@@ -9,6 +9,7 @@ from fastapi.encoders import jsonable_encoder
 from starlette.requests import Request
 
 import app.main as main
+from app.task_observation_routes import TaskObservationResponseAdapter
 from app.assistant_goal_continuation import GoalContinuationService, GoalResultProjection
 from app.conversation_repository import ConversationRepository
 from app.creation.contracts import JobRun, TaskEvent
@@ -53,7 +54,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     request = Request({"type": "http", "headers": [(b"x-local-member-token", state.token.encode())]})
     monkeypatch.setattr(main, "_require_permit_actor", lambda *_: CreationExecutionActor("ws", state.member.member_id))
     monkeypatch.setattr(main, "_goal_readiness_completed_sources", lambda *_: [])
-    monkeypatch.setattr(main, "_task_observation_metadata", lambda *_: {})
+    monkeypatch.setattr(TaskObservationResponseAdapter, "metadata", lambda *_: {})
     monkeypatch.setattr(main.GoalReadinessUseCase, "output_checkpoint", lambda *_: None)
     chat = repo.create("ws", state.member.member_id, "home", "home")
     selected = {"kind": "selection", "items": [{"kind": "subtitle", "task_id": state.task.id, "object_id": "cue", "version": state.base.id, "label": "字幕1"}]}

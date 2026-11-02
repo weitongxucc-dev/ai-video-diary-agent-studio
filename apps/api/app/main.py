@@ -184,7 +184,6 @@ from app.member_permits import (
 from app.device_resource_configuration import resolve_device_resources
 from app.device_resource_profile import DeviceProfileUnavailable
 from app.device_runtime import RuntimeUnavailable
-from app.creation.quality_projection import bounded_quality_evidence, bounded_quality_findings
 
 _RESOURCE_BUDGET_UNSET = object()
 
@@ -2113,63 +2112,22 @@ def _output_observation_facts(workspace_id, task_id, arguments, actor):
 
 
 
-def _task_observation_metadata(task,member_id):
-    workspace_id,task_id=task.workspace_id,task.id
-    current = _creation_task_quality_check_response(workspace_id, task_id).model_dump(mode="json")
-    current.update(bounded_quality_findings(current))
-    rows = production_repo.execution_records.list_observation_job_starts(workspace_id, task_id, TASK_MEDIA_KIND, member_id)
-    observations = []
-    for row in rows:
-        job = production_repo.job_records.get_job_run(workspace_id, row["id"])
-        start = json.loads(row["payload_json"])
-        result = None
-        if job.status == "succeeded":
-            result = production_repo.execution_records.get_task_event(workspace_id, f"event_{job.id}_result").payload["result"]
-        stale = start["input_facts"]["base_version_id"] != task.current_timeline_version_id
-        if not stale:
-            try:
-                original = CreationTaskObservationRequest.model_validate(start["arguments"]["payload"])
-                _path, output, _binding = _registered_observation_output(workspace_id, task_id, original.target,
-                    CreationExecutionActor.from_event(workspace_id, start))
-                stale = output != start["input_facts"]["output"]
-            except (KeyError, OSError, ValueError, PermissionError, HTTPException):
-                stale = True
-        observations.append({"job_id": job.id, "status": job.status,
-            "stale": stale,
-            "timeline_version_id": start["input_facts"]["base_version_id"], "result": result,
-            "result_url": f"/api/creation-tasks/{task_id}/media-jobs/{job.id}"})
-    targets = []
-    try:
-        _path, output, _binding = _registered_observation_output(workspace_id, task_id,
-            CreationTaskObservationTarget(kind="final"), None)
-    except (KeyError, OSError, ValueError, PermissionError, HTTPException):
-        pass  # Missing/changed final is not an available observation target.
-    else:
-        targets.append({"target": {"kind": "final"}, "artifact_id": output["artifact_id"], "sha256": output["sha256"],
-                        "output_role": "composed_output"})
-    rows = production_repo.execution_records.list_observation_target_artifacts(
-        workspace_id, task_id, TASK_MEDIA_KIND, member_id, task.current_timeline_version_id)
-    for row in rows:
-        if row["logical_ref"].endswith(".mp4") or row["kind"] == "graphic_source" and row["logical_ref"].endswith(".png"):
-            targets.append({"target": {"kind": "media_job", "job_id": row["producer_job_id"], "artifact_id": row["id"]},
-                "artifact_id": row["id"], "sha256": row["sha256"],
-                "output_role": "graphic_source" if row["kind"] == "graphic_source" else "composed_preview"})
-    version = production_repo.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
-    return {"task_id": task_id, "timeline_version_id": task.current_timeline_version_id,
-        "timeline_sequence": version.sequence if version else 0,
-        "quality_check": current, "quality_history": [bounded_quality_evidence(item)
-            for item in quality_check_repo.history(workspace_id, task_id)],
-        "observations": observations, "targets": targets, "targets_limit": 11,
-        "media_policy": "local_measurements_and_text_only"}
+def _task_observation_response_adapter():
+    return TaskObservationResponseAdapter(
+        repo_for=lambda: production_repo,
+        quality_response=lambda workspace_id, task_id: _creation_task_quality_check_response(workspace_id, task_id),
+        registered_output=lambda workspace_id, task_id, target, actor: _registered_observation_output(workspace_id, task_id, target, actor),
+        quality_history=lambda workspace_id, task_id: quality_check_repo.history(workspace_id, task_id),
+    )
 
 
-from app.task_observation_routes import build_task_observation_router
+from app.task_observation_routes import TaskObservationResponseAdapter, build_task_observation_router
 
 
 def _task_observation_http_router(route_names):
     return build_task_observation_router(
         access_for=lambda: _exact_edit_access,
-        metadata_for=lambda: _task_observation_metadata,
+        metadata_for=lambda: _task_observation_response_adapter().metadata,
         actor_for=lambda: _require_permit_actor,
         case_for=lambda: _output_observation_use_case,
         json_response_for=lambda: JSONResponse,
@@ -6608,7 +6566,7 @@ def _task_business(*, generation_case=None):
         generate_topics=lambda ws,task,guard:_script_draft_use_case(ws,validate_inputs=lambda *args:None).generate_topics(ws,task,write_guard=guard),
         topic_facts=_creation_task_text_response_adapter().creation_task_topic_response,edit_capabilities=_task_edit_capability_response_adapter().facts,
         script_capabilities=_task_script_capability_facts,tool_capabilities=_script_tool_capability_facts,
-        material_facts=_material_asset_response,observation_facts=lambda task,actor:_task_observation_metadata(task,actor.user_id or actor.member_id),
+        material_facts=_material_asset_response,observation_facts=lambda task,actor:_task_observation_response_adapter().metadata(task,actor.user_id or actor.member_id),
         observe_output=_submit_goal_observation,request_result=_public_goal_request_metadata,media_result=_goal_media_metadata,
         record_adoption=lambda *args, **kwargs: _goal_service().record_script_adoption(*args, **kwargs),
         segments=None if generation_case is not None else _segment_production_use_case(),
@@ -6703,7 +6661,7 @@ def _goal_readiness_execution(business, goal, actor, *, job_id):
 
 def _goal_readiness_observations(task, member_id):
     try:
-        return _task_observation_metadata(task, member_id)
+        return _task_observation_response_adapter().metadata(task, member_id)
     except HTTPException as exc:
         raise GoalEvidenceUnavailable(exc.status_code, exc.detail) from exc.__cause__
 
