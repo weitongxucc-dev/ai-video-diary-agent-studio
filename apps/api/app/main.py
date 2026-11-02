@@ -129,7 +129,7 @@ from app.creation.editing.metadata import (PICTURE_METADATA_OPERATIONS,
     apply_audio_metadata, prepare_picture_command, prepare_audio_command, metadata_request_identity,
     prepare_clip_command, prepare_subtitle_display_command)
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS, CLIP_METADATA_OPERATIONS, ClipPreviewConflict, apply_clip_patch, reorder_picture
-from app.creation.editing.picture import graphic_overlay_candidate, EditConflict
+from app.creation.editing.picture import graphic_overlay_candidate
 from app.creation.editing.audio_edit_use_case import AudioEditUseCase, AudioEditRejected
 from app.creation.output_observation_use_case import OutputObservationUseCase, OutputObservationRejected
 from app.creation.editing.timeline_history import TimelineHistoryConflict
@@ -163,7 +163,6 @@ from app.creation_task_text_responses import CreationTaskTextResponseAdapter
 from app.task_edit_confirmation import TaskEditConfirmationHttpAdapter, MetadataEditConfirmationHttpAdapter
 from app.task_edit_commands import TaskEditCommandHttpAdapter
 from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
-from app.creation.editing.subtitles import subtitle_display_selection
 from app.creation.transactions import (prepare_change_set, commit_change_set, commit_direct_change,
     clone_subtitle_track as _clone_subtitle_track, clone_cover_asset as _clone_cover_asset)
 from app.creation import media_script_submission_use_case as script_submission
@@ -268,7 +267,7 @@ from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT
 from app.models import EpisodeStatus, FeedbackEvent, ScriptPackage, ScriptSection, VideoJobStatus, utc_now
 from app.montage import (
     CreationTaskMontagePlan,
-    MontageClip,
+    MontageClip as MontageClip,
     MontagePlanner,
     MontageRenderer,
     MontageRepository,
@@ -290,7 +289,7 @@ from app.schemas import (MaterialDiscoveryStartRequest,
 from app.product_hunt import ProductHuntClient
 from app.scheduled_task_routes import build_scheduled_task_router
 from app.materials.contracts import MediaAuthorityError
-from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
+from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, ProductionProfile, ProductionRepository, material_segment_eligible
 from app.creation.task_workspace_read_use_case import TaskWorkspaceReadUseCase
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import knowledge_item_readable as content_readable
@@ -4091,31 +4090,6 @@ def _metadata_edit_response(outcome):
 
 
 
-def _validate_edit_graphic_sources(workspace_id, task_id, overlays):
-    return _metadata_edit_use_case().validate_graphic_sources(workspace_id, task_id, overlays)
-
-
-def _bind_affected_source_command(verifier,command,before,after):
-    try:return _metadata_edit_use_case().bind_affected_source_command(verifier,command,before,after)
-    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-
-
-def _edit_clip_source_bounds(task, request, clip):
-    identity, diagnostic = _content_reader(request, task.workspace_id)
-    selection = production_repo.clip_sources.resolve(task.workspace_id, task.id, clip, {},
-        user_id=identity, local_diagnostic=diagnostic)
-    return selection.start_seconds, selection.end_seconds, selection.is_speech
-
-
-def _resolve_edit_clip_source(task,request,clip,values):
-    reader,diagnostic=_content_reader(request,task.workspace_id)
-    return _metadata_edit_use_case().resolve_edit_clip_source(task,{'member_id':reader,'local_diagnostic':diagnostic},clip,values)
-
-
-def _link_reordered_edit(task, candidate):
-    return _metadata_edit_use_case().link_reordered_edit(task, candidate)
-
-
 def _preview_metadata_settings(task, request, operation_type, values, base_version_id):
     reader, diagnostic = _content_reader(request, task.workspace_id)
     source = EXACT_EDIT_SOURCE.get()
@@ -4155,12 +4129,6 @@ def _logical_montage_output_refs(plan: CreationTaskMontagePlan) -> list[str]:
 
 def _current_narration_snapshot(workspace_id: str, task: CreationTask) -> dict[str, object]:
     return _metadata_edit_use_case().current_narration_snapshot(workspace_id, task)
-
-
-def _narration_segments_from_snapshot(
-    snapshot: dict[str, object],
-) -> list[NarrationSegment] | None:
-    return MetadataEditUseCase.narration_segments_from_snapshot(snapshot)
 
 
 def _ensure_montage_base_version(
@@ -4215,14 +4183,6 @@ def _persist_typed_montage_edit(
     return result if connection is not None else _metadata_edit_response(result)
 
 
-def _subtitle_display_selection(tracks, mode):
-    try:
-        return subtitle_display_selection(tracks, mode)
-    except EditConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
 def _execution_subtitle_track(track: SubtitleTrack) -> SubtitleExecutionTrack:
     return metadata_execution_subtitle_track(track)
 
@@ -4249,64 +4209,6 @@ def _publish_subtitle_text(
     return _metadata_edit_use_case().publish_subtitle_text(workspace_id=workspace_id, task_id=task_id, proposal_id=proposal_id, kind=kind, input_refs=input_refs, content=content, engine=engine, parameters=parameters)
 
 
-def _persist_subtitle_cover_edit(
-    *,
-    workspace_id: str,
-    task: CreationTask,
-    proposal: EditProposal,
-    base_version: TimelineVersion,
-    result_version_id: str,
-    operation_type: str,
-    operation_payload: dict[str, object],
-    subtitle_tracks: list[SubtitleTrack],
-    cover_asset: CoverAsset | None = None,
-    updated_plan: CreationTaskMontagePlan | None = None,
-    snapshot_source: dict[str, object] | None = None,
-    narration_segments: list[NarrationSegment] | None = None,
-    narration_artifact: NarrationArtifactRecord | None = None,
-) -> CreationTaskEditConfirmResponse:
-    try:
-        outcome = _metadata_edit_use_case().persist_subtitle_edit(workspace_id=workspace_id, task=task,
-            proposal=proposal, base_version=base_version, result_version_id=result_version_id,
-            operation_type=operation_type, operation_payload=operation_payload, subtitle_tracks=subtitle_tracks,
-            cover_asset=cover_asset, updated_plan=updated_plan, snapshot_source=snapshot_source,
-            narration_segments=narration_segments, narration_artifact=narration_artifact)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _metadata_edit_response(outcome)
-
-
-
-
-
-
-
-
-
-
-def _presenter_share_selection(plan,target):
-    return _person_preview_use_case().share_selection(plan,target)
-
-
-def _presenter_share_broll_candidate(workspace_id: str, plan: CreationTaskMontagePlan, clip: MontageClip):
-    # This one picks by itself — the first usable B-roll becomes the replacement
-    # — so material the user kept out of automation must not appear here.
-    for candidate in _creation_task_montage_candidates(workspace_id, plan, clip, automation_only=True):
-        asset = production_repo.get_asset(workspace_id, candidate.asset_id)
-        segment = next(item for item in asset.segments if item.id == candidate.segment_id)
-        if effective_segment_usage_role(asset, segment) == "b_roll":
-            return candidate
-    return None
-
-
-def _presenter_share_changed_clips(plan,selected):
-    return _person_preview_use_case().share_changed_clips(plan,selected)
-
-
-
-
-
-
 def _bind_assistant_edit_instruction(request,task,payload):
     if payload.assistant_turn_id is None:return payload
     turn=conversation_repo.get_turn(str(payload.assistant_turn_id))
@@ -4318,21 +4220,6 @@ def _bind_assistant_edit_instruction(request,task,payload):
         return _command_preview_use_case().bind_after_access(task,payload,turn,workspace_id,member_id)
     except ValueError as exc:raise HTTPException(status_code=409,detail=str(exc)) from exc
     except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-
-
-
-
-
-def _reorder_montage_plan(workspace_id,task,plan,new_order,*,link_narration):
-    try:return _metadata_edit_use_case().reorder_montage_plan(workspace_id,task,plan,new_order,link_narration=link_narration)
-    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-
-
-def _timeline_reorder_narration_scope(plan,new_order,target_ids):
-    try:return _metadata_edit_use_case().reorder_narration_scope(plan,new_order,target_ids)
-    except EditPreviewRejected as exc:raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-
-
 
 
 
