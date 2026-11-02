@@ -4430,48 +4430,6 @@ def _compound_edit_use_case(repository=None):
 def _graphic_overlay_candidate(plan,payload):
     return _metadata_edit_use_case().graphic_overlay_candidate(plan,payload)
 
-def _preview_graphic_overlay(task_id, request, payload):
-    workspace_id = current_workspace_id(request)
-    reader, diagnostic = _content_reader(request, workspace_id)
-    identity = {'member_id':reader, 'local_diagnostic':diagnostic}
-    try:
-        outcome = _metadata_edit_use_case().preview_graphic_overlay(workspace_id, task_id, payload,
-            identity=identity, source=EXACT_EDIT_SOURCE.get(), execution=None,
-            draft_only=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'))
-        return _edit_preview_response(*outcome)
-    except EditPreviewRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
-def _preview_transition(task_id, request, payload):
-    workspace_id = current_workspace_id(request)
-    reader, diagnostic = _content_reader(request, workspace_id)
-    identity = {'member_id':reader, 'local_diagnostic':diagnostic}
-    try:
-        outcome = _metadata_edit_use_case().preview_transition(workspace_id, task_id, payload,
-            identity=identity, source=EXACT_EDIT_SOURCE.get(), execution=None,
-            draft_only=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'))
-        return _edit_preview_response(*outcome)
-    except EditPreviewRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
-def _preview_canvas(task_id, request, payload):
-    workspace_id = current_workspace_id(request)
-    reader, diagnostic = _content_reader(request, workspace_id)
-    identity = {'member_id':reader, 'local_diagnostic':diagnostic}
-    try:
-        outcome = _metadata_edit_use_case().preview_canvas(workspace_id, task_id, payload,
-            identity=identity, source=EXACT_EDIT_SOURCE.get(), execution=None,
-            draft_only=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'))
-        return _edit_preview_response(*outcome)
-    except EditPreviewRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
-
-
-
 def _subtitle_edit_use_case():
     return SubtitleEditUseCase(production_repo, _metadata_edit_use_case())
 
@@ -4485,78 +4443,9 @@ def _subtitle_values(payload):
 
 
 
-def _preview_subtitle_edit(task_id, request, payload):
-    workspace_id = current_workspace_id(request)
-    reader, diagnostic = _content_reader(request, workspace_id)
-    source = EXACT_EDIT_SOURCE.get()
-    if source is not None:
-        reader, diagnostic = _assistant_member_id(request, workspace_id), False
-    try:
-        return _edit_preview_response(*_subtitle_edit_use_case().preview(workspace_id, task_id, payload,
-            identity={'member_id':reader,'local_diagnostic':diagnostic}, source=source,
-            execution=None,
-            draft_only=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact')))
-    except EditPreviewRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-
-
-def _preview_subtitle_style(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    return _preview_subtitle_edit(task_id, request, payload)
-
-
-def _preview_subtitle_structure(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    return _preview_subtitle_edit(task_id, request, payload)
-
-
-def _preview_subtitle_replace(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    return _preview_subtitle_edit(task_id, request, payload)
-
-
-def _preview_subtitle_cue(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    return _preview_subtitle_edit(task_id, request, payload)
-
-
-def _preview_linked_timeline(task_id,request,payload):
-    return _preview_linked_core(task_id,request,payload,source=EXACT_EDIT_SOURCE.get())
-
-
-def _preview_linked_core(task_id,request,payload,*,source):
-    case=_exact_preview_use_case()
-    try:
-        task,values=case.prepare_linked(current_workspace_id(request),task_id,payload)
-        command=_task_edit_command_http_adapter().linked_timeline_command(task,request,payload.operation_type,
-            {'base_version_id':task.current_timeline_version_id,**values},source=source)
-        return _edit_preview_response(*case.preview_linked(command,payload))
-    except EditPreviewRejected as exc:
-        raise HTTPException(status_code=exc.status_code,detail=exc.detail) from exc
-
-
-
-
-
-def _preview_linked_clip_edit(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    return _preview_linked_timeline(task_id, request, payload)
-
-
-def _preview_insert(task_id: str, request: Request, payload: CreationTaskExactEditRequest):
-    return _preview_linked_timeline(task_id, request, payload)
-
-
 def _trim_clip_source_url(workspace_id,task_id,clip,cue):
     return _metadata_edit_use_case().trim_clip_source_url(workspace_id,task_id,clip,cue)
 
-
-def _preview_exact_montage_edit(task_id, request, payload):
-    workspace_id = current_workspace_id(request)
-    reader, diagnostic = _content_reader(request, workspace_id)
-    identity = {'member_id':reader, 'local_diagnostic':diagnostic}
-    try:
-        outcome = _metadata_edit_use_case().preview_exact_montage(workspace_id, task_id, payload,
-            identity=identity, source=EXACT_EDIT_SOURCE.get(), execution=None,
-            draft_only=request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact'))
-        return outcome
-    except EditPreviewRejected as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
 from app.timeline_restore_routes import build_timeline_restore_router
 

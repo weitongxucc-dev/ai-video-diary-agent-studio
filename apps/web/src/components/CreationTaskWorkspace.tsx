@@ -764,8 +764,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   function saveSubtitle(mode: "zh" | "en" | "zh-en") { return saveOutput(() => saveTaskSubtitles(task.id, mode, task.current_timeline_version_id, workspace.subtitle_tracks, activeSubtitleTrack)); }
 
   // 插入用与「换素材」同一对既有端点取候选，不新开端点。InsertClip 的锚点就是
-  // 当前选中镜头（clip_id），落点是「插在它之后」；后端 _preview_exact_montage_edit
-  // 对每个操作都要求 clip_id，缺了直接 409。
+  // 当前选中镜头（clip_id），落点是「插在它之后」；ExactPreviewUseCase
+  // 将 InsertClip 分派给 linked 用例，由该用例校验锚点。
   async function showInsertCandidates(clipId: string) {
     setBusy("clip");
     setError(null);
