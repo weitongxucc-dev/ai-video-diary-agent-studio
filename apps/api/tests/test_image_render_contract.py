@@ -9,6 +9,7 @@ from PIL import Image
 import pytest
 
 import app.main as main
+import app.member_permits as permits
 from app.artifact_store import ArtifactStore
 from app.creation_execution import CreationExecutionActor, cpu_render_facts
 from app.graphic_overlays import ArrowOverlay, ImageOverlay, TextOverlay

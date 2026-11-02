@@ -51,7 +51,7 @@ SAMPLE_SECONDS = 2
 
 
 def _ffmpeg(arguments: list[str]) -> None:
-    _quality_native_command(
+    globals()["_quality_native_command"](
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *arguments],
         check=True, capture_output=True, timeout=3,
     )
