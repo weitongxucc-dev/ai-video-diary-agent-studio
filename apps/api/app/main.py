@@ -288,7 +288,7 @@ from app.schemas import (MaterialDiscoveryStartRequest,
 from app.product_hunt import ProductHuntClient
 from app.scheduled_task_routes import build_scheduled_task_router
 from app.materials.contracts import MediaAuthorityError
-from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, ProductionBatch, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
+from app.production import EXACT_EDIT_SOURCE, MaterialVersionConflict, TimelineVersionConflict, MaterialCollection, MaterialAssetNote, MaterialBusinessObject, ProductionProfile, ProductionRepository, effective_segment_usage_role, material_segment_eligible
 from app.creation.task_workspace_read_use_case import TaskWorkspaceReadUseCase
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import knowledge_item_readable as content_readable
@@ -357,7 +357,7 @@ from app.source_item_routes import build_source_item_router
 from app.episode_read_routes import build_episode_read_router
 from app.source_repository import SourceRepository
 from app.home_aggregation import aggregate_home
-from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontageClipResponse, MontagePlanResponse, MontagePlansResponse, NarrationCueResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionBatchResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
+from app.schemas import AssistantConversationCreateRequest, AssistantConversationCurrentRequest, AssistantConversationReferenceRequest, AssistantConversationReferenceResponse, AssistantConversationDraftRestoreRequest, AssistantConversationDraftRestoreResponse, AssistantConversationListResponse, AssistantConversationResponse, AssistantConversationRequestResponse, AssistantConversationStopRequest, AssistantConversationUpdateRequest, ScriptLibrarySourceResponse, AuthorizationResponse, AuthorizationUpsertRequest, ContentTemplatesResponse, CreationPlanConfirmRequest, CreationPlanPreviewRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, CreationPlanPreviewResponse, CreationRequestWindowPreviewRequest, CreationRequestResponse, CreationRequestItemsResponse, CreationTaskScriptConfirmRequest, CreationTaskScriptDraftRequest, TaskKnowledgeAdoptionResponse, CreationTaskScriptResponse, CreationTaskNarrationVoiceSelectionResponse, CreationTaskPersonRendersResponse, CreationTaskMontagePlanResponse, AssistantStoryboardRegenerationReceipt, AssistantStoryboardRegenerationFailure, QualityContinuationResponse, CreationTaskQualityCheckResponse, CreationTaskEditConfirmResponse, CreationTaskEditPreviewRequest, CreationTaskAssistantTurnRequest, CreationTaskAssistantTurnResponse, AssistantScriptWindowRequestResponse, CreationTaskAssistantHistoryResponse, AssistantStreamEvent, MaterialAssistantTurnResponse, MaterialAssistantResultResponse, WorkspaceAssistantPlanTurnRequest, WorkspaceAssistantPlanTurnResponse, CreationTaskEditPreviewResponse, CreationTaskExactEditRequest, AssistantEditRequestLocator, AssistantScriptToolReceipt, MediaScriptPreviewRequest, TaskMediaJobResponse, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest, EXACT_EDIT_FIELDS, EXACT_EDIT_ENVELOPE_FIELDS, EXACT_MONTAGE_REQUIRED_FIELDS, CreationTasksResponse, CreatorProfileResponse, DraftAssetResponse, DraftEnvironmentResponse, DraftStatusResponse, EpisodeVoiceSelectionResponse, FeedbackEventResponse, KnowledgeNoteResponse, MaterialAssetResponse, MaterialAssetNotesRequest, MaterialAssetNotesResponse, MaterialBusinessObjectCreateRequest, MaterialBusinessObjectResponse, MaterialBusinessObjectsResponse, MaterialAssetBusinessObjectsSaveRequest, MaterialAssetTagsRequest, MaterialIntakeBindRequest, MaterialIntakeStatusResponse, MaterialCopyCompleteRequest, MaterialCopyCompleteResponse, MaterialUsageRecordsResponse, MediaLinkCheckRequest, MediaLinkCheckResponse, MediaLinkImportRequest, MediaLinkImportResponse, MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialCollectionCreateRequest, MaterialCollectionResponse, MaterialCollectionsResponse, MaterialLibraryInsightsResponse, MaterialLibraryResponse, MaterialReviewRequest, MaterialUseStateRequest, MaterialSegmentMatchResponse, MaterialSegmentSearchResponse, MaterialSegmentUpdateRequest, MediaCapabilityResponse, MontageClipCandidateResponse, MontagePlansResponse, PendingVideoResponse, ProcessedVideoResponse, ProductionBatchesResponse, ProductionFoundationResponse, ProductionProfileResponse, PersonProfileResponse, SourceConnectorResponse, ContentVisibilityRequest, SourceRunEvidenceResponse, SystemStatusResponse, VoiceProfileResponse, VoiceReferenceImportResponse, VoiceProfilesResponse, VersionedVoiceProfileResponse, VoiceTranscriptionResponse, WorkflowStatusResponse, CoverAssetResponse, SubtitleTrackResponse, TimelineVersionArtifactResponse, TimelineVersionDetailResponse, TimelineVersionListResponse, TimelineVersionNarrationSegmentResponse, TimelineVersionShotResponse, TimelineVersionSummaryResponse, validate_logical_media_reference
 from app.services import EpisodeService
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
@@ -1123,8 +1123,8 @@ def _production_profile_http_router(route_names):
         sources_configured_for=lambda: topic_sources_configured,
         settings_for=lambda: settings,
         vault_for=lambda: vault,
-        batch_response_for=lambda: _production_batch_response,
-        montage_response_for=lambda: _montage_plan_response,
+        batch_response_for=lambda: _legacy_montage_response_adapter().production_batch_response,
+        montage_response_for=lambda: _legacy_montage_response_adapter().montage_plan_response,
         montages_for=lambda: montage_repo,
         episodes_for=lambda: repo,
         episode_status_for=lambda: EpisodeStatus,
@@ -1492,131 +1492,17 @@ def _montage_narration_status(workspace_id: str, narration_reference: str | None
     return "ready" if path.is_file() and path.stat().st_size > 0 else "unavailable"
 
 
-def _montage_clip_response(workspace_id: str, clip) -> MontageClipResponse:
-    response = MontageClipResponse.model_validate(clip, from_attributes=True)
-    try:
-        source_reference = production_repo.workspace_media_reference_for_asset(
-            workspace_id,
-            clip.asset_id,
-        )
-    except (KeyError, MediaAuthorityError):
-        source_reference = None
-    return response.model_copy(update={"source_path": source_reference})
-
-
-def _montage_plan_response(plan) -> MontagePlanResponse:
-    output_path = _safe_montage_media_path(plan, "output_path")
-    subtitle_path = _safe_montage_media_path(plan, "subtitle_path")
-    subtitle_status = (
-        "ready"
-        if subtitle_path is not None
-        else "not_generated"
-        if not plan.subtitle_path
-        else "unavailable"
-    )
-    return MontagePlanResponse.model_validate(
-        {
-            "id": plan.id,
-            "workspace_id": plan.workspace_id,
-            "batch_id": plan.batch_id,
-            "episode_id": plan.episode_id,
-            "script_title": plan.script_title,
-            "status": plan.status,
-            "cues": [
-                NarrationCueResponse.model_validate(cue, from_attributes=True)
-                for cue in plan.cues
-            ],
-            "clips": [
-                _montage_clip_response(plan.workspace_id, clip)
-                for clip in plan.clips
-            ],
-            "duration_seconds": plan.duration_seconds,
-            "low_confidence_clip_count": plan.low_confidence_clip_count,
-            "aspect_ratio": "9:16",
-            "narration_status": _montage_narration_status(
-                plan.workspace_id, plan.narration_audio_path
-            ),
-            "subtitle_status": subtitle_status,
-            "output_url": (
-                f"/api/production/montage-plans/{plan.id}/output"
-                if output_path is not None
-                else None
-            ),
-            "subtitle_url": (
-                f"/api/production/montage-plans/{plan.id}/subtitle"
-                if subtitle_path is not None
-                else None
-            ),
-            "message": plan.message,
-            "created_at": plan.created_at,
-            "updated_at": plan.updated_at,
-        }
+def _legacy_montage_response_adapter():
+    return LegacyMontageResponseAdapter(
+        repository_for=lambda: production_repo,
+        montage_repository_for=lambda: montage_repo,
+        safe_montage_media_path=lambda plan, field: _safe_montage_media_path(plan, field),
+        montage_narration_status=lambda workspace_id, reference: _montage_narration_status(workspace_id, reference),
     )
 
 
-def _production_batch_response(batch: ProductionBatch) -> ProductionBatchResponse:
-    items = []
-    for item in batch.items:
-        plan = None
-        if item.plan_id:
-            try:
-                plan = montage_repo.get(batch.workspace_id, item.plan_id)
-            except KeyError:
-                pass
-        output_path = _safe_montage_media_path(plan, "output_path") if plan else None
-        subtitle_path = _safe_montage_media_path(plan, "subtitle_path") if plan else None
-        items.append(
-            {
-                "episode_id": item.episode_id,
-                "status": item.status,
-                "plan_id": item.plan_id,
-                "aspect_ratio": "9:16",
-                "narration_status": _montage_narration_status(
-                    batch.workspace_id,
-                    plan.narration_audio_path if plan else None,
-                ),
-                "subtitle_status": (
-                    "ready"
-                    if subtitle_path is not None
-                    else "not_generated"
-                    if plan is None or not plan.subtitle_path
-                    else "unavailable"
-                ),
-                "output_url": (
-                    f"/api/production/montage-plans/{plan.id}/output"
-                    if output_path is not None
-                    else None
-                ),
-                "subtitle_url": (
-                    f"/api/production/montage-plans/{plan.id}/subtitle"
-                    if subtitle_path is not None
-                    else None
-                ),
-                "message": item.message,
-                "attempts": item.attempts,
-                "updated_at": item.updated_at,
-            }
-        )
-    return ProductionBatchResponse.model_validate(
-        {
-            "id": batch.id,
-            "workspace_id": batch.workspace_id,
-            "name": batch.name,
-            "target_count": batch.target_count,
-            "status": batch.status,
-            "episode_ids": batch.episode_ids,
-            "items": items,
-            "blocker_codes": batch.blocker_codes,
-            "message": batch.message,
-            "rendered_count": batch.rendered_count,
-            "waiting_review_count": batch.waiting_review_count,
-            "failed_count": batch.failed_count,
-            "started_at": batch.started_at,
-            "finished_at": batch.finished_at,
-            "created_at": batch.created_at,
-            "updated_at": batch.updated_at,
-        }
-    )
+
+
 
 
 
@@ -5590,7 +5476,7 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('update_production_material_segment',)))
 
 
-from app.legacy_montage_routes import build_legacy_montage_router
+from app.legacy_montage_routes import LegacyMontageResponseAdapter, build_legacy_montage_router
 
 
 def _legacy_montage_http_router(route_names):
@@ -5598,11 +5484,11 @@ def _legacy_montage_http_router(route_names):
         production_for=lambda: production_repo,
         workspace_for=lambda: current_workspace_id,
         batches_type_for=lambda: ProductionBatchesResponse,
-        batch_response_for=lambda: _production_batch_response,
+        batch_response_for=lambda: _legacy_montage_response_adapter().production_batch_response,
         http_error_for=lambda: HTTPException,
         montage_for=lambda: montage_repo,
         plans_type_for=lambda: MontagePlansResponse,
-        plan_response_for=lambda: _montage_plan_response,
+        plan_response_for=lambda: _legacy_montage_response_adapter().montage_plan_response,
         safe_path_for=lambda: _safe_montage_media_path,
         file_response_for=lambda: FileResponse,
         candidate_type_for=lambda: MontageClipCandidateResponse,

@@ -1,7 +1,148 @@
-"""Read-only historical batches and montage plans; durable readers and shared projections stay host-owned."""
+"""Read-only historical batches and montage plans; durable readers stay host-owned."""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from app.materials.contracts import MediaAuthorityError
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
-from app.schemas import ProductionBatchesResponse, ProductionBatchResponse, MontagePlansResponse, MontagePlanResponse, MontageClipCandidateResponse
+from app.schemas import MontageClipResponse, NarrationCueResponse, ProductionBatchesResponse, ProductionBatchResponse, MontagePlansResponse, MontagePlanResponse, MontageClipCandidateResponse
+
+if TYPE_CHECKING:
+    from app.production import ProductionBatch
+
+
+class LegacyMontageResponseAdapter:
+    def __init__(self, *, repository_for, montage_repository_for, safe_montage_media_path, montage_narration_status):
+        self.repository_for = repository_for
+        self.montage_repository_for = montage_repository_for
+        self.safe_montage_media_path = safe_montage_media_path
+        self.montage_narration_status = montage_narration_status
+
+    def montage_clip_response(self, workspace_id: str, clip) -> MontageClipResponse:
+        response = MontageClipResponse.model_validate(clip, from_attributes=True)
+        try:
+            source_reference = self.repository_for().workspace_media_reference_for_asset(
+                workspace_id,
+                clip.asset_id,
+            )
+        except (KeyError, MediaAuthorityError):
+            source_reference = None
+        return response.model_copy(update={"source_path": source_reference})
+
+    def montage_plan_response(self, plan) -> MontagePlanResponse:
+        output_path = self.safe_montage_media_path(plan, "output_path")
+        subtitle_path = self.safe_montage_media_path(plan, "subtitle_path")
+        subtitle_status = (
+            "ready"
+            if subtitle_path is not None
+            else "not_generated"
+            if not plan.subtitle_path
+            else "unavailable"
+        )
+        return MontagePlanResponse.model_validate(
+            {
+                "id": plan.id,
+                "workspace_id": plan.workspace_id,
+                "batch_id": plan.batch_id,
+                "episode_id": plan.episode_id,
+                "script_title": plan.script_title,
+                "status": plan.status,
+                "cues": [
+                    NarrationCueResponse.model_validate(cue, from_attributes=True)
+                    for cue in plan.cues
+                ],
+                "clips": [
+                    self.montage_clip_response(plan.workspace_id, clip)
+                    for clip in plan.clips
+                ],
+                "duration_seconds": plan.duration_seconds,
+                "low_confidence_clip_count": plan.low_confidence_clip_count,
+                "aspect_ratio": "9:16",
+                "narration_status": self.montage_narration_status(
+                    plan.workspace_id, plan.narration_audio_path
+                ),
+                "subtitle_status": subtitle_status,
+                "output_url": (
+                    f"/api/production/montage-plans/{plan.id}/output"
+                    if output_path is not None
+                    else None
+                ),
+                "subtitle_url": (
+                    f"/api/production/montage-plans/{plan.id}/subtitle"
+                    if subtitle_path is not None
+                    else None
+                ),
+                "message": plan.message,
+                "created_at": plan.created_at,
+                "updated_at": plan.updated_at,
+            }
+        )
+
+    def production_batch_response(self, batch: ProductionBatch) -> ProductionBatchResponse:
+        items = []
+        for item in batch.items:
+            plan = None
+            if item.plan_id:
+                try:
+                    plan = self.montage_repository_for().get(batch.workspace_id, item.plan_id)
+                except KeyError:
+                    pass
+            output_path = self.safe_montage_media_path(plan, "output_path") if plan else None
+            subtitle_path = self.safe_montage_media_path(plan, "subtitle_path") if plan else None
+            items.append(
+                {
+                    "episode_id": item.episode_id,
+                    "status": item.status,
+                    "plan_id": item.plan_id,
+                    "aspect_ratio": "9:16",
+                    "narration_status": self.montage_narration_status(
+                        batch.workspace_id,
+                        plan.narration_audio_path if plan else None,
+                    ),
+                    "subtitle_status": (
+                        "ready"
+                        if subtitle_path is not None
+                        else "not_generated"
+                        if plan is None or not plan.subtitle_path
+                        else "unavailable"
+                    ),
+                    "output_url": (
+                        f"/api/production/montage-plans/{plan.id}/output"
+                        if output_path is not None
+                        else None
+                    ),
+                    "subtitle_url": (
+                        f"/api/production/montage-plans/{plan.id}/subtitle"
+                        if subtitle_path is not None
+                        else None
+                    ),
+                    "message": item.message,
+                    "attempts": item.attempts,
+                    "updated_at": item.updated_at,
+                }
+            )
+        return ProductionBatchResponse.model_validate(
+            {
+                "id": batch.id,
+                "workspace_id": batch.workspace_id,
+                "name": batch.name,
+                "target_count": batch.target_count,
+                "status": batch.status,
+                "episode_ids": batch.episode_ids,
+                "items": items,
+                "blocker_codes": batch.blocker_codes,
+                "message": batch.message,
+                "rendered_count": batch.rendered_count,
+                "waiting_review_count": batch.waiting_review_count,
+                "failed_count": batch.failed_count,
+                "started_at": batch.started_at,
+                "finished_at": batch.finished_at,
+                "created_at": batch.created_at,
+                "updated_at": batch.updated_at,
+            }
+        )
+
 
 def build_legacy_montage_router(*, production_for, workspace_for, batches_type_for, batch_response_for, http_error_for, montage_for, plans_type_for, plan_response_for, safe_path_for, file_response_for, candidate_type_for, reader_for, eligible_for, route_names):
     router = APIRouter()
