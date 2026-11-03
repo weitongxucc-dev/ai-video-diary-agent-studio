@@ -108,10 +108,10 @@ def test_empty_restore_body_requires_task_write_access(tmp_path, monkeypatch):
         url = f'/api/creation-tasks/{state.task.id}/timeline/{action}'
         before = editorial_rows(state.repo)
         for token, status in ((reader_token, 403), ('invalid-token', 401)):
-            denied = state.client.post(url, json={}, headers={'X-Local-Member-Token': token})
+            denied = state.client.post(url, json={"request_id": f"restore-access:{action}"}, headers={'X-Local-Member-Token': token})
             assert denied.status_code == status, denied.text
             assert editorial_rows(state.repo) == before
-        restored = state.client.post(url, json={})
+        restored = state.client.post(url, json={"request_id": f"restore-access:{action}"})
         assert restored.status_code == 200, restored.text
 
 

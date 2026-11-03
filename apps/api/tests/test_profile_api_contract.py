@@ -307,7 +307,7 @@ class VoiceProvider:
     supported_languages = ("zh",)
     calls = 0
 
-    def generate(self, **kwargs):
+    def generate_granted(self, **kwargs):
         self.calls += 1
         assert kwargs["grant_context"].grant.owner_type == "media_preview"
         out = Path(kwargs["output_path"])
@@ -486,7 +486,7 @@ def test_preview_binding_tick_before_submitter_bind(
     def arrange(runtime, resources, provider):
         runtime_ref.append(runtime)
         resources.admit_value = True
-        generate = provider.generate
+        generate = provider.generate_granted
 
         def delayed_bind(run, request_id, *, conn=None):
             if conn is not None:
@@ -513,7 +513,7 @@ def test_preview_binding_tick_before_submitter_bind(
                 kwargs["grant_context"].check()
                 raise AssertionError("cancelled provider must not produce an artifact")
 
-            provider.generate = interleaved_generate
+            provider.generate_granted = interleaved_generate
             assert runtime.run_once()
             terminal = repo.preview_records.get_media_preview_run("ws", "voice", run.identity)
             phases.append(terminal)
@@ -1144,7 +1144,7 @@ def test_preview_stale_and_cancel_do_not_generate(repo, tmp_path):
 
 def test_preview_failure_is_not_success_and_preserves_input(repo, tmp_path):
     class Failing(VoiceProvider):
-        def generate(self, **kwargs):
+        def generate_granted(self, **kwargs):
             self.calls += 1
             raise OSError("synthetic provider failure")
 
@@ -1665,66 +1665,52 @@ def test_avatar_preview_uses_own_grant_and_independent_person_version(
 
 
 def test_person_cache_validation_uses_actual_task_reader(repo, tmp_path, monkeypatch):
-    monkeypatch.setattr(main, "production_repo", repo)
-    render = SimpleNamespace(
-        workspace_id="ws",
-        task_id="task",
-        person_profile_id="person",
-        person_version="p1",
-        cache_key="render-key",
-        artifact_ref="artifact",
-        motion="natural",
-        expression="neutral",
-        model_id="fixture",
-    )
-    segment = SimpleNamespace(
-        audio_reference="audio",
-        voice_profile_id="voice",
-        voice_version="v1",
-        language="zh",
-    )
-    facts = {"source": "exact-source-revision"}
-    transform = SimpleNamespace(
-        transform_type="person_render",
-        status="succeeded",
-        input_digest="render-key",
-        output_refs=["artifact"],
-        input_refs=["audio"],
-        parameters={"language": "zh", "presenter_input_facts": facts},
-    )
-    monkeypatch.setattr(
-        repo.task_records,
-        "get_creation_task",
-        lambda ws, task: SimpleNamespace(owner_user_id="member"),
-    )
-    monkeypatch.setattr(
-        repo.profile_records,
-        "get_person_profile",
-        lambda *args: SimpleNamespace(id="person", version="p1", authorization=None),
-    )
-    monkeypatch.setattr(
-        repo.narration_artifacts,
-        "resolve_authorized_narration_audio_reference",
-        lambda *args: tmp_path / "synthetic.wav",
-    )
+    from tests._media_preview_test_fixtures import register_synthetic_profiles
+    from app.creation.contracts import CreationTask
+    from app.creation.narration_artifacts import NarrationArtifactRecord
+    from app.creation_execution import presenter_input_facts
+    from app.persistence_json import _json_payload
+
+    monkeypatch.setattr(main, 'production_repo', repo)
+    person, voice, _, audio_path, _ = register_synthetic_profiles(repo,
+        workspace_id='ws', member_id='member', person_id='person', person_version='p1',
+        voice_id='voice', voice_version='v1', language='zh')
+    task = CreationTask('task', 'ws', 'plan', 'cache', 'knowledge_explanation', owner_user_id='member')
+    with repo._connect() as conn:
+        conn.execute('INSERT INTO creation_tasks(id,workspace_id,plan_id,payload,updated_at,visibility) '
+            'VALUES(?,?,?,?,?,?)', (task.id, 'ws', task.plan_id, _json_payload(task),
+                task.updated_at.isoformat(), task.visibility))
+    repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
+        id='audio', workspace_id='ws', task_id=task.id, script_id='script', voice_profile_id=voice.id,
+        cache_key='audio', audio_path=str(audio_path), duration_seconds=2, sample_rate=8000, model_id=voice.model_id))
+    render = SimpleNamespace(workspace_id='ws', task_id=task.id, person_profile_id=person.id,
+        person_version=person.version, cache_key='render-key', artifact_ref='artifact',
+        motion='natural', expression='neutral', model_id='fixture')
+    segment = SimpleNamespace(audio_reference='narration://artifact/audio',
+        voice_profile_id=voice.id, voice_version=voice.version, language='zh')
+    original = repo.profile_inputs.resolve_avatar_lipsync_request
+    request = original(workspace_id='ws', person_id=person.id, person_version=person.version,
+        voice_profile_id=voice.id, voice_version=voice.version, audio_path=str(audio_path),
+        audio_cache_key=segment.audio_reference, language='zh', motion=render.motion,
+        expression=render.expression, authorization_id=person.authorization.id,
+        authorization_version=person.authorization.version, model_id=render.model_id, viewer_user_id=task.owner_user_id)
+    facts = presenter_input_facts(request)
+    transform = SimpleNamespace(transform_type='person_render', status='succeeded',
+        input_digest=render.cache_key, output_refs=[render.artifact_ref], input_refs=[segment.audio_reference],
+        parameters={'language': 'zh', 'presenter_input_facts': facts})
     captured = []
-    monkeypatch.setattr(
-        repo.profile_inputs,
-        "resolve_avatar_lipsync_request",
-        lambda **kw: captured.append(kw) or SimpleNamespace(),
-    )
-    monkeypatch.setattr(main, "presenter_input_facts", lambda request: facts)
-    monkeypatch.setattr(
-        "app.avatar_lipsync._authorization_failure", lambda request: None
-    )
+
+    def resolve(**kwargs):
+        captured.append(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(repo.profile_inputs, 'resolve_avatar_lipsync_request', resolve)
     assert main._person_render_matches_narration(render, segment, [transform])
-    assert (
-        captured[0]["viewer_user_id"] == "member"
-        and captured[0]["person_version"] == "p1"
-    )
+    assert captured[0]['viewer_user_id'] == 'member' and captured[0]['person_version'] == 'p1'
+    assert captured[0]['audio_path'] == str(audio_path)
 
-    def denied(**kw):
-        raise PermissionError("source sharing revoked")
+    def denied(**kwargs):
+        raise PermissionError('source sharing revoked')
 
-    monkeypatch.setattr(repo.profile_inputs, "resolve_avatar_lipsync_request", denied)
+    monkeypatch.setattr(repo.profile_inputs, 'resolve_avatar_lipsync_request', denied)
     assert not main._person_render_matches_narration(render, segment, [transform])

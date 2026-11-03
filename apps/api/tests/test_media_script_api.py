@@ -257,7 +257,7 @@ def test_script_source_is_adopted_through_existing_graphic_edit_and_undo(state):
     assert confirmed.status_code == 200, confirmed.text
     assert state.client.get(state.base_url).json()["montage"]["graphic_overlays"][0]["source_ref"] == source["source_ref"]
     assert state.client.get(state.base_url).json()["montage"]["cues"] == before["montage"]["cues"]
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={"request_id": "script-source-adoption-undo"}).status_code == 200
     assert state.client.get(state.base_url).json()["montage"]["graphic_overlays"] == before["montage"]["graphic_overlays"]
     assert len(state.calls) == 1
 

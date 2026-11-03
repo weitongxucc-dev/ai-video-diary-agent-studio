@@ -125,12 +125,20 @@ class NarrationStageUseCase:
             if plan.selected_voice is None:
                 raise MediaAuthorityError(reason='voice_identity_missing', impact='当前创作任务未生成配音，未调用声音模型。',
                     repair_action='重新预检并选择已授权且支持目标语言的声音版本。')
-            inputs = self.repository.profile_inputs.resolve_creation_task_narration_inputs(workspace_id=workspace_id, task_id=task.id,
-                voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
-            pronunciation_version = _pronunciation_version(_pronunciation_dictionary(
-                entries=inputs.pronunciation_entries, workspace_id=workspace_id,
-                person_profile_id=inputs.voice.person_profile_id, task_id=task.id))
-            for _ in self._merge_segments(task, script, inputs.voice, pronunciation_version, connection=conn):
+        # Voice reference validation can inspect audio. Release the read snapshot
+        # before that I/O, then verify its inputs again before reading the segments.
+        inputs = self.repository.profile_inputs.resolve_creation_task_narration_inputs(workspace_id=workspace_id, task_id=task.id,
+            voice_profile_id=plan.selected_voice.profile_id, voice_version=plan.selected_voice.version)
+        pronunciation_version = _pronunciation_version(_pronunciation_dictionary(
+            entries=inputs.pronunciation_entries, workspace_id=workspace_id,
+            person_profile_id=inputs.voice.person_profile_id, task_id=task.id))
+        with self.repository.execution_inputs.creation_execution_read() as conn:
+            current = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
+            if (current.input_digest != snapshot.input_digest
+                    or current.task.stage != task.stage
+                    or current.task.confirmed_script_id != task.confirmed_script_id):
+                raise PermissionError('配音合并准备期间任务或文案输入已变化，未执行组装')
+            for _ in self._merge_segments(current.task, current.script_header, inputs.voice, pronunciation_version, connection=conn):
                 pass
         language = {'zh-CN': 'zh', 'en-US': 'en', 'zh-CN/en-US': 'zh-en'}[script.language]
         if not input_references or len(set(input_references)) != len(input_references):

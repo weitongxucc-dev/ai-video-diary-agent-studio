@@ -488,7 +488,7 @@ class Provider:
     calls = 0
     fail = False
 
-    def generate(self, **kwargs):
+    def generate_granted(self, **kwargs):
         self.calls += 1
         if self.fail:
             raise VoiceCloneError("controlled provider failure")
@@ -936,60 +936,62 @@ def test_range_selected_person_qualification_pins_original_version_without_a_mod
         )
 
 
-def test_range_presenter_consumes_explicit_person_not_voice_relationship():
-    observed = []
-    selected = CreationPlanPersonReference("explicit-person", "v7")
-    plan = range_plan(selected_person=selected, selected_voice=range_plan_voice())
+def test_range_presenter_consumes_explicit_person_not_voice_relationship(repository, monkeypatch):
+    from app.creation.contracts import NarrationSegment
+    from app.creation.narration_artifacts import NarrationArtifactRecord
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    from script_seed_fixtures import script_seed_payload
+
+    authorization = repository.save_authorization(Authorization(
+        id='explicit-person-auth', version='v1', rights_holder='合成测试成员',
+        content_types=('person_likeness', 'avatar_video', 'voice'),
+        usage_scopes=('narration', 'avatar_lipsync'), effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        expires_at=None, evidence_reference='fixture://explicit-person/authorization', status='active', workspace_id='ws'))
+    explicit = repository.save_person_profile(replace(person(repository, image_asset(repository)),
+        id='explicit-person', version='v7', authorization=authorization), verified_owner_user_id='member')
+    voice = save_voice(repository, authorization=authorization)
+    audio_path = repository.resolve_workspace_media_reference('ws', voice.reference_audio_path)
+    assert (voice.person_profile_id, voice.person_version) == ('', '')
+    selected = CreationPlanPersonReference(explicit.id, explicit.version)
+    selected_voice = replace(range_plan_voice(), person_profile_id='', person_version='',
+        authorization_id=authorization.id, authorization_version=authorization.version)
+    plan = range_plan(selected_person=selected, selected_voice=selected_voice)
     plan.presenter_share_target = 100
-    plan.lipsync_quality = "fast"
-    segment = SimpleNamespace(
-        id="audio-1",
-        source_section_id="s1",
-        status="ready",
-        duration_seconds=2,
-        voice_profile_id="voice",
-        voice_version="v1",
-        audio_reference="artifact.wav",
-        language="zh",
-    )
+    plan.lipsync_quality = 'fast'
+    task = CreationTask('task', 'ws', plan.id, 'test', 'knowledge_explanation',
+        confirmed_script_id='script', owner_user_id='member')
+    _, task = repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id='member')
+    script = CreationTaskScript('script', 'ws', task.id, 'run', 'topic', 'test', 'zh-CN',
+        [CreationTaskScriptSection('s1', 'test', 'test', '', [])], selection_status='confirmed')
+    with repository._connect() as conn:
+        conn.execute('BEGIN')
+        conn.execute('INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) '
+            'VALUES(?,?,?,?,?,?)', (script.id, 'ws', task.id, script.run_id,
+                script_seed_payload(repository, conn, script), script.updated_at.isoformat()))
+    repository.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
+        id='range-audio', workspace_id='ws', task_id=task.id, script_id=script.id,
+        voice_profile_id=voice.id, cache_key='range-audio', audio_path=str(audio_path),
+        duration_seconds=2, sample_rate=8000, model_id=voice.model_id))
+    segment = NarrationSegment('audio-1', 'ws', task.id, script.id, 's1', 'test',
+        'narration://artifact/range-audio', 2, 8000, voice.model_id, voice.id, voice.version, 'zh', '', 'ready')
+    repository.narration_records.save_narration_segments('ws', task.id, script.id, [segment])
+    observed = []
+    original = repository.profile_records.get_person_profile
 
-    class Repo:
-        def list_narration_segments(self, *args):
-            return [segment]
+    def read_person(ws, person_id, version=None):
+        observed.append((ws, person_id, version))
+        return original(ws, person_id, version)
 
-        def get_person_profile(self, ws, id, version):
-            observed.append((ws, id, version))
-            return SimpleNamespace(id=id, version=version, authorization=None)
-
-        narration_artifacts = SimpleNamespace(
-            resolve_authorized_narration_audio_reference=lambda *args: Path("artifact.wav"))
-
-        class ProfileInputs:
-            def resolve_avatar_lipsync_request(self, **kwargs):
-                assert (
-                    kwargs["person_id"] == "explicit-person"
-                    and kwargs["person_version"] == "v7"
-                )
-                assert kwargs["viewer_user_id"] == "member"
-                return "controlled-request"
-
-        profile_inputs = ProfileInputs()
-
-    # The authorization boundary is tested by real profile tests; this case
-    # isolates the plan's version forwarding, not a media/model success.
-    from unittest.mock import patch
-
-    task = SimpleNamespace(workspace_id="ws", id="task", owner_user_id="member")
-    script = SimpleNamespace(id="script", sections=[SimpleNamespace(id="s1")])
-    with patch("app.creation_execution._authorization_failure", return_value=None):
-        assert (
-            presenter_inputs(Repo(), task, script, plan, {"fast": "test-model"})[0][0]
-            == segment
-        )
-        assert observed == [("ws", "explicit-person", "v7")]
-        plan.selected_person = None
-        with pytest.raises(ValueError, match="单独选择"):
-            presenter_inputs(Repo(), task, script, plan, {"fast": "test-model"})
+    monkeypatch.setattr(repository.profile_records, 'get_person_profile', read_person)
+    inputs = presenter_inputs(repository, task, script, plan, {'fast': 'test-model'})
+    assert inputs[0][0] == segment
+    request = inputs[0][1]
+    assert (request.person.id, request.person.version) == ('explicit-person', 'v7')
+    assert request.audio_path == str(audio_path) and request.voice == voice
+    assert observed == [('ws', 'explicit-person', 'v7')]
+    plan.selected_person = None
+    with pytest.raises(ValueError, match='单独选择'):
+        presenter_inputs(repository, task, script, plan, {'fast': 'test-model'})
 
 
 def test_range_wav_derivation_exact_samples_source_immutable_and_cache_revalidated(
@@ -1421,7 +1423,7 @@ def test_range_task_generation_hands_only_exact_reference_to_granted_provider(
         def __init__(self):
             pass
 
-        def generate(self, **kwargs):
+        def generate_granted(self, **kwargs):
             kwargs["grant_context"].check()
             self.calls.append(kwargs)
             output = kwargs["output_path"]

@@ -417,7 +417,8 @@ def _pcm_assembly_monitor(scheduler, grant, argv, output_paths, absolute_limit):
     manifest_bytes, manifest_identity = metadata(manifest_path)
     expected = {'version':1,'operation':'append','unit_id':f'{grant.request_id}:{grant.generation}',
         'job_id':grant.owner_id,'source_digest':resources['merge_source_digest'],
-        **baseline,'expected_file_identity':baseline['file_identity'],'sources':resources['pcm_sources'],'final':resources['merge_final']}
+        **baseline,'expected_file_identity':baseline['file_identity'],'sources':resources['pcm_sources'],'final':resources['merge_final'],
+        'max_input_count':resources['input_count']}
     del expected['file_identity'],expected['header_bytes_allowance']
     if json.loads(manifest_bytes) != expected:
         raise RecoveryBlocked('PCM manifest与原许可单元、来源或预算不一致')

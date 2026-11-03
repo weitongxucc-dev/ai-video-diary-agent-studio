@@ -32,7 +32,7 @@ class _VoiceProvider:
         self.calls = 0
         self.reference_paths: list[Path] = []
 
-    def generate(self, *, output_path, reference_audio_path, **_kwargs):
+    def generate_granted(self, *, output_path, reference_audio_path, **_kwargs):
         self.calls += 1
         self.reference_paths.append(Path(reference_audio_path))
         grant = _kwargs.get("grant_context")

@@ -412,7 +412,10 @@ def fixture(tmp_path, monkeypatch):
             voice_profile_id=plan.selected_voice.profile_id, cache_key='1'*64, language='zh',
             pronunciation_version=pronunciation)
     generator.generate_for_creation_task = generated
-    metadata = MetadataEditUseCase(repo, ArtifactStore(tmp_path / 'artifacts'), output_root=tmp_path / 'output')
+    from app.task_audio import TaskAudio
+    artifact_store = ArtifactStore(tmp_path / 'artifacts')
+    audio_service = TaskAudio(repo, artifact_store, tmp_path / 'temporary')
+    metadata = MetadataEditUseCase(repo, artifact_store, output_root=tmp_path / 'output', audio_service=audio_service)
     stage = NarrationStageUseCase(repo, generator, metadata, budget)
     committed = []
     persist = metadata.persist_montage_edit

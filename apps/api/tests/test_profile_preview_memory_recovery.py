@@ -18,11 +18,11 @@ class PressureProvider(VoiceProvider):
     def __init__(self, error):
         self.error, self.calls = error, 0
 
-    def generate(self, **kwargs):
+    def generate_granted(self, **kwargs):
         if self.error is not None:
             self.calls += 1
             raise self.error
-        return super().generate(**kwargs)
+        return super().generate_granted(**kwargs)
 
 
 def _pressure():

@@ -270,6 +270,7 @@ def test_query_after_undo_returns_original_version_without_adopting_it_again(cha
     original = state.client.get(first["result_url"]).json()
     version = original["result"]
     assert state.client.post(state.base_url + "/timeline/undo", json={
+        "request_id": "storyboard-receipt-undo",
         "expected_timeline_version_id": version["timeline_version_id"],
         "expected_timeline_sequence": version["timeline_sequence"]}).status_code == 200
     before = state.repo.task_records.get_creation_task("ws", state.task.id).current_timeline_version_id
