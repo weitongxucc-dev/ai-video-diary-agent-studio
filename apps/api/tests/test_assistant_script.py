@@ -167,7 +167,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     def no_execution(*_):
         pytest.fail("this scope test must not run a media executor")
     monkeypatch.setattr(main_module, "creation_execution", CreationExecution(material_repo,
-        run_narration=no_execution, run_montage_plan=no_execution, run_render=no_execution,
+        run_montage_plan=no_execution, run_render=no_execution,
         render_is_valid=lambda *_: False))
     def run_turn(_settings, **kwargs):
         calls.append(kwargs)

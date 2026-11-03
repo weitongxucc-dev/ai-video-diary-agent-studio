@@ -60,7 +60,7 @@ def captured_runtime(monkeypatch, tmp_path):
 
 def envelope(text):
     if text.lstrip().startswith("{"):
-        text=json.loads(text)["message"]
+        text=json.loads(text)["systemPrompt"]
     return json.loads(text.split("本轮能力与对象（JSON）：\n", 1)[1].splitlines()[0])
 
 
@@ -80,13 +80,13 @@ def test_one_conversation_refreshes_material_task_capabilities_and_trusted_objec
     contexts = []
     for call in calls:
         call["cmd"]
-        current = envelope(json.loads(call["message"])["message"])
-        assert current == envelope(json.loads(call["message"])["systemPrompt"])
+        current = envelope(call["message"])
+        assert current["task_id"] == (call["env"]["AI_VIDEO_DIARY_AGENT_TASK_ID"] or None)
         assert current["tool_names"] == json.loads(call["message"])["tools"]
-        assert "历史真实提案、修改和作业保留其当时的事实" in json.loads(call["message"])["message"]
-        assert "历史工具清单、失败及助手解释不能定义本轮工具可用性" in json.loads(call["message"])["message"]
+        assert "历史真实提案、修改和作业保留其当时的事实" in json.loads(call["message"])["systemPrompt"]
+        assert "历史工具清单、失败及助手解释不能定义本轮工具可用性" in json.loads(call["message"])["systemPrompt"]
         contexts.append(current)
-    assert contexts[0]["scope_kind"] == "material" and contexts[0]["task_id"] is None
+    assert contexts[0]["scope_kind"] == "home" and contexts[0]["task_id"] is None
     assert "preview_edit" not in contexts[0]["tool_names"]
     assert contexts[1]["scope_kind"] == "task" and contexts[1]["task_id"] == "task-current"
     assert "preview_edit" not in contexts[1]["tool_names"]
@@ -119,16 +119,18 @@ def test_task_without_material_snapshot_keeps_tools_guarded_and_does_not_guess(c
     assert "read_selected_material" in context["tool_names"]
 
 
-@pytest.mark.parametrize("stage,expected,excluded", [
+@pytest.mark.parametrize("stage,expected,shared", [
     ("topic", "generate_creation_task_topics", "preview_script_draft"),
     ("script", "preview_script_draft", "generate_creation_task_topics"),
 ])
-def test_topic_and_script_keep_current_stage_capability_gates(captured_runtime, stage, expected, excluded):
+def test_topic_and_script_keep_stage_context_and_shared_capabilities(captured_runtime, stage, expected, shared):
     settings, calls = captured_runtime
     pi.run_task_turn(settings, workspace_id="workspace-current", task_id="task-current",
                      message="检查当前阶段", stage=stage, selected_refs=[], playhead_ms=None, turn_id=f"turn-{stage}")
-    tools = envelope(calls[0]["message"])["tool_names"]
-    assert expected in tools and excluded not in tools
+    context = envelope(calls[0]["message"])
+    tools = context["tool_names"]
+    assert context["context_stage"] == stage and context["task_id"] == "task-current"
+    assert expected in tools and shared in tools
     assert "preview_edit" not in tools
     assert {"read_clip_candidates", "read_task_edit_capabilities", "preview_typed_edit", "read_task_object"} <= set(tools)
     prompt = json.loads(calls[0]["message"])["systemPrompt"]

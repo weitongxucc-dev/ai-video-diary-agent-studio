@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import sys
 
 from app.artifact_store import ArtifactStore
 from app.creation.contracts import TimelineVersion
@@ -47,13 +48,13 @@ def _leaf_case(tmp_path, monkeypatch):
         case.repo._claim_workspace_media_reference(conn, workspace_id='local', reference=reference)
     montage = CreationTaskMontagePlan(id='picture-window-plan', workspace_id='local', task_id=case.task_id,
         script_id=case.script_id, script_title='approved windows', status='ready',
-        cues=[NarrationCue('cue', 'section_1', '窗口字幕', 2)], clips=[MontageClip(id='clip', cue_id='cue', asset_id=asset.id,
+        cues=[NarrationCue('cue', 'section_1', '窗口字幕', 2, subtitle_style={'font_family': 'PingFang SC' if sys.platform == 'darwin' else 'Noto Sans CJK SC'})], clips=[MontageClip(id='clip', cue_id='cue', asset_id=asset.id,
             segment_id='segment', source_path=reference, source_start_seconds=0, source_end_seconds=1,
             timeline_start_seconds=0, timeline_end_seconds=2, match_score=1, match_reasons=['explicit slow picture'],
             needs_confirmation=False)], duration_seconds=2, low_confidence_clip_count=0, aspect_ratio='16:9',
         narration_audio_path=case.repo.narration_artifacts.narration_artifact_reference(case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key))
     montage.graphic_overlays = [{'kind': 'text', 'id': 'title', 'text': '原图层', 'start_seconds': .4,
-        'end_seconds': 1.8, 'x': .5, 'y': .15, 'width': .8}]
+        'end_seconds': 1.8, 'font_family': 'PingFang SC' if sys.platform == 'darwin' else 'Noto Sans CJK SC', 'x': .5, 'y': .15, 'width': .8}]
     case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))
     case.repo.timeline_records.create_timeline_version(TimelineVersion(id='approved-picture-head', workspace_id='local', task_id=case.task_id,
         parent_version_id=None, sequence=1, created_by_operation_id=None, snapshot={'montage_plan': creation_task_montage_plan_to_payload(montage)}))

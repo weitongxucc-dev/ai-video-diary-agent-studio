@@ -47,6 +47,7 @@ def metadata_device_components(root, *, repository):
 def isolated_host(tmp_path,monkeypatch, request):
     from assistant_turn_control_fixtures import isolate_assistant_turn_control
     isolate_assistant_turn_control(monkeypatch, request)
+    monkeypatch.setattr(main, "_goal_continuation_service", None)
     for function in (main._publish_runtime_dependencies, main._activate_runtime_reload, main._publish_runtime_routes):
         for node in ast.walk(ast.parse(inspect.getsource(function))):
             if isinstance(node,ast.Global):
@@ -105,6 +106,9 @@ def isolated_host(tmp_path,monkeypatch, request):
             main.automation_runtime.stop()
         if main.assistant_continuation_driver is not None:
             main.assistant_continuation_driver.stop()
+        if main._goal_continuation_service is not None:
+            import time
+            assert main._goal_continuation_service.stop(deadline_monotonic=time.monotonic() + 5)
 
 
 def test_startup_recovers_once_but_reload_never_recovers_or_replaces_installer(isolated_host,monkeypatch):
@@ -144,7 +148,7 @@ def test_live_path_change_refuses_before_any_device_or_workspace_write(isolated_
     assert entered.wait(2)
     before=env_path.read_bytes()
     def forbidden(*args):raise AssertionError('blocked catalog change must not write workspace settings')
-    monkeypatch.setattr(main,'apply_workspace_runtime_settings_update',forbidden)
+    monkeypatch.setattr(main,'apply_runtime_settings_save',forbidden)
     client=TestClient(main.app,client=('127.0.0.1',50000))
     response=client.post('/api/settings/runtime',json={'model_root_path':str(tmp_path/'other'), 'llm_model':'blocked-model'})
     assert response.status_code==409,response.text
@@ -155,7 +159,7 @@ def test_scheduled_reload_refuses_before_any_settings_write(isolated_host,monkey
     installer,_,_,env_path,_=isolated_host
     monkeypatch.setattr(main,'creation_execution_mode','scheduled')
     def forbidden(*args):raise AssertionError('scheduled refusal must happen before persistence')
-    monkeypatch.setattr(main,'apply_workspace_runtime_settings_update',forbidden)
+    monkeypatch.setattr(main,'apply_runtime_settings_save',forbidden)
     before=env_path.read_bytes()
     response=TestClient(main.app,client=('127.0.0.1',50000)).post('/api/settings/runtime',json={'llm_model':'blocked'})
     assert response.status_code==503,response.text

@@ -2,6 +2,7 @@ from __future__ import annotations
 from app.content_identity_http import ContentIdentityHttpAdapter
 from app.creation.task_authorization import TaskAuthorizationUseCase
 from app.member_permits import MemberDeviceAccess
+from script_seed_fixtures import script_seed_payload
 
 from app.materials.intake_routes import material_binding_status
 
@@ -127,6 +128,9 @@ def _qualify_start_voice(repo, task_id, member_id, workspace_id='local'):
         task.owner_user_id=member_id
         conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
             (json.dumps(asdict(task),default=str),workspace_id,task_id))
+    task = repo.task_records.get_creation_task(workspace_id, task_id)
+    return revision_digest(repo.script_records.get_creation_task_script(workspace_id, task.confirmed_script_id),
+        repo.plan_records.get_creation_plan(workspace_id, task.plan_id))
 
 
 def test_creation_owner_uses_canonical_plan_visibility_for_legacy_payload(tmp_path):
@@ -167,7 +171,7 @@ def _render_version_fixture(tmp_path):
     """Persisted render inputs are real synthetic media with an owned profile."""
     from app.member_permits import MemberDeviceAccess
 
-    repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
+    repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local", duration_seconds=1)
     members = LocalMemberService(repo.database_path)
     member = members.add_member("render version fixture")
     actor = CreationExecutionActor("local", member.member_id)
@@ -545,7 +549,7 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
             media_checks.append(grant.request_id)
 
         monkeypatch.setattr(PicturePreviewRenderer, 'render_montage', staticmethod(synthetic_media))
-        monkeypatch.setattr(main_module, "_validate_rendered_media", synthetic_validate)
+        monkeypatch.setattr("app.creation.render_stage_use_case._validate_rendered_media", synthetic_validate)
         monkeypatch.setattr(main_module, "_start_creation_task_quality_check", lambda w, t: quality_requests.append((w, t)))
         if publication_state == "missing_input_version":
             task = repo.task_records.get_creation_task("local", task_id)
@@ -687,6 +691,7 @@ def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_accou
     plan.owner_user_id = user
     task = repo.task_records.get_creation_task(workspace, task_id)
     task.owner_user_id = user
+    script_for_merge = repo.script_records.get_creation_task_script(workspace, script_id)
     with repo._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
                      (json.dumps(asdict(plan), default=str), workspace, plan.id))
@@ -694,9 +699,9 @@ def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_accou
                      (json.dumps(asdict(task), default=str), workspace, task_id))
         if stop is None:
             # Exercise actual granted FFmpeg concatenation, not just one-file copy.
-            script_payload = json.loads(conn.execute("SELECT payload FROM creation_task_scripts WHERE id=?", (script_id,)).fetchone()[0])
-            script_payload["sections"].append({**script_payload["sections"][0], "id": "section_2"})
-            conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?", (json.dumps(script_payload), script_id))
+            script_for_merge.sections.append(replace(script_for_merge.sections[0], id='section_2'))
+            conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?",
+                (script_seed_payload(repo, conn, script_for_merge), script_id))
     digest = revision_digest(repo.script_records.get_creation_task_script(workspace, script_id), plan)
     asset, _source_reference = register_synthetic_video_asset(
         repo, workspace_id=workspace, member_id=user,
@@ -798,8 +803,11 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     monkeypatch.setattr(main_module, "auth_context", account_context)
     monkeypatch.setattr(main_module, "_verify_creation_identity", verify)
     monkeypatch.setattr(main_module, "trusted_device_credential", lambda: SimpleNamespace(device_id=device))
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    authorizations = TaskAuthorizationUseCase(repo, lambda identity: verify(CreationExecutionActor.from_event(workspace, identity)))
+    owner.task_authorizations = authorizations
     runtime = SimpleNamespace(scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)},
-        last_error=None, running=True, wake=lambda: None)
+        task_authorizations=authorizations, last_error=None, running=True, wake=lambda: None)
     monkeypatch.setattr(main_module, "device_runtime", runtime)
     monkeypatch.setattr(execution, "execute", lambda *_args:
         pytest.fail("product cannot use diagnostic execute/thread fallback"))
@@ -1060,7 +1068,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
                         lambda **_kwargs: pinned_capacity)
     monkeypatch.setattr("app.montage.sample_host_capacity",
                         lambda **_kwargs: pinned_capacity)
-    repo, task_id, script_id, digest = _seed(tmp_path)
+    repo, task_id, script_id, digest = _seed(tmp_path, duration_seconds=1)
     audio = tmp_path / "voice.wav"
     video = tmp_path / "library" / "source.mp4"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
@@ -1389,6 +1397,7 @@ def _permit_scheduler(repo, tmp_path):
 def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, monkeypatch):
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     scheduler, members, owner_member = _permit_scheduler(repo, tmp_path)
+    digest = _qualify_start_voice(repo, task_id, owner_member.member_id)
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "creation_execution", _execution(repo))
     monkeypatch.setattr(main_module, "local_members_service", members)
@@ -1396,7 +1405,7 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
         task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
             CreationExecutionActor.from_event(identity["workspace_id"], identity))),
-        last_error=None, wake=lambda: None,
+        last_error=None, running=True, wake=lambda: None,
     ))
     monkeypatch.setattr(ThreadPoolExecutor, "submit", staticmethod(lambda *_args: pytest.fail("许可已接通，制作作业不得退回旧的本机线程")))
     client = TestClient(main_module.app,
@@ -1438,7 +1447,7 @@ def test_http_start_refuses_an_identity_it_cannot_verify(tmp_path, monkeypatch):
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
         task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
             CreationExecutionActor.from_event(identity["workspace_id"], identity))),
-        last_error=None, wake=lambda: None,
+        last_error=None, running=True, wake=lambda: None,
     ))
     monkeypatch.setattr(ThreadPoolExecutor, "submit", staticmethod(lambda *_args: pytest.fail("身份不可核验时不得放行制作作业")))
     base = f"/api/creation-tasks/{task_id}/execution"
@@ -1448,6 +1457,7 @@ def test_http_start_refuses_an_identity_it_cannot_verify(tmp_path, monkeypatch):
     assert not repo.job_records.list_job_runs("local", task_id)
     # 另一位真实成员发起时，许可挂的是他自己的成员行，不是 owner 的，也不是一个字符串。
     second, second_token = members.join(members.create_invite_code(), "第二位")
+    payload['input_digest'] = _qualify_start_voice(repo, task_id, second.member_id)
     client = TestClient(main_module.app, headers={"X-Local-Member-Token": second_token})
     assert client.post(base + "/start", json=payload).status_code == 202
     with repo._connect() as conn:
@@ -1462,6 +1472,7 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     execution = _execution(repo)
     scheduler, members, seeded_owner = _permit_scheduler(repo, tmp_path)
+    digest = _qualify_start_voice(repo, task_id, seeded_owner.member_id)
     task = repo.task_records.get_creation_task("local", task_id)
     task.owner_user_id = seeded_owner.member_id
     with repo._connect() as conn:
@@ -1552,7 +1563,10 @@ def test_failed_new_narration_never_reuses_leftover_old_audio(tmp_path, monkeypa
 def _render_validity_fixture(tmp_path, monkeypatch):
     store = ArtifactStore(tmp_path / "artifacts")
     published = store.publish_bytes("task/preview.mp4", b"invalid media")
-    task = SimpleNamespace(current_timeline_version_id="version_1", confirmed_script_id="script_1")
+    task = CreationTask("task_1", "workspace_a", "plan_1", "validity", "knowledge_explanation",
+        current_timeline_version_id="version_1", confirmed_script_id="script_1")
+    requirement_plan = CreationPlan("plan_1", "workspace_a", "validity", "validity", 1, "zh-CN",
+        "16:9", 1, [], [], None, [], 0, 0, "", [], [], [], "fixture")
     plan = creation_task_montage_plan_to_payload(CreationTaskMontagePlan(
         id="montage_validity", workspace_id="workspace_a", task_id="task_1",
         script_id="script_1", script_title="fixture", status="rendered",
@@ -1566,6 +1580,7 @@ def _render_validity_fixture(tmp_path, monkeypatch):
     transform = SimpleNamespace(task_id="task_1", job_id="render_1", status="succeeded",
                                 output_refs=[published.logical_ref], input_digest="render-input")
     repository = SimpleNamespace(
+        plan_records=SimpleNamespace(get_creation_plan=lambda *_: requirement_plan),
         task_records=SimpleNamespace(get_creation_task=lambda *_: task),
         get_creation_task_montage_plan=lambda *_: plan,
         timeline_records=SimpleNamespace(get_timeline_version=lambda *_: current_version),
@@ -1583,7 +1598,7 @@ def _render_validity_fixture(tmp_path, monkeypatch):
 def test_video_ready_requires_current_version_registered_hash_and_probe(tmp_path, monkeypatch):
     store, published, current_version, transform = _render_validity_fixture(tmp_path, monkeypatch)
     assert not main_module._creation_render_is_valid("workspace_a", "task_1")
-    monkeypatch.setattr(main_module, "_validate_rendered_media", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.creation.render_stage_use_case._validate_rendered_media", lambda *_args, **_kwargs: None)
     assert main_module._creation_render_is_valid("workspace_a", "task_1")
     transform.status = "failed"
     assert not main_module._creation_render_is_valid("workspace_a", "task_1")
@@ -1597,7 +1612,7 @@ def test_video_ready_requires_current_version_registered_hash_and_probe(tmp_path
 
 def test_render_validity_requires_lineage_without_media(tmp_path, monkeypatch):
     store, published, current_version, transform = _render_validity_fixture(tmp_path, monkeypatch)
-    monkeypatch.setattr(main_module, "_validate_rendered_media", lambda *_args, **_kwargs: pytest.fail("metadata-only validation must not probe"))
+    monkeypatch.setattr("app.creation.render_stage_use_case._validate_rendered_media", lambda *_args, **_kwargs: pytest.fail("metadata-only validation must not probe"))
     def valid():
         return main_module._creation_render_is_valid("workspace_a", "task_1", verify_media=False)
     assert valid()
@@ -1635,6 +1650,7 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
     from app.creation.contracts import JobRun, TaskEvent
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     scheduler, _members, member = _permit_scheduler(repo, tmp_path)
+    digest = _qualify_start_voice(repo, task_id, member.member_id)
     execution = _execution(repo)
     actor = CreationExecutionActor("local", member.member_id)
     job = execution.start("local", task_id, script_id, digest, actor=actor)
@@ -1648,8 +1664,9 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
         script = repo.script_records.get_creation_task_script("local", script_id)
         script = replace(script, sections=[replace(script.sections[0], content="较新采用的文案")])
         with repo._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?",
-                (json.dumps(asdict(script), default=str), script.id))
+                (script_seed_payload(repo, conn, script), script.id))
     if scenario in {"newer_execution", "newer_input_and_execution"}:
         newer_digest = revision_digest(repo.script_records.get_creation_task_script("local", script_id),
             repo.plan_records.get_creation_plan("local", repo.task_records.get_creation_task("local", task_id).plan_id))
@@ -1688,6 +1705,7 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
 def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path, monkeypatch):
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     scheduler, members, owner_member = _permit_scheduler(repo, tmp_path)
+    digest = _qualify_start_voice(repo, task_id, owner_member.member_id)
     execution = _execution(repo)
     # 能被复核的作业必须带着真实成员身份落库，否则开机时就该拒绝重新申请许可。
     queued = execution.start("local", task_id, script_id, digest,
@@ -2090,8 +2108,8 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         output.write_bytes(synthetic_wav_bytes())
         pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=kwargs['pronunciation_entries'],
             workspace_id='local', person_profile_id=kwargs['voice_identity'].person_profile_id, task_id=task_id))
-        return NarrationArtifact(task_id=task_id, script_id=script_id, audio_path=str(output), duration_seconds=.01,
-            sample_rate=24000, model_id='synthetic', voice_profile_id=kwargs['voice_identity'].id,
+        return NarrationArtifact(task_id=task_id, script_id=script_id, audio_path=str(output), duration_seconds=2,
+            sample_rate=8000, model_id='synthetic', voice_profile_id=kwargs['voice_identity'].id,
             cache_key='pressure_cache', language='zh', pronunciation_version=pronunciation)
     monkeypatch.setattr(generator, 'generate_for_creation_task', generated)
     executor = CreationJobUnitExecutor(repo, render_action=lambda *args: pytest.fail('not render'),
@@ -2809,7 +2827,7 @@ def _queued_creation_admission_case(tmp_path, *, static):
         'text_chars':547 if static else 300,'section_count':3,'reference_bytes':627574,
         'duration_seconds':30,'max_output_bytes':3145728,'threads':2,'timeout_seconds':300.0}
     key='narration:'+'b'*64
-    owner.stage_facts=lambda *_:(key,dict(resources))
+    owner.stage_facts=lambda *_, **_kwargs:(key,dict(resources))
     owner.narration_unit_facts=lambda *args,**kwargs:owner.stage_facts()
     calls=[]
     def admit(request):
@@ -2865,7 +2883,7 @@ def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_wait
         # An explicitly changed unit declaration may use the formal continue
         # entry; the old refusal survives and no admission/model is run here.
         changed={**request.resources,'text_chars':300}
-        owner.stage_facts=lambda *_:('narration:'+'c'*64,changed)
+        owner.stage_facts=lambda *_, **_kwargs:('narration:'+'c'*64,changed)
         resumed=control.resume('local',task_id,actor,runtime,verify_media=False)
         assert resumed['job']['status']=='queued' and resumed['job']['id']!=request.owner_id
         assert repo.job_records.get_job_run('local',request.owner_id).status=='failed'
@@ -4007,13 +4025,13 @@ def test_narration_merge_checkpoint_rejects_changed_actual_dependency(tmp_path, 
     if changed=='partial':
         Path(checkpoint['pcm']['work_path']).write_bytes(b'changed dependency')
         request=case.scheduler._get(next(row['id'] for row in case.repo.job_records.list_creation_job_request_states('local',case.job.id) if row['state']=='waiting'))
-        with case.repo._connect() as conn:
+        with case.repo.execution_inputs.creation_execution_read() as conn:
             watcher=case.owner.capture_local(request,conn)
             assert watcher(conn)=='stale'
     else:
         artifact=case.repo.narration_artifacts.get_narration_artifact('local',checkpoint['input_references'][0].removeprefix('narration://artifact/'))
         Path(artifact.audio_path).write_bytes(b'changed dependency')
-        with case.repo._connect() as conn:
+        with case.repo.execution_inputs.creation_execution_read() as conn:
             job,task,_event,script,plan=case.owner._facts(conn,'local',case.job.id)
             with pytest.raises(RecoveryBlocked,match='检查点'):
                 case.owner.narration_unit_facts(conn,job,task,script,plan)
@@ -4792,7 +4810,7 @@ def _edit_source_boundary_case(tmp_path, monkeypatch, kind):
     # these boundary cases isolate persisted source changes with real SQLite/turn facts.
     key = ('person_edit:' if kind == 'creation_task_person_edit' else 'narration_edit:') + 'source'
     resources = {'kind': 'edit_source_boundary'}
-    monkeypatch.setattr(case.owner, '_check_facts', lambda *a: 'ready')
+    monkeypatch.setattr(case.owner, '_check_facts', lambda *a, **kwargs: 'ready')
     monkeypatch.setattr(case.owner, 'edit_facts', lambda *a, **kw: (key, resources))
     monkeypatch.setattr(case.owner, 'narration_edit_facts', lambda *a, **kw: (key, resources))
     connections = []
@@ -6011,7 +6029,7 @@ def _ready_pcm_body_case(tmp_path, monkeypatch):
     monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbid_worker)
     for name in ('get_creation_task_script', '_creation_task_script_from_payload',
                  'effective_creation_script', 'list_narration_segments'):
-        target = repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name == 'list_narration_segments' else repo
+        target = repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name == 'list_narration_segments' else repo.section_inputs
         original = getattr(target, name)
         def bounded(*args, _original=original, **kwargs):
             current = repo.task_records.get_creation_task('local', task.id, connection=kwargs.get('connection'))
@@ -6019,7 +6037,7 @@ def _ready_pcm_body_case(tmp_path, monkeypatch):
                 pytest.fail('PCM must not hydrate whole script/segment bodies')
             # Following montage is explicitly outside this migration.
             return _original(*args, **kwargs)
-        monkeypatch.setattr((target.section_inputs if name in ('effective_creation_script',) else target), name, bounded)
+        monkeypatch.setattr(target, name, bounded)
     original_decoder = repo.narration_records._decode_script
     def bounded_decoder(*args, _original=original_decoder, **kwargs):
         current = repo.task_records.get_creation_task('local', task.id, connection=kwargs.get('connection'))

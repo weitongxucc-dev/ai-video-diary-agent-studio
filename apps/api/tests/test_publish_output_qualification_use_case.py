@@ -55,10 +55,12 @@ def test_metadata_authorized_task_and_output_qualification(tmp_path, monkeypatch
     trace, task_reads, version_reads = [], [], []
     get_task, get_version, list_artifacts = repository.task_records.get_creation_task, repository.timeline_records.get_timeline_version, repository.execution_records.list_artifact_records
 
-    def observe_task(ws, identifier):
+    def observe_task(ws, identifier, *, include_private=True, connection=None):
+        if connection is not None:
+            return get_task(ws, identifier, include_private=include_private, connection=connection)
         trace.append("task")
         assert (ws, identifier) == (workspace, task.id)
-        result = get_task(ws, identifier)
+        result = get_task(ws, identifier, include_private=include_private, connection=connection)
         task_reads.append(result)
         return result
 

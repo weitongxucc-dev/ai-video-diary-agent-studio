@@ -50,7 +50,7 @@ def test_fixed_version_download_returns_its_actual_receipt_and_range(output, suf
     client, _, _, _ = output
     path = '/api/creation-tasks/task/output' + suffix + '?expected_version_id=v1'
     response = client.get(path)
-    assert response.status_code == 200 and response.content == body
+    assert response.status_code == 200 and response.content == body, response.text
     assert response.headers['X-Timeline-Version-Id'] == 'v1' and response.headers['X-Timeline-Sequence'] == '1'
     part = client.get(path, headers={'Range': 'bytes=1-3'})
     assert part.status_code == 206 and part.content == body[1:4]
@@ -60,9 +60,10 @@ def test_fixed_version_download_returns_its_actual_receipt_and_range(output, suf
 def test_old_request_cannot_silently_receive_new_version(output):
     client, _, _, version = output
     version(2)
-    assert client.get('/api/creation-tasks/task/output?expected_version_id=v1').status_code == 409
+    response = client.get('/api/creation-tasks/task/output?expected_version_id=v1')
+    assert response.status_code == 409, response.text
     current = client.get('/api/creation-tasks/task/output?expected_version_id=v2')
-    assert current.status_code == 200 and current.content == b'video-2'
+    assert current.status_code == 200 and current.content == b'video-2', current.text
     assert current.headers['X-Timeline-Version-Id'] == 'v2'
 
 
@@ -84,7 +85,8 @@ def test_new_version_without_valid_registered_output_never_falls_back_to_old(out
                 for item in root.rglob('*')}
 
     before_facts, before_tree = facts(), tree()
-    assert client.get('/api/creation-tasks/task/output?expected_version_id=v2').status_code == 409
+    response = client.get('/api/creation-tasks/task/output?expected_version_id=v2')
+    assert response.status_code == 409, response.text
     expected = ('当前版本尚无可下载的有效产物，请等待该版本制作完成。' if values.get('rendered') is False
                 else '当前版本产物尚未登记。')
     subtitles = client.get('/api/creation-tasks/task/output/subtitles?expected_version_id=v2')
@@ -101,4 +103,5 @@ def test_version_change_while_resolving_file_rejects_download(output, monkeypatc
         version(2)
         return result
     monkeypatch.setattr(store, 'resolve_file', resolve)
-    assert client.get('/api/creation-tasks/task/output?expected_version_id=v1').status_code == 409
+    response = client.get('/api/creation-tasks/task/output?expected_version_id=v1')
+    assert response.status_code == 409, response.text

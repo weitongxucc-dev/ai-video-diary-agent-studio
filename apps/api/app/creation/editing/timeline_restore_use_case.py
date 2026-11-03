@@ -136,7 +136,7 @@ class TimelineRestoreUseCase:
             if self.conversations is None:
                 raise PermissionError('恢复指令的来源核验未装配')
             source_input = self.conversations.task_turn_source(source['assistant_turn_id'], workspace_id, member_id, task_id)
-            if source_input['input_id'] != source['input_id']:
+            if source_input.get('input_id') != source['input_id']:
                 raise PermissionError('恢复动作不属于原已消费输入')
             CreationIntentUseCase.reject_discussion_only_input(source_input['raw_command'])
         def guarded(connection):

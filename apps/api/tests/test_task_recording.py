@@ -6,7 +6,8 @@ import json
 import shutil
 import subprocess
 import wave
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from app.creation.script_contracts import CreationTaskScriptSection
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -172,7 +173,11 @@ def _prepare_first_recording_adoption(repo: ProductionRepository, task_id: str) 
                      ("local", task_id))
 
 
-def test_initial_recording_requires_explicit_adoption_then_persists_narration_for_continuation(recording_task, tmp_path):
+def test_initial_recording_requires_explicit_adoption_then_persists_narration_for_continuation(recording_task, tmp_path, monkeypatch):
+    from app.narration import NarrationGenerator
+    def no_narration(*args, **kwargs):
+        pytest.fail("录音采用后不应再次生成配音")
+    monkeypatch.setattr(NarrationGenerator, 'generate_for_creation_task', no_narration)
     repo, task_id, _old_version_id, client = recording_task
     authorized_voice = repo.plan_records.get_creation_plan("local", "plan_recording").selected_voice
     generated_preview = client.get(f"/api/creation-tasks/{task_id}/execution/preview")
@@ -253,7 +258,6 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     current_plan = restarted.plan_records.get_creation_plan("local", "plan_recording")
     execution = CreationExecution(
         restarted,
-        run_narration=lambda _workspace, _task: pytest.fail("录音采用后不应再次生成配音"),
         run_montage_plan=lambda _workspace, _task: None,
         run_render=lambda _workspace, _task: None,
         render_is_valid=lambda _workspace, _task: False,
@@ -300,6 +304,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
         "local", task_id, montage.id, creation_task_montage_plan_to_payload(montage),
     )
     with restarted._connect() as conn:
+        conn.execute('BEGIN')
         digest, resources = cpu_render_facts(
             restarted, conn, restarted.task_records.get_creation_task("local", task_id),
             current_plan, CpuRenderLimits(1024 * 1024, 1, 30),
@@ -308,15 +313,12 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     assert resources["kind"] == "creation_render"
 
     with repo._connect() as conn:
-        row = conn.execute(
-            "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?",
-            ("local", current_script.id),
-        ).fetchone()
-        script_payload = json.loads(row["payload"])
-        script_payload["sections"][0]["content"] = "之后改过的确认文案"
+        conn.execute('BEGIN IMMEDIATE')
+        changed_script = replace(current_script, sections=[
+            replace(current_script.sections[0], content='之后改过的确认文案'), *current_script.sections[1:]])
         conn.execute(
             "UPDATE creation_task_scripts SET payload=? WHERE workspace_id=? AND id=?",
-            (json.dumps(script_payload), "local", current_script.id),
+            (script_seed_payload(repo, conn, changed_script), "local", current_script.id),
         )
     assert client.get(route).json()["items"] == []
     stale_preview = client.get(f"/api/creation-tasks/{task_id}/execution/preview")
@@ -331,13 +333,11 @@ def test_initial_recording_adoption_rejects_ambiguous_or_stale_script(recording_
     route = f"/api/creation-tasks/{task_id}/audio/recordings"
     script = repo.script_records.get_creation_task_script("local", "script_recording")
     with repo._connect() as conn:
-        payload = json.loads(conn.execute(
-            "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?",
-            ("local", script.id),
-        ).fetchone()[0])
-        payload["sections"].append({"id": "section_2", "title": "第二段", "content": "不能推断", "visual_prompt": "", "evidence_reference_ids": []})
+        conn.execute('BEGIN IMMEDIATE')
+        changed_script = replace(script, sections=[*script.sections,
+            CreationTaskScriptSection('section_2', '第二段', '不能推断', '', [])])
         conn.execute("UPDATE creation_task_scripts SET payload=? WHERE workspace_id=? AND id=?",
-                     (json.dumps(payload), "local", script.id))
+                     (script_seed_payload(repo, conn, changed_script), "local", script.id))
     saved_response = client.post(route, files={"audio": ("voice.wav", wav_bytes(), "audio/wav")})
     assert saved_response.status_code == 200, saved_response.text
     saved = saved_response.json()
@@ -359,13 +359,11 @@ def test_initial_recording_rejects_script_content_changed_after_save(recording_t
     saved = saved_response.json()
     script = repo.script_records.get_creation_task_script("local", "script_recording")
     with repo._connect() as conn:
-        payload = json.loads(conn.execute(
-            "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?",
-            ("local", script.id),
-        ).fetchone()[0])
-        payload["sections"][0]["content"] = "已修改的文案正文"
+        conn.execute('BEGIN IMMEDIATE')
+        changed_script = replace(script, sections=[
+            replace(script.sections[0], content='已修改的文案正文'), *script.sections[1:]])
         conn.execute("UPDATE creation_task_scripts SET payload=? WHERE workspace_id=? AND id=?",
-                     (json.dumps(payload), "local", script.id))
+                     (script_seed_payload(repo, conn, changed_script), "local", script.id))
     response = client.post(route + "/adopt", json={
         "source_ref": saved["source_ref"], "script_id": script.id,
         "source_section_id": "section_1",

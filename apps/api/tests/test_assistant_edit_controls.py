@@ -9,6 +9,51 @@ from test_assistant_edit_chain import current, preview, storyboard as storyboard
 from test_montage_pipeline import person_render_edit_state  # noqa: F401
 
 
+def test_original_turn_restore_replays_and_rejects_foreign_input(tmp_path):
+    from app.creation.editing.metadata_use_case import metadata_edit_command
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreCommand, TimelineRestoreUseCase
+    from app.creation_execution import CreationExecutionActor
+    from test_metadata_edit_use_case import metadata_state
+
+    state = metadata_state(tmp_path)
+    edited = state.case.save(state.task, metadata_edit_command(state.task, state.identity, 'SetClipLock',
+        {'clip_id': 'clip', 'locked': True, 'base_version_id': state.base.id}))
+    task = edited.task
+    version = state.repo.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
+    conversations = ConversationRepository(state.repo.database_path)
+    member = state.member.member_id
+    chat = conversations.create('ws', member, 'home', 'home', 'history')
+    instruction = '撤销刚才那一步'
+    conversations.save_draft(chat['id'], 'ws', member, instruction, 0)
+    turn, created = conversations.create_turn_idempotent(chat['id'], 'ws', member, instruction,
+        str(uuid4()), 1, request_context={'kind': 'task', 'task_id': task.id, 'stage': 'montage',
+            'selected_object_refs': [], 'playhead_ms': None,
+            'target_snapshot': {'timeline_version_id': version.id, 'timeline_sequence': version.sequence}})
+    assert created
+    assert 'input_id' not in conversations.task_turn_source(turn['id'], 'ws', member, task.id)
+    restore = TimelineRestoreUseCase(state.repo, state.case, conversations=conversations)
+    actor = CreationExecutionActor('ws', member)
+    command = TimelineRestoreCommand('ws', task, False)
+    kwargs = {'actor': actor, 'request_id': 'original-turn-undo',
+        'expected_timeline_version_id': version.id, 'expected_timeline_sequence': version.sequence,
+        'source': {'assistant_turn_id': turn['id'], 'input_id': None}}
+    restored = restore.execute(command, **kwargs)
+    assert restored.operation.operation_type == 'UndoTimelineVersion'
+    assert not restored.montage.clips[0].locked
+    head = restored.task.current_timeline_version_id
+    replayed = restore.execute(command, **kwargs)
+    assert replayed.operation.id == restored.operation.id
+    assert replayed.task.current_timeline_version_id == head
+    with state.repo._connect() as conn:
+        before = conn.iterdump()
+        snapshot = tuple(before)
+    with pytest.raises(PermissionError, match='原已消费输入'):
+        restore.execute(command, **{**kwargs, 'request_id': 'foreign-input',
+            'source': {'assistant_turn_id': turn['id'], 'input_id': 'unconsumed-input'}})
+    with state.repo._connect() as conn:
+        assert tuple(conn.iterdump()) == snapshot
+
+
 def control(state, monkeypatch, command):
     conversations = ConversationRepository(state.production.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
@@ -21,7 +66,7 @@ def control(state, monkeypatch, command):
             "stage": "montage", "selected_object_refs": [], "playhead_ms": None,
             "target_snapshot": {"timeline_version_id": version.id, "timeline_sequence": version.sequence}})
     assert created
-    return {"assistant_turn_id": row["id"], "expected_timeline_version_id": version.id,
+    return {"request_id": "history:" + row["id"], "assistant_turn_id": row["id"], "expected_timeline_version_id": version.id,
         "expected_timeline_sequence": version.sequence}
 
 
@@ -36,7 +81,11 @@ def test_undo_and_redo_use_original_turn_and_actual_versions(storyboard, monkeyp
     undone = state.client.post(state.base_url + "/timeline/undo", json=body)
     assert undone.status_code == 200, undone.text
     assert [item["id"] for item in current(state)["montage"]["clips"]] == original
-    assert state.client.post(state.base_url + "/timeline/undo", json=body).status_code == 409
+    restored_head = current(state)["task"]["current_timeline_version_id"]
+    assert state.client.post(state.base_url + "/timeline/undo", json=body).status_code == 200
+    assert current(state)["task"]["current_timeline_version_id"] == restored_head
+    stale = {**body, "request_id": body["request_id"] + ":stale"}
+    assert state.client.post(state.base_url + "/timeline/undo", json=stale).status_code == 409
     redone = state.client.post(state.base_url + "/timeline/redo", json=control(state, monkeypatch, "重做刚才撤销那一步"))
     assert redone.status_code == 200, redone.text
     assert [item["id"] for item in current(state)["montage"]["clips"]] == list(reversed(original))

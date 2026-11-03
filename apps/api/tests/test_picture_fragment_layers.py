@@ -1,5 +1,6 @@
 import hashlib
 import subprocess
+import sys
 from types import SimpleNamespace
 
 from app.creation.assembly_manifest import iter_picture_windows
@@ -14,7 +15,7 @@ def layers():
         TimedCaption(.2333334, .8333334, '第二条', {'font_size': 72, 'color': '#FFE070', 'background_opacity': .5})]
     graphics = [{'kind': 'text', 'id': 'title', 'text': '标题',
         'start_seconds': .1666667, 'end_seconds': .7333334, 'font_size': 72, 'color': '#80FF90',
-        'x': .5, 'y': .15, 'width': .8}]
+        'font_family': 'PingFang SC' if sys.platform == 'darwin' else 'Noto Sans CJK SC', 'x': .5, 'y': .15, 'width': .8}]
     return captions, graphics
 
 

@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import psutil
 
 from PIL import Image
@@ -81,7 +82,7 @@ def visual_application(permitted_media_state, monkeypatch):
         parameters={'language':'en-US'})
     track = state.production.subtitle_records.create_subtitle_track(SubtitleTrack(id='visual-fixture-caption',
         workspace_id=state.workspace_id, task_id=task.id, timeline_version_id=base.id,
-        language='en-US', source_language=None, style={**main.metadata_default_subtitle_style(), 'enabled':True},
+        language='en-US', source_language=None, style={**main.metadata_default_subtitle_style(), 'font_family': 'PingFang SC' if sys.platform == 'darwin' else 'Noto Sans CJK SC', 'enabled':True},
         cues=[SubtitleCue('visual-caption-one', None, 'TAIL DEMO', .2, 1.5)],
         generation_method='timeline', model_id=None, artifact_ref=caption_ref, transform_id=caption_transform, status='valid'))
     state.visual_plan, state.visual_clip, state.visual_base = plan, clip, base

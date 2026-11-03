@@ -497,6 +497,9 @@ class Provider:
         output.write_bytes(wav_bytes())
         return VoiceCloneResult(str(output), 2, 8000)
 
+    def generate(self, **kwargs):
+        return self.generate_granted(**kwargs)
+
 
 def test_independent_narration_provider_failure_and_cached_preview_rechecks_source(
     repository, tmp_path
@@ -949,7 +952,7 @@ def test_range_presenter_consumes_explicit_person_not_voice_relationship(reposit
         expires_at=None, evidence_reference='fixture://explicit-person/authorization', status='active', workspace_id='ws'))
     explicit = repository.save_person_profile(replace(person(repository, image_asset(repository)),
         id='explicit-person', version='v7', authorization=authorization), verified_owner_user_id='member')
-    voice = save_voice(repository, authorization=authorization)
+    voice = save_voice(repository, authorization=authorization, model_id=Provider.model_id)
     audio_path = repository.resolve_workspace_media_reference('ws', voice.reference_audio_path)
     assert (voice.person_profile_id, voice.person_version) == ('', '')
     selected = CreationPlanPersonReference(explicit.id, explicit.version)

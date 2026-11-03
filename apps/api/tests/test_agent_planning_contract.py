@@ -27,7 +27,7 @@ def test_script_window_business_dispatch_uses_only_the_window_callback():
         calls.append((current,script_id,options))
         return page
     business.read_script_sections = read
-    assert business.execute('read_script_sections',{'script_id':'script'},None,task,None,None,None,None) is page
+    assert business.execute('read_script_sections',{'script_id':'script'},None,task,None,{},None,None) is page
     assert calls == [(task,'script',{'after_ordinal':0,'limit':SCRIPT_SECTION_WINDOW_LIMIT,'expected_updated_at':None})]
 
 
@@ -44,11 +44,11 @@ def test_script_window_business_preserves_conflict_missing_and_invalid_errors():
             raise error
         business.read_script_sections = read
         with pytest.raises(TaskOperationRejected) as failed:
-            business.execute('read_script_sections',{'script_id':'script','after_ordinal':20,'expected_updated_at':'v1'},None,task,None,None,None,None)
+            business.execute('read_script_sections',{'script_id':'script','after_ordinal':20,'expected_updated_at':'v1'},None,task,None,{},None,None)
         assert failed.value.kind == status
     business.read_script_sections = None
     with pytest.raises(TaskBusinessRejected) as failed:
-        business.execute('read_script_sections',{'script_id':'script'},None,task,None,None,None,None)
+        business.execute('read_script_sections',{'script_id':'script'},None,task,None,{},None,None)
     assert failed.value.kind == 'unavailable'
 
 
@@ -73,7 +73,7 @@ def test_device_preparation_uses_original_account_actor_and_only_public_facts():
     for operation,args in [('prepare_device_resources',{'payload':{'request_id':key,'shape':shape},'actor':'forged'}),
                            ('read_device_preparation',{'request_id':'work','actor':'forged'}),
                            ('finalize_device_preparation',{'request_id':'work','actor':'forged'})]:
-        result = business.execute(operation,args,actor,task,None,None,None,None)
+        result = business.execute(operation,args,actor,task,None,{},None,None)
         assert result['id']=='work' and result['normal_work_started'] is False
         assert 'write_paths' not in result and 'bootstrap_budget' not in result
     assert [action for action,_ in calls] == ['prepare','status','finalize']
@@ -102,7 +102,7 @@ def test_device_preparation_status_reuses_pure_application_without_starting_runt
     business = object.__new__(TaskBusiness)
     business.device_preparation = application.dispatch
     result = business.execute('read_device_preparation',{'request_id':'original'},actor,
-        SimpleNamespace(workspace_id='workspace',id='task'),None,None,None,None)
+        SimpleNamespace(workspace_id='workspace',id='task'),None,{},None,None)
     assert result['state']=='waiting' and len(calls)==1
     assert calls[0]['database_path']=='isolated'
 
@@ -120,14 +120,14 @@ def test_device_preparation_preserves_parameter_conflict_missing_and_unassembled
             raise error
         business.device_preparation = dispatch
         with pytest.raises(TaskOperationRejected) as failure:
-            business.execute('read_device_preparation',{'request_id':'work'},None,task,None,None,None,None)
+            business.execute('read_device_preparation',{'request_id':'work'},None,task,None,{},None,None)
         assert failure.value.kind==status
     with pytest.raises(TaskOperationRejected) as failure:
-        business.execute('prepare_device_resources',{'payload':{'request_id':'invalid','shape':{}}},None,task,None,None,None,None)
+        business.execute('prepare_device_resources',{'payload':{'request_id':'invalid','shape':{}}},None,task,None,{},None,None)
     assert failure.value.kind=='invalid_input'
     business.device_preparation = None
     with pytest.raises(TaskBusinessRejected) as failure:
-        business.execute('read_device_preparation',{'request_id':'work'},None,task,None,None,None,None)
+        business.execute('read_device_preparation',{'request_id':'work'},None,task,None,{},None,None)
     assert failure.value.kind=='unavailable'
 
 

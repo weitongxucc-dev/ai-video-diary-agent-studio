@@ -1291,8 +1291,15 @@ def test_defer_releases_only_after_resources_and_rechecks_eligibility(tmp_path):
     _complete(scheduler, resumed)
 
 
-def test_failed_and_invalid_result_retry_requires_business_proof_and_keeps_audit(tmp_path):
+def test_failed_and_invalid_result_retry_requires_business_proof_and_keeps_audit(tmp_path, monkeypatch):
     scheduler = _scheduler(tmp_path)
+    verify_retry = scheduler.owners.verify_retry
+
+    def verify_in_snapshot(request, actor, reason, conn):
+        assert conn.in_transaction
+        return verify_retry(request, actor, reason, conn)
+
+    monkeypatch.setattr(scheduler.owners, "verify_retry", verify_in_snapshot)
     request = scheduler.submit(_intent("job"), "member-a")
     grant = scheduler.pick_and_grant()
     with sqlite3.connect(scheduler.database_path) as conn:

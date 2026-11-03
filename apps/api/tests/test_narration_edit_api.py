@@ -5,23 +5,23 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.creation_execution import CreationExecutionActor
-from test_narration_edit_execution import fixture, unchanged, run_edit_to_boundary, assert_original_pcm_unknown  # noqa: F401
+from test_narration_edit_execution import _narration_edit_state, unchanged, run_edit_to_boundary, assert_original_pcm_unknown
 
 
 @pytest.fixture
-def narration_api(fixture, monkeypatch):  # noqa: F811 (explicit existing pytest fixture import)
-    state = fixture
-    monkeypatch.setattr(main_module, "production_repo", state.repo)
-    monkeypatch.setattr(main_module, "local_members_service", state.members)
-    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "local")
-    # The real roster and owner verifier check this controlled request actor;
-    # no process, host sampling, model, or background service is started.
-    monkeypatch.setattr(main_module, "_require_permit_actor", lambda *_: state.actor)
-    monkeypatch.setattr(main_module, "_request_permit_actor", lambda *_: state.actor)
-    monkeypatch.setattr(main_module, "_creation_runtime", lambda: state.runtime)
-    state.client = TestClient(main_module.app)
-    state.confirm_url = f"/api/creation-tasks/{state.task.id}/edits/{state.proposal.id}/confirm"
-    return state
+def narration_api(tmp_path, monkeypatch):
+    with _narration_edit_state(tmp_path, monkeypatch, register_job=False) as state:
+        from app.conversation_repository import ConversationRepository
+        monkeypatch.setattr(main_module, 'conversation_repo', ConversationRepository(state.repo.database_path))
+        monkeypatch.setattr(main_module, 'production_repo', state.repo)
+        monkeypatch.setattr(main_module, 'local_members_service', state.members)
+        monkeypatch.setattr(main_module, 'current_workspace_id', lambda _request: 'local')
+        monkeypatch.setattr(main_module, 'device_runtime', state.runtime)
+        monkeypatch.setattr(main_module, '_creation_runtime', lambda: state.runtime)
+        state.client = TestClient(main_module.app,
+            headers={'X-Local-Member-Token': state.member_token})
+        state.confirm_url = f'/api/creation-tasks/{state.task.id}/edits/{state.proposal.id}/confirm'
+        yield state
 
 
 def test_confirm_queues_once_and_publishes_only_after_real_grant(narration_api):
@@ -390,6 +390,7 @@ def test_actual_generator_cancellation_retains_original_facts(generator_api, mon
         return result
     monkeypatch.setattr(main_module.narration_generator, "generate_for_creation_task", cancel)
     response = state.client.post(state.confirm_url, json={})
+    assert response.status_code == 202, response.text
     state.resources.allowed = True
     assert run_edit_to_boundary(state)
     assert state.repo.job_records.get_job_run("local", response.json()["job_id"]).status == "cancelled"
@@ -401,6 +402,7 @@ def test_actual_callback_unknown_release_does_not_publish(generator_api):
     from app.device_scheduler import RecoveryBlocked
     state = generator_api
     response = state.client.post(state.confirm_url, json={})
+    assert response.status_code == 202, response.text
     state.resources.allowed = True
     state.resources.release = None
     try:

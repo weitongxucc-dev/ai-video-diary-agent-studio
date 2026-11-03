@@ -2,6 +2,7 @@
 from script_seed_fixtures import script_seed_payload
 
 import io
+from contextlib import contextmanager
 import json
 import wave
 from dataclasses import asdict, replace
@@ -41,7 +42,6 @@ from app.creation.contracts import (
     EditProposal,
     JobRun,
     NarrationSegment,
-    TaskEvent,
     TimelineVersion,
 )
 
@@ -125,13 +125,13 @@ class Processes:
         return self.recovery
 
 
-@pytest.fixture
-def fixture(tmp_path, monkeypatch):
+@contextmanager
+def _narration_edit_state(tmp_path, monkeypatch, *, register_job=True):
     repo = ProductionRepository(
         database_path=tmp_path / "db.sqlite3", video_library_path=tmp_path / "library"
     )
     members = LocalMemberService(repo.database_path)
-    member = members.add_member("isolated narration member")
+    member, member_token = members.join(members.create_invite_code(), "isolated narration member")
     actor = CreationExecutionActor("local", member.member_id)
     reference, _, _ = repo.import_voice_reference_wav(
         "local", wav_bytes(), verified_owner_user_id=member.member_id
@@ -191,7 +191,7 @@ def fixture(tmp_path, monkeypatch):
         "knowledge_explanation",
         owner_user_id=member.member_id,
     )
-    repo.plan_confirmation.confirm_creation_plan(plan, task)
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
     now = datetime.now(timezone.utc).isoformat()
     script = {
         "id": "script",
@@ -355,18 +355,19 @@ def fixture(tmp_path, monkeypatch):
         narration_budget=budget,
         verify_identity=MemberDeviceAccess(members).verify_identity,
     )
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    authorizations = TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
+        CreationExecutionActor.from_event(identity['workspace_id'], identity)))
+    authorizations.ensure(task, actor)
+    owner.task_authorizations = authorizations
     digest = narration_edit_digest(proposal.operation)
-    job = repo.job_records.create_job_run(
-        JobRun(
-            "job",
-            "local",
-            task.id,
-            NARRATION_EDIT_KIND,
-            "narration-edit:proposal",
-            digest,
-        )
-    )
+    job = JobRun('job', 'local', task.id, NARRATION_EDIT_KIND, 'narration-edit:proposal', digest)
+    import app.main as main
+    from app.creation.execution_control import CreationExecutionControl
+    control = CreationExecutionControl(repo, main._new_creation_execution(repo),
+        main._render_stage_use_case(repo), MemberDeviceAccess(members).verify_identity)
     event = {
+        'source': control._edit_source(task, proposal, actor, None),
         **actor.identity_payload(),
         "script_id": "script",
         "plan_id": plan.id,
@@ -376,16 +377,11 @@ def fixture(tmp_path, monkeypatch):
         "input_digest": digest,
         "edit_proposal_id": proposal.id,
     }
-    repo.execution_records.append_task_event(
-        TaskEvent(
-            "event_job_start",
-            "local",
-            task.id,
-            job.id,
-            "narration_edit_requested",
-            event,
-        )
-    )
+    from app.creation.narration_pcm import prepare_narration_source
+    if register_job:
+        with prepare_narration_source(repo, task, plan, actor) as prepared:
+            job = repo.creation_execution_jobs.create_creation_execution_job(job,
+                start_payload=event, event_type='narration_edit_requested', source_preparation=prepared)
     resources = Resources()
     access = MemberDeviceAccess(members)
     calls = []
@@ -438,11 +434,18 @@ def fixture(tmp_path, monkeypatch):
     monkeypatch.setattr('app.granted_subprocess.run_granted_command', pcm_worker)
     action = stage.prepare_edit
 
+    from app.conversation_repository import ConversationRepository
+    from app.creation.editing.exact_preview_use_case import validate_edit_origin
+    conversations = ConversationRepository(repo.database_path)
+    def verify_origin(source, actor, *, connection=None):
+        validate_edit_origin(conversations, source, actor, connection=connection)
+    owner.source_verifier = verify_origin
     executor = CreationJobUnitExecutor(
         repo,
         render_action=lambda *_: pytest.fail("not render"),
         render_is_valid=lambda *_: False,
         narration_stage=stage,
+        source_verifier=verify_origin,
     )
     runtime = build_device_runtime(
         database_path=repo.database_path,
@@ -452,9 +455,11 @@ def fixture(tmp_path, monkeypatch):
         resources=resources,
         processes=Processes(),
     )
+    runtime.task_authorizations = authorizations
     data = SimpleNamespace(
         repo=repo,
         actor=actor,
+        member_token=member_token,
         members=members,
         task=task,
         plan=plan,
@@ -474,8 +479,16 @@ def fixture(tmp_path, monkeypatch):
         committed=committed,
         action=action,
     )
-    yield data
-    assert runtime.stop(1)
+    try:
+        yield data
+    finally:
+        assert runtime.stop(1)
+
+
+@pytest.fixture
+def fixture(tmp_path, monkeypatch):
+    with _narration_edit_state(tmp_path, monkeypatch) as state:
+        yield state
 
 
 def submit(f):

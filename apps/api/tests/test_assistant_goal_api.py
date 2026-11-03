@@ -101,6 +101,13 @@ def isolated_local_workspace(request, monkeypatch):
         lambda name: synthetic_clip_preview_budget() if name == 'clip_preview' else selected_budget_for(name))
     from _media_preview_test_fixtures import configure_synthetic_media_budgets
     configure_synthetic_media_budgets(monkeypatch,main)
+    if 'script_state' in request.fixturenames:
+        from app.member_permits import media_script_budget_from_env
+        profile = main._device_host_budget()
+        # The script fixture declares its finite experiment budget in env;
+        # preserve it alongside this fixture's audio/render envelopes.
+        monkeypatch.setattr(main, '_device_host_budget',
+            lambda: replace(profile, media_script=media_script_budget_from_env()))
 
 
 
@@ -357,7 +364,7 @@ def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(stat
     if operation == "DeleteClip":
         def no_media(*_):
             pytest.fail("this continuation receipt test must not run a media executor")
-        execution = CreationExecution(state.production, run_narration=no_media, run_montage_plan=no_media,
+        execution = CreationExecution(state.production, run_montage_plan=no_media,
                                       run_render=no_media, render_is_valid=lambda *_: True)
         monkeypatch.setattr(main, "creation_execution", execution)
     def model(_settings, **kwargs):
@@ -489,7 +496,7 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
         effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
     def no_media(*_):
         pytest.fail("this receipt test must not run any media executor")
-    execution = CreationExecution(state.production, run_narration=no_media, run_montage_plan=no_media,
+    execution = CreationExecution(state.production, run_montage_plan=no_media,
                                   run_render=no_media, render_is_valid=lambda *_: True)
     monkeypatch.setattr(main, "creation_execution", execution)
     calls, jobs = [], []
@@ -546,7 +553,7 @@ def test_actual_start_is_persisted_before_model_failure_then_original_job_contin
     monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
         effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
-    execution = CreationExecution(state.production, run_narration=lambda *_: None, run_montage_plan=lambda *_: None,
+    execution = CreationExecution(state.production, run_montage_plan=lambda *_: None,
         run_render=lambda *_: None, render_is_valid=lambda *_: True)
     monkeypatch.setattr(main, "creation_execution", execution)
     monkeypatch.setattr(main, "submit_creation_stage", lambda *_: "isolated-receipt-test; no media execution")
@@ -624,7 +631,7 @@ def test_actual_execution_read_registers_goal_only_for_own_submitted_job(state, 
     monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _:SimpleNamespace(
         effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
-    execution = CreationExecution(state.production, run_narration=lambda *_:None, run_montage_plan=lambda *_:None,
+    execution = CreationExecution(state.production, run_montage_plan=lambda *_:None,
         run_render=lambda *_:None, render_is_valid=lambda *_:True)
     monkeypatch.setattr(main, "creation_execution", execution)
     monkeypatch.setattr(main, "submit_creation_stage", lambda *_:"receipt test; no media")
@@ -694,7 +701,7 @@ def test_consumed_input_observes_existing_job_then_resumes_without_starting_agai
     monkeypatch.setattr(main,"quality_check_repo",QualityCheckRepository(state.production.database_path))
     monkeypatch.setattr(main,"_workspace_settings_for",lambda _:SimpleNamespace(
         effective_llm_provider="fixture",effective_llm_model="fixture",effective_llm_api_key=""))
-    execution=CreationExecution(state.production,run_narration=lambda *_:None,run_montage_plan=lambda *_:None,
+    execution=CreationExecution(state.production,run_montage_plan=lambda *_:None,
         run_render=lambda *_:None,render_is_valid=lambda *_:True)
     monkeypatch.setattr(main,"creation_execution",execution)
     monkeypatch.setattr(main,"submit_creation_stage",lambda *_:"receipt test; no media")

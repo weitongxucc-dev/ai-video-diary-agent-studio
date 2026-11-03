@@ -589,6 +589,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
         100, 1, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
         cpu_render=replace(main._device_operation_budget("cpu_render"),running_cpu_policy=_render_budget().running_cpu_policy), clip_preview=main._device_operation_budget("clip_preview"), cpu_audio=main._device_operation_budget("cpu_audio")),memory_monitor=IsolatedMemoryMonitor())
     monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
+    monkeypatch.setattr(main, 'device_runtime', runtime)
     return main, repo, actor, media, runtime, TestClient(main.app), payload, track, store
 
 
@@ -617,7 +618,9 @@ def test_color_preview_on_21_shots_renders_only_representative_silent_window(tmp
         assert event['input_facts']['clip']['id'] == 'clip_1'
         assert resources['input_bytes'] == repo.resolve_clip_media_reference('local', 'asset', original['clips'][1]['source_path']).stat().st_size
         assert runtime.run_once()
-        done = client.get(queued.json()['result_url']).json()
+        response = client.get(queued.json()['result_url'])
+        assert response.status_code == 200, response.text
+        done = response.json()
         assert done['status'] == 'succeeded', done
         proposal = done['result']['proposal']
         assert set(proposal['operation']['payload']['expected_clips']) == {'clip_1', 'clip_20'}
@@ -680,7 +683,9 @@ def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(t
             assert [(cue.id, cue.start_seconds, cue.end_seconds) for cue in tracks[0].cues] == [('inside', 1, 2)]
         assert creation_task_montage_plan_to_payload(plan) == original and asdict(track) == before_tracks
         assert runtime.run_once()
-        done = client.get(queued.json()['result_url']).json()
+        response = client.get(queued.json()['result_url'])
+        assert response.status_code == 200, response.text
+        done = response.json()
         assert done['status'] == 'succeeded', done
         assert '完整区间' in done['result']['proposal']['preview']['after']['detail']
         assert '未覆盖相邻转场' in done['result']['proposal']['preview']['after']['detail']

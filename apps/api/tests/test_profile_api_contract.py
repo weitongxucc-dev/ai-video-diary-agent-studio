@@ -359,7 +359,7 @@ def preview_record_guards(monkeypatch):
     monkeypatch.setattr(wave, 'open', forbidden)
     monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
     monkeypatch.setattr(DeviceRuntime, 'run_once', forbidden)
-    monkeypatch.setattr(VoiceProvider, 'generate', forbidden)
+    monkeypatch.setattr(VoiceProvider, 'generate_granted', forbidden)
     monkeypatch.setattr(UnavailableAvatarAndLipSyncProvider, 'render', forbidden)
     monkeypatch.setattr(main, 'run_task_turn', forbidden)
     monkeypatch.setattr(main, 'start_assistant_continuation_driver', forbidden)
@@ -670,6 +670,16 @@ def test_preview_binding_recovery_unknown_keeps_metadata_and_permit(
         )
         recovery["state"] = "released"
         monkeypatch.setattr(resources, "released", lambda grant: True)
+        assert isinstance(recovered.last_error, RecoveryBlocked)
+        assert recovered.stop(1)
+        recovered = build_device_runtime(
+            database_path=repo.database_path,
+            device_lock_path=tmp_path / "device.lock",
+            device_access=Access(),
+            registrations=runtime.registrations,
+            resources=resources,
+            processes=processes,
+        )
         assert recovered.run_once()
         final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert (

@@ -157,7 +157,7 @@ def test_job_progress_does_not_cross_workspaces(client):
 
 def test_a_task_without_jobs_reports_unknown_rather_than_a_fake_progress(client):
     client.repo  # 任务存在但还没有任何作业
-    seed_task(client.repo, WORKSPACE, "task-job-4")
+    seed_task(client.repo, WORKSPACE, "task-job-4", owner_user_id=client.member_id)
 
     response = client.get("/api/creation-tasks/task-job-4/job-runs")
 

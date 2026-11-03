@@ -2,6 +2,7 @@
 from dataclasses import replace
 import hashlib
 import wave
+import sys
 
 from PIL import Image
 import pytest
@@ -26,6 +27,7 @@ def subtitle_state(tmp_path, *, bilingual=True, with_cover=True):
         stream.setframerate(16000)
         stream.writeframes(b'\0\0' * 64000)
     state.zh = clone_subtitle_track(state.track, timeline_version_id='subtitle-base', track_id='family-zh',
+        style={**state.track.style, 'font_family': 'PingFang SC' if sys.platform == 'darwin' else 'Noto Sans CJK SC'},
         cues=[SubtitleCue('cue', None, '原字幕', 0, 2), SubtitleCue('next', None, '后字幕', 2, 4)])
     state.en = replace(state.zh, id='family-en', language='en-US', source_language='zh-CN',
         generation_method='translation', style={**state.zh.style, 'enabled': False},

@@ -1648,6 +1648,7 @@ class DeviceScheduler(DeviceRequestReadAccess):
         if reason not in {"failed", "cancelled", "result_invalid"}:
             raise ValueError("重试原因无效")
         with self._connect() as reader:
+            reader.execute("BEGIN")
             row = reader.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
             if row is None:
                 raise KeyError(request_id)

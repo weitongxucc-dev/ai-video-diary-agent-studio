@@ -157,7 +157,7 @@ def test_invalid_tmp_refuses_before_env_workspace_installer_and_driver_changes(i
     invalid.write_text("not a directory")
     def forbidden(*args):
         pytest.fail("invalid candidate must not persist workspace values or rebind installer")
-    monkeypatch.setattr(main, "apply_workspace_runtime_settings_update", forbidden)
+    monkeypatch.setattr(main, "apply_runtime_settings_save", forbidden)
     monkeypatch.setattr(installer, "rebind_catalog", forbidden)
     response = client().post("/api/settings/runtime", json={
         "temporary_root_path": str(invalid), "model_root_path": str(tmp_path / "next-models"), "llm_model": "not-saved",
@@ -542,8 +542,17 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
     ]
     server_tree = ast.parse((root / 'apps/api/server.py').read_text())
     server_main = next(node for node in server_tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
-    assert [ast.unparse(node) for node in server_main.body[:3]] == [
-        "if sys.argv[1:2] == ['--grant-exec']:\n    _exec_granted_command(sys.argv[2:])\n    return",
+    child_entries = server_main.body[:6]
+    assert all(isinstance(node, ast.If) for node in child_entries)
+    assert [ast.unparse(node.test) for node in child_entries] == [
+        "sys.argv[1:2] == ['--pcm-assembly-worker']", "sys.argv[1:2] == ['--grant-exec']",
+        "sys.argv[1:2] == ['--grant-exec-background']", "sys.argv[1:2] == ['--grant-exec-nice']",
+        "sys.argv[1:2] == ['--cover-worker']", "sys.argv[1:2] == ['--quality-worker']",
+    ]
+    assert ast.unparse(child_entries[1]) == (
+        "if sys.argv[1:2] == ['--grant-exec']:\n    _exec_granted_command(sys.argv[2:])\n    return")
+    assert all(isinstance(node.body[-1], (ast.Return, ast.Raise)) for node in child_entries)
+    assert [ast.unparse(node) for node in server_main.body[6:8]] == [
         "if sys.argv[1:]:\n    raise SystemExit('api-server accepts only its fixed --grant-exec child entry')",
         '_configure_env()',
     ]
