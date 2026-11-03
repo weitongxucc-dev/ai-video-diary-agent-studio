@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run one sorted, round-robin shard of the default backend test files."""
+"""Run a complete platform suite, partitioned into sorted round-robin shards."""
 
 import argparse
 import fnmatch
@@ -11,6 +11,8 @@ import sys
 
 
 API = Path(__file__).resolve().parents[1] / "apps" / "api"
+# This file includes real darwin_nice admission and FFmpeg execution.
+DARWIN_FILES = frozenset({"tests/test_host_resource_probes.py"})
 IGNORED_DIRECTORIES = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "__pycache__")
 
 
@@ -25,6 +27,7 @@ def test_files():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--suite", choices=("portable", "darwin"), default="portable")
     parser.add_argument("--shard", type=int, required=True)
     parser.add_argument("--total", type=int, default=3)
     parser.add_argument("--junitxml", type=Path, required=True)
@@ -32,14 +35,20 @@ def main():
     args = parser.parse_args()
     if args.total < 1 or not 1 <= args.shard <= args.total:
         parser.error("shard must be between 1 and total, and total must be positive")
-    files = test_files()
+    all_files = test_files()
+    missing = DARWIN_FILES.difference(all_files)
+    if missing:
+        parser.error(f"Darwin suite files not found: {sorted(missing)}")
+    files = [path for path in all_files if (path in DARWIN_FILES) == (args.suite == "darwin")]
+    if args.suite == "darwin" and sys.platform != "darwin" and not args.dry_run:
+        parser.error("Darwin native tests require a real macOS runner")
     shards = [files[index::args.total] for index in range(args.total)]
     if any(not shard for shard in shards):
         parser.error("each shard must contain test files")
     selected = shards[args.shard - 1]
     argv = [sys.executable, "-m", "pytest", "-ra", "--tb=short", "--durations=20",
             f"--junitxml={args.junitxml}", *selected]
-    print(json.dumps({"shard": args.shard, "total": args.total, "total_files": len(files),
+    print(json.dumps({"suite": args.suite, "discovered_files": len(all_files), "shard": args.shard, "total": args.total, "total_files": len(files),
                       "shard_counts": [len(shard) for shard in shards], "files": selected,
                       "cwd": str(API), "argv": argv}, indent=2), flush=True)
     if args.dry_run:

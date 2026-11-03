@@ -171,12 +171,12 @@ def test_real_recipe_bridge_keeps_leaf_validated_parameter_defaults(state):
 
 
 def test_script_unknown_receipt_keeps_earlier_job_from_same_real_turn(state, tmp_path, monkeypatch):
-    conversations = ConversationRepository(tmp_path / "related-conversations.sqlite3")
+    conversations = ConversationRepository(state.production.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
         effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
-    monkeypatch.setattr(main.settings, "tencentcloud_secret_id", "", raising=False)
-    monkeypatch.setattr(main.settings, "tencentcloud_secret_key", "", raising=False)
+    monkeypatch.setattr(main, "settings", replace(main.settings,
+        tencentcloud_secret_id="", tencentcloud_secret_key=""))
     chat = conversations.create(state.workspace_id, state.member.member_id, "task", state.task.id)
     raw = "先生成卡片，再查看第二个请求"
     chat = conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, raw, chat["draft_version"])
@@ -236,14 +236,14 @@ def test_same_invocation_request_cannot_be_rebound_to_another_tool_path(state):
 
 @pytest.fixture
 def assistant_state(state, tmp_path, monkeypatch):
-    conversations = ConversationRepository(tmp_path / "tool-conversations.sqlite3")
+    conversations = ConversationRepository(state.production.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     monkeypatch.setattr(main, "assistant_continuation_driver", None)
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
         effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
-    monkeypatch.setattr(main.settings, "video_inbox_path", str(state.production.video_library_path), raising=False)
-    monkeypatch.setattr(main.settings, "tencentcloud_secret_id", "", raising=False)
-    monkeypatch.setattr(main.settings, "tencentcloud_secret_key", "", raising=False)
+    monkeypatch.setattr(main, "settings", replace(main.settings,
+        video_inbox_path=str(state.production.video_library_path),
+        tencentcloud_secret_id="", tencentcloud_secret_key=""))
     chat = conversations.create(state.workspace_id, state.member.member_id, "task", state.task.id)
     raw = "按明确要求保存或读取这张卡片工具"
     chat = conversations.save_draft(chat["id"], state.workspace_id, state.member.member_id, raw, chat["draft_version"])

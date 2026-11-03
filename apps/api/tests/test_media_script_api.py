@@ -28,7 +28,9 @@ from _media_preview_test_fixtures import ControlledResources
 
 
 @pytest.fixture
-def state(material_edit_state, tmp_path, monkeypatch):
+def state(material_edit_state, tmp_path, monkeypatch, request):
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    isolate_assistant_turn_control(monkeypatch, request)
     state = material_edit_state
     # The API/owner tests already substitute preparation/execution. Isolate
     # only this adapter's platform inventory; do not mutate global sys or the
@@ -43,9 +45,20 @@ def state(material_edit_state, tmp_path, monkeypatch):
     descriptor = {name: str(root / name) for name in ("python", "stdlib", "python_library", "pillow")}
     descriptor.update(version="fixture-python-pillow", digest="a" * 64)
     (root / "media-script-runtime.json").write_text(json.dumps(descriptor))
-    monkeypatch.setattr(main, "settings", replace(main.settings, model_root_path=str(root)))
+    monkeypatch.setattr(main, "settings", replace(main.settings, model_root_path=str(root),
+        device_resource_mode="experiment", device_resource_experiment_id="media-script-api-fixture"))
     budget = MediaScriptBudget(4096, 4096, 8, 65536, 1, 128, 128, 16384, 65536,
         1024, 1024, 1, 10, 16 * 1024**2, 8, .1, 16 * 1024**2, 1024**2)
+    # Finite experimental declarations for the substituted script runner;
+    # admission below still uses ControlledResources, not host calibration.
+    for name, value in {
+        "DEVICE_HOST_MAX_CPU_PERCENT": 100,
+        "DEVICE_HOST_MIN_AVAILABLE_MEMORY_BYTES": 1,
+        "DEVICE_HOST_MIN_FREE_DISK_BYTES": 1,
+        "DEVICE_HOST_MAX_DISK_IO_BYTES_PER_SECOND": 2**63,
+        "DEVICE_HOST_MAX_UNIT_INPUT_BYTES": 1024**2,
+    }.items():
+        monkeypatch.setenv(name, str(value))
     for name, value in asdict(budget).items():
         monkeypatch.setenv("DEVICE_MEDIA_SCRIPT_" + name.upper(), str(value))
     actor = CreationExecutionActor(state.workspace_id, state.member.member_id)
@@ -343,7 +356,7 @@ def test_shared_job_artifact_transform_finish_rollback_is_atomic(state):
 
 
 def test_script_success_continuation_is_source_ready_without_applying_a_version(state, tmp_path, monkeypatch):
-    conversations = ConversationRepository(tmp_path / "script-conversations.sqlite3")
+    conversations = ConversationRepository(state.production.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     chat = conversations.create(state.workspace_id, state.member.member_id, "task", state.task.id)
     raw = "生成一张红色卡片，先作为图形来源"

@@ -68,7 +68,7 @@ jobs:
 
       - name: Run backend tests
         working-directory: apps/api
-        run: uv run python ../../scripts/run-backend-tests.py --shard "${{ matrix.shard }}" --total 3 --junitxml "$RUNNER_TEMP/backend-tests/junit-${{ matrix.shard }}.xml"
+        run: uv run python ../../scripts/run-backend-tests.py --suite portable --shard "${{ matrix.shard }}" --total 3 --junitxml "$RUNNER_TEMP/backend-tests/junit-${{ matrix.shard }}.xml"
 
       - name: Upload backend test report
         if: ${{ !cancelled() }}
@@ -76,6 +76,47 @@ jobs:
         with:
           name: backend-tests-${{ matrix.shard }}
           path: ${{ runner.temp }}/backend-tests/junit-${{ matrix.shard }}.xml
+          if-no-files-found: error
+
+  backend-darwin:
+    name: Backend native macOS
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+
+      - name: Install FFmpeg
+        run: |
+          brew install ffmpeg
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Install Python dependencies
+        working-directory: apps/api
+        run: uv sync --locked
+
+      - name: Run native backend tests
+        working-directory: apps/api
+        run: uv run python ../../scripts/run-backend-tests.py --suite darwin --shard 1 --total 1 --junitxml "$RUNNER_TEMP/backend-tests/junit-darwin.xml"
+
+      - name: Upload native backend test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-tests-darwin
+          path: ${{ runner.temp }}/backend-tests/junit-darwin.xml
           if-no-files-found: error
 
   frontend:

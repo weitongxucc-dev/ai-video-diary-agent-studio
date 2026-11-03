@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from fastapi.encoders import jsonable_encoder
 from app.local_members import LocalMemberService
 import json
+import logging
 
 from fastapi.testclient import TestClient
 import pytest
@@ -80,6 +81,19 @@ def library(tmp_path, monkeypatch, request):
     monkeypatch.setattr(main, "source_repository", sources)
     monkeypatch.setattr(main,"local_members_service",members)
     monkeypatch.setattr(main,"auth_context",SimpleNamespace(enabled=False))
+    # Retain the real failure while exposing the KeyError hidden by HTTP's 404 mapping.
+    from app.creation.script_library_use_case import ScriptLibraryUseCase
+    save_entry = ScriptLibraryUseCase.save_entry
+    def save_entry_with_diagnostics(case, workspace_id, payload):
+        try:
+            return save_entry(case, workspace_id, payload)
+        except KeyError:
+            logging.getLogger(__name__).exception(
+                "library save failed: workspace=%r repository=%s fixture_repository=%s",
+                workspace_id, case.repository.database_path, repo.database_path,
+            )
+            raise
+    monkeypatch.setattr(ScriptLibraryUseCase, "save_entry", save_entry_with_diagnostics)
     # Use the actual routes without starting background workers/models.
     client = TestClient(main.app,headers={"X-Local-Member-Token":token})
     yield client, repo, sources

@@ -1651,7 +1651,9 @@ def test_issue_reference_rejection_reports_safe_subtype_without_fixing_model_ref
         data = json.loads(body['messages'][1]['content'])
         schema = body['tools'][0]['function']['parameters']
         reference_schema = schema['properties']['sections']['items']['anyOf'][1]['properties']['issues']['items']['anyOf'][0]['properties']['reference_ids']
-        assert reference_schema['items']['enum'] == ['evidence_1']
+        # The first review branch also owns the title, which may cite either source.
+        # Content remains limited to the section's evidence_1 below and at validation.
+        assert reference_schema['items']['enum'] == ['evidence_1', 'evidence_2']
         assert reference_schema['minItems'] == 1
         assert reference_schema['uniqueItems'] is True
         assert data['script']['sections'][0]['evidence_reference_ids'] == ['evidence_1']

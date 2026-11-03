@@ -879,7 +879,7 @@ def test_typed_requests_refuse_invalid_scope_and_fields(material_edit_state, mut
 
 def test_assistant_typed_source_is_host_bound_and_not_parsed_again(material_edit_state, tmp_path, monkeypatch):
     state = material_edit_state
-    conversations = ConversationRepository(tmp_path / "conversations.sqlite3")
+    conversations = ConversationRepository(state.production.database_path)
     conversations.initialize()
     monkeypatch.setattr(main, "conversation_repo", conversations)
     member = state.members.resolve_member(state.client.headers.get("X-Local-Member-Token"))

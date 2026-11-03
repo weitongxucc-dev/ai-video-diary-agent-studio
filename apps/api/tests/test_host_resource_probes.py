@@ -690,6 +690,12 @@ def test_real_scheduler_registers_child_before_exec_and_commits_after_release(tm
         def check_current(self, request, conn):
             return "ready"
 
+        def capture_local(self, request, conn):
+            return lambda current: self.check_current(request, current)
+
+        def check_local(self, request, conn, observed):
+            return observed(conn)
+
     database = tmp_path / "production.sqlite"
     with sqlite3.connect(database) as conn:
         conn.execute("""CREATE TABLE material_ingestion_files (
@@ -747,6 +753,12 @@ def test_isolated_cpu_ffmpeg_render_uses_measured_admission_and_real_grant(tmp_p
         def check_current(self, request, conn):
             return "ready"
 
+        def capture_local(self, request, conn):
+            return lambda current: self.check_current(request, current)
+
+        def check_local(self, request, conn, observed):
+            return observed(conn)
+
     database = tmp_path / "production.sqlite"
     with sqlite3.connect(database) as conn:
         conn.execute("""CREATE TABLE material_ingestion_files (
@@ -796,6 +808,12 @@ def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monke
 
         def check_current(self, request, conn):
             return "ready"
+
+        def capture_local(self, request, conn):
+            return lambda current: self.check_current(request, current)
+
+        def check_local(self, request, conn, observed):
+            return observed(conn)
 
     database = tmp_path / "production.sqlite"
     with sqlite3.connect(database) as conn:
