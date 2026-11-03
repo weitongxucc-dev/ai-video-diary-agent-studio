@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 from workspace_secret_test_fixtures import workspace_secrets_tool_double as workspace_secrets_tool_double
+from quality_native_test_fixtures import licensed_quality_native as licensed_quality_native
 
 # The explicit test-session composition runs before per-test monkeypatches.
 # Keep it away from every developer/app database and output tree.

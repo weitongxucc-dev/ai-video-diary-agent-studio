@@ -97,6 +97,8 @@ def test_direct_change_rechecks_displaced_or_transition_source_in_original_scope
         monkeypatch.setattr(ContentIdentityHttpAdapter,'reader',lambda adapter, *args:(actor.member_id,False))
         commit = repo.edit_adoption.confirm_direct
         def revise(command,*args,**kwargs):
+            if kwargs.get('connection') is not None:
+                return commit(command,*args,**kwargs)
             assert f'clip_{source_index}' in command.affected_clip_ids
             assert 'clip_10' not in command.affected_clip_ids
             assert any(fact['asset_id']=='neighbor' for fact in command.affected_source_facts)

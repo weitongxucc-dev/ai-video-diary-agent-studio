@@ -94,6 +94,8 @@ def test_direct_edit_cas_or_failure_rolls_back_all_lineage_and_cross_track_write
         if failure == 'version':
             original_commit = repo.edit_adoption.confirm_direct
             def commit(command, *args, **kwargs):
+                if kwargs.get('connection') is not None:
+                    return original_commit(command, *args, **kwargs)
                 from app.creation.contracts import TimelineVersion
                 repo.timeline_records.create_timeline_version(TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None))
                 return original_commit(command, *args, **kwargs)
@@ -172,6 +174,8 @@ def test_source_change_after_binding_before_direct_transaction_creates_no_lineag
     called = False
     def change_source(command, *args, **kwargs):
         nonlocal called
+        if kwargs.get('connection') is not None:
+            return commit(command, *args, **kwargs)
         assert command.source['source_facts'] if typed else command.input_source_facts
         asset = repo.get_asset('local', 'asset')
         if change == 'file':

@@ -1,4 +1,5 @@
 """Recipe proxies consume actual DTOs; HTTP doubles, no producer/runtime execution."""
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
 
 from assistant_sdk_fixtures import project_event_fixture
 import json
@@ -8,10 +9,12 @@ import subprocess
 from uuid import UUID
 
 import pytest
-import app.assistant_pi as host
+import app.assistant_pi as _owner_app_assistant_pi
 from app.schemas import (MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest,
                          MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest)
 from test_assistant_typed_tools import installed_pi
+
+host = _owner_app_assistant_pi
 
 @pytest.fixture(autouse=True)
 def receipt_projection_native_guard(request, monkeypatch):
@@ -37,7 +40,7 @@ TOOL = {"tool_id": "tool-real", "version": 1, "active": True, "name": "Panel", "
 SAVE = {"producer_job_id": "producer-real", "name": "Panel", "description": "draw panel", "parameter_schema": TOOL["parameter_schema"]}
 SOURCE = {"source_ref":"artifacts/orange.png", "artifact_id":"orange", "sha256":"a" * 64,
           "size_bytes":128, "name":"orange.png", "width":64, "height":64, "applied":False}
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 let data='';for await(const part of process.stdin)data+=part;
 const input=JSON.parse(data),tools=new Map(),calls=[],results=[];
 globalThis.fetch=async(url,init)=>{
@@ -59,7 +62,7 @@ process.env.AI_VIDEO_DIARY_AGENT_SCRIPT_TOOL_CAPABILITIES=JSON.stringify(input.c
 const {default:register}=await import(process.argv[2]);await register({registerTool:tool=>tools.set(tool.name,tool),
  getAllTools:()=>[...tools.values()],getSettings:()=>({}),appendEntry:()=>{}});
 for(const step of input.steps){
- try{results.push({ok:true,result:await tools.get(step.name).execute(step.call||'call-'+results.length,step.args||{})});}
+ try{results.push(toolOutcome(await tools.get(step.name).execute(step.call||'call-'+results.length,step.args||{})));}
  catch(error){results.push({ok:false,error:error.message});}
 }
 if(input.code){
@@ -68,7 +71,7 @@ if(input.code){
    return {toolCall:{id:'nested-'+calls.length},isError:Boolean(result.isError),result};}
   catch(error){return {toolCall:{id:'failed-'+calls.length},isError:true,result:{content:[{type:'text',text:error.message}]}};}
  }};
- results.push({ok:true,result:await tools.get('codemode').execute('parent',{code:input.code},undefined,undefined,ctx)});
+ results.push(toolOutcome(await tools.get('codemode').execute('parent',{code:input.code},undefined,undefined,ctx)));
 }
 console.log(JSON.stringify({calls,results,parameters:tools.get('save_media_script_tool').parameters}));
 """

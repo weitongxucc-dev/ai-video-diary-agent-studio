@@ -1,4 +1,5 @@
 """查看历史时间线版本：只读旧版本自己的快照与产物，不动当前版本。"""
+from script_seed_fixtures import script_seed_payload
 
 import json
 from dataclasses import asdict, replace
@@ -74,7 +75,7 @@ def persist_task(repo: ProductionRepository, task: CreationTask, script_id: str,
             conn.execute(
                 "INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at)"
                 " VALUES (?,?,?,?,?,?)",
-                (script_id, WORKSPACE_ID, task.id, script["run_id"], json.dumps(script), now))
+                (script_id, WORKSPACE_ID, task.id, script["run_id"], script_seed_payload(repo, conn, script), now))
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
                      (json.dumps(asdict(task), default=str), WORKSPACE_ID, task.id))
         conn.execute(

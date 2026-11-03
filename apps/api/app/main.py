@@ -137,7 +137,7 @@ from app.task_edit_confirmation import TaskEditConfirmationHttpAdapter, Metadata
 from app.task_edit_commands import TaskEditCommandHttpAdapter
 from app.content_identity_http import ContentIdentityHttpAdapter
 from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
-from app.creation.transactions import (clone_subtitle_track as _clone_subtitle_track)
+import app.creation.transactions as _owner_app_creation_transactions
 from app.creation import media_script_submission_use_case as script_submission
 from app.media_script import MediaScriptError
 from app.media_script_jobs import read_script_toolchain, MediaScriptPreviewUseCase, MEDIA_SCRIPT_ACTIONS
@@ -160,7 +160,7 @@ from app.device_resource_profile import DeviceProfileUnavailable
 from app.device_runtime import RuntimeUnavailable
 
 
-from app.visual_understanding import LocalVisualUnderstanding
+import app.visual_understanding as _owner_app_visual_understanding
 from app.creation.cover_use_case import CoverUseCase, COVER_JOB_KIND, COVER_OPERATION
 from app.cover_generation import (
     unconfigured_image_generation_capability,
@@ -276,7 +276,7 @@ from app.schemas import ScriptLibrarySourceResponse as ScriptLibrarySourceRespon
 from app.knowledge_files import parse_knowledge_file
 from app.knowledge_grant_routes import knowledge_grant_router
 from app.knowledge_grants import VerifiedMemberGrantTargetResolver
-from app.platform_auth.service import PlatformAuthService
+import app.platform_auth.service as _owner_app_platform_auth_service
 from app.platform_publish import (
     build_platform_publish_router,
     platform_publish_registration,
@@ -297,6 +297,57 @@ from app.automation_routes import build_automation_guarded_publish_router
 from contextlib import contextmanager
 from app.automation_routes import build_automation_router
 from app.automation_runtime import AutomationRuntime
+
+from app.desktop_shutdown_routes import build_desktop_shutdown_router
+from app.device_invite_accept_routes import (
+    DeviceInviteAcceptResponse, build_device_invite_accept_router,
+)
+from app.content_template_routes import build_content_template_router
+from app.creation.source_inputs_use_case import CreationSourceInputs
+from app.task_edit_routes import CoverConfirmationHttpAdapter, TaskEditReceiptHttpAdapter, build_task_edit_router
+from app.task_observation_routes import TaskObservationResponseAdapter, build_task_observation_router
+from app.task_media_script_routes import (
+    MediaScriptSubmissionHttpAdapter, build_task_media_script_router,
+    media_script_submission_source, media_script_submission_command,
+)
+from app.assistant_reference_routes import build_assistant_reference_router
+from app.assistant_capability_routes import build_assistant_capability_router
+from app.workspace_assistant_turn_routes import build_workspace_assistant_turn_router
+from app.assistant.home_plan_http_adapter import HomePlanTurnHTTPAdapter
+from app.creation_request_routes import build_creation_request_router
+from app.creation_plan_routes import CreationPlanPreflightHttpAdapter, build_creation_plan_router
+from app.creation.script_library_routes import build_script_library_router
+from app.creation.script_library_use_case import ScriptLibraryUseCase
+from app.task_workspace_routes import TaskWorkspaceResponseAdapter, build_task_workspace_router
+from app.task_topic_routes import build_task_topic_router
+from app.task_knowledge_adoption_routes import build_task_knowledge_adoption_router
+from app.creation.script_context_use_case import ScriptContextUseCase
+from app.task_script_routes import build_task_script_router
+from app.task_assistant_history_routes import build_task_assistant_history_router
+from app.creation.script_routes import ScriptWindowHttpAdapter, build_script_sections_router
+from app.task_narration_routes import build_task_narration_router
+from app.task_person_render_routes import build_task_person_render_router
+from app.storyboard_regeneration_routes import build_storyboard_regeneration_router
+from app.task_montage_control_routes import build_task_montage_control_router
+from app.native_task_read_routes import build_native_task_read_router
+from app.assistant_semantic_receipt_routes import build_assistant_semantic_receipt_router
+from app.task_segment_routes import build_task_segment_router
+from app.task_budget_routes import build_task_budget_router
+from app.task_capability_routes import TaskEditCapabilityResponseAdapter, build_task_capability_router
+from app.timeline_restore_routes import build_timeline_restore_router
+from app.creation.quality_routes import build_quality_router
+from app.creation.quality_application import QualityApplication
+from app.task_output_routes import build_task_output_router
+from app.timeline_history_routes import build_timeline_history_router
+from app.home_routes import build_home_router
+from app.material_insights_routes import build_material_insights_router
+from app.material_processing_routes import build_material_processing_router
+from app.legacy_montage_routes import LegacyMontageResponseAdapter, build_legacy_montage_router
+from app.knowledge_notes_routes import build_knowledge_notes_router
+from app.device_preparation_routes import build_device_preparation_router
+_clone_subtitle_track = _owner_app_creation_transactions.clone_subtitle_track
+LocalVisualUnderstanding = _owner_app_visual_understanding.LocalVisualUnderstanding
+PlatformAuthService = _owner_app_platform_auth_service.PlatformAuthService
 
 _RESOURCE_BUDGET_UNSET = object()
 
@@ -335,7 +386,6 @@ _desktop_shutdown_lock = threading.Lock()
 DESKTOP_SHUTDOWN_PATH = "/internal/desktop-shutdown"
 
 
-from app.desktop_shutdown_routes import build_desktop_shutdown_router
 
 app.include_router(build_desktop_shutdown_router(
     shutdown_path=DESKTOP_SHUTDOWN_PATH,
@@ -694,9 +744,6 @@ def companion_identity_for(request: Request) -> CompanionIdentity:
         raise companion_http_error(exc) from exc
 
 
-from app.device_invite_accept_routes import (
-    DeviceInviteAcceptResponse, build_device_invite_accept_router,
-)
 
 app.include_router(build_device_invite_accept_router(
     service_type_for=lambda: DeviceAccountService,
@@ -942,7 +989,6 @@ app.include_router(build_scheduled_task_router(
 ))
 
 
-from app.content_template_routes import build_content_template_router
 
 app.include_router(build_content_template_router(
     response_for=lambda: ContentTemplatesResponse,
@@ -1403,7 +1449,6 @@ def _workspace_llm_route_snapshot():
     )
 
 
-from app.creation.source_inputs_use_case import CreationSourceInputs
 
 
 def _source_inputs_use_case() -> CreationSourceInputs:
@@ -1528,7 +1573,6 @@ def _task_edit_receipt_http_adapter():
 
 
 
-from app.task_edit_routes import CoverConfirmationHttpAdapter, TaskEditReceiptHttpAdapter, build_task_edit_router
 
 
 def _task_edit_http_router(route_names):
@@ -1937,7 +1981,6 @@ def _task_observation_response_adapter():
     )
 
 
-from app.task_observation_routes import TaskObservationResponseAdapter, build_task_observation_router
 
 
 def _task_observation_http_router(route_names):
@@ -2190,10 +2233,6 @@ def _script_configuration():
 
 
 
-from app.task_media_script_routes import (
-    MediaScriptSubmissionHttpAdapter, build_task_media_script_router,
-    media_script_submission_source, media_script_submission_command,
-)
 
 
 def _task_media_script_http_router(route_names):
@@ -2465,7 +2504,6 @@ def _assistant_profile_snapshot(request: Request, kind: str, profile_id: str, ve
             "instruction": "固定版本档案事实，只读引用；不表示已用于任务，也不授权编辑、生成或发布。"}
 
 
-from app.assistant_reference_routes import build_assistant_reference_router
 
 
 def _assistant_reference_http_router(route_names):
@@ -2624,7 +2662,6 @@ def _validate_saved_assistant_reference(request: Request, reference: dict | None
 
 
 
-from app.assistant_capability_routes import build_assistant_capability_router
 
 app.include_router(build_assistant_capability_router(
     workspace_for=lambda: current_workspace_id,
@@ -2644,7 +2681,6 @@ app.include_router(build_assistant_capability_router(
 
 
 
-from app.workspace_assistant_turn_routes import build_workspace_assistant_turn_router
 
 
 def _workspace_assistant_turn_http_router(route_names):
@@ -2664,7 +2700,6 @@ def _workspace_assistant_turn_http_router(route_names):
 app.include_router(_workspace_assistant_turn_http_router(('workspace_assistant_plan_turn',)))
 
 
-from app.assistant.home_plan_http_adapter import HomePlanTurnHTTPAdapter
 
 
 def _home_plan_http_adapter():
@@ -2796,7 +2831,6 @@ def _creation_request_or_404(request: Request, request_id: str) -> dict:
 
 
 
-from app.creation_request_routes import build_creation_request_router
 
 
 def _creation_request_http_router(route_names):
@@ -2858,7 +2892,6 @@ app.include_router(_creation_request_http_router(("confirm_creation_request_wind
 app.include_router(_creation_request_http_router(("list_creation_request_items",)))
 
 
-from app.creation_plan_routes import CreationPlanPreflightHttpAdapter, build_creation_plan_router
 
 
 app.include_router(build_creation_plan_router(
@@ -2894,13 +2927,10 @@ def _script_library_use_case(request: Request):
     return _bind_script_library_use_case(draft_use_case, reader)
 
 
-from app.creation.script_library_routes import build_script_library_router
-from app.creation.script_library_use_case import ScriptLibraryUseCase
 app.include_router(build_script_library_router(
     use_case=_script_library_use_case, workspace_id=lambda request: current_workspace_id(request)))
 
 
-from app.task_workspace_routes import TaskWorkspaceResponseAdapter, build_task_workspace_router
 
 
 def _task_workspace_http_router(route_names):
@@ -2986,7 +3016,6 @@ def _topic_failure_response(
     )
 
 
-from app.task_topic_routes import build_task_topic_router
 
 
 app.include_router(build_task_topic_router(
@@ -3012,7 +3041,6 @@ app.include_router(build_task_topic_router(
 app.include_router(_task_workspace_http_router(('set_creation_task_visibility_route', 'get_creation_task_workspace')))
 
 
-from app.task_knowledge_adoption_routes import build_task_knowledge_adoption_router
 
 
 app.include_router(build_task_knowledge_adoption_router(
@@ -3042,14 +3070,12 @@ def _assistant_creation_adoption_scope(task_id: str, request: Request, turn_id: 
     return origin
 
 
-from app.creation.script_context_use_case import ScriptContextUseCase
 
 
 def _script_context_use_case() -> ScriptContextUseCase:
     return ScriptContextUseCase(production_repo, _source_inputs_use_case())
 
 
-from app.task_script_routes import build_task_script_router
 
 
 def _task_script_http_router(route_names):
@@ -3140,7 +3166,6 @@ def _script_draft_use_case(workspace_id, *, validate_inputs, content_reader=None
 app.include_router(_task_script_http_router(('save_assistant_script_draft',)))
 
 
-from app.task_assistant_history_routes import build_task_assistant_history_router
 
 app.include_router(build_task_assistant_history_router(
     workspace_for=lambda: current_workspace_id,
@@ -3407,7 +3432,6 @@ def _resolve_assistant_storyboard_regeneration(task_id, request, turn_id, detail
 app.include_router(_task_script_http_router(('get_creation_task_scripts',)))
 
 
-from app.creation.script_routes import ScriptWindowHttpAdapter, build_script_sections_router
 
 
 def _script_window_http_adapter():
@@ -3509,7 +3533,6 @@ app.include_router(build_script_generation_router(
 app.include_router(_task_script_http_router(('confirm_creation_task_script',)))
 
 
-from app.task_narration_routes import build_task_narration_router
 
 
 app.include_router(build_task_narration_router(
@@ -3568,7 +3591,6 @@ def _person_render_media_path(render: PersonRender) -> Path | None:
 
 
 
-from app.task_person_render_routes import build_task_person_render_router
 
 
 def _task_person_render_http_router(route_names):
@@ -3601,7 +3623,6 @@ def _generate_creation_task_person_render_record(workspace_id,task_id,payload,*,
 app.include_router(_task_person_render_http_router(('generate_creation_task_person_render', 'get_creation_task_person_render_media')))
 
 
-from app.storyboard_regeneration_routes import build_storyboard_regeneration_router
 
 
 app.include_router(build_storyboard_regeneration_router(
@@ -3629,7 +3650,6 @@ def _creation_task_montage_candidates(workspace_id,plan,clip,*,automation_only=F
     return _metadata_edit_use_case().montage_candidates(workspace_id,plan,clip,automation_only=automation_only,viewer_user_id=viewer_user_id,local_diagnostic=local_diagnostic)
 
 
-from app.task_montage_control_routes import build_task_montage_control_router
 
 
 def _task_montage_control_http_router(route_names):
@@ -3740,7 +3760,6 @@ def _ordinary_native_handler(actor,binding):
     return NativeOperationHandler(case,actor,verify,_creation_runtime)
 
 
-from app.native_task_read_routes import build_native_task_read_router
 
 
 def _native_task_read_http_router(route_names):
@@ -3774,7 +3793,6 @@ def _local_revision_origin(task_id,request,payload):
     return actor,{**origin,'assistant_turn_id':turn_id,'input_id':input_id}
 
 
-from app.assistant_semantic_receipt_routes import build_assistant_semantic_receipt_router
 
 
 def _assistant_semantic_receipt_http_router(route_names):
@@ -3793,7 +3811,6 @@ app.include_router(_assistant_semantic_receipt_http_router(("creation_task_input
 app.include_router(_assistant_semantic_receipt_http_router(("creation_task_narration_semantic_review",)))
 
 
-from app.task_segment_routes import build_task_segment_router
 
 
 def _task_segment_http_router(route_names):
@@ -3835,7 +3852,6 @@ app.include_router(_task_segment_http_router(("creation_task_segment_video",)))
 
 
 
-from app.task_budget_routes import build_task_budget_router
 
 
 def _task_budget_http_router(route_names):
@@ -4137,7 +4153,6 @@ app.include_router(_task_edit_http_router(('confirm_creation_task_edit',)))
 
 
 
-from app.task_capability_routes import TaskEditCapabilityResponseAdapter, build_task_capability_router
 
 app.include_router(build_task_capability_router(
     access_for=lambda: _exact_edit_access,
@@ -4217,7 +4232,6 @@ def _trim_clip_source_url(workspace_id,task_id,clip,cue):
     return _metadata_edit_use_case().trim_clip_source_url(workspace_id,task_id,clip,cue)
 
 
-from app.timeline_restore_routes import build_timeline_restore_router
 
 
 def _timeline_restore_http_router(route_names):
@@ -4355,7 +4369,6 @@ def _start_creation_task_quality_check(workspace_id: str, task_id: str, *,
     _quality_inspection_use_case().start(device_runtime, actor, workspace_id, task_id, force=force)
 
 
-from app.creation.quality_routes import build_quality_router
 
 
 def _quality_http_router(route_names, *, read_continuation=None):
@@ -4385,7 +4398,6 @@ def recover_interrupted_quality_checks(runtime) -> None:
 app.include_router(_quality_http_router(("check_creation_task_quality",)))
 
 
-from app.creation.quality_application import QualityApplication
 
 
 def _bind_quality_runtime():
@@ -4414,7 +4426,6 @@ app.include_router(_quality_http_router(("continue_phase", "original_continuatio
     read_continuation=_read_creation_quality_continuation))
 
 
-from app.task_output_routes import build_task_output_router
 
 
 def _task_output_http_router(route_names):
@@ -4494,7 +4505,6 @@ _HISTORY_ARTIFACT_MISSING = {
 
 
 
-from app.timeline_history_routes import build_timeline_history_router
 
 
 def _timeline_history_http_router(route_names):
@@ -4541,7 +4551,6 @@ app.include_router(_task_output_http_router(("get_creation_task_selected_subtitl
 app.include_router(_task_output_http_router(("get_creation_task_cover_image",)))
 
 
-from app.home_routes import build_home_router
 
 
 app.include_router(build_home_router(
@@ -4568,7 +4577,6 @@ def _material_library_http_adapter():
     )
 
 
-from app.material_insights_routes import build_material_insights_router
 
 
 app.include_router(build_material_insights_router(
@@ -4734,7 +4742,6 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('stream_production_material',)))
 
 
-from app.material_processing_routes import build_material_processing_router
 
 
 app.include_router(build_material_processing_router(
@@ -4758,7 +4765,6 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('update_production_material_segment',)))
 
 
-from app.legacy_montage_routes import LegacyMontageResponseAdapter, build_legacy_montage_router
 
 
 def _legacy_montage_http_router(route_names):
@@ -5052,7 +5058,6 @@ def _reload_runtime_dependencies(prepared: PreparedRuntimeReload | None = None) 
                 _activate_runtime_reload(prepared, drivers)
 
 
-from app.knowledge_notes_routes import build_knowledge_notes_router
 
 
 app.include_router(build_knowledge_notes_router(
@@ -5705,7 +5710,6 @@ def _dispatch_device_preparation(action, *, actor, request_id, shape=None, kind=
 
 
 
-from app.device_preparation_routes import build_device_preparation_router
 app.include_router(build_device_preparation_router(
     authorized_actor=lambda request: _require_permit_actor(request, current_workspace_id(request)),
     application=_device_preparation_application))

@@ -6,6 +6,7 @@
 """
 
 from __future__ import annotations
+from script_seed_fixtures import script_seed_payload
 
 import pytest
 
@@ -299,7 +300,7 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
         created_at=now, updated_at=now, confirmed_at=now)
     with repository._connect() as conn:
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
-            ("script", WORKSPACE, task.id, "run", json.dumps(payload), now))
+            ("script", WORKSPACE, task.id, "run", script_seed_payload(repository, conn, payload), now))
         task.confirmed_script_id = "script"
         task.stage = "narration"
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?",

@@ -9,11 +9,10 @@ from pathlib import Path
 from typing import Callable
 from app.config import Settings
 from app.assistant.script_generation_policy import is_script_generation
-from app.assistant.catalogue import (SCRIPT_GENERATION_TOOLS, MEMORY_TOOLS, SCRIPT_TOOL_READS, ASSISTANT_BUSINESS_TOOLS,
-    TASK_READ_PREVIEW_TOOLS, SYSTEM_PROMPT, PLAN_PROMPT, MATERIAL_PROMPT, SCRIPT_PROMPT, TOPIC_PROMPT, _PI_TOOL_LABELS as _PI_TOOL_LABELS)
-from app.assistant.failures import (AssistantUnavailable as AssistantUnavailable, _fail as _fail, _classify_output, _tool_error_seen,
-    _FAILURES, FAILURE_KEY_REJECTED as FAILURE_KEY_REJECTED, FAILURE_ADDRESS_UNREACHABLE as FAILURE_ADDRESS_UNREACHABLE, FAILURE_TIMEOUT as FAILURE_TIMEOUT, FAILURE_RUNTIME_MISSING as FAILURE_RUNTIME_MISSING,
-    FAILURE_TOOL_FAILED as FAILURE_TOOL_FAILED, FAILURE_UNKNOWN as FAILURE_UNKNOWN)
+import app.assistant.catalogue as _owner_app_assistant_catalogue
+from app.assistant.catalogue import SCRIPT_GENERATION_TOOLS, ASSISTANT_BUSINESS_TOOLS, SYSTEM_PROMPT, PLAN_PROMPT, SCRIPT_PROMPT, TOPIC_PROMPT, _PI_TOOL_LABELS as _PI_TOOL_LABELS
+import app.assistant.failures as _owner_app_assistant_failures
+from app.assistant.failures import AssistantUnavailable as AssistantUnavailable, _fail as _fail, _classify_output, FAILURE_KEY_REJECTED as FAILURE_KEY_REJECTED, FAILURE_ADDRESS_UNREACHABLE as FAILURE_ADDRESS_UNREACHABLE, FAILURE_TIMEOUT as FAILURE_TIMEOUT, FAILURE_RUNTIME_MISSING as FAILURE_RUNTIME_MISSING, FAILURE_TOOL_FAILED as FAILURE_TOOL_FAILED, FAILURE_UNKNOWN as FAILURE_UNKNOWN
 from app.assistant.projection import _safe_tool_result_summary as _safe_tool_result_summary, _business_event_lines, _PiStreamProjector
 from app.assistant.result_projection import read_sdk_result
 from app.assistant.service_observations import _record_service
@@ -24,6 +23,13 @@ from app.assistant.runtime_checks import _pi_executable, runtime_checks
 from app.assistant.preflight import read_task_before_pi, read_memory_before_pi
 from app.assistant.process_runner import run_pi_streaming
 from app.assistant.turn import run_turn
+
+MEMORY_TOOLS = _owner_app_assistant_catalogue.MEMORY_TOOLS
+SCRIPT_TOOL_READS = _owner_app_assistant_catalogue.SCRIPT_TOOL_READS
+TASK_READ_PREVIEW_TOOLS = _owner_app_assistant_catalogue.TASK_READ_PREVIEW_TOOLS
+MATERIAL_PROMPT = _owner_app_assistant_catalogue.MATERIAL_PROMPT
+_tool_error_seen = _owner_app_assistant_failures._tool_error_seen
+_FAILURES = _owner_app_assistant_failures._FAILURES
 
 _turn_control = TurnControl(terminate=lambda process, **kwargs: _terminate_process_group(process, **kwargs))
 _session_control = SessionLocks()

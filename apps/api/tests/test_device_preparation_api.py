@@ -3,15 +3,26 @@ from dataclasses import replace
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 import app.main as main
 import app.device_resource_preparation as preparation
 from test_typed_assistant_edits_api import metadata_http_state as metadata_http_state  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def preparation_metadata_no_execution(monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
 
 
 def test_preparation_http_reuses_request_and_never_resumes_old_work(metadata_http_state, monkeypatch, tmp_path):
     state = metadata_http_state
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "ws")
     monkeypatch.setenv("DEVICE_ID", "isolated-device")
+    import app.device_resource_configuration as resource_configuration
+    current_identity = resource_configuration.current_device_identity
+    monkeypatch.setattr(resource_configuration, "current_device_identity",
+        lambda environment: replace(current_identity(environment), platform="darwin"))
     monkeypatch.setattr(main, "settings", replace(main.settings, device_resource_mode="normal",
         device_resource_profile_path=str(tmp_path / "device" / "profile.json"),
         temporary_root_path=str(tmp_path / "temporary")))

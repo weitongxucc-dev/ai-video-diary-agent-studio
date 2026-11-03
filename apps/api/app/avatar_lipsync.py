@@ -13,18 +13,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Literal, Protocol
 
-from app.profiles.contracts import (
-    AuthorizationStatus as AuthorizationStatus,
-    Authorization,
-    ProfileReference as ProfileReference,
-    PersonProfile,
-    VoiceProfile,
-    PronunciationEntry as PronunciationEntry,
-    profile_use_failure,
-    profile_cache_identity,
-    _as_utc,
-    _authorization_cache_identity,
-)
+import app.profiles.contracts as _owner_app_profiles_contracts
+from app.profiles.contracts import AuthorizationStatus as AuthorizationStatus, Authorization, ProfileReference as ProfileReference, PersonProfile, VoiceProfile, PronunciationEntry as PronunciationEntry, profile_use_failure, profile_cache_identity, _authorization_cache_identity
 from app.voice_clone import MediaRuntimeFailure
 from app.media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
 from app.profile_reference_media import ProfileReferenceInput
@@ -33,6 +23,8 @@ if TYPE_CHECKING:
     from app.config import Settings
     from app.production import ProductionRepository
 
+
+_as_utc = _owner_app_profiles_contracts._as_utc
 
 def compile_person_edit_command(command: str) -> str:
     """Require a complete executable request before offering person generation."""

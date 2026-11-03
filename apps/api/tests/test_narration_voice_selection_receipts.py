@@ -1,8 +1,9 @@
 """A voice adoption and its original receipt commit once, without model execution."""
+from script_seed_fixtures import script_seed_payload
 import json
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, replace
+from dataclasses import replace
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -209,7 +210,7 @@ def script_candidate(state, *, locked=False):
     with state.repo._connect() as conn:
         conn.execute("INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)",
             (script.id, script.workspace_id, script.task_id, script.run_id,
-             json.dumps(asdict(script), default=lambda value:value.isoformat()), script.updated_at.isoformat()))
+             script_seed_payload(state.repo, conn, script), script.updated_at.isoformat()))
     return script
 
 

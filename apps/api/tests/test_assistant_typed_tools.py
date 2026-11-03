@@ -1,4 +1,5 @@
 """Shipped tools and installed QuickJS, with HTTP doubles and no model/media calls."""
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
 
 from assistant_sdk_fixtures import project_event_fixture
 import json
@@ -111,7 +112,7 @@ def test_original_receipt_refresh_reuses_saved_locators_without_mutating_the_tur
     assert 'failure' not in refreshed['result']['response']['timeline_restore']
 
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 let raw=''; for await (const part of process.stdin) raw+=part;
 const input=JSON.parse(raw), tools=new Map(), calls=[], results=[]; let failedPosts=0;
 globalThis.fetch=async(url,init)=>{
@@ -142,7 +143,7 @@ const api={registerTool:tool=>tools.set(tool.name,tool), getAllTools:()=>[...too
 const binding=createDiaryExtension(process.env);await binding.extension(api);
 for (const step of input.steps||[]) {
  if(step.rebind){await binding.rebind({...process.env,AI_VIDEO_DIARY_AGENT_SELECTED_REFERENCES:JSON.stringify(step.rebind)});continue;}
- try {const args=step.fromReceipt?{request_id:results[0].result.details.request_id}:(step.args||{});results.push({ok:true,result:await tools.get(step.tool).execute(results.length?'fixture-'+results.length:'fixture',args)});}
+ try {const args=step.fromReceipt?{request_id:results[0].result.details.request_id}:(step.args||{});results.push(toolOutcome(await tools.get(step.tool).execute(results.length?'fixture-'+results.length:'fixture',args)));}
  catch(error){results.push({ok:false,error:error.message});}
 }
 if(input.code){
@@ -151,7 +152,7 @@ if(input.code){
    return {toolCall:{id:'nested-'+calls.length},isError:Boolean(result.isError),result};}
   catch(error){return {toolCall:{id:'failed-'+calls.length},isError:true,result:{content:[{type:'text',text:error.message}]}};}
  }};
- results.push({ok:true,result:await tools.get('codemode').execute('script-fixture',{code:input.code},undefined,undefined,ctx)});
+ results.push(toolOutcome(await tools.get('codemode').execute('script-fixture',{code:input.code},undefined,undefined,ctx)));
 }
 console.log(JSON.stringify({results,calls,parameters:tools.get('preview_typed_edit').parameters,requestIdentity:typedRequestId('trusted-turn','fixture')}));
 """
@@ -220,7 +221,8 @@ def test_execution_unknown_cannot_repost_and_job_switch_cannot_claim_original_su
                {"tool":"read_creation_execution", "args":{"job_id":"execution:old"}}])
     assert len([call for call in observed["calls"] if call["method"] == "POST"]) == 1
     assert observed["results"][0]["result"]["isError"] is True
-    assert 'fixture reply lost' in observed["results"][0]["result"]["details"]["failure"]["reason"]
+    assert observed["results"][0]["result"]["details"]["failure"]["reason"] == '业务请求响应中断，写入结果未知。'
+    assert 'fixture reply lost' not in json.dumps(observed["results"][0]["result"], ensure_ascii=False)
     assert observed["results"][1]["result"]["isError"] is True
     assert not observed["results"][2]["ok"] and '身份不一致' in observed["results"][2]["error"]
 

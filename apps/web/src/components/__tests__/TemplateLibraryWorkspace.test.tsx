@@ -191,9 +191,12 @@ describe("template version editing", () => {
     renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, can_edit: true }]} />);
     fireEvent.click(screen.getByRole("button", { name: /版本记录/ }));
     fireEvent.click(screen.getByRole("button", { name: /视频日记 · 第1版/ }));
+    const parent = screen.getByRole("dialog", { name: "模板详情" });
     fireEvent.click(screen.getByRole("button", { name: "编辑名称与文案风格" }));
     const child = screen.getByRole("dialog", { name: "编辑模板" });
-    expect(Number.parseFloat(child.style.left)).toBe(Number.parseFloat(screen.getByRole("dialog", { name: "模板详情" }).style.left) - 12);
+    expect(child).toHaveAttribute("aria-modal", "true");
+    expect(parent).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "模板详情" })).not.toBeInTheDocument();
     fireEvent.change(within(child).getByLabelText("模板名称"), { target: { value: " 新名称 " } });
     fireEvent.change(within(child).getByLabelText("新文案的风格要求"), { target: { value: " 短句 " } });
     fireEvent.click(within(child).getByRole("button", { name: "保存新版本" }));

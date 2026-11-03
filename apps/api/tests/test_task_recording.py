@@ -1,4 +1,5 @@
 """A saved desktop recording is not the current narration until edit confirmation."""
+from script_seed_fixtures import script_seed_payload
 
 import io
 import json
@@ -119,7 +120,7 @@ def recording_task(tmp_path, monkeypatch):
     montage_payload = creation_task_montage_plan_to_payload(montage)
     with repo._connect() as conn:
         conn.execute("INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)",
-                     (script_id, workspace_id, task_id, script["run_id"], json.dumps(script), now))
+                     (script_id, workspace_id, task_id, script["run_id"], script_seed_payload(repo, conn, script), now))
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
                      (json.dumps(asdict(task), default=str), workspace_id, task_id))
         conn.execute("INSERT INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) VALUES (?,?,?,?,?)",

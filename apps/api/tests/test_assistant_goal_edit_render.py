@@ -1,4 +1,5 @@
 """Committed edit/render metadata with real SQLite; no model or media worker."""
+from script_seed_fixtures import script_seed_payload
 import json
 from dataclasses import asdict, replace
 from uuid import uuid4
@@ -42,7 +43,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
         [CreationTaskScriptSection("section", "开头", "原字幕", "既有画面", ["fixture-source"])], selection_status="confirmed")
     with state.repo._connect() as conn:
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
-            (script.id,"ws",state.task.id,script.run_id,json.dumps(asdict(script),default=str),script.updated_at.isoformat()))
+            (script.id,"ws",state.task.id,script.run_id,script_seed_payload(state.repo, conn, script),script.updated_at.isoformat()))
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(replace(state.task,confirmed_script_id=script.id)),default=str),state.task.id))
     # TaskBusiness's real borrowed-connection guard reads the same isolated database.
     repo = ConversationRepository(state.repo.database_path)

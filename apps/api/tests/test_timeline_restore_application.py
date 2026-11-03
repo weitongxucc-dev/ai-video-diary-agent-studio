@@ -1,4 +1,5 @@
 """Historical restore from real isolated SQLite and synthetic PCM/SRT/PNG inputs."""
+from script_seed_fixtures import script_seed_payload
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import json
@@ -39,7 +40,7 @@ def restore_state(tmp_path, *, empty=False):
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
             (json.dumps(asdict(task), default=str), task.id))
         conn.execute('INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-            (script.id, 'ws', task.id, script.run_id, json.dumps(asdict(script), default=str), stamp.isoformat()))
+            (script.id, 'ws', task.id, script.run_id, script_seed_payload(state.repo, conn, script), stamp.isoformat()))
     state.repo.narration_records.save_narration_segments('ws', task.id, 'fixed-script', state.segments)
     snapshot = {**state.base.snapshot,
         'narration_segments': json.loads(json.dumps([asdict(item) for item in state.segments], default=str))}

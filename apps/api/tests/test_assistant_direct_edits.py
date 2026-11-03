@@ -2,6 +2,7 @@
 
 Opaque fixture source bytes are never decoded, and no provider/media job is run.
 """
+from script_seed_fixtures import script_seed_payload
 import json
 import pytest
 import os
@@ -105,7 +106,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     with state.repo._connect() as conn:
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan),default=str),plan.id))
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
-            (script.id,"ws",task.id,script.run_id,json.dumps(asdict(script),default=str),script.updated_at.isoformat()))
+            (script.id,"ws",task.id,script.run_id,script_seed_payload(state.repo, conn, script),script.updated_at.isoformat()))
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?",(json.dumps(asdict(task),default=str),task.id))
     audio_path=tmp_path / "outputs/artifacts/task/fixed-narration.wav"
     with wave.open(str(audio_path),"wb") as audio:

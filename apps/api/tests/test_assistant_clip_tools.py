@@ -1,4 +1,5 @@
 """Run the shipped Node extension across task/material operations, without a model."""
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
 
 from assistant_sdk_fixtures import project_event_fixture
 import json
@@ -11,7 +12,7 @@ from app.schemas import CreationTaskExactEditRequest, EXACT_EDIT_FIELDS
 
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
 TURN_ID = "11111111-1111-4111-8111-111111111111"
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 import {createServer} from 'node:http';
 let raw='';for await(const part of process.stdin)raw+=part;
 const input=JSON.parse(raw),calls=[],tools=new Map();
@@ -52,7 +53,7 @@ try{
  const results=[];
  for(const step of input.steps){
   if(step.changeVersion)workspace.task.timeline_sequence=2;
-  try{results.push({ok:true,result:await tools.get(step.tool).execute('call',step.params||{})});}
+  try{results.push(toolOutcome(await tools.get(step.tool).execute('call',step.params||{})));}
   catch(error){results.push({ok:false,error:error.message});}
  }
  console.log(JSON.stringify({results,calls,asset,tools:[...tools.keys()],preview_parameters:tools.get('preview_typed_edit').parameters}));

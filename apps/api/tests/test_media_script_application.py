@@ -13,12 +13,14 @@ import pytest
 import app.main as main
 import app.media_script_jobs as scripts
 from app.media_script import MeasuredScriptOutput
+import test_media_script_api as _owner_test_media_script_api
 from test_media_script_api import (
-    state as legacy_state,
     material_edit_state as material_edit_state,
     person_render_edit_state as person_render_edit_state,
 )
 
+
+legacy_state = _owner_test_media_script_api.state
 
 @pytest.fixture
 def script_application(legacy_state, monkeypatch):

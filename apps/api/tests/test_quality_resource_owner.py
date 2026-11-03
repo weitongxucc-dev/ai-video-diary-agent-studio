@@ -26,12 +26,12 @@ from app.task_audio import TaskAudio
 
 
 def licensed_native_port(request):
-    """The separate native gate supplies calibrated grant/process ports explicitly."""
+    """Require explicit finite synthetic budgets and real grant/process ports."""
     import pytest
     try:
         return request.getfixturevalue("licensed_quality_native")
     except pytest.FixtureLookupError:
-        pytest.fail("质检 native fixture 尚未绑定独立标定预算与真实许可；本轮不能执行此矩阵。", pytrace=False)
+        pytest.fail("质检 native fixture 尚未绑定有限合成预算与真实许可；不能执行此矩阵。", pytrace=False)
 
 
 class QualityCheckFixtureRepository(QualityCheckRepository):

@@ -1,4 +1,5 @@
 """Metadata-only real SQLite use cases; no HTTP, renderer or model calls."""
+from script_seed_fixtures import script_seed_payload
 from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
@@ -235,7 +236,7 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
     with s.repo._connect() as conn:
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(s.task),default=str),s.task.id))
         conn.execute('INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)',
-            ('fixed-script','ws',s.task.id,'fixture-run',json.dumps(script),now.isoformat()))
+            ('fixed-script','ws',s.task.id,'fixture-run',script_seed_payload(s.repo, conn, script),now.isoformat()))
     s.repo.timeline_records.create_timeline_version(s.base)
     s.repo.subtitle_records.create_subtitle_track(replace(s.track,id='complete-zh',timeline_version_id=s.base.id))
     s.repo.narration_records.save_narration_segments('ws',s.task.id,'fixed-script',[segment])

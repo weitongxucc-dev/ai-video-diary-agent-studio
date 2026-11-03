@@ -103,7 +103,8 @@ function harness(initial: CreationTaskScriptSection[] = []) {
         completeLast: () => finish(writes[writes.length - 1]), sections: () => sections, version: () => version };
 }
 function fill(count: number, offset = 0, append = false) {
-    for (let index = 1; index < count; index++) fireEvent.click(screen.getByRole("button", { name: "再加一段" }));
+    const addSection = count > 1 ? screen.getByRole("button", { name: "再加一段" }) : null;
+    for (let index = 1; index < count; index++) fireEvent.click(addSection!);
     for (let index = 1; index <= count; index++) {
         const ordinal = append ? `新增 ${index}` : String(index);
         fireEvent.change(screen.getByLabelText(`第 ${ordinal} 段标题`), { target: { value: `标题 ${offset + index}` } });

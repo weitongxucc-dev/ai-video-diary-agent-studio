@@ -21,7 +21,7 @@ from app.member_permits import MemberDeviceAccess
 from app.production import ProductionRepository
 
 
-def preparation(tmp_path):
+def preparation(tmp_path, *, device_platform=sys.platform):
     repository = ProductionRepository(tmp_path / 'db' / 'production.sqlite', tmp_path / 'library')
     members = LocalMemberService(repository.database_path)
     member, _ = members.join(members.create_invite_code(), 'CPU preparation fixture')
@@ -29,11 +29,26 @@ def preparation(tmp_path):
     access = MemberDeviceAccess(members)
     owner = tmp_path / 'device'
     settings = Settings(device_resource_profile_path=str(owner / 'device-resource-profile.json'))
-    device = DeviceProfileIdentity('fixture-device', sys.platform, platform.machine(), psutil.virtual_memory().total)
+    device = DeviceProfileIdentity('fixture-device', device_platform, platform.machine(), psutil.virtual_memory().total)
     paths = {'database': repository.database_path.parent, 'output': tmp_path / 'output', 'temporary': tmp_path / 'temporary'}
     service = DeviceResourcePreparation(profile_path=settings.device_resource_profile_path, device=device,
         settings=settings, write_paths=paths, verify_identity=access.verify_identity)
     return repository, actor, access, service, paths
+
+
+def metadata_preparation(tmp_path, monkeypatch):
+    """Exercise the Mac policy with declared observations; no native work runs."""
+    from types import SimpleNamespace
+    import subprocess
+    from app.device_runtime import DeviceRuntime
+    import app.device_resource_preparation as preparation_module
+    def forbidden(*args, **kwargs):
+        raise AssertionError('preparation metadata must not run native work or a device driver')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(preparation_module, 'sample_host_memory', lambda: SimpleNamespace(
+        pressure='normal', available_bytes=4 * 1024**3))
+    return preparation(tmp_path, device_platform='darwin')
 
 
 @pytest.mark.skipif(sys.platform != 'darwin' or not shutil.which('ffmpeg') or not shutil.which('ffprobe'), reason='macOS CPU preparation backend unavailable')
@@ -96,7 +111,7 @@ def test_normal_device_lock_is_independent_of_workspace_database(tmp_path):
 def test_prepare_normal_pressure_uses_available_headroom_not_fraction_of_physical_memory(tmp_path, monkeypatch):
     from types import SimpleNamespace
     import app.device_resource_preparation as preparation_module
-    repository, actor, access, service, paths = preparation(tmp_path)
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     available, host_rss = 2 * 1024**3, 100 * 1024**2
     monkeypatch.setattr(preparation_module, 'sample_host_memory', lambda: SimpleNamespace(pressure='normal', available_bytes=available))
     monkeypatch.setattr(preparation_module.psutil, 'Process', lambda: SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=host_rss)))
@@ -110,7 +125,7 @@ def test_prepare_normal_pressure_uses_available_headroom_not_fraction_of_physica
 def test_prepare_critical_pressure_does_not_start_work_or_publish_profile(tmp_path, monkeypatch):
     from types import SimpleNamespace
     import app.device_resource_preparation as preparation_module
-    repository, actor, access, service, paths = preparation(tmp_path)
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     monkeypatch.setattr(preparation_module, 'sample_host_memory', lambda: SimpleNamespace(pressure='critical', available_bytes=12 * 1024**3))
     with pytest.raises(DeviceProfileUnavailable, match='内存压力过高'):
         service.prepare(CpuPreparationShape(64, 64, 24, 1, 2, 2, 8000, 1), actor, request_id=str(uuid4()))
@@ -148,7 +163,7 @@ def _synthetic_publication(service, plan_id):
 
 def test_writer_rejects_stale_revision_and_failure_preserves_existing_profile(tmp_path, monkeypatch):
     import app.device_resource_preparation as module
-    repository, actor, access, service, paths = preparation(tmp_path)
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     from test_device_resource_profile import profile_document
     original = profile_document()
     original['device'] = __import__('dataclasses').asdict(service.device)
@@ -179,7 +194,7 @@ def test_writer_rejects_stale_revision_and_failure_preserves_existing_profile(tm
 def test_twenty_inputs_are_prepared_as_unit_shape_not_rejected_by_cpu_core_count(tmp_path, monkeypatch):
     from types import SimpleNamespace
     import app.device_resource_preparation as module
-    repository, actor, access, service, paths = preparation(tmp_path)
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     monkeypatch.setattr(module, 'sample_host_memory', lambda: SimpleNamespace(pressure='normal', available_bytes=2 * 1024**3))
     monkeypatch.setattr(module.psutil, 'Process', lambda: SimpleNamespace(memory_info=lambda: SimpleNamespace(rss=100 * 1024**2)))
     monkeypatch.setattr(module.psutil, 'cpu_count', lambda: 4)
@@ -190,8 +205,8 @@ def test_twenty_inputs_are_prepared_as_unit_shape_not_rejected_by_cpu_core_count
     assert not service.profile_path.exists()  # Preparing an envelope is not measuring it.
 
 
-def test_published_audio_budget_covers_measured_container_and_known_source_bytes(tmp_path):
-    repository, actor, access, service, paths = preparation(tmp_path)
+def test_published_audio_budget_covers_measured_container_and_known_source_bytes(tmp_path, monkeypatch):
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     plan_id, _ = service.prepare(CpuPreparationShape(64, 64, 24, 1, 2, 2, 8000, 1, source_bytes=1000000), actor, request_id=str(uuid4()))
     plan, receipt = _synthetic_publication(service, plan_id)
     result = service._publish(plan, receipt, plan['backends'])
@@ -205,7 +220,7 @@ def test_cpu_preparation_preserves_existing_host_policy_and_unrelated_capacity(t
     from types import SimpleNamespace
     import app.device_resource_preparation as module
     from test_device_resource_profile import profile_document
-    repository, actor, access, service, paths = preparation(tmp_path)
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     original = profile_document()
     original['device'] = asdict(service.device)
     original['budget'].update(sample_seconds=.2, max_swap_used_bytes=1234)
@@ -232,7 +247,7 @@ def test_cpu_preparation_preserves_existing_host_policy_and_unrelated_capacity(t
 
 def test_prepare_request_key_reuses_original_plan_without_remeasuring_and_rejects_changed_input(tmp_path, monkeypatch):
     import app.device_resource_preparation as module
-    repository, actor, access, service, paths = preparation(tmp_path)
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     shape = CpuPreparationShape(64, 64, 24, 1, 2, 2, 8000, 1)
     plan_id, budget = service.prepare(shape, actor, request_id='stable-request')
     monkeypatch.setattr(module, 'sample_host_memory', lambda: pytest.fail('replayed preparation must not measure again'))
@@ -243,9 +258,9 @@ def test_prepare_request_key_reuses_original_plan_without_remeasuring_and_reject
     assert len(list((service.root / 'plans').glob('*.json'))) == 1
 
 
-def test_preparation_keeps_account_actor_identity_during_admission_recheck(tmp_path):
+def test_preparation_keeps_account_actor_identity_during_admission_recheck(tmp_path, monkeypatch):
     from types import SimpleNamespace
-    repository, local_actor, access, service, paths = preparation(tmp_path)
+    repository, local_actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     actor = CreationExecutionActor.account(str(uuid4()), str(uuid4()), str(uuid4()))
     observed = []
     def verify(candidate):
@@ -263,7 +278,7 @@ def test_preparation_keeps_account_actor_identity_during_admission_recheck(tmp_p
 
 def test_plan_write_failure_retries_same_identity_without_duplicate_plan(tmp_path, monkeypatch):
     import app.device_resource_preparation as module
-    repository, actor, access, service, paths = preparation(tmp_path)
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     shape = CpuPreparationShape(64, 64, 24, 1, 2, 2, 8000, 1)
     original = module._atomic_json
     attempted = []
@@ -280,8 +295,8 @@ def test_plan_write_failure_retries_same_identity_without_duplicate_plan(tmp_pat
     assert len(list((service.root / 'plans').glob('*.json'))) == 1
 
 
-def test_status_is_read_only_after_service_recreation_and_rejects_other_owner_or_member(tmp_path):
-    repository, actor, access, service, paths = preparation(tmp_path)
+def test_status_is_read_only_after_service_recreation_and_rejects_other_owner_or_member(tmp_path, monkeypatch):
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     plan_id, budget = service.prepare(CpuPreparationShape(64, 64, 24, 1, 2, 2, 8000, 1), actor, request_id='status-request')
     resources = HostResourceProbe(repository.database_path, disk_paths=paths, budget=budget)
     runtime = build_device_runtime(database_path=repository.database_path,

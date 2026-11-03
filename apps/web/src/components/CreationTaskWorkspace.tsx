@@ -132,19 +132,29 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [pendingTimelineRestore, setPendingTimelineRestore] = useState<PendingTimelineRestore | null>(null);
   const pendingTimelineRestoreRef = useRef<PendingTimelineRestore | null>(null);
   const editRequestScope = useRef<string | null>(null);
+  const restoredIdentityScope = useRef<string | undefined>(undefined);
+  const [editRequestRecoveryReady, setEditRequestRecoveryReady] = useState(false);
+  const editRequestRecoveryError = useRef<ReturnType<typeof errorDetails> | null>(null);
   const editRequestOperation = useRef<{ taskId: string; memberId: string | null } | null>(null);
   const editRequestIdentity = useLocalMemberIdentity();
   const subtitleStoragePrefix = `subtitle-save:${workspace.task.workspace_id}:${workspace.task.id}:`;
   useEffect(() => {
     let active = true;
     let identityRevision = 0;
+    setEditRequestRecoveryReady(false);
     const restore = (memberId: string | null) => {
       if (!active) return;
       const nextScope = memberId ? `${subtitleStoragePrefix}${memberId}` : null;
       if (editRequestScope.current === nextScope && editRequestOperation.current) return;
+      setEditRequestRecoveryReady(false);
+      editRequestRecoveryError.current = null;
       const previousScope = editRequestScope.current;
       editRequestScope.current = nextScope;
-      if (previousScope !== nextScope) { setError(null); setNotice(null); }
+      const restoredScope = JSON.stringify([subtitleStoragePrefix, memberId]);
+      if (restoredIdentityScope.current !== undefined && restoredIdentityScope.current !== restoredScope) {
+        setError(null); setNotice(null);
+      }
+      restoredIdentityScope.current = restoredScope;
       const operation = editRequestOperation.current;
       if (operation && ((previousScope !== null && previousScope !== nextScope)
         || (operation.memberId !== null && (operation.memberId !== memberId || operation.taskId !== workspace.task.id)))) {
@@ -155,7 +165,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       setPendingMetadataSave(null);
       pendingTimelineRestoreRef.current = null;
       setPendingTimelineRestore(null);
-      if (!memberId) return;
+      if (!memberId) { setEditRequestRecoveryReady(true); return; }
       try {
         const stored = sessionStorage.getItem(`${subtitleStoragePrefix}${memberId}`);
         const pending: PendingMetadataSave | null = stored ? JSON.parse(stored) : null;
@@ -165,7 +175,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         pendingMetadataSaveRef.current = pending;
         setPendingMetadataSave(pending);
         if (pending?.submissionError) setError(pending.submissionError);
-      } catch (cause) { setError(errorDetails(cause)); }
+      } catch (cause) { editRequestRecoveryError.current = errorDetails(cause); setError(editRequestRecoveryError.current); }
       try {
         const stored = sessionStorage.getItem(`timeline-restore:${workspace.task.workspace_id}:${workspace.task.id}:${memberId}`);
         const pending: PendingTimelineRestore | null = stored ? JSON.parse(stored) : null;
@@ -175,7 +185,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         pendingTimelineRestoreRef.current = pending;
         setPendingTimelineRestore(pending);
         if (pending?.submissionError) setError(pending.submissionError);
-      } catch (cause) { setError(errorDetails(cause)); }
+      } catch (cause) { editRequestRecoveryError.current = errorDetails(cause); setError(editRequestRecoveryError.current); }
+      setEditRequestRecoveryReady(editRequestRecoveryError.current === null);
     };
     void editRequestMemberId().then(memberId => { if (identityRevision === 0) restore(memberId); })
       .catch(cause => { if (active && identityRevision === 0) setError(errorDetails(cause)); });
@@ -1408,7 +1419,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   async function saveMetadataEdit(input: MetadataEditInput) {
     if (editRequestOperation.current || pendingMetadataSaveRef.current || busy !== null) return false;
+    if (editRequestRecoveryError.current) return false;
     const taskSnapshot = currentWorkspace.current.task;
+    // Do not create a request locator for a command known to lack its required base.
+    // Existing pending requests above still require their original receipt.
+    if (taskSnapshot.current_timeline_version_id === null) {
+      setError({ message: "当前故事板还没有可撤销的初始版本。", code: "timeline_version_required",
+        impact: "修改没有提交，当前草稿已保留。", repairAction: "保留当前故事板并建立版本，再保存修改。" });
+      return false;
+    }
     const operation: { taskId: string; memberId: string | null } = { taskId: taskSnapshot.id, memberId: null };
     editRequestOperation.current = operation;
     const owns = () => currentTaskId.current === taskSnapshot.id && editRequestOperation.current === operation
@@ -1729,7 +1748,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">{!pendingMetadataSave ? <CheckCircle2 size={17} /> : null}{notice}</div> : null}
         {pendingMetadataSave?.taskId === task.id ? <div role="status">保存结果待核对。原输入已保留，不会重复提交。<Button variant="outline" disabled={busy !== null} onClick={() => void queryMetadataSave()}>查询原保存结果</Button><details><summary>保存请求详情</summary><p>原请求：{pendingMetadataSave.input.request_id}</p></details></div> : null}
         {pendingTimelineRestore?.taskId===task.id ? <p role="status">撤销或重做请求等待核对。<Button variant="outline" disabled={busy!==null} onClick={()=>void queryTimelineRestore()}>查询原撤销重做结果</Button></p> : null}
-        {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
+        {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={!editRequestRecoveryReady || busy !== null || pendingMetadataSave !== null || pendingTimelineRestore !== null} onClick={() => { if (!editRequestRecoveryReady || editRequestOperation.current || pendingMetadataSaveRef.current || pendingTimelineRestoreRef.current) return; void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。"); } } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
         {executionError ? <TaskIssue stage={task.stage} reason={executionError.code === "device_budget_unavailable" ? "这台设备还没有完成制作资源标定，暂时不能开始制作。" : executionError.message} impact={executionError.impact} repair={executionError.repairAction} code={executionError.code}>{executionError.code === "device_budget_unavailable" ? <><Link href="/health">检查运行情况</Link><details className={styles.traceDetails}><summary>制作资源诊断</summary><p>{executionError.message}</p></details></> : null}{task.confirmed_script_id ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(executionController.recheckRequirements)} type="button">重新核对文案和制作要求</button> : null}</TaskIssue> : null}
         {!error && !executionError && task.stage_status === "failed" && activeView === task.stage && (task.stage_reason || task.stage_impact) ? <TaskIssue stage={task.stage} reason={task.stage_reason} impact={task.stage_impact} repair={task.stage_repair_action} label={`${stageLabels[activeView]}失败`} /> : null}
         <NativeOperationsPanel key={`native-${task.id}`} taskId={task.id}

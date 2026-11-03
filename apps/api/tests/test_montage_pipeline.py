@@ -1,4 +1,5 @@
 from __future__ import annotations
+from script_seed_fixtures import script_seed_payload
 
 from app.subtitle_schedule import subtitle_schedule
 
@@ -572,11 +573,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
                 workspace_id,
                 task.id,
                 script.run_id,
-                json.dumps(
-                    asdict(script),
-                    ensure_ascii=False,
-                    default=lambda value: value.isoformat(),
-                ),
+                script_seed_payload(production, conn, script),
                 now.isoformat(),
             ),
         )
@@ -2835,7 +2832,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
                 workspace_id,
                 task.id,
                 script.run_id,
-                json.dumps(asdict(script), ensure_ascii=False, default=lambda value: value.isoformat()),
+                script_seed_payload(production, conn, script),
                 now.isoformat(),
             ),
         )

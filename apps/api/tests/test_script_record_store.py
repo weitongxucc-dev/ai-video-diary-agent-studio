@@ -31,7 +31,8 @@ def test_script_record_owner_cold_import_does_not_load_application_or_parent_rep
     assert result.returncode == 0, result.stderr
 
 
-def test_standalone_owner_roundtrips_its_own_rows_without_cross_domain_ports(tmp_path, monkeypatch):
+@pytest.mark.parametrize("input_form", ["dataclass", "json"])
+def test_standalone_owner_roundtrips_its_own_rows_without_cross_domain_ports(tmp_path, monkeypatch, input_form):
     def forbidden_execution(*args, **kwargs):
         raise AssertionError("record metadata must not run a process, media or runtime")
 
@@ -110,7 +111,10 @@ def test_standalone_owner_roundtrips_its_own_rows_without_cross_domain_ports(tmp
     )
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        payload = store._script_payload(conn, script)
+        from types import SimpleNamespace
+        from script_seed_fixtures import script_seed_payload
+        seed = script if input_form == "dataclass" else json.loads(json.dumps(asdict(script), default=str))
+        payload = script_seed_payload(SimpleNamespace(script_records=store), conn, seed)
         assert "sections" not in json.loads(payload)
         conn.execute(
             "INSERT INTO creation_task_scripts VALUES (?,?,?,?,?,?)",

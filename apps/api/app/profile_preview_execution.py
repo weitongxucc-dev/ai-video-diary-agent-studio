@@ -16,7 +16,9 @@ from app.device_runtime import OwnerRegistration
 from app.device_scheduler import RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork
 from app.models import utc_now
 from app.host_resource_probes import HostResourceRefusal
-from app.persistence_json import _json_payload
+import app.persistence_json as _owner_app_persistence_json
+
+_json_payload = _owner_app_persistence_json._json_payload
 
 OWNER = "media_preview"
 logger = logging.getLogger(__name__)

@@ -19,6 +19,10 @@ const api = vi.hoisted(() => ({
   findCitedVersion: vi.fn(),
   parseKnowledgeReferenceId: vi.fn(),
   listScriptLibraryEntries: vi.fn(),
+  getScriptLibraryEntry: vi.fn(),
+  getScriptLibrarySections: vi.fn(),
+  getScriptLibraryRequest: vi.fn(),
+  push: vi.fn(),
   getScriptLibrarySources: vi.fn(),
   reuseScriptLibraryEntry: vi.fn(),
 }));
@@ -32,7 +36,7 @@ vi.mock("@/lib/source-api", () => ({
   findCitedVersion: api.findCitedVersion,
   parseKnowledgeReferenceId: api.parseKnowledgeReferenceId,
 }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), useSearchParams: () => new URLSearchParams(window.location.search) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: api.push }), usePathname: () => window.location.pathname, useSearchParams: () => new URLSearchParams(window.location.search) }));
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/api")>(),
   listScriptLibraryEntries: api.listScriptLibraryEntries,
@@ -41,6 +45,12 @@ vi.mock("@/lib/api", async (importOriginal) => ({
   getKnowledgeGrants: api.getKnowledgeGrants,
   grantKnowledgeToWorkspace: api.grantKnowledgeToWorkspace,
   revokeKnowledgeGrant: api.revokeKnowledgeGrant,
+}));
+vi.mock("@/lib/api/script-library", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/api/script-library")>(),
+  getScriptLibraryEntry: api.getScriptLibraryEntry,
+  getScriptLibrarySections: api.getScriptLibrarySections,
+  getScriptLibraryRequest: api.getScriptLibraryRequest,
 }));
 vi.mock("next/link", () => ({ default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a> }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: ReactNode; inspector?: ReactNode }) => <><div>{children}</div>{inspector ? <aside aria-label="来源详情">{inspector}</aside> : null}</> }));
@@ -65,6 +75,7 @@ const scriptEntry: ScriptLibraryEntry = {
   language: "zh-CN", sections: [{ id: "section-one", title: "开场", content: "先讲产品用途。", visual_prompt: "", reference_ids: [] }],
   created_at: "2026-10-09T08:00:00Z", updated_at: "2026-10-09T08:00:00Z",
 };
+const scriptHeader = { ...scriptEntry, sections: null, sections_loaded: false, sections_total_count: 1 };
 beforeEach(() => {
   Object.values(api).forEach((mock) => mock.mockReset());
   window.history.replaceState({}, "", "/knowledge");
@@ -79,6 +90,12 @@ beforeEach(() => {
   api.parseKnowledgeReferenceId.mockReturnValue(null);
   api.listScriptLibraryEntries.mockResolvedValue({ items: [], total_count: 0 });
   api.getScriptLibrarySources.mockResolvedValue([]);
+  api.getScriptLibraryEntry.mockResolvedValue(scriptHeader);
+  api.getScriptLibrarySections.mockResolvedValue({
+    entry_id: scriptEntry.id, version: scriptEntry.version, updated_at: scriptEntry.updated_at,
+    items: scriptEntry.sections.map((section, ordinal) => ({ section, ordinal, digest: "fixture-section-digest" })),
+    total_count: 1, next_after_ordinal: null, has_more: false,
+  });
 });
 describe("KnowledgePage", () => {
   it("locates the frozen capsule version after navigation without selecting it again", async () => {
@@ -384,19 +401,22 @@ describe("knowledge workspace grants", () => {
 
   it("opens the visible scripts collection and exact source-matched entry from a deep link", async () => {
     window.history.replaceState({}, "", "/knowledge?entry_id=script-entry-one&source_task_id=task-one");
-    api.listScriptLibraryEntries.mockResolvedValue({ items: [scriptEntry], total_count: 1 });
+    api.listScriptLibraryEntries.mockResolvedValue({ items: [scriptHeader], total_count: 1, next: null });
     render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
 
     expect(await screen.findByRole("button", { name: "文案库" })).toHaveAttribute("aria-pressed", "true");
     expect(await screen.findByRole("heading", { name: "已确认文案 · 版本 2" })).toBeInTheDocument();
-    expect(screen.getByText("先讲产品用途。")).toBeInTheDocument();
+    expect(await screen.findByText("先讲产品用途。")).toBeInTheDocument();
     expect(api.listScriptLibraryEntries).toHaveBeenCalledWith("", "");
   });
 
   it("reuses a script with a long target duration through the visible form", async () => {
     window.history.replaceState({}, "", "/knowledge?entry_id=script-entry-one&source_task_id=task-one");
-    api.listScriptLibraryEntries.mockResolvedValue({ items: [scriptEntry], total_count: 1 });
-    api.reuseScriptLibraryEntry.mockResolvedValue({ task_id: "task-new" });
+    api.listScriptLibraryEntries.mockResolvedValue({ items: [scriptHeader], total_count: 1, next: null });
+    api.reuseScriptLibraryEntry.mockImplementation(async (entryId, input) => ({
+      request_id: input.request_id, entry_id: entryId, entry_version: scriptEntry.version,
+      task_id: "task-new", script_id: "script-new", updated_at: scriptEntry.updated_at, status: "saved",
+    }));
     render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
     await screen.findByText("本人文案没有外部事实引用。");
     fireEvent.change(screen.getByRole("textbox", { name: "新任务名称" }), { target: { value: "长作品" } });
@@ -406,14 +426,17 @@ describe("knowledge workspace grants", () => {
     expect(create).toBeEnabled();
     fireEvent.click(create);
     await waitFor(() => expect(api.reuseScriptLibraryEntry).toHaveBeenCalledWith(scriptEntry.id, {
+      request_id: expect.any(String), expected_entry_updated_at: scriptEntry.updated_at,
       name: "长作品", aspect_ratio: "9:16", duration_target_seconds: 1800, requirements_confirmed: true,
     }));
-    await waitFor(() => expect(create).toBeEnabled());
+    await waitFor(() => expect(api.push).toHaveBeenCalledWith("/tasks/task-new"));
+    expect(api.reuseScriptLibraryEntry).toHaveBeenCalledOnce();
+    expect(api.getScriptLibraryRequest).not.toHaveBeenCalled();
   });
 
   it("does not reuse a script with an invalid target duration or replace an empty input", async () => {
     window.history.replaceState({}, "", "/knowledge?entry_id=script-entry-one&source_task_id=task-one");
-    api.listScriptLibraryEntries.mockResolvedValue({ items: [scriptEntry], total_count: 1 });
+    api.listScriptLibraryEntries.mockResolvedValue({ items: [scriptHeader], total_count: 1, next: null });
     render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
     await screen.findByText("本人文案没有外部事实引用。");
     fireEvent.change(screen.getByRole("textbox", { name: "新任务名称" }), { target: { value: "新作品" } });
@@ -438,6 +461,7 @@ describe("knowledge workspace grants", () => {
       items: sourceTaskId === "different-task" ? [scriptEntry] : [{ ...scriptEntry, id: "sibling-entry", name: "其他文案" }],
       total_count: 1,
     });
+    if (_case === "missing entry") api.getScriptLibraryEntry.mockRejectedValue(new Error(message));
     render(<KnowledgeWorkspace items={[item]} loading={false} error={null} onRefresh={vi.fn()} />);
 
     expect(await screen.findByRole("button", { name: "文案库" })).toHaveAttribute("aria-pressed", "true");

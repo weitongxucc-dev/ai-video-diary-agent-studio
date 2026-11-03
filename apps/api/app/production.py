@@ -10,11 +10,8 @@ from app.creation.narration_voice_selection import NarrationVoiceSelectionTransa
 from app.creation.narration_completion import NarrationCompletionTransaction
 from app.creation.montage_plan_adoption import MontagePlanAdoptionTransaction
 
-from app.creation.script_contracts import (
-    ScriptGenerationRunStatus as _ScriptGenerationRunStatus, ScriptSelectionStatus as _ScriptSelectionStatus, ScriptGenerationRun as _ScriptGenerationRun,
-    CreationTaskScript as _CreationTaskScript, ScriptLibrarySection as _ScriptLibrarySection,
-    _validated_assistant_reply_reference as _validated_assistant_reply_reference, _assistant_reply_input_references as _assistant_reply_input_references, _assistant_reply_request_event_id as _assistant_reply_request_event_id,
-)
+import app.creation.script_contracts as _owner_app_creation_script_contracts
+from app.creation.script_contracts import _validated_assistant_reply_reference as _validated_assistant_reply_reference, _assistant_reply_input_references as _assistant_reply_input_references, _assistant_reply_request_event_id as _assistant_reply_request_event_id
 from app.creation.request_records import CreationRequestRecordStore
 from app.creation.request_adoption_use_case import CreationRequestAdoptionUseCase
 from app.creation.job_records import JobRunRecordStore
@@ -63,10 +60,8 @@ from app.creation.timeline_restore_records import TimelineRestoreRecordStore
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
-from app.creation.contracts import (
-    CreationTask as _CreationTask, NarrationSegmentStatus as _NarrationSegmentStatus,
-    validate_logical_reference as _validate_logical_reference,
-)
+import app.creation.contracts as _owner_app_creation_contracts
+from app.creation.contracts import CreationTask as _CreationTask
 from app.creation.person_renders import PersonRenderStore
 from app.creation.task_records import TaskRecordStore
 from app.creation.video_template_records import VideoTemplateRecordStore
@@ -95,7 +90,8 @@ from app.visual_understanding import LocalVisualUnderstanding
 from app.models import utc_now
 from app.materials.business_objects import MaterialBusinessObjectStore
 from app.materials.collections import MaterialCollectionStore
-from app.materials.assets import MaterialAssetStore, MaterialVersionConflict as MaterialVersionConflict, _normalized_labels, _infer_system_tags as _infer_system_tags, _segment_id as _segment_id
+import app.materials.assets as _owner_app_materials_assets
+from app.materials.assets import MaterialAssetStore, MaterialVersionConflict as MaterialVersionConflict, _infer_system_tags as _infer_system_tags, _segment_id as _segment_id
 from app.materials.analysis import MaterialAnalysisUseCase
 from app.materials.analysis_execution import probe_duration, detect_scene_boundaries
 from app.materials.usage_records import MaterialUsageRecordReader
@@ -112,13 +108,9 @@ from app.materials.discovery_intake import DiscoveryIntake
 from app.source_policy import content_owner
 from app.source_policy import knowledge_item_readable as _content_readable
 from app.materials.contracts import MediaAuthorityError as _MediaAuthorityError
-from app.creation.contracts import (
-    CreationPlanVoiceReference as _CreationPlanVoiceReference,
-    CreationPlanPersonReference as _CreationPlanPersonReference,
-)
-from app.persistence_json import (
-    _json_payload, _json_object, _json_default as _json_default, _with_datetime,
-)
+from app.creation.contracts import CreationPlanPersonReference as _CreationPlanPersonReference
+import app.persistence_json as _owner_app_persistence_json
+from app.persistence_json import _json_payload, _json_default as _json_default, _with_datetime
 from app.materials.segment_search_use_case import MaterialSegmentSearchUseCase
 from app.materials.contracts import (
     AssetReviewStatus,
@@ -153,18 +145,27 @@ if TYPE_CHECKING:
     from app.profile_reference_media import ProfileReferenceInput, ProfileReferenceArtifact
 
 # Public imports retained while downstream creation consumers migrate.
-from app.creation.contracts import (
-    JobRunStatus as _JobRunStatus,
-    SubtitleTrackStatus as _SubtitleTrackStatus,
-    SubtitleCue as _SubtitleCue,
-    SubtitleTrack as _SubtitleTrack,
-    CoverAsset as _CoverAsset,
-    TaskEvent as _TaskEvent,
-    TransformRunStatus as _TransformRunStatus,
-    EditProposalStatus as _EditProposalStatus,
-    EditOperationStatus as _EditOperationStatus,
-    EditOperationType as _EditOperationType,
-)
+from app.creation.contracts import TaskEvent as _TaskEvent
+
+_ScriptGenerationRunStatus = _owner_app_creation_script_contracts.ScriptGenerationRunStatus
+_ScriptSelectionStatus = _owner_app_creation_script_contracts.ScriptSelectionStatus
+_ScriptGenerationRun = _owner_app_creation_script_contracts.ScriptGenerationRun
+_CreationTaskScript = _owner_app_creation_script_contracts.CreationTaskScript
+_ScriptLibrarySection = _owner_app_creation_script_contracts.ScriptLibrarySection
+_NarrationSegmentStatus = _owner_app_creation_contracts.NarrationSegmentStatus
+_validate_logical_reference = _owner_app_creation_contracts.validate_logical_reference
+_normalized_labels = _owner_app_materials_assets._normalized_labels
+_CreationPlanVoiceReference = _owner_app_creation_contracts.CreationPlanVoiceReference
+_json_object = _owner_app_persistence_json._json_object
+_JobRunStatus = _owner_app_creation_contracts.JobRunStatus
+_SubtitleTrackStatus = _owner_app_creation_contracts.SubtitleTrackStatus
+_SubtitleCue = _owner_app_creation_contracts.SubtitleCue
+_SubtitleTrack = _owner_app_creation_contracts.SubtitleTrack
+_CoverAsset = _owner_app_creation_contracts.CoverAsset
+_TransformRunStatus = _owner_app_creation_contracts.TransformRunStatus
+_EditProposalStatus = _owner_app_creation_contracts.EditProposalStatus
+_EditOperationStatus = _owner_app_creation_contracts.EditOperationStatus
+_EditOperationType = _owner_app_creation_contracts.EditOperationType
 
 logger = logging.getLogger(__name__)
 EXACT_EDIT_SOURCE = ContextVar("exact_edit_source", default=None)

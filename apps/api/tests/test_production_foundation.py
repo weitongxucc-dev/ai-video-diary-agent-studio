@@ -1,3 +1,4 @@
+from script_seed_fixtures import script_seed_payload
 import hashlib
 import io
 import json
@@ -209,7 +210,7 @@ def _seed_confirmed_script(
                 workspace_id,
                 task_id,
                 script_payload["run_id"],
-                json.dumps(script_payload, ensure_ascii=False),
+                script_seed_payload(production, conn, script_payload),
                 now.isoformat(),
             ),
         )

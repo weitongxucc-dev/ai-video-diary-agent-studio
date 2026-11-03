@@ -1,4 +1,5 @@
 """Two finite audio journeys with synthetic files, actual stores/receipts and original grants."""
+from script_seed_fixtures import script_seed_payload
 from dataclasses import asdict, replace
 import hashlib
 import io
@@ -83,7 +84,7 @@ def confirmed_script(repo, *, montage=False, cache_key=None):
     with repo._connect() as conn:
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(task),default=str),task.id))
         conn.execute('INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)',
-            (script.id,'local',task.id,script.run_id,json.dumps(asdict(script),default=str),stamp.isoformat()))
+            (script.id,'local',task.id,script.run_id,script_seed_payload(repo, conn, script),stamp.isoformat()))
     return task,script
 
 

@@ -208,6 +208,12 @@ vi.mock("../DesktopVoiceRecorder", () => ({
   ),
 }));
 
+vi.mock("@/lib/auth/routing", () => ({ isLocalAuthMode: () => true }));
+vi.mock("@/lib/local-member-auth", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/local-member-auth")>(),
+  ensureLocalMemberIdentity: async () => ({ member_id: "member-1", role: "owner", member_token: "fixture-token" }),
+}));
+vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ role: "owner", token: "fixture-token", ready: true }) }));
 vi.mock("@/lib/api", () => ({
   getCurrentAssistantConversation: vi.fn(async (scope: { scope_kind: string; scope_id: string }) => ({ id: `conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "local", ...scope, title: "新对话", draft_text: "", draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] })),
   createAssistantConversation: vi.fn(async (scope: { scope_kind: string; scope_id: string }) => ({ id: `new-conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "local", ...scope, title: "新对话", draft_text: "", draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] })),
@@ -354,6 +360,8 @@ function useElectronSave(saveRenderedVideo: ReturnType<typeof vi.fn>) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
+  vi.spyOn(taskMediaApi, "readCreationTaskNativeOperations").mockImplementation(async taskId => ({ task_id: taskId, items: [], total_count: 0, truncated: false, offset: 0 }));
   mocks.getWorkspace.mockResolvedValue(reviewWorkspace());
   const qualityCheck: CreationTaskQualityCheck = {
     check_state: "none", result_status: null, stale: false, check_id: null,
@@ -366,20 +374,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.mocked(taskMediaApi.readCreationTaskNativeOperations).mockRestore();
   vi.clearAllMocks();
   mocks.previewExecution.mockResolvedValue(null);
   Reflect.deleteProperty(window, "electronAPI");
 });
 
 describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
-  beforeEach(() => {
-    // The save fixture has no native operations; keep that independent read
-    // inside the fixture so its network error cannot mask save feedback.
-    vi.spyOn(taskMediaApi, "readCreationTaskNativeOperations").mockImplementation(async taskId => ({
-      task_id: taskId, items: [], total_count: 0, truncated: false, offset: 0,
-    }));
-  });
-  afterEach(() => vi.mocked(taskMediaApi.readCreationTaskNativeOperations).mockRestore());
   it("保存失败时在输出页显示未保存状态、原因和可执行下一步", async () => {
     const saveRenderedVideo = vi.fn().mockResolvedValue({
       saved: false,

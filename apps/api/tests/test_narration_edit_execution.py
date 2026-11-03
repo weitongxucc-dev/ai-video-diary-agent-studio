@@ -1,4 +1,5 @@
 """Controlled creation_job narration edit; no model, service or media subprocess."""
+from script_seed_fixtures import script_seed_payload
 
 import io
 import json
@@ -187,7 +188,7 @@ def fixture(tmp_path):
     with repo._connect() as conn:
         conn.execute(
             "INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
-            ("script", "local", task.id, "run", json.dumps(script), now),
+            ("script", "local", task.id, "run", script_seed_payload(repo, conn, script), now),
         )
         conn.execute(
             "UPDATE creation_tasks SET payload=? WHERE id=?",

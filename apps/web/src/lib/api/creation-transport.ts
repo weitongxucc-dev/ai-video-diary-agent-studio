@@ -61,7 +61,7 @@ export async function creationPlanRequest<T>(path: string, init?: RequestInit): 
         const details = detail && typeof detail === "object" ? detail as Record<string, unknown> : {};
         const code = typeof details.error === "string" ? details.error : null;
         const reason = typeof details.reason === "string" ? details.reason : null;
-        throw new CreationPlanApiError(response.status, code, reason ?? (code && creationPlanErrorTitles[code]
+        throw new CreationPlanApiError(response.status, code, reason && reason !== code ? reason : (code && creationPlanErrorTitles[code]
             ? creationPlanErrorTitles[code]
             : typeof detail === "string"
                 ? detail
