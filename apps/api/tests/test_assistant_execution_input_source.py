@@ -26,7 +26,7 @@ def human_turn(repo, chat, message, context):
     return turn
 
 
-def additional_input(repo, chat, turn_id, *, context, status="consumed", message="按本轮新要求生成，保留字幕修改。", mode="steer"):
+def additional_input(repo, chat, turn_id, *, context, status="consumed", message="按本轮新要求生成，保留字幕修改。", mode="steer", understood=False):
     current = repo.get(chat["id"], "w", "m")
     draft = repo.save_draft(chat["id"], "w", "m", message, current["draft_version"])
     input_id = str(uuid4())
@@ -37,6 +37,9 @@ def additional_input(repo, chat, turn_id, *, context, status="consumed", message
         repo.transition_input(chat["id"], "w", "m", input_id, "consumed" if status == "interrupted" else status)
     if status == "interrupted":
         repo.transition_input(chat["id"], "w", "m", input_id, "interrupted")
+    if understood:
+        repo.record_input_understanding(chat["id"], "w", "m", turn_id, input_id,
+            kind="effective_modification", summary="按用户明确要求修改当前作品", target_refs=[])
     return input_id, message
 
 
@@ -206,7 +209,7 @@ def test_consumed_derived_input_with_effect_registers_and_resumes_a_new_revision
     sibling = repo.get_task_goal(state.roots[1])
     input_id, message = additional_input(repo, state.chat, claim["turn_id"], mode=mode,
         message="中文字幕另改为蓝色后再生成。",
-        context={"kind": "task", "task_id": "cn", "stage": "narration", "target_snapshot": VERSION})
+        understood=True, context={"kind": "task", "task_id": "cn", "stage": "narration", "target_snapshot": VERSION})
     assert repo.register_task_goal(claim["turn_id"], running_execution=True) is None
     assert repo.get_task_goal(claim["turn_id"])["revision"] == 0
     goal = record_child_execution(state, claim, input_id, "new-input-job")
@@ -226,7 +229,7 @@ def test_consumed_derived_input_with_effect_registers_and_resumes_a_new_revision
     assert source["raw_command"] == goal["original_instruction"]
     assert resumed["goal"]["revision"] == 1
     next_input, next_message = additional_input(repo, state.chat, resumed["turn_id"], message="把这次中文旁白再放慢一点。",
-        context={"kind": "task", "task_id": "cn", "stage": "narration", "target_snapshot": VERSION})
+        understood=True, context={"kind": "task", "task_id": "cn", "stage": "narration", "target_snapshot": VERSION})
     assert repo.task_execution_source(resumed["turn_id"], "w", "m", "cn", input_id=next_input)["raw_command"] == next_message
     next_goal = record_child_execution(state, resumed, next_input, "next-input-job")
     assert next_goal["revision"] == 2 and next_goal["includes_root_instruction"] == (mode == "steer")
@@ -271,17 +274,17 @@ def test_revisions_merge_only_this_child_and_freeze_prior_task_requirements(repo
     state = adopted_goals(repo)
     sibling = claim_task(state, "en")
     en_input, _ = additional_input(repo, state.chat, sibling["turn_id"], message="英文独立后续要求。", mode="follow_up",
-        context={"kind": "task", "task_id": "en", "target_snapshot": VERSION})
+        understood=True, context={"kind": "task", "task_id": "en", "target_snapshot": VERSION})
     record_child_execution(state, sibling, en_input, "en-job")
     complete_child_execution(state, sibling, en_input, "en-job")
     sibling_goal = repo.get_task_goal(state.roots[1])
     first = claim_task(state, "cn")
     cn_input, first_text = additional_input(repo, state.chat, first["turn_id"], message="中文字幕改蓝色。",
-        context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
+        understood=True, context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
     record_child_execution(state, first, cn_input, "cn-job-1")
     repo.transition_input(state.chat["id"], "w", "m", cn_input, "completed")
     second_input, second_text = additional_input(repo, state.chat, first["turn_id"], message="中文片头缩小一些。",
-        context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
+        understood=True, context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
     assert repo.task_execution_source(first["turn_id"], "w", "m", "cn", input_id=second_input)["raw_command"] == second_text
     goal = record_child_execution(state, first, second_input, "cn-job-2")
     assert goal["revision"] == 2
@@ -291,7 +294,7 @@ def test_revisions_merge_only_this_child_and_freeze_prior_task_requirements(repo
     complete_child_execution(state, first, second_input, "cn-job-2")
     next_claim = claim_task(state, "cn")
     third_input, third_text = additional_input(repo, state.chat, next_claim["turn_id"], message="中文旁白音量降低。",
-        context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
+        understood=True, context={"kind": "task", "task_id": "cn", "target_snapshot": VERSION})
     assert repo.task_execution_source(next_claim["turn_id"], "w", "m", "cn", input_id=third_input)["raw_command"] == third_text
     newest = record_child_execution(state, next_claim, third_input, "cn-job-3")
     assert newest["revision"] == 3 and newest["original_instruction"].count(third_text) == 1

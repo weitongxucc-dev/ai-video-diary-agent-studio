@@ -22,7 +22,12 @@ def storyboard(person_render_edit_state):
             for index, (start, end) in enumerate(((0, 2), (2, 5), (5, 8)))])
     state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
-    main._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    original = state.production.timeline_records.get_timeline_version(
+        state.workspace_id, state.task.current_timeline_version_id)
+    state.production.timeline_records.create_timeline_version(replace(original,
+        id="storyboard-base", parent_version_id=original.id, sequence=original.sequence + 1,
+        snapshot={**original.snapshot, "montage": creation_task_montage_plan_to_payload(state.montage)}))
+    state.task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     state.base_url = f"/api/creation-tasks/{state.task.id}"
     return state
 

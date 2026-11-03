@@ -40,6 +40,7 @@ def fine_state(material_edit_state, monkeypatch):
         sequence=original.sequence + 1, snapshot={**original.snapshot, "montage": creation_task_montage_plan_to_payload(plan)}))
     state.before = deepcopy(state.client.get(state.base_url).json())
     state.plan = plan
+    state.initial_jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
     return state
 
 
@@ -146,7 +147,7 @@ def test_fine_edits_reject_invalid_request_without_version_or_media_effect(fine_
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     assert task.current_timeline_version_id == payload["expected_timeline_version_id"] or failure == "old_version"
     assert state.production.edit_records.list_edit_operations(state.workspace_id, task.id) == []
-    assert state.production.job_records.list_job_runs(state.workspace_id, task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, task.id) == state.initial_jobs
 
 
 def test_visual_lock_and_full_default_omission_boundaries(fine_state):
@@ -174,9 +175,13 @@ def test_queued_fine_edit_keeps_sparse_dto_and_real_target_refs(fine_state, monk
         receipt = response.json()
         assert receipt["target_refs"] == ["audio:fine-music-clip" if audio else f"clip:{state.clip.id}"]
         saved = state.production.execution_records.get_task_event(state.workspace_id, f"event_{receipt['job_id']}_start").payload
-        assert saved["arguments"]["payload"] == action
+        prepared_action = action if audio else {**action,
+            "base_version_id": "fine-original-version", "clip_id": state.clip.id}
+        assert saved["arguments"]["payload"] == prepared_action
         assert saved["arguments"]["_typed_source"]["action"] == action
-        assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 1
+        jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
+        assert [job for job in jobs if job.id != receipt["job_id"]] == state.initial_jobs
+        assert [job.id for job in jobs if job.id == receipt["job_id"]] == [receipt["job_id"]]
     finally:
         runtime.scheduler.close()
 

@@ -11,11 +11,14 @@ import sys
 
 
 API = Path(__file__).resolve().parents[1] / "apps" / "api"
-# These files include real darwin_nice admission and FFmpeg execution.
+# These files include real Darwin CPU admission or memory-pressure monitoring.
 DARWIN_FILES = frozenset({
     "tests/test_host_resource_probes.py",
     "tests/test_creation_audio_mix.py",
     "tests/test_task_media_grants.py",
+    "tests/test_member_permits.py",
+    "tests/test_material_probe.py",
+    "tests/test_material_scene.py",
 })
 IGNORED_DIRECTORIES = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "__pycache__")
 

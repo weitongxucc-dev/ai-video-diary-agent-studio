@@ -19,13 +19,13 @@ from app.production import MaterialAsset, MaterialSegment, ProductionRepository
 from app.profile_preview_execution import profile_preview_registration, submit_profile_preview
 
 
-def synthetic_wav_bytes(seconds: int = 2) -> bytes:
+def synthetic_wav_bytes(seconds: float = 2) -> bytes:
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as audio:
         audio.setnchannels(1)
         audio.setsampwidth(2)
         audio.setframerate(8000)
-        audio.writeframes(b"\x01\x00" * (8000 * seconds))
+        audio.writeframes(b"\x01\x00" * round(8000 * seconds))
     return buffer.getvalue()
 
 

@@ -34,7 +34,7 @@ from app.creation_execution import (
     CreationJobUnitExecutor,
     revision_digest, submit_creation_stage,
 )
-from app.device_scheduler import DeviceScheduler, ProcessIdentity
+from app.device_scheduler import DeviceScheduler, ProcessIdentity, StaleGrantInput
 from app.host_resource_probes import HostCapacity, HostProcessProbe, HostResourceDecision
 from app.local_members import LocalMemberService
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
@@ -337,7 +337,9 @@ def test_confirmed_crop_requeues_only_render_and_invalidates_prior_grant(tmp_pat
             (tmp_path / "library/source.mp4").write_bytes(b"changed-source")
         else:
             members.remove_member(actor.member_id)
-        with pytest.raises(PermissionError, match="失效"):
+        expected_error = PermissionError if mutation == "revoked" else StaleGrantInput
+        expected_message = "失效" if mutation == "revoked" else "输入版本已过期"
+        with pytest.raises(expected_error, match=expected_message):
             scheduler.assert_grant(grant)
         scheduler.defer_unit(grant, reason="authorization_lost" if mutation == "revoked" else "input_stale")
         scheduler.assert_released(grant)
@@ -444,7 +446,7 @@ def test_render_grant_accepts_own_publication_but_not_copied_version_or_subtitle
             subtitle = json.loads(row[0])
             subtitle["cues"][0]["text"] = "changed fixture"
             conn.execute("UPDATE subtitle_tracks SET payload_json=? WHERE id=?", (json.dumps(subtitle), track.id))
-        with pytest.raises(PermissionError, match="失效"):
+        with pytest.raises(StaleGrantInput, match="输入版本已过期"):
             scheduler.assert_grant(grant)
         scheduler.defer_unit(grant, reason="input_stale")
         scheduler.assert_released(grant)
@@ -816,6 +818,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
 
     narration_stage = main_module._narration_stage_use_case(repo, narration_budget=narration)
     montage_stage = main_module._montage_stage_use_case(repo)
+    owner.segments = main_module._segment_production_use_case(repo)
     prepare_segment = narration_stage.prepare_segment
     generate_montage = montage_stage.generate
     def narration_action(*args, **kwargs):
@@ -1369,11 +1372,11 @@ def test_cancel_at_boundary_and_revision_change_blocks_resume(tmp_path, monkeypa
     assert execution.cancel("workspace_a", task_id).status == "cancelled"
     assert execution.execute("workspace_a", first.id).status == "cancelled"
     assert calls == []
+    changed_script = repo.script_records.get_creation_task_script("workspace_a", script_id)
     with sqlite3.connect(repo.database_path) as conn:
-        row = conn.execute("SELECT payload FROM creation_task_scripts WHERE id=?", (script_id,)).fetchone()
-        payload = json.loads(row[0])
-        payload["sections"][0]["content"] = "修改后的文案"
-        conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?", (json.dumps(payload), script_id))
+        conn.execute("BEGIN IMMEDIATE")
+        changed_script.sections[0].content = "修改后的文案"
+        conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?", (repo.script_records._script_payload(conn, changed_script), script_id))
     with pytest.raises(ValueError, match="变化"):
         execution.retry("workspace_a", task_id)
 

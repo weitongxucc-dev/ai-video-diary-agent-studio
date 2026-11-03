@@ -322,9 +322,11 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
             (json.dumps(asdict(plan), default=str), plan.id))
     script = repository.script_records.get_creation_task_script(WORKSPACE, "script")
     plan = repository.plan_records.get_creation_plan(WORKSPACE, plan.id)
-    from app.host_resource_probes import HostResourceDecision
+    from app.host_resource_probes import HostResourceDecision, CpuAudioBudget
     budget = NarrationBudget(80, 1, 1024, 15, 1024, 1, 10, 1024, 8, 0.1, 1024, 1024, input_scope="single_call_experiment_v1")
-    owner = CreationJobOwnerVerifier(repository, narration_budget=budget, verify_identity=access.verify_identity)
+    audio_budget = CpuAudioBudget(1, 1024, 15, 15, 8000, 1, 1024, 1, 10, 1024, 8, .1, 1024, 1024)
+    owner = CreationJobOwnerVerifier(repository, narration_budget=budget, narration_audio_budget=audio_budget,
+        verify_identity=access.verify_identity)
     # No model is executed; this fixture only permits the real scheduler's admission.
     resources = SimpleNamespace(admit=lambda request: HostResourceDecision(True,dict(request.resources),{}), continue_unit=lambda grant: True,
         released=lambda grant: True)

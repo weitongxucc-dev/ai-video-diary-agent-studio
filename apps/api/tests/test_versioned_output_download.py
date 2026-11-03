@@ -24,6 +24,27 @@ def output(linked, tmp_path, monkeypatch):
     monkeypatch.setattr(main, 'production_repo', repository)
     monkeypatch.setattr(main, 'artifact_store', store)
 
+    original_readable = main._readable_creation_task
+
+    def readable(request, task_id):
+        try:
+            return original_readable(request, task_id)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            try:
+                print({"requested_workspace": main.current_workspace_id(request),
+                    "expected_workspace": WORKSPACE, "expected_user": USER,
+                    "reader": main._content_identity_http_adapter().reader(request, WORKSPACE),
+                    "actual_database": str(main.production_repo.database_path),
+                    "fixture_database": str(repository.database_path),
+                    "stored_owner": repository.task_records.get_creation_task(WORKSPACE, task_id).owner_user_id})
+            except Exception as diagnostic_error:
+                print({"diagnostic_error": type(diagnostic_error).__name__})
+            raise
+
+    monkeypatch.setattr(main, '_readable_creation_task', readable)
+
     def version(number, *, rendered=True, registered=True):
         refs = []
         for suffix, kind, body in [('mp4', 'rendered_video', f'video-{number}'.encode()),

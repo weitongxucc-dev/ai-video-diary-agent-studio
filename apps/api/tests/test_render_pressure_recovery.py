@@ -1,24 +1,30 @@
 """Post-publication render pressure, with synthetic receipts and an isolated driver.
 
-No FFmpeg, model, service or real media is run. Only media/fact measurement and
-ambient resource observations are seams; roster, jobs, versions, permit, lock,
-release fencing and the background dispatch loop use their production code.
+Setup registers synthetic PCM/profile inputs; rendering publishes an opaque
+measurement receipt without FFmpeg or a model. Roster, jobs, versions, permit,
+lock, release fencing and the background dispatch loop use production code.
 """
 import json
 import time
 from datetime import datetime, timedelta, timezone
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 
 import pytest
 
 import app.creation_execution as creation
-from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier, CreationJobUnitExecutor
+from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier, CreationJobUnitExecutor, CpuRenderLimits, revision_digest, submit_creation_stage
 from app.device_runtime import OwnerRegistration, build_device_runtime
-from app.device_scheduler import RecoveryBlocked, SchedulePolicy, SubmissionIntent
+from app.device_scheduler import RecoveryBlocked
 from app.host_resource_probes import HostCapacity, HostProcessProbe, HostResourceDecision, HostResourceRefusal
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
-from app.creation.contracts import TimelineVersion
+from app.creation.contracts import TimelineVersion, CreationPlanVoiceReference
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.montage import CreationTaskMontagePlan, NarrationCue, MontageClip, creation_task_montage_plan_to_payload
+from app.production import MaterialAsset, MaterialSegment
+from _media_preview_test_fixtures import register_synthetic_profiles, synthetic_wav_bytes
+from script_seed_fixtures import script_seed_payload
 from test_creation_execution import _execution, _seed
 
 
@@ -33,12 +39,50 @@ def wait_for(predicate, diagnostic=lambda: None):
 
 @pytest.fixture
 def render_case(tmp_path, monkeypatch):
-    repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
+    repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local", duration_seconds=1)
     members = LocalMemberService(repo.database_path)
     member = members.add_member("render pressure fixture")
     actor = CreationExecutionActor("local", member.member_id)
     access = MemberDeviceAccess(members)
-    owner = CreationJobOwnerVerifier(repo, verify_identity=access.verify_identity)
+    person, voice, *_ = register_synthetic_profiles(repo, workspace_id='local', member_id=member.member_id,
+        person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh', model_id='test')
+    plan = repo.plan_records.get_creation_plan('local', 'plan_local')
+    plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
+        person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version,
+        'zh-CN', voice.model_id)
+    plan.owner_user_id = member.member_id
+    audio = tmp_path/'render-input.wav'
+    audio.write_bytes(synthetic_wav_bytes(1))
+    repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord('render-input', 'local', script_id,
+        voice.id, 'render-input', str(audio), 1, 8000, 'synthetic-render-input', task_id=task_id))
+    picture = tmp_path/'library'/'render-input.dat'
+    picture.write_bytes(b'opaque picture measurement fixture, not media')
+    asset = repo._save_asset(MaterialAsset(id='render-input', workspace_id='local', file_name=picture.name,
+        path=str(picture), size_bytes=picture.stat().st_size,
+        modified_at=datetime.fromtimestamp(picture.stat().st_mtime, timezone.utc), duration_seconds=1,
+        media_type='video', owner_user_id=member.member_id, usage_role='b_roll', review_status='approved', analysis_status='ready',
+        segments=[MaterialSegment(id='render-section', asset_id='render-input', start_seconds=0, end_seconds=1,
+            description='opaque render measurement fixture', review_status='approved')]))
+    reference = repo.workspace_media_reference_for_asset('local', asset.id)
+    montage = CreationTaskMontagePlan('fixture_montage', 'local', task_id, script_id, 'render pressure', 'ready',
+        [NarrationCue('render-cue', 'section_1', '真实待制作文案', 1)],
+        [MontageClip('render-clip', 'render-cue', asset.id, asset.segments[0].id, reference,
+            0, 1, 0, 1, 1, [], False)], 1, 0, narration_audio_path='narration://artifact/render-input')
+    original_montage = creation_task_montage_plan_to_payload(montage)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, montage.id, original_montage)
+    task = repo.task_records.get_creation_task('local', task_id)
+    task.owner_user_id = member.member_id
+    task.stage, task.stage_status = 'montage', 'completed'
+    task.narration_cache_key, task.montage_plan_id = 'render-input', montage.id
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+    repo.timeline_records.create_timeline_version(TimelineVersion('render-input-base', 'local', task_id,
+        None, 1, {'montage': original_montage}, None))
+    digest = revision_digest(repo.script_records.get_creation_task_script('local', script_id),
+        repo.plan_records.get_creation_plan('local', plan.id))
+    owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(1024, 1, 600),
+        verify_identity=access.verify_identity)
     resource_facts = {"kind": "creation_render", "execution_mode": "cpu_ffmpeg", "duration_seconds": 1,
                       "clip_count": 1, "threads": 1, "timeout_seconds": 600, "max_output_bytes": 1024}
     # Persisted measurement seam; _check_facts still checks the actual script,
@@ -55,8 +99,7 @@ def render_case(tmp_path, monkeypatch):
         state["render_calls"] += 1
         state["grants"].append(context.grant)
         receipt.write_bytes(b"synthetic render receipt, not media")
-        plan = {"id": "fixture_montage", "workspace_id": workspace_id, "task_id": current_task_id,
-                "script_id": script_id, "status": "rendered", "output_path": str(receipt)}
+        plan = {**original_montage, 'status': 'rendered', 'output_path': str(receipt)}
         task = repo.task_records.get_creation_task(workspace_id, current_task_id)
         previous = repo.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         version = TimelineVersion(id=f"fixture-output-{state['render_calls']}", workspace_id=workspace_id,
@@ -81,7 +124,8 @@ def render_case(tmp_path, monkeypatch):
 
     executor = CreationJobUnitExecutor(repo, render_action=render, render_is_valid=validate)
     execution = _execution(repo)
-    resources = SimpleNamespace(admit=lambda request: True, continue_unit=lambda grant: True,
+    resources = SimpleNamespace(admit=lambda request: HostResourceDecision(True, dict(request.resources), {}),
+                                continue_unit=lambda grant: True,
                                 released=lambda grant: state["released"])
     processes = HostProcessProbe()
     original_children_released = processes.children_released
@@ -92,8 +136,10 @@ def render_case(tmp_path, monkeypatch):
         resources=resources, processes=processes, poll_interval_seconds=0.01)
     runtime.scheduler.clock = lambda: state["now"]
     job = execution.start("local", task_id, script_id, digest, actor=actor)
-    request = runtime.scheduler.submit(SubmissionIntent("local", "creation_job", job.id, digest,
-                                                       "render:fixture", SchedulePolicy()), actor)
+    request_id = submit_creation_stage(execution, runtime.scheduler, job, actor)
+    assert request_id is not None
+    request = runtime.scheduler._get(request_id)
+    assert request.unit_key == 'render:fixture'
 
     def snapshot():
         with repo._connect() as conn:
@@ -187,10 +233,12 @@ def test_changed_confirmed_input_prevents_regrant(render_case):
     case.runtime.start()
     wait_for(lambda: case.runtime.last_error is not None or case.snapshot()[2].status == "interrupted")
     assert case.runtime.last_error is None
+    script = case.repo.script_records.get_creation_task_script('local', case.script_id)
+    script = replace(script, sections=[replace(script.sections[0], content='changed confirmed fixture input')])
     with case.repo._connect() as conn:
-        script = json.loads(conn.execute("SELECT payload FROM creation_task_scripts WHERE id=?", (case.script_id,)).fetchone()[0])
-        script["sections"][0]["content"] = "changed confirmed fixture input"
-        conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?", (json.dumps(script), case.script_id))
+        conn.execute('BEGIN IMMEDIATE')
+        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?',
+            (script_seed_payload(case.repo, conn, script), script.id))
     case.state["now"] += timedelta(seconds=31)
     case.runtime.wake()
     wait_for(lambda: case.runtime.last_error is not None or case.snapshot()[0]["wait_reason"] == "input_stale")

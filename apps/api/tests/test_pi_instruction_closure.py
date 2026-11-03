@@ -182,12 +182,14 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
         assert "preview_edit" not in json.loads(kwargs.get("message", kwargs.get("input")))["tools"]
         model_input = json.loads(json.loads(kwargs["message"])["message"].split("本轮输入（JSON）：\n", 1)[1])
         assert model_input["original_user_instruction"] == ORIGINAL
-        assert model_input["current_task_facts"]["task_id"] == "task-real"
-        assert model_input["current_task_facts"]["selected_refs"] == []
-        assert model_input["current_task_facts"]["timeline_sequence"] == 0
-        prompt = json.loads(kwargs.get("message", kwargs.get("input")))["systemPrompt"]
-        assert '"knowledge_reference_count": 1' in prompt and '"source_reference_count": 1' in prompt
-        assert "large-body" not in prompt and "secret-token" not in prompt and "/private/" not in prompt
+        assert model_input["task_binding"]["task_id"] == "task-real"
+        assert model_input["task_binding"]["selected_refs"] == []
+        assert model_input["task_binding"]["timeline_sequence"] == 0
+        context = json.loads(kwargs["message"])["taskContext"]
+        assert context["plan"]["knowledge_reference_count"] == 1
+        assert context["plan"]["source_reference_count"] == 1
+        model_payload = kwargs["message"]
+        assert "large-body" not in model_payload and "secret-token" not in model_payload and "/private/" not in model_payload
         return sdk_completed(cmd, 0, stdout=json.dumps({"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"已核对当前任务。"}]}})+"\n"+json.dumps({"type":"agent_settled"}), stderr="")
     monkeypatch.setattr(pi, "_run_pi_streaming", launch)
     values = dict(workspace_id="qa", task_id="task-real", message=ORIGINAL, stage="montage", selected_refs=[], playhead_ms=None,
@@ -238,11 +240,14 @@ def test_task_switch_updates_current_model_input_without_rewriting_bound_instruc
                      tool_names="read_current_task,preview_typed_edit", preview_kind="edit_preview", session_key="conversation:shared",
                      turn_id=str(payload.assistant_turn_id) if streaming else None, on_event=(lambda _: None) if streaming else None)
         cmd, kwargs = launches[-1]
-        model_input = json.loads(kwargs["message"] if streaming else kwargs["input"])["message"]
+        envelope = json.loads(kwargs["message"])
+        model_input = envelope["message"]
         current = json.loads(model_input.split("本轮输入（JSON）：\n", 1)[1])
-        assert current == {"current_task_facts":facts, "original_user_instruction":ORIGINAL}
+        assert current == {"task_binding": {key: facts[key] for key in (
+            "task_id", "current_timeline_version_id", "timeline_sequence", "selected_refs", "selected_stage")},
+            "trusted_input_identity": {}, "original_user_instruction": ORIGINAL}
         assert "历史工具结果及失败只属于其当时的任务和版本" in model_input
-        assert json.dumps(facts, ensure_ascii=False) in json.loads(kwargs.get("message", kwargs.get("input")))["systemPrompt"]
+        assert envelope["taskContext"] == facts
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == ORIGINAL
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_TURN_ID"] == (str(payload.assistant_turn_id) if streaming else "")
         assert "preview_typed_edit" in json.loads(kwargs.get("message", kwargs.get("input")))["tools"]

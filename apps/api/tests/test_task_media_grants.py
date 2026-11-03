@@ -653,6 +653,18 @@ def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(t
     from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
     main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(
         tmp_path, monkeypatch, fade_out=.4 if existing_fade else 0)
+    failures = []
+    original_execute = media.exact_preview.execute
+
+    def execute(*args, **kwargs):
+        try:
+            return original_execute(*args, **kwargs)
+        except Exception:
+            import traceback
+            failures.append(traceback.format_exc())
+            raise
+
+    monkeypatch.setattr(media.exact_preview, 'execute', execute)
     try:
         patch = {'fade_out_seconds':0 if existing_fade else .4}
         queued = client.post('/api/creation-tasks/task/edits/exact/preview', json={
@@ -686,7 +698,7 @@ def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(t
         response = client.get(queued.json()['result_url'])
         assert response.status_code == 200, response.text
         done = response.json()
-        assert done['status'] == 'succeeded', done
+        assert done['status'] == 'succeeded', {'receipt': done, 'execution_failures': failures}
         assert '完整区间' in done['result']['proposal']['preview']['after']['detail']
         assert '未覆盖相邻转场' in done['result']['proposal']['preview']['after']['detail']
         inputs = [item for item in repo.execution_records.list_task_events('local', 'task')

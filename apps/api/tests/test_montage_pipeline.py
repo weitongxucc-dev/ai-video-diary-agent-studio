@@ -100,7 +100,7 @@ def _assert_montage_endpoint_requires_device_contract(client, production, worksp
         with TemporaryDirectory(prefix='storyboard-http-contract-') as temporary:
             scheduler = DeviceScheduler(production.database_path, Path(temporary)/'device.lock',
                 owners=owner, resources=ControlledResources(False), processes=HostProcessProbe())
-            runtime = DeviceRuntime(scheduler, {})
+            runtime = DeviceRuntime(scheduler, {}, poll_interval_seconds=1)
             try:
                 with pytest.MonkeyPatch.context() as scoped:
                     scoped.setattr(main_module, '_creation_runtime', lambda: runtime)
@@ -2377,7 +2377,8 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     audio_path = tmp_path / "voice.wav"
     audio_path.write_bytes(b"audio")
 
-    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None):
+    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None, render_context=None):
+        assert render_context is None  # This existing opaque diagnostic does not execute a device grant.
         job_staging_path.mkdir(parents=True, exist_ok=True)
         (job_staging_path / "preview.mp4").write_bytes(b"playable-video")
         (job_staging_path / "subtitles.srt").write_text(
@@ -3350,7 +3351,8 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
 
     # Retain the existing fake-renderer diagnostic; it proves cache/edit lineage only,
     # never a permitted device render, media output, or public re-output capability.
-    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None):
+    def fake_render(_workspace_id, rendered_plan, _audio_path, *, job_staging_path, subtitle_tracks=None, render_context=None):
+        assert render_context is None  # This existing opaque diagnostic does not execute a device grant.
         job_staging_path.mkdir(parents=True, exist_ok=True)
         (job_staging_path / "preview.mp4").write_bytes(b"rerendered-video")
         (job_staging_path / "subtitles.srt").write_text(
