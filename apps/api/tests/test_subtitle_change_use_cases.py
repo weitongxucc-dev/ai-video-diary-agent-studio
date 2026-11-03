@@ -4,6 +4,7 @@ from dataclasses import asdict, replace
 import pytest
 
 from app.creation.contracts import EditCommand, SubtitleCue
+from app.media.picture_preview import PicturePreviewRenderer
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.subtitle_changes import (
     apply_subtitle_content_command, calculate_subtitle_content, calculate_subtitle_style,
@@ -172,7 +173,7 @@ def test_actual_draft_style_preview_adoption_and_undo_keep_all_other_facts(perso
     before = state.client.get(base).json()
     def forbidden(*args, **kwargs):
         raise AssertionError("draft style proposal must not invoke media or runtime")
-    monkeypatch.setattr(main, "_publish_task_picture_preview", forbidden)
+    monkeypatch.setattr(PicturePreviewRenderer, "publish_picture", staticmethod(forbidden))
     monkeypatch.setattr(main, "_creation_runtime", forbidden)
     result = state.client.post(base + "/edits/exact/preview?draft=true", json={
         "operation_type": "ConfigureSubtitleTrack", "style": {"font_size": 64},
@@ -190,10 +191,10 @@ def test_actual_draft_style_preview_adoption_and_undo_keep_all_other_facts(perso
     assert current["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
     assert current["montage"]["clips"] == before["montage"]["clips"]
     assert current["narration"]["audio_reference"] == before["narration"]["audio_reference"]
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={"request_id": "test_actual_draft_style_preview_adoption_and_undo_keep_all_other_facts:undo"}).status_code == 200
     restored = state.client.get(base).json()
     assert restored["subtitle_tracks"][0]["style"] == before["subtitle_tracks"][0]["style"]
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={"request_id": "test_actual_draft_style_preview_adoption_and_undo_keep_all_other_facts:redo"}).status_code == 200
     assert state.client.get(base).json()["subtitle_tracks"][0]["style"]["font_size"] == 64
 
 

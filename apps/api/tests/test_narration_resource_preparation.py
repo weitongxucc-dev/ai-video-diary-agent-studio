@@ -21,8 +21,9 @@ from test_device_resource_configuration import isolated_model_runtime
 from test_device_scheduler import Resources, Processes
 
 
-def fixture(tmp_path, monkeypatch):
-    repository, actor, access, cpu, paths = preparation(tmp_path)
+def fixture(tmp_path, monkeypatch, *, metadata=False):
+    from test_device_resource_preparation import metadata_preparation
+    repository, actor, access, cpu, paths = (metadata_preparation(tmp_path, monkeypatch) if metadata else preparation(tmp_path))
     document = profile_document()
     document['device'] = asdict(cpu.device)
     cpu.profile_path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,13 +168,16 @@ def test_normal_profile_cannot_promote_declared_candidate_or_fabricated_receipt_
 def test_prepared_scope_binds_actual_inputs_and_checks_separate_model_cache_volume(tmp_path, monkeypatch):
     from tests.host_memory_boundary import IsolatedMemoryMonitor
     from app import device_resource_volumes as volumes
-    from app.host_resource_probes import narration_scope_basis
+    from app.host_resource_probes import narration_scope_basis, RuntimeCpuPolicy
     from app.narration_resource_preparation import narration_preparation_shape_digest
     import psutil
-    repository, actor, access, service, voice = fixture(tmp_path, monkeypatch)
+    from test_host_resource_probes import declare_render_metadata_host
+    declare_render_metadata_host(monkeypatch)
+    repository, actor, access, service, voice = fixture(tmp_path, monkeypatch, metadata=True)
     plan_id, bootstrap = service.prepare(NarrationPreparationShape('voice', 'v1', '样本', 'zh', 2), actor, request_id='volumes')
     plan = service._plan(plan_id)
-    prepared = replace(bootstrap.narration, input_scope='single_call_prepared_v1', preparation_receipt_sha256='a'*64)
+    prepared = replace(bootstrap.narration, input_scope='single_call_prepared_v1', preparation_receipt_sha256='a'*64,
+        running_cpu_policy=RuntimeCpuPolicy('darwin_nice', 'synthetic-narration-volume-metadata', nice=5))
     resources = {**service._resources(plan), 'input_scope': prepared.input_scope,
         'budget_basis': narration_scope_basis(prepared.input_scope), 'preparation_receipt_sha256': 'a'*64}
     budget = replace(bootstrap, narration=prepared, max_disk_io_bytes_per_second=None)

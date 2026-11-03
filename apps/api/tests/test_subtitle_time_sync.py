@@ -7,6 +7,7 @@ import pytest
 import app.main as main_module
 from app.compound_edits import apply_compound_subtitles
 from app.creation.contracts import SubtitleCue, SubtitleTrack
+from app.media.picture_preview import PicturePreviewRenderer
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state
 
 
@@ -91,8 +92,8 @@ def test_exact_chinese_text_change_preserves_all_english_invalidation(
             timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
     monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
-    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
-                        SimpleNamespace(id="text-preview", logical_ref="artifacts/text-preview.mp4"))
+    monkeypatch.setattr(PicturePreviewRenderer, "publish_picture", staticmethod(lambda *args, **kwargs:
+                        SimpleNamespace(id="text-preview", logical_ref="artifacts/text-preview.mp4")))
     preview = state.client.post(base + "/edits/exact/preview", json={
         "operation_type": "UpdateSubtitleCue", "track_id": source.id, "cue_id": source.cues[0].id,
         "text": "改过的第一句",
@@ -104,7 +105,7 @@ def test_exact_chinese_text_change_preserves_all_english_invalidation(
     after = state.client.get(base).json()
     assert [track["language"] for track in after["subtitle_tracks"]] == ["zh-CN"]
     assert after["subtitle_tracks"][0]["cues"][0]["text"] == "改过的第一句"
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={"request_id": "test_exact_chinese_text_change_preserves_all_english_invalidation:undo"}).status_code == 200
     restored = state.client.get(base).json()
     assert {track["language"]: track["cues"] for track in restored["subtitle_tracks"]} == {
         track["language"]: track["cues"] for track in before["subtitle_tracks"]}
@@ -126,8 +127,8 @@ def test_preview_reports_new_gaps_without_writing(person_render_edit_state, monk
             task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
     monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
-    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
-                        SimpleNamespace(id="gap-preview", logical_ref="artifacts/gap-preview.mp4"))
+    monkeypatch.setattr(PicturePreviewRenderer, "publish_picture", staticmethod(lambda *args, **kwargs:
+                        SimpleNamespace(id="gap-preview", logical_ref="artifacts/gap-preview.mp4")))
     preview = (state.client.post(base + "/edits/preview", json={
         "raw_command": f"中文字幕1显示{start}到{end}秒", "context_stage": "subtitle_cover",
         "selected_object_refs": [],
@@ -152,8 +153,8 @@ def test_compound_preview_reports_only_final_gaps(person_render_edit_state, monk
             task_id=state.task.id, timeline_version_id=version.id, style={"enabled": True}))
     before = state.client.get(base).json()
     monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
-    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
-                        SimpleNamespace(id="gap-preview", logical_ref="artifacts/gap-preview.mp4"))
+    monkeypatch.setattr(PicturePreviewRenderer, "publish_picture", staticmethod(lambda *args, **kwargs:
+                        SimpleNamespace(id="gap-preview", logical_ref="artifacts/gap-preview.mp4")))
     preview = state.client.post(base + "/edits/preview", json={
         "raw_command": "中文字幕1显示0到1.8秒，然后中文字幕2显示1.8到5秒",
         "context_stage": "subtitle_cover", "selected_object_refs": [],
@@ -178,8 +179,8 @@ def test_confirm_syncs_both_tracks_exports_one_bilingual_srt_and_undoes(
     state.production.subtitle_records.create_subtitle_track(translation)
     before = state.client.get(base).json()
     monkeypatch.setattr(main_module, "_task_audio", lambda: SimpleNamespace(validate=lambda *args, draft_only=False: None))
-    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
-                        SimpleNamespace(id="timing-preview", logical_ref="artifacts/timing-preview.mp4"))
+    monkeypatch.setattr(PicturePreviewRenderer, "publish_picture", staticmethod(lambda *args, **kwargs:
+                        SimpleNamespace(id="timing-preview", logical_ref="artifacts/timing-preview.mp4")))
     preview = (state.client.post(base + "/edits/preview", json={
         "raw_command": "中文字幕1显示0到1.8秒", "context_stage": "subtitle_cover",
         "selected_object_refs": [],
@@ -207,7 +208,7 @@ def test_confirm_syncs_both_tracks_exports_one_bilingual_srt_and_undoes(
     (tmp_path / "confirmed-bilingual.srt").write_text(exported.text, encoding="utf-8")
     assert "00:00:00,000 --> 00:00:01,800\n第一句\nFirst sentence" in exported.text
     assert "00:00:03,000 --> 00:00:05,000\n第二句\nSecond sentence" in exported.text
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={"request_id": "test_confirm_syncs_both_tracks_exports_one_bilingual_srt_and_undoes:undo"}).status_code == 200
     restored = state.client.get(base).json()
     for language in ("zh-CN", "en-US"):
         assert next(track["cues"] for track in restored["subtitle_tracks"] if track["language"] == language) == next(
@@ -278,7 +279,7 @@ def test_bilingual_merge_publishes_both_tracks_exports_and_undoes(person_render_
     assert "第一句第二句\nFirst sentence Second sentence" in exported.text
     assert after["montage"]["narration_reference"] == before["montage"]["narration_reference"]
     assert after["montage"]["clips"] == before["montage"]["clips"]
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={"request_id": "test_bilingual_merge_publishes_both_tracks_exports_and_undoes:undo"}).status_code == 200
     restored = state.client.get(base).json()
     assert {t["language"]: t["cues"] for t in restored["subtitle_tracks"]} == {t["language"]: t["cues"] for t in before["subtitle_tracks"]}
     selected = {t["language"]: t for t in restored["subtitle_tracks"]}

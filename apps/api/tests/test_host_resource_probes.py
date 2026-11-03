@@ -232,6 +232,38 @@ def _render_resources():
             "max_output_bytes": 1_000_000, "threads": 1, "timeout_seconds": 3.0}
 
 
+def declare_render_metadata_host(monkeypatch):
+    """Declare the finite Darwin scheduling-policy case, without native sampling."""
+    import subprocess
+    import app.host_resource_probes as probes
+    def forbidden(*args, **kwargs):
+        pytest.fail("declared resource metadata forbids processes and device drivers")
+    from app.device_runtime import DeviceRuntime
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(probes, 'HostProcessProbe', forbidden)
+    monkeypatch.setattr(probes, 'sys', SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr(probes, 'HostMemoryMonitor', lambda policy: IsolatedMemoryMonitor())
+    monkeypatch.setattr(psutil, 'cpu_percent', lambda **kwargs: 0)
+    monkeypatch.setattr(psutil, 'cpu_count', lambda **kwargs: 4)
+    monkeypatch.setattr(psutil, 'cpu_times', lambda: SimpleNamespace(
+        _asdict=lambda: {'user': 1., 'nice': 1., 'system': 1., 'idle': 1.}))
+    monkeypatch.setattr(psutil, 'virtual_memory', lambda: SimpleNamespace(available=8*1024**3, total=16*1024**3))
+    monkeypatch.setattr(psutil, 'swap_memory', lambda: SimpleNamespace(used=0))
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=16*1024**3))
+    counters = SimpleNamespace(read_bytes=100, write_bytes=100)
+    monkeypatch.setattr(psutil, 'disk_io_counters',
+        lambda **kwargs: {'metadata-disk': counters} if kwargs.get('perdisk') else counters)
+    import itertools
+    clock = itertools.count(time.monotonic(), .02)
+    monkeypatch.setattr(probes, 'time', SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda seconds: None))
+
+
+@pytest.fixture
+def render_metadata_host(monkeypatch):
+    declare_render_metadata_host(monkeypatch)
+
+
 def _render_budget():
     return CpuRenderBudget(
         max_duration_seconds=1, max_pixel_seconds=100_000,
@@ -244,7 +276,7 @@ def _render_budget():
     )
 
 
-def test_cpu_render_requires_explicit_budget_and_complete_bounded_contract(tmp_path):
+def test_cpu_render_requires_explicit_budget_and_complete_bounded_contract(tmp_path, render_metadata_host):
     base = dict(max_cpu_percent=100, min_available_memory_bytes=0,
                 max_swap_used_bytes=2**63, min_free_disk_bytes=0,
                 max_disk_io_bytes_per_second=2**63, max_unit_input_bytes=1024,
@@ -264,7 +296,7 @@ def test_cpu_render_requires_explicit_budget_and_complete_bounded_contract(tmp_p
 
 
 @pytest.mark.parametrize("running", [False, True])
-def test_render_running_memory_is_host_headroom_with_explicit_own_process_limits(tmp_path, monkeypatch, running):
+def test_render_running_memory_is_host_headroom_with_explicit_own_process_limits(tmp_path, monkeypatch, running, render_metadata_host):
     render = replace(_render_budget(), additional_memory_bytes=2*1024**3, max_process_threads=16)
     probe = HostResourceProbe(tmp_path/"db",disk_paths=(tmp_path,),budget=HostBudget(
         100,1024**3,2**63,0,2**63,1024,sample_seconds=.01,cpu_render=render))
@@ -284,7 +316,7 @@ def test_render_running_memory_is_host_headroom_with_explicit_own_process_limits
 
 
 @pytest.mark.parametrize("failure", ["headroom","memory_unknown","scope_unknown"])
-def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch, failure):
+def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch, failure, render_metadata_host):
     render = replace(_render_budget(),additional_memory_bytes=2*1024**3)
     probe = HostResourceProbe(tmp_path/"db",disk_paths=(tmp_path,),budget=HostBudget(
         91,1024**3,1024,0,2**63,1024,sample_seconds=.01,cpu_render=render))
@@ -297,8 +329,13 @@ def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch
     monkeypatch.setattr(psutil,"cpu_percent",lambda **kwargs:pytest.fail("Running render reused admission CPU gate"))
     monkeypatch.setattr(psutil,"swap_memory",lambda:SimpleNamespace(used=0))
     grant = Grant("request", "workspace", "creation_job", "job", "render:digest", "a"*64, 1, 1, "token", probe.database_path)
-    with pytest.raises(HostResourceRefusal):
+    with pytest.raises(HostResourceRefusal) as refusal:
         probe.continue_unit(grant)
+    expected = {"headroom": "memory_headroom_insufficient",
+        "memory_unknown": "available_memory_bytes: OSError: synthetic unknown sample",
+        "scope_unknown": "granted_resources_unreadable"}
+    assert refusal.value.decision.reason == expected[failure]
+    assert refusal.value.decision.verdict is (False if failure == "headroom" else None)
 
 
 @pytest.mark.parametrize("rss,threads,accepted", [(1024,2,True),(1025,2,False),(1024,3,False)])
@@ -364,7 +401,7 @@ def test_render_process_group_rss_and_total_threads_use_actual_cap(monkeypatch,r
         assert observation["latest"]["sample_complete"] is False
 
 
-def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):
+def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch, render_metadata_host):
     budget = HostBudget(100, 1, 2**63, 0, 2**63, 1024, 0.02,
                         cpu_render=_render_budget())
     probe = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,), budget=budget)
@@ -452,7 +489,7 @@ def test_admission_logs_same_observation_without_resampling(
         assert check[boundary] == values[failure] + (1 if boundary == "minimum" else -1)
 
 
-def test_admission_logs_declared_render_limit_without_host_sample(tmp_path, monkeypatch, caplog):
+def test_admission_logs_declared_render_limit_without_host_sample(tmp_path, monkeypatch, caplog, render_metadata_host):
     import app.host_resource_probes as probes
 
     probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),

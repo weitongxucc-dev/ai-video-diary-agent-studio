@@ -634,7 +634,9 @@ def script_domain_state(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def api_state(tmp_path, monkeypatch):
+def api_state(tmp_path, monkeypatch, request):
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    isolate_assistant_turn_control(monkeypatch, request)
     from app.creation.script_generation_routes import build_script_generation_router
     state=_script_domain_state(tmp_path,monkeypatch)
     app=FastAPI()

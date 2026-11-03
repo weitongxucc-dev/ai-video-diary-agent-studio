@@ -1,5 +1,5 @@
 """API/owner integration with explicit runner substitutes, never OS calibration."""
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
 import io
 import json
@@ -43,7 +43,7 @@ def state(material_edit_state, tmp_path, monkeypatch):
     descriptor = {name: str(root / name) for name in ("python", "stdlib", "python_library", "pillow")}
     descriptor.update(version="fixture-python-pillow", digest="a" * 64)
     (root / "media-script-runtime.json").write_text(json.dumps(descriptor))
-    monkeypatch.setattr(main.settings, "model_root_path", str(root), raising=False)
+    monkeypatch.setattr(main, "settings", replace(main.settings, model_root_path=str(root)))
     budget = MediaScriptBudget(4096, 4096, 8, 65536, 1, 128, 128, 16384, 65536,
         1024, 1024, 1, 10, 16 * 1024**2, 8, .1, 16 * 1024**2, 1024**2)
     for name, value in asdict(budget).items():
@@ -52,7 +52,7 @@ def state(material_edit_state, tmp_path, monkeypatch):
     def identity(candidate):
         return "ready" if candidate == actor and main.find_member(state.members, actor.member_id) else "unauthorized"
     access = MemberDeviceAccess(state.members, identity_verifier=identity)
-    monkeypatch.setattr(main.settings, "native_ocr_worker_path", None, raising=False)
+    monkeypatch.setattr(main, "settings", replace(main.settings, native_ocr_worker_path=None))
     media = TaskMediaJobs(state.production, facts=main._task_media_facts, verify_identity=identity,
         audio_ingress=main._audio_ingress_use_case(state.production),
         audio_edit=main._audio_edit_use_case(state.production),

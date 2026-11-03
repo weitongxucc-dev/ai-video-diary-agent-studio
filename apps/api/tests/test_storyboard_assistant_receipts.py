@@ -97,6 +97,8 @@ def _metadata_receipt_state(tmp_path, monkeypatch):
 
 @pytest.fixture
 def chat(request, tmp_path, monkeypatch):
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    isolate_assistant_turn_control(monkeypatch, request)
     parameters = getattr(getattr(request.node, "callspec", None), "params", {})
     metadata = (request.node.originalname == "test_http_turn_rereads_original_request_and_persists_dedicated_receipt"
                 and parameters.get("mode") == "forged_status") or (

@@ -16,7 +16,9 @@ from app.creation.contracts import CreationTask, TimelineVersion
 
 
 @pytest.fixture
-def task_client(tmp_path, monkeypatch):
+def task_client(tmp_path, monkeypatch, request):
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    isolate_assistant_turn_control(monkeypatch, request)
     from test_production_foundation import edit_adoption_no_execution
     forbidden = edit_adoption_no_execution(monkeypatch)
     monkeypatch.setattr(main, "_creation_task_script_generator_for", forbidden)
@@ -158,3 +160,33 @@ def test_task_failure_stream_persists_original_message_and_fixed_zero_sequence(t
     assert context["target_snapshot"]["timeline_sequence"] == 0
     replay = client.post("/api/creation-tasks/task/assistant/turn", headers=headers, json=payload)
     assert replay.status_code == 503 and len(calls) == 1
+
+
+def test_turn_control_scope_preserves_shutdown_and_restores_original_owner(monkeypatch, request):
+    import time
+    import subprocess
+    import app.assistant_pi as pi
+    from app.assistant.turn_control import AssistantStopped
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    def forbidden(*args, **kwargs):
+        pytest.fail("control scope metadata cannot launch or terminate processes")
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(pi, "_terminate_process_group", forbidden)
+    original, view = pi._turn_control, pi._turn_stop_events
+    with monkeypatch.context() as scoped:
+        closed = isolate_assistant_turn_control(scoped, request)
+        pi.register_turn_control("first-owner")
+        assert "first-owner" in pi._turn_stop_events and "first-owner" not in view
+        closed.stop_all(deadline_monotonic=time.monotonic()+1)
+        with pytest.raises(AssistantStopped):
+            pi.register_turn_control("cannot-reopen")
+    assert pi._turn_control is original and pi._turn_stop_events is view
+    with monkeypatch.context() as scoped:
+        fresh = isolate_assistant_turn_control(scoped, request)
+        assert fresh is not closed
+        pi.register_turn_control("second-owner")
+        pi.forget_turn_control("second-owner")
+        assert "second-owner" not in pi._turn_stop_events
+        with pytest.raises(AssistantStopped):
+            closed.register("old-stays-closed")
+    assert pi._turn_control is original and pi._turn_stop_events is view

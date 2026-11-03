@@ -4549,10 +4549,11 @@ def test_pure_arrow_nl_command_reaches_overlay_compiler(person_render_edit_state
 
 def test_graphic_import_ownership_and_image_layer_roundtrip(person_render_edit_state,monkeypatch,tmp_path):
     import io
+    from dataclasses import replace
     from PIL import Image
     state=person_render_edit_state
     base=f'/api/creation-tasks/{state.task.id}'
-    monkeypatch.setattr(main_module.settings,'effective_temporary_root_path',tmp_path,raising=False)
+    monkeypatch.setattr(main_module,'settings',replace(main_module.settings,temporary_root_path=str(tmp_path)))
     content=io.BytesIO()
     Image.new('RGBA',(80,40),(255,0,0,128)).save(content,format='PNG')
     imported=state.client.post(base+'/graphics/import',files={'image':('logo.png',content.getvalue(),'image/png')})
@@ -4582,7 +4583,6 @@ def test_graphic_import_ownership_and_image_layer_roundtrip(person_render_edit_s
         'graphic_overlay':{**result,'source_ref':'artifacts/other-task/private.png'}})
     assert foreign.status_code==422
     from app.creation.contracts import CreationTask
-    from dataclasses import replace
     other_plan=replace(state.production.plan_records.get_creation_plan(state.workspace_id,state.task.plan_id),id='other-image-plan')
     other=CreationTask(id='other-image-task',workspace_id=state.workspace_id,
         plan_id=other_plan.id,name='Other task',scenario=state.task.scenario)
@@ -4602,7 +4602,7 @@ def test_graphic_import_corrects_photo_orientation_and_drops_metadata(person_ren
     from PIL import Image
     state=person_render_edit_state
     base=f'/api/creation-tasks/{state.task.id}'
-    monkeypatch.setattr(main_module.settings,'effective_temporary_root_path',tmp_path,raising=False)
+    monkeypatch.setattr(main_module,'settings',replace(main_module.settings,temporary_root_path=str(tmp_path)))
     image=Image.new('RGB',(20,10),(0,120,200))
     exif=Image.Exif()
     exif[274]=6
@@ -5448,7 +5448,7 @@ def test_confirmed_user_material_does_not_require_legacy_rights_flags(tmp_path,r
 
 def test_material_use_state_api_persists_and_rejects_obsolete_writer(person_render_edit_state,monkeypatch):
     state=person_render_edit_state
-    monkeypatch.setattr(main_module.settings,'video_inbox_path',str(state.production.video_library_path),raising=False)
+    monkeypatch.setattr(main_module,'settings',replace(main_module.settings,video_inbox_path=str(state.production.video_library_path)))
     asset=state.production.list_assets(state.workspace_id)[0]
     base=f'/api/production/materials/{asset.id}'
     response=state.client.put(base+'/use-state',json={'use_state':'reference_only'})

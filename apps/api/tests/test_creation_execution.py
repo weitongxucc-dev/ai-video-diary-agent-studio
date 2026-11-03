@@ -1770,16 +1770,18 @@ def test_read_only_material_directory_refuses_binding_and_recovers(tmp_path):
         library.chmod(0o755)
 
 
-def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp_path, monkeypatch):
+def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp_path, monkeypatch, request):
     # Keep the full runtime reload inside a synthetic library and restore its
     # module globals afterwards; no provider or media operation is invoked.
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    isolate_assistant_turn_control(monkeypatch, request)
     for name in (
         "settings repo source_repository model_catalog model_installer visual_semantic_provider "
         "voice_clone_provider avatar_lipsync_provider latentsync_provider production_repo "
         "montage_repo montage_planner montage_renderer artifact_store narration_generator "
         "voice_preview_service avatar_preview_service vault video_inbox video_processor "
         "video_pipeline draft_workspace source_tracker service workflow auth_context "
-        "video_job_runner creation_execution execution_worker material_ingestion"
+        "video_job_runner creation_execution device_runtime material_ingestion assistant_continuation_driver"
     ).split():
         monkeypatch.setattr(main_module, name, getattr(main_module, name))
     monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
@@ -1796,26 +1798,32 @@ def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp
         hermes_radar_path=str(tmp_path / "radar"),
     )
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda _cls: isolated))
-    monkeypatch.setattr(main_module, "execution_worker", ThreadPoolExecutor(max_workers=1))
+    from test_host_model_installation import metadata_device_components
+    monkeypatch.setattr(main_module, "device_runtime", None)
+    monkeypatch.setattr(main_module, "_build_device_components",
+        lambda **kwargs: metadata_device_components(tmp_path, **kwargs))
     monkeypatch.setattr(main_module, "material_ingestion", None)
 
     def assert_running():
         service = main_module.material_ingestion
-        worker = main_module.execution_worker
+        worker = main_module.device_runtime
         assert service is not None and service._thread is not None and service._thread.is_alive()
-        assert worker.submit(lambda: "ready").result(timeout=2) == "ready"
+        assert worker is not None and worker.running
+        assert worker._thread is not None and worker._thread.is_alive()
+        assert worker.scheduler.database_path == Path(main_module.production_repo.database_path).resolve()
         return service, service._thread, worker
 
     def assert_stopped(service, thread, worker):
         assert service._thread is None and not thread.is_alive()
-        with pytest.raises(RuntimeError, match="shutdown"):
-            worker.submit(lambda: None)
+        assert not worker.running and worker._closed
+        assert worker._thread is not None and not worker._thread.is_alive()
+        assert worker.scheduler.active_permit() is None
 
     main_module._reload_runtime_dependencies()
     first_service, first_thread, first_worker = assert_running()
     with TestClient(main_module.app):
         assert main_module.material_ingestion is first_service
-        assert main_module.execution_worker is first_worker
+        assert main_module.device_runtime is first_worker
     assert_stopped(first_service, first_thread, first_worker)
 
     with TestClient(main_module.app):
@@ -1829,7 +1837,7 @@ def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp
     fourth_service, fourth_thread, fourth_worker = assert_running()
     main_module.resume_persisted_creation_executions()
     assert main_module.material_ingestion is fourth_service
-    assert main_module.execution_worker is fourth_worker
+    assert main_module.device_runtime is fourth_worker
     main_module.stop_creation_execution_worker()
     main_module.stop_creation_execution_worker()
     assert_stopped(fourth_service, fourth_thread, fourth_worker)

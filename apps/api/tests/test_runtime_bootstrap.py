@@ -24,8 +24,9 @@ def client():
     return TestClient(main.app, client=("127.0.0.1", 50000), raise_server_exceptions=False)
 
 
-def assert_legacy_worker_usable(worker, ingestion):
-    assert worker.submit(lambda: "ready").result(timeout=2) == "ready"
+def assert_device_driver_usable(runtime, ingestion):
+    assert runtime is main.device_runtime and runtime.running
+    assert runtime._thread is not None and runtime._thread.is_alive()
     assert ingestion._thread is not None and ingestion._thread.is_alive()
 
 
@@ -150,7 +151,7 @@ def test_database_switch_moves_five_actual_service_writes_together(isolated_data
 def test_invalid_tmp_refuses_before_env_workspace_installer_and_driver_changes(isolated_host, tmp_path, monkeypatch):
     installer, _, _, env_path, _ = isolated_host
     main._reload_runtime_dependencies()
-    worker, ingestion, settings, catalog = main.execution_worker, main.material_ingestion, main.settings, main.model_catalog
+    worker, ingestion, settings, catalog = main.device_runtime, main.material_ingestion, main.settings, main.model_catalog
     before = env_path.read_bytes(), dict(os.environ), tempfile.tempdir
     invalid = tmp_path / "ordinary-file"
     invalid.write_text("not a directory")
@@ -165,8 +166,8 @@ def test_invalid_tmp_refuses_before_env_workspace_installer_and_driver_changes(i
     assert "FileExistsError" in response.text
     assert (env_path.read_bytes(), dict(os.environ), tempfile.tempdir) == before
     assert main.settings is settings and main.model_catalog is catalog
-    assert main.execution_worker is worker and main.material_ingestion is ingestion
-    assert_legacy_worker_usable(worker, ingestion)
+    assert main.device_runtime is worker and main.material_ingestion is ingestion
+    assert_device_driver_usable(worker, ingestion)
 
 
 def test_same_database_reload_retains_pending_invite_and_identity_owner(isolated_host):
@@ -590,8 +591,8 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
 
         def finish():
             module = sys.modules.get('app.main')
-            if module is not None and module.execution_worker is not None:
-                module._stop_execution_worker()
+            if module is not None and module.device_runtime is not None:
+                module._stop_device_runtime()
             if tracker is not None:
                 activity['actual_source_loads'] = tracker.records
                 activity['actual_origins_post'] = tracker.origins()
@@ -665,7 +666,7 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
         assert not database.exists()
         assert 'model_installer' not in vars(main) and 'creation_execution' not in vars(main)
         assert 'settings' not in vars(main) and 'production_repo' not in vars(main)
-        assert main.execution_worker is None and main._bound_runtime_routes == []
+        assert main.device_runtime is None and main._bound_runtime_routes == []
         assert main.device_runtime is main.material_ingestion is main.automation_runtime is main.assistant_continuation_driver is None
         before = tuple(main.app.router.routes)
         position = main._runtime_routes_insert_at
@@ -675,7 +676,7 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
             activity['actual_origins_after_pure_import'] = tracker.origins()
 
         assert main.create_app() is main.app
-        assert activity['construction_order'] == ['graph', 'installer', 'knowledge_routes', 'publish_routes', 'creation', 'worker']
+        assert activity['construction_order'] == ['graph', 'installer', 'knowledge_routes', 'publish_routes', 'creation']
         assert len(graphs) == 1
         graph = graphs[0]
         assert main.settings is graph.settings and main.production_repo is graph.database.production
@@ -693,9 +694,8 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
             'montage_plan': main._create_creation_task_montage_plan_for_workspace,
             'render': main._render_creation_task_montage_for_workspace}
         assert execution.render_is_valid is main._creation_render_is_valid
-        worker = main.execution_worker
-        assert worker._max_workers == 1 and worker._thread_name_prefix == 'creation-execution'
-        assert worker._threads == set() and not worker._shutdown
+        assert main.device_runtime is None
+        assert 'execution_worker' not in vars(main)
         assert main.model_installer._active_thread is None and main.model_installer._writer is None
         bound = tuple(main._bound_runtime_routes)
         after = tuple(main.app.router.routes)
@@ -718,10 +718,10 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
                 'creation_task_quality_checks'} <= tables
         assert main.device_runtime is main.material_ingestion is main.automation_runtime is main.assistant_continuation_driver is None
         assert all(activity[name] == [] for name in ('thread_starts', 'native_commands', 'resource_samples', 'dispatches', 'network'))
-        main._stop_execution_worker()
-        assert worker._shutdown and main.execution_worker is None
+        main._stop_device_runtime()
+        assert main.device_runtime is None
         activity['explicit_factory'] = {'same_dependency_graph': True, 'original_callbacks': True,
-            'original_installer_reload_callback_forwarded': True, 'one_unstarted_worker_closed': True,
+            'original_installer_reload_callback_forwarded': True, 'no_legacy_pool_or_started_device_driver': True,
             'runtime_routes': len(bound), 'static_route_and_handler_order_preserved': True,
             'real_schema_tables': sorted(tables), 'original_37_value_profile': True,
             'startup_shutdown_or_reload_executions': 0}

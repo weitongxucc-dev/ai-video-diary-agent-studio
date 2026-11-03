@@ -1,4 +1,5 @@
 """Real PNG registrations and resource decisions; no media execution or OS calibration."""
+from test_host_resource_probes import render_metadata_host as render_metadata_host
 from dataclasses import asdict, replace
 from functools import partial
 from types import SimpleNamespace
@@ -51,7 +52,7 @@ def facts(state, **changes):
             **{'actor': state.actor, 'graphic_source_facts': state.resolver, **changes})
 
 
-def test_normal_image_render_stat_facts_deduplicate_bytes_and_real_probe_counts(state, tmp_path, monkeypatch):
+def test_normal_image_render_stat_facts_deduplicate_bytes_and_real_probe_counts(state, tmp_path, monkeypatch, render_metadata_host):
     png = state.resolver(state.task.workspace_id, state.task.id, state.source['source_ref'], actor=state.actor)
     assert (png['width'], png['height']) == (16, 12)
     monkeypatch.setattr(state.store, 'describe', lambda *_: pytest.fail('admission must not hash content'))
@@ -98,7 +99,7 @@ def test_png_facts_refuse_unknown_or_foreign_provenance(state, invalid):
         state.resolver(state.task.workspace_id, task_id, state.source['source_ref'], actor=actor)
 
 
-def test_text_render_uses_existing_overlay_budget_and_binds_text_values(state, tmp_path):
+def test_text_render_uses_existing_overlay_budget_and_binds_text_values(state, tmp_path, render_metadata_host):
     state.montage.graphic_overlays = [TextOverlay(text='公开素材演示', start_seconds=0, end_seconds=1).model_dump()]
     state.repo.montage_plan_adoption.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
@@ -198,7 +199,10 @@ def test_exact_image_preview_declares_union_and_candidate_peak(script_state, mon
     graphics = actual['graphic_sources']
     assert {item['source_ref'] for item in graphics} == {first_ref, second_ref}
     assert resources['input_bytes'] == sum(item[1] for item in actual['files'])
-    assert _verdict(_probe(tmp_path, max_overlay_count=0), resources) is False
+    with monkeypatch.context() as scoped:
+        from test_host_resource_probes import declare_render_metadata_host
+        declare_render_metadata_host(scoped)
+        assert _verdict(_probe(tmp_path, max_overlay_count=0), resources) is False
     payload['graphic_overlay']['source_ref'] = first_ref
     duplicate, same_resources = main._task_media_facts(state.workspace_id, state.task.id, 'exact_edit_preview', {'payload': payload}, actor)
     assert same_resources['overlay_count'] == 2 and len(duplicate['graphic_sources']) == 1

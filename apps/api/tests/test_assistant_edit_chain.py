@@ -197,7 +197,7 @@ def test_replacement_candidate_requalified_at_confirmation(material_edit_state, 
 
 def test_task_clip_snapshot_binds_both_revisions_and_never_falls_back_from_person(material_edit_state, monkeypatch):
     state = material_edit_state
-    monkeypatch.setattr(main.settings, "video_inbox_path", str(Path(state.asset.path).parent), raising=False)
+    monkeypatch.setattr(main, "settings", replace(main.settings, video_inbox_path=str(Path(state.asset.path).parent)))
     selection = main._assistant_task_clip_material_selection(state.request, state.task, [f"clip:{state.clip.id}"])
     asset = main._material_library_http_adapter().get_production_material(state.clip.asset_id, state.request)
     segment = next(item for item in asset.segments if item.id == state.clip.segment_id)

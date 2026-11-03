@@ -16,9 +16,9 @@ from test_montage_pipeline import person_render_edit_state as person_render_edit
 @pytest.fixture
 def state(material_edit_state, tmp_path, monkeypatch):
     state = material_edit_state
-    monkeypatch.setattr(main.settings, "video_inbox_path", str(state.production.video_library_path), raising=False)
-    monkeypatch.setattr(main.settings, "tencentcloud_secret_id", "", raising=False)
-    monkeypatch.setattr(main.settings, "tencentcloud_secret_key", "", raising=False)
+    monkeypatch.setattr(main, "settings", replace(main.settings,
+        video_inbox_path=str(state.production.video_library_path),
+        tencentcloud_secret_id="", tencentcloud_secret_key=""))
     conversations = ConversationRepository(tmp_path / "conversations.sqlite3")
     monkeypatch.setattr(main, "conversation_repo", conversations)
     monkeypatch.setattr(main, "assistant_continuation_driver", None)
