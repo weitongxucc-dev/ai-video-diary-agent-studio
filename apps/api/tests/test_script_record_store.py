@@ -237,3 +237,41 @@ def test_standalone_owner_roundtrips_its_own_rows_without_cross_domain_ports(tmp
         closed_current_reader(count)
     assert "app.main" not in sys.modules
     assert "app.device_runtime" not in sys.modules
+
+
+def test_positive_seed_caller_owns_header_sections_and_task_transaction(tmp_path, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("seed transaction evidence forbids process, media and runtime")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(wave, "open", forbidden)
+    from app.device_runtime import DeviceRuntime
+    monkeypatch.setattr(DeviceRuntime, "start", forbidden)
+    monkeypatch.setattr(DeviceRuntime, "run_once", forbidden)
+    from app.production import ProductionRepository
+    from test_production_foundation import _save_creation_task, _seed_confirmed_script
+    repository = ProductionRepository(tmp_path / "seed.sqlite", tmp_path / "library",
+        duration_reader=forbidden, scene_reader=forbidden)
+    before = _save_creation_task(repository, workspace_id="seed-ws", task_id="seed-task")
+    with repository._connect() as connection:
+        connection.execute("""CREATE TRIGGER reject_seed_task_tail BEFORE UPDATE OF payload ON creation_tasks
+            WHEN NEW.id='seed-task' BEGIN SELECT RAISE(ABORT,'seed task tail refused'); END""")
+    with pytest.raises(sqlite3.IntegrityError, match="seed task tail refused"):
+        _seed_confirmed_script(repository, workspace_id="seed-ws", task_id="seed-task")
+    assert repository.task_records.get_creation_task("seed-ws", "seed-task") == before
+    with repository._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM creation_task_scripts").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM creation_task_script_sections").fetchone()[0] == 0
+        connection.execute("DROP TRIGGER reject_seed_task_tail")
+    script_id, sections = _seed_confirmed_script(repository, workspace_id="seed-ws", task_id="seed-task")
+    actual = repository.script_records.get_creation_task_script("seed-ws", script_id)
+    assert actual.selection_status == "confirmed"
+    assert [asdict(section) for section in actual.sections] == sections
+    task = repository.task_records.get_creation_task("seed-ws", "seed-task")
+    assert task.confirmed_script_id == script_id and task.stage == "narration"
+    with repository._connect() as connection:
+        payload = json.loads(connection.execute("SELECT payload FROM creation_task_scripts WHERE id=?",
+            (script_id,)).fetchone()[0])
+        assert payload["_sections_storage"] == "rows" and "sections" not in payload
+        assert connection.execute("SELECT COUNT(*) FROM creation_task_script_sections WHERE script_id=?",
+            (script_id,)).fetchone()[0] == len(sections)

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 from fastapi import HTTPException
 import pytest
 import app.main as main
@@ -214,7 +215,8 @@ def test_real_topic_script_and_make_routes_block_before_any_generation(automatio
     monkeypatch.setattr(main,'_creation_task_topic_generator_for',external)
     monkeypatch.setattr(main,'_creation_task_script_generator_for',external)
     for suffix in ['topics/generate','scripts/generate','execution/resume']:
-        response=client.post(f'/api/creation-tasks/{task_id}/{suffix}',json={})
+        response=client.post(f'/api/creation-tasks/{task_id}/{suffix}',
+            json={'request_id': str(uuid4())} if suffix == 'scripts/generate' else {})
         assert response.status_code==409,response.text
         assert response.json()['detail']['error']==('automation_paused' if restriction=='paused' else 'outside_window')
     external.assert_not_called()

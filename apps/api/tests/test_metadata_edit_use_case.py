@@ -234,6 +234,7 @@ def test_insert_undo_redo_reauthorizes_restored_material_and_replays_http_readin
     s.base=TimelineVersion('complete-narration-base','ws',s.task.id,s.base.id,s.base.sequence+1,
         {**s.base.snapshot,'narration_segments':[asdict(segment)],'subtitle_track_ids':['complete-zh']},None)
     with s.repo._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(s.task),default=str),s.task.id))
         conn.execute('INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)',
             ('fixed-script','ws',s.task.id,'fixture-run',script_seed_payload(s.repo, conn, script),now.isoformat()))

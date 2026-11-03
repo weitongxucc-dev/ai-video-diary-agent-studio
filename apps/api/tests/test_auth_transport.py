@@ -179,7 +179,7 @@ def test_reload_binds_new_auth_to_same_application_transport(isolated_host, monk
         # Stop actual isolated users before releasing the shared transport.
         main._stop_device_runtime()
         main._stop_material_ingestion()
-        main._stop_execution_worker()
+        main._stop_device_runtime()
         main.stop_auth_transport()
     assert client.is_closed and main.auth_context._http_client is None
 

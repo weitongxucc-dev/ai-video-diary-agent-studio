@@ -167,12 +167,15 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
         if (params.target_operation_id) {
           if (!historicalOperations.has(params.target_operation_id)) throw new Error('请从本次读取的真实修改历史选择原操作');
         } else if (!editControls && !historyRead) throw new Error('请先读取修改历史或当前编辑控制范围');
+        else if (editControls && !(action === 'undo' ? editControls.can_undo : editControls.can_redo))
+          throw new Error(action === 'undo' ? '当前没有可撤销的编辑' : '当前没有可重做的编辑');
         const requestId = typedRequestId(body.assistant_turn_id, callId);
         markEditControlWrite();
         let posted = false;
         try {
           const result = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/timeline/${action}`, {
-            method: 'POST', body: JSON.stringify({...body, request_id: requestId, ...params})});
+            method: 'POST', body: JSON.stringify({...body, request_id: requestId,
+              ...(params.target_operation_id ? {target_operation_id: params.target_operation_id} : {})})});
           posted = true;
           const receipt = result.restore_request ?? await request(restorePath(requestId));
           if (receipt.task_id !== taskId || receipt.request_id !== requestId) throw new Error('恢复回执不属于原请求，请先查询');

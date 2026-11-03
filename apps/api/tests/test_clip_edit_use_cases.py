@@ -55,11 +55,11 @@ def test_direct_shot_edit_preserves_other_tracks_and_roundtrips_without_routes(t
             assert len(changed['clips']) == len(original['clips'])+1
             assert changed['clips'][1]['timeline_end_seconds'] == 3
             assert changed['clips'][2]['timeline_start_seconds'] == 3
-        undo = client.post('/api/creation-tasks/task/timeline/undo', json={})
+        undo = client.post('/api/creation-tasks/task/timeline/undo', json={'request_id': 'test_direct_shot_edit_preserves_other_tracks_and_roundtrips_without_routes:1'})
         assert undo.status_code == 200, undo.text
         restored = repo.get_creation_task_montage_plan('local', 'task')
         assert restored['clips'] == original['clips'] and restored['audio_timeline'] == original['audio_timeline']
-        redo = client.post('/api/creation-tasks/task/timeline/redo', json={})
+        redo = client.post('/api/creation-tasks/task/timeline/redo', json={'request_id': 'test_direct_shot_edit_preserves_other_tracks_and_roundtrips_without_routes:2'})
         assert redo.status_code == 200, redo.text
         assert repo.get_creation_task_montage_plan('local', 'task')['clips'] == changed['clips']
     finally:

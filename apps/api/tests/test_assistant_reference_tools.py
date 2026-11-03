@@ -5,8 +5,10 @@ from pathlib import Path
 import subprocess
 
 
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
+
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 let raw=''; for await(const part of process.stdin) raw+=part;
 const input=JSON.parse(raw), calls=[], tools=new Map(); let reads=0;
 globalThis.fetch=async(url,init)=>{
@@ -18,9 +20,12 @@ globalThis.fetch=async(url,init)=>{
 };
 const {default:register}=await import(process.argv[1]);register({registerTool:t=>tools.set(t.name,t)});
 try {
-  if(input.mode==='task') {await tools.get('read_current_task').execute();await tools.get('generate_creation_task_topics').execute();}
-  else await tools.get(input.mode==='knowledge'?'read_selected_knowledge':'read_selected_profile').execute('id',{kind:'person',profile_id:'model-fake',version:'model-fake'});
-  console.log(JSON.stringify({ok:true,calls}));
+  let result;
+  if(input.mode==='task') {
+    result=await tools.get('read_current_task').execute();
+    if(result.isError!==true) result=await tools.get('generate_creation_task_topics').execute();
+  } else result=await tools.get(input.mode==='knowledge'?'read_selected_knowledge':'read_selected_profile').execute('id',{kind:'person',profile_id:'model-fake',version:'model-fake'});
+  console.log(JSON.stringify({...toolOutcome(result),calls}));
 }catch(error){console.log(JSON.stringify({ok:false,error:error.message,calls}));}
 """
 

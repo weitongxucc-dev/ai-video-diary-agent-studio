@@ -23,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.media.picture_preview import PicturePreviewRenderer
 from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.canvas import canvas_size
 from app.creation_execution import (
@@ -541,7 +542,7 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
             assert path.read_bytes() == b"synthetic-render-output"
             media_checks.append(grant.request_id)
 
-        monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", synthetic_media)
+        monkeypatch.setattr(PicturePreviewRenderer, 'render_montage', staticmethod(synthetic_media))
         monkeypatch.setattr(main_module, "_validate_rendered_media", synthetic_validate)
         monkeypatch.setattr(main_module, "_start_creation_task_quality_check", lambda w, t: quality_requests.append((w, t)))
         if publication_state == "missing_input_version":
@@ -1183,13 +1184,13 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             video_output_path=str(tmp_path / "outputs"), video_inbox_path=str(tmp_path / "library"),
             effective_temporary_root_path=tmp_path / "temp", native_portrait_worker_path=None))
         render_calls = []
-        original_render = main_module._render_montage_with_resolved_clip_sources
+        original_render = main_module._picture_preview_renderer().render_montage
 
         def counted_render(*args, **kwargs):
             render_calls.append(1)
             return original_render(*args, **kwargs)
 
-        monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", counted_render)
+        monkeypatch.setattr(PicturePreviewRenderer, 'render_montage', staticmethod(counted_render))
         retry_executor = CreationJobUnitExecutor(
             repo,
             render_action=lambda workspace_id, current_task_id, context: (
@@ -1388,8 +1389,7 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
         last_error=None, wake=lambda: None,
     ))
-    monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
-        submit=lambda *_args: pytest.fail("许可已接通，制作作业不得退回旧的本机线程")))
+    monkeypatch.setattr(ThreadPoolExecutor, "submit", staticmethod(lambda *_args: pytest.fail("许可已接通，制作作业不得退回旧的本机线程")))
     client = TestClient(main_module.app,
                         headers={"X-Local-Member-Token": members.whoami(None)[1]})
     base = f"/api/creation-tasks/{task_id}/execution"
@@ -1429,8 +1429,7 @@ def test_http_start_refuses_an_identity_it_cannot_verify(tmp_path, monkeypatch):
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
         last_error=None, wake=lambda: None,
     ))
-    monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
-        submit=lambda *_args: pytest.fail("身份不可核验时不得放行制作作业")))
+    monkeypatch.setattr(ThreadPoolExecutor, "submit", staticmethod(lambda *_args: pytest.fail("身份不可核验时不得放行制作作业")))
     base = f"/api/creation-tasks/{task_id}/execution"
     payload = {"script_id": script_id, "input_digest": digest, "requirements_confirmed": True}
     forged = TestClient(main_module.app, headers={"X-Local-Member-Token": "not-a-real-token"})
@@ -1467,9 +1466,7 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)}, last_error=None,
         running=True, wake=lambda: wake_calls.append(True),
     ))
-    monkeypatch.setattr(main_module, "execution_worker", SimpleNamespace(
-        submit=lambda *_args: pytest.fail("scheduled request must not enter legacy worker"),
-    ))
+    monkeypatch.setattr(ThreadPoolExecutor, "submit", staticmethod(lambda *_args: pytest.fail("scheduled request must not enter legacy worker")))
     client = TestClient(main_module.app,
                         headers={"X-Local-Member-Token": members.whoami(None)[1]})
     route = f"/api/creation-tasks/{task_id}/execution"
@@ -1566,7 +1563,7 @@ def _render_validity_fixture(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(main_module, "production_repo", repository)
     monkeypatch.setattr(main_module, "artifact_store", store)
-    monkeypatch.setattr(main_module, "_validate_montage_material_use", lambda *_: None)
+    monkeypatch.setattr(PicturePreviewRenderer, 'validate_material_use', staticmethod(lambda *_: None))
     return store, published, current_version, transform
 
 
@@ -1683,16 +1680,13 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     queued = execution.start("local", task_id, script_id, digest,
                               member_id=owner_member.member_id)
     submitted = []
-    worker = SimpleNamespace(
-        submit=lambda *args: submitted.append(args), shutdown=lambda **_kwargs: None,
-    )
     runtime_starts = []
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "quality_check_repo", main_module.QualityCheckRepository(repo.database_path))
     monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo.job_records))
     monkeypatch.setattr(main_module, "creation_execution", execution)
     monkeypatch.setattr(main_module, "local_members_service", members)
-    monkeypatch.setattr(main_module, "execution_worker", worker)
+    monkeypatch.setattr(ThreadPoolExecutor, "submit", lambda *args, **kwargs: submitted.append(args))
     monkeypatch.setattr(main_module, "material_ingestion", None)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},

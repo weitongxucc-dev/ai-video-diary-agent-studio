@@ -199,6 +199,7 @@ def _seed_confirmed_script(
     task.recovery_point = "narration"
     task.updated_at = now
     with sqlite3.connect(production.database_path) as conn:
+        conn.execute("BEGIN")
         conn.execute(
             """
             INSERT INTO creation_task_scripts

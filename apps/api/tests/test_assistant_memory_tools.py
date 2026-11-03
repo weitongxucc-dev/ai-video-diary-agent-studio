@@ -7,8 +7,10 @@ import subprocess
 import pytest
 
 
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
+
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 let raw=''; for await(const part of process.stdin) raw+=part;
 const input=JSON.parse(raw), tools=new Map(), calls=[];
 let memory=structuredClone(input.memory), patched=false;
@@ -37,7 +39,7 @@ const steps=[];
 for(const operation of input.operations||[{tool:input.tool,params:input.params}]) {
   try {
     const result=operation.tool==='host_read'?await readCreatorMemoryFacts():await tools.get(operation.tool).execute('synthetic-call',operation.params||{});
-    steps.push({ok:true,result});
+    steps.push(toolOutcome(result));
   } catch(error) {steps.push({ok:false,error:error.message});}
 }
 console.log(JSON.stringify({steps,calls,memory,parameters:tools.get('update_preference_memory').parameters}));
@@ -144,7 +146,10 @@ def test_missing_source_or_value_never_writes(tmp_path, memory, change):
 @pytest.mark.parametrize("failure", ["patch", "temporary", "readback_http", "readback_value", "readback_revision", "readback_member"])
 def test_failure_never_reports_success(tmp_path, memory, failure):
     out = call(tmp_path, memory, failure=failure)
-    assert not out["steps"][0]["ok"] and "result" not in out["steps"][0]
+    outcome = out["steps"][0]
+    assert not outcome["ok"] and outcome["result"]["isError"] is True
+    assert set(outcome["result"]["details"]) == {"failure", "invocation_input_id"}
+    assert json.loads(outcome["result"]["content"][0]["text"]) == {"failure": outcome["result"]["details"]["failure"]}
     assert sum(item["method"] == "PATCH" for item in out["calls"]) == 1
     assert len(out["calls"]) == (2 if failure in {"patch", "temporary"} else 3)
 

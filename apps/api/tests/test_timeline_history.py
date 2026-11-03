@@ -71,6 +71,7 @@ def persist_task(repo: ProductionRepository, task: CreationTask, script_id: str,
               "selection_status": "confirmed", "created_at": now, "updated_at": now,
               "confirmed_at": now}
     with repo._connect() as conn:
+        conn.execute("BEGIN")
         if insert_script:
             conn.execute(
                 "INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at)"

@@ -29,11 +29,11 @@ def source_turn(state, conversations):
 @pytest.mark.parametrize("case", ["own", "other_turn", "unknown", "foreign_version", "other_input"])
 def test_execution_accepts_only_this_inputs_committed_successor(metadata_http_state, tmp_path, monkeypatch, case):
     state = metadata_http_state
-    conversations = ConversationRepository(tmp_path / "conversation.sqlite")
+    conversations = ConversationRepository(state.repo.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     turn = source_turn(state, conversations)
-    from app.creation_execution import CreationExecutionActor
-    monkeypatch.setattr(main, "_require_permit_actor", lambda *_args: CreationExecutionActor("ws", state.member.member_id))
+    # The isolated local roster belongs to this workspace; use the real identity reader.
+    monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "ws")
     writer = source_turn(state, conversations) if case == "other_turn" else turn
     response = state.client.post(state.url + "/edits/exact", json={"operation_type": "UpdateSubtitleCue",
         "cue_id": "cue", "text": "已保存的新字幕", "request_id": str(uuid4()), "assistant_turn_id": writer["id"],
@@ -160,7 +160,7 @@ def test_tool_only_continues_after_verified_direct_edit(tmp_path, case):
 def test_host_keeps_v3_edit_receipt_when_render_has_already_reached_v4(metadata_http_state, tmp_path, monkeypatch, kind):
     from types import SimpleNamespace
     state = metadata_http_state
-    conversations = ConversationRepository(tmp_path / "chat.sqlite")
+    conversations = ConversationRepository(state.repo.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     monkeypatch.setattr(main, "_goal_service", lambda: SimpleNamespace(register_turn=lambda *_: None))
     monkeypatch.setattr(main, "_wake_assistant_continuations", lambda: None)

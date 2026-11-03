@@ -11,7 +11,7 @@ from app.creation.script_routes import build_script_sections_router
 from test_creation_task_script_grounding import (
     api_state as api_state, agent_payload, draft, reviewed, saved_row_draft, set_agent_reviewer,
     FACT, OpenAICompatibleCreationTaskScriptGenerator, _review_tool_response,
-    set_api_provider,
+    generate_current_http_draft,
 )
 
 
@@ -53,9 +53,8 @@ def test_patch_http_preserves_unread_sections_and_replays_original_receipt(api_s
 def test_legacy_confirmation_rechecks_current_input_before_adoption(api_state, monkeypatch):
     state = api_state
     calls = []
-    set_api_provider(monkeypatch, draft(), reviewed(draft()), calls)
-    generated = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
-    assert generated.status_code == 200, generated.text
+    set_agent_reviewer(monkeypatch, reviewed(draft()), calls)
+    generate_current_http_draft(state, monkeypatch, calls)
     script = state.repository.script_records.list_creation_task_scripts('local', 'task')[0]
     turn_id = str(uuid4())
     checks = []
@@ -74,7 +73,8 @@ def test_legacy_confirmation_rechecks_current_input_before_adoption(api_state, m
     assert checks == [('task', turn_id, False), ('task', turn_id, False)]
     assert state.repository.script_records.get_creation_task_script('local', script.id) == script
     assert state.repository.task_records.get_creation_task('local', 'task').confirmed_script_id is None
-    assert len(calls) == 2  # The unchanged candidate does not run another review.
+    # Generation and legacy confirmation each review before the final origin check.
+    assert len(calls) == 3
 
 
 def test_start_http_creates_partial_draft_without_an_existing_script(api_state, monkeypatch):
@@ -181,7 +181,12 @@ def test_45_section_target_through_http_windows_and_complete_adoption(api_state,
     assert len(calls) == 6
 
 
-def test_legacy_window_requirement_does_not_mark_model_connection_failed(api_state, monkeypatch):
+def test_oversized_generation_window_does_not_mark_model_connection_failed(api_state, monkeypatch):
+    from app.assistant.task_business_adapter import TaskBusinessAdapter
+    from app.conversation_repository import ConversationRepository
+    from app.creation_execution import CreationExecutionActor
+    from threading import Event
+    import time
     state = api_state
     with state.repository._connect() as conn:
         row = conn.execute("SELECT payload FROM creation_plans WHERE id='plan'").fetchone()
@@ -189,10 +194,22 @@ def test_legacy_window_requirement_does_not_mark_model_connection_failed(api_sta
         plan['template_settings'] = {'script_section_count': 45}
         conn.execute("UPDATE creation_plans SET payload=? WHERE id='plan'", (json.dumps(plan),))
     calls = []
-    set_api_provider(monkeypatch, draft(), reviewed(draft()), calls)
-    response = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
-    assert response.status_code == 422, response.text
-    assert 'window_required' in response.text
+    set_agent_reviewer(monkeypatch, reviewed(draft()), calls)
+    monkeypatch.setattr(main, 'conversation_repo', ConversationRepository(state.repository.database_path))
+    intent = main._script_generation_intent('local')
+    request_id = str(uuid4())
+    record, _ = intent.start('local', 'task', request_id, CreationExecutionActor('local', state.owner.member_id))
+    host = TaskBusinessAdapter(main._task_business(generation_case=intent))
+    binding = dict(workspace_id='local', task_id='task', member_id=state.owner.member_id,
+        conversation_id=record['conversation_id'], turn_id=record['turn_id'],
+        intent_kind='script_generation', generation_request_id=request_id)
+    payload = agent_payload(state)
+    payload['request_id'] = str(uuid4())
+    payload['sections'] = [{**payload['sections'][0], 'id': f'section-{index}'} for index in range(45)]
+    result = host('start_script_window', {'payload': payload}, call_id='oversized', tool_call_id='window',
+        source_binding=binding, cancel_event=Event(), deadline_monotonic=time.monotonic()+10)
+    assert not result['ok'] and result['failure']['status_code'] == 422, result
     assert not calls and not state.verifications
     run = state.repository.script_records.latest_script_generation_run('local', 'task')
     assert run.route_snapshot['availability'] == 'unverified'
+    assert intent.read('local', 'task', request_id, state.owner.member_id)['script_id'] is None

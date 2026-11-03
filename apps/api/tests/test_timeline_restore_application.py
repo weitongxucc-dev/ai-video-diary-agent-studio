@@ -37,6 +37,7 @@ def restore_state(tmp_path, *, empty=False):
         '固定文案', 'zh-CN', [CreationTaskScriptSection('section', '段落', '原配音', '素材画面', [])],
         selection_status='confirmed', created_at=stamp, updated_at=stamp, confirmed_at=stamp)
     with state.repo._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
             (json.dumps(asdict(task), default=str), task.id))
         conn.execute('INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) VALUES (?, ?, ?, ?, ?, ?)',

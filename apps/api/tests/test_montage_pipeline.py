@@ -23,6 +23,8 @@ from PIL import Image
 from starlette.requests import Request
 
 import app.main as main_module
+from app.media.picture_preview import PicturePreviewRenderer
+from app.creation.editing.command_compile import subtitle_text_from_command
 from app.artifact_store import ArtifactStore
 from app.creation_execution import CpuRenderGrantContext
 from app.host_resource_probes import HostCapacity, HostProcessProbe
@@ -564,6 +566,7 @@ def _person_render_edit_state(tmp_path, monkeypatch, workspace_id):
     task.stage_status = "running"
     task.status = "running"
     with production._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute(
             "INSERT INTO creation_task_scripts "
             "(id, workspace_id, task_id, run_id, payload, updated_at) "
@@ -2018,7 +2021,7 @@ def test_creation_task_render_helper_restores_logical_media_references(
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "montage_renderer", renderer)
 
-    rendered = main_module._render_montage_with_resolved_clip_sources(
+    rendered = main_module._picture_preview_renderer().render_montage(
         workspace_id,
         plan,
         audio_path,
@@ -2026,7 +2029,7 @@ def test_creation_task_render_helper_restores_logical_media_references(
 
     assert rendered.clips[0].source_path == logical_clip_reference
     context = CpuRenderGrantContext(object(), object(), time.monotonic() + 30, 1_000_000, 1)
-    main_module._render_montage_with_resolved_clip_sources(
+    main_module._picture_preview_renderer().render_montage(
         workspace_id, plan, audio_path, job_staging_path=tmp_path / "staging",
         render_context=context,
     )
@@ -2037,7 +2040,7 @@ def test_creation_task_render_helper_restores_logical_media_references(
     prior_calls = len(renderer.options)
     plan.clips[0].visual_effects = {"beauty_strength": 0.3}
     with pytest.raises(ValueError, match="人像效果"):
-        main_module._render_montage_with_resolved_clip_sources(
+        main_module._picture_preview_renderer().render_montage(
             workspace_id, plan, audio_path, job_staging_path=tmp_path / "staging",
             render_context=context,
         )
@@ -2341,7 +2344,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         lambda _workspace_id, _reference: audio_path,
     )
     monkeypatch.setattr(
-        main_module, "_render_montage_with_resolved_clip_sources", fake_render
+        PicturePreviewRenderer, 'render_montage', staticmethod(fake_render)
     )
 
     client = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token})
@@ -2375,7 +2378,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         pytest.fail("恢复已发布产物时不应再次执行 FFmpeg")
 
     monkeypatch.setattr(
-        main_module, "_render_montage_with_resolved_clip_sources", reject_rerender
+        PicturePreviewRenderer, 'render_montage', staticmethod(reject_rerender)
     )
     response = main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
 
@@ -2577,7 +2580,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     ).status_code == 409
 
     monkeypatch.setattr(
-        main_module, "_render_montage_with_resolved_clip_sources", fake_render
+        PicturePreviewRenderer, 'render_montage', staticmethod(fake_render)
     )
     rerender = main_module._render_creation_task_montage_for_workspace(workspace_id, task.id)
     assert rerender.status == "rendered"
@@ -2637,7 +2640,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert trimmed_plan.output_path is None and trimmed_plan.subtitle_path is None
     assert len(production.timeline_records.list_timeline_versions(workspace_id, task.id)) == 6
 
-    undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={})
+    undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={'request_id': 'test_creation_task_render_route_persists_job_lineage_and_logical_outputs:1'})
     assert undo.status_code == 200, undo.text
     assert undo.json()["operation"]["operation_type"] == "UndoTimelineVersion"
     restored_plan = creation_task_montage_plan_from_payload(
@@ -2695,21 +2698,21 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
     assert cropped["montage"]["clips"][0]["crop_y"] == 1
     assert cropped["montage"]["clips"][1:] == before_crop["montage"]["clips"][1:]
     assert cropped["narration"] == before_crop["narration"]
-    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={'request_id': 'test_creation_task_render_route_persists_job_lineage_and_logical_outputs:12'}).status_code == 200
     restored = client.get(f"/api/creation-tasks/{task.id}").json()
     assert restored["montage"]["clips"] == before_crop["montage"]["clips"]
     assert restored["task"]["can_redo"] is True
-    redo = client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={})
+    redo = client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={'request_id': 'test_creation_task_render_route_persists_job_lineage_and_logical_outputs:2'})
     assert redo.status_code == 200, redo.text
     assert redo.json()["operation"]["operation_type"] == "RedoTimelineVersion"
     redone = client.get(f"/api/creation-tasks/{task.id}").json()
     assert redone["montage"]["clips"] == cropped["montage"]["clips"]
     assert redone["task"]["can_redo"] is False
     assert redone["task"]["can_undo"] is True
-    assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={}).status_code == 409
-    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={'request_id': 'test_creation_task_render_route_persists_job_lineage_and_logical_outputs:13'}).status_code == 409
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={'request_id': 'test_creation_task_render_route_persists_job_lineage_and_logical_outputs:14'}).status_code == 200
 
-    for change in ({"operation_type": "ReorderClip", "position": 1}, {"operation_type": "SetClipLock", "locked": True}):
+    for edit_index, change in enumerate(({"operation_type": "ReorderClip", "position": 1}, {"operation_type": "SetClipLock", "locked": True})):
         before_change = client.get(f"/api/creation-tasks/{task.id}").json()
         preview = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={**change, "clip_id": "clip-route"})
         assert preview.status_code == 200, preview.text
@@ -2717,7 +2720,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         assert proposal["preview"]["before"]["detail"] != proposal["preview"]["after"]["detail"]
         assert client.get(f"/api/creation-tasks/{task.id}").json()["montage"]["clips"] == before_change["montage"]["clips"]
         assert client.post(f"/api/creation-tasks/{task.id}/edits/{proposal['id']}/confirm").status_code == 200
-        assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+        assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={'request_id': f'test_creation_task_render_route_persists_job_lineage_and_logical_outputs:65:{edit_index}'}).status_code == 200
         assert client.get(f"/api/creation-tasks/{task.id}").json()["montage"]["clips"] == before_change["montage"]["clips"]
 
     assert client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={**crop_payload, "crop_x": 2}).status_code == 422
@@ -2736,7 +2739,7 @@ def test_creation_task_render_route_persists_job_lineage_and_logical_outputs(
         assert rejected.status_code == 409, rejected.text
         assert production.get_creation_task_montage_plan(workspace_id, task.id) == locked_state
     assert client.get(f"/api/creation-tasks/{task.id}").json()["task"]["can_redo"] is False
-    assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={}).status_code == 409
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/redo", json={'request_id': 'test_creation_task_render_route_persists_job_lineage_and_logical_outputs:15'}).status_code == 409
 
     assert crop_runtime.stop(1)
 
@@ -2825,6 +2828,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     task.stage_status = "running"
     task.status = "running"
     with production._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute(
             "INSERT INTO creation_task_scripts (id, workspace_id, task_id, run_id, payload, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
             (
@@ -2970,7 +2974,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
         replace(chinese.cues[0], id="english-cue", source_cue_id=chinese.cues[0].id, text="MANUAL TEST", line_breaks=[])
     ]))
     display_client = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token})
-    for mode, languages in [("en", {"en-US"}), ("zh", {"zh-CN"}), ("none", set())]:
+    for display_index, (mode, languages) in enumerate([("en", {"en-US"}), ("zh", {"zh-CN"}), ("none", set())]):
         preview = display_client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview", json={
             "operation_type":"ConfigureSubtitleTrack", "subtitle_display":mode})
         assert preview.status_code == 200, preview.text
@@ -2978,7 +2982,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
         assert result.status_code == 200, result.text
         visible = display_client.get(f"/api/creation-tasks/{task.id}").json()
         assert {track["language"] for track in visible["subtitle_tracks"] if track["style"].get("enabled",True)} == languages
-        assert display_client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={}).status_code == 200
+        assert display_client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={'request_id': f'test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration:66:{display_index}'}).status_code == 200
     # Undo creates new versioned IDs; assertions below use the current tracks.
     current = display_client.get(f"/api/creation-tasks/{task.id}").json()
     current_zh = next(track["id"] for track in current["subtitle_tracks"] if track["language"]=="zh-CN")
@@ -3033,7 +3037,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
 
     undo = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token}).post(
         f"/api/creation-tasks/{task.id}/timeline/undo",
-        json={},
+        json={'request_id': 'test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration:3'},
     )
     assert undo.status_code == 200, undo.text
     assert undo.json()["operation"]["operation_type"] == "UndoTimelineVersion"
@@ -3068,7 +3072,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(production.job_records))
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
     monkeypatch.setattr(main_module, "settings", SimpleNamespace(video_output_path=str(tmp_path / "output"), native_portrait_worker_path=None, effective_temporary_root_path=tmp_path / "temp"))
-    monkeypatch.setattr(main_module, "_render_montage_with_resolved_clip_sources", render)
+    monkeypatch.setattr(PicturePreviewRenderer, 'render_montage', staticmethod(render))
     client = TestClient(main_module.app, headers={"X-Local-Member-Token": member_token})
     _assert_retired_montage_endpoint(client, production, workspace_id, task.id, "render")
     # Diagnostic helper, then cache hit: both must carry the same immutable cover selection.
@@ -3139,7 +3143,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     invalid=client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview",json={
         "operation_type":"UpdateSubtitleCue","cue_id":selected_cue["id"],"end_seconds":5})
     assert invalid.status_code==422
-    undone=client.post(f"/api/creation-tasks/{task.id}/timeline/undo",json={})
+    undone=client.post(f"/api/creation-tasks/{task.id}/timeline/undo",json={'request_id': 'test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration:4'})
     assert undone.status_code==200, undone.text
     restored=client.get(f"/api/creation-tasks/{task.id}").json()["subtitle_tracks"][0]["cues"][0]
     assert (restored["start_seconds"],restored["end_seconds"])==(selected_cue["start_seconds"],selected_cue["end_seconds"])
@@ -3164,7 +3168,7 @@ def test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration(
     hidden = client.get(f"/api/creation-tasks/{task.id}").json()
     assert all(track["style"]["enabled"] is False for track in hidden["subtitle_tracks"])
     assert [track["cues"] for track in hidden["subtitle_tracks"]] == [track["cues"] for track in visibility_before["subtitle_tracks"]]
-    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo",json={}).status_code == 200
+    assert client.post(f"/api/creation-tasks/{task.id}/timeline/undo",json={'request_id': 'test_subtitle_exact_edit_uses_typed_operation_and_keeps_segmented_narration:16'}).status_code == 200
     restored = client.get(f"/api/creation-tasks/{task.id}").json()
     assert all(track["style"].get("enabled",True) for track in restored["subtitle_tracks"])
     absent_english = client.post(f"/api/creation-tasks/{task.id}/edits/exact/preview",json={"operation_type":"ConfigureSubtitleTrack","subtitle_display":"en"})
@@ -3273,7 +3277,7 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
 
     undo = state.client.post(
         f"/api/creation-tasks/{state.task.id}/timeline/undo",
-        json={},
+        json={'request_id': 'test_regenerate_person_render_replaces_only_target_and_undo_restores_old_render:5'},
     )
 
     assert undo.status_code == 200, undo.text
@@ -3302,9 +3306,9 @@ def test_regenerate_person_render_replaces_only_target_and_undo_restores_old_ren
         return rendered_plan
 
     monkeypatch.setattr(
-        main_module,
-        "_render_montage_with_resolved_clip_sources",
-        fake_render,
+        PicturePreviewRenderer,
+        'render_montage',
+        staticmethod(fake_render),
     )
     _assert_retired_montage_endpoint(state.client, production, state.workspace_id, state.task.id, "render")
     # Diagnostic fixture rendering does not prove a permitted person/edit re-output path.
@@ -3643,7 +3647,7 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
     confirmed_task = production.task_records.get_creation_task(workspace_id, task.id)
     confirmed_version = production.timeline_records.get_timeline_version(workspace_id, confirmed_task.current_timeline_version_id)
     assert "subtitle_track_ids" not in confirmed_version.snapshot
-    undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={})
+    undo = client.post(f"/api/creation-tasks/{task.id}/timeline/undo", json={'request_id': 'test_confirm_pending_clip_preview_preserves_state_and_can_undo:6'})
     assert undo.status_code == 200, undo.text
     assert production.get_creation_task_montage_plan(workspace_id, task.id)["clips"][0]["needs_confirmation"] is True
 
@@ -3656,7 +3660,7 @@ def test_confirm_pending_clip_preview_preserves_state_and_can_undo(tmp_path, mon
     ("把字幕改成：It's ready.", "It's ready."),
 ])
 def test_subtitle_command_preserves_authored_punctuation(command, expected):
-    assert main_module._subtitle_text_from_command(command) == expected
+    assert subtitle_text_from_command(command) == expected
 
 
 @pytest.mark.parametrize("visual_prompt,content", [
@@ -3771,9 +3775,9 @@ def test_split_clip_preserves_clock_narration_and_roundtrips_undo(person_render_
     assert after["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
     assert after["montage"]["cues"] == before["montage"]["cues"]
     assert state.client.post(base + f"/edits/{proposal['id']}/confirm").status_code == 409
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_split_clip_preserves_clock_narration_and_roundtrips_undo:17'}).status_code == 200
     assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={'request_id': 'test_split_clip_preserves_clock_narration_and_roundtrips_undo:18'}).status_code == 200
     assert state.client.get(base).json()["montage"]["clips"] == clips
 
 
@@ -3805,7 +3809,7 @@ def test_split_person_render_keeps_source_offset_in_render_helper(person_render_
         observed.extend((c.source_start_seconds,c.source_end_seconds) for c in plan.clips)
         return plan
     monkeypatch.setattr(main_module,"montage_renderer",SimpleNamespace(render=render))
-    main_module._render_montage_with_resolved_clip_sources(state.workspace_id,montage,tmp_path/"voice.wav")
+    main_module._picture_preview_renderer().render_montage(state.workspace_id,montage,tmp_path/"voice.wav")
     assert observed == [(0,1.25),(1.25,4)]
 
 
@@ -3866,7 +3870,7 @@ def test_person_clip_crop_and_replacement_keep_editable_timeline(permitted_media
     confirmed = state.client.post(base + f"/edits/{replacement.json()['proposal']['id']}/confirm")
     assert confirmed.status_code == 200, confirmed.text
     assert state.client.get(base).json()["montage"]["clips"][0]["person_render_id"] is None
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_person_clip_crop_and_replacement_keep_editable_timeline:19'}).status_code == 200
     assert state.client.get(base).json()["montage"]["clips"][0]["person_render_id"] == face.person_render_id
 
 
@@ -3892,7 +3896,7 @@ def test_natural_language_presenter_share_previews_confirms_and_undoes(person_re
     assert after["cues"] == before["cues"]
     assert after["audio_timeline"] == before["audio_timeline"]
     assert state.provider.output_cache_keys == prior_renders
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_natural_language_presenter_share_previews_confirms_and_undoes:20'}).status_code == 200
     assert state.client.get(base).json()["montage"]["clips"] == before["clips"]
 
 
@@ -3935,19 +3939,19 @@ def test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_ro
     assert after[0]["artifact_ref"] is None and after[0]["transform_id"] is None
     assert after[0]["failure_reason"] and after[0]["impact"] and after[0]["repair_action"]
     assert state.production.narration_records.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 6
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_roundtrips_history:21'}).status_code == 200
     restored = state.client.get(base).json()["subtitle_tracks"]
     assert restored[0]["cues"][0]["end_seconds"] == 4
     assert restored[0]["cues"][0]["text"] == before[0]["cues"][0]["text"]
     assert restored[0]["status"] == "valid"
     assert restored[0]["artifact_ref"] == "artifacts/original.srt"
     assert restored[0]["transform_id"] == "original-transform"
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={'request_id': 'test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_roundtrips_history:22'}).status_code == 200
     redone = state.client.get(base).json()["subtitle_tracks"]
     assert redone[0]["cues"] == after[0]["cues"]
     assert redone[0]["status"] == "unavailable"
     assert redone[0]["artifact_ref"] is None and redone[0]["transform_id"] is None
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_diagnostic_narration_retime_snapshot_marks_subtitles_unavailable_and_roundtrips_history:23'}).status_code == 200
     assert state.production.narration_records.get_narration_segment(state.workspace_id, state.task.id, segment_id).duration_seconds == 4
 
 @pytest.mark.parametrize("action,expected", [("DeleteClip", 4), ("DuplicateClip", 12)])
@@ -3964,9 +3968,9 @@ def test_linked_clip_edits_preview_audio_and_undo(person_render_edit_state, acti
     assert edited["montage"]["duration_seconds"] == expected
     clips = edited["montage"]["audio_timeline"]["tracks"][0]["clips"]
     assert sum(c["source_end_ms"] - c["source_start_ms"] for c in clips) == expected * 1000
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_linked_clip_edits_preview_audio_and_undo:24'}).status_code == 200
     assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={'request_id': 'test_linked_clip_edits_preview_audio_and_undo:25'}).status_code == 200
     assert state.client.get(base).json()["montage"]["audio_timeline"] == edited["montage"]["audio_timeline"]
 
 
@@ -3983,7 +3987,7 @@ def test_linked_delete_removes_last_caption_without_reviving_projection(person_r
     result = state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm")
     assert result.status_code == 200, result.text
     assert state.client.get(base).json()["subtitle_tracks"] == []
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_linked_delete_removes_last_caption_without_reviving_projection:26'}).status_code == 200
     assert state.client.get(base).json()["subtitle_tracks"][0]["cues"][0]["text"] == "被删除的字幕"
 
 
@@ -4028,9 +4032,9 @@ def test_insert_clip_inherits_source_span_and_shifts_every_linked_lane(person_re
     clips = edited["audio_timeline"]["tracks"][0]["clips"]
     assert [(c["timeline_start_ms"], c["source_end_ms"] - c["source_start_ms"]) for c in clips] == [
         (0, 4000), (10000, 4000)]
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_insert_clip_inherits_source_span_and_shifts_every_linked_lane:27'}).status_code == 200
     assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={'request_id': 'test_insert_clip_inherits_source_span_and_shifts_every_linked_lane:28'}).status_code == 200
     assert state.client.get(base).json()["montage"]["audio_timeline"] == edited["audio_timeline"]
 
 
@@ -4126,7 +4130,7 @@ def test_linked_speed_preview_confirm_uses_same_derived_audio_and_rejects_stale(
     assert after["montage"]["audio_timeline"]["tracks"][0]["clips"][-1]["source_ref"] == state.montage.narration_audio_path
     assert after["montage"]["audio_timeline"]["tracks"][0]["clips"][-1]["playback_rate"] == 2
     assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 409
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_linked_speed_preview_confirm_uses_same_derived_audio_and_rejects_stale:29'}).status_code == 200
     assert state.client.get(base).json()["montage"]["clips"] == before["montage"]["clips"]
 
 
@@ -4159,7 +4163,7 @@ def test_full_subtitle_replace_respects_language_preserves_voice_and_undo(person
     assert after["montage"]["clips"] == before["montage"]["clips"]
     assert after["narration"]["audio_reference"] == before["narration"]["audio_reference"]
     assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 409
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_full_subtitle_replace_respects_language_preserves_voice_and_undo:30'}).status_code == 200
     current = state.client.get(base).json()
     assert [t["cues"] for t in current["subtitle_tracks"]] == [t["cues"] for t in before["subtitle_tracks"]]
     zh = next(t for t in current["subtitle_tracks"] if t["language"] == "zh-CN")
@@ -4168,7 +4172,7 @@ def test_full_subtitle_replace_respects_language_preserves_voice_and_undo(person
     assert any("译文将失效" in x for x in preview.json()["proposal"]["external_effects"])
     assert state.client.post(base + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 200
     assert [t["language"] for t in state.client.get(base).json()["subtitle_tracks"]] == ["zh-CN"]
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_full_subtitle_replace_respects_language_preserves_voice_and_undo:31'}).status_code == 200
     assert len(state.client.get(base).json()["subtitle_tracks"]) == 2
 
 
@@ -4202,19 +4206,19 @@ def test_subtitle_structure_preview_export_facts_and_restore_empty_track(person_
     assert merged["subtitle_tracks"][0]["cues"][0]["text"] == track.cues[0].text
     deleted = preview_confirm("删除当前字幕", merged)
     assert deleted["subtitle_tracks"] == []
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_subtitle_structure_preview_export_facts_and_restore_empty_track:32'}).status_code == 200
     assert state.client.get(base).json()["subtitle_tracks"][0]["cues"] == merged["subtitle_tracks"][0]["cues"]
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={'request_id': 'test_subtitle_structure_preview_export_facts_and_restore_empty_track:33'}).status_code == 200
     assert state.client.get(base).json()["subtitle_tracks"] == []
 
     # Repeated undo/redo follows restored snapshots, including after a render.
-    for expected in (1, 2, 1):
-        response = state.client.post(base + "/timeline/undo", json={})
+    for undo_index, expected in enumerate((1, 2, 1)):
+        response = state.client.post(base + "/timeline/undo", json={'request_id': f'test_subtitle_structure_preview_export_facts_and_restore_empty_track:10:{undo_index}'})
         assert response.status_code == 200, response.text
         assert len(state.client.get(base).json()["subtitle_tracks"][0]["cues"]) == expected
     assert state.client.get(base).json()["task"]["can_undo"] is False
-    for expected in (2, 1, 0):
-        response = state.client.post(base + "/timeline/redo", json={})
+    for redo_index, expected in enumerate((2, 1, 0)):
+        response = state.client.post(base + "/timeline/redo", json={'request_id': f'test_subtitle_structure_preview_export_facts_and_restore_empty_track:11:{redo_index}'})
         assert response.status_code == 200, response.text
         tracks = state.client.get(base).json()["subtitle_tracks"]
         assert (len(tracks[0]["cues"]) if tracks else 0) == expected
@@ -4247,7 +4251,7 @@ def test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibili
     assert after['subtitle_tracks'][0]['cues']==before['subtitle_tracks'][0]['cues']
     assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
     assert after['montage']['clips']==before['montage']['clips']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_subtitle_style_preview_and_confirm_preserve_voice_and_language_visibility:34'}).status_code==200
     assert state.client.get(base).json()['subtitle_tracks'][0]['style']==track.style
 
 
@@ -4287,9 +4291,9 @@ def test_canvas_preview_confirmation_and_undo_keep_time_and_voice(person_render_
     assert all(clip['fit_mode']=='fit' for clip in after['montage']['clips'])
     assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
     assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_canvas_preview_confirmation_and_undo_keep_time_and_voice:35'}).status_code==200
     assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
-    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/redo',json={'request_id': 'test_canvas_preview_confirmation_and_undo_keep_time_and_voice:36'}).status_code==200
     assert state.client.get(base).json()['montage']['aspect_ratio']==ratio
     assert runtime.stop(1)
 
@@ -4329,8 +4333,8 @@ def test_canvas_edit_preserves_nonvalid_subtitle_state_through_persisted_history
                 (status, unavailable.failure_reason, unavailable.impact, unavailable.repair_action),
                 ("valid", None, None, None),
             ]
-    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *args, **kwargs:
-        pytest.fail("ordinary canvas draft must not encode media"))
+    monkeypatch.setattr(PicturePreviewRenderer, 'publish_picture', staticmethod(lambda *args, **kwargs:
+        pytest.fail("ordinary canvas draft must not encode media")))
 
     changed = state.client.post(base + "/edits/exact", json={"operation_type": "ChangeCanvas", "aspect_ratio": "1:1"})
     assert changed.status_code == 200, changed.text
@@ -4343,7 +4347,7 @@ def test_canvas_edit_preserves_nonvalid_subtitle_state_through_persisted_history
                 ("valid", None, None, None),
             ]
 
-    undone = state.client.post(base + "/timeline/undo", json={})
+    undone = state.client.post(base + "/timeline/undo", json={'request_id': 'test_canvas_edit_preserves_nonvalid_subtitle_state_through_persisted_history:7'})
     assert undone.status_code == 200, undone.text
     restored = state.client.get(base).json()
     assert restored["montage"]["aspect_ratio"] == before["montage"]["aspect_ratio"]
@@ -4352,7 +4356,7 @@ def test_canvas_edit_preserves_nonvalid_subtitle_state_through_persisted_history
                 (status, unavailable.failure_reason, unavailable.impact, unavailable.repair_action),
                 ("valid", None, None, None),
             ]
-    redone = state.client.post(base + "/timeline/redo", json={})
+    redone = state.client.post(base + "/timeline/redo", json={'request_id': 'test_canvas_edit_preserves_nonvalid_subtitle_state_through_persisted_history:8'})
     assert redone.status_code == 200, redone.text
     redone_workspace = state.client.get(base).json()
     assert redone_workspace["montage"]["aspect_ratio"] == "1:1"
@@ -4388,7 +4392,7 @@ def test_geometry_edit_uses_existing_version_and_preserves_audio(person_render_e
     assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
     assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
     assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_geometry_edit_uses_existing_version_and_preserves_audio:37'}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
     assert runtime.stop(1)
 
@@ -4435,9 +4439,9 @@ def test_fade_preview_validates_all_targets_and_roundtrips(person_render_edit_st
     assert after['montage']['clips'][0]['visual_effects']['fade_out_seconds']==.4
     assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
     assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_fade_preview_validates_all_targets_and_roundtrips:38'}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
-    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/redo',json={'request_id': 'test_fade_preview_validates_all_targets_and_roundtrips:39'}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==after['montage']['clips']
     assert runtime.stop(1)
 
@@ -4484,9 +4488,9 @@ def test_dissolve_exact_and_natural_share_version_preview_confirm_undo(person_re
     assert after['montage']['clips'][1]['transition_in_seconds']==.4
     assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
     assert after['montage']['duration_seconds']==before['montage']['duration_seconds']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_dissolve_exact_and_natural_share_version_preview_confirm_undo:40'}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
-    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/redo',json={'request_id': 'test_dissolve_exact_and_natural_share_version_preview_confirm_undo:41'}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==after['montage']['clips']
     result=state.client.post(base+'/edits/exact/preview',json={'operation_type':'SetClipTransition','clip_id':target['id'],'transition_seconds':0})
     assert result.status_code==200,result.text
@@ -4503,7 +4507,7 @@ def test_titles_share_preview_version_and_undo_without_changing_caption_or_voice
     base=f'/api/creation-tasks/{state.task.id}'
     main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
     before=state.client.get(base).json()
-    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='title',logical_ref='artifacts/title.mp4'))
+    monkeypatch.setattr(PicturePreviewRenderer,'publish_picture',staticmethod(lambda *args,**kwargs:SimpleNamespace(id='title',logical_ref='artifacts/title.mp4')))
     preview=state.client.post(base+'/edits/preview',json={'raw_command':'前3秒加标题“本地 / Local”','context_stage':'montage','selected_object_refs':[]})
     assert preview.status_code==200,preview.text
     assert state.client.get(base).json()['montage']['graphic_overlays']==[]
@@ -4513,9 +4517,9 @@ def test_titles_share_preview_version_and_undo_without_changing_caption_or_voice
     assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
     assert after['montage']['clips']==before['montage']['clips']
     assert [t['cues'] for t in after['subtitle_tracks']]==[t['cues'] for t in before['subtitle_tracks']]
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_titles_share_preview_version_and_undo_without_changing_caption_or_voice:42'}).status_code==200
     assert state.client.get(base).json()['montage']['graphic_overlays']==[]
-    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/redo',json={'request_id': 'test_titles_share_preview_version_and_undo_without_changing_caption_or_voice:43'}).status_code==200
     assert state.client.get(base).json()['montage']['graphic_overlays']==after['montage']['graphic_overlays']
     preview=state.client.post(base+'/edits/preview',json={'raw_command':'标题1删除','context_stage':'montage','selected_object_refs':[]})
     assert preview.status_code==200,preview.text
@@ -4535,7 +4539,7 @@ def test_pure_arrow_nl_command_reaches_overlay_compiler(person_render_edit_state
         creation_task_montage_plan_to_payload(state.montage),
     )
     main_module._ensure_montage_base_version(state.workspace_id,state.task,state.montage)
-    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='arrow',logical_ref='artifacts/arrow.mp4'))
+    monkeypatch.setattr(PicturePreviewRenderer,'publish_picture',staticmethod(lambda *args,**kwargs:SimpleNamespace(id='arrow',logical_ref='artifacts/arrow.mp4')))
     preview=state.client.post(base+'/edits/preview',json={'raw_command':'箭头1删除','context_stage':'montage','selected_object_refs':[]})
     assert preview.status_code==200,preview.text
     assert preview.json()['proposal']['target_refs']==[f"overlay:{arrow['id']}"]
@@ -4560,7 +4564,7 @@ def test_graphic_import_ownership_and_image_layer_roundtrip(person_render_edit_s
     read=state.client.get(base+'/graphics/source/'+source['artifact_id'])
     assert read.status_code==200
     assert Image.open(io.BytesIO(read.content)).getpixel((0,0))==(255,0,0,128)
-    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='image',logical_ref='artifacts/image.mp4'))
+    monkeypatch.setattr(PicturePreviewRenderer,'publish_picture',staticmethod(lambda *args,**kwargs:SimpleNamespace(id='image',logical_ref='artifacts/image.mp4')))
     preview=state.client.post(base+'/edits/preview',json={'raw_command':'前3秒加图片“logo.png”','context_stage':'montage','selected_object_refs':[]})
     assert preview.status_code==200,preview.text
     assert state.client.post(base+'/edits/'+preview.json()['proposal']['id']+'/confirm').status_code==200
@@ -4569,7 +4573,7 @@ def test_graphic_import_ownership_and_image_layer_roundtrip(person_render_edit_s
     contextual=state.client.post(base+'/edits/preview',json={'raw_command':'当前图片不透明度改为50%','context_stage':'montage','selected_object_refs':[f"overlay:{result['id']}"]})
     assert contextual.status_code==200,contextual.text
     assert contextual.json()['proposal']['target_refs']==[f"overlay:{result['id']}"]
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_graphic_import_ownership_and_image_layer_roundtrip:44'}).status_code==200
     assert state.client.get(base).json()['montage']['graphic_overlays']==[]
     invalid=state.client.post(base+'/edits/exact/preview',json={'operation_type':'EditGraphicOverlay','overlay_action':'add',
         'graphic_overlay':{**result,'source_ref':'/etc/passwd'}})
@@ -4633,7 +4637,7 @@ def test_compound_visual_edit_is_one_version_and_rejects_unknown_before_render(p
     assert effect['zoom']==.8 and effect['offset_x']==.05 and effect['exposure']==.5
     assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
     assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_compound_visual_edit_is_one_version_and_rejects_unknown_before_render:45'}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
     assert runtime.stop(1)
 
@@ -4651,7 +4655,7 @@ def test_cross_object_proposal_is_atomic_and_stale_safe(person_render_edit_state
     def publish(*args,**kwargs):
         calls.append(True)
         return SimpleNamespace(id='compound',logical_ref='artifacts/compound.mp4')
-    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    monkeypatch.setattr(PicturePreviewRenderer,'publish_picture',staticmethod(publish))
     def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
     bad=preview('当前镜头亮一点，同时配音小一点，然后增加闪电特效')
     assert bad.status_code==422,bad.text
@@ -4669,11 +4673,11 @@ def test_cross_object_proposal_is_atomic_and_stale_safe(person_render_edit_state
     assert after['montage']['audio_timeline']['tracks'][0]['gain_db']==-3
     assert after['montage']['clips'][1:]==before['montage']['clips'][1:]
     assert state.client.post(base+'/edits/'+stale['id']+'/confirm').status_code==409
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_cross_object_proposal_is_atomic_and_stale_safe:46'}).status_code==200
     restored=state.client.get(base).json()
     assert restored['montage']['clips']==before['montage']['clips']
     assert restored['montage']['audio_timeline']==before['montage']['audio_timeline']
-    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/redo',json={'request_id': 'test_cross_object_proposal_is_atomic_and_stale_safe:47'}).status_code==200
     assert state.client.get(base).json()['montage']['audio_timeline']==after['montage']['audio_timeline']
 
 
@@ -4708,7 +4712,7 @@ def test_compound_partial_selection_recompiles_from_base_and_preserves_context(p
     source_service = main_module._task_audio()
     monkeypatch.setattr(source_service, 'validate', lambda *args, **kwargs: None)
     monkeypatch.setattr(main_module, '_task_audio', lambda: source_service)
-    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='partial',logical_ref='artifacts/partial.mp4'))
+    monkeypatch.setattr(PicturePreviewRenderer,'publish_picture',staticmethod(lambda *args,**kwargs:SimpleNamespace(id='partial',logical_ref='artifacts/partial.mp4')))
     result=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头亮一点，同时配音片段1音量降低3分贝，然后淡出0.4秒','context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
     assert result.status_code==200,result.text
     first=result.json()['proposal']
@@ -4730,7 +4734,7 @@ def test_compound_partial_selection_recompiles_from_base_and_preserves_context(p
     after=state.client.get(base).json()
     assert after['montage']['audio_timeline']['tracks'][0]['clips'][0]['gain_db']==0
     assert state.client.post(route,json={'included_step_indices':[0]}).status_code==409
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_compound_partial_selection_recompiles_from_base_and_preserves_context:48'}).status_code==200
     assert state.client.get(base).json()['montage']['audio_timeline']==before['montage']['audio_timeline']
 
 
@@ -4765,7 +4769,7 @@ def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_
     def publish(workspace,task,version,plan,tracks,**kwargs):
         captured.append([track.style for track in tracks])
         return SimpleNamespace(id='subtitle-compound',logical_ref='artifacts/compound.mp4')
-    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    monkeypatch.setattr(PicturePreviewRenderer,'publish_picture',staticmethod(publish))
     result=state.client.post(base+'/edits/preview',json={'raw_command':'当前镜头亮一点，同时字幕字号改为64，配音小一点','context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
     assert result.status_code==200,result.text
     proposal=result.json()['proposal']
@@ -4782,10 +4786,10 @@ def test_subtitle_style_joins_compound_preview_selection_and_undo(person_render_
     assert [track['cues'] for track in after['subtitle_tracks']]==[track['cues'] for track in before['subtitle_tracks']]
     assert after['montage']['clips']==before['montage']['clips']
     assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_subtitle_style_joins_compound_preview_selection_and_undo:49'}).status_code==200
     restored=state.client.get(base).json()
     assert [track['style'] for track in restored['subtitle_tracks']]==[track['style'] for track in before['subtitle_tracks']]
-    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/redo',json={'request_id': 'test_subtitle_style_joins_compound_preview_selection_and_undo:50'}).status_code==200
     assert state.client.get(base).json()['subtitle_tracks'][0]['style']['font_size']==64
 
 
@@ -4804,7 +4808,7 @@ def test_compound_caption_text_time_and_translation_boundary(person_render_edit_
     source_service = main_module._task_audio()
     monkeypatch.setattr(source_service, 'validate', lambda *args, **kwargs: None)
     monkeypatch.setattr(main_module, '_task_audio', lambda: source_service)
-    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='text-preview',logical_ref='artifacts/text-preview.mp4'))
+    monkeypatch.setattr(PicturePreviewRenderer,'publish_picture',staticmethod(lambda *args,**kwargs:SimpleNamespace(id='text-preview',logical_ref='artifacts/text-preview.mp4')))
     def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
     assert preview('当前镜头亮一点，同时字幕1改成“歧义字幕”').status_code==422
     assert preview('当前镜头亮一点，同时英文字幕1显示0到99秒').status_code==422
@@ -4817,7 +4821,7 @@ def test_compound_caption_text_time_and_translation_boundary(person_render_edit_
     assert track['cues'][0]['start_seconds']==.2 and track['cues'][0]['end_seconds']==3.5
     assert track['artifact_ref']!='artifacts/source.srt'
     assert after['montage']['audio_timeline']==before['montage']['audio_timeline']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_compound_caption_text_time_and_translation_boundary:51'}).status_code==200
     assert [t['cues'] for t in state.client.get(base).json()['subtitle_tracks']]==[t['cues'] for t in before['subtitle_tracks']]
     response=preview('当前镜头亮一点，同时中文字幕1改成“真实修改”')
     assert response.status_code==200,response.text
@@ -5052,7 +5056,7 @@ def test_person_replacement_maps_narration_instead_of_broll_source(permitted_per
     assert (clip['timeline_start_seconds'],clip['timeline_end_seconds'])==(start,4)
     stored=state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id)
     assert creation_task_montage_plan_from_payload(stored).narration_audio_path==state.montage.narration_audio_path
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_person_replacement_maps_narration_instead_of_broll_source:52'}).status_code==200
     restored=state.client.get(base).json()
     clip=next(c for c in restored['montage']['clips'] if c['id']==target.id)
     assert (clip['source_start_seconds'],clip['source_end_seconds'])==(4+start,8)
@@ -5149,7 +5153,7 @@ def test_extract_original_audio_real_media_preview_confirm_undo(permitted_media_
     assert updated.narration_audio_path==state.montage.narration_audio_path
     duplicate=state.client.post(base+'/edits/preview',json=command)
     assert duplicate.status_code==409 and '已有原声' in duplicate.text
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_extract_original_audio_real_media_preview_confirm_undo:53'}).status_code==200
     restored=creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id))
     assert not any(t.clips for t in main_module._creation_task_response_adapter().effective_audio_timeline(restored).tracks if t.role=='original')
 
@@ -5257,13 +5261,13 @@ def test_silence_edit_real_preview_confirm_and_undo(permitted_media_state, grant
         return subprocess.run(['ffmpeg','-v','error','-i',str(path),'-vf','scale=12:20:flags=area',
             '-pix_fmt','rgb24','-f','rawvideo','-'],capture_output=True,check=True).stdout
     assert pixels(preview_after)==pixels(output)
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_silence_edit_real_preview_confirm_and_undo:54'}).status_code==200
     restored=state.client.get(base).json()
     assert restored['montage']['duration_seconds']==8
     assert restored['montage']['clips']==before['montage']['clips']
-    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/redo',json={'request_id': 'test_silence_edit_real_preview_confirm_and_undo:55'}).status_code==200
     assert state.client.get(base).json()['montage']['duration_seconds']==expected
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_silence_edit_real_preview_confirm_and_undo:56'}).status_code==200
 
 
 
@@ -5290,7 +5294,7 @@ def test_relative_subtitle_shift_previews_confirms_and_undoes(person_render_edit
     assert cue['text']=='移动字幕'
     assert {k:v for k,v in after['narration'].items() if k != 'task'} == {k:v for k,v in before['narration'].items() if k != 'task'}
     assert after['montage']['clips']==before['montage']['clips']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_relative_subtitle_shift_previews_confirms_and_undoes:57'}).status_code==200
     restored=state.client.get(base).json()
     assert restored['subtitle_tracks'][0]['cues']==before['subtitle_tracks'][0]['cues']
     current_track=restored['subtitle_tracks'][0]
@@ -5323,7 +5327,7 @@ def test_relative_subtitle_shift_in_compound_selection_and_undo(person_render_ed
     source_service = main_module._task_audio()
     monkeypatch.setattr(source_service, 'validate', lambda *args, **kwargs: None)
     monkeypatch.setattr(main_module, '_task_audio', lambda: source_service)
-    monkeypatch.setattr(main_module,'_publish_task_picture_preview',lambda *args,**kwargs:SimpleNamespace(id='shift-preview',logical_ref='artifacts/shift-preview.mp4'))
+    monkeypatch.setattr(PicturePreviewRenderer,'publish_picture',staticmethod(lambda *args,**kwargs:SimpleNamespace(id='shift-preview',logical_ref='artifacts/shift-preview.mp4')))
     def preview(command):return state.client.post(base+'/edits/preview',json={'raw_command':command,'context_stage':'montage','selected_object_refs':[f"clip:{clip['id']}"]})
     for invalid in ['当前镜头亮一点，同时字幕1提前0.2秒','当前镜头亮一点，同时英文字幕1提前2秒']:
         response=preview(invalid)
@@ -5343,7 +5347,7 @@ def test_relative_subtitle_shift_in_compound_selection_and_undo(person_render_ed
     assert chinese['cues']==next(t['cues'] for t in before['subtitle_tracks'] if t['language']=='zh-CN')
     assert after['montage']['clips'][0]['visual_effects']!=before['montage']['clips'][0]['visual_effects']
     assert after['narration']['audio_reference']==before['narration']['audio_reference']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_relative_subtitle_shift_in_compound_selection_and_undo:58'}).status_code==200
     restored=state.client.get(base).json()
     assert [t['cues'] for t in restored['subtitle_tracks']]==[t['cues'] for t in before['subtitle_tracks']]
     assert restored['montage']['clips']==before['montage']['clips']
@@ -5372,7 +5376,7 @@ def test_indexed_subtitle_without_selection_previews_confirms_and_undoes(person_
     def publish(*args,**kwargs):
         previews.append(args[4])
         return SimpleNamespace(id='indexed-preview',logical_ref='artifacts/indexed-preview.mp4')
-    monkeypatch.setattr(main_module,'_publish_task_picture_preview',publish)
+    monkeypatch.setattr(PicturePreviewRenderer,'publish_picture',staticmethod(publish))
     def preview(raw):return state.client.post(base+'/edits/preview',json={'raw_command':raw,'context_stage':stage,'selected_object_refs':[]})
     for invalid in ['字幕2延后300毫秒','英文字幕99延后300毫秒','英文字幕2提前9秒','英文字幕2提前2秒','英文字幕2延后300毫秒，字幕不变']:
         rejected=preview(invalid)
@@ -5391,7 +5395,7 @@ def test_indexed_subtitle_without_selection_previews_confirms_and_undoes(person_
     assert (cue['start_seconds'],cue['end_seconds'],cue['text'])==expected
     assert after['montage']['clips']==before['montage']['clips']
     assert after['narration']['audio_reference']==before['narration']['audio_reference']
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_indexed_subtitle_without_selection_previews_confirms_and_undoes:59'}).status_code==200
     restored=state.client.get(base).json()
     for language in ['zh-CN','en-US']:
         assert next(t['cues'] for t in restored['subtitle_tracks'] if t['language']==language)==next(t['cues'] for t in before['subtitle_tracks'] if t['language']==language)
@@ -5499,9 +5503,9 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     assert cropped['montage']['clips'][2:]==before['montage']['clips'][2:]
     assert cropped['montage']['audio_timeline']==before['montage']['audio_timeline']
 
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and_expiry:60'}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==before['montage']['clips']
-    assert state.client.post(base+'/timeline/redo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/redo',json={'request_id': 'test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and_expiry:61'}).status_code==200
     assert state.client.get(base).json()['montage']['clips']==cropped['montage']['clips']
 
     # 只说模式：沿用当前两轴，不把已裁好的位置重置
@@ -5534,7 +5538,7 @@ def test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and
     assert canvas.json()['proposal']['operation']['payload']['aspect_ratio']=='9:16'
     # 画幅预览同样不写库
     assert state.client.get(base).json()['montage']['aspect_ratio']=='16:9'
-    assert state.client.post(base+'/timeline/undo',json={}).status_code==200
+    assert state.client.post(base+'/timeline/undo',json={'request_id': 'test_crop_dialogue_reuses_the_exact_chain_with_preview_confirm_undo_lock_and_expiry:62'}).status_code==200
     assert state.client.get(base).json()['montage']['aspect_ratio']=='9:16'
 
     assert len(publishes)==8
@@ -5689,7 +5693,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     assert not main_module._creation_render_is_valid(
         state.workspace_id, state.task.id, verify_media=False, timeline_version=unsealed,
     )
-    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *a, **kw: pytest.fail("ordinary draft must not encode media"))
+    monkeypatch.setattr(PicturePreviewRenderer, 'publish_picture', staticmethod(lambda *a, **kw: pytest.fail("ordinary draft must not encode media")))
     jobs_before = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
     changed = state.client.post(base + "/edits/exact", json={"operation_type":"ChangeCanvas", "aspect_ratio":"1:1"})
     assert changed.status_code == 200, changed.text
@@ -5704,14 +5708,14 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
     assert not main_module._creation_render_is_valid(
         state.workspace_id, state.task.id, verify_media=False, timeline_version=changed_dependency,
     )
-    undo = state.client.post(base + "/timeline/undo", json={})
+    undo = state.client.post(base + "/timeline/undo", json={'request_id': 'test_v3_exact_draft_persists_and_restores_only_registered_output:9'})
     assert undo.status_code == 200, undo.text
     assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).output_ready
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={'request_id': 'test_v3_exact_draft_persists_and_restores_only_registered_output:63'}).status_code == 200
     assert not state.production.task_records.get_creation_task(state.workspace_id, state.task.id).output_ready
     # Same length tampering must not restore a false ready output.
     main_module.artifact_store.resolve_file(published.logical_ref).write_bytes(b"x" * published.size_bytes)
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_v3_exact_draft_persists_and_restores_only_registered_output:64'}).status_code == 200
     assert not state.production.task_records.get_creation_task(state.workspace_id, state.task.id).output_ready
     assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)["output_path"] is None
 
@@ -5719,7 +5723,7 @@ def test_v3_exact_draft_persists_and_restores_only_registered_output(person_rend
 def test_v3_natural_proposal_applies_once_without_media(person_render_edit_state, monkeypatch):
     state = person_render_edit_state
     base = f"/api/creation-tasks/{state.task.id}"
-    monkeypatch.setattr(main_module, "_publish_task_picture_preview", lambda *a, **kw: pytest.fail("draft proposal must not encode media"))
+    monkeypatch.setattr(PicturePreviewRenderer, 'publish_picture', staticmethod(lambda *a, **kw: pytest.fail("draft proposal must not encode media")))
     before = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     proposal = state.client.post(base + "/edits/preview?draft=true", json={
         "raw_command":"露脸占比调到0%", "context_stage":"montage", "selected_object_refs":[]})

@@ -299,6 +299,7 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
             visual_prompt="", evidence_reference_ids=[])], selection_status="confirmed",
         created_at=now, updated_at=now, confirmed_at=now)
     with repository._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
             ("script", WORKSPACE, task.id, "run", script_seed_payload(repository, conn, payload), now))
         task.confirmed_script_id = "script"

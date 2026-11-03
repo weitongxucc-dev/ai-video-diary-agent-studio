@@ -25,7 +25,7 @@ def isolated_host(tmp_path,monkeypatch):
                     monkeypatch.setattr(main,name,getattr(main,name))
     monkeypatch.setattr(main.app.router, "routes", list(main.app.router.routes))
     monkeypatch.setattr(main.app, "openapi_schema", main.app.openapi_schema)
-    for name in ("execution_worker", "material_ingestion", "device_runtime", "automation_runtime", "assistant_continuation_driver"):
+    for name in ("material_ingestion", "device_runtime", "automation_runtime", "assistant_continuation_driver"):
         monkeypatch.setattr(main, name, None)
     monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
     monkeypatch.setenv("TMPDIR", os.environ["TMPDIR"])
@@ -70,7 +70,6 @@ def isolated_host(tmp_path,monkeypatch):
             assert not installer._active_thread.is_alive()
         main._stop_device_runtime()
         main._stop_material_ingestion()
-        main._stop_execution_worker()
         if main.automation_runtime is not None:
             main.automation_runtime.stop()
         if main.assistant_continuation_driver is not None:

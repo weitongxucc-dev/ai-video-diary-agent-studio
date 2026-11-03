@@ -186,6 +186,7 @@ def fixture(tmp_path):
     task.confirmed_script_id = "script"
     task.stage = "montage"
     with repo._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute(
             "INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
             ("script", "local", task.id, "run", script_seed_payload(repo, conn, script), now),

@@ -3001,3 +3001,40 @@ def test_owned_candidate_without_sources_still_gets_independent_fact_and_goal_re
     with pytest.raises(CreationTaskScriptGenerationError) as err:
         checker.generate(args)
     assert err.value.code=='input_invalid' and len(calls)==1
+
+
+def generate_current_http_draft(state, monkeypatch, calls, *, task_id="task"):
+    """Use the real request/runner/business/window owners with a controlled Agent port."""
+    from app.assistant import script_generation_runner
+    from app.conversation_repository import ConversationRepository
+    from threading import Event
+    import time
+    from uuid import uuid4
+    monkeypatch.setattr(main, "conversation_repo", ConversationRepository(state.repository.database_path))
+    def agent(_settings, **values):
+        binding = values["source_binding"]
+        options = dict(call_id="fixture-generation", tool_call_id="fixture-window",
+            source_binding=binding, cancel_event=Event(), deadline_monotonic=time.monotonic() + 10)
+        context = values["business_handler"]("read_assistant_script_context", {}, **options)
+        assert context["ok"], context
+        calls.append({"generation_input": json.loads(values["message"])["input"], "context": context["value"]})
+        window = values["business_handler"]("start_script_window",
+            {"payload": {**agent_payload(state), "request_id": str(uuid4())}}, **options)
+        assert window["ok"], window
+        return "", {}
+    monkeypatch.setattr(script_generation_runner, "run_task_turn", agent)
+    request_id = str(uuid4())
+    url = f"/api/creation-tasks/{task_id}/scripts/generate"
+    accepted = state.client.post(url, json={"request_id": request_id})
+    assert accepted.status_code == 202, accepted.text
+    original = accepted.json()
+    result = state.client.get(f"/api/creation-tasks/{task_id}/scripts/generation-requests/{request_id}")
+    assert result.status_code == 200, result.text
+    saved = result.json()
+    assert saved["request_id"] == request_id and saved["run_id"] == original["run_id"]
+    assert saved["turn_id"] == original["turn_id"] and saved["status"] == "draft_ready", saved
+    count = len(calls)
+    replay = state.client.post(url, json={"request_id": request_id})
+    assert replay.status_code == 202 and replay.json() == saved
+    assert len(calls) == count
+    return state.repository.script_records.get_creation_task_script("local", saved["script_id"])

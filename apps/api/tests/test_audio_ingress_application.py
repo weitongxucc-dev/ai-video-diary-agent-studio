@@ -82,6 +82,7 @@ def confirmed_script(repo, *, montage=False, cache_key=None):
     task.confirmed_script_id=script.id
     task.narration_cache_key=cache_key
     with repo._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(task),default=str),task.id))
         conn.execute('INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)',
             (script.id,'local',task.id,script.run_id,script_seed_payload(repo, conn, script),stamp.isoformat()))

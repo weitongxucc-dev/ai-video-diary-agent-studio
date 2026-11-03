@@ -12,9 +12,12 @@ import pytest
 
 from app.assistant_pi import AssistantUnavailable, _safe_tool_result_summary, run_material_turn
 from app.config import Settings
+from app.assistant.catalogue import ASSISTANT_BUSINESS_TOOLS
+
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
 
 EXTENSION = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 let input=''; for await(const chunk of process.stdin) input+=chunk;
 const data=JSON.parse(input), tools=new Map(), calls=[];
 globalThis.fetch=async(url,init)=>{
@@ -28,7 +31,7 @@ const extension=await import(process.argv[1]); extension.default({registerTool:t
 try {
  const tool=tools.get(data.tool);
  const result=await tool.execute('fixture-call',data.params??{});
- console.log(JSON.stringify({ok:true,result,parameters:tool.parameters,calls,names:[...tools.keys()]}));
+ console.log(JSON.stringify({...toolOutcome(result),parameters:tool.parameters,calls,names:[...tools.keys()]}));
 } catch(error) {console.log(JSON.stringify({ok:false,error:error.message,calls,names:[...tools.keys()]}));}
 """
 
@@ -101,7 +104,10 @@ def test_http_failure_never_becomes_empty_success_or_exposes_a_local_path(tmp_pa
     out = call(tmp_path, tool, {path: {"__status": status, "detail": f"真实请求失败({status}) /private/synthetic/data"}},
                selection={"scope": "asset", "assetId": "asset-one"} if tool == "read_selected_material" else None, params=params)
     assert not out["ok"] and str(status) in out["error"]
-    assert "/private" not in out["error"] and "result" not in out
+    assert "/private" not in json.dumps(out["result"])
+    assert out["result"]["isError"] is True
+    assert set(out["result"]["details"]) == {"failure", "invocation_input_id"}
+    assert json.loads(out["result"]["content"][0]["text"]) == {"failure": out["result"]["details"]["failure"]}
 
 @pytest.mark.parametrize("second", [page([], total=101, offset=100, more=True), page([], total=102, offset=100), page([], total=101, offset=99)])
 def test_incomplete_or_changed_pagination_is_not_reported_as_complete(tmp_path, asset, second):
@@ -199,7 +205,9 @@ def test_selected_read_rejects_mismatched_http_object_before_projecting_text(tmp
     else:
         reply["segments"][0]["asset_id"] = "another-asset"
     out = call(tmp_path, "read_selected_material", {"/api/production/materials/asset-one": reply}, selection=bound(asset, "segment-one"))
-    assert not out["ok"] and "result" not in out
+    assert not out["ok"] and out["result"]["isError"] is True
+    assert set(out["result"]["details"]) == {"failure", "invocation_input_id"}
+    assert json.loads(out["result"]["content"][0]["text"]) == {"failure": out["result"]["details"]["failure"]}
 
 @pytest.mark.parametrize("name", ["/private/synthetic.mp4", r"C:\private\synthetic.mp4"])
 def test_selected_file_name_and_embedded_diagnostics_do_not_send_local_paths(tmp_path, asset, name):
@@ -226,14 +234,16 @@ def test_read_uses_trusted_headers_on_every_page_and_ignores_model_identity(tmp_
                                       "cookie": "workspace=synthetic-trusted", "x-local-member-token": "synthetic-member"}
     assert "forged" not in json.dumps(out["result"])
 
-def test_unselected_material_turn_binds_browse_session_and_only_read_capabilities(monkeypatch, tmp_path):
+def test_unselected_material_turn_binds_browse_session_and_workspace_capabilities(monkeypatch, tmp_path):
     seen = {}
     monkeypatch.setattr("app.assistant_pi._run_turn", lambda _settings, **kwargs: (seen.update(kwargs) or ("库状态", None)))
     result = run_material_turn(Settings(model_root_path=str(tmp_path)), workspace_id="trusted-space", conversation_id="trusted-conversation", message="库里有什么",
                                local_member_token="trusted-member", cookie="trusted-cookie", authorization="trusted-auth", caller_user_id="trusted-user")
     assert result == ("库状态", None)
     assert seen["material_selection"] is None and seen["session_key"] == "conversation:trusted-conversation"
-    assert set(seen["tool_names"].split(",")) == {"read_material_library_status", "search_material_library", "read_preference_memory", "update_preference_memory"}
+    assert set(seen["tool_names"].split(",")) == set(ASSISTANT_BUSINESS_TOOLS["home"])
+    assert seen["task_id"] == "" and seen["stage"] == "" and seen["preview_kind"] == "plan_preview"
+    assert not {"read_selected_material", "update_selected_material_tags", "start_creation_task_execution"}.intersection(seen["tool_names"].split(","))
     assert seen["local_member_token"] == "trusted-member" and seen["caller_user_id"] == "trusted-user"
     assert seen["authorization"] == "trusted-auth" and seen["cookie"] == "trusted-cookie"
 

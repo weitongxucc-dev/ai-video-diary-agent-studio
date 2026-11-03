@@ -105,11 +105,20 @@ function harness(initial: CreationTaskScriptSection[] = []) {
 function fill(count: number, offset = 0, append = false) {
     const addSection = count > 1 ? screen.getByRole("button", { name: "再加一段" }) : null;
     for (let index = 1; index < count; index++) fireEvent.click(addSection!);
-    for (let index = 1; index <= count; index++) {
-        const ordinal = append ? `新增 ${index}` : String(index);
-        fireEvent.change(screen.getByLabelText(`第 ${ordinal} 段标题`), { target: { value: `标题 ${offset + index}` } });
-        fireEvent.change(screen.getByLabelText(`第 ${ordinal} 段正文`), { target: { value: `正文 ${offset + index}` } });
-        fireEvent.change(screen.getByLabelText(`第 ${ordinal} 段画面建议`), { target: { value: `画面 ${offset + index}` } });
+    const fields = new Map(screen.getAllByLabelText(/^第 (?:新增 )?\d+ 段(?:标题|正文|画面建议)$/)
+        .map(field => [field.getAttribute("aria-label"), field]));
+    // Batch fixture input across separate rows, flushing between field types so
+    // each real change handler sees the values entered in the previous batch.
+    for (const [fieldName, valueName] of [["标题", "标题"], ["正文", "正文"], ["画面建议", "画面"]]) {
+        act(() => {
+            for (let index = 1; index <= count; index++) {
+                const ordinal = append ? `新增 ${index}` : String(index);
+                const label = `第 ${ordinal} 段${fieldName}`;
+                const field = fields.get(label);
+                if (!field) throw new Error(`Missing section field: ${label}`);
+                fireEvent.change(field, { target: { value: `${valueName} ${offset + index}` } });
+            }
+        });
     }
 }
 function section(id = "first"): CreationTaskScriptSection {

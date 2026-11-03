@@ -208,6 +208,7 @@ def script_candidate(state, *, locked=False):
     if locked:
         script.locked_body_digest = hashlib.sha256("原正文".encode()).hexdigest()
     with state.repo._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute("INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at) VALUES (?,?,?,?,?,?)",
             (script.id, script.workspace_id, script.task_id, script.run_id,
              script_seed_payload(state.repo, conn, script), script.updated_at.isoformat()))

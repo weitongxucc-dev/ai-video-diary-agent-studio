@@ -104,6 +104,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     task = replace(state.task, confirmed_script_id=script.id)
     plan = replace(state.repo.plan_records.get_creation_plan("ws", task.plan_id), duration_target_seconds=15)
     with state.repo._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan),default=str),plan.id))
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
             (script.id,"ws",task.id,script.run_id,script_seed_payload(state.repo, conn, script),script.updated_at.isoformat()))

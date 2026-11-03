@@ -8,6 +8,8 @@ from uuid import uuid4
 import pytest
 
 import app.main as main
+from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
+from app.media.picture_preview import PicturePreviewRenderer
 from app.task_edit_confirmation import TaskEditConfirmationHttpAdapter
 from app.conversation_repository import ConversationRepository
 from app.schemas import CreationTaskExactEditRequest
@@ -1117,7 +1119,7 @@ def test_linked_speed_direct_and_natural_consumers_call_real_application(linked_
         calls.append(command)
         return preview(self, command)
     monkeypatch.setattr(LinkedTimelineEditUseCase, 'preview', observed)
-    monkeypatch.setattr(main, '_preview_exact_edit_request', lambda *args: pytest.fail('direct cannot reenter preview facade'))
+    monkeypatch.setattr(ExactPreviewUseCase, 'submit_preview', staticmethod(lambda *args: pytest.fail('direct cannot reenter preview facade')))
     monkeypatch.setattr(TaskEditConfirmationHttpAdapter, 'confirm', lambda *args: pytest.fail('direct cannot reenter confirm facade'))
     applied = state.client.post(state.url + '/edits/exact', json={'operation_type': 'ChangeLinkedSpeed', 'clip_id': 'clip', 'playback_rate': 2})
     assert applied.status_code == 200, applied.text
@@ -1190,7 +1192,7 @@ def test_linked_clip_direct_and_natural_use_single_application(linked_speed_http
     else:
         assert natural.status_code == 200, natural.text
         assert natural.json()['proposal']['operation']['operation_type'] == operation
-    monkeypatch.setattr(main, '_preview_exact_edit_request', lambda *args: pytest.fail('direct cannot reenter preview facade'))
+    monkeypatch.setattr(ExactPreviewUseCase, 'submit_preview', staticmethod(lambda *args: pytest.fail('direct cannot reenter preview facade')))
     monkeypatch.setattr(TaskEditConfirmationHttpAdapter, 'confirm', lambda *args: pytest.fail('direct cannot reenter confirm facade'))
     direct = state.client.post(state.url + '/edits/exact', json=linked_clip_action(state, operation))
     assert direct.status_code == 200, direct.text
@@ -1375,12 +1377,12 @@ def test_subtitle_direct_and_natural_consumers_use_real_family(subtitle_http_sta
         calls.append(command)
         return prepare(self, command)
     monkeypatch.setattr(SubtitleEditUseCase, 'prepare_preview', observed)
-    monkeypatch.setattr(main, '_publish_task_picture_preview', lambda *args, **kwargs: pytest.fail('draft preview must not generate media'))
+    monkeypatch.setattr(PicturePreviewRenderer, 'publish_picture', staticmethod(lambda *args, **kwargs: pytest.fail('draft preview must not generate media')))
     natural = state.client.post(state.url + '/edits/preview?draft=true', json={
         'raw_command': raw_command, 'context_stage': 'subtitle_cover', 'selected_object_refs': refs})
     assert natural.status_code == 200, natural.text
     assert natural.json()['proposal']['operation']['operation_type'] == operation
-    monkeypatch.setattr(main, '_preview_exact_edit_request', lambda *args: pytest.fail('direct cannot reenter HTTP preview'))
+    monkeypatch.setattr(ExactPreviewUseCase, 'submit_preview', staticmethod(lambda *args: pytest.fail('direct cannot reenter HTTP preview')))
     monkeypatch.setattr(TaskEditConfirmationHttpAdapter, 'confirm', lambda *args: pytest.fail('direct cannot reenter HTTP confirm'))
     direct = state.client.post(state.url + '/edits/exact', json=subtitle_action(state, operation))
     assert direct.status_code == 200, direct.text
@@ -1431,7 +1433,7 @@ def test_compound_public_selection_restore_confirm_and_fixed_read_are_one_joint_
         validations.append(kwargs.get('draft_only'))
         return validate(self, *args, **kwargs)
     monkeypatch.setattr(TaskAudio, 'validate', observed)
-    monkeypatch.setattr(main, '_publish_task_picture_preview', lambda *args, **kwargs: pytest.fail('draft must not publish video'))
+    monkeypatch.setattr(PicturePreviewRenderer, 'publish_picture', staticmethod(lambda *args, **kwargs: pytest.fail('draft must not publish video')))
     before = state.repo.get_creation_task_montage_plan('ws', state.task.id)
     full = state.client.post(state.url + '/edits/preview?draft=true', json={
         'raw_command': COMPOUND_TEXT, 'context_stage': 'montage', 'selected_object_refs': ['clip:clip'], 'playhead_ms': 750})

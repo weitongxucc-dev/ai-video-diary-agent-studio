@@ -11,7 +11,8 @@ from app.creation.intent_use_case import CreationIntentUseCase
 from app.production import ProductionRepository
 from test_creation_requests import OWNER, WORKSPACE, entries
 from test_creation_task_script_grounding import (
-    FACT, agent_payload, api_state as api_state, draft, reviewed, set_agent_reviewer, set_api_provider,
+    FACT, agent_payload, api_state as api_state, draft, reviewed, set_agent_reviewer,
+    generate_current_http_draft,
 )
 
 
@@ -232,7 +233,7 @@ def test_real_main_script_consumers_send_original_user_goal_to_model(consumer_st
         set_agent_reviewer(monkeypatch, reviewed(document), calls)
         payload = {**agent_payload(state, content=FACT), "assistant_turn_id": state.turn_id}
     else:
-        set_api_provider(monkeypatch, document, reviewed(document), calls)
+        set_agent_reviewer(monkeypatch, reviewed(document), calls)
         payload = {}
     context_response = state.client.get(f"/api/creation-tasks/{state.task.id}/assistant/script-context")
     assert context_response.status_code == 200, context_response.text
@@ -244,9 +245,18 @@ def test_real_main_script_consumers_send_original_user_goal_to_model(consumer_st
     assert context["creation_intent"] == plan.creation_intent
     assert (context["language"], context["duration_target_seconds"], context["presenter_share_target"]) == ("zh-CN", 30, 0)
     assert calls == []
-    response = state.client.post(f"/api/creation-tasks/{state.task.id}/{endpoint}", json=payload)
-    assert response.status_code == 200, response.text
-    bodies = calls if endpoint == "assistant/script-draft" else [body for _, body in calls]
+    if endpoint == "assistant/script-draft":
+        response = state.client.post(f"/api/creation-tasks/{state.task.id}/{endpoint}", json=payload)
+        assert response.status_code == 200, response.text
+    else:
+        import app.main as main
+        main.conversation_repo.finish_turn(state.turn_id, "completed", assistant_text="已完成原任务输入轮次")
+        generate_current_http_draft(state, monkeypatch, calls, task_id=state.task.id)
+        assert len(calls) == 3
+        original = calls[0]["generation_input"]
+        assert original["goal"] == context["goal"] == state.goal and "Agent自拟" not in original["goal"]
+        assert original["requirements"]["duration_target_seconds"] == 30
+    bodies = calls if endpoint == "assistant/script-draft" else calls[1:]
     assert len(bodies) == (1 if endpoint == "assistant/script-draft" else 2)
     for body in bodies:
         model_input = json.loads(body["messages"][1]["content"])
@@ -263,11 +273,19 @@ def test_main_rejects_unreadable_or_mismatched_goal_before_model_and_script_run(
     state = consumer_state(failure=failure)
     monkeypatch.setattr(main, "_creation_task_script_generator_for",
         lambda *_: pytest.fail("来源拒绝必须发生在模型调用前"))
-    payload = {**agent_payload(state), "assistant_turn_id": state.turn_id} if endpoint == "assistant/script-draft" else {}
+    payload = ({**agent_payload(state), "assistant_turn_id": state.turn_id} if endpoint == "assistant/script-draft"
+               else {"request_id": str(uuid4())} if endpoint == "scripts/generate" else {})
     path = f"/api/creation-tasks/{state.task.id}/{endpoint}"
     response = state.client.get(path) if endpoint == "assistant/script-context" else state.client.post(path, json=payload)
-    assert response.status_code == 409, response.text
-    assert response.json()["detail"]["error"] == "script_goal_source_changed"
+    if endpoint == "scripts/generate":
+        expected_status = 403 if failure == "private_request" else 422
+        assert response.status_code == expected_status, response.text
+        expected_detail = ("生成请求的原成员或任务归属已失效" if failure == "private_request"
+                           else "文案目标与原始用户输入摘要不一致，没有沿用方案中的自拟文案。")
+        assert response.json()["detail"] == expected_detail
+    else:
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["error"] == "script_goal_source_changed"
     assert state.repository.script_records.list_creation_task_scripts("local", state.task.id) == []
     with state.repository._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM script_generation_runs WHERE task_id=?", (state.task.id,)).fetchone()[0] == 0

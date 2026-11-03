@@ -11,6 +11,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from app.creation.contracts import TaskEvent
 from app.creation.intent_use_case import CreationIntentUseCase
 from app.creation.script_contracts import ScriptGenerationRun
+from app.creation.source_errors import SourcePreflightError
 from app.creation_execution import CreationExecutionActor
 
 
@@ -442,7 +443,7 @@ class ScriptGenerationIntent:
             return self.fail(workspace_id, task_id, request_id, member_id, status="failed", reason=exc.code,
                 impact="Agent 未完成本次草稿，已有结果保留。", repair_action="查看原请求与运行时状态后再处理。",
                 retryable=True, provider_attempted=exc.provider_attempted, provider_failed=exc.provider_failed)
-        except (PermissionError, ValueError, KeyError, ScriptDraftRejected):
+        except (PermissionError, ValueError, KeyError, ScriptDraftRejected, SourcePreflightError):
             # Retain a finite failure category, not raw source/model/error text.
             with closing(self.repository._connect()) as conn, conn:
                 conn.execute("BEGIN")

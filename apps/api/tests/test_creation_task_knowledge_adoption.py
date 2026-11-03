@@ -1,6 +1,5 @@
 """Fixed-source adoption uses real public source reads and one SQLite transaction."""
 import hashlib
-import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from uuid import uuid4
@@ -12,7 +11,7 @@ from app.creation.script_contracts import CreationTaskScriptSection, ScriptGener
 from app.creation.contracts import JobRun
 from app.source_types import KnowledgeItem
 from test_creation_task_script_grounding import (
-    api_state as api_state, draft, reviewed, saved_agent_draft, set_api_provider,
+    api_state as api_state, draft, reviewed, saved_agent_draft,
 )
 from test_knowledge_original_files import uploaded, word_file
 
@@ -187,10 +186,10 @@ def test_new_script_consumes_new_fixed_inputs_and_old_draft_cannot_be_adopted(st
             title=old.title, sections=old.sections, expected_updated_at=old.updated_at)
     assert rows(state, historical) == historical
     document, calls = draft(), []
-    set_api_provider(monkeypatch, document, reviewed(document), calls)
-    response = state.client.post('/api/creation-tasks/task/scripts/generate', json={})
-    assert response.status_code == 200, response.text
-    model_input = json.loads(calls[0][1]['messages'][1]['content'])
+    from test_creation_task_script_grounding import set_agent_reviewer, generate_current_http_draft
+    set_agent_reviewer(monkeypatch, reviewed(document), calls)
+    generate_current_http_draft(state, monkeypatch, calls)
+    model_input = calls[0]['context']
     assert any(source['text'] == item.body for source in model_input['sources'])
     run = state.repository.script_records.latest_script_generation_run('local', 'task')
     assert any(ref['object_id'] == item.id and ref['version_or_identity'] == item.version for ref in run.input_references)

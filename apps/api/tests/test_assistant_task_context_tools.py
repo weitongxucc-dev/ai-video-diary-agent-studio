@@ -7,8 +7,10 @@ import subprocess
 import pytest
 
 
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
+
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 import {createServer} from 'node:http';
 let raw='';for await(const part of process.stdin)raw+=part;
 const input=JSON.parse(raw),calls=[],tools=new Map();
@@ -24,7 +26,7 @@ process.env.AI_VIDEO_DIARY_AGENT_API_BASE=`http://127.0.0.1:${server.address().p
 try {
   const {default:register}=await import(process.argv[1]);register({registerTool:tool=>tools.set(tool.name,tool)});
   const result=await tools.get('read_current_task').execute();
-  console.log(JSON.stringify({ok:true,result,calls}));
+  console.log(JSON.stringify({...toolOutcome(result),calls}));
 }catch(error){console.log(JSON.stringify({ok:false,error:error.message,calls}));}
 finally{await new Promise(resolve=>server.close(resolve));}
 """
@@ -81,7 +83,8 @@ def test_real_node_task_read_separates_fixed_inputs_from_empty_editor_selection(
     ]
     assert details["execution"]["job"] is None and "服务端本次未返回" in details["execution"]["meaning"]
     text = output["result"]["content"][0]["text"]
-    assert json.loads(text) == details
+    assert details["invocation_input_id"] is None
+    assert json.loads(text) == {key: value for key, value in details.items() if key != "invocation_input_id"}
     assert all(value not in text for value in ("/private/", "secret-token", "large-body", "authorization", "ownership"))
 
 
@@ -165,7 +168,9 @@ def test_real_node_context_does_not_embed_preloaded_script_body(tmp_path, metada
 def test_real_node_execution_unreadable_never_reports_empty_or_not_queued(tmp_path, execution, status):
     output = run_tool(tmp_path, confirmed_workspace(), execution=execution, execution_status=status, stage="narration")
     assert not output["ok"] and output["error"]
-    assert "result" not in output
+    assert output["result"]["isError"] is True
+    assert set(output["result"]["details"]) == {"failure", "invocation_input_id"}
+    assert json.loads(output["result"]["content"][0]["text"]) == {"failure": output["result"]["details"]["failure"]}
     assert len(output["calls"]) == 2
 
 
@@ -174,7 +179,9 @@ def test_real_node_missing_confirmed_identity_is_unreadable_not_an_empty_script(
     workspace["task"]["confirmed_script_id"] = "missing-script"
     output = run_tool(tmp_path, workspace, stage="narration")
     assert not output["ok"] and "已确认文案不可读" in output["error"]
-    assert "result" not in output
+    assert output["result"]["isError"] is True
+    assert set(output["result"]["details"]) == {"failure", "invocation_input_id"}
+    assert json.loads(output["result"]["content"][0]["text"]) == {"failure": output["result"]["details"]["failure"]}
 
 
 def test_actual_api_narration_without_segments_and_montage_audio_are_not_omitted(tmp_path):
