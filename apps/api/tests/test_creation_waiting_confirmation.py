@@ -5,7 +5,7 @@ import pytest
 
 import app.main as main_module
 from app.creation_execution import CreationExecution, CpuRenderLimits, submit_creation_stage
-from app.host_resource_probes import MontageBudget
+from app.host_resource_probes import MontageBudget, HostResourceDecision
 from app.creation.contracts import TimelineVersion
 from test_narration_edit_api import generator_api, narration_api  # noqa: F401
 from test_narration_edit_execution import fixture  # noqa: F401
@@ -16,7 +16,7 @@ def waiting_state(generator_api, monkeypatch):  # noqa: F811 (existing pytest fi
     state = generator_api
     state.owner.montage_budget = MontageBudget(10, 10, 1000000, 1000000, 60, 1000000)
     state.owner.cpu_render_limits = CpuRenderLimits(1000000, 1, 60)
-    monkeypatch.setattr(state.resources, "admit", lambda _: state.resources.allowed)
+    monkeypatch.setattr(state.resources, "admit", lambda request: HostResourceDecision(state.resources.allowed, dict(request.resources), {}))
     monkeypatch.setattr(main_module, "_creation_render_is_valid", lambda *_, **__: False)
     montage = state.repo.get_creation_task_montage_plan("local", state.task.id)
     montage["status"] = "waiting_for_user"
@@ -36,18 +36,21 @@ def waiting_state(generator_api, monkeypatch):  # noqa: F811 (existing pytest fi
         state.repo._claim_workspace_media_reference(connection, workspace_id="local",
             reference=state.repo.workspace_media_reference_for_asset("local", asset.id))
     state.task = state.repo.task_records.get_creation_task("local", state.task.id)
-    state.execution = CreationExecution(state.repo, run_narration=lambda *_: pytest.fail("不应重配音"),
+    monkeypatch.setattr(state.executor.narration_stage.generator, 'generate_for_creation_task',
+        lambda **kwargs: pytest.fail("不应重配音"))
+    state.execution = CreationExecution(state.repo,
         run_montage_plan=lambda *_: None, run_render=lambda *_: pytest.fail("未确认不应渲染"),
         render_is_valid=lambda *_: False)
     monkeypatch.setattr(main_module, "creation_execution", state.execution)
     state.normal_job = state.execution.start("local", state.task.id, "script",
         main_module.revision_digest(state.repo.script_records.get_creation_task_script("local", "script"), state.plan), actor=state.actor)
     state.montage_calls = []
-    def produce_waiting(*args):
-        state.montage_calls.append(args)
+    def produce_waiting(workspace_id, task_id, *, grant_context):
+        state.montage_calls.append((workspace_id, task_id, grant_context))
         state.repo.montage_plan_adoption.save_creation_task_montage_plan("local", state.task.id, montage["id"], montage)
         state.produced_plan = state.repo.get_creation_task_montage_plan("local", state.task.id)
-    state.executor.stage_actions["montage_plan"] = produce_waiting
+    state.executor.montage_stage = main_module._montage_stage_use_case(state.repo)
+    monkeypatch.setattr(state.executor.montage_stage, "generate", produce_waiting)
     # Force the completed montage stage through the actual persisted Grant.
     from app.device_scheduler import SchedulePolicy, SubmissionIntent
     key, _ = state.owner.stage_facts(state.task, state.repo.script_records.get_creation_task_script("local", "script"), state.plan, "montage_plan")

@@ -28,10 +28,10 @@ def test_list_workspace_controls_agree_after_apply_undo_and_redo(tmp_path, monke
         assert saved.status_code==200,saved.text
         applied=read()
         assert applied['timeline_sequence']==2 and applied['can_undo'] and not applied['can_redo']
-        assert client.post('/api/creation-tasks/task/timeline/undo',json={}).status_code==200
+        assert client.post('/api/creation-tasks/task/timeline/undo',json={'request_id': 'test_list_workspace_controls_agree_after_apply_undo_and_redo:undo:31'}).status_code==200
         undone=read()
         assert undone['timeline_sequence']==3 and undone['can_redo'] and not undone['can_undo']
-        assert client.post('/api/creation-tasks/task/timeline/redo',json={}).status_code==200
+        assert client.post('/api/creation-tasks/task/timeline/redo',json={'request_id': 'test_list_workspace_controls_agree_after_apply_undo_and_redo:redo:34'}).status_code==200
         redone=read()
         assert redone['timeline_sequence']==4 and redone['can_undo'] and not redone['can_redo']
     finally:
@@ -103,10 +103,10 @@ def test_all_nested_task_responses_agree_after_edit_undo_and_redo(person_render_
     edited = read()
     assert edited["timeline_sequence"] == initial["timeline_sequence"] + 1
     assert edited["can_undo"] and not edited["can_redo"]
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_all_nested_task_responses_agree_after_edit_undo_and_redo:undo:106'}).status_code == 200
     undone = read()
     assert undone["timeline_sequence"] == edited["timeline_sequence"] + 1 and undone["can_redo"]
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={'request_id': 'test_all_nested_task_responses_agree_after_edit_undo_and_redo:redo:109'}).status_code == 200
     redone = read()
     assert redone["timeline_sequence"] == undone["timeline_sequence"] + 1
     assert redone["can_undo"] and not redone["can_redo"]

@@ -36,6 +36,11 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
         "target_snapshot": {"timeline_version_id": version.id, "timeline_sequence": version.sequence}})
     state.raw_post = state.client.post
     runtime = _granted_domain_preview_adapter(state, monkeypatch)
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import CreationExecutionActor
+    runtime.task_authorizations = TaskAuthorizationUseCase(state.production,
+        lambda identity: main._verify_creation_identity(
+            CreationExecutionActor.from_event(identity["workspace_id"], identity)))
     runtime.registrations["creation_job"].owner.task_media.on_settled = main._wake_assistant_continuations
     monkeypatch.setattr(main, "device_runtime", runtime)
     monkeypatch.setattr(main, "run_task_turn", lambda *_args, **_kwargs: pytest.fail("deterministic continuation must not call a model"))

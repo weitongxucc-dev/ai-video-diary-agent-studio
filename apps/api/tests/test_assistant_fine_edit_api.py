@@ -101,7 +101,7 @@ def test_audio_mix_patch_adoption_preserves_other_parameters_and_undo(fine_state
     assert after["montage"]["clips"] == state.before["montage"]["clips"]
     assert after["montage"]["cues"] == state.before["montage"]["cues"]
     assert after["task"]["timeline_sequence"] == state.before["task"]["timeline_sequence"] + 1
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={'request_id': 'test_audio_mix_patch_adoption_preserves_other_parameters_and_undo:undo:104'}).status_code == 200
     assert state.client.get(state.base_url).json()["montage"]["audio_timeline"] == state.before["montage"]["audio_timeline"]
 
 
@@ -115,7 +115,7 @@ def test_visual_patch_applies_per_clip_without_resetting_other_effects_or_audio(
     for previous, current in zip(state.before["montage"]["clips"], after["montage"]["clips"]):
         assert current == {**previous, "visual_effects": {**previous["visual_effects"], "saturation": .7}}
     assert after["montage"]["audio_timeline"] == state.before["montage"]["audio_timeline"]
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={'request_id': 'test_visual_patch_applies_per_clip_without_resetting_other_effects_or_audio:undo:118'}).status_code == 200
     assert state.client.get(state.base_url).json()["montage"]["clips"] == state.before["montage"]["clips"]
 
 

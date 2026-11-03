@@ -32,6 +32,7 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
     from assistant_turn_control_fixtures import isolate_assistant_turn_control
     isolate_assistant_turn_control(monkeypatch, request)
     state = material_edit_state
+    monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
     # The API/owner tests already substitute preparation/execution. Isolate
     # only this adapter's platform inventory; do not mutate global sys or the
     # real Leaf OS-isolation guard on Linux CI.

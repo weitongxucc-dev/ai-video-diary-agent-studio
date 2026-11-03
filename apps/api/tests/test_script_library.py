@@ -81,6 +81,7 @@ def library(tmp_path, monkeypatch, request):
     monkeypatch.setattr(main, "source_repository", sources)
     monkeypatch.setattr(main,"local_members_service",members)
     monkeypatch.setattr(main,"auth_context",SimpleNamespace(enabled=False))
+    monkeypatch.setattr(main, "current_workspace_id", lambda request: "local")
     # Retain the real failure while exposing the KeyError hidden by HTTP's 404 mapping.
     from app.creation.script_library_use_case import ScriptLibraryUseCase
     save_entry = ScriptLibraryUseCase.save_entry

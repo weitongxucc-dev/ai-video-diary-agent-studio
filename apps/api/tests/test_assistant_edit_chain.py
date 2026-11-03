@@ -64,7 +64,7 @@ def test_indexed_reorder_is_one_version_and_one_undo_without_render(storyboard, 
     assert after["task"]["timeline_sequence"] == before["task"]["timeline_sequence"] + 1
     assert state.provider.output_cache_keys == []
     assert state.client.post(state.base_url + f"/edits/{proposal['id']}/confirm").status_code == 409
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={'request_id': 'test_indexed_reorder_is_one_version_and_one_undo_without_render:undo:67'}).status_code == 200
     assert _plan(current(state))["clips"] == _plan(before)["clips"]
 
 
@@ -93,7 +93,7 @@ def test_person_swap_reports_and_applies_existing_narration_subtitle_linkage(per
     after = current(state)
     assert _cues(after, "zh-CN")[0]["text"] == "第二句。"
     assert _plan(after)["audio_timeline"] != _plan(before)["audio_timeline"]
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={'request_id': 'test_person_swap_reports_and_applies_existing_narration_subtitle_linkage:undo:96'}).status_code == 200
     assert _cues(current(state), "zh-CN") == _cues(before, "zh-CN")
     assert _plan(current(state))["audio_timeline"] == _plan(before)["audio_timeline"]
 
@@ -169,7 +169,7 @@ def test_generic_replacement_selects_real_candidate_in_unrendered_draft(material
     assert _plan(after)["duration_seconds"] == _plan(before)["duration_seconds"]
     persisted = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     assert persisted["narration_audio_path"] == montage.narration_audio_path
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={'request_id': 'test_generic_replacement_selects_real_candidate_in_unrendered_draft:undo:172'}).status_code == 200
     assert _plan(current(state))["clips"] == _plan(before)["clips"]
 
 

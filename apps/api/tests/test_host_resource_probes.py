@@ -1124,7 +1124,7 @@ def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, m
     ("creation_narration", 1024**3, True),
     ("creation_narration", 1024**3 - 1, False),
     ("creation_narration", None, None),
-    ("creation_person_render", 29 * 1024**3 // 10, False),
+    ("creation_person_render", 29 * 1024**3 // 10, True),
 ])
 def test_narration_reserves_memory_at_admission_but_runtime_keeps_system_floor(
     tmp_path, monkeypatch, kind, available, runtime_verdict, narration_cpu_boundary,
@@ -1166,7 +1166,7 @@ def test_narration_reserves_memory_at_admission_but_runtime_keeps_system_floor(
             probe.continue_unit(grant)
         decision = stopped.value.decision
         assert decision.verdict is runtime_verdict
-        expected_floor = gib if kind == "creation_narration" else 3 * gib
+        expected_floor = gib  # Running units retain the system floor; admission reserves the peak.
         assert decision.checks["available_memory_bytes"]["minimum"] == expected_floor
         if available is None:
             assert "actual" not in decision.checks["available_memory_bytes"]
@@ -1790,7 +1790,7 @@ def pcm_runner_case(tmp_path):
     assert grant is not None
     manifest = {'version':1,'operation':'append','unit_id':f'{grant.request_id}:{grant.generation}',
         'job_id':'job','source_digest':'a'*64,**baseline,'expected_file_identity':baseline['file_identity'],
-        'sources':sources,'final':True}
+        'sources':sources,'final':True,'max_input_count':resources['input_count']}
     del manifest['file_identity'],manifest['header_bytes_allowance']
     manifest_path = Path(str(receipt)+'.manifest.json')
     manifest_path.write_text(json.dumps(manifest))
@@ -1904,7 +1904,10 @@ def test_script_keeps_host_and_runtime_envelope(tmp_path, monkeypatch, pressure)
     monkeypatch.setattr(psutil,'swap_memory',lambda:SimpleNamespace(used=101 if pressure=='swap' else 0))
     monkeypatch.setattr(psutil,'disk_usage',lambda path:SimpleNamespace(free=1 if pressure=='disk' else 100000))
     decision=probe._sample(_script_resources(),running_io=True)
-    assert decision.verdict is (True if pressure=='none' else False)
+    # Historical swap occupancy is diagnostic, not current memory pressure.
+    assert decision.verdict is (pressure in {'none', 'swap'})
+    assert decision.checks['swap_used_bytes']['diagnostic_only'] is True
+    assert decision.checks['swap_used_bytes']['value'] == (101 if pressure == 'swap' else 0)
     assert decision.checks['available_memory_bytes']['minimum']==100
     assert decision.checks[f'disk_free_bytes:{tmp_path}']['minimum']==100+8192+1024
     probe._grant_resources=lambda grant:_script_resources()

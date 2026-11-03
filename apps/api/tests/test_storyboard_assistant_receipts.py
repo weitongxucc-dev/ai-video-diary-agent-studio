@@ -105,7 +105,8 @@ def chat(request, tmp_path, monkeypatch):
                 request.node.originalname == "test_http_unknown_without_server_record_keeps_verified_original_UUID"
                 and parameters.get("kind") == "storyboard_regeneration_unknown")
     state = _metadata_receipt_state(tmp_path, monkeypatch) if metadata else request.getfixturevalue("state")
-    state.conversations = ConversationRepository(tmp_path / "conversation.sqlite3")
+    monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "ws")
+    state.conversations = ConversationRepository(state.repo.database_path)
     monkeypatch.setattr(main, "conversation_repo", state.conversations)
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
         effective_llm_provider="synthetic", effective_llm_model="synthetic-events", effective_llm_api_key=None))

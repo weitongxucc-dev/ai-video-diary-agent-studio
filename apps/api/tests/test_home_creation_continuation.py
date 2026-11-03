@@ -107,6 +107,9 @@ def test_only_matching_adoption_can_bind_task_scope(client_state, mutation):
 
 def test_home_boundary_reads_owner_receipt_instead_of_returned_task_ids(client_state, monkeypatch):
     c = client_state
+    monkeypatch.setattr(main, "_goal_continuation_service", None)
+    monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "request-test")
+    monkeypatch.setattr(main, "settings", replace(main.settings, database_path=str(c.repository.database_path)))
     _, source, saved, _ = adopted(c)
     wake = Mock()
     monkeypatch.setattr(main, "_wake_assistant_continuations", wake)
@@ -120,6 +123,7 @@ def test_home_boundary_reads_owner_receipt_instead_of_returned_task_ids(client_s
 
 def test_home_response_and_live_replay_register_the_same_actual_tasks(client_state, monkeypatch):
     c = client_state
+    monkeypatch.setattr(main, "_goal_continuation_service", None)
     # Bind the isolated workspace to the real local roster and the same DB;
     # retain actual Goal authorization/context persistence instead of bypassing it.
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "request-test")

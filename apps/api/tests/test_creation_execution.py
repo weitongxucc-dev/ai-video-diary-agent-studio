@@ -1,5 +1,7 @@
 from __future__ import annotations
 from app.content_identity_http import ContentIdentityHttpAdapter
+from app.creation.task_authorization import TaskAuthorizationUseCase
+from app.member_permits import MemberDeviceAccess
 
 from app.materials.intake_routes import material_binding_status
 
@@ -32,7 +34,7 @@ from app.creation_execution import (
     revision_digest, submit_creation_stage,
 )
 from app.device_scheduler import DeviceScheduler, ProcessIdentity
-from app.host_resource_probes import HostCapacity, HostProcessProbe
+from app.host_resource_probes import HostCapacity, HostProcessProbe, HostResourceDecision
 from app.local_members import LocalMemberService
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.creation.narration_artifacts import NarrationArtifactRecord
@@ -48,7 +50,7 @@ from app.artifact_store import ArtifactStore
 from app.config import Settings
 from app.narration import NarrationGenerator
 
-from app.host_resource_probes import HostBudget, HostResourceProbe, CpuRenderBudget, NarrationBudget, MontageBudget
+from app.host_resource_probes import HostBudget, HostResourceProbe, CpuRenderBudget, CpuAudioBudget, NarrationBudget, MontageBudget
 from app.video_jobs import VideoJobRunner
 from _media_preview_test_fixtures import (
     register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes,
@@ -233,7 +235,7 @@ def _render_version_fixture(tmp_path):
     owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(8_000_000, 1, 60),
                                     verify_identity=MemberDeviceAccess(members).verify_identity)
     scheduler = DeviceScheduler(repo.database_path, tmp_path / "device.lock", owners=owner,
-        resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
+        resources=SimpleNamespace(admit=lambda request: HostResourceDecision(True, dict(request.resources), {}), continue_unit=lambda _grant: True,
                                   released=lambda _grant: True), processes=HostProcessProbe())
     persisted_script = repo.script_records.get_creation_task_script("local", script_id)
     persisted_plan = repo.plan_records.get_creation_plan("local", plan.id)
@@ -728,7 +730,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             "import subprocess,time\np=subprocess.Popen([sys.executable,'-c','import time; held=bytearray(80000000); time.sleep(5)']); p.wait()\n"
             if stop == "rss" else "import time; time.sleep(5)\n"))
     narration = NarrationBudget(1000, 10, 1_000_000, 300, 8_000_000, 1, 90,
-        1024 ** 3, 16, 0.1, 1024 ** 3, 1_000_000)
+        1024 ** 3, 16, 0.1, 1024 ** 3, 1_000_000, input_scope="single_call_experiment_v1")
     if stop == "rss":
         narration = replace(narration, max_process_rss_bytes=40 * 1024 ** 2)
     elif stop == "output":
@@ -741,8 +743,10 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     # Match the existing synthetic media profile, not the production host budget.
     render = CpuRenderBudget(300, 400_000_000, 1920, 1920, 10_000_000, 20, 0,
                             8_000_000, 1, 90, 512 * 1024 ** 2, 64 * 1024 ** 2, 16)
+    audio_budget = CpuAudioBudget(10, 32*1024**2, 300, 300, 24000, 1, 8_000_000, 1, 90,
+        1024**3, 16, .1, 1024**3, 1_000_000)
     budget = HostBudget(100, 1, 100 * 1024 ** 3, 1, 10 ** 12, 10_000_000,
-                        cpu_render=render, narration=narration, montage=montage)
+                        cpu_render=render, cpu_audio=audio_budget, narration=narration, montage=montage)
     actor = CreationExecutionActor.account(workspace, device, user)
     state = {"identity": "ready", "montage_attempts": 0}
     identity_calls = []
@@ -753,7 +757,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         return state["identity"]
 
     owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(8_000_000, 1, 90),
-        narration_budget=narration, montage_budget=montage, verify_identity=verify)
+        narration_budget=narration, narration_audio_budget=audio_budget, montage_budget=montage, verify_identity=verify)
     resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=budget)
     # Deterministic ambient load; preserve the probe's real sampling interval.
     def ambient_cpu_percent(*, interval):
@@ -802,20 +806,24 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     calls = []
     render_calls = []
 
-    def narration_action(workspace, current_task, *, grant_context):
+    narration_stage = main_module._narration_stage_use_case(repo, narration_budget=narration)
+    montage_stage = main_module._montage_stage_use_case(repo)
+    prepare_segment = narration_stage.prepare_segment
+    generate_montage = montage_stage.generate
+    def narration_action(*args, **kwargs):
         calls.append("narration")
-        result = main_module._narration_stage_use_case(repo, narration_budget=narration).generate(
-            workspace, current_task, grant_context=grant_context)
+        result = prepare_segment(*args, **kwargs)
         if stop == "commit_unknown":
             state["identity"] = "unknown"
         return result
-
-    def montage_action(workspace, current_task, *, grant_context):
+    def montage_action(*args, **kwargs):
         calls.append("montage_plan")
         state["montage_attempts"] += 1
         if state["montage_attempts"] == 1:
             raise ValueError("synthetic first montage failure")
-        return main_module._montage_stage_use_case(repo).generate(workspace, current_task, grant_context=grant_context)
+        return generate_montage(*args, **kwargs)
+    monkeypatch.setattr(narration_stage, 'prepare_segment', narration_action)
+    monkeypatch.setattr(montage_stage, 'generate', montage_action)
 
     def render_action(*args):
         render_calls.append("render")
@@ -826,8 +834,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
 
     executor = CreationJobUnitExecutor(repo, render_action=render_action,
         render_is_valid=main_module._creation_stage_valid_with_grant,
-        narration_stage=SimpleNamespace(generate=narration_action),
-        montage_stage=SimpleNamespace(generate=montage_action))
+        narration_stage=narration_stage, montage_stage=montage_stage)
     from app.device_runtime import OwnerRegistration, OwnerRouter
     from app.member_permits import MemberDeviceAccess
     registration = OwnerRegistration(owner, executor)
@@ -1106,7 +1113,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
     owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(8_000_000, 1, 90))
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=owner,
-        resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
+        resources=SimpleNamespace(admit=lambda request: HostResourceDecision(True, dict(request.resources), {}), continue_unit=lambda _grant: True,
                                   released=lambda _grant: True),
         processes=HostProcessProbe(),
     )
@@ -1368,7 +1375,7 @@ def _permit_scheduler(repo, tmp_path):
     owner = CreationJobOwnerVerifier(repo)
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=owner,
-        resources=SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
+        resources=SimpleNamespace(admit=lambda request: HostResourceDecision(True, dict(request.resources), {}), continue_unit=lambda _grant: True,
                                   released=lambda _grant: True),
         processes=SimpleNamespace(current=lambda: ProcessIdentity(1234, "test", "boot"),
                                   children_released=lambda _children: True,
@@ -1387,6 +1394,8 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
+        task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
+            CreationExecutionActor.from_event(identity["workspace_id"], identity))),
         last_error=None, wake=lambda: None,
     ))
     monkeypatch.setattr(ThreadPoolExecutor, "submit", staticmethod(lambda *_args: pytest.fail("许可已接通，制作作业不得退回旧的本机线程")))
@@ -1427,6 +1436,8 @@ def test_http_start_refuses_an_identity_it_cannot_verify(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
+        task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
+            CreationExecutionActor.from_event(identity["workspace_id"], identity))),
         last_error=None, wake=lambda: None,
     ))
     monkeypatch.setattr(ThreadPoolExecutor, "submit", staticmethod(lambda *_args: pytest.fail("身份不可核验时不得放行制作作业")))
@@ -1463,7 +1474,9 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "creation_execution_mode", "scheduled")
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)}, last_error=None,
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)},
+        task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
+            CreationExecutionActor.from_event(identity["workspace_id"], identity))), last_error=None,
         running=True, wake=lambda: wake_calls.append(True),
     ))
     monkeypatch.setattr(ThreadPoolExecutor, "submit", staticmethod(lambda *_args: pytest.fail("scheduled request must not enter legacy worker")))
@@ -1690,6 +1703,8 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     monkeypatch.setattr(main_module, "material_ingestion", None)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
+        task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
+            CreationExecutionActor.from_event(identity["workspace_id"], identity))),
         last_error=None, running=False, wake=lambda: None, start=lambda: runtime_starts.append("start"),
         stop=lambda **_kwargs: True,
     ))
@@ -1817,7 +1832,8 @@ def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp
         assert service._thread is None and not thread.is_alive()
         assert not worker.running and worker._closed
         assert worker._thread is not None and not worker._thread.is_alive()
-        assert worker.scheduler.active_permit() is None
+        with main_module.production_repo._connect() as connection:
+            assert tuple(connection.execute("SELECT state,request_id FROM device_permit WHERE id=1").fetchone()) == ("free", None)
 
     main_module._reload_runtime_dependencies()
     first_service, first_thread, first_worker = assert_running()
@@ -2023,7 +2039,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
                      (json.dumps(asdict(task), default=str), "local", task_id))
     digest = revision_digest(repo.script_records.get_creation_task_script("local", script_id), plan)
-    narration = NarrationBudget(1000, 10, 1000000, 30, 100000, 1, 10, 1024, 16, 0.1, 1024, 1)
+    narration = NarrationBudget(1000, 10, 1000000, 30, 100000, 1, 10, 1024, 16, 0.1, 1024, 1, input_scope="single_call_experiment_v1")
     owner = CreationJobOwnerVerifier(repo, narration_budget=narration, verify_identity=access.verify_identity)
     # Only host pressure is substituted. Identity, inputs, SQLite, process and lock checks are real.
     resources = SimpleNamespace(admit=lambda request: HostResourceDecision(
@@ -2037,43 +2053,49 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         failure.command_diagnostics = {"before_termination_returncode": -6, "stderr": b"synthetic model abort"}
     attempts = []
     grants = []
-    def action(workspace, current_task, context):
+    import copy
+    from app.creation.narration_stage_use_case import NarrationStageUseCase
+    generator = copy.copy(main_module.narration_generator)
+    metadata = main_module._picture_preview_components(repo)[1]
+    stage = NarrationStageUseCase(repo, generator, metadata, narration)
+    prepare_segment = stage.prepare_segment
+    def action(workspace, current_task, **kwargs):
+        context = kwargs['grant_context']
         attempts.append(context.grant.generation)
         grants.append(context.grant)
-        repo.start_creation_task_narration(workspace, current_task)
-        if after_wait == "application_quit":
+        if after_wait == 'application_quit':
             executor.request_stop()
             context.check_execution_limits()
-        if len(attempts) == 1 and after_wait != "checkpoint_pressure":
-            if after_wait == "ordinary_error":
-                raise RuntimeError("synthetic narration failed")
-            if after_wait == "user_cancel":
+        if len(attempts) == 1 and after_wait != 'checkpoint_pressure':
+            if after_wait == 'ordinary_error':
+                raise RuntimeError('synthetic narration failed')
+            if after_wait == 'user_cancel':
                 from app.granted_subprocess import GrantedCommandCancelled
                 execution.cancel(workspace, current_task, member_id=member.member_id)
-                raise GrantedCommandCancelled("user cancelled")
-            if after_wait == "unreleased":
-                monkeypatch.setattr(context.scheduler.processes, "children_released", lambda children: False)
+                raise GrantedCommandCancelled('user cancelled')
+            if after_wait == 'unreleased':
+                monkeypatch.setattr(context.scheduler.processes, 'children_released', lambda children: False)
             raise failure
-        audio = tmp_path / "library/narration.wav"
-        audio.write_bytes(synthetic_wav_bytes())
-        record = NarrationArtifactRecord(id="pressure_audio", workspace_id=workspace, task_id=current_task,
-            script_id=script_id, voice_profile_id="voice_1", cache_key="pressure_cache",
-            audio_path=str(audio), duration_seconds=0.01, sample_rate=24000, model_id="synthetic")
-        if after_wait == "checkpoint_pressure":
-            repo.narration_completion.complete_creation_task_narration(record)
+        result = prepare_segment(workspace, current_task, **kwargs)
+        if after_wait == 'checkpoint_pressure':
+            repo.narration_completion.complete_creation_task_narration(result[0])
             raise failure
-        if after_wait in {"ordinary_error", "user_cancel"}:
-            repo.narration_completion.complete_creation_task_narration(record)
-            return
-        repo.narration_artifacts.save_narration_artifact(record)
-        task = repo.task_records.get_creation_task(workspace, current_task)
-        task.narration_cache_key = record.cache_key
-        with repo._connect() as conn:
-            conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?", (json.dumps(asdict(task), default=str), workspace, current_task))
-    executor = CreationJobUnitExecutor(repo, render_action=lambda *args: pytest.fail("not render"),
-        render_is_valid=lambda *args: False,
-        narration_stage=SimpleNamespace(generate=lambda workspace, current_task, *, grant_context:
-            action(workspace, current_task, grant_context)))
+        return result
+    monkeypatch.setattr(stage, 'prepare_segment', action)
+    audio_budget = CpuAudioBudget(10, 32*1024**2, 30, 30, 24000, 1, 100000, 1, 10, 1024, 16, .1, 1024, 1)
+    owner.narration_audio_budget = audio_budget
+    from app.narration import NarrationArtifact, _pronunciation_dictionary, _pronunciation_version
+    def generated(**kwargs):
+        output = tmp_path / 'library' / 'narration.wav'
+        output.write_bytes(synthetic_wav_bytes())
+        pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=kwargs['pronunciation_entries'],
+            workspace_id='local', person_profile_id=kwargs['voice_identity'].person_profile_id, task_id=task_id))
+        return NarrationArtifact(task_id=task_id, script_id=script_id, audio_path=str(output), duration_seconds=.01,
+            sample_rate=24000, model_id='synthetic', voice_profile_id=kwargs['voice_identity'].id,
+            cache_key='pressure_cache', language='zh', pronunciation_version=pronunciation)
+    monkeypatch.setattr(generator, 'generate_for_creation_task', generated)
+    executor = CreationJobUnitExecutor(repo, render_action=lambda *args: pytest.fail('not render'),
+        render_is_valid=lambda *args: False, narration_stage=stage)
     runtime = build_device_runtime(database_path=repo.database_path, device_lock_path=tmp_path / "device.lock",
         device_access=access, registrations={"creation_job": OwnerRegistration(owner, executor, executor.record_stopped)},
         resources=resources, processes=HostProcessProbe(), poll_interval_seconds=0.01)
@@ -2777,8 +2799,10 @@ def _queued_creation_admission_case(tmp_path, *, static):
     task = repo.task_records.get_creation_task('local', task_id)
     digest = revision_digest(repo.script_records.get_creation_task_script('local', script_id), repo.plan_records.get_creation_plan('local', task.plan_id))
     job=execution.start('local',task_id,script_id,digest,actor=actor)
-    budget=NarrationBudget(374,3,1000000,30,3145728,2,300,1024,16,.1,2048,1024)
-    owner=CreationJobOwnerVerifier(repo,narration_budget=budget,verify_identity=lambda current:'ready' if current==actor else 'unauthorized')
+    budget=NarrationBudget(374,3,1000000,30,3145728,2,300,1024,16,.1,2048,1024, input_scope="single_call_experiment_v1")
+    owner=CreationJobOwnerVerifier(repo,narration_budget=budget,
+        narration_audio_budget=CpuAudioBudget(3,32*1024**2,30,30,24000,1,3145728,1,300,1024,16,.1,2048,1024),
+        verify_identity=lambda current:'ready' if current==actor else 'unauthorized')
     # Fixed stage facts and host observation are declared ports; the real owner,
     # scheduler, process identity and SQLite transactions run without a model.
     resources={'kind':'creation_narration','execution_mode':'isolated_qwen3_tts',
@@ -4941,7 +4965,8 @@ def test_completed_narration_resumes_current_montage_not_historical_failed_tts(t
     case = _narration_units_case(tmp_path)
     def refused(*args, **kwargs):
         raise ValueError('current montage audio mix budget refused')
-    case.executor.montage_stage = SimpleNamespace(generate=refused)
+    case.executor.montage_stage = main_module._montage_stage_use_case(case.repo)
+    monkeypatch.setattr(case.executor.montage_stage, "generate", refused)
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
     first = case.scheduler.pick_and_grant()
     case.executor.execute(first, case.scheduler)
@@ -7458,3 +7483,47 @@ def test_effective_execution_reads_keep_start_source_links_and_caller_rollback(t
     with repo._connect() as connection:
         assert connection.execute('SELECT count(*) FROM task_events WHERE workspace_id=? AND job_id=?',
             (task.workspace_id, job.id)).fetchone()[0] == 1
+
+
+def test_executor_scope_caps_and_ungranted_real_owner_remain_bounded_metadata(tmp_path, monkeypatch):
+    from app.creation.narration_stage_use_case import NarrationStageUseCase
+    from app.member_permits import creation_stage_budgets_from_env
+    from app.device_scheduler import Grant
+    from test_device_scheduler import Processes, Resources
+    def forbidden(*args, **kwargs):
+        pytest.fail('scope/negative-grant metadata must not execute a provider,media or worker')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    import wave
+    monkeypatch.setattr(wave, 'open', forbidden)
+    from app.device_runtime import DeviceRuntime
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'run_once', forbidden)
+    expected = NarrationBudget(374,3,1000000,30,3145728,2,300,1024,16,.1,2048,1024,
+        input_scope='single_call_experiment_v1')
+    env = {'DEVICE_NARRATION_'+key.upper(): str(value) for key,value in vars(expected).items()
+        if key not in {'running_cpu_policy','input_scope'}}
+    legacy, _ = creation_stage_budgets_from_env(env)
+    assert legacy.input_scope == 'legacy_stage' and legacy.max_text_chars == 374
+    env['DEVICE_NARRATION_INPUT_SCOPE'] = expected.input_scope
+    parsed, _ = creation_stage_budgets_from_env(env)
+    assert parsed == expected and parsed.max_output_bytes == 3145728 and parsed.max_timeout_seconds == 300
+    repo = ProductionRepository(tmp_path/'contract.sqlite',tmp_path/'library',
+        duration_reader=forbidden,scene_reader=forbidden)
+    stage = NarrationStageUseCase(repo, None, None, parsed)
+    monkeypatch.setattr(stage, 'prepare_segment', forbidden)
+    monkeypatch.setattr(stage, 'prepare_merge', forbidden)
+    executor = CreationJobUnitExecutor(repo, render_action=forbidden, render_is_valid=forbidden,narration_stage=stage)
+    owner = CreationJobOwnerVerifier(repo,narration_budget=parsed)
+    scheduler = DeviceScheduler(repo.database_path,tmp_path/'never-granted.lock',owners=owner,
+        resources=Resources(),processes=Processes())
+    try:
+        unsigned = Grant('no-request','metadata-ws','creation_job','no-job',
+            'narration:segment:v1:unsigned','a'*64,1,1,'unsigned',Path(repo.database_path).resolve())
+        with pytest.raises(PermissionError,match='原请求设备许可'):
+            executor.execute(unsigned,scheduler)
+        with repo._connect() as connection:
+            assert tuple(connection.execute("SELECT state,request_id FROM device_permit WHERE id=1").fetchone()) == ("free", None)
+        with repo._connect() as connection:
+            assert connection.execute("SELECT COUNT(*) FROM job_runs WHERE workspace_id='metadata-ws'").fetchone()[0] == 0
+    finally:
+        scheduler.close()

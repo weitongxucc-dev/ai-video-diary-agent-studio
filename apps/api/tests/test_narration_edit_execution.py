@@ -38,13 +38,45 @@ from app.creation.contracts import (
     CreationPlanVoiceReference,
     CreationTask,
     EditIntent,
-    EditOperation,
     EditProposal,
     JobRun,
     NarrationSegment,
     TaskEvent,
     TimelineVersion,
 )
+
+
+def run_edit_to_boundary(state):
+    """Advance the real finite generation/PCM units, with each unit's own grant."""
+    progressed = False
+    # One generation,one append per original input,and one final PCM header.
+    for _ in range(len(state.segments) + 2):
+        if not state.runtime.run_once():
+            return progressed
+        progressed = True
+    return progressed
+
+
+def assert_original_pcm_unknown(state, job_id):
+    job = state.repo.job_records.get_job_run('local', job_id)
+    assert job.status == 'interrupted' and job.failure_reason == 'pcm_result_unknown'
+    assert isinstance(state.runtime.last_error, RecoveryBlocked)
+    usage = state.repo.narration_units.creation_narration_usage('local', job_id)
+    assert not usage['consumption_known'] and len(usage['unsettled']) == 1
+    original = usage['unsettled'][0]
+    request = state.runtime.scheduler._get(original['request_id'])
+    assert request.owner_id == job_id and request.unit_key == original['unit_key']
+    assert request.last_grant_generation == original['permit_generation']
+    assert request.unit_key.startswith('narration_edit:pcm:')
+    assert request.resources['execution_mode'] == 'cpu_pcm_wav_assembly'
+    assert Path(request.resources['pcm_assembly']['receipt_path'] + '.manifest.json').is_file()
+    assert request.state == 'blocked' and request.wait_reason == 'worker_interrupted'
+    with state.repo._connect() as conn:
+        assert tuple(conn.execute('SELECT state,request_id FROM device_permit WHERE id=1').fetchone()) == ('free', None)
+        assert conn.execute('SELECT COUNT(*) FROM edit_operations WHERE workspace_id=? AND task_id=?',
+            ('local', state.task.id)).fetchone()[0] == 0
+    assert state.repo.edit_records.get_edit_proposal('local', state.proposal.id).status == 'proposed'
+    return request
 
 
 def wav_bytes(seconds=2):
@@ -62,7 +94,8 @@ class Resources:
     release = True
 
     def admit(self, request):
-        assert request.resources["kind"] == "creation_narration"
+        assert request.resources["narration_phase"] in {"segment_edit", "merge"}
+        assert request.resources["kind"] == ("creation_narration" if request.resources["narration_phase"] == "segment_edit" else "task_audio")
         from app.host_resource_probes import HostResourceDecision
         return HostResourceDecision(self.allowed, dict(request.resources), {})
 
@@ -93,7 +126,7 @@ class Processes:
 
 
 @pytest.fixture
-def fixture(tmp_path):
+def fixture(tmp_path, monkeypatch):
     repo = ProductionRepository(
         database_path=tmp_path / "db.sqlite3", video_library_path=tmp_path / "library"
     )
@@ -310,10 +343,15 @@ def fixture(tmp_path):
     task = repo.task_records.get_creation_task("local", task.id)
     plan = repo.plan_records.get_creation_plan("local", plan.id)
     budget = NarrationBudget(
-        1000, 1, 1000000, 10, 1000000, 1, 60, 1000000, 2, 0.1, 1000000, 1000000
+        1000, 1, 1000000, 10, 1000000, 1, 60, 1000000, 2, 0.1, 1000000, 1000000,
+        input_scope="single_call_experiment_v1"
     )
+    from app.host_resource_probes import CpuAudioBudget
+    audio_budget = CpuAudioBudget(2, 32*1024*1024, 10, 10, 8000, 1, 1000000, 1, 60,
+        1000000, 2, .1, 1000000, 1000000)
     owner = CreationJobOwnerVerifier(
         repo,
+        narration_audio_budget=audio_budget,
         narration_budget=budget,
         verify_identity=MemberDeviceAccess(members).verify_identity,
     )
@@ -352,51 +390,56 @@ def fixture(tmp_path):
     access = MemberDeviceAccess(members)
     calls = []
 
-    def action(workspace, task_id, context, proposal_id):
+    import copy
+    import app.main as main
+    from app.artifact_store import ArtifactStore
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase
+    from app.creation.narration_stage_use_case import NarrationStageUseCase
+    from app.narration import NarrationArtifact
+    generator = copy.copy(main.narration_generator)
+    generator.output_root = tmp_path / "generated"
+    def generated(**kwargs):
+        context = kwargs['grant_context']
         context.check()
         calls.append(context.grant)
-        changed = replace(segments[0], audio_reference="narration://artifact/new")
-        updated = json.loads(json.dumps(montage))
-        updated["cues"][0]["audio_reference"] = changed.audio_reference
-        applied_at = datetime.now(timezone.utc)
-        operation = EditOperation(
-            "operation",
-            "local",
-            task.id,
-            proposal.id,
-            "RegenerateNarrationSegment",
-            proposal.operation["payload"],
-            base.id,
-            "result",
-            "applied",
-            created_at=applied_at,
-            applied_at=applied_at,
-        )
-        version = TimelineVersion(
-            "result", "local", task.id, base.id, 2, {"montage": updated}, operation.id
-        )
-
-        def commit(conn):
-            repo.edit_adoption.confirm(
-                "local",
-                task.id,
-                proposal.id,
-                operation=operation,
-                result_version=version,
-                montage_plan_id="montage",
-                montage_payload=updated,
-                narration_segments=[changed, segments[1]],
-                connection=conn,
-            )
-            return operation
-
-        return commit
+        output = tmp_path / "segment-generated.wav"
+        output.write_bytes(wav_bytes(segments[0].duration_seconds))
+        from app.narration import _pronunciation_dictionary, _pronunciation_version
+        pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=kwargs['pronunciation_entries'],
+            workspace_id='local', person_profile_id=kwargs['voice_identity'].person_profile_id, task_id=task.id))
+        return NarrationArtifact(task_id=task.id, script_id='script', audio_path=str(output),
+            duration_seconds=segments[0].duration_seconds, sample_rate=8000, model_id='synthetic-provider',
+            voice_profile_id=plan.selected_voice.profile_id, cache_key='1'*64, language='zh',
+            pronunciation_version=pronunciation)
+    generator.generate_for_creation_task = generated
+    metadata = MetadataEditUseCase(repo, ArtifactStore(tmp_path / 'artifacts'), output_root=tmp_path / 'output')
+    stage = NarrationStageUseCase(repo, generator, metadata, budget)
+    committed = []
+    persist = metadata.persist_montage_edit
+    def observed_persist(**kwargs):
+        operation = persist(**kwargs)
+        committed.append(operation)
+        return operation
+    monkeypatch.setattr(metadata, 'persist_montage_edit', observed_persist)
+    def pcm_worker(scheduler, grant, command, **options):
+        # Run the existing PCM algorithm on the original granted manifest.
+        from model_workers.pcm_assembly import execute
+        resources = scheduler._get(grant.request_id).resources
+        assert resources['max_output_bytes'] < budget.max_output_bytes
+        assert [item['reference'].removeprefix('narration://artifact/') for item in resources['inputs']] == ['1'*64, 'old']
+        assert repo.task_records.get_creation_task('local', task.id).current_timeline_version_id == data.base.id
+        assert repo.narration_records.get_narration_segment('local', task.id, segments[0].id).audio_reference == segments[0].audio_reference
+        manifest = json.loads(Path(command[-1]).read_text())
+        receipt = execute(manifest, {'generated_bytes': 0, 'work_created': False})
+        return SimpleNamespace(returncode=0, stdout=json.dumps(receipt), stderr='')
+    monkeypatch.setattr('app.granted_subprocess.run_granted_command', pcm_worker)
+    action = stage.prepare_edit
 
     executor = CreationJobUnitExecutor(
         repo,
         render_action=lambda *_: pytest.fail("not render"),
         render_is_valid=lambda *_: False,
-        stage_actions={"narration_edit": action},
+        narration_stage=stage,
     )
     runtime = build_device_runtime(
         database_path=repo.database_path,
@@ -418,11 +461,14 @@ def fixture(tmp_path):
         segments=segments,
         montage=montage,
         budget=budget,
+        audio_budget=audio_budget,
+        stage=stage,
         owner=owner,
         resources=resources,
         executor=executor,
         runtime=runtime,
         calls=calls,
+        committed=committed,
         action=action,
     )
     yield data
@@ -454,15 +500,16 @@ def test_waiting_duplicate_grant_and_atomic_local_success(fixture):
     f = fixture
     request = submit(f)
     assert submit(f).id == request.id and request.work_class == "preview_dependency"
-    assert not f.runtime.run_once() and not f.calls
+    assert not run_edit_to_boundary(f) and not f.calls
     unchanged(f)
     f.resources.allowed = True
-    assert f.runtime.run_once()
+    assert run_edit_to_boundary(f)
     assert len(f.calls) == 1 and f.calls[0].request_id == request.id
     assert (
         f.repo.task_records.get_creation_task("local", f.task.id).current_timeline_version_id
-        == "result"
+        == f.committed[0].result_version_id
     )
+    assert len(f.committed) == 1 and f.committed[0].result_version_id != f.base.id
     assert f.repo.job_records.get_job_run("local", f.job.id).status == "succeeded"
     assert (
         f.repo.narration_records.list_narration_segments("local", f.task.id, "script")[1] == f.segments[1]
@@ -478,7 +525,7 @@ def test_waiting_duplicate_grant_and_atomic_local_success(fixture):
         ]
         == request.id
     )
-    assert not f.runtime.run_once()
+    assert not run_edit_to_boundary(f)
     with pytest.raises((PermissionError, ValueError)):
         submit(f)
 
@@ -550,7 +597,7 @@ def test_waiting_stale_or_unauthorized_never_calls_provider(fixture, mutation):
                 (request.id,),
             )
     f.resources.allowed = True
-    assert not f.runtime.run_once() and not f.calls
+    assert not run_edit_to_boundary(f) and not f.calls
     with f.repo._connect() as conn:
         assert (
             conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0]
@@ -572,7 +619,7 @@ def test_no_partial_commit_on_failure_cancel_or_stale(fixture, kind):
     f = fixture
     submit(f)
 
-    def action(ws, task_id, context, proposal_id):
+    def action(ws, task_id, context, proposal_id, resources):
         if kind == "provider_failure":
             raise ValueError("synthetic provider failure")
         if kind == "timeout":
@@ -580,8 +627,8 @@ def test_no_partial_commit_on_failure_cancel_or_stale(fixture, kind):
         if kind == "cancel":
             f.executor.request_cancel(context.grant.request_id)
             context.check()
-        commit = f.action(ws, task_id, context, proposal_id)
-        if kind == "stale_after_generation":
+        commit, receipt = f.action(ws, task_id, context, proposal_id, resources)
+        if kind == "stale_after_generation" and receipt["finalized"]:
             f.repo.narration_records.save_narration_segments(
                 "local",
                 f.task.id,
@@ -591,25 +638,35 @@ def test_no_partial_commit_on_failure_cancel_or_stale(fixture, kind):
                     f.segments[1],
                 ],
             )
-        if kind == "bad_checkpoint":
+        if kind == "bad_checkpoint" and commit is not None:
 
             def bad(conn):
                 operation = commit(conn)
                 return replace(operation, result_version_id="not-saved")
 
-            return bad
-        return commit
+            return bad, receipt
+        return commit, receipt
 
-    f.executor.stage_actions["narration_edit"] = action
+    f.executor.narration_stage.prepare_edit = action
     f.resources.allowed = True
-    assert f.runtime.run_once()
+    before_montage = f.repo.get_creation_task_montage_plan('local', f.task.id)
+    original_start = f.repo.execution_records.get_task_event('local', f'event_{f.job.id}_start')
+    pcm_unknown = kind in {'bad_checkpoint', 'stale_after_generation'}
+    if pcm_unknown:
+        with pytest.raises(RecoveryBlocked, match='结果或消耗未知'):
+            run_edit_to_boundary(f)
+        assert_original_pcm_unknown(f, f.job.id)
+    else:
+        assert run_edit_to_boundary(f)
+    assert f.repo.get_creation_task_montage_plan('local', f.task.id) == before_montage
+    assert f.repo.execution_records.get_task_event('local', f'event_{f.job.id}_start') == original_start
     assert (
         f.repo.task_records.get_creation_task("local", f.task.id).current_timeline_version_id
         == f.base.id
     )
     assert f.repo.edit_records.get_edit_proposal("local", f.proposal.id).status == "proposed"
     assert f.repo.job_records.get_job_run("local", f.job.id).status == (
-        "cancelled" if kind == "cancel" else "failed"
+        "interrupted" if pcm_unknown else "cancelled" if kind == "cancel" else "failed"
     )
     if kind != "stale_after_generation":
         assert (
@@ -623,7 +680,7 @@ def test_unknown_release_retains_original_permit_and_unpublished_version(fixture
     f.resources.allowed = True
     f.resources.release = None
     with pytest.raises(RecoveryBlocked):
-        f.runtime.run_once()
+        run_edit_to_boundary(f)
     unchanged(f)
     with f.repo._connect() as conn:
         permit = conn.execute(
@@ -664,7 +721,7 @@ def test_unknown_admission_and_wrong_scope_are_not_permits(fixture):
     f = fixture
     f.resources.allowed = None
     submit(f)
-    assert not f.runtime.run_once() and not f.calls
+    assert not run_edit_to_boundary(f) and not f.calls
     unchanged(f)
     with pytest.raises(PermissionError):
         f.runtime.scheduler.submit(

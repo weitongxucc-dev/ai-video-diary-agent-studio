@@ -43,7 +43,7 @@ def speed_state(tmp_path):
         stream.writeframes(b'\0\0' * 64000)
     voice = MaterialAsset('voice-input', 'ws', voice_path.name, str(voice_path), voice_path.stat().st_size,
         datetime.fromtimestamp(voice_path.stat().st_mtime, timezone.utc), media_type='audio', duration_seconds=4,
-        owner_user_id=state.member.member_id, visibility='private')
+        owner_user_id=state.member.member_id, visibility='private', analysis_status='ready')
     repo._save_asset(voice)
     voice_ref = repo.workspace_media_reference_for_asset('ws', voice.id)
     with repo._connect() as conn:

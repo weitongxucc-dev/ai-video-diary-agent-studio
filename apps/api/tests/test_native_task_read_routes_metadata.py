@@ -49,6 +49,8 @@ def test_native_task_reads_metadata_and_rejects_unregistered_artifact_without_wr
         model_runtime_python_path=None, supabase_url=None, supabase_publishable_key=None)
     monkeypatch.setattr(main, 'settings', settings)
     monkeypatch.setattr(main, 'auth_context', SupabaseAuthContext(settings))
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request: 'local')
+    monkeypatch.setattr(main, 'LEGACY_WORKSPACE_ID', 'local')
     monkeypatch.setattr(main, 'device_runtime', None)
     repository = ProductionRepository(database, tmp_path / 'library')
     members = LocalMemberService(database)

@@ -1008,7 +1008,7 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
         script = state.production.script_records.get_creation_task_script(state.workspace_id, current.confirmed_script_id)
         def forbidden(*args):
             pytest.fail("diagnostic must not run ungranted creation actions")
-        execution = CreationExecution(state.production, run_narration=forbidden, run_montage_plan=forbidden,
+        execution = CreationExecution(state.production, run_montage_plan=forbidden,
                                       run_render=forbidden, render_is_valid=forbidden)
         job = execution.start(state.workspace_id, current.id, script.id, revision_digest(script, plan), actor=actor)
         key, _ = owner.stage_facts(current, script, plan, stage)
@@ -1046,7 +1046,7 @@ def permitted_person_edit_state(tmp_path, monkeypatch):
     def forbidden(*args):
         pytest.fail("local person edit must not start full creation")
     executor = CreationJobUnitExecutor(state.production, render_action=forbidden,
-        render_is_valid=forbidden, stage_actions={"person_edit": main_module._person_edit_stage_with_grant})
+        render_is_valid=forbidden, person_stage=main_module._person_stage_use_case(state.production))
     scheduler = DeviceScheduler(state.production.database_path, tmp_path / "device.lock",
         owners=owner, resources=resources, processes=HostProcessProbe())
     state.runtime = DeviceRuntime(scheduler, {"creation_job": OwnerRegistration(owner, executor)}, poll_interval_seconds=1)

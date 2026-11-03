@@ -326,7 +326,7 @@ def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use
     source.parent.mkdir(parents=True)
     tone(source, 440)
     asset = MaterialAsset(id='asset', workspace_id=task.workspace_id, file_name=source.name,
-        path=str(source.resolve()), size_bytes=source.stat().st_size, modified_at=utc_now())
+        path=str(source.resolve()), size_bytes=source.stat().st_size, modified_at=utc_now(), analysis_status='ready')
     repo._save_asset(asset)
     reference = repo.workspace_media_reference_for_asset(task.workspace_id, asset.id)
     with repo._connect() as conn:

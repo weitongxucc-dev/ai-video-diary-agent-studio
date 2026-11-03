@@ -163,14 +163,14 @@ def test_person_clip_reorder_moves_narration_and_subtitles_as_one_source_group(l
     assert next(track for track in after["subtitle_tracks"] if track["language"] == "zh-CN")["artifact_ref"] != (
         "artifacts/link-zh.srt")
 
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_person_clip_reorder_moves_narration_and_subtitles_as_one_source_group:undo:166'}).status_code == 200
     restored = state.client.get(base).json()
     assert _plan(restored)["clips"] == _plan(before)["clips"]
     assert _plan(restored)["audio_timeline"] == _plan(before)["audio_timeline"]
     assert _cues(restored, "zh-CN") == _cues(before, "zh-CN")
     assert _cues(restored, "en-US") == _cues(before, "en-US")
 
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={'request_id': 'test_person_clip_reorder_moves_narration_and_subtitles_as_one_source_group:redo:173'}).status_code == 200
     redone = state.client.get(base).json()
     assert _plan(redone)["audio_timeline"] == _plan(after)["audio_timeline"]
     assert _cues(redone, "zh-CN") == _cues(after, "zh-CN")
@@ -199,7 +199,7 @@ def test_material_clip_reorder_leaves_narration_and_subtitles_untouched(person_r
     assert _cues(after, "zh-CN") == _cues(before, "zh-CN")
     assert _cues(after, "en-US") == _cues(before, "en-US")
 
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_material_clip_reorder_leaves_narration_and_subtitles_untouched:undo:202'}).status_code == 200
     restored = state.client.get(base).json()
     assert [clip["id"] for clip in _plan(restored)["clips"]] == ["clip-link-a", "clip-link-b"]
     assert _plan(restored)["audio_timeline"] == _plan(before)["audio_timeline"]
