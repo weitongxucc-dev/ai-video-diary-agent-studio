@@ -309,6 +309,7 @@ class AudioDeliveryAssembly:
             # Full-byte verification belongs to the active Grant, never admission.
             for parent in parents:
                 context.check()
+                check_current = context.scheduler.capture_running_check(context.grant)
                 path = Path(parent['path'])
                 descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
                 with os.fdopen(descriptor, 'rb') as source:
@@ -321,7 +322,8 @@ class AudioDeliveryAssembly:
                         raise ValueError('音画父文件描述符与原stat不一致')
                     digest = hashlib.sha256()
                     while True:
-                        context.check()
+                        context.check_execution_limits()
+                        check_current()
                         data = source.read(65536)
                         if not data:
                             break
@@ -331,6 +333,7 @@ class AudioDeliveryAssembly:
                     after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
                     if before_identity != after_identity or _identity(path) != parent['file_identity'] or digest.hexdigest() != parent['parent']['binding']['sha256']:
                         raise ValueError('音画父文件完整SHA或原stat已变化')
+                context.check()
             inputs = {'manifest_digest': manifest['digest'], 'unit_id': request.resources['unit_id'], 'phase': phase,
                 'parents': parents, 'recipe': manifest['audio_recipe' if phase == 'audio_encode' else 'mux_recipe']}
             encoded = json.dumps(inputs, sort_keys=True, ensure_ascii=False).encode()

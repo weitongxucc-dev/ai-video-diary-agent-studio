@@ -236,6 +236,7 @@ class PictureFragmentAssembly:
         try:
             source = Path(unit['source']['path'])
             context.check()
+            check_current = context.scheduler.capture_running_check(context.grant)
             digest = hashlib.sha256()
             descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(descriptor, 'rb') as reader:
@@ -246,7 +247,10 @@ class PictureFragmentAssembly:
                 if opened_identity != before:
                     raise ValueError('原画面来源文件描述符与封存stat不一致')
                 while True:
-                    context.check()
+                    # Use the scheduler's live local dependency check while
+                    # streaming, with full input verification at both ends.
+                    context.check_execution_limits()
+                    check_current()
                     chunk = reader.read(65536)
                     if not chunk:
                         break
@@ -256,6 +260,7 @@ class PictureFragmentAssembly:
                         or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) !=
                            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
                     raise ValueError('原画面来源在完整SHA期间已变化')
+            context.check()
             if manifest['images']:
                 montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id))
                 self.renderer.graphic_source_paths(job.workspace_id, job.task_id, montage.graphic_overlays, context)

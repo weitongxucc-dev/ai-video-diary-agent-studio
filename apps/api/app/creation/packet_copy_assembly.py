@@ -278,6 +278,7 @@ class PacketCopyAssembly:
         verified = {}
         for record, path, _facts in parents:
             context.check()
+            check_current = context.scheduler.capture_running_check(context.grant)
             before = _file_identity(path.stat())
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(descriptor, 'rb') as source:
@@ -285,7 +286,8 @@ class PacketCopyAssembly:
                     raise ValueError('画面父产物在完整字节核验前已替换')
                 digest = hashlib.sha256()
                 while True:
-                    context.check()
+                    context.check_execution_limits()
+                    check_current()
                     part = source.read(65536)
                     if not part:
                         break
@@ -295,6 +297,7 @@ class PacketCopyAssembly:
                     raise ValueError('画面父产物在完整字节核验期间已变化')
             if digest.hexdigest() != record.sha256:
                 raise ValueError('画面父产物完整SHA与原生产回执不一致')
+            context.check()
             verified[record.id] = before
         return verified
 
