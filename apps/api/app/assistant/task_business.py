@@ -235,7 +235,7 @@ class TaskBusiness:
         binding=dict(source_binding)
         if is_script_generation(binding) and operation not in SCRIPT_GENERATION_OPERATIONS:
             raise TaskBusinessRejected('本次生成动作仅授权读取与保存原请求草稿')
-        reconcile_original=(operation in {'read_task_quality_check','read_task_quality_continuation','continue_task_quality_check','read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
+        reconcile_original=(operation in {'read_task_workspace','read_task_quality_check','read_task_quality_continuation','continue_task_quality_check','read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
             or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
         # Section owners validate the frozen target and dependency digest at
         # commit. An unrelated timeline publication may legitimately move HEAD.

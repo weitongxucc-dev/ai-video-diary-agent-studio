@@ -129,6 +129,21 @@ def test_agent_new_continuation_rejects_stale_head_and_foreign_pair(failed_quali
     assert repo.job_records.get_job_run('local', pair['job_id']).status == 'failed'
 
 
+def test_current_workspace_read_does_not_rebase_stale_quality_write(failed_quality, monkeypatch):
+    _, repo, _, _, _, _, failed, starts, business, host, options = failed_quality
+    repo.timeline_records.create_timeline_version(TimelineVersion('v2', 'local', 'task', 'v1', 2, {}, None))
+    monkeypatch.setattr(business, 'workspace_facts', lambda workspace_id, task: {
+        'task': {'id': task.id, 'current_timeline_version_id': task.current_timeline_version_id}})
+    current = host('read_task_workspace', {}, **options)
+    assert current['ok'] and current['value']['task']['current_timeline_version_id'] == 'v2'
+    assert options['source_binding']['task_version'] == {'timeline_version_id': 'v1', 'timeline_sequence': 1}
+    rejected = host('continue_task_quality_check', {'payload': {
+        'job_id': failed['owner_id'], 'failed_request_id': failed['id']}}, **options)
+    assert not rejected['ok'] and rejected['failure']['status_code'] == 409 and starts == []
+    options['cancel_event'].set()
+    assert not host('read_task_workspace', {}, **options)['ok']
+
+
 @pytest.mark.parametrize('background', [False, True], ids=['chat-response', 'goal-finish'])
 @pytest.mark.parametrize('recorded', [False, True], ids=['unknown', 'recorded'])
 def test_quality_turn_persists_owner_receipt_for_original_input(failed_quality, system, monkeypatch, background, recorded):

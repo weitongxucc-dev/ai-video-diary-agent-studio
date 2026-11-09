@@ -902,6 +902,7 @@ class MontageRenderer:
                 intervals=([(cue.start_seconds,cue.end_seconds) for cue in schedule] if schedule is not None else
                     [(clip.timeline_start_seconds,clip.timeline_end_seconds) for clip in plan.clips])
                 subtitle_sequence = None
+                overlay_positions = None
                 if isinstance(plan, CreationTaskMontagePlan):
                     if schedule:
                         subtitle_sequence = _write_timed_subtitle_input(
@@ -910,9 +911,11 @@ class MontageRenderer:
                         )
                     graphics=validate_overlays(plan.graphic_overlays,plan.duration_seconds)
                     graphic_paths=[]
+                    overlay_positions=[]
                     for index,graphic in enumerate(graphics):
                         path=Path(overlay_dir)/f"graphic-{index}.png"
-                        write_graphic_overlay(graphic.model_dump(),path,canvas_size(plan.aspect_ratio))
+                        overlay_positions.append(_write_cropped_graphic_input(
+                            graphic.model_dump(),path,canvas_size(plan.aspect_ratio)))
                         graphic_paths.append(path)
                     subtitle_overlays=graphic_paths
                     intervals=[(item.start_seconds,item.end_seconds) for item in graphics]
@@ -925,6 +928,7 @@ class MontageRenderer:
                 command = self.build_command(
                     plan, narration_path, output_path, subtitle_overlays,
                     subtitle_intervals=intervals,
+                    overlay_positions=overlay_positions,
                     subtitle_sequence=subtitle_sequence, picture_sequence=picture_sequence,
                 )
                 if grant is None:
@@ -1029,6 +1033,7 @@ class MontageRenderer:
         subtitle_overlays: list[Path],
         subtitle_intervals: list[tuple[float,float]] | None = None,
         *,
+        overlay_positions: list[tuple[int, int]] | None = None,
         subtitle_sequence: tuple[Path, tuple[int, int]] | None = None,
         picture_sequence: Path | None = None,
     ) -> list[str]:
@@ -1067,11 +1072,12 @@ class MontageRenderer:
         for overlay_path in subtitle_overlays:
             command.extend(["-loop", "1", "-framerate", "30", "-i", str(overlay_path)])
         intervals=subtitle_intervals if subtitle_intervals is not None else [(clip.timeline_start_seconds,clip.timeline_end_seconds) for clip in plan.clips]
-        for index, ((start,end), _overlay_path) in enumerate(zip(intervals,subtitle_overlays,strict=True)):
+        positions = overlay_positions if overlay_positions is not None else [(0, 0)] * len(subtitle_overlays)
+        for index, ((start,end), _overlay_path, (left,top)) in enumerate(zip(intervals,subtitle_overlays,positions,strict=True)):
             overlay_input = audio_index + 1 + index
             next_label = f"[vsub{index}]"
             filters.append(
-                f"{output_label}[{overlay_input}:v]overlay=0:0:shortest=1:"
+                f"{output_label}[{overlay_input}:v]overlay={left}:{top}:shortest=1:"
                 f"enable='gte(t,{start:.6f})*lt(t,{end:.6f})'{next_label}"
             )
             output_label = next_label
@@ -1508,6 +1514,22 @@ def _write_subtitle_overlays(
 def _subtitle_frame_boundary(seconds: float) -> int:
     # The existing overlay enables use six decimal places on a 30fps picture clock.
     return int((Decimal(f"{seconds:.6f}") * 30).to_integral_value(rounding=ROUND_CEILING))
+
+
+def _write_cropped_graphic_input(value, path, size):
+    """Decode the graphic's content box instead of a full transparent canvas."""
+    write_graphic_overlay(value, path, size)
+    with Image.open(path) as image:
+        bounds = image.getbbox(alpha_only=False)
+        if bounds is None:
+            return (0, 0)
+        # Even origins preserve yuv420 overlay placement, including alpha edges
+        # and RGB stored in zero-alpha pixels.
+        box = (bounds[0] // 2 * 2, bounds[1] // 2 * 2,
+            min(size[0], (bounds[2] + 1) // 2 * 2), min(size[1], (bounds[3] + 1) // 2 * 2))
+        cropped = image.crop(box)
+    cropped.save(path)
+    return box[:2]
 
 
 def _write_timed_subtitle_input(schedule, images: list[Path], output_dir: Path, *,
@@ -2071,10 +2093,10 @@ def _picture_window_layers(window, output, context, layers, filters, size):
             captions.append((layer.first_frame, layer.last_frame))
             caption_paths.append(path)
         elif layer.kind == 'graphic':
-            write_graphic_overlay(layer.value, path, size)
-            arguments.extend(['-loop', '1', '-framerate', '30', '-i', str(path)])
+            left, top = _write_cropped_graphic_input(layer.value, path, size)
+            arguments.extend(['-loop', '1', '-framerate', '30', '-threads', str(context.threads), '-i', str(path)])
             following = f'[graphic{input_index}]'
-            graph.append(f"{label}[{input_index}:v]overlay=0:0:shortest=1:"
+            graph.append(f"{label}[{input_index}:v]overlay={left}:{top}:shortest=1:"
                 f"enable='gte(n,{layer.first_frame})*lt(n,{layer.last_frame})'{following}")
             label = following
             input_index += 1
@@ -2083,7 +2105,8 @@ def _picture_window_layers(window, output, context, layers, filters, size):
     if captions:
         manifest, position = _write_frame_subtitle_input(captions, caption_paths, directory,
             size=size, frame_count=window.frame_count, crop_to_content=False, check=check_layers)
-        arguments.extend(['-f', 'concat', '-safe', '0', '-protocol_whitelist', 'file', '-i', str(manifest)])
+        arguments.extend(['-f', 'concat', '-safe', '0', '-protocol_whitelist', 'file',
+            '-threads', str(context.threads), '-i', str(manifest)])
         graph.append(f'[{input_index}:v]setpts=PTS-STARTPTS,format=rgba[subtitleclock]')
         graph.append(f'{label}[subtitleclock]overlay={position[0]}:{position[1]}:'
             'shortest=0:eof_action=pass:repeatlast=0[windowcaptioned]')

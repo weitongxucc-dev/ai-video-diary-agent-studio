@@ -350,7 +350,10 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     // The section owner checks the original section and dependency digest.
     // The quality application reads an existing successor before checking HEAD for a new continuation.
     const qualityContinuation = path === `${taskRoot}/quality-check/continue`;
-    if (taskId && selectedTaskVersion && write && !sectionWrite && !targetedRestore && !qualityContinuation && path.startsWith(`${taskRoot}/`)) {
+    // Observation freezes the current output version in its payload. Its owner
+    // checks that version at admission; this does not rebase an edit selection.
+    const outputObservation = path === `${taskRoot}/observations`;
+    if (taskId && selectedTaskVersion && write && !sectionWrite && !targetedRestore && !qualityContinuation && !outputObservation && path.startsWith(`${taskRoot}/`)) {
       try {
         const current = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}`, undefined, false);
         verifyTaskVersion(current);

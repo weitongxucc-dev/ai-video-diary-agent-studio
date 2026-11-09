@@ -256,6 +256,21 @@ def test_graphics_keep_their_clock_below_subtitles_and_hidden_tracks_have_no_sub
     assert "合成字幕 0" in hidden["sidecar"]  # hidden display still exports the current sidecar
 
 
+def test_cropped_graphic_input_reconstructs_every_rgba_pixel_at_the_original_position(tmp_path, monkeypatch):
+    original = Image.new('RGBA', (1080, 1920))
+    original.paste((255, 0, 0, 127), (17, 23, 180, 182))
+    original.putpixel((181, 185), (0, 255, 0, 0))
+    monkeypatch.setattr(montage, 'write_graphic_overlay', lambda value, path, size: original.save(path))
+    path = tmp_path / 'graphic.png'
+    left, top = montage._write_cropped_graphic_input({}, path, original.size)
+    with Image.open(path) as cropped:
+        assert cropped.width < original.width and cropped.height < original.height
+        assert left % 2 == top % 2 == 0
+        restored = Image.new('RGBA', original.size)
+        restored.paste(cropped, (left, top))
+    assert restored.tobytes() == original.tobytes()
+
+
 @pytest.mark.parametrize("english_position", ["bottom", "top"])
 @pytest.mark.parametrize("background_opacity", [0, .6])
 def test_cropped_real_bilingual_captions_restore_exact_rgba_at_every_picture_frame(tmp_path, english_position, background_opacity):
