@@ -327,6 +327,20 @@ def test_sdk_validation_omits_unknown_validation_text():
     assert "private-value" not in json.dumps(event)
 
 
+@pytest.mark.parametrize("problem,explanation", [
+    ("missing", "limit 为必填参数"),
+    ("expected number, got string", "limit 必须使用数字"),
+    ("expected array, got object", "limit: expected array"),
+])
+def test_pi_schema_failure_preserves_safe_repair_fields(problem, explanation):
+    raw = (f'Validation failed for tool "preview_creation_plan":\n  - limit: {problem}'
+        '\n\nReceived arguments:\n{"token":"private-token","path":"/Users/private/file"}')
+    event = _project({"isError": True, "details": {}, "content": [{"type": "text", "text": raw}]}, "preview_creation_plan")
+    assert explanation in event["failure"]["reason"]
+    assert event["failure"]["submission_effect"] == "not_submitted"
+    assert "private" not in json.dumps(event)
+
+
 def test_projection_whitelist_does_not_accept_raw_or_wrongly_typed_fields():
     safe = _safe_business_failure({"reason": "身份服务暂不可用。 /Users/private/a token=opaque", "repair_action": "读取原请求。",
         "error": "auth_dependency_unavailable", "stage": "task_version_preflight", "submission_effect": "not_submitted",

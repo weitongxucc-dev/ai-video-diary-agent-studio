@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from app.assistant.tool_sources import tool_sources_readable
 from app.assistant.failures import _FAILURES, FAILURE_RUNTIME_MISSING
 
-PI_SDK_VERSION = "1.4.0"
+PI_SDK_VERSION = "1.5.0"
 
 
 def sdk_module(pi_executable: str) -> Path | None:
