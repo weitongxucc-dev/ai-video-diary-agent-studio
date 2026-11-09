@@ -309,7 +309,7 @@ class AudioDeliveryAssembly:
             # Full-byte verification belongs to the active Grant, never admission.
             for parent in parents:
                 context.check()
-                check_current = context.scheduler.capture_running_check(context.grant)
+                check_current = context.scheduler.capture_dependency_check(context.grant)
                 path = Path(parent['path'])
                 descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
                 with os.fdopen(descriptor, 'rb') as source:

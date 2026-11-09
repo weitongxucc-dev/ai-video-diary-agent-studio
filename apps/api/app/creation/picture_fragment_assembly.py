@@ -236,7 +236,7 @@ class PictureFragmentAssembly:
         try:
             source = Path(unit['source']['path'])
             context.check()
-            check_current = context.scheduler.capture_running_check(context.grant)
+            check_current = context.scheduler.capture_dependency_check(context.grant)
             digest = hashlib.sha256()
             descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(descriptor, 'rb') as reader:

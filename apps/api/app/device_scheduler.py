@@ -1275,8 +1275,8 @@ class DeviceScheduler(DeviceRequestReadAccess):
             if self.resources.continue_unit(grant) is not True:
                 raise RecoveryBlocked("运行中资源未知或不足，须在安全边界让出")
 
-    def capture_running_check(self, grant: Grant):
-        """Freeze this command's local dependencies before launch, then read versions."""
+    def capture_dependency_check(self, grant: Grant):
+        """Check a held grant and live local dependencies without sampling resources."""
         with self._connect() as conn:
             self._assert_grant(conn, grant)
             row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (grant.request_id,)).fetchone()
@@ -1286,8 +1286,15 @@ class DeviceScheduler(DeviceRequestReadAccess):
             with self._connect() as conn:
                 self._assert_grant(conn, grant)
                 self._require_current(self.owners.check_local(request, conn, local), grant)
-                if self.resources.continue_unit(grant) is not True:
-                    raise RecoveryBlocked("运行中资源未知或不足，须在安全边界让出")
+        return check
+
+    def capture_running_check(self, grant: Grant):
+        """Check command dependencies and observe its current resource conditions."""
+        check_dependencies = self.capture_dependency_check(grant)
+        def check():
+            check_dependencies()
+            if self.resources.continue_unit(grant) is not True:
+                raise RecoveryBlocked("运行中资源未知或不足，须在安全边界让出")
         return check
 
     def shutdown_released(self) -> bool:

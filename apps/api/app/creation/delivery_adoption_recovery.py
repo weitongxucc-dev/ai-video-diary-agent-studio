@@ -276,7 +276,7 @@ class DeliveryAdoptionRecovery:
             plan = self.read_plan(job, request.unit_key.removeprefix(PREFIX), conn)
         for facts in [plan['video']] + ([plan['subtitle']] if plan['subtitle'] is not None else []):
             context.check()
-            check_current = context.scheduler.capture_running_check(context.grant)
+            check_current = context.scheduler.capture_dependency_check(context.grant)
             expected = facts['file_identity']
             binding = facts['parent']['binding'] if 'parent' in facts else facts
             descriptor = os.open(facts['path'], os.O_RDONLY | os.O_NOFOLLOW)

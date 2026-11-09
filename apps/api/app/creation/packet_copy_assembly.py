@@ -278,7 +278,7 @@ class PacketCopyAssembly:
         verified = {}
         for record, path, _facts in parents:
             context.check()
-            check_current = context.scheduler.capture_running_check(context.grant)
+            check_current = context.scheduler.capture_dependency_check(context.grant)
             before = _file_identity(path.stat())
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(descriptor, 'rb') as source:
