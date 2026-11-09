@@ -378,7 +378,8 @@ class AudioDeliveryAssembly:
                 if _identity(parent['path']) != parent['file_identity']:
                     raise ValueError('音画父文件在处理期间已变化，不发布')
             publication_started = True
-            published = self.store.publish_file(logical, output, temporary_path=files['published'], check=context.check)
+            published = self.store.publish_file(logical, output, temporary_path=files['published'],
+                check=context.check, retain_failed_temporary=True)
             identity = self._unit(manifest, phase)
             record = ArtifactRecord(f'artifact_{phase}_{identity}', job.workspace_id, job.task_id,
                 'rendered_video' if phase == 'final_mux' else phase, logical,

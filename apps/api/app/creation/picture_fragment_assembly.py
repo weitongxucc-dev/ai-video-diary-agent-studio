@@ -278,12 +278,13 @@ class PictureFragmentAssembly:
                     raise ValueError('画面与字幕真实总输出超出本单元许可')
                 subtitle_publication_started = True
                 published_subtitles = self.store.publish_file(subtitle_logical, subtitle_path,
-                    temporary_path=subtitle_temporary, check=context.check)
+                    temporary_path=subtitle_temporary, check=context.check, retain_failed_temporary=True)
             context.check()
             if _identity(source) != unit['source']['file_identity']:
                 raise ValueError('画面来源在编码期间已变化')
             started = True
-            published = self.store.publish_file(logical, output, temporary_path=publication_file, check=context.check)
+            published = self.store.publish_file(logical, output, temporary_path=publication_file,
+                check=context.check, retain_failed_temporary=True)
             record = ArtifactRecord(unit['artifact_id'], job.workspace_id, job.task_id, 'picture_fragment', logical,
                 published.sha256, published.size_bytes, job.id, [window.clip.source_path, *manifest['images']])
             facts = {**request.resources['picture_fragment'], 'recipe_digest': manifest['picture_recipe'],

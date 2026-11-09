@@ -174,7 +174,7 @@ class PacketCopyAssembly:
             record, _path, _facts = self._parent(job, unit['artifact_id'], manifest['recipe_digest'], connection=connection)
         except KeyError:
             return None
-        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=connection)
         if transform.parameters.get('packet_copy_manifest_digest') != manifest['manifest_digest']:
             raise ValueError('画面归约检查点不属于原manifest')
         return record
@@ -334,7 +334,8 @@ class PacketCopyAssembly:
                 if _file_identity(path.stat()) != verified[record.id]:
                     raise ValueError('画面父产物在copy期间已变化，未发布归约结果')
             publication_started = True
-            published = self.store.publish_file(logical, files['staging'], temporary_path=files['published'], check=context.check)
+            published = self.store.publish_file(logical, files['staging'], temporary_path=files['published'],
+                check=context.check, retain_failed_temporary=True)
             fragment = {'recipe_digest': manifest['recipe_digest'], 'contract': 'h264-crf20-b0-fmp4/v1',
                 'first_frame': unit['first_frame'], 'packet_count': unit['packet_count'],
                 'producer_request_id': context.grant.request_id, 'producer_generation': context.grant.generation,

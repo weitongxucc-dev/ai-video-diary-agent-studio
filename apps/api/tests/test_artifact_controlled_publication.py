@@ -38,7 +38,8 @@ def test_declared_temporary_path_is_the_actual_link_source(tmp_path, monkeypatch
     assert sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()) == ["final/result.mp4"]
 
 
-def test_copy_cancellation_removes_only_own_temporary_and_never_publishes(tmp_path):
+@pytest.mark.parametrize('retain_failed', [False, True])
+def test_copy_cancellation_preserves_metering_or_cleans_generic_copy_without_publishing(tmp_path, retain_failed):
     store = ArtifactStore(tmp_path / "store")
     source = tmp_path / "source"
     source.write_bytes(b"x" * (2 * 1024 * 1024))
@@ -49,8 +50,14 @@ def test_copy_cancellation_removes_only_own_temporary_and_never_publishes(tmp_pa
             raise Cancelled()
 
     with pytest.raises(Cancelled):
-        store.publish_file("result", source, temporary_path=temporary, check=check)
-    assert not temporary.exists()
+        store.publish_file("result", source, temporary_path=temporary, check=check,
+                           retain_failed_temporary=retain_failed)
+    if retain_failed:
+        assert temporary.read_bytes() == b'x' * (1024 * 1024)
+        with pytest.raises(FileExistsError):
+            store.publish_file("result", source, temporary_path=temporary, retain_failed_temporary=True)
+    else:
+        assert not temporary.exists()
     assert not (tmp_path / "store/result").exists()
 
 

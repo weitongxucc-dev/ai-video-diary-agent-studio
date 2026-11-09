@@ -121,6 +121,9 @@ def test_original_job_packet_tree_restarts_with_original_parents_and_real_limits
     case.executor.execute(first, case.scheduler)
     assert case.scheduler._get(first.request_id).state == 'done', case.repo.job_records.get_job_run('local', case.job.id).failure_reason
     completed = case.repo.execution_records.get_artifact_record('local', plan['units'][0]['artifact_id'])
+    with case.repo._connect() as conn:
+        conn.execute('BEGIN EXCLUSIVE')
+        assert service._completed(case.job, plan['units'][0], plan, connection=conn) == completed
     old_path = store.resolve_file(completed.logical_ref)
     old_sha, old_mtime = completed.sha256, old_path.stat().st_mtime_ns
     case.scheduler.close()
@@ -182,7 +185,8 @@ def test_packet_copy_before_start_rechecks_original_parent_and_quota(tmp_path, m
     case.scheduler.close()
 
 
-def test_packet_publication_unknown_keeps_original_reservation_and_receipt(tmp_path, monkeypatch):
+@pytest.mark.parametrize('partial_copy', [False, True])
+def test_packet_publication_unknown_keeps_original_reservation_and_receipt(tmp_path, monkeypatch, partial_copy):
     from app.device_scheduler import RecoveryBlocked
     case, service, budget, store, plan, original_next = _packet_case(tmp_path, monkeypatch)
     intent = original_next(case.repo, case.scheduler, case.job)
@@ -191,15 +195,27 @@ def test_packet_publication_unknown_keeps_original_reservation_and_receipt(tmp_p
     publish = store.publish_file
     def interrupted(logical_ref, source, **kwargs):
         def stop():
-            raise OSError('controlled publication interrupted before its cleanup')
+            from pathlib import Path
+            path = Path(kwargs['temporary_path'])
+            if not partial_copy or path.exists() and path.stat().st_size > 0:
+                raise OSError('controlled publication interrupted before its cleanup')
         return publish(logical_ref, source, **{**kwargs, 'check': stop})
     monkeypatch.setattr(store, 'publish_file', interrupted)
-    with pytest.raises(RecoveryBlocked, match='真实新文件字节未知'):
+    if partial_copy:
         case.executor.execute(grant, case.scheduler)
+        assert case.scheduler._get(grant.request_id).state == 'failed'
+        case.scheduler.assert_released(grant)
+    else:
+        with pytest.raises(RecoveryBlocked, match='真实新文件字节未知'):
+            case.executor.execute(grant, case.scheduler)
     usage = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
-    assert usage['reserved_bytes'] > 0 and usage['unknown_unit_count'] == 1
     event = case.repo.execution_records.get_task_event('local', f'event_{grant.request_id}_{grant.generation}_picture_output')
-    assert event.payload['consumption_known'] is False and event.payload['output_bytes'] is None
+    if partial_copy:
+        assert usage['reserved_bytes'] == 0 and usage['unknown_unit_count'] == 0
+        assert event.payload['consumption_known'] is True and event.payload['output_bytes'] > 0
+    else:
+        assert usage['reserved_bytes'] > 0 and usage['unknown_unit_count'] == 1
+        assert event.payload['consumption_known'] is False and event.payload['output_bytes'] is None
     with pytest.raises(KeyError):
         case.repo.execution_records.get_artifact_record('local', plan['units'][0]['artifact_id'])
     case.scheduler.close()
