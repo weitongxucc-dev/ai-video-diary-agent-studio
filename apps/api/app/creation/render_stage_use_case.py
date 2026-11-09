@@ -9,15 +9,24 @@ from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from app.creation.duration_requirement import DurationRequirement, DurationConflict
+from app.creation.picture_fragment_layers import PICTURE_LAYER_CONTRACT
 from app.canvas import canvas_size
-from app.creation.contracts import ArtifactRecord, DependencyEdge, JobRun, TaskEvent, TimelineVersion, TransformRun
+from app.creation.contracts import (
+    ArtifactRecord,
+    DependencyEdge,
+    JobRun,
+    TaskEvent,
+    TimelineVersion,
+    TransformRun,
+)
 from app.creation.editing.metadata_use_case import InvalidMontage
 from app.creation.transactions import clone_subtitle_track as _clone_subtitle_track, clone_cover_asset as _clone_cover_asset
 from app.creation_execution import CpuRenderGrantContext
 from app.media.picture_preview import PicturePreviewRejected
 from app.models import utc_now
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, _validate_rendered_media
-from app.production import CreationTask, MediaAuthorityError
+from app.materials.contracts import MediaAuthorityError
+from app.creation.contracts import CreationTask
 from app.task_runtime import JobFailure, JobResult
 
 CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v22"
@@ -44,6 +53,7 @@ def render_input_payload(
     for transient_key in ("status", "message", "output_path", "subtitle_path", "updated_at"):
         payload.pop(transient_key, None)
     payload["render_contract_version"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
+    payload["picture_layer_contract"] = PICTURE_LAYER_CONTRACT
     if bind_timeline_version:
         payload["timeline_version_id"] = timeline_version_id
     payload["subtitles_visible"] = subtitles_visible
@@ -87,7 +97,7 @@ class RenderStageUseCase:
             )
         except KeyError as exc:
             raise RenderRejected(status_code=404, detail="creation task montage plan not found") from exc
-        requirement = DurationRequirement.from_plan(self.repository.get_creation_plan(workspace_id, task.plan_id))
+        requirement = DurationRequirement.from_plan(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))
         try:
             requirement.require(plan.duration_seconds, 30)
         except DurationConflict as exc:
@@ -109,7 +119,7 @@ class RenderStageUseCase:
             raise RenderRejected(status_code=409,detail=str(exc)) from exc
         active_subtitle_tracks = self.current_subtitle_tracks(workspace_id, task, montage=plan)
         active_version = (
-            self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             if task.current_timeline_version_id
             else None
         )
@@ -167,8 +177,8 @@ class RenderStageUseCase:
             if not isinstance(transform_id, str) or not transform_id.startswith("transform_job_"):
                 raise ValueError("成片恢复缺少内层渲染记录")
             inner_id = transform_id.removeprefix("transform_")
-            inner_job = self.repository.get_job_run(workspace_id, inner_id)
-            transform = self.repository.get_transform_run(workspace_id, transform_id)
+            inner_job = self.repository.job_records.get_job_run(workspace_id, inner_id)
+            transform = self.repository.lineage_records.get_transform_run(workspace_id, transform_id)
             output_refs = [plan.output_path, plan.subtitle_path]
             if (input_digest != original_digest or inner_job.task_id != task.id
                     or inner_job.kind != "creation_task_montage_render"
@@ -181,7 +191,7 @@ class RenderStageUseCase:
                     or snapshot.get("output_refs") != output_refs):
                 raise ValueError("成片恢复输入或已发布产物不匹配")
             render_context.scheduler.assert_grant(render_context.grant)
-            subtitle_record = self.repository.get_artifact_record(workspace_id, f"artifact_{inner_id}_subtitles")
+            subtitle_record = self.repository.execution_records.get_artifact_record(workspace_id, f"artifact_{inner_id}_subtitles")
             published_subtitle = self.metadata.artifact_store.describe(plan.subtitle_path)
             if (subtitle_record.producer_job_id != inner_id or subtitle_record.logical_ref != plan.subtitle_path
                     or subtitle_record.sha256 != published_subtitle.sha256
@@ -191,7 +201,7 @@ class RenderStageUseCase:
         base_idempotency_key = f"montage-render:{task.id}:{input_digest}"
         matching_jobs = [
             existing
-            for existing in self.repository.list_job_runs(workspace_id, task.id)
+            for existing in self.repository.job_records.list_job_runs(workspace_id, task.id)
             if existing.kind == "creation_task_montage_render"
             and existing.input_digest == input_digest
         ]
@@ -210,7 +220,7 @@ class RenderStageUseCase:
                 and latest_matching_job.status == "succeeded"):
             reusable_records = [
                 record
-                for record in self.repository.list_artifact_records(workspace_id, task.id)
+                for record in self.repository.execution_records.list_artifact_records(workspace_id, task.id)
                 if record.producer_job_id == latest_matching_job.id
                 and record.logical_ref in latest_matching_job.output_refs
             ]
@@ -229,17 +239,17 @@ class RenderStageUseCase:
                     plan.subtitle_path = reusable_subtitles.logical_ref
                     plan.message = "已复用输入一致且通过校验的成片，等待检查。"
                     rendered_payload = creation_task_montage_plan_to_payload(plan)
-                    self.repository.save_creation_task_montage_plan(
+                    self.repository.montage_plan_adoption.save_creation_task_montage_plan(
                         workspace_id, task.id, plan.id, rendered_payload
                     )
-                    versions = self.repository.list_timeline_versions(workspace_id, task.id)
-                    current_task = self.repository.get_creation_task(workspace_id, task.id)
+                    versions = self.repository.timeline_records.list_timeline_versions(workspace_id, task.id)
+                    current_task = self.repository.task_records.get_creation_task(workspace_id, task.id)
                     version_id = f"timeline_{uuid4().hex}"
                     inherited_cover = (
                         _clone_cover_asset(active_cover, timeline_version_id=version_id)
                         if active_cover is not None else None
                     )
-                    version = self.repository.create_timeline_version(
+                    version = self.repository.timeline_records.create_timeline_version(
                         TimelineVersion(
                             id=version_id,
                             workspace_id=workspace_id,
@@ -261,13 +271,13 @@ class RenderStageUseCase:
                         )
                     )
                     if inherited_cover is not None:
-                        self.repository.create_cover_asset(inherited_cover)
-                    if not self.repository.list_subtitle_tracks(
+                        self.repository.cover_records.create_cover_asset(inherited_cover)
+                    if not self.repository.subtitle_records.list_subtitle_tracks(
                         workspace_id, task.id, timeline_version_id=version.id
                     ):
                         if active_subtitle_tracks:
                             for active_track in active_subtitle_tracks:
-                                self.repository.create_subtitle_track(
+                                self.repository.subtitle_records.create_subtitle_track(
                                     _clone_subtitle_track(
                                         active_track,
                                         timeline_version_id=version.id,
@@ -288,8 +298,8 @@ class RenderStageUseCase:
                                 workspace_id, task, version, plan
                             )
                             if initial_track is not None:
-                                self.repository.create_subtitle_track(initial_track)
-                    self.repository.append_task_event(
+                                self.repository.subtitle_records.create_subtitle_track(initial_track)
+                    self.repository.execution_records.append_task_event(
                         TaskEvent(
                             id=f"event_{version.id}_render_reused",
                             workspace_id=workspace_id,
@@ -324,7 +334,7 @@ class RenderStageUseCase:
         )
 
         def render_job(context) -> JobResult:
-            running_job = self.repository.get_job_run(
+            running_job = self.repository.job_records.get_job_run(
                 context.workspace_id, context.job_id
             )
             try:
@@ -336,12 +346,12 @@ class RenderStageUseCase:
                     rendered = plan
                     rendered.status = "rendered"
                 except FileNotFoundError:
-                    narration_path = self.repository.resolve_authorized_narration_audio_reference(
+                    narration_path = self.repository.narration_artifacts.resolve_authorized_narration_audio_reference(
                         workspace_id, plan.narration_audio_path or ""
                     )
                     rendering_payload = creation_task_montage_plan_to_payload(plan)
                     rendering_payload["status"] = "rendering"
-                    self.repository.save_creation_task_montage_plan(
+                    self.repository.montage_plan_adoption.save_creation_task_montage_plan(
                         workspace_id, task.id, plan.id, rendering_payload,
                         **({"expected_current_version_id": plan_input["timeline_version_id"]}
                            if render_context is not None else {}),
@@ -388,9 +398,9 @@ class RenderStageUseCase:
                     ),
                 ):
                     try:
-                        self.repository.get_artifact_record(workspace_id, artifact_id)
+                        self.repository.execution_records.get_artifact_record(workspace_id, artifact_id)
                     except KeyError:
-                        self.repository.create_artifact_record(
+                        self.repository.execution_records.create_artifact_record(
                             ArtifactRecord(
                                 id=artifact_id,
                                 workspace_id=workspace_id,
@@ -407,11 +417,11 @@ class RenderStageUseCase:
                 output_refs = [video_ref, subtitle_ref]
                 active_transform_id = f"transform_{context.job_id}"
                 try:
-                    transform = self.repository.get_transform_run(
+                    transform = self.repository.lineage_records.get_transform_run(
                         workspace_id, active_transform_id
                     )
                 except KeyError:
-                    transform = self.repository.create_transform_run(
+                    transform = self.repository.lineage_records.create_transform_run(
                         TransformRun(
                             id=active_transform_id,
                             workspace_id=workspace_id,
@@ -439,9 +449,9 @@ class RenderStageUseCase:
                         ).hexdigest()[:24]
                         edge_id = f"edge_{context.job_id}_{edge_digest}"
                         try:
-                            self.repository.get_dependency_edge(workspace_id, edge_id)
+                            self.repository.lineage_records.get_dependency_edge(workspace_id, edge_id)
                         except KeyError:
-                            self.repository.create_dependency_edge(
+                            self.repository.lineage_records.create_dependency_edge(
                                 DependencyEdge(
                                     id=edge_id,
                                     workspace_id=workspace_id,
@@ -460,12 +470,12 @@ class RenderStageUseCase:
                     render_context.check()
                 version_id = f"timeline_{context.job_id}"
                 try:
-                    version = self.repository.get_timeline_version(
+                    version = self.repository.timeline_records.get_timeline_version(
                         workspace_id, version_id
                     )
                 except KeyError:
-                    versions = self.repository.list_timeline_versions(workspace_id, task.id)
-                    current_task = self.repository.get_creation_task(workspace_id, task.id)
+                    versions = self.repository.timeline_records.list_timeline_versions(workspace_id, task.id)
+                    current_task = self.repository.task_records.get_creation_task(workspace_id, task.id)
                     parent_version_id = current_task.current_timeline_version_id
                     if (render_context is not None
                             and parent_version_id != plan_input["timeline_version_id"]):
@@ -495,16 +505,16 @@ class RenderStageUseCase:
                         },
                         created_by_operation_id=None,
                     )
-                self.repository.publish_creation_task_render(
+                self.repository.montage_plan_adoption.publish_creation_task_render(
                     workspace_id, task.id, rendered.id, rendered_payload, version,
                     **({"expected_current_version_id": plan_input["timeline_version_id"]}
                        if render_context is not None else {}),
                 )
                 event_id = f"event_{context.job_id}_render_succeeded"
                 try:
-                    self.repository.get_task_event(workspace_id, event_id)
+                    self.repository.execution_records.get_task_event(workspace_id, event_id)
                 except KeyError:
-                    self.repository.append_task_event(
+                    self.repository.execution_records.append_task_event(
                         TaskEvent(
                             id=event_id,
                             workspace_id=workspace_id,
@@ -520,22 +530,22 @@ class RenderStageUseCase:
                     )
                 # The selected cover is an immutable image with its own source reference;
                 # rendering a video must not silently discard or retarget that selection.
-                if active_cover is not None and not self.repository.list_cover_assets(
+                if active_cover is not None and not self.repository.cover_records.list_cover_assets(
                     workspace_id, task.id, timeline_version_id=version.id
                 ):
-                    self.repository.create_cover_asset(
+                    self.repository.cover_records.create_cover_asset(
                         replace(
                             _clone_cover_asset(active_cover, timeline_version_id=version.id),
                             id=version.snapshot["cover_asset_id"],
                         )
                     )
-                persisted_tracks = self.repository.list_subtitle_tracks(
+                persisted_tracks = self.repository.subtitle_records.list_subtitle_tracks(
                     workspace_id, task.id, timeline_version_id=version.id
                 )
                 if not persisted_tracks:
                     if active_subtitle_tracks:
                         for active_track in active_subtitle_tracks:
-                            self.repository.create_subtitle_track(
+                            self.repository.subtitle_records.create_subtitle_track(
                                 _clone_subtitle_track(
                                     active_track,
                                     timeline_version_id=version.id,
@@ -556,7 +566,7 @@ class RenderStageUseCase:
                             workspace_id, task, version, rendered
                         )
                         if initial_track is not None:
-                            self.repository.create_subtitle_track(initial_track)
+                            self.repository.subtitle_records.create_subtitle_track(initial_track)
                 context.report_progress(100)
                 return JobResult(tuple(output_refs))
             except JobFailure:
@@ -574,9 +584,9 @@ class RenderStageUseCase:
         if result.status != "succeeded":
             transform_id = f"transform_{result.id}"
             try:
-                self.repository.get_transform_run(workspace_id, transform_id)
+                self.repository.lineage_records.get_transform_run(workspace_id, transform_id)
             except KeyError:
-                self.repository.create_transform_run(
+                self.repository.lineage_records.create_transform_run(
                     TransformRun(
                         id=transform_id,
                         workspace_id=workspace_id,
@@ -599,7 +609,7 @@ class RenderStageUseCase:
             plan.output_path = None
             plan.subtitle_path = None
             plan.message = f"成片渲染失败：{result.failure_reason or '未知错误'}"
-            self.repository.save_failed_creation_task_render_if_current(
+            self.repository.montage_plan_adoption.save_failed_creation_task_render_if_current(
                 workspace_id, task.id, plan.id, creation_task_montage_plan_to_payload(plan),
                 **({"expected_current_version_id": plan_input["timeline_version_id"]}
                    if render_context is not None else {}),
@@ -626,10 +636,10 @@ class RenderStageUseCase:
         timeline_version: TimelineVersion | None = None,
     ) -> bool:
         try:
-            task = self.repository.get_creation_task(workspace_id, task_id)
+            task = self.repository.task_records.get_creation_task(workspace_id, task_id)
             if not task.current_timeline_version_id:
                 return False
-            version = timeline_version or self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            version = timeline_version or self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
             plan = version.snapshot["montage"] if timeline_version is not None else self.repository.get_creation_task_montage_plan(workspace_id, task_id)
             ref = plan.get("output_path")
             if (plan.get("status") != "rendered" or not isinstance(ref, str)
@@ -637,10 +647,14 @@ class RenderStageUseCase:
                 return False
             if version.task_id != task_id or ref not in version.snapshot.get("output_refs", []):
                 return False
+            if 'audio_delivery' in version.snapshot:
+                from app.creation.final_delivery_adoption import valid_delivery
+                return valid_delivery(self.repository, self.metadata.artifact_store, task, version, plan,
+                    metadata=self.metadata, render_context=render_context if verify_media else None)
             transform_id = version.snapshot.get("transform_run_id")
             if not isinstance(transform_id, str):
                 return False
-            transform = self.repository.get_transform_run(workspace_id, transform_id)
+            transform = self.repository.lineage_records.get_transform_run(workspace_id, transform_id)
             if (transform.task_id != task_id or transform.status != "succeeded"
                     or ref not in transform.output_refs
                     or transform.output_refs != version.snapshot.get("output_refs")):
@@ -659,7 +673,7 @@ class RenderStageUseCase:
                         or not isinstance(version.snapshot.get("render_input_subtitle_tracks"), list)
                         or transform.input_digest != render_input_digest):
                     return False
-                input_version = self.repository.get_timeline_version(workspace_id, input_version_id)
+                input_version = self.repository.timeline_records.get_timeline_version(workspace_id, input_version_id)
                 if input_version.task_id != task_id:
                     return False
             input_plan = creation_task_montage_plan_from_payload(plan)
@@ -670,7 +684,7 @@ class RenderStageUseCase:
                 input_version_id = version.snapshot.get("render_input_timeline_version_id")
                 if not isinstance(input_version_id, str) or version.parent_version_id != input_version_id:
                     return False
-                input_version = self.repository.get_timeline_version(workspace_id, input_version_id)
+                input_version = self.repository.timeline_records.get_timeline_version(workspace_id, input_version_id)
                 input_plan_payload = input_version.snapshot.get("montage")
                 subtitle_tracks = version.snapshot.get("render_input_subtitle_tracks")
                 subtitles_visible = version.snapshot.get("render_input_subtitles_visible")
@@ -700,25 +714,25 @@ class RenderStageUseCase:
                         return False
                     segments_by_id = {segment.id: segment for segment in narration_segments}
                     cues_by_id = {cue.id: cue for cue in input_plan.cues}
-                    person_transforms = self.repository.list_transform_runs(workspace_id, task_id)
+                    person_transforms = self.repository.lineage_records.list_transform_runs(workspace_id, task_id)
                     for clip in person_clips:
                         cue = cues_by_id.get(clip.cue_id)
                         segment = segments_by_id.get(cue.narration_segment_id) if cue and cue.narration_segment_id else None
                         if segment is None:
                             return False
-                        person_render = self.repository.get_person_render(workspace_id, task_id, clip.person_render_id)
+                        person_render = self.repository.person_renders.get_person_render(workspace_id, task_id, clip.person_render_id)
                         if (person_render.status != "ready"
                                 or person_render.narration_segment_id != segment.id
                                 or not self.person_preview.render_matches_narration(person_render, segment, person_transforms)):
                             return False
             registered = next(
-                (artifact for artifact in self.repository.list_artifact_records(workspace_id, task_id)
+                (artifact for artifact in self.repository.execution_records.list_artifact_records(workspace_id, task_id)
                  if artifact.logical_ref == ref and artifact.kind == "rendered_video"),
                 None,
             )
             if registered is None or registered.producer_job_id != transform.job_id:
                 return False
-            job = self.repository.get_job_run(workspace_id, registered.producer_job_id)
+            job = self.repository.job_records.get_job_run(workspace_id, registered.producer_job_id)
             if (job.status != "succeeded" or job.task_id != task_id
                     or (render_input_digest is not None and job.kind != "creation_task_montage_render")
                     or job.output_refs != transform.output_refs
@@ -750,7 +764,7 @@ class RenderStageUseCase:
             _validate_rendered_media(path, expected_size=canvas_size(str(plan["aspect_ratio"])),
                                      expected_duration_seconds=float(plan["duration_seconds"]),
                                      duration_requirement=DurationRequirement.from_plan(
-                                         self.repository.get_creation_plan(workspace_id, task.plan_id)),
+                                         self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)),
                                      **media_options)
             return True
         except (KeyError, FileNotFoundError, ValueError, OSError):
@@ -759,15 +773,18 @@ class RenderStageUseCase:
     def valid_with_grant(self, workspace_id: str, task_id: str, grant: CpuRenderGrantContext) -> bool:
         valid = self.valid(workspace_id, task_id, render_context=grant)
         if valid:
-            plan = self.repository.get_creation_task_montage_plan(workspace_id, task_id)
-            self.graphic_source_paths(workspace_id, task_id, plan.get("graphic_overlays", []), grant)
+            task = self.repository.task_records.get_creation_task(workspace_id, task_id)
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            if 'audio_delivery' not in version.snapshot:
+                plan = self.repository.get_creation_task_montage_plan(workspace_id, task_id)
+                self.graphic_source_paths(workspace_id, task_id, plan.get("graphic_overlays", []), grant)
         return valid
 
     def record_usage(self, workspace_id: str, plan) -> None:
         for clip in plan.clips:
             if clip.person_render_id:
                 continue
-            self.repository.record_segment_usage(
+            self.repository.material_assets.record_segment_usage(
                 workspace_id,
                 clip.asset_id,
                 clip.segment_id,
@@ -777,7 +794,7 @@ class RenderStageUseCase:
 
     def task_or_missing(self, workspace_id: str, task_id: str) -> CreationTask:
         try:
-            return self.repository.get_creation_task(workspace_id, task_id)
+            return self.repository.task_records.get_creation_task(workspace_id, task_id)
         except KeyError as exc:
             raise RenderRejected(status_code=404, detail="creation task not found") from exc
 
@@ -801,9 +818,9 @@ class RenderStageUseCase:
 
     def render_montage(self, workspace_id, plan, narration_audio_path, *, job_staging_path=None, subtitle_tracks=None, render_context=None):
         original_requirement = plan.duration_requirement
-        task = self.repository.get_creation_task(workspace_id, plan.task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, plan.task_id)
         plan.duration_requirement = DurationRequirement.from_plan(
-            self.repository.get_creation_plan(workspace_id, task.plan_id)).payload()
+            self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)).payload()
         try:
             return self.metadata.picture_renderer.render_montage(workspace_id, plan, narration_audio_path, job_staging_path=job_staging_path, subtitle_tracks=subtitle_tracks, render_context=render_context)
         except PicturePreviewRejected as exc:

@@ -1,0 +1,225 @@
+"""One granted packet-copy unit, with stream costs and live file allocations.
+
+The creation owner proves artifact lineage and authorization. This module proves
+only the declared resource shape. It neither grants work nor certifies throughput.
+"""
+from dataclasses import asdict, dataclass
+import hashlib
+import json
+import math
+from pathlib import Path
+import re
+import stat
+
+import psutil
+
+from app.device_resource_volumes import existing_volume
+
+
+PACKET_COPY_POLICY = 'packet-copy-bounded-preparation/v1'
+PACKET_COPY_UNIT_PREFIX = 'render:packet-copy:v1:'
+_ROLES = {'manifest', 'staging', 'published'}
+
+
+def _digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'),
+        ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+
+
+def _sha(value):
+    return isinstance(value, str) and re.fullmatch('[0-9a-f]{64}', value) is not None
+
+
+def _positive(value):
+    return type(value) is int and value > 0
+
+
+@dataclass(frozen=True)
+class PacketCopyBudget:
+    backend_identity: str
+    max_process_rss_bytes: int
+    additional_memory_bytes: int
+    max_process_threads: int
+    threads: int
+    runtime_sample_seconds: float
+    max_stdout_bytes: int
+    max_stderr_bytes: int
+    max_manifest_bytes: int
+    preparation_timeout_seconds: float
+    policy_id: str = PACKET_COPY_POLICY
+
+    def __post_init__(self):
+        if (not _sha(self.backend_identity) or self.policy_id != PACKET_COPY_POLICY
+                or any(not _positive(getattr(self, name)) for name in (
+                    'max_process_rss_bytes', 'additional_memory_bytes', 'max_process_threads',
+                    'threads', 'max_stdout_bytes', 'max_stderr_bytes', 'max_manifest_bytes'))
+                or self.additional_memory_bytes < self.max_process_rss_bytes
+                or self.max_process_threads < self.threads
+                or self.max_manifest_bytes > self.max_process_rss_bytes
+                or any(type(value) not in {int, float} or not math.isfinite(value) or value <= 0
+                    for value in (self.runtime_sample_seconds, self.preparation_timeout_seconds))
+                or self.runtime_sample_seconds > .25):
+            raise ValueError('Packet copy needs a finite explicit process preparation policy')
+
+    @property
+    def digest(self):
+        return _digest(asdict(self))
+
+
+def packet_copy_preparation_budget(*, host_budget, backend_identity):
+    """Explicit first-use choice from an existing CPU process policy, not its rate.
+
+    Preserve its finite RSS/thread/time envelopes. The current native command
+    adapter has 64 KiB stdout and 256 KiB stderr buffers; metadata receives at
+    most 1/16 of the RSS envelope and 64 KiB per reduction unit. These versioned
+    preparation allowances are not model/codec measurements or a film limit.
+    """
+    cpu = host_budget.cpu_render
+    if cpu is None:
+        raise ValueError('Packet-copy preparation needs an explicit host process policy')
+    return PacketCopyBudget(backend_identity, cpu.additional_memory_bytes,
+        cpu.additional_memory_bytes, cpu.max_process_threads, 1,
+        host_budget.sample_seconds, 65536, 262144,
+        min(65536, cpu.additional_memory_bytes // 16), cpu.max_timeout_seconds)
+
+
+def _locations(write_paths, write_files, publication_mode):
+    if (not isinstance(write_paths, dict) or not isinstance(write_files, dict)
+            or set(write_paths) != _ROLES or set(write_files) != _ROLES
+            or publication_mode not in {'atomic_rename', 'copy'}):
+        raise ValueError('Packet-copy paths must name every actual newly written file role')
+    paths, files, volumes = {}, {}, {}
+    for role in sorted(_ROLES):
+        directory, file = Path(write_paths[role]).expanduser(), Path(write_files[role]).expanduser()
+        if (not directory.is_absolute() or not file.is_absolute() or file.is_symlink()
+                or file.parent.resolve() != directory.resolve()):
+            raise ValueError('Packet-copy file is not in its declared actual directory')
+        paths[role], files[role] = str(directory.resolve()), str(file.parent.resolve() / file.name)
+        volumes[role] = existing_volume(directory)[0]
+    if len(set(files.values())) != len(files):
+        raise ValueError('Packet-copy manifest, staging and publication files must be distinct')
+    if publication_mode == 'atomic_rename' and volumes['staging'] != volumes['published']:
+        raise ValueError('Atomic publication requires staging and destination on the same actual volume')
+    return paths, files, volumes
+
+
+def packet_copy_output_allocation(*, write_paths, write_files, publication_mode,
+                                  manifest_bytes, reserve_bytes):
+    """Finite available storage candidate, never an encoded-output prediction.
+
+    Existing parents already occupy free space. Copy publication reserves two
+    live outputs; a same-volume atomic rename reserves one. No source-size ratio
+    is asserted as a muxer bound. Caller still needs fresh host admission.
+    """
+    if not _positive(manifest_bytes) or type(reserve_bytes) is not int or reserve_bytes < 0:
+        raise ValueError('Packet-copy storage needs explicit manifest bytes and volume reserve')
+    paths, files, volumes = _locations(write_paths, write_files, publication_mode)
+    if any(Path(path).exists() for path in files.values()):
+        raise ValueError('New packet-copy allocation cannot overwrite an existing or partial output')
+    per_volume = {}
+    for role, volume in volumes.items():
+        item = per_volume.setdefault(volume, {'free': psutil.disk_usage(str(existing_volume(paths[role])[1])).free,
+                                              'fixed': reserve_bytes, 'copies': 0})
+        if role == 'manifest':
+            item['fixed'] += manifest_bytes
+        elif role == 'staging' or publication_mode == 'copy':
+            item['copies'] += 1
+    limits = []
+    for item in per_volume.values():
+        if type(item['free']) is not int:
+            raise OSError('Packet-copy write volume available space is unknown')
+        available = item['free'] - item['fixed']
+        if available < 0:
+            raise ValueError('Packet-copy write volume has insufficient or unknown available space')
+        if item['copies']:
+            limits.append(available // item['copies'])
+    limit = min(limits)
+    if limit <= 0:
+        raise ValueError('Packet-copy write volumes cannot reserve an output')
+    return limit
+
+
+def packet_copy_resources(*, budget, manifest_digest, unit_id, parents, expected_total_packets,
+                          write_paths, write_files, output_limit_bytes, manifest_bytes, publication_mode):
+    """Build facts from all actual parents; source bytes are stream work, not RSS."""
+    if not isinstance(budget, PacketCopyBudget) or not _sha(manifest_digest) or not _sha(unit_id):
+        raise ValueError('Packet copy needs a policy and original manifest/unit digests')
+    fields = {'artifact_id', 'sha256', 'size_bytes', 'packet_count', 'producer_request_id', 'producer_generation'}
+    if not isinstance(parents, (tuple, list)) or not parents:
+        raise ValueError('Packet copy needs all actual parents')
+    for parent in parents:
+        if (not isinstance(parent, dict) or set(parent) != fields or not _sha(parent['sha256'])
+                or any(not isinstance(parent[name], str) or not parent[name].strip()
+                       for name in ('artifact_id', 'producer_request_id'))
+                or any(not _positive(parent[name]) for name in ('size_bytes', 'packet_count', 'producer_generation'))):
+            raise ValueError('Packet-copy parent receipt facts are incomplete')
+    # Keep order and repeated uses: a repeated parent is real input work too.
+    parent_facts = [dict(parent) for parent in parents]
+    if (not _positive(expected_total_packets)
+            or sum(parent['packet_count'] for parent in parent_facts) != expected_total_packets
+            or not _positive(output_limit_bytes) or not _positive(manifest_bytes)
+            or manifest_bytes > budget.max_manifest_bytes
+            or len(json.dumps(parent_facts, ensure_ascii=False).encode()) > budget.max_manifest_bytes):
+        raise ValueError('Packet-copy packet clock or bounded manifest declaration is invalid')
+    paths, files, volumes = _locations(write_paths, write_files, publication_mode)
+    allocations = {'manifest': manifest_bytes, 'staging': output_limit_bytes,
+                   'published': output_limit_bytes if publication_mode == 'copy' else 0}
+    return {'kind': 'creation_packet_copy', 'execution_mode': 'ffmpeg_packet_copy',
+        'read_mode': 'stream', 'role': 'picture_packet_copy', 'manifest_digest': manifest_digest,
+        'unit_id': unit_id, 'parents': parent_facts, 'parent_bindings_digest': _digest(parent_facts),
+        'input_count': len(parent_facts), 'source_bytes': sum(parent['size_bytes'] for parent in parent_facts),
+        'expected_total_packets': expected_total_packets, 'budget_digest': budget.digest,
+        'backend_identity': budget.backend_identity, 'threads': budget.threads,
+        'max_output_bytes': output_limit_bytes, 'max_stdout_bytes': budget.max_stdout_bytes,
+        'max_stderr_bytes': budget.max_stderr_bytes, 'manifest_bytes': manifest_bytes,
+        'timeout_seconds': budget.preparation_timeout_seconds,
+        'publication_mode': publication_mode, 'write_paths': paths, 'write_files': files,
+        'write_allocations': allocations, 'write_volume_ids': volumes,
+        'workload_provenance': {'mode': 'bounded_preparation', 'policy_id': budget.policy_id,
+            'deadline_source': 'sealed_packet_copy_preparation_policy',
+            'deadline_seconds': budget.preparation_timeout_seconds,
+            'throughput_verification': 'unknown', 'decode_encode_work': 'not_applicable',
+            'output_limit_basis': 'finite_storage_allocation_not_encoded_size_prediction'}}
+
+
+def packet_copy_refusal(resources, budget):
+    if budget is None:
+        return 'packet_copy_policy_unavailable'
+    if resources.get('budget_digest') != budget.digest or resources.get('backend_identity') != budget.backend_identity:
+        return 'packet_copy_profile_changed'
+    try:
+        expected = packet_copy_resources(budget=budget, **{key: resources[key] for key in (
+            'manifest_digest', 'unit_id', 'parents', 'expected_total_packets', 'write_paths', 'write_files',
+            'manifest_bytes', 'publication_mode')},
+            output_limit_bytes=resources['max_output_bytes'])
+        if json.dumps(resources, sort_keys=True, allow_nan=False) != json.dumps(expected, sort_keys=True, allow_nan=False):
+            return 'packet_copy_resources_invalid'
+    except OSError:
+        return 'packet_copy_filesystem_unavailable'
+    except (ValueError, KeyError, TypeError):
+        return 'packet_copy_resources_invalid'
+    return None
+
+
+def packet_copy_remaining_allocations(resources, *, running):
+    """Reserve only still-unwritten bytes; missing is zero, unreadable is unknown."""
+    used = {}
+    for role, path in resources['write_files'].items():
+        try:
+            info = Path(path).lstat()
+        except FileNotFoundError:
+            used[role] = 0
+            continue
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError('Packet-copy output is not its own regular staging/publication file')
+        used[role] = info.st_size
+        cap = resources['manifest_bytes'] if role == 'manifest' else resources['max_output_bytes']
+        if info.st_size > cap or not running:
+            raise ValueError('Packet-copy output exceeds its allocation or already exists before admission')
+    allocations = resources['write_allocations']
+    if resources['publication_mode'] == 'atomic_rename':
+        if used['staging'] and used['published']:
+            raise ValueError('Atomic publication unexpectedly has two live output copies')
+        return {'manifest': allocations['manifest'] - used['manifest'],
+                'staging': allocations['staging'] - max(used['staging'], used['published']), 'published': 0}
+    return {role: allocations[role] - used[role] for role in allocations}

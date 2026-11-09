@@ -3,7 +3,6 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import hashlib
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -32,8 +31,10 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     with repo._connect() as conn:
         for table in ('creation_tasks','creation_plans'):
             row=conn.execute('SELECT id,payload FROM '+table+' WHERE workspace_id=?',('local',)).fetchone()
-            payload=json.loads(row['payload']);payload['owner_user_id']=actor.member_id
-            if table=='creation_tasks':payload['stage']='review'
+            payload=json.loads(row['payload'])
+            payload['owner_user_id']=actor.member_id
+            if table=='creation_tasks':
+                payload['stage']='review'
             conn.execute('UPDATE '+table+' SET payload=? WHERE id=?',(json.dumps(payload),row['id']))
     store = ArtifactStore(tmp_path/'outputs')
     monkeypatch.setattr(main, 'production_repo', repo)
@@ -83,25 +84,26 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     with repo._connect() as conn:
         repo._claim_workspace_media_reference(conn, workspace_id='local', reference=source_ref)
     publication = store.publish_file('artifacts/task/owned-final.mp4', original)
-    producer = repo.create_job_run(JobRun('fixture-output-job', 'local', 'task', 'creation_task_montage_render',
+    producer = repo.job_records.create_job_run(JobRun('fixture-output-job', 'local', 'task', 'creation_task_montage_render',
         'owned-output-input', hashlib.sha256(original.read_bytes()).hexdigest()))
-    running = repo.claim_job_run('local', producer.id)
-    artifact = repo.create_artifact_record(ArtifactRecord('fixture-output-artifact', 'local', 'task', 'rendered_video',
+    running = repo.job_records.claim_job_run('local', producer.id)
+    artifact = repo.execution_records.create_artifact_record(ArtifactRecord('fixture-output-artifact', 'local', 'task', 'rendered_video',
         publication.logical_ref, publication.sha256, publication.size_bytes, producer.id, [source_ref]))
-    repo.create_transform_run(TransformRun('fixture-output-transform', 'local', 'task', producer.id,
+    repo.lineage_records.create_transform_run(TransformRun('fixture-output-transform', 'local', 'task', producer.id,
         'rendered_video', producer.input_digest, [source_ref], [publication.logical_ref], 'synthetic-fixture-input/v1',
         {'width':width,'height':height,'duration_ms':2000}, 'succeeded', running.started_at, utc_now()))
-    repo.finish_job_run('local', producer.id, status='succeeded', output_refs=[publication.logical_ref])
+    repo.job_records.finish_job_run('local', producer.id, status='succeeded', output_refs=[publication.logical_ref])
     clip = MontageClip('clip-1', 'fixture-cue', asset.id, 'owned-segment', source_ref, 0, 2, 0, 2, 1, [], False)
     plan = CreationTaskMontagePlan('montage', 'local', 'task', 'fixture-script', 'owned output', 'rendered',
         [], [clip], 2, 0, aspect_ratio='16:9', output_path=publication.logical_ref)
     payload = creation_task_montage_plan_to_payload(plan)
-    repo.save_creation_task_montage_plan('local', 'task', plan.id, payload)
-    base = repo.create_timeline_version(TimelineVersion('v1', 'local', 'task', None, 1,
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local', 'task', plan.id, payload)
+    base = repo.timeline_records.create_timeline_version(TimelineVersion('v1', 'local', 'task', None, 1,
         {'montage':payload,'output_refs':[publication.logical_ref]}, None))
     assert type(media.output_observation) is OutputObservationUseCase
     assert runtime.registrations['creation_job'].owner.task_media is media
-    calls=[];execute=media.output_observation.execute
+    calls=[]
+    execute=media.output_observation.execute
     def observed(job,event,who,context):
         assert TASK_MEDIA_CONTEXT.get() is None and who==actor and context.grant.owner_id==job.id
         calls.append(job.id)
@@ -112,11 +114,15 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
         'expected_timeline_sequence':base.sequence,'target':{'kind':'final'}}
     first=client.post('/api/creation-tasks/task/observations',json=request)
     assert first.status_code==202,first.text
-    receipt=first.json();assert receipt['result'] is None and receipt['result_kind']=='observation'
+    receipt=first.json()
+    assert receipt['result'] is None and receipt['result_kind']=='observation'
     assert runtime.run_once()
-    done=client.get(receipt['result_url']);assert done.status_code==200,done.text
-    result=done.json();assert result['status']=='succeeded',result
-    measured=result['result'];assert measured['measurement_scope']=='actual_output_bounded_frames'
+    done=client.get(receipt['result_url'])
+    assert done.status_code==200,done.text
+    result=done.json()
+    assert result['status']=='succeeded',result
+    measured=result['result']
+    assert measured['measurement_scope']=='actual_output_bounded_frames'
     assert measured['output_role']=='composed_output' and measured['media']['width']==width and measured['media']['height']==height
     assert measured['output']['artifact_id']==artifact.id and measured['output']['sha256']==publication.sha256
     assert len(measured['samples'])==3 and all(s['object_refs']==['clip:clip-1'] for s in measured['samples'])
@@ -128,9 +134,9 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     query=client.get('/api/creation-tasks/task/assistant/edit-requests/'+request['request_id']+'?phase=observation')
     assert query.status_code==200 and query.json()['result']['job_id']==receipt['job_id']
     assert client.get(receipt['result_url']).json()['result']==measured and calls==[receipt['job_id']]
-    assert len(repo.list_job_runs('local','task'))==2 and len(repo.list_artifact_records('local','task'))==1
-    assert repo.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
-    assert repo.get_creation_task('local','task').current_timeline_version_id==base.id
+    assert len(repo.job_records.list_job_runs('local','task'))==2 and len(repo.execution_records.list_artifact_records('local','task'))==1
+    assert repo.execution_records.get_task_event('local','event_'+receipt['job_id']+'_verified').payload['outputs']==[]
+    assert repo.task_records.get_creation_task('local','task').current_timeline_version_id==base.id
     assert main._creation_task_output_path('local','task',subtitle=False)==store.resolve_file(publication.logical_ref)
     assert main._quality_check_source('local','task')[3].sha256==publication.sha256
     assert not list((tmp_path/'temporary').glob('task-observation-*'))

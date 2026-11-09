@@ -1,6 +1,7 @@
 import { chooseSelectValue } from "./select-interaction";
 import { useState } from "react";
 import * as api from "@/lib/api";
+import * as taskMediaApi from "@/lib/api/task-media";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CreationTaskWorkspace } from "../CreationTaskWorkspace";
@@ -207,6 +208,12 @@ vi.mock("../DesktopVoiceRecorder", () => ({
   ),
 }));
 
+vi.mock("@/lib/auth/routing", () => ({ isLocalAuthMode: () => true }));
+vi.mock("@/lib/local-member-auth", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/local-member-auth")>(),
+  ensureLocalMemberIdentity: async () => ({ member_id: "member-1", role: "owner", member_token: "fixture-token" }),
+}));
+vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ role: "owner", token: "fixture-token", ready: true }) }));
 vi.mock("@/lib/api", () => ({
   getCurrentAssistantConversation: vi.fn(async (scope: { scope_kind: string; scope_id: string }) => ({ id: `conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "local", ...scope, title: "新对话", draft_text: "", draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] })),
   createAssistantConversation: vi.fn(async (scope: { scope_kind: string; scope_id: string }) => ({ id: `new-conversation-${scope.scope_kind}-${scope.scope_id}`, workspace_id: "local", ...scope, title: "新对话", draft_text: "", draft_version: 0, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:00Z", turns: [] })),
@@ -353,6 +360,8 @@ function useElectronSave(saveRenderedVideo: ReturnType<typeof vi.fn>) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
+  vi.spyOn(taskMediaApi, "readCreationTaskNativeOperations").mockImplementation(async taskId => ({ task_id: taskId, items: [], total_count: 0, truncated: false, offset: 0 }));
   mocks.getWorkspace.mockResolvedValue(reviewWorkspace());
   const qualityCheck: CreationTaskQualityCheck = {
     check_state: "none", result_status: null, stale: false, check_id: null,
@@ -365,6 +374,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.mocked(taskMediaApi.readCreationTaskNativeOperations).mockRestore();
   vi.clearAllMocks();
   mocks.previewExecution.mockResolvedValue(null);
   Reflect.deleteProperty(window, "electronAPI");
@@ -383,7 +393,7 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /^检查与输出：/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
-    await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1", "timeline-version-1"));
     const alert = await screen.findByRole("alert");
     // 1) 未保存状态
     expect(alert).toHaveTextContent(/没有保存到本地/);
@@ -396,13 +406,16 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     expect(screen.getByRole("status", { name: "成片质量检查状态" })).toHaveTextContent("当前成片尚未检查");
   });
 
-  it("本地服务没返回成片时，提示不会只让用户去查磁盘", async () => {
+  it.each([
+    "本地服务没有返回可保存的 MP4（HTTP 404）。",
+    "作品版本已变化，请刷新当前任务后重新下载。",
+  ])("本地服务拒绝保存时保留具体原因：%s", async reason => {
     // 真实 IPC 返回形状：main.js 的 save-rendered-video 是 resolve {saved, error}，
     // 不会 reject、也不会把 API 的 body/code 结构化传回，error 就是一句人话字符串。
     // 若下一步只写「检查保存位置」，用户会对着完好的外接盘反复重试，永远查不到真正原因。
     const saveRenderedVideo = vi.fn().mockResolvedValue({
       saved: false,
-      error: "本地服务没有返回可保存的 MP4（HTTP 404）。",
+      error: reason,
     });
     useElectronSave(saveRenderedVideo);
 
@@ -414,7 +427,7 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/没有保存到本地/);
     // 桌面端返回的原始原因必须原样保留
-    expect(alert).toHaveTextContent("本地服务没有返回可保存的 MP4");
+    expect(alert).toHaveTextContent(reason);
     // 下一步必须同时覆盖「当前成片/本地服务」和「保存位置」，不能只归因磁盘
     expect(alert).toHaveTextContent(/当前成片和本地服务/);
     expect(alert).toHaveTextContent(/保存位置是否可写/);
@@ -430,7 +443,7 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /^检查与输出：/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
-    await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1", "timeline-version-1"));
     await waitFor(() => expect(screen.getByRole("button", { name: "保存到本地" })).toBeEnabled());
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText(/^已保存(?:：|到所选位置)/)).not.toBeInTheDocument();
@@ -460,6 +473,21 @@ describe("CreationTaskWorkspace 输出页原生保存反馈", () => {
     await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("已保存：成片.mp4")).toHaveAttribute("role", "status");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("缺少所见时间线版本时拒绝保存，不调用原生 latest 下载", async () => {
+    const saveRenderedVideo = vi.fn();
+    useElectronSave(saveRenderedVideo);
+    const initial = reviewWorkspace();
+    initial.task.current_timeline_version_id = null;
+    mocks.getWorkspace.mockResolvedValue(initial);
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(screen.getByRole("button", { name: "制作进度" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^检查与输出：/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("当前成片缺少时间线版本");
+    expect(saveRenderedVideo).not.toHaveBeenCalled();
+    expect(screen.queryByText(/^已保存(?:：|到所选位置)/)).not.toBeInTheDocument();
   });
 
   it("浏览器预览没有原生保存能力时说明没有保存成和正确下一步", async () => {

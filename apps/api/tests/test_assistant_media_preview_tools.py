@@ -1,4 +1,5 @@
 """Registered tool receipts with in-process HTTP doubles; no server or model."""
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
 TURN_ID = "11111111-1111-4111-8111-111111111111"
 PARAMS = {"operation_type": "ChangeClipSpeed", "clip_id": "current", "playback_rate": 0.7}
 ORIGINAL = "把选中镜头速度改为0.7倍，保留时间槽和旁白"
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 let raw = ''; for await (const part of process.stdin) raw += part;
 const input = JSON.parse(raw), tools = new Map(), calls = [], results = [];
 globalThis.fetch = async (url, init) => {
@@ -31,7 +32,7 @@ process.env.AI_VIDEO_DIARY_AGENT_EDIT_CAPABILITIES=JSON.stringify(input.capabili
 const {default:register} = await import(process.argv[1]);
 register({registerTool: tool => tools.set(tool.name, tool)});
 for (let i=0; i<2; i++) {
-  try { results.push({ok:true,result:await tools.get('preview_typed_edit').execute('call-'+i,input.params)}); }
+  try { results.push(toolOutcome(await tools.get('preview_typed_edit').execute('call-'+i,input.params))); }
   catch (error) { results.push({ok:false,error:error.message}); }
 }
 process.stdout.write(JSON.stringify({results,calls,parameters:tools.get('preview_typed_edit').parameters,legacyRegistered:tools.has('preview_edit')}));
@@ -79,7 +80,8 @@ def test_media_receipt_is_not_dereferenced_as_a_proposal_or_polled(tmp_path, sta
     assert details["kind"] == "task_media_job"
     assert {key:details["media_job"][key] for key in receipt} == receipt
     content = json.loads(first["result"]["content"][0]["text"])
-    assert content == details == first["result"]["structuredContent"]
+    assert details == {**content, "invocation_input_id": TURN_ID, "input_id": None, "input_turn_id": None}
+    assert details == first["result"]["structuredContent"]
     assert content["media_job"]["status"] == status
     assert "proposal_id" not in content
     assert not second["ok"] and "不重复未知操作" in second["error"]
@@ -109,7 +111,9 @@ def test_immediate_200_proposal_keeps_existing_result(tmp_path):
     details = observed["results"][0]["result"]["details"]
     assert details["kind"] == "edit_preview"
     assert {key:details["preview"][key] for key in preview} == preview
-    assert json.loads(observed["results"][0]["result"]["content"][0]["text"]) == details
+    content = json.loads(observed["results"][0]["result"]["content"][0]["text"])
+    assert details == {**content, "invocation_input_id": TURN_ID, "input_id": None, "input_turn_id": None}
+    assert details == observed["results"][0]["result"]["structuredContent"]
     assert not observed["results"][1]["ok"] and "相同预览" in observed["results"][1]["error"]
     assert sum(call["method"] == "POST" for call in observed["calls"]) == 1
 

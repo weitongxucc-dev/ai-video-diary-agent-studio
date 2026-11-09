@@ -15,9 +15,8 @@ from app.device_scheduler import (
     DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent,
     VerifiedWork, WorkRequest,
 )
-from app.production import (
-    MaterialAsset, ProductionRepository, material_probe_unit_key,
-)
+from app.production import MaterialAsset, ProductionRepository
+from app.material_probe import material_probe_unit_key
 from app.material_probe import MAX_PROBE_OUTPUT_BYTES, parse_ffprobe_output
 from app.material_scene import (
     SCENE_MAX_SAMPLED_FRAMES, SCENE_MAX_WIDTH, SCENE_SAMPLE_FPS,
@@ -49,13 +48,13 @@ class MaterialHashOwnerVerifier:
                 or intent.owner_type != "material_asset"
                 or actor.workspace_id != intent.workspace_id):
             raise PermissionError("素材后台归属未通过验证")
-        binding = self.repository.get_material_ingestion_binding()
+        binding = self.repository.material_source_files.get_material_ingestion_binding()
         if binding != (actor.workspace_id, actor.library_path):
             raise PermissionError("素材后台绑定已失效")
         candidate = None
         with self.repository._connect() as conn:
             if intent.unit_key.startswith("hash:v1:"):
-                verdict = self.repository.material_hash_verdict(
+                verdict = self.repository.hash_intake.material_hash_verdict(
                     intent.workspace_id, intent.owner_id, intent.input_digest,
                     intent.unit_key, conn,
                 )
@@ -66,7 +65,7 @@ class MaterialHashOwnerVerifier:
                     (intent.workspace_id, intent.owner_id, intent.input_digest),
                 ).fetchone()
             elif intent.unit_key.startswith(("probe-meta:v1:", "probe-meta:v2:")):
-                verdict = self.repository.material_probe_source_verdict(
+                verdict = self.repository.probe_records.material_probe_source_verdict(
                     intent.workspace_id, intent.owner_id, intent.input_digest,
                     intent.unit_key, conn,
                 )
@@ -76,13 +75,13 @@ class MaterialHashOwnerVerifier:
                     "WHERE a.workspace_id=? AND a.id=? AND f.attempted_digest=?",
                     (intent.workspace_id, intent.owner_id, intent.input_digest),
                 ).fetchone()
-                if row is not None and intent.unit_key != self.repository._preferred_material_probe_key(
+                if row is not None and intent.unit_key != self.repository.probe_records._preferred_material_probe_key(
                     conn, intent.workspace_id, intent.owner_id, intent.input_digest,
                     str(row["provisional_revision"]),
                 ):
                     verdict = "stale"
             elif intent.unit_key.startswith("scene-window:v1:"):
-                candidate = self.repository.material_scene_candidate(
+                candidate = self.repository.scene_records.material_scene_candidate(
                     intent.workspace_id, intent.owner_id, intent.input_digest,
                     intent.unit_key, conn,
                 )
@@ -123,12 +122,12 @@ class MaterialHashOwnerVerifier:
                 or request.work_class != "background" or request.source_refs):
             return "unauthorized"
         if request.unit_key.startswith("hash:v1:"):
-            return self.repository.material_hash_verdict(
+            return self.repository.hash_intake.material_hash_verdict(
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
             )
         if request.unit_key.startswith(("probe-meta:v1:", "probe-meta:v2:")):
-            verdict = self.repository.material_probe_source_verdict(
+            verdict = self.repository.probe_records.material_probe_source_verdict(
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
             )
@@ -144,20 +143,20 @@ class MaterialHashOwnerVerifier:
                     "AND a.file_path=f.file_path WHERE a.workspace_id=? AND a.id=?",
                     (request.workspace_id, request.owner_id),
                 ).fetchone()
-                if row is None or request.unit_key != self.repository._preferred_material_probe_key(
+                if row is None or request.unit_key != self.repository.probe_records._preferred_material_probe_key(
                     conn, request.workspace_id, request.owner_id, request.input_digest,
                     str(row["provisional_revision"]),
                 ):
                     return "stale"
             return verdict
         if request.unit_key.startswith("scene-window:v1:"):
-            source_verdict = self.repository.material_probe_source_verdict(
+            source_verdict = self.repository.probe_records.material_probe_source_verdict(
                 request.workspace_id, request.owner_id, request.input_digest,
                 material_probe_unit_key(request.input_digest), conn,
             )
             if source_verdict != "ready":
                 return source_verdict
-            candidate = self.repository.material_scene_candidate(
+            candidate = self.repository.scene_records.material_scene_candidate(
                 request.workspace_id, request.owner_id, request.input_digest,
                 request.unit_key, conn,
             )
@@ -286,7 +285,7 @@ class MaterialIngestionService:
         The repository checks the directory binding and current stat revision.
         A manual declaration confirms copy completion, not media validity.
         """
-        self.repository.confirm_material_copy_complete(
+        self.repository.material_source_files.confirm_material_copy_complete(
             workspace_id,
             relative_path=relative_path,
             expected_revision=expected_revision,
@@ -302,20 +301,20 @@ class MaterialIngestionService:
             return []
         analyzed: list[MaterialAsset] = []
         with self._scan_lock:
-            binding = self.repository.get_material_ingestion_binding()
+            binding = self.repository.material_source_files.get_material_ingestion_binding()
             if binding is None:
                 return analyzed
             workspace_id, _ = binding
-            for asset_id, digest in self.repository.scan_material_ingestion(stable_seconds=self.stable_seconds):
+            for asset_id, digest in self.repository.material_intake.scan_material_ingestion(stable_seconds=self.stable_seconds):
                 if self._stop.is_set():
                     break
                 try:
                     asset = self.repository.analyze_asset(workspace_id, asset_id, expected_source_digest=digest)
                 except Exception as exc:
                     logger.exception("Material analysis failed for asset %s", asset_id)
-                    self.repository.fail_material_ingestion(workspace_id, asset_id, digest, exc)
+                    self.repository.material_intake.fail_material_ingestion(workspace_id, asset_id, digest, exc)
                     continue
-                self.repository.finish_material_ingestion(
+                self.repository.material_intake.finish_material_ingestion(
                     workspace_id, asset_id, digest, failed=asset.analysis_status == "failed"
                 )
                 analyzed.append(asset)
@@ -329,10 +328,10 @@ class MaterialIngestionService:
         with self._scan_lock:
             self.submit_pending_probe_dependencies()
             self.submit_pending_scene_windows()
-            for candidate in self.repository.discover_material_hash_candidates(
+            for candidate in self.repository.hash_intake.discover_material_hash_candidates(
                 stable_seconds=self.stable_seconds
             ):
-                binding = self.repository.get_material_ingestion_binding()
+                binding = self.repository.material_source_files.get_material_ingestion_binding()
                 if binding is None or binding[0] != candidate.workspace_id:
                     raise PermissionError("素材绑定在发现后已变化")
                 intent = SubmissionIntent(
@@ -348,22 +347,22 @@ class MaterialIngestionService:
         """Replay committed hashes into idempotent, blocked probe requests."""
         if self.execution_mode != "scheduled" or self.scheduler is None:
             raise RuntimeError("素材整机调度尚未启用")
-        binding = self.repository.get_material_ingestion_binding()
+        binding = self.repository.material_source_files.get_material_ingestion_binding()
         if binding is None:
             return []
         actor = MaterialHashServiceActor(*binding)
         request_ids: list[str] = []
-        for dependency in self.repository.pending_material_probe_dependencies():
+        for dependency in self.repository.probe_records.pending_material_probe_dependencies():
             if dependency.workspace_id != binding[0]:
                 raise PermissionError("素材哈希检查点归属与绑定不一致")
-            unit_key = self.repository.material_probe_key_for_dependency(dependency)
+            unit_key = self.repository.probe_records.material_probe_key_for_dependency(dependency)
             intent = SubmissionIntent(
                 workspace_id=dependency.workspace_id, owner_type="material_asset",
                 owner_id=dependency.asset_id, input_digest=dependency.source_sha256,
                 unit_key=unit_key,
                 policy=SchedulePolicy(),
             )
-            legacy_id = (self.repository.legacy_probe_request_for_replacement(dependency)
+            legacy_id = (self.repository.probe_records.legacy_probe_request_for_replacement(dependency)
                          if unit_key.startswith("probe-meta:v1:") else None)
             if legacy_id is not None:
                 replace = getattr(self.scheduler, "replace_unexecuted_request", None)
@@ -380,12 +379,12 @@ class MaterialIngestionService:
     def submit_pending_scene_windows(self) -> list[str]:
         if self.execution_mode != "scheduled" or self.scheduler is None:
             raise RuntimeError("素材整机调度尚未启用")
-        binding = self.repository.get_material_ingestion_binding()
+        binding = self.repository.material_source_files.get_material_ingestion_binding()
         if binding is None:
             return []
         actor = MaterialHashServiceActor(*binding)
         request_ids = []
-        for candidate in self.repository.pending_material_scene_windows():
+        for candidate in self.repository.scene_records.pending_material_scene_windows():
             if candidate.workspace_id != binding[0]:
                 raise PermissionError("镜头检查点归属与素材绑定不一致")
             intent = SubmissionIntent(
@@ -407,13 +406,13 @@ class MaterialIngestionService:
             self.scheduler.assert_grant(active)
         try:
             check(grant)
-            result = self.repository.hash_granted_material(grant, check)
+            result = self.repository.hash_intake.hash_granted_material(grant, check)
         except GrantedCommandCancelled:
             self.scheduler.defer_unit(grant, reason="worker_interrupted",
                 retry_not_before_utc=datetime.now(timezone.utc)+timedelta(minutes=1))
             return None
         except (OSError, ValueError, PermissionError, RecoveryBlocked) as error:
-            verdict = self.repository.material_hash_verdict_for_grant(grant)
+            verdict = self.repository.hash_intake.material_hash_verdict_for_grant(grant)
             reason = {
                 "dependency": "dependency_unavailable",
                 "stale": "input_stale",
@@ -424,7 +423,7 @@ class MaterialIngestionService:
             } else None
             self.scheduler.defer_unit(grant, reason=reason, retry_not_before_utc=retry_at)
             return None
-        verdict = self.repository.material_hash_verdict_for_grant(grant)
+        verdict = self.repository.hash_intake.material_hash_verdict_for_grant(grant)
         if verdict != "ready":
             reason = {"dependency": "dependency_unavailable", "stale": "input_stale",
                       "unauthorized": "authorization_lost"}.get(verdict, "transient_failure")
@@ -433,7 +432,7 @@ class MaterialIngestionService:
             return None
         self.scheduler.complete_unit(
             grant, checkpoint_database_path=self.repository.database_path,
-            checkpoint_write=lambda conn, active: self.repository.commit_material_hash(conn, active, result),
+            checkpoint_write=lambda conn, active: self.repository.hash_records.commit_material_hash(conn, active, result, source_verdict=self.repository.hash_intake.material_hash_verdict),
         )
         try:
             self.submit_pending_probe_dependencies()
@@ -454,7 +453,7 @@ class MaterialIngestionService:
         scheduler = self.scheduler
         try:
             scheduler.assert_grant(grant)
-            candidate = self.repository.material_probe_candidate_for_grant(grant)
+            candidate = self.repository.probe_records.material_probe_candidate_for_grant(grant)
         except (OSError, ValueError, PermissionError):
             if self._defer_stale_probe(grant):
                 return None
@@ -486,7 +485,7 @@ class MaterialIngestionService:
                 reason = "probe_timeout" if isinstance(error, GrantedCommandTimeout) else "probe_output_limit"
                 scheduler.fail_unit(
                     grant, reason=reason,
-                    failure_write=lambda conn, active: self.repository.fail_material_probe(
+                    failure_write=lambda conn, active: self.repository.probe_records.fail_material_probe(
                         conn, active, candidate, reason,
                     ),
                 )
@@ -496,7 +495,7 @@ class MaterialIngestionService:
                 return None
             scheduler.fail_unit(
                 grant, reason="probe_failed",
-                failure_write=lambda conn, active: self.repository.fail_material_probe(
+                failure_write=lambda conn, active: self.repository.probe_records.fail_material_probe(
                     conn, active, candidate, "probe_failed",
                 ),
             )
@@ -506,7 +505,7 @@ class MaterialIngestionService:
         if completed.returncode != 0:
             scheduler.fail_unit(
                 grant, reason="probe_failed",
-                failure_write=lambda conn, active: self.repository.fail_material_probe(
+                failure_write=lambda conn, active: self.repository.probe_records.fail_material_probe(
                     conn, active, candidate, "probe_failed",
                 ),
             )
@@ -516,14 +515,14 @@ class MaterialIngestionService:
         except ValueError:
             scheduler.fail_unit(
                 grant, reason="probe_invalid_media",
-                failure_write=lambda conn, active: self.repository.fail_material_probe(
+                failure_write=lambda conn, active: self.repository.probe_records.fail_material_probe(
                     conn, active, candidate, "probe_invalid_media",
                 ),
             )
             return None
         scheduler.complete_unit(
             grant, checkpoint_database_path=self.repository.database_path,
-            checkpoint_write=lambda conn, active: self.repository.commit_material_probe(
+            checkpoint_write=lambda conn, active: self.repository.probe_records.commit_material_probe(
                 conn, active, candidate, facts,
             ),
         )
@@ -546,7 +545,7 @@ class MaterialIngestionService:
         scheduler = self.scheduler
         try:
             scheduler.assert_grant(grant)
-            candidate = self.repository.material_scene_candidate_for_grant(grant)
+            candidate = self.repository.scene_records.material_scene_candidate_for_grant(grant)
         except (OSError, ValueError, PermissionError):
             if self._defer_stale_scene(grant):
                 return None
@@ -587,7 +586,7 @@ class MaterialIngestionService:
                 return None
             scheduler.fail_unit(
                 grant, reason="scene_resource_limit",
-                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                failure_write=lambda conn, active: self.repository.scene_records.fail_material_scene(
                     conn, active, candidate, "scene_resource_limit",
                 ),
             )
@@ -598,7 +597,7 @@ class MaterialIngestionService:
             reason = "scene_timeout" if isinstance(error, GrantedCommandTimeout) else "scene_output_limit"
             scheduler.fail_unit(
                 grant, reason=reason,
-                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                failure_write=lambda conn, active: self.repository.scene_records.fail_material_scene(
                     conn, active, candidate, reason,
                 ),
             )
@@ -608,7 +607,7 @@ class MaterialIngestionService:
                 return None
             scheduler.fail_unit(
                 grant, reason="scene_failed",
-                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                failure_write=lambda conn, active: self.repository.scene_records.fail_material_scene(
                     conn, active, candidate, "scene_failed",
                 ),
             )
@@ -622,14 +621,14 @@ class MaterialIngestionService:
         except ValueError:
             scheduler.fail_unit(
                 grant, reason="scene_failed",
-                failure_write=lambda conn, active: self.repository.fail_material_scene(
+                failure_write=lambda conn, active: self.repository.scene_records.fail_material_scene(
                     conn, active, candidate, "scene_failed",
                 ),
             )
             return None
         scheduler.complete_unit(
             grant, checkpoint_database_path=self.repository.database_path,
-            checkpoint_write=lambda conn, active: self.repository.commit_material_scene(
+            checkpoint_write=lambda conn, active: self.repository.scene_records.commit_material_scene(
                 conn, active, candidate, facts,
             ),
         )
@@ -642,7 +641,7 @@ class MaterialIngestionService:
     def _defer_stale_scene(self, grant: Grant) -> bool:
         if self.scheduler is None:
             raise RuntimeError("素材整机调度尚未启用")
-        verdict = self.repository.material_scene_verdict_for_grant(grant)
+        verdict = self.repository.scene_records.material_scene_verdict_for_grant(grant)
         if verdict == "ready" and shutil.which("ffmpeg") is None:
             verdict = "dependency"
         if verdict == "ready":
@@ -657,7 +656,7 @@ class MaterialIngestionService:
     def _defer_stale_probe(self, grant: Grant) -> bool:
         if self.scheduler is None:
             raise RuntimeError("素材整机调度尚未启用")
-        verdict = self.repository.material_probe_verdict_for_grant(grant)
+        verdict = self.repository.probe_records.material_probe_verdict_for_grant(grant)
         if verdict == "ready" and shutil.which("ffprobe") is None:
             verdict = "dependency"
         if verdict == "ready":

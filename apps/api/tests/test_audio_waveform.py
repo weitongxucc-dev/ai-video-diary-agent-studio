@@ -58,7 +58,7 @@ def test_waveform_api_rejects_another_tasks_artifact(monkeypatch):
 
     monkeypatch.setattr(main, "_creation_task_or_404", lambda workspace_id, task_id:
                         SimpleNamespace(id=task_id, narration_cache_key="cache"))
-    monkeypatch.setattr(main.production_repo, "get_narration_artifact", lambda *args:
+    monkeypatch.setattr(main.production_repo.narration_artifacts, "get_narration_artifact", lambda *args:
                         SimpleNamespace(task_id="another-task", audio_path="unread"))
     response = TestClient(main.app).get("/api/creation-tasks/this-task/narration/waveform")
     assert response.status_code == 404
@@ -70,17 +70,24 @@ def test_granted_timeline_waveform_uses_default_cache_directory_when_not_configu
     source = tmp_path / "voice.wav"
     write_audio(source, 16384)
     monkeypatch.setattr(main, "settings", replace(main.settings, temporary_root_path=None, model_root_path=str(tmp_path / "models")))
-    monkeypatch.setattr(main, "_creation_task_or_404", lambda *args: None)
-    monkeypatch.setattr(main.production_repo, "get_creation_task_montage_plan", lambda *args: {})
-    monkeypatch.setattr(main, "creation_task_montage_plan_from_payload", lambda value: value)
-    monkeypatch.setattr(main, "_effective_audio_timeline", lambda plan: SimpleNamespace(
-        tracks=[SimpleNamespace(clips=[SimpleNamespace(id="voice", source_ref="voice-source")])]))
-    monkeypatch.setattr(main, "_task_audio", lambda: SimpleNamespace(source=lambda *args: source))
-    from starlette.requests import Request
+    from app.creation import audio_ingress_use_case as ingress_module
+    from app.creation_execution import CreationExecutionActor
+    from app.local_members import LocalMemberService
+    from app.production import ProductionRepository
     with granted_media([source]) as context:
-        monkeypatch.setattr(main, "_task_media_grant_or_queue", lambda: context)
-        # Exercise the post-admission route; public queue/identity checks have separate tests.
-        result = main.get_creation_task_audio_waveform.__wrapped__("task", "voice",
-            Request({"type": "http", "headers": [], "path": "/api/creation-tasks/task/audio/waveform/voice"}))
+        # Keep the actual granted Job and factory-owned default cache configuration.
+        repository = ProductionRepository(context.grant.database_path, context.grant.database_path.parent / 'library')
+        monkeypatch.setattr(main, 'production_repo', repository)
+        use_case = main._audio_ingress_use_case()
+        monkeypatch.setattr(repository.task_records, 'get_creation_task', lambda *args: SimpleNamespace(id='task'))
+        monkeypatch.setattr(repository, 'get_creation_task_montage_plan', lambda *args: {})
+        monkeypatch.setattr(ingress_module, 'creation_task_montage_plan_from_payload', lambda value: value)
+        monkeypatch.setattr(ingress_module, 'effective_audio_timeline', lambda plan: SimpleNamespace(
+            tracks=[SimpleNamespace(clips=[SimpleNamespace(id='voice', source_ref='voice-source')])]))
+        monkeypatch.setattr(use_case.task_audio, 'source', lambda *args, **kwargs: source)
+        job = repository.job_records.get_job_run(context.grant.workspace_id, context.grant.owner_id)
+        member, _ = LocalMemberService(repository.database_path).whoami(None)
+        actor = CreationExecutionActor(context.grant.workspace_id, member.member_id)
+        result = use_case.audio_waveform(job, {'arguments': {'clip_id': 'voice'}}, actor, context)
     assert max(result["peaks"]) == pytest.approx(0.5)
     assert list((tmp_path / "temporary" / "audio-waveforms").rglob("*.json"))

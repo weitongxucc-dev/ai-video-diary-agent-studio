@@ -23,10 +23,12 @@ def test_continuation_pause_spends_one_deadline_and_restores_failed_pause(monkey
     from threading import Event
     driver=main.AssistantContinuationDriver.__new__(main.AssistantContinuationDriver)
     driver._paused=Event()
-    now=[100.0];budgets=[]
+    now=[100.0]
+    budgets=[]
     class TickLock:
         def acquire(self,timeout):
-            budgets.append(timeout);now[0]+=0.4
+            budgets.append(timeout)
+            now[0]+=0.4
             return True
         def release(self): pass
     driver._tick_lock=TickLock()
@@ -198,7 +200,74 @@ def test_failed_user_shutdown_does_not_close_transport_under_an_active_user(monk
 
 
 
-def test_desktop_shutdown_control_is_loopback_only_and_uses_one_deadline(monkeypatch):
+@pytest.fixture(autouse=True)
+def desktop_shutdown_metadata_guard(request, monkeypatch, tmp_path):
+    if request.node.originalname != 'test_desktop_shutdown_control_is_loopback_only_and_uses_one_deadline':
+        return None
+    import sqlite3
+    import subprocess
+    import wave
+    from PIL import Image
+    from app.auth import SupabaseAuthContext
+    from app.creation.execution_control import DesktopShutdownUseCase
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('actual-shutdown-runtime-or-media')
+        pytest.fail('controlled shutdown HTTP forbids real owner construction/execution/stopping and persistence')
+
+    # Only the original test's preexisting controlled Shutdown object may execute.
+    monkeypatch.setattr(DesktopShutdownUseCase, '__init__', forbidden)
+    monkeypatch.setattr(DesktopShutdownUseCase, 'execute', forbidden)
+    monkeypatch.setattr(sqlite3, 'connect', forbidden)
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', forbidden)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', forbidden)
+    for name in ('start', 'run_once', 'wake', 'stop', 'begin_shutdown'):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    monkeypatch.setattr(DeviceScheduler, 'pick_and_grant', forbidden)
+    for name in ('_creation_runtime', '_build_device_components', '_start_device_runtime',
+                 '_stop_device_runtime', '_workspace_settings_for', 'run_task_turn', 'run_plan_turn',
+                 'start_assistant_continuation_driver', 'stop_all_assistant_turns',
+                 'stop_auth_transport', 'stop_creation_permit_transport'):
+        monkeypatch.setattr(main, name, forbidden)
+    monkeypatch.setattr(main, 'montage_renderer', SimpleNamespace(render=forbidden))
+    monkeypatch.setattr(main, 'narration_generator', SimpleNamespace(generate_for_creation_task=forbidden))
+    settings = Settings(database_path=str(tmp_path / 'unused.sqlite'),
+        video_inbox_path=str(tmp_path / 'library'), video_output_path=str(tmp_path / 'outputs'),
+        model_root_path=str(tmp_path / 'models'), temporary_root_path=str(tmp_path / 'temporary'),
+        draft_output_path=str(tmp_path / 'drafts'), jianying_draft_root_path=str(tmp_path / 'jianying'),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main, 'settings', settings)
+    monkeypatch.setattr(main, 'auth_context', SupabaseAuthContext(settings))
+    for name in ('device_runtime', 'automation_runtime', 'material_ingestion', 'assistant_continuation_driver',
+                 'production_repo', 'conversation_repo', 'source_repository', 'artifact_store', 'local_members_service', 'vault'):
+        monkeypatch.setattr(main, name, None)
+
+    def snapshot():
+        return {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                for path in tmp_path.rglob('*')}
+
+    before = snapshot()
+    assert before == {}  # The original test prepares only an in-memory controlled shutdown object.
+
+    def assert_unchanged():
+        assert snapshot() == before
+        assert violations == []
+
+    return SimpleNamespace(assert_unchanged=assert_unchanged)
+
+
+def test_desktop_shutdown_control_is_loopback_only_and_uses_one_deadline(monkeypatch, desktop_shutdown_metadata_guard):
     from datetime import datetime, timedelta, timezone
     import time
     calls = []
@@ -222,6 +291,7 @@ def test_desktop_shutdown_control_is_loopback_only_and_uses_one_deadline(monkeyp
     remote = TestClient(main.app, client=("192.0.2.1", 43210))
     assert remote.post(main.DESKTOP_SHUTDOWN_PATH, json=payload, headers=headers).status_code == 403
     assert len(calls) == 1
+    desktop_shutdown_metadata_guard.assert_unchanged()
 
 
 def test_desktop_shutdown_repeats_receipt_without_restarting_or_resetting_budget():

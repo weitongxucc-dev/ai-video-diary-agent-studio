@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
+import stat
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -30,7 +30,9 @@ class ArtifactStore:
         return self.publish(logical_ref, lambda target: target.write(content))
 
     def publish_file(
-        self, logical_ref: str, source: str | Path
+        self, logical_ref: str, source: str | Path, *,
+        temporary_path: str | Path | None = None,
+        check: Callable[[], None] | None = None,
     ) -> PublishedArtifact:
         source_path = Path(source)
         if not source_path.is_file():
@@ -38,48 +40,132 @@ class ArtifactStore:
 
         def copy(target: BinaryIO) -> None:
             with source_path.open("rb") as source_file:
-                shutil.copyfileobj(source_file, target)
+                while True:
+                    self._check_publication(check)
+                    chunk = source_file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    target.write(chunk)
 
-        return self.publish(logical_ref, copy)
+        return self.publish(logical_ref, copy, temporary_path=temporary_path, check=check)
 
     def publish(
         self,
         logical_ref: str,
         write: Callable[[BinaryIO], object],
+        *,
+        temporary_path: str | Path | None = None,
+        check: Callable[[], None] | None = None,
     ) -> PublishedArtifact:
         target = self._target(logical_ref)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        self._check_publication(check)
+        if temporary_path is not None:
+            self._require_plain_directory(target.parent, create=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
         if not target.parent.resolve().is_relative_to(self._root):
             raise ValueError("产物逻辑引用必须位于受控目录内")
 
-        descriptor, temporary_name = tempfile.mkstemp(
-            dir=target.parent,
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-        )
-        temporary = Path(temporary_name)
+        self._check_publication(check)
+        target_parent_stat = target.parent.stat()
+        target_parent_identity = (target_parent_stat.st_dev, target_parent_stat.st_ino)
+        temporary_parent_identity = None
+        temporary_identity = None
+        if temporary_path is None:
+            descriptor, temporary_name = tempfile.mkstemp(
+                dir=target.parent, prefix=f".{target.name}.", suffix=".tmp",
+            )
+            temporary = Path(temporary_name)
+        else:
+            temporary = Path(temporary_path)
+            if (not temporary.is_absolute() or ".." in temporary.parts
+                    or not temporary.is_relative_to(self._root) or temporary == target):
+                raise ValueError("显式临时文件必须是受控目录内独立的绝对路径")
+            self._require_plain_directory(temporary.parent)
+            self._require_plain_directory(target.parent)
+            if temporary.parent.stat().st_dev != target.parent.stat().st_dev:
+                raise ValueError("临时文件必须与最终产物位于同一实际卷")
+            descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
-            with os.fdopen(descriptor, "wb") as temporary_file:
+            temporary_parent_stat = temporary.parent.stat()
+            temporary_parent_identity = (temporary_parent_stat.st_dev, temporary_parent_stat.st_ino)
+            identity = os.fstat(descriptor)
+            temporary_identity = (identity.st_dev, identity.st_ino)
+            temporary_file = os.fdopen(descriptor, "w+b")
+            descriptor = None  # The file object now owns closing the descriptor.
+            with temporary_file:
+                self._check_publication(check)
                 write(temporary_file)
+                self._check_publication(check)
                 temporary_file.flush()
                 os.fsync(temporary_file.fileno())
-
-            self._require_storage_root()
-            publication = self._describe(logical_ref, temporary)
+                temporary_file.seek(0)
+                publication = self._describe_stream(
+                    logical_ref, temporary_file, lambda: self._check_publication(check),
+                )
+            self._check_publication(check)
+            if not self._file_matches(temporary, temporary_identity):
+                raise OSError("发布临时文件已被替换")
+            if temporary_path is not None:
+                self._require_plain_directory(temporary.parent)
+                self._require_plain_directory(target.parent)
+            if (not self._directory_matches(temporary.parent, temporary_parent_identity)
+                    or not self._directory_matches(target.parent, target_parent_identity)):
+                raise OSError("发布目录已被替换")
             try:
-                os.link(temporary, target)
+                os.link(temporary, target, follow_symlinks=False)
             except FileExistsError:
                 if target.is_symlink():
                     raise ValueError("产物逻辑引用不能指向符号链接")
-                existing = self._describe(logical_ref, target)
+                existing = self._describe(logical_ref, target, lambda: self._check_publication(check))
                 if existing != publication:
                     raise FileExistsError("产物逻辑引用已绑定到不同内容")
+                self._check_publication(check)
                 return existing
             return publication
         finally:
+            if descriptor is not None:
+                os.close(descriptor)
             # A replacement disk/directory must not receive even cleanup writes.
-            if self._storage_root_matches():
+            if (temporary_parent_identity is not None and temporary_identity is not None
+                    and self._storage_root_matches()
+                    and self._directory_matches(temporary.parent, temporary_parent_identity)
+                    and (temporary_path is None or temporary.parent.resolve() == temporary.parent)
+                    and self._file_matches(temporary, temporary_identity)):
                 temporary.unlink(missing_ok=True)
+
+    def _check_publication(self, check: Callable[[], None] | None) -> None:
+        self._require_storage_root()
+        if check is not None:
+            check()
+        self._require_storage_root()
+
+    def _require_plain_directory(self, directory: Path, *, create: bool = False) -> None:
+        """Explicit sealed paths cannot redirect through even an in-root symlink."""
+        relative = directory.relative_to(self._root)
+        current = self._root
+        for part in relative.parts:
+            current = current / part
+            if create:
+                current.mkdir(exist_ok=True)
+            if not stat.S_ISDIR(current.lstat().st_mode):
+                raise ValueError("发布路径目录不能包含符号链接或非目录")
+
+    @staticmethod
+    def _directory_matches(path: Path, identity: tuple[int, int]) -> bool:
+        try:
+            current = path.stat()
+        except FileNotFoundError:
+            return False
+        return stat.S_ISDIR(current.st_mode) and (current.st_dev, current.st_ino) == identity
+
+    @staticmethod
+    def _file_matches(path: Path, identity: tuple[int, int]) -> bool:
+        try:
+            current = path.lstat()
+        except FileNotFoundError:
+            return False
+        return stat.S_ISREG(current.st_mode) and (current.st_dev, current.st_ino) == identity
 
     def resolve_file(self, logical_ref: str) -> Path:
         """Resolve a published logical reference inside the controlled root."""
@@ -120,13 +206,26 @@ class ArtifactStore:
             raise OSError("产物存储目录已断开或被替换，请恢复原存储位置后重试；更换磁盘后需重新启动应用。")
 
     @staticmethod
-    def _describe(logical_ref: str, path: Path) -> PublishedArtifact:
+    def _describe(
+        logical_ref: str, path: Path, check: Callable[[], None] | None = None,
+    ) -> PublishedArtifact:
+        with path.open("rb") as artifact_file:
+            return ArtifactStore._describe_stream(logical_ref, artifact_file, check)
+
+    @staticmethod
+    def _describe_stream(
+        logical_ref: str, artifact_file: BinaryIO, check: Callable[[], None] | None = None,
+    ) -> PublishedArtifact:
         digest = hashlib.sha256()
         size = 0
-        with path.open("rb") as artifact_file:
-            while chunk := artifact_file.read(1024 * 1024):
-                digest.update(chunk)
-                size += len(chunk)
+        while True:
+            if check is not None:
+                check()
+            chunk = artifact_file.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
         return PublishedArtifact(
             logical_ref=logical_ref,
             sha256=digest.hexdigest(),

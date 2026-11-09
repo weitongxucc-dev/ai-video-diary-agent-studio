@@ -42,7 +42,10 @@ describe("shared compact assistant send control", () => {
     const current = state(true) as unknown as { stop: ReturnType<typeof vi.fn> };
     const onSend = vi.fn();
     render(<AssistantConversationPanel state={current as never} input="/help" onInput={vi.fn()} onSend={onSend} configured busy scopeLabel="fixture" />);
-    expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
+    const send = screen.getByRole("button", { name: "发送" });
+    expect(send).toBeDisabled();
+    fireEvent.click(send);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "对话要求" }), { key: "Enter" });
     expect(screen.getByRole("textbox", { name: "对话要求" })).toHaveValue("/help");
     fireEvent.click(screen.getByRole("button", { name: "停止本轮" }));
     expect(current.stop).toHaveBeenCalledOnce(); expect(onSend).not.toHaveBeenCalled();

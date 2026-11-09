@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.assistant.script_generation_policy import SCRIPT_GENERATION_TOOLS as SCRIPT_GENERATION_TOOLS
+
 MEMORY_TOOLS = ("read_preference_memory", "update_preference_memory")
 SCRIPT_TOOL_READS = ("read_media_script_tool_capabilities", "list_media_script_tools", "describe_media_script_tool", "read_media_script_tool_creation")
 
@@ -23,11 +25,15 @@ ASSISTANT_BUSINESS_TOOLS = {
                   "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "read_segment_visual_decision", "regenerate_storyboard"),
 }
 
+SCRIPT_WINDOW_TOOL_OPERATIONS = {'start_script_window':'start','patch_script_sections':'patch',
+    'confirm_saved_script':'confirm','read_script_window_request':None}
+
 TASK_READ_PREVIEW_TOOLS = ("start_script_window", "patch_script_sections", "confirm_saved_script", "read_script_window_request", "prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_storyboard_regeneration",
                            "select_narration_voice", "read_narration_voice_selection",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit", "apply_typed_edit",
                            "read_task_observations", "observe_task_output", "read_task_observation_request",
+                           "read_task_quality_check", "read_task_quality_continuation", "continue_task_quality_check",
                            "save_media_script_tool", "update_media_script_tool", "revoke_media_script_tool", "preview_media_script_tool",
                            "read_media_script_capabilities", "read_task_graphic_sources", "preview_media_script", "read_media_script_request", "read_clip_candidates", "read_edit_control_context", "preview_edit_selection",
                            "find_materials", "codemode")
@@ -91,6 +97,9 @@ _PI_TOOL_LABELS = {
     "read_task_object": "读取任务对象细节",
     "read_task_media_job": "读取预览作业结果",
     "read_task_media_jobs": "读取任务媒体作业",
+    "read_task_quality_check": "读取原成片质检",
+    "read_task_quality_continuation": "查询原质检续作回执",
+    "continue_task_quality_check": "接续原失败质检阶段",
     "read_task_observations": "读取实际结果检查",
     "observe_task_output": "检查实际输出",
     "read_task_observation_request": "查询原观察请求",
@@ -140,6 +149,7 @@ SYSTEM_PROMPT = """你是 AI 视频日记的创作助手。围绕当前授权目
 只有当用户明确要求开始制作、修改后重新生成、继续/恢复制作或取消/停止当前制作时，才调用对应的具名制作动作工具一次；问题、建议、假设或单纯提及“生成”不是执行指令。用户明确要求“修改后生成”时，先按真实能力完成修改，直接编辑成功后回读新版本再进入生成；若该动作需要提案则等待实际采用，保留原要求中的生成步骤；宿主核验真实保存或采用后可继续完成原要求，不要求用户再说一遍继续。开始只使用当前已确认的文案与制作要求，不能把待确认文案或仅供讨论的建议自动应用。
 执行开始、继续或取消后，只按工具返回的真实作业状态回复。不得把排队、开始或回复说成已完成。
 不得声称已执行、已保存或已出片，除非工具返回相应事实。
+原失败质检先read_task_quality_check；沿返回的job_id/failed_request_id用continue_task_quality_check接续原失败阶段，不用observe另建作业替代。回包未知只用read_task_quality_continuation查同一对原标识，无回执仍unknown，不能换前驱重试；回执仅表示已受理，须读当前质检结果才判断是否完成。
 用read_task_observations读取本轮实际检查和可观察目标；需要新检查时observe_task_output，只提交当前已登记的预览、成片或PNG目标。按实际返回区分技术检查、抽帧、OCR和不可用的语义/听感，不能把尺寸或像素检测说成画面正确、字幕易读或声音自然；排队不代表已看，历史stale检查不代表当前版本，缺少证据就明确说明。
 apply_typed_edit只在本轮明确指令及API直接能力内执行，成功以原请求journal回执为准；结果未知用read_typed_edit_request phase=apply查询，不重POST。preview_typed_edit只生成待确认提案；让用户检查影响并确认。
 用户明确要求保留或取消待确认修改的部分步骤，先读取read_edit_control_context，用preview_edit_selection准备新的范围并等待确认；明确取消整份修改方案用discard_edit_proposal。撤销或重做先读read_edit_history，指定较早修改须向undo_last_edit或redo_last_edit传真实target_operation_id；省略才按最近历史，保留无关后续成果。未知结果用read_timeline_restore_request查原UUID。已应用复合操作内部单项逆编辑尚未接通，不得用整体撤销冒充只撤销调色，也不得把重做口型解释为历史重做。

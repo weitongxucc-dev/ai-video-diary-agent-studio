@@ -1,17 +1,21 @@
 """Canonical picture source qualification and the original montage renderer."""
 from __future__ import annotations
-from dataclasses import asdict, replace
+from dataclasses import asdict
 import json
 from pathlib import Path
 import re
 from app.audio_timeline import bounded_audio_context, render_audio_mix
-from app.creation_execution import CreationExecutionActor, CpuRenderGrantContext, presenter_inputs, current_presenter_render
+from app.creation_execution import CreationExecutionActor, CpuRenderGrantContext
 from app.creation.editing.metadata_use_case import effective_audio_timeline, InvalidMontage
 from app.graphic_sources import graphic_source_facts
 from app.linked_timeline import remove_time_ranges
 from app.local_portrait import LocalPortrait
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.production import PersonRender, MediaAuthorityError, SubtitleTrack, SubtitleCue, content_readable, material_allows_footage
+from app.materials.contracts import MediaAuthorityError
+from app.creation.person_renders import PersonRender
+from app.production import material_allows_footage
+from app.source_policy import knowledge_item_readable as content_readable
+from app.creation.contracts import SubtitleTrack, SubtitleCue
 from app.task_audio import TASK_MEDIA_KIND, TaskMediaRequired, media_digest, audio_mix_resources
 from app.canvas import canvas_size
 from app.transitions import extend_dissolve_sources
@@ -90,7 +94,7 @@ class PicturePreviewRenderer:
             raise ValueError("图片渲染必须持有当前设备许可")
         context.check()
         actor = CreationExecutionActor.from_event(workspace_id,
-            self.repository.get_task_event(workspace_id, f"event_{context.grant.owner_id}_start").payload)
+            self.repository.execution_records.get_task_event(workspace_id, f"event_{context.grant.owner_id}_start").payload)
         verdict = context.task_authorization_verdict(actor, task_id)
         if (self.verify_identity(actor) if verdict is None else verdict) != "ready":
             raise PermissionError("当前图片渲染成员许可不可核验")
@@ -121,9 +125,9 @@ class PicturePreviewRenderer:
         scope = resources.get("silence_analysis_scope")
         if not isinstance(scope, dict):
             raise ValueError("画面预览音轨与本次封存候选输入不一致")
-        task = self.repository.get_creation_task(workspace_id, plan.task_id)
-        job = self.repository.get_job_run(workspace_id, context.grant.owner_id)
-        start = self.repository.get_task_event(workspace_id, f"event_{job.id}_start")
+        task = self.repository.task_records.get_creation_task(workspace_id, plan.task_id)
+        job = self.repository.job_records.get_job_run(workspace_id, context.grant.owner_id)
+        start = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
         arguments = start.payload.get("arguments", {}).get("payload", {})
         if (job.kind != TASK_MEDIA_KIND or job.task_id != plan.task_id
                 or CreationExecutionActor.from_event(workspace_id, start.payload) != actor
@@ -132,7 +136,7 @@ class PicturePreviewRenderer:
                 or not re.fullmatch(r"(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?", arguments.get("raw_command", "").strip())
                 or task.current_timeline_version_id != scope["base_version_id"]):
             raise PermissionError("动态静音候选没有本次原始指令或当前版本许可")
-        inputs = [event for event in self.repository.list_task_events(workspace_id, plan.task_id)
+        inputs = [event for event in self.repository.execution_records.list_task_events(workspace_id, plan.task_id)
             if event.job_id == job.id and event.event_type == "task_media_input"
             and event.payload.get("operation") == "picture_preview"
             and event.payload.get("parameters", {}).get("side") == "after"
@@ -142,13 +146,13 @@ class PicturePreviewRenderer:
             raise ValueError("动态静音候选缺少唯一的本次实际画面输入")
         actual = inputs[0].payload
         analysis_ref = actual["parameters"].get("analysis_ref")
-        record = next((item for item in self.repository.list_artifact_records(workspace_id, plan.task_id)
+        record = next((item for item in self.repository.execution_records.list_artifact_records(workspace_id, plan.task_id)
             if item.logical_ref == analysis_ref and item.kind == "audio_preview" and item.producer_job_id == job.id), None)
         if record is None:
             raise ValueError("静音候选缺少本次真实分析产物")
         service = self.audio
         transform = service._transform_for(workspace_id, plan.task_id, record)
-        result = self.repository.get_task_event(workspace_id, f"event_{job.id}_{record.id}_silence_detected")
+        result = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_{record.id}_silence_detected")
         cuts = actual["parameters"]["removed_ranges_ms"]
         if (transform.status != "succeeded" or transform.job_id != job.id
                 or transform.parameters.get("action") != "silence_analysis"
@@ -168,7 +172,7 @@ class PicturePreviewRenderer:
             if track.role in {"narration", "original"} and not track.muted and any(not item.muted for item in track.clips))
         voice_refs = sorted({item.source_ref for track in effective_audio_timeline(before).tracks
             if track.id in voice_ids for item in track.clips})
-        analysis_input = self.repository.get_task_event(workspace_id, f"event_{job.id}_{transform.input_digest}_input")
+        analysis_input = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_{transform.input_digest}_input")
         if (clip is None or transform.input_refs != voice_refs or transform.output_refs != [record.logical_ref]
                 or analysis_input.job_id != job.id or analysis_input.event_type != "task_media_input"
                 or analysis_input.payload.get("operation") != "audio_mix"
@@ -178,7 +182,7 @@ class PicturePreviewRenderer:
                     "start_seconds":clip.timeline_start_seconds, "end_seconds":clip.timeline_end_seconds,
                     "solo_track_ids":voice_ids}):
             raise ValueError("静音分析不是本次实际镜头的固定原始音轨与区间")
-        base = self.repository.get_timeline_version(workspace_id, scope["base_version_id"])
+        base = self.repository.timeline_records.get_timeline_version(workspace_id, scope["base_version_id"])
         tracks = self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=before)
         expected, expected_tracks = remove_time_ranges(before, tracks, effective_audio_timeline(before), cuts)
         transient = {"status", "message", "output_path", "subtitle_path", "created_at", "updated_at"}
@@ -207,7 +211,7 @@ class PicturePreviewRenderer:
     def audio_mix_sources(self, workspace_id, plan, context):
         context.check()
         actor = CreationExecutionActor.from_event(workspace_id,
-            self.repository.get_task_event(workspace_id, f"event_{context.grant.owner_id}_start").payload)
+            self.repository.execution_records.get_task_event(workspace_id, f"event_{context.grant.owner_id}_start").payload)
         verdict = context.task_authorization_verdict(actor, plan.task_id)
         if (self.verify_identity(actor) if verdict is None else verdict) != "ready":
             raise PermissionError("当前音轨渲染成员许可不可核验")
@@ -221,7 +225,7 @@ class PicturePreviewRenderer:
         if not isinstance(declared, dict):
             raise PermissionError("当前成片未封存音轨混音用途")
         if declared.get('prepared_master') is not None:
-            job = self.repository.get_job_run(workspace_id, context.grant.owner_id)
+            job = self.repository.job_records.get_job_run(workspace_id, context.grant.owner_id)
             facts = self.audio.master_mix_facts(job, plan, actor=actor,
                 budget=context.scheduler.resources.budget.cpu_audio)
         else:
@@ -267,7 +271,7 @@ class PicturePreviewRenderer:
                     if item.get('kind')=='image' else item for item in original_graphics]
             for clip in plan.clips:
                 if clip.person_render_id:
-                    render = self.repository.get_person_render(
+                    render = self.repository.person_renders.get_person_render(
                         workspace_id, plan.task_id, clip.person_render_id
                     )
                     output = self.person_path(render)
@@ -381,8 +385,8 @@ class PicturePreviewRenderer:
         person_ids = set()
         if any((clip.person_render_id for clip in plan.clips)):
             from app.creation_execution import presenter_inputs, current_presenter_render
-            creation_plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
-            script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
+            creation_plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
+            script = self.repository.script_records.get_creation_task_script(workspace_id, task.confirmed_script_id)
             for segment, person_request in presenter_inputs(self.repository, task, script, creation_plan, self.presenter_model_ids()):
                 current = current_presenter_render(self.repository, task, segment, person_request, self.person_path)
                 if current is not None:
@@ -395,7 +399,7 @@ class PicturePreviewRenderer:
                 asset = self.repository.get_asset(workspace_id, clip.asset_id)
                 if not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False, visibility=asset.visibility, owner_user_id=asset.owner_user_id):
                     raise PermissionError('当前成员不能读取镜头素材')
-            path = self.person_path(self.repository.get_person_render(workspace_id, task_id, clip.person_render_id)) if clip.person_render_id else self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+            path = self.person_path(self.repository.person_renders.get_person_render(workspace_id, task_id, clip.person_render_id)) if clip.person_render_id else self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
             if path is None:
                 raise ValueError('当前人物片段没有有效媒体')
             remember(clip.source_path, path)

@@ -75,9 +75,12 @@ function createNativeMedia({ showSaveDialog, getWindow, webOrigin, getMediaDirec
     };
   }
 
-  async function saveRenderedVideo(taskId) {
+  async function saveRenderedVideo(taskId, expectedVersionId) {
     if (typeof taskId !== 'string' || !/^task_[a-zA-Z0-9_-]{1,80}$/.test(taskId)) {
       return { saved: false, error: '创作任务标识无效。' };
+    }
+    if (typeof expectedVersionId !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(expectedVersionId)) {
+      return { saved: false, error: '当前成片时间线版本无效，请刷新任务后重新保存。' };
     }
     const context = captureSaveContext();
     if (!context) return { saved: false, error: saveSourceError };
@@ -91,7 +94,7 @@ function createNativeMedia({ showSaveDialog, getWindow, webOrigin, getMediaDirec
       const temporaryPath = `${result.filePath}.partial-${crypto.randomUUID()}`;
       try {
         context.assertCurrent();
-        await downloadCreationTaskOutput(context, taskId, temporaryPath);
+        await downloadCreationTaskOutput(context, taskId, temporaryPath, null, expectedVersionId);
         context.assertCurrent();
         await fs.promises.rename(temporaryPath, result.filePath);
         recordLifecycle('rendered-video-saved', { taskId, fileName: path.basename(result.filePath) });

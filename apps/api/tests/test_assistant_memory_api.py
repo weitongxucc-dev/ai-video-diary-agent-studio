@@ -24,12 +24,7 @@ def memory_client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "auth_context", SimpleNamespace(enabled=False))
     monkeypatch.setattr(main, "current_workspace_id", lambda _request: "memory-workspace")
     app = FastAPI()
-    app.add_api_route("/api/assistant/memory", main.read_assistant_memory, methods=["GET"])
-    app.add_api_route("/api/assistant/memory", main.update_assistant_memory, methods=["PATCH"])
-    app.add_api_route("/api/assistant/memory/user.md", main.export_assistant_memory, methods=["GET"])
-    app.add_api_route("/api/creator-profile", main.get_creator_profile_endpoint, methods=["GET"])
-    app.add_api_route("/api/creator-profile", main.update_creator_profile_endpoint, methods=["PATCH"])
-    app.add_api_route("/api/creator-profile/learn", main.learn_creator_profile_endpoint, methods=["POST"])
+    app.include_router(main._creator_profile_http_router())
     client = TestClient(app)
 
     def turn(message, member=alice):

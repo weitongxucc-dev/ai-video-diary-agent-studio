@@ -138,7 +138,7 @@ class CoverUseCase:
         self.on_settled = on_settled
 
     def _source_record(self, workspace_id, task_id, logical_ref):
-        records = self.repository.list_artifact_records(workspace_id, task_id)
+        records = self.repository.execution_records.list_artifact_records(workspace_id, task_id)
         source = next((item for item in records if item.logical_ref == logical_ref), None)
         if source is None:
             raise ValueError("封面源成片缺少原任务已登记摘要，不能无许可重扫文件")
@@ -150,7 +150,7 @@ class CoverUseCase:
         return self.budget
 
     def _access(self, actor: CreationExecutionActor, task_id: str):
-        task = self.repository.get_creation_task(actor.workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id)
         if self.task_authorizations is not None:
             verdict = self.task_authorizations.verdict(actor, task_id, "cover", check_scope=False)
         else:
@@ -162,7 +162,7 @@ class CoverUseCase:
         return task
 
     def _proposal(self, workspace_id: str, task_id: str, proposal_id: str):
-        proposal = self.repository.get_edit_proposal(workspace_id, proposal_id)
+        proposal = self.repository.edit_records.get_edit_proposal(workspace_id, proposal_id)
         if proposal.task_id != task_id or proposal.operation.get("operation_type") != COVER_OPERATION:
             raise ValueError("封面提案不属于当前任务或操作")
         payload = proposal.operation.get("payload")
@@ -184,7 +184,7 @@ class CoverUseCase:
             raise ValueError("封面生成操作无效")
         if task.current_timeline_version_id != payload["base_version_id"]:
             raise ValueError("封面提案基础版本已变化")
-        base = self.repository.get_timeline_version(actor.workspace_id, payload["base_version_id"])
+        base = self.repository.timeline_records.get_timeline_version(actor.workspace_id, payload["base_version_id"])
         if base.task_id != task_id:
             raise ValueError("封面基础版本不属于当前任务")
         source = self._source_record(actor.workspace_id, task_id, payload["source_video_ref"])
@@ -215,7 +215,7 @@ class CoverUseCase:
         return self._job(command.workspace_id, command.task_id, command.proposal_id, command.input_digest)
 
     def _job(self, workspace_id, task_id, proposal_id, input_digest):
-        job = self.repository.get_job_run_by_idempotency_key(workspace_id, f"cover:{proposal_id}")
+        job = self.repository.job_records.get_job_run_by_idempotency_key(workspace_id, f"cover:{proposal_id}")
         if job is not None and (job.task_id != task_id or job.kind != COVER_JOB_KIND
                                 or job.input_digest != input_digest):
             raise ValueError("原封面幂等键已绑定不同任务或输入")
@@ -236,14 +236,14 @@ class CoverUseCase:
                                     command.operation_json, self.find_job(command))
 
     def _applied_result(self, workspace_id, task_id, proposal_id, operation_json, job):
-        operations = self.repository.list_edit_operations(workspace_id, task_id)
+        operations = self.repository.edit_records.list_edit_operations(workspace_id, task_id)
         operation = next((item for item in operations if item.proposal_id == proposal_id), None)
         if operation is None:
             return None
         if (operation.operation_type != COVER_OPERATION or operation.status != "applied"
                 or _canonical(operation.payload) != operation_json):
             raise ValueError("原封面采用记录与请求不一致")
-        version = self.repository.get_timeline_version(workspace_id, operation.result_version_id)
+        version = self.repository.timeline_records.get_timeline_version(workspace_id, operation.result_version_id)
         if (version.task_id != task_id or version.created_by_operation_id != operation.id
                 or version.parent_version_id != operation.base_version_id):
             raise ValueError("原封面采用记录的版本谱系不一致")
@@ -333,7 +333,7 @@ class CoverUseCase:
         receipt = self.read_staged(command, job, max_receipt_bytes=max_receipt_bytes)
         if receipt is None:
             raise ValueError("原封面缺少可信staged回执，保持未确定，不重生成")
-        base = self.repository.get_timeline_version(command.workspace_id, command.operation["base_version_id"])
+        base = self.repository.timeline_records.get_timeline_version(command.workspace_id, command.operation["base_version_id"])
         version_id = f"timeline_{uuid4().hex}"
         tracks = [clone_subtitle_track(track, timeline_version_id=version_id)
                   for track in self.metadata.current_subtitle_tracks(command.workspace_id, task, current_version=base)]
@@ -361,28 +361,28 @@ class CoverUseCase:
             if checked != receipt:
                 raise ValueError("封面采用前固定回执发生变化")
             context.check()
-            self.repository.create_artifact_record(ArtifactRecord(id=f"artifact_{job.id}_cover",
+            self.repository.execution_records.create_artifact_record(ArtifactRecord(id=f"artifact_{job.id}_cover",
                 workspace_id=command.workspace_id, task_id=command.task_id, kind="cover_image",
                 logical_ref=evidence.output_ref, sha256=evidence.output_sha256,
                 size_bytes=evidence.output_size_bytes, producer_job_id=job.id,
                 input_refs=[cover.source_video_ref], created_at=receipt.generated_at), connection=connection)
-            self.repository.create_transform_run(TransformRun(id=transform_id, workspace_id=command.workspace_id,
+            self.repository.lineage_records.create_transform_run(TransformRun(id=transform_id, workspace_id=command.workspace_id,
                 task_id=command.task_id, job_id=job.id, transform_type="cover_from_frame",
                 input_digest=job.input_digest, input_refs=[cover.source_video_ref], output_refs=[evidence.output_ref],
                 engine=cover.model_or_engine, parameters=evidence.parameters, status="succeeded",
                 started_at=job.started_at or job.created_at, finished_at=receipt.generated_at), connection=connection)
-            self.repository.create_dependency_edge(DependencyEdge(id=f"edge_{job.id}_cover",
+            self.repository.lineage_records.create_dependency_edge(DependencyEdge(id=f"edge_{job.id}_cover",
                 workspace_id=command.workspace_id, task_id=command.task_id,
                 upstream_ref=cover.source_video_ref, downstream_ref=evidence.output_ref,
                 created_by_transform_id=transform_id, created_at=receipt.generated_at), connection=connection)
-            self.repository.append_task_event(TaskEvent(id=f"event_{job.id}_cover_adopted",
+            self.repository.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_cover_adopted",
                 workspace_id=command.workspace_id, task_id=command.task_id, job_id=job.id,
                 event_type="cover_adopted", payload={"edit_proposal_id": command.proposal_id,
                     "request_id": command.request_id, "receipt_ref": self.receipt_ref(job),
                     "result_version_id": version_id}, created_at=receipt.generated_at), connection=connection)
             commit_change_set(self.repository, change, connection=connection)
             if job.status == "running":
-                self.repository.finish_job_run(command.workspace_id, job.id, status="succeeded",
+                self.repository.job_records.finish_job_run(command.workspace_id, job.id, status="succeeded",
                     output_refs=[evidence.output_ref], connection=connection)
             return f"cover:{job.id}:{version_id}"
 
@@ -406,9 +406,9 @@ class CoverUseCase:
                 "max_stdout_bytes": budget.max_stdout_bytes, "max_stderr_bytes": budget.max_stderr_bytes}
 
     def _start(self, workspace_id, job_id, connection=None):
-        job = self.repository.get_job_run(workspace_id, job_id)
+        job = self.repository.job_records.get_job_run(workspace_id, job_id)
         try:
-            event = self.repository.get_task_event(workspace_id, f"event_{job.id}_cover_start", connection=connection)
+            event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_cover_start", connection=connection)
         except KeyError as exc:
             raise CoverUnresolved(job, "原封面Job缺少封存输入事件，结果保持未确定，不重生成") from exc
         command = CoverCommand.from_payload(event.payload["command"])
@@ -450,7 +450,7 @@ class CoverUseCase:
                         "preview_dependency", payload["resources"], ())):
                 return "unauthorized"
             try:
-                started = self.repository.get_task_event(command.workspace_id, f"event_{job.id}_cover_worker_started", connection=connection)
+                started = self.repository.execution_records.get_task_event(command.workspace_id, f"event_{job.id}_cover_worker_started", connection=connection)
             except KeyError:
                 return "ready" if job.status == "queued" else "unknown"
             if (request.state in {"granted", "yield_requested"} and job.status == "running"
@@ -520,13 +520,13 @@ class CoverUseCase:
     def submit(self, runtime, actor: CreationExecutionActor, task_id: str, proposal_id: str,
                *, request_id: str | None):
         if self.task_authorizations is not None:
-            self.task_authorizations.ensure(self.repository.get_creation_task(actor.workspace_id, task_id), actor)
+            self.task_authorizations.ensure(self.repository.task_records.get_creation_task(actor.workspace_id, task_id), actor)
         from app.device_scheduler import SchedulePolicy, SubmissionIntent
         result = self.original_result(actor, task_id, proposal_id)
         if result is not None:
             return result
         budget = self.require_budget()  # before a new Job or generation
-        job = self.repository.get_job_run_by_idempotency_key(actor.workspace_id, f"cover:{proposal_id}")
+        job = self.repository.job_records.get_job_run_by_idempotency_key(actor.workspace_id, f"cover:{proposal_id}")
         if job is None:
             command = self.prepare(actor, task_id, proposal_id, request_id=request_id)
             submitted = datetime.now(timezone.utc)
@@ -534,7 +534,7 @@ class CoverUseCase:
                        "submitted_at_utc": submitted.isoformat(),
                        "deadline_utc": (submitted + timedelta(seconds=budget.max_timeout_seconds)).isoformat(),
                        "edit_proposal_id": proposal_id, **actor.identity_payload()}
-            job = self.repository.create_cover_generation_job(JobRun(id=f"job_{uuid4().hex}",
+            job = self.repository.task_media_submissions.create_cover_generation_job(JobRun(id=f"job_{uuid4().hex}",
                 workspace_id=actor.workspace_id, task_id=task_id, kind=COVER_JOB_KIND,
                 idempotency_key=command.idempotency_key, input_digest=command.input_digest), payload,
                 expected_version_id=command.operation["base_version_id"])
@@ -549,20 +549,20 @@ class CoverUseCase:
             result = self.read_result(command, actor)
             if result is not None:
                 return result
-            current = self.repository.get_job_run(command.workspace_id, job.id)
+            current = self.repository.job_records.get_job_run(command.workspace_id, job.id)
             if current.status in {"failed", "cancelled"}:
                 raise CoverUnresolved(current, current.failure_reason or current.status)
             remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
             if remaining <= 0:
-                for row in self.repository.list_creation_job_request_states(command.workspace_id, job.id):
+                for row in self.repository.job_records.list_creation_job_request_states(command.workspace_id, job.id):
                     if row["state"] in {"waiting", "blocked", "granted", "yield_requested"}:
                         detail = runtime.scheduler.cancel(row["id"], actor)
                         runtime.registrations["creation_job"].executor.request_cancel(row["id"])
                         if detail["state"] == "cancelled" and current.status in {"queued", "interrupted"}:
-                            self.repository.finish_job_run(command.workspace_id, job.id, status="cancelled",
+                            self.repository.job_records.finish_job_run(command.workspace_id, job.id, status="cancelled",
                                 failure_reason="cover_deadline", impact="当前时间线保持不变。",
                                 repair_action="回读原封面请求，确认释放后重新发起。")
-                raise CoverUnresolved(self.repository.get_job_run(command.workspace_id, job.id),
+                raise CoverUnresolved(self.repository.job_records.get_job_run(command.workspace_id, job.id),
                     "封面原请求时限已到；未确认释放或采用的结果保持未确定，不重复生成")
             threading.Event().wait(min(budget.runtime_sample_seconds, remaining))
 
@@ -585,13 +585,13 @@ class CoverUseCase:
             receipt = self.read_staged(command, job, max_receipt_bytes=budget.max_receipt_bytes)
             if receipt is None:
                 try:
-                    self.repository.get_task_event(command.workspace_id, f"event_{job.id}_cover_worker_started")
+                    self.repository.execution_records.get_task_event(command.workspace_id, f"event_{job.id}_cover_worker_started")
                 except KeyError:
                     if job.status != "queued":
                         raise RecoveryBlocked("原封面副作用未知，缺少回执，不重claim或重生成")
                 else:
                     raise RecoveryBlocked("原封面worker已启动但无可信回执，不能盲重放")
-                job = self.repository.claim_job_run(command.workspace_id, job.id)
+                job = self.repository.job_records.claim_job_run(command.workspace_id, job.id)
                 control_ref = f"artifacts/{command.task_id}/{job.id}/cover-request.json"
                 control = {"command": asdict(command), "job_id": job.id,
                            "threads": budget.decoder_threads, "max_receipt_bytes": budget.max_receipt_bytes,
@@ -600,7 +600,7 @@ class CoverUseCase:
                 if len(encoded) > budget.max_receipt_bytes:
                     raise ValueError("封面封存输入超过profile控制文件上限")
                 self.artifact_store.publish_bytes(control_ref, encoded)
-                self.repository.append_task_event(TaskEvent(id=f"event_{job.id}_cover_worker_started",
+                self.repository.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_cover_worker_started",
                     workspace_id=command.workspace_id, task_id=command.task_id, job_id=job.id,
                     event_type="cover_worker_started", payload={"request_id": grant.request_id,
                         "generation": grant.generation, "input_digest": command.input_digest}, created_at=job.created_at))
@@ -624,7 +624,7 @@ class CoverUseCase:
             if executor._pause_for_quit(grant, scheduler):
                 return
             def cancelled(connection, current):
-                self.repository.finish_job_run(command.workspace_id, job.id, status="cancelled",
+                self.repository.job_records.finish_job_run(command.workspace_id, job.id, status="cancelled",
                     failure_reason="user_cancelled", impact="当前时间线保持不变。",
                     repair_action="回读原封面状态后重新发起。", connection=connection)
                 return f"cover:{job.id}:cancelled"
@@ -636,16 +636,16 @@ class CoverUseCase:
             if executor._pause_for_quit(grant, scheduler):
                 return
             if known_failure:
-                def failed(connection, current):
-                    self.repository.finish_job_run(command.workspace_id, job.id, status="failed",
-                        failure_reason=str(exc), impact="当前时间线保持不变。",
+                def failed(connection, current, error=exc):
+                    self.repository.job_records.finish_job_run(command.workspace_id, job.id, status="failed",
+                        failure_reason=str(error), impact="当前时间线保持不变。",
                         repair_action="检查原成片、选帧和本机FFmpeg后重新发起。", connection=connection)
                     return f"cover:{job.id}:failed"
                 scheduler.fail_unit(grant, reason="cover_generation_failed", failure_write=failed)
             else:
                 # Includes late adoption SQL failure. Preserve the concrete
                 # cause without turning an unknown side effect into a failure.
-                self.repository.append_task_event(TaskEvent(
+                self.repository.execution_records.append_task_event(TaskEvent(
                     id=f"event_{job.id}_cover_deferred_{grant.generation}",
                     workspace_id=command.workspace_id, task_id=command.task_id, job_id=job.id,
                     event_type="cover_adoption_deferred", payload={"request_id": grant.request_id,

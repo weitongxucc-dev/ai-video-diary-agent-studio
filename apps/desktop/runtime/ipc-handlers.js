@@ -19,9 +19,9 @@ function registerDesktopIpc({ ipcMain, services, files, media, buildIdentity, ge
   ipcMain.handle('open-file', () => files.openFile());
   ipcMain.handle('open-wav-file', () => files.openWavFile());
   const rejectedSave = () => ({ saved: false, error: '保存来源已失效，请返回当前应用窗口后重试。' });
-  ipcMain.handle('save-rendered-video', (event, taskId) => {
+  ipcMain.handle('save-rendered-video', (event, taskId, expectedVersionId) => {
     if (!media.checkSaveSender(event)) return rejectedSave();
-    return media.saveRenderedVideo(taskId);
+    return media.saveRenderedVideo(taskId, expectedVersionId);
   });
   ipcMain.handle('save-cover-image', (event, taskId, coverId) => {
     if (!media.checkSaveSender(event)) return rejectedSave();

@@ -4,7 +4,7 @@ import sqlite3
 from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 22
+PRODUCTION_SCHEMA_VERSION = 23
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -629,13 +629,13 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     # token column nor the content visibility columns live in static SQL here:
     # both target tables that are created outside the migration list (the
     # members table is self-provisioned by app.local_members; creation_tasks and
-    # material_assets are provisioned by ProductionRepository._init_database),
+    # material_assets are provisioned by production_schema.initialize_production_schema),
     # and the migration chain is also applied standalone (see test_device_runtime)
     # against a bare database lacking those tables. SQLite has no ADD COLUMN IF
     # NOT EXISTS and static SQL cannot PRAGMA-guard, so a plain ALTER here would
     # collide on a re-open or crash the standalone chain. The columns are added
     # by PRAGMA-guarded ensures in app.local_members._ensure_token_column and in
-    # ProductionRepository._init_database instead.
+    # production_schema.initialize_production_schema instead.
     (
         13,
         "",
@@ -830,12 +830,13 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
     """),
     (22, ""),  # Transactional section-row migration is applied below.
+    (23, ""),
 )
 
 # 「内容可见性」地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。
 # 与 version 13 同一原因：这三张表都在迁移链之外创建（knowledge_items 由
 # SourceRepository._init_database，creation_plans / video_templates 由
-# ProductionRepository._init_database），迁移链本身也会被独立应用到裸库
+# production_schema.initialize_production_schema），迁移链本身也会被独立应用到裸库
 # （见 test_device_runtime）。SQLite 没有 ADD COLUMN IF NOT EXISTS，静态 SQL
 # 也无法 PRAGMA 守卫，所以这里不放静态 ALTER，改由下列 PRAGMA 守卫的 ensure
 # 在各自 Repository 打开时幂等执行：表不存在就跳过（裸库安全），列已存在就
@@ -949,6 +950,16 @@ def apply_production_migrations(conn: sqlite3.Connection) -> None:
     for version, sql in _MIGRATIONS:
         if version in applied:
             continue
+        if version == 23:
+            from app.creation.script_windows import migrate_library_sections
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("""CREATE TABLE IF NOT EXISTS script_library_entries (
+                    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, source_task_id TEXT NOT NULL,
+                    name TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)""")
+                migrate_library_sections(conn)
+                conn.execute("INSERT INTO production_schema_migrations(version) VALUES (23)")
+            continue
         if version == 22:
             from app.creation.script_windows import migrate_script_sections
             with conn:
@@ -985,7 +996,7 @@ def apply_production_migrations(conn: sqlite3.Connection) -> None:
         except sqlite3.Error:
             conn.rollback()
             raise
-    # Intake is created by ProductionRepository, outside this migration chain.
+    # Intake is created by production_schema.initialize_production_schema, outside this migration chain.
     # A standalone database may record version 14 before that table exists.
     # Ensure the columns on each repository open, including that later creation.
     if conn.execute(

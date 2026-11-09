@@ -203,6 +203,22 @@ export type CreationTaskScriptsResponse = {
     } | null;
     route_preflight: CreationTaskTopicRoutePreflight;
 };
+export type CreationTaskScriptGenerationInput = { request_id: string };
+export type CreationTaskScriptGenerationReceipt = {
+    request_id: string;
+    task_id: string;
+    conversation_id: string;
+    turn_id: string;
+    turn_status: import("./assistant").AssistantConversationTurn["status"];
+    run_id: string;
+    run_status: NonNullable<CreationTaskScriptsResponse["latest_run"]>["status"];
+    script_id: string | null;
+    status: "running" | "stopping" | "draft_ready" | "failed" | "stopped" | "incomplete" | "unknown";
+    stop_requested: boolean;
+    result_stale: boolean;
+    script_updated_at: string | null;
+    requested_effect: "draft";
+};
 export type CreationTaskNarrationVoiceSelectionRequest = {
     request_id: string;
     voice_profile_id: string;
@@ -494,10 +510,9 @@ export type CreationExecutionPreview = {
     task_id: string;
     script_id: string;
     script_title: string;
-    script_sections: {
-        title: string;
-        content: string;
-    }[];
+    script_updated_at: string;
+    script_sections_total_count: number;
+    script_sections_loaded: false;
     plan_id: string;
     narration_source: {
         source_kind: "generated" | "recorded";

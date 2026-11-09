@@ -66,6 +66,23 @@ def test_knowledge_correction_is_owned_versioned_and_does_not_modify_source(clie
     assert client.put(route, json=payload, headers={"X-Local-Member-Token": token}).status_code == 403
     assert client.get(f"/api/knowledge-items/{saved['id']}").json()["version"] == "2"
 
+    detail = f"/api/knowledge-items/{saved['id']}"
+    peer = {"X-Local-Member-Token": token}
+    assert client.get(detail, headers=peer).status_code == 404
+    assert client.get("/api/knowledge-items/search", params={"query": "修订"}, headers=peer).json()["total_count"] == 0
+    found = client.get("/api/knowledge-items/search", params={"query": "修订", "limit": 1}).json()
+    assert found["total_count"] == 1 and found["items"][0]["id"] == saved["id"]
+    assert found["items"][0]["version"] == "2" and found["next_offset"] is None
+    shared = client.put(detail + "/visibility", json={"visibility": "shared"})
+    assert shared.status_code == 200 and shared.json()["visibility"] == "shared"
+    assert client.get(detail, headers=peer).json()["version"] == "2"
+    assert client.get("/api/knowledge-items/search", params={"query": "修订"}, headers=peer).json()["total_count"] == 1
+    private = client.put(detail + "/visibility", json={"visibility": "private"})
+    assert private.status_code == 200 and private.json()["visibility"] == "private"
+    assert client.get(detail, headers=peer).status_code == 404
+    assert client.get("/api/knowledge-items/search", params={"query": "修订"}, headers=peer).json()["total_count"] == 0
+    assert main_module.source_repository.get_source_item("workspace-a", source["id"]).body == "原始内容"
+
 
 def test_manual_source_and_knowledge_are_persistent_and_workspace_scoped(client):
     rejected_workspace = client.post(
@@ -123,8 +140,14 @@ def test_manual_source_and_knowledge_are_persistent_and_workspace_scoped(client)
         f"/api/source-connectors/{source['connector_id']}", headers=other_workspace
     ).status_code == 404
 
+    original = f"/api/knowledge-items/{knowledge['id']}/versions/{knowledge['version']}/original"
+    missing_original = client.get(original)
+    assert missing_original.status_code == 404
+    assert client.get(original, headers=other_workspace).status_code == 404
+    assert client.get(f"/api/knowledge-items/{knowledge['id']}").json()["version"] == "1"
 
-def test_unimplemented_connector_is_not_reported_as_success(client):
+
+def test_unimplemented_connector_is_not_reported_as_success(client, monkeypatch):
     connector = _create_connector(client)
 
     response = client.post(f"/api/source-connectors/{connector['id']}/sync")
@@ -134,6 +157,33 @@ def test_unimplemented_connector_is_not_reported_as_success(client):
     assert error["error"] == "capability_unavailable"
     assert error["run"]["status"] == "failed"
     assert error["run"]["connector_id"] == connector["id"]
+
+    run = error["run"]
+    database = main_module.source_repository._database_path
+    monkeypatch.setattr(main_module, "source_repository", SourceRepository(database))
+    base = f"/api/source-connectors/{connector['id']}"
+    assert client.get(base).json()["connection_status"] == "capability_unavailable"
+    assert client.get("/api/source-connectors").json()["total_count"] == 1
+    assert client.get(base + "/runs").json() == {"items": [run], "total_count": 1}
+    assert client.get(base + "/runs/latest").json() == run
+    assert client.get(base + f"/runs/{run['id']}").json() == run
+    status = client.get("/api/sources/sync-status").json()["statuses"]
+    assert len(status) == 1
+    assert status[0]["configured"] is False
+    assert status[0]["last_success_at"] is None
+    assert status[0]["last_sync_at"] == run["finished_at"]
+    assert status[0]["last_failure_at"] == run["finished_at"]
+    assert status[0]["error_message"] == run["reason"]
+    other = _create_connector(client, platform="manual")
+    assert client.get(f"/api/source-connectors/{other['id']}/runs/latest").status_code == 404
+    assert client.get(f"/api/source-connectors/{other['id']}/runs/{run['id']}").status_code == 404
+    foreign = {"x-test-workspace": "workspace-b"}
+    assert client.get("/api/source-connectors", headers=foreign).json() == {"items": [], "total_count": 0}
+    assert client.get("/api/sources/sync-status", headers=foreign).json() == {"statuses": []}
+    for suffix in ("", "/runs", "/runs/latest", f"/runs/{run['id']}"):
+        assert client.get(base + suffix, headers=foreign).status_code == 404
+    assert main_module.source_repository.list_source_items("workspace-a") == []
+    assert len(main_module.source_repository.list_runs("workspace-a", connector["id"])) == 1
 
 
 @pytest.mark.parametrize(
@@ -224,6 +274,18 @@ def test_payloads_match_the_web_source_api_contract(client):
     assert listed["items"][0]["id"] == knowledge["id"]
     # 来源绑定只属于本次保存回执，不冒充列表对象本身的来源字段。
     assert listed["items"][0]["saved_source_item_id"] is None
+
+    legacy = client.get("/api/sources/items")
+    assert legacy.status_code == 200
+    assert legacy.json()["total_count"] == 1
+    assert legacy.json()["items"] == [{
+        "source_type": source["source_label"], "title": source["title"],
+        "ref": source["source_url"], "excerpt": source["body"],
+    }]
+    before = main_module.source_repository.list_runs("workspace-a")
+    unknown = client.post("/api/sources/not-a-known-key/retry")
+    assert unknown.status_code == 404
+    assert main_module.source_repository.list_runs("workspace-a") == before
 
 
 def test_connector_sync_payload_matches_the_web_source_api_contract(client, monkeypatch):

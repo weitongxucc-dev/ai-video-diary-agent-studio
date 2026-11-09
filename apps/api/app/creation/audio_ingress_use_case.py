@@ -1,5 +1,11 @@
 """Five sealed audio actions using the original source, grant and publication owners."""
 from dataclasses import asdict, dataclass
+from contextlib import contextmanager
+import os
+from uuid import uuid4
+import hashlib
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.creation.contracts import NarrationSegment
 from collections import Counter
 from pathlib import Path
 import subprocess
@@ -32,6 +38,183 @@ class AudioIngressUseCase:
         self.repository, self.task_audio = repository, task_audio
         self.waveform_cache_root = waveform_cache_root
 
+    @contextmanager
+    def prepare_submission(self, task, actor, operation, *, temporary_root, cpu_budget,
+                           filename=None, stream=None, draft=False, arguments=None):
+        workspace_id, task_id = task.workspace_id, task.id
+        if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
+            raise AudioIngressRejected(status_code=403, detail='当前成员不能安排此任务的媒体处理')
+        if stream is not None and cpu_budget() is None:
+            raise AudioIngressRejected(status_code=503, detail='CPU 音频处理预算尚未标定，未接收媒体作业')
+        values = {'_media_kind': 'upload' if stream is not None else 'audio_mix' if operation == 'audio_listen' else 'waveform', '_draft': draft, **(arguments if arguments is not None else {})}
+        created_input = None
+        try:
+            if stream is not None:
+                suffix = Path(filename or '').suffix.lower()
+                allowed = {'.wav', '.mp3', '.m4a', '.aac', '.flac'} if operation == 'audio_import' else {'.webm', '.mp4', '.m4a', '.ogg', '.wav'}
+                if suffix not in allowed:
+                    raise AudioIngressRejected(status_code=422, detail='当前上传音频格式不可用')
+                root = temporary_root / 'task-media-inputs' / media_digest([workspace_id, actor.identity_payload()])
+                root.mkdir(parents=True, exist_ok=True)
+                partial = root / (uuid4().hex + '.part')
+                limit = (512 if operation == 'audio_import' else 50) * 1024 * 1024
+                total, digest = (0, hashlib.sha256())
+                try:
+                    with partial.open('xb') as target:
+                        while (chunk := stream.read(1024 * 1024)):
+                            total += len(chunk)
+                            if total > limit:
+                                raise AudioIngressRejected(status_code=422, detail='上传音频超过本次大小上限')
+                            target.write(chunk)
+                            digest.update(chunk)
+                    if total == 0:
+                        raise AudioIngressRejected(status_code=422, detail='上传音频为空')
+                    staged = root / (digest.hexdigest() + suffix)
+                    if staged.is_symlink():
+                        raise AudioIngressRejected(status_code=422, detail='音频暂存位置不可用')
+                    try:
+                        os.link(partial, staged)
+                    except FileExistsError:
+                        if staged.stat().st_size != total:
+                            raise AudioIngressRejected(status_code=409, detail='已保存的固定音频输入发生变化，请检查本机存储')
+                    else:
+                        created_input = staged
+                finally:
+                    partial.unlink(missing_ok=True)
+                values['audio'] = {'staged_input': str(staged.relative_to(temporary_root)), 'filename': Path(filename).name, 'size_bytes': total, 'sha256': digest.hexdigest()}
+            else:
+                self.check_public_input(workspace_id, task_id, operation, values, actor)
+            yield values
+        except Exception as exc:
+            if created_input is not None:
+                relative = str(created_input.relative_to(temporary_root))
+                referenced = self.repository.execution_records.staged_audio_input_referenced(workspace_id, relative)
+                if not referenced:
+                    created_input.unlink(missing_ok=True)
+            if isinstance(exc, AudioIngressRejected):
+                raise
+            if isinstance(exc, PermissionError):
+                raise AudioIngressRejected(status_code=403, detail=str(exc)) from exc
+            if isinstance(exc, (ValueError, KeyError)):
+                raise AudioIngressRejected(status_code=422, detail=str(exc)) from exc
+            raise
+
+    def list_recordings(self, task, *, outputs):
+        workspace_id, task_id = task.workspace_id, task.id
+        if not task.confirmed_script_id:
+            return {"items": []}
+        service = self.task_audio
+        current_narration_refs = set()
+        if task.montage_plan_id:
+            plan = creation_task_montage_plan_from_payload(
+                self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            if plan.script_id == task.confirmed_script_id:
+                current_narration_refs = {clip.source_ref for track in effective_audio_timeline(plan).tracks
+                                          if track.role == "narration" for clip in track.clips}
+        if task.narration_cache_key:
+            current_narration = self.repository.narration_artifacts.get_narration_artifact(
+                workspace_id, task.narration_cache_key,
+            )
+            if (current_narration is not None and current_narration.task_id == task.id
+                    and current_narration.script_id == task.confirmed_script_id
+                    and current_narration.source_kind == "recorded"
+                    and current_narration.source_artifact_ref):
+                current_narration_refs.add(current_narration.source_artifact_ref)
+        items = []
+        for record in reversed(self.repository.execution_records.list_artifact_records(workspace_id, task_id)):
+            if record.kind != "task_recording":
+                continue
+            try:
+                _, duration_ms = service.recording(
+                    workspace_id, task_id, record.logical_ref,
+                )
+                if not outputs.published_outputs_current(self.repository.job_records.get_job_run(workspace_id, record.producer_job_id)):
+                    continue
+            except (KeyError, ValueError, FileNotFoundError):
+                continue  # Failed or obsolete uploads are never offered as current narration.
+            items.append({"source_ref": record.logical_ref, "artifact_id": record.id,
+                          "audio_url": f"/api/creation-tasks/{task_id}/audio/artifacts/{record.id}",
+                          "duration_ms": duration_ms, "created_at": record.created_at.isoformat(),
+                          "applied": record.logical_ref in current_narration_refs})
+        return {"items": items}
+
+
+    def adopt_recording(self, task, *, script_id, source_section_id, source_ref, outputs):
+        workspace_id = task.workspace_id
+        if task.stage != "narration" or task.stage_status not in {"not_started", "failed"}:
+            raise AudioIngressRejected(409, "当前任务不能首次采用录音")
+        if task.confirmed_script_id != script_id:
+            raise AudioIngressRejected(409, "文案版本已变化，请重新选择当前录音")
+        try:
+            script = self.repository.script_records.get_creation_task_script(workspace_id, script_id)
+        except KeyError as exc:
+            raise AudioIngressRejected(404, "当前文案不存在") from exc
+        if script.selection_status != "confirmed" or len(script.sections) != 1:
+            raise AudioIngressRejected(409, "当前版本有多个文案段，暂不能确定单段录音的对应关系")
+        section = script.sections[0]
+        if source_section_id != section.id:
+            raise AudioIngressRejected(409, "录音对应的文案段已变化，请重新选择")
+        script_digest = self.repository.script_records.confirmed_creation_task_script_digest(
+            workspace_id, task.id, script.id,
+        )
+        if script_digest is None:
+            raise AudioIngressRejected(409, "当前文案未确认或已经变化，不能采用录音")
+        try:
+            source, duration_ms = self.task_audio.recording(
+                workspace_id, task.id, source_ref,
+            )
+            if not outputs.published_outputs_current(self.repository.job_records.get_job_run(workspace_id, source.producer_job_id)):
+                raise ValueError("电脑录音已变化或缺少受许可核验回执，请重新录制")
+            audio_path = self.task_audio.source(workspace_id, task.id, source.logical_ref)
+            cache_seed = f"recorded:{task.id}:{script.id}:{section.id}:{source.logical_ref}:{source.sha256}"
+            cache_key = f"recorded_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:48]}"
+            narration_ref = self.repository.narration_artifacts.narration_artifact_reference(cache_key)
+            narration_id = f"narration_segment_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:20]}"
+            language = {"zh-CN": "zh", "en-US": "en", "zh-CN/en-US": "zh-en"}[script.language]
+            record = NarrationArtifactRecord(
+                id=cache_key,
+                workspace_id=workspace_id,
+                task_id=task.id,
+                script_id=script.id,
+                voice_profile_id=None,
+                cache_key=cache_key,
+                audio_path=str(audio_path),
+                duration_seconds=duration_ms / 1000,
+                sample_rate=None,
+                model_id=None,
+                language=language,
+                source_kind="recorded",
+                source_artifact_ref=source.logical_ref,
+                source_sha256=source.sha256,
+                source_script_digest=script_digest,
+            )
+            segment = NarrationSegment(
+                id=narration_id,
+                workspace_id=workspace_id,
+                task_id=task.id,
+                script_id=script.id,
+                source_section_id=section.id,
+                text=section.content,
+                audio_reference=narration_ref,
+                duration_seconds=duration_ms / 1000,
+                sample_rate=None,
+                model_id=None,
+                voice_profile_id=None,
+                voice_version=None,
+                language=language,
+                pronunciation_version="",
+                status="ready",
+                source_kind="recorded",
+                source_artifact_ref=source.logical_ref,
+                source_sha256=source.sha256,
+                source_script_digest=script_digest,
+            )
+            task, record = self.repository.narration_completion.complete_creation_task_narration(record, segments=[segment])
+        except (KeyError, ValueError, FileNotFoundError) as exc:
+            raise AudioIngressRejected(409, f"当前录音未采用：{exc}") from exc
+        return task, record
+
+
     def execute(self, job, event, actor, context):
         action = event['operation']
         if action == 'audio_import':
@@ -47,7 +230,7 @@ class AudioIngressUseCase:
         raise ValueError('不是本音频输入用例的动作')
 
     def check_public_input(self, workspace_id, task_id, action, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if action == 'audio_listen':
             if task.current_timeline_version_id != arguments['payload'].get('base_version_id'):
                 raise AudioIngressRejected(409, '时间线已经变化，请刷新后试听')
@@ -64,7 +247,7 @@ class AudioIngressUseCase:
             except (KeyError, StopIteration, ValueError, AudioWaveformError) as exc:
                 raise AudioIngressRejected(422, '无法读取所选音频的波形，请检查源文件') from exc
         elif action == 'narration_waveform':
-            artifact = self.repository.get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
+            artifact = self.repository.narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
             if artifact is None or artifact.task_id != task.id:
                 raise AudioIngressRejected(404, '当前任务还没有可读取的配音。')
 
@@ -72,7 +255,7 @@ class AudioIngressUseCase:
         workspace_id, task_id = (job.workspace_id, job.task_id)
         raw = event['arguments']['audio']
         audio = StagedAudioInput(raw['staged_input'], raw['filename'], raw['size_bytes'], raw['sha256'])
-        self.repository.get_creation_task(workspace_id, task_id)
+        self.repository.task_records.get_creation_task(workspace_id, task_id)
         suffix = Path(audio.filename or '').suffix.lower()
         if suffix not in {'.wav', '.mp3', '.m4a', '.aac', '.flac'}:
             raise AudioIngressRejected(status_code=422, detail='请选择 WAV、MP3、M4A、AAC 或 FLAC 音频')
@@ -87,10 +270,10 @@ class AudioIngressUseCase:
         workspace_id, task_id = (job.workspace_id, job.task_id)
         raw = event['arguments']['audio']
         audio = StagedAudioInput(raw['staged_input'], raw['filename'], raw['size_bytes'], raw['sha256'])
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if task.stage not in {'narration', 'montage', 'review'} or not task.confirmed_script_id:
             raise AudioIngressRejected(status_code=409, detail='请先确认当前任务文案，再保存电脑录音')
-        script_digest = self.repository.confirmed_creation_task_script_digest(workspace_id, task.id, task.confirmed_script_id)
+        script_digest = self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task.id, task.confirmed_script_id)
         if script_digest is None:
             raise AudioIngressRejected(status_code=409, detail='当前文案未确认或已经变化，不能保存为本任务录音')
         suffix = Path(audio.filename or '').suffix.lower()
@@ -109,7 +292,7 @@ class AudioIngressUseCase:
     def audio_waveform(self, job, event, actor, context):
         workspace_id, task_id = (job.workspace_id, job.task_id)
         clip_id = event['arguments']['clip_id']
-        self.repository.get_creation_task(workspace_id, task_id)
+        self.repository.task_records.get_creation_task(workspace_id, task_id)
         try:
             plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
             clip = next((clip for track in effective_audio_timeline(plan).tracks for clip in track.clips if clip.id == clip_id))
@@ -121,7 +304,7 @@ class AudioIngressUseCase:
     def listen(self, job, event, actor, context):
         workspace_id, task_id = (job.workspace_id, job.task_id)
         payload = AudioListenRequest.model_validate(event['arguments']['payload'])
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if task.current_timeline_version_id != payload.base_version_id:
             raise AudioIngressRejected(status_code=409, detail='时间线已经变化，请刷新后试听')
         try:
@@ -135,8 +318,8 @@ class AudioIngressUseCase:
 
     def narration_waveform(self, job, event, actor, context):
         workspace_id, task_id = (job.workspace_id, job.task_id)
-        task = self.repository.get_creation_task(workspace_id, task_id)
-        artifact = self.repository.get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
+        artifact = self.repository.narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key) if task.narration_cache_key else None
         if artifact is None or artifact.task_id != task.id:
             raise AudioIngressRejected(status_code=404, detail='当前任务还没有可读取的配音。')
         try:
@@ -145,7 +328,7 @@ class AudioIngressUseCase:
             raise AudioIngressRejected(status_code=422, detail=str(exc)) from exc
 
     def seal(self, workspace_id, task_id, operation, arguments, actor, budget):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         plan_payload = self.repository.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None
         plan = creation_task_montage_plan_from_payload(plan_payload) if plan_payload else None
         transient = {'status', 'message', 'output_path', 'subtitle_path', 'updated_at'}
@@ -187,12 +370,12 @@ class AudioIngressUseCase:
         if operation == 'narration_waveform':
             if not task.narration_cache_key:
                 raise ValueError('当前任务没有可读取的配音')
-            reference = self.repository.narration_artifact_reference(task.narration_cache_key)
+            reference = self.repository.narration_artifacts.narration_artifact_reference(task.narration_cache_key)
             remember(reference, self.task_audio.source(workspace_id, task_id, reference, actor=actor))
         facts = {'base_version_id':task.current_timeline_version_id, 'script_id':task.confirmed_script_id,
-            'script_digest':self.repository.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id)
+            'script_digest':self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id)
                 if task.confirmed_script_id else None,
-            'plan_id':task.plan_id, 'plan_digest':media_digest(asdict(self.repository.get_creation_plan(workspace_id,task.plan_id))),
+            'plan_id':task.plan_id, 'plan_digest':media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),
             'montage':snapshot, 'files':files, 'narration_cache_key':task.narration_cache_key}
         if operation == 'audio_import':
             facts = {'base_version_id':None, 'files':files}
@@ -241,7 +424,7 @@ class AudioIngressUseCase:
 
     def validate_result(self, job, event, result, context):
         outputs = []
-        for record in self.repository.list_artifact_records(job.workspace_id,job.task_id):
+        for record in self.repository.execution_records.list_artifact_records(job.workspace_id,job.task_id):
             if record.producer_job_id != job.id:
                 continue
             context.check()

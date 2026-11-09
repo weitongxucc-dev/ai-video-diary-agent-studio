@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from datetime import datetime
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app.local_members import LocalMemberService
-from app.production import _json_payload
-from tests.test_material_search_candidates import _approved_asset, _repository
+from app.materials.contracts import MaterialAsset, MaterialSegment
+from tests.test_material_search_candidates import _repository
+from test_content_visibility_routes import material_library_no_execution
 
 
 def test_material_search_filters_members_before_limit_and_keeps_shared_assets(
     tmp_path, monkeypatch,
 ):
+    material_library_no_execution(monkeypatch)
     workspace = "material-search-members"
     production = _repository(tmp_path)
     members = LocalMemberService(tmp_path / "members.sqlite3")
@@ -28,23 +31,25 @@ def test_material_search_filters_members_before_limit_and_keeps_shared_assets(
     client = TestClient(main_module.app)
 
     def add_asset(file_name: str, owner_id: str, visibility: str):
-        asset = _approved_asset(
-            production,
-            workspace,
-            file_name,
-            segments=[{
-                "_start": 0.0,
-                "description": "permissionneedle",
-                "transcript": "",
-            }],
+        # Persist ready analysis facts directly; no ingestion/scan/provider fixture.
+        path = production.video_library_path / file_name
+        path.write_bytes(b"metadata-only")
+        asset_id = uuid4().hex
+        asset = MaterialAsset(
+            id=asset_id, workspace_id=workspace, file_name=file_name,
+            path=str(path), size_bytes=path.stat().st_size,
+            modified_at=datetime.fromtimestamp(path.stat().st_mtime),
+            duration_seconds=25.0, analysis_status="ready",
+            review_status="approved", usage_role="b_roll",
+            owner_user_id=owner_id, visibility=visibility,
+            segments=[MaterialSegment(
+                id=f"{asset_id}-{index}", asset_id=asset_id,
+                start_seconds=start, end_seconds=end,
+                description="permissionneedle" if index == 0 else "",
+                visual_status="ready", usage_role="b_roll", review_status="approved",
+            ) for index, (start, end) in enumerate(((0.0, 5.0), (5.0, 17.0), (17.0, 25.0)))],
         )
-        owned = replace(asset, owner_user_id=owner_id, visibility=visibility)
-        with production._connect() as conn:
-            conn.execute(
-                "UPDATE material_assets SET payload=?, visibility=? WHERE workspace_id=? AND id=?",
-                (_json_payload(owned), visibility, workspace, asset.id),
-            )
-        return asset
+        return production._save_asset(asset)
 
     shared = add_asset("shared.mp4", first.member_id, "shared")
     first_private = add_asset("first-private.mp4", first.member_id, "private")

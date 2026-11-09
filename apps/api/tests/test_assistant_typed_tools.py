@@ -1,5 +1,7 @@
-from assistant_sdk_fixtures import project_event_fixture
 """Shipped tools and installed QuickJS, with HTTP doubles and no model/media calls."""
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
+
+from assistant_sdk_fixtures import project_event_fixture
 import json
 import os
 import re
@@ -110,7 +112,7 @@ def test_original_receipt_refresh_reuses_saved_locators_without_mutating_the_tur
     assert 'failure' not in refreshed['result']['response']['timeline_restore']
 
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 let raw=''; for await (const part of process.stdin) raw+=part;
 const input=JSON.parse(raw), tools=new Map(), calls=[], results=[]; let failedPosts=0;
 globalThis.fetch=async(url,init)=>{
@@ -141,7 +143,7 @@ const api={registerTool:tool=>tools.set(tool.name,tool), getAllTools:()=>[...too
 const binding=createDiaryExtension(process.env);await binding.extension(api);
 for (const step of input.steps||[]) {
  if(step.rebind){await binding.rebind({...process.env,AI_VIDEO_DIARY_AGENT_SELECTED_REFERENCES:JSON.stringify(step.rebind)});continue;}
- try {const args=step.fromReceipt?{request_id:results[0].result.details.request_id}:(step.args||{});results.push({ok:true,result:await tools.get(step.tool).execute(results.length?'fixture-'+results.length:'fixture',args)});}
+ try {const args=step.fromReceipt?{request_id:results[0].result.details.request_id}:(step.args||{});results.push(toolOutcome(await tools.get(step.tool).execute(results.length?'fixture-'+results.length:'fixture',args)));}
  catch(error){results.push({ok:false,error:error.message});}
 }
 if(input.code){
@@ -150,7 +152,7 @@ if(input.code){
    return {toolCall:{id:'nested-'+calls.length},isError:Boolean(result.isError),result};}
   catch(error){return {toolCall:{id:'failed-'+calls.length},isError:true,result:{content:[{type:'text',text:error.message}]}};}
  }};
- results.push({ok:true,result:await tools.get('codemode').execute('script-fixture',{code:input.code},undefined,undefined,ctx)});
+ results.push(toolOutcome(await tools.get('codemode').execute('script-fixture',{code:input.code},undefined,undefined,ctx)));
 }
 console.log(JSON.stringify({results,calls,parameters:tools.get('preview_typed_edit').parameters,requestIdentity:typedRequestId('trusted-turn','fixture')}));
 """
@@ -219,7 +221,8 @@ def test_execution_unknown_cannot_repost_and_job_switch_cannot_claim_original_su
                {"tool":"read_creation_execution", "args":{"job_id":"execution:old"}}])
     assert len([call for call in observed["calls"] if call["method"] == "POST"]) == 1
     assert observed["results"][0]["result"]["isError"] is True
-    assert 'fixture reply lost' in observed["results"][0]["result"]["details"]["failure"]["reason"]
+    assert observed["results"][0]["result"]["details"]["failure"]["reason"] == '业务请求响应中断，写入结果未知。'
+    assert 'fixture reply lost' not in json.dumps(observed["results"][0]["result"], ensure_ascii=False)
     assert observed["results"][1]["result"]["isError"] is True
     assert not observed["results"][2]["ok"] and '身份不一致' in observed["results"][2]["error"]
 
@@ -527,6 +530,22 @@ def test_observation_reads_and_enqueue_bind_actual_current_task_and_no_media(tmp
     assert UUID(post["body"]["request_id"]).version == 5
 
 
+def test_distinct_output_observations_are_not_limited_by_a_round_counter(tmp_path):
+    job = {"job_id": "observation-job", "result_kind": "observation", "status": "queued"}
+    steps = [{"tool": "observe_task_output", "args": {
+        "target": {"kind": "final"}, "sample_times_seconds": [point],
+    }} for point in (1, 2, 3, 4)]
+    seen = invoke(tmp_path, observation_job=job, steps=[*steps, steps[-1]])
+    assert all(result["ok"] and not result["result"].get("isError") for result in seen["results"][:4])
+    duplicate = seen["results"][4]
+    assert not duplicate["ok"] or duplicate["result"]["isError"]
+    assert "相同观察" in json.dumps(duplicate, ensure_ascii=False)
+    posts = [call for call in seen["calls"] if call["method"] == "POST"]
+    assert len(posts) == 4
+    assert len({call["body"]["request_id"] for call in posts}) == 4
+    assert [call["body"]["sample_times_seconds"] for call in posts] == [[1], [2], [3], [4]]
+
+
 def test_unknown_observation_receipt_is_queried_without_replaying(tmp_path):
     job = {"job_id": "observation-job", "result_kind": "observation", "status": "queued"}
     request = {"tool": "observe_task_output", "args": {"target": {"kind": "final"}}}
@@ -536,7 +555,10 @@ def test_unknown_observation_receipt_is_queried_without_replaying(tmp_path):
     assert result["status"] == "result_unknown" and result["phase"] == "observation"
     assert result["assistant_turn_id"] == "trusted-turn" and result["tool_call_id"] == "fixture"
     assert result["base_version_id"] == "version-current" and result["base_sequence"] == 4
-    assert not seen["results"][1]["ok"] and seen["results"][2]["result"]["details"]["media_job"] == job
+    blocked = seen["results"][1]
+    assert not blocked["ok"] or blocked["result"]["isError"]
+    assert "尚待核验" in json.dumps(blocked, ensure_ascii=False)
+    assert seen["results"][2]["result"]["details"]["media_job"] == job
     assert sum(call["method"] == "POST" for call in seen["calls"]) == 1
 
 
@@ -653,3 +675,124 @@ def test_multiple_frozen_profiles_are_read_by_index_without_rebinding_ids(tmp_pa
         ("/api/assistant/profile-references/voice/voice-new","?version=v9")]
     assert actual["results"][2]["ok"] is False and len(calls) == 3
     assert actual["results"][3]["result"]["details"]["display_name"] == "声音丙"
+
+
+def test_quality_tools_use_host_and_keep_original_pair_after_unknown(tmp_path):
+    runner = tmp_path / 'quality-host.mjs'
+    runner.write_text(r'''
+import {registerObservationTools} from MODULE_OBSERVATION;
+import {createBusinessRequest} from MODULE_TRANSPORT;
+const tools=new Map(), calls=[];
+let visible=false, changed=false, writes=0, verifies=0;
+const pair={job_id:'original-quality-job',failed_request_id:'failed-phase'};
+const receipt={check_id:'original-check',job_id:pair.job_id,request_id:'same-successor'};
+const verifyTaskVersion=()=>{verifies++;if(changed)throw new Error('HEAD changed');};
+const request=createBusinessRequest({taskId:'task',selectedTaskVersion:{timeline_version_id:'v1',timeline_sequence:1},
+  verifyTaskVersion,readCredentials:()=>{throw new Error('host cannot read HTTP credentials');},
+  getSignal:()=>undefined,fetchRequest:()=>{throw new Error('must not loop back through HTTP');},
+  businessCall:async(operation,args)=>{
+    calls.push({operation,args});
+    if(operation==='read_task_quality_continuation')return {ok:true,value:{...pair,status:visible?'recorded':'unknown',receipt:visible?receipt:null}};
+    if(operation==='read_task_workspace')return {ok:true,value:{task:{id:'task',current_timeline_version_id:'v1',timeline_sequence:1}}};
+    if(operation==='read_task_quality_check')return {ok:true,value:{check_state:'failed',continuation:{...pair,can_request:true}}};
+    if(operation==='continue_task_quality_check'){writes++;throw new Error('committed but reply lost');}
+    throw new Error('unexpected operation '+operation);
+  }});
+const register=()=>registerObservationTools({registerTool:t=>tools.set(t.name,t)},
+  {request,taskId:'task',verifyTaskVersion,readActionSource:()=>({turnId:'turn'}),typedRequestId:()=>{throw new Error('QC must use original predecessor, not new UUID');}});
+register();
+const first=await tools.get('continue_task_quality_check').execute('first',pair);
+changed=true;
+const unknown=await tools.get('continue_task_quality_check').execute('second',{job_id:'another-job',failed_request_id:'another-phase'});
+visible=true;
+const recovered=await tools.get('read_task_quality_continuation').execute('read',pair);
+register();
+const replay=await tools.get('continue_task_quality_check').execute('restart',pair);
+console.log(JSON.stringify({first,unknown,recovered,replay,writes,verifies,calls,parameters:tools.get('continue_task_quality_check').parameters}));
+'''.replace('MODULE_OBSERVATION', json.dumps((MODULE.parent / 'diary/observation-tools.ts').as_uri()))
+        .replace('MODULE_TRANSPORT', json.dumps((MODULE.parent / 'diary/transport.ts').as_uri())))
+    completed = subprocess.run([os.environ.get('MATERIAL_TOOLS_TEST_NODE', 'node'), '--experimental-strip-types', str(runner)],
+        capture_output=True, text=True, check=True)
+    seen = json.loads(completed.stdout.splitlines()[-1])
+    assert seen['writes'] == 1 and seen['verifies'] == 1
+    assert seen['first']['details']['status'] == seen['unknown']['details']['status'] == 'unknown'
+    assert seen['unknown']['details']['job_id'] == 'original-quality-job'
+    assert seen['unknown']['details']['failed_request_id'] == 'failed-phase'
+    assert seen['recovered']['details']['receipt'] == seen['replay']['details']['receipt']
+    assert seen['replay']['details']['receipt']['request_id'] == 'same-successor'
+    assert set(seen['parameters']['properties']) == {'job_id', 'failed_request_id'}
+    assert seen['parameters']['additionalProperties'] is False
+    assert seen['calls'][-1]['operation'] == 'read_task_quality_continuation'
+    assert all(call['operation'] != 'observe_task_output' for call in seen['calls'])
+
+
+@pytest.mark.parametrize('status', ['recorded', 'unknown', 'rejected'])
+def test_quality_continuation_projection_never_claims_check_passed(status):
+    from app.assistant.result_projection import project_business_result
+    details = {'kind': 'quality_continuation', 'task_id': 'task', 'job_id': 'original-job',
+        'failed_request_id': 'original-failure', 'status': status, 'invocation_input_id': 'current',
+        'receipt': {'check_id': 'check', 'job_id': 'original-job', 'request_id': 'successor'} if status == 'recorded' else None}
+    answer, value = project_business_result({'answer': '质检通过，视频完成', 'status': 'settled', 'input_id': 'current',
+        'tool_results': [{'type': 'tool_execution_end', 'toolName': 'continue_task_quality_check',
+            'isError': status != 'recorded', 'result': {'details': details}}]})
+    assert value == details and answer != '质检通过，视频完成'
+    assert '不表示检查通过' in answer if status == 'recorded' else ('尚未知' in answer if status == 'unknown' else '拒绝' in answer)
+
+
+@pytest.mark.parametrize('recovery_tool', ['read_task_quality_continuation', 'continue_task_quality_check'])
+def test_quality_same_tool_instance_unlocks_only_recorded_original_pair(tmp_path, recovery_tool):
+    runner = tmp_path / 'quality-next-phase.mjs'
+    runner.write_text(r'''
+import {registerObservationTools} from MODULE_OBSERVATION;
+const tools=new Map(), writes=[], reads=[];
+const first={job_id:'same-job',failed_request_id:'first-failed-phase'};
+const second={job_id:'same-job',failed_request_id:'second-failed-phase'};
+const unrelated={job_id:'other-job',failed_request_id:'other-failed-phase'};
+let visible=false, current=first, verifies=0;
+const receipt=pair=>({check_id:'same-check',job_id:pair.job_id,request_id:`successor-${pair.failed_request_id}`});
+const request=async(path, options)=>{
+  if(path.includes('/continuation?')){
+    const query=new URL(path,'http://localhost').searchParams;
+    const pair={job_id:query.get('job_id'),failed_request_id:query.get('failed_request_id')};
+    reads.push(pair);
+    const recorded=pair.job_id===unrelated.job_id || (pair.failed_request_id===first.failed_request_id && visible);
+    return {...pair,status:recorded?'recorded':'unknown',receipt:recorded?receipt(pair):null};
+  }
+  if(path.endsWith('/continue')){
+    const pair=JSON.parse(options.body);writes.push(pair);
+    if(pair.failed_request_id===first.failed_request_id)throw new Error('committed but reply lost');
+    return receipt(pair);
+  }
+  if(path.endsWith('/quality-check'))return {continuation:{...current,can_request:true}};
+  if(path==='/api/creation-tasks/task')return {task:{id:'task'}};
+  throw new Error('unexpected request '+path);
+};
+registerObservationTools({registerTool:t=>tools.set(t.name,t)},
+  {request,taskId:'task',verifyTaskVersion:()=>{verifies++;},readActionSource:()=>({turnId:'turn'}),
+   typedRequestId:()=>{throw new Error('must not create another request');}});
+const continued=tools.get('continue_task_quality_check');
+const initial=await continued.execute('initial',first);
+current=second;
+await tools.get('read_task_quality_continuation').execute('unrelated',unrelated);
+const blocked=await continued.execute('still-unknown',second);
+const writesWhileUnknown=writes.length;
+visible=true;
+const recovered=await tools.get(RECOVERY_TOOL).execute('recover',first);
+const next=await continued.execute('next-phase',second);
+console.log(JSON.stringify({initial,blocked,recovered,next,writesWhileUnknown,writes,reads,verifies}));
+'''.replace('MODULE_OBSERVATION', json.dumps((MODULE.parent / 'diary/observation-tools.ts').as_uri()))
+        .replace('RECOVERY_TOOL', json.dumps(recovery_tool)))
+    completed = subprocess.run([os.environ.get('MATERIAL_TOOLS_TEST_NODE', 'node'), '--experimental-strip-types', str(runner)],
+        capture_output=True, text=True, check=True)
+    seen = json.loads(completed.stdout.splitlines()[-1])
+    assert seen['initial']['details']['status'] == seen['blocked']['details']['status'] == 'unknown'
+    assert seen['writesWhileUnknown'] == 1
+    assert seen['blocked']['details']['failed_request_id'] == 'first-failed-phase'
+    assert seen['recovered']['details']['status'] == 'recorded'
+    assert seen['recovered']['details']['failed_request_id'] == 'first-failed-phase'
+    assert seen['next']['details']['failed_request_id'] == 'second-failed-phase'
+    assert seen['next']['details']['receipt']['request_id'] == 'successor-second-failed-phase'
+    assert seen['writes'] == [
+        {'job_id': 'same-job', 'failed_request_id': 'first-failed-phase'},
+        {'job_id': 'same-job', 'failed_request_id': 'second-failed-phase'}]
+    assert seen['verifies'] == 2

@@ -10,7 +10,53 @@ import type { SegmentVisualDecision, SegmentVisualDecisionLocator, CreationTaskS
 import styles from "../CreationTaskWorkspace.module.css";
 import editorUi from "../VideoEditor.module.css";
 import { executionStageLabels } from './execution-labels';
-export function CreationExecutionPanel({ taskStage, taskReason, voice, availableVoices, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, storyboard, onRegenerateStoryboard, onReadStoryboard, compact = false, onStart, onResume, onCancel, onOpenMontage }: {
+import { CreationPlanApiError } from "@/lib/api";
+import { getCreationTaskScriptSections } from "@/lib/api/creation-tasks";
+import type { CreationTaskScriptSectionWindow } from "@/lib/types/creation-tasks";
+
+function ExecutionScriptWindow({ preview, onStale }: {
+    preview: CreationExecutionPreview; onStale: (key: string) => void;
+}) {
+    const [open, setOpen] = useState(false);
+    const [cursors, setCursors] = useState([0]);
+    const [page, setPage] = useState<CreationTaskScriptSectionWindow | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [retry, setRetry] = useState(0);
+    const after = cursors[cursors.length - 1];
+    const { task_id: taskId, script_id: scriptId, script_updated_at: version, input_digest: digest } = preview;
+    useEffect(() => {
+        if (!open) return;
+        let active = true;
+        setPage(null);
+        setLoading(true);
+        setError(null);
+        void getCreationTaskScriptSections(taskId, scriptId, { after_ordinal: after, expected_updated_at: version }).then(value => {
+            if (active) setPage(value);
+        }).catch(cause => {
+            if (!active) return;
+            if (cause instanceof CreationPlanApiError && cause.status === 409) {
+                onStale(`${taskId}:${digest}`);
+                setError("文案版本已变化，旧页已清除；请重新核对文案和制作要求。");
+            } else setError(cause instanceof Error ? cause.message : "文案窗口读取失败。");
+        }).finally(() => { if (active) setLoading(false); });
+        return () => { active = false; };
+    }, [open, taskId, scriptId, version, digest, after, retry, onStale]);
+    return <details className={styles.executionScript} onToggle={event => setOpen(event.currentTarget.open)}>
+        <summary>这次使用的文案：{preview.script_title}<span>共 {preview.script_sections_total_count} 段</span></summary>
+        {loading ? <p role="status">正在读取已确认文案…</p> : null}
+        {error ? <p role="alert">{error}</p> : null}
+        {page ? <>
+            <p>当前显示第 {page.items[0]?.ordinal ?? 0}–{page.items.at(-1)?.ordinal ?? 0} 段，共 {page.total_count} 段。</p>
+            {page.items.map(item => <p key={item.section.id}>第 {item.ordinal} 段 · {item.section.title}：{item.section.content}</p>)}
+            <Button variant="outline" disabled={loading || cursors.length === 1} onClick={() => setCursors(current => current.slice(0, -1))}>上一页已确认文案</Button>
+            <Button variant="outline" disabled={loading || page.next_after_ordinal === null} onClick={() => setCursors(current => [...current, page.next_after_ordinal!])}>下一页已确认文案</Button>
+        </> : null}
+        {error ? <Button variant="outline" disabled={loading} onClick={() => setRetry(value => value + 1)}>重试读取原版本文案</Button> : null}
+    </details>;
+}
+
+export function CreationExecutionPanel({ taskStage, taskReason, voice, availableVoices, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, storyboard, onRegenerateStoryboard, onReadStoryboard, compact = false, onStart, onResume, onCancel, onOpenMontage, onRefreshPreview }: {
     taskReason: string | null;
     taskStage: WorkspaceState["task"]["stage"];
     voice: WorkspaceState["plan"]["selected_voice"];
@@ -30,7 +76,11 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
     onResume: () => void;
     onCancel: () => void;
     onOpenMontage: () => void;
+    onRefreshPreview?: () => void;
 }) {
+    const [stalePreview, setStalePreview] = useState<string | null>(null);
+    const previewKey = preview ? `${preview.task_id}:${preview.input_digest}` : null;
+    const previewStale = stalePreview !== null && stalePreview === previewKey;
     const storyboardControls = storyboard && onRegenerateStoryboard ? <section aria-label="重新安排画面" className={styles.workSection}>
       <Button variant="outline" disabled={busy || visualBusy || !storyboard.canSubmit} onClick={onRegenerateStoryboard} type="button">重新安排画面，保留配音</Button>
       <p>重新编排当前文案的镜头，保留原配音、字幕与图层；不会自动生成成片。</p>
@@ -110,7 +160,8 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
     <div className={styles.operationHeading}><h2>{job ? "连续制作" : "制作要求"}</h2><span className={styles.stateBadge}>{statusText}</span></div>
     {needsOutput ? <p>沿用有效配音和故事板，重新输出当前时间线。</p> : null}
     {(!job || resumable || waitingForUser) && preview ? <>
-      <details className={styles.executionScript}><summary>这次使用的文案：{preview.script_title}<span>{preview.script_sections.length} 段</span></summary>{preview.script_sections.map((section, index) => <p key={index}>第 {index + 1} 段 · {section.title}：{section.content}</p>)}</details>
+      <ExecutionScriptWindow key={previewKey} preview={preview} onStale={setStalePreview}/>
+      {previewStale ? <p role="status">制作前览已过期，请重新核对文案和制作要求。{onRefreshPreview ? <Button variant="outline" disabled={busy} onClick={onRefreshPreview}>重新核对文案和制作要求</Button> : null}</p> : null}
       <section className={styles.executionRequirements} aria-label="这次制作要求">
         <p>画幅 {preview.requirements.aspect_ratio} · 目标时长 {preview.requirements.duration_target_seconds} 秒 · 露脸目标 {preview.requirements.presenter_share_target}%</p>
         <p>口型：{preview.requirements.lipsync_quality === "high" ? "高精度" : "较快档"} · {preview.narration_source?.source_kind === "recorded"
@@ -122,7 +173,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
         {Object.entries(preview.requirements.template_settings).length ? <details><summary>查看模板中的具体设置</summary><dl>{Object.entries(preview.requirements.template_settings).map(([name, value]) => <div key={name}><dt>{({ fit_mode: "画面适配", color_style: "调色", subtitle_style: "字幕样式" } as Record<string, string>)[name] ?? name}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl></details> : null}
       </section>
       {!preview.requirements.can_continue && preview.requirements.continuation_blocker ? <p role="status">{preview.requirements.continuation_blocker}</p> : null}
-      {!job ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || !preview.requirements.can_continue} onClick={onStart} type="button">{preview.requirements.can_continue ? "确认以上文案和要求，开始制作" : "暂不能开始制作"}</button></div> : null}
+      {!job ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || previewStale || !preview.requirements.can_continue} onClick={onStart} type="button">{preview.requirements.can_continue ? "确认以上文案和要求，开始制作" : "暂不能开始制作"}</button></div> : null}
     </> : null}
     {job ? <div>
       {execution?.waiting_reason ? <p role="status">{creationTaskFailureReason(execution.waiting_reason, taskStage)}</p> : null}
@@ -136,7 +187,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
       {needsOutput ? <><p>原成片不再对应当前时间线，请先核对以上文案和制作要求，再确认重新输出。</p><div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || visualBusy} onClick={onOpenMontage} type="button">查看剪辑与已有产物</button></div></> : null}
       {hasInitialExecutionControls && active && job.status !== "interrupted" ? <button className={styles.secondaryButton} disabled={busy || visualBusy} onClick={onCancel} type="button">停止制作</button> : null}
       {awaitingMontageConfirmation ? <Button variant="outline" disabled={busy || visualBusy} onClick={onOpenMontage} type="button">审核镜头</Button> : null}
-      {resumable ? <Button className="modern-primary-button" disabled={busy || !preview?.requirements.can_continue} onClick={onResume} type="button">{needsOutput ? "确认以上文案和要求，仅重新输出当前剪辑" : "确认以上文案和要求，继续制作"}</Button> : null}
+      {resumable ? <Button className="modern-primary-button" disabled={busy || previewStale || !preview?.requirements.can_continue} onClick={onResume} type="button">{needsOutput ? "确认以上文案和要求，仅重新输出当前剪辑" : "确认以上文案和要求，继续制作"}</Button> : null}
     </div> : null}
   </section>;
     if (!compact)
@@ -150,7 +201,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
       </div>
       <button className={editorUi.button} type="button" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}>{job ? "查看制作详情" : "核对制作要求"}</button>
       {awaitingMontageConfirmation && !detailsOpen ? <Button variant="outline" className={editorUi.button} disabled={busy || visualBusy} onClick={onOpenMontage} type="button">审核镜头</Button> : null}
-      {resumeWaiting && !detailsOpen ? <Button className={editorUi.button} disabled={busy || visualBusy} onClick={onResume} type="button">继续制作</Button> : null}
+      {resumeWaiting && !detailsOpen ? <Button className={editorUi.button} disabled={busy || visualBusy || previewStale} onClick={onResume} type="button">继续制作</Button> : null}
       {hasInitialExecutionControls && active && job?.status !== "interrupted" && !detailsOpen ? <button className={editorUi.button} type="button" disabled={busy || visualBusy} onClick={onCancel}>停止制作</button> : null}
     </section>
     {storyboard?.requestId && !storyboard.receipt ? <span role="status">原画面安排结果待核对</span> : null}

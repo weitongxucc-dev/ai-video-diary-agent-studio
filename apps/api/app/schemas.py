@@ -14,6 +14,7 @@ from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
 from app.visual_understanding import OCR_RETRIEVAL_MIN_CONFIDENCE
 from app.source_types import ContentUseState
+from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT
 
 from app.models import (
     EpisodeIntakeMode,
@@ -52,6 +53,50 @@ def validate_logical_media_reference(
         if decoded in {".", ".."} or "/" in decoded or "\\" in decoded or ":" in decoded:
             raise ValueError(f"{field} contains an invalid path component")
     return f"{scheme}://{parsed.netloc}{parsed.path}"
+
+
+class DevicePreparationShapeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    width_px: int = Field(gt=0)
+    height_px: int = Field(gt=0)
+    frame_rate: int = Field(gt=0)
+    duration_seconds: float = Field(gt=0)
+    clip_count: int = Field(gt=0)
+    audio_input_count: int = Field(gt=0)
+    sample_rate: int = Field(gt=0)
+    channels: int = Field(gt=0)
+    source_bytes: int | None = Field(default=None, gt=0)
+
+
+class NarrationPreparationPronunciationReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    id: str = Field(min_length=1)
+    version: str = Field(min_length=1)
+
+
+class NarrationPreparationShapeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    voice_profile_id: str = Field(min_length=1)
+    voice_version: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    language: Literal["zh", "en", "zh-en"]
+    output_duration_seconds: float = Field(gt=0)
+    pronunciation_references: list[NarrationPreparationPronunciationReference] = Field(default_factory=list)
+    task_id: str | None = Field(default=None, min_length=1)
+
+
+class DevicePreparationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    kind: Literal["cpu", "narration"] = "cpu"
+    shape: DevicePreparationShapeRequest | NarrationPreparationShapeRequest
+
+    @model_validator(mode="after")
+    def shape_matches_kind(self):
+        expected = DevicePreparationShapeRequest if self.kind == "cpu" else NarrationPreparationShapeRequest
+        if not isinstance(self.shape, expected):
+            raise ValueError("准备类型与输入形状不一致")
+        return self
 
 
 class SourceRefResponse(BaseModel):
@@ -855,7 +900,7 @@ class CreationPlanDefaultsRequest(BaseModel):
     target_count: int = Field(default=1, ge=1, le=50)
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"] = "zh-CN"
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
-    duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    duration_target_seconds: int = Field(default=60, ge=1, strict=True)
     duration_mode: Literal["exact", "approximate"] = "exact"
     duration_range_seconds: tuple[float, float] | None = None
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
@@ -1128,6 +1173,24 @@ class CreationTaskTopicsResponse(BaseModel):
 
 class CreationTaskScriptGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+
+
+class CreationTaskScriptGenerationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    task_id: str
+    conversation_id: UUID
+    turn_id: UUID
+    turn_status: Literal["running", "completed", "failed", "stopped"]
+    run_id: str
+    run_status: Literal["running", "succeeded", "failed"]
+    status: Literal["running", "stopping", "draft_ready", "failed", "stopped", "incomplete", "unknown"]
+    requested_effect: Literal["draft"]
+    stop_requested: bool
+    result_stale: bool
+    script_id: str | None
+    script_updated_at: str | None
 
 
 class TaskKnowledgeAdoptionRequest(BaseModel):
@@ -1162,7 +1225,7 @@ class CreationTaskScriptSectionRequest(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     content: str = Field(min_length=1, max_length=4000)
     visual_prompt: str = Field(min_length=1, max_length=1000)
-    evidence_reference_ids: list[str] = Field(min_length=1, max_length=12)
+    evidence_reference_ids: list[str] = Field(max_length=12)
 
 
 class CreationTaskScriptConfirmRequest(BaseModel):
@@ -1174,6 +1237,7 @@ class CreationTaskScriptConfirmRequest(BaseModel):
     expected_updated_at: datetime
     adoption_kind: Literal["manual", "delegated_system"] = "manual"
     assistant_turn_id: UUID | None = None
+    edit_mode: Literal["replace_all"] | None = None
 
 
 class CreationTaskScriptDraftSectionRequest(BaseModel):
@@ -1192,6 +1256,34 @@ class CreationTaskScriptDraftRequest(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     sections: list[CreationTaskScriptDraftSectionRequest] = Field(min_length=1, max_length=20)
     expected_updated_at: datetime | None = None
+    assistant_turn_id: UUID | None = None
+    edit_mode: Literal["replace_all"] | None = None
+
+
+class CreationTaskScriptWindowStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    title: str = Field(min_length=1, max_length=160)
+    sections: list[CreationTaskScriptDraftSectionRequest] = Field(
+        min_length=1, max_length=SCRIPT_SECTION_WINDOW_LIMIT)
+    assistant_turn_id: UUID | None = None
+
+
+class CreationTaskScriptSectionsPatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    expected_updated_at: datetime
+    sections: list[CreationTaskScriptDraftSectionRequest] = Field(
+        min_length=1, max_length=SCRIPT_SECTION_WINDOW_LIMIT)
+    insert_after_section_id: str | None = Field(default=None, min_length=1, max_length=120)
+    assistant_turn_id: UUID | None = None
+
+
+class CreationTaskScriptConfirmSavedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    expected_updated_at: datetime
+    adoption_kind: Literal["manual", "delegated_system"] = "manual"
     assistant_turn_id: UUID | None = None
 
 
@@ -1229,13 +1321,16 @@ class CreationTaskScriptGenerationRunResponse(BaseModel):
 
 
 class CreationTaskScriptResponse(BaseModel):
+    draft_complete: bool = True
     id: str
     task_id: str
     run_id: str
     topic_id: str
     title: str
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
-    sections: list[CreationTaskScriptSectionResponse]
+    sections: list[CreationTaskScriptSectionResponse] | None
+    sections_loaded: bool = True
+    sections_total_count: int | None = Field(default=None, ge=0)
     selection_status: Literal["draft", "confirmed"]
     created_at: datetime
     updated_at: datetime
@@ -1245,10 +1340,25 @@ class CreationTaskScriptResponse(BaseModel):
     adoption: dict[str, object] | None = None
     locked_body_digest: str | None = None
 
+    @model_validator(mode="after")
+    def complete_body_or_explicit_header(self):
+        if self.sections is None:
+            if self.sections_loaded or self.sections_total_count is None:
+                raise ValueError("未加载正文必须明确标记并提供真实总段数")
+        else:
+            if not self.sections_loaded:
+                raise ValueError("部分正文只能通过文案窗口返回，不能冒充完整稿件")
+            if self.sections_total_count is None:
+                self.sections_total_count = len(self.sections)
+            elif self.sections_total_count != len(self.sections):
+                raise ValueError("完整正文段数与声明总数不符")
+        return self
+
 
 class CreationTaskScriptsResponse(BaseModel):
     task: CreationTaskResponse
     scripts: list[CreationTaskScriptResponse]
+    scripts_scope: Literal["active", "history"] = "history"
     latest_run: CreationTaskScriptGenerationRunResponse | None
     route_preflight: TopicRouteSnapshotResponse
 
@@ -1336,6 +1446,51 @@ class NarrationRevisionRequest(BaseModel):
     protected_rules: list[NarrationProtectedRule]
     semantic_review_ref: str = Field(min_length=1)
     adoption_mode: Literal["apply", "candidate"]
+
+
+class TaskBudgetQuantities(BaseModel):
+    execution_seconds: float | None = Field(ge=0)
+    generated_bytes: int | None = Field(ge=0)
+
+
+class TaskBudgetScopeUsage(BaseModel):
+    execution_seconds: float = Field(ge=0)
+    generated_bytes: int = Field(ge=0)
+    reserved_seconds: float = Field(ge=0)
+    reserved_bytes: int = Field(ge=0)
+    unknown_unit_count: int = Field(ge=0)
+    unit_count: int = Field(ge=0)
+
+
+class TaskBudgetScopeAuthorization(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    scope_id: str
+    revision: int = Field(ge=0)
+    limits: TaskBudgetQuantities
+    policy_kind: Literal["local_goal", "explicit_total"]
+    revoked: bool
+    target_task_ids: list[str]
+    source_ref: str
+
+
+class TaskBudgetScopeRead(BaseModel):
+    authorization: TaskBudgetScopeAuthorization
+    usage: TaskBudgetScopeUsage
+    remaining: TaskBudgetQuantities
+    status: Literal["available", "revoked", "usage_unknown", "exhausted"]
+    coverage: Literal["tts_pcm_only"]
+
+
+class TaskBudgetReadResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    task_id: str
+    status: str
+    resources: dict[str, object]
+    actual_cost: dict[str, object]
+    estimates: dict[str, object]
+    in_flight: list[dict[str, object]]
+    scopes: list[TaskBudgetScopeRead]
+    authorization_coverage: Literal["tts_pcm_only", "scope_unbound"]
 
 
 class TaskBudgetResumeRequest(BaseModel):
@@ -1546,7 +1701,7 @@ class AudioTimelineResponse(AudioTimeline):
 
 
 class CreationTaskQualityFindingResponse(BaseModel):
-    kind: Literal["black_frame", "truncation", "clipping", "timestamp_offset"]
+    kind: Literal["black_frame", "truncation", "clipping", "timestamp_offset", "delivery_duration"]
     start_seconds: float
     end_seconds: float
     duration_seconds: float
@@ -1581,6 +1736,54 @@ class CreationTaskClippingSummaryResponse(BaseModel):
     findings_truncated_count: int
 
 
+class CreationTaskBlackFrameSummaryResponse(BaseModel):
+    event_count: int
+    total_black_seconds: float
+    first_start_seconds: float
+    last_end_seconds: float
+    event_list_limit: int
+    events: list[CreationTaskClippingEventResponse]
+    events_truncated: bool
+    truncated_event_count: int
+    findings_event_limit: int
+    findings_truncated: bool
+    findings_truncated_count: int
+
+
+class QualityContinuationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    failed_request_id: str | None
+    phase: str
+    completed_phases: list[str]
+    can_request: bool
+    reason_code: Literal["actor_unavailable", "runtime_unavailable", "original_actor_required",
+                         "source_changed", "policy_unavailable", "algorithm_changed",
+                         "failed_request_unavailable", "request_in_flight"] | None
+    release_check: Literal["on_submit"]
+
+
+class QualityContinuationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str = Field(min_length=1)
+    failed_request_id: str = Field(min_length=1)
+
+
+class QualityContinuationReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    check_id: str
+    job_id: str
+    request_id: str
+
+
+class QualityContinuationReadResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str
+    failed_request_id: str
+    status: Literal["recorded", "unknown"]
+    receipt: QualityContinuationReceipt | None
+
+
 class CreationTaskQualityCheckResponse(BaseModel):
     check_state: Literal["none", "checking", "failed", "done"]
     result_status: Literal["clean", "issues_found", "unavailable"] | None
@@ -1593,6 +1796,8 @@ class CreationTaskQualityCheckResponse(BaseModel):
     findings: list[CreationTaskQualityFindingResponse]
     unavailable: list[CreationTaskQualityUnavailableResponse]
     clipping_summary: CreationTaskClippingSummaryResponse | None = None
+    black_frame_summary: CreationTaskBlackFrameSummaryResponse | None = None
+    continuation: QualityContinuationResponse | None = None
     validation_scope: Literal["deterministic_media_errors_only"]
 
 
@@ -2495,7 +2700,26 @@ class AssistantTimelineRestoreResponse(BaseModel):
     failure: dict[str, object] | None = None
 
 
+class AssistantScriptWindowRequestResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["script_window_request"] = "script_window_request"
+    operation: Literal["start", "patch", "confirm"]
+    task_id: str
+    request_id: UUID
+    script_id: str | None = None
+    status: Literal["saved", "confirmed", "unknown", "failed", "rejected", "not_submitted"]
+    updated_at: datetime | None = None
+    total_count: int | None = Field(default=None, ge=0)
+    affected_section_ids: list[str] | None = None
+    submission_effect: Literal["not_submitted", "rejected", "unknown"] | None = None
+    failure: dict[str, object] | None = None
+    input_id: str | None = None
+    input_turn_id: str | None = None
+
+
 class CreationTaskAssistantTurnResponse(BaseModel):
+    quality_continuation: QualityContinuationReadResponse | None = None
+    script_window_request: AssistantScriptWindowRequestResponse | None = None
     timeline_restore: AssistantTimelineRestoreResponse | None = None
     segment_revision: AssistantSegmentRevisionResponse | None = None
     storyboard_regeneration: AssistantStoryboardRegenerationReceipt | AssistantStoryboardRegenerationFailure | None = None
@@ -2612,7 +2836,7 @@ class CreationPlanPreviewResponse(BaseModel):
     target_count: int = Field(ge=1)
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
     aspect_ratio: Literal["9:16", "16:9", "1:1"]
-    duration_target_seconds: int = Field(ge=15)
+    duration_target_seconds: int = Field(ge=1)
     duration_mode: Literal["exact", "approximate"] = "exact"
     duration_range_seconds: tuple[float, float] | None = None
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
@@ -2669,7 +2893,7 @@ class CreationRequestDeliveryRequirements(BaseModel):
 
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"] = "zh-CN"
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
-    duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    duration_target_seconds: int = Field(default=60, ge=1, strict=True)
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
     lipsync_quality: Literal["high", "fast"] = "high"
     selected_voice: PlanProfileReference | None = None
@@ -2932,6 +3156,7 @@ class CreationTaskWorkspaceResponse(BaseModel):
     selected_topic: CreationTaskTopicCandidateResponse | None
     topic_evidence: list[TopicEvidenceReferenceResponse]
     scripts: list[CreationTaskScriptResponse]
+    scripts_scope: Literal["active"] = "active"
     available_voices: list[CreationTaskVoiceOptionResponse]
     narration: CreationTaskNarrationResponse | None
     portrait_available: bool = False
@@ -4100,6 +4325,8 @@ class CreatorProfileLearnResult(BaseModel):
 
 
 class ScriptLibrarySaveRequest(BaseModel):
+    request_id: UUID
+    expected_source_updated_at: datetime
     source_script_id: str
     name: str = Field(min_length=1)
     category: str = ""
@@ -4135,6 +4362,39 @@ class ScriptLibraryListResponse(BaseModel):
     total_count: int
 
 
+class ScriptLibraryEntryHeaderResponse(ScriptLibraryEntryResponse):
+    sections: None
+    sections_loaded: Literal[False] = False
+    sections_total_count: int = Field(ge=0)
+
+
+class ScriptLibraryCursorResponse(BaseModel):
+    after_created_at: datetime
+    after_entry_id: str
+
+
+class ScriptLibraryHeaderListResponse(BaseModel):
+    items: list[ScriptLibraryEntryHeaderResponse]
+    next: ScriptLibraryCursorResponse | None
+    total_count: int | None = None
+
+
+class ScriptLibrarySectionWindowItemResponse(BaseModel):
+    ordinal: int = Field(ge=1)
+    section: ScriptLibrarySectionResponse
+    digest: str
+
+
+class ScriptLibrarySectionWindowResponse(BaseModel):
+    entry_id: str
+    version: int
+    updated_at: datetime
+    total_count: int = Field(ge=0)
+    items: list[ScriptLibrarySectionWindowItemResponse]
+    next_after_ordinal: int | None
+    has_more: bool
+
+
 class ScriptLibrarySourceResponse(BaseModel):
     reference_id: str
     status: Literal["readable", "missing", "version_changed"]
@@ -4152,15 +4412,34 @@ class ScriptLibrarySourceResponse(BaseModel):
 
 
 class ScriptLibraryReuseRequest(BaseModel):
+    request_id: UUID
+    expected_entry_updated_at: datetime
     name: str = Field(min_length=1)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
-    duration_target_seconds: int = Field(default=60, ge=15, le=600)
+    duration_target_seconds: int = Field(default=60, ge=1, strict=True)
     requirements_confirmed: bool
 
 
 class ScriptLibraryReuseResponse(BaseModel):
+    request_id: UUID
+    entry_id: str
+    entry_version: int
     task_id: str
-    script: CreationTaskScriptResponse
+    script_id: str
+    updated_at: datetime
+    status: Literal["saved"]
+
+
+class ScriptLibrarySaveResponse(BaseModel):
+    request_id: UUID
+    status: Literal["saved"]
+    entry_id: str
+    version: int
+    updated_at: datetime
+    source_task_id: str
+    source_script_id: str
+    source_updated_at: datetime
+    entry: ScriptLibraryEntryHeaderResponse
 
 
 class TimelineVersionSummaryResponse(BaseModel):

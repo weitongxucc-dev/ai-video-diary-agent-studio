@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.production import (CreationPlan, CreationTask, CreationRequestConflict,
-                            MaterialAsset, MaterialSegment, MaterialSegmentMatch, ProductionRepository)
+from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.creation.request_contracts import CreationRequestConflict
+from app.creation.contracts import CreationTask
 import app.database_migrations as migrations
 
 WORKSPACE = "request-test"
@@ -24,7 +26,7 @@ def create(repository, **changes):
         target_count=10000, output_relation="distinct_topics", requirements={"language": "zh-CN"},
         material_scope={"mode": "workspace"}, clarification_questions=[], verified_owner_user_id=OWNER)
     values.update(changes)
-    return repository.create_creation_request(WORKSPACE, **values)
+    return repository.creation_requests.create_creation_request(WORKSPACE, **values)
 
 
 def entries(start=1, count=8):
@@ -43,22 +45,22 @@ def entries(start=1, count=8):
 
 
 def save(repository, request, values=None, fingerprint="window-1", **changes):
-    return repository.save_creation_request_window(WORKSPACE, request["id"], expected_revision=request["revision"],
+    return repository.creation_requests.save_creation_request_window(WORKSPACE, request["id"], expected_revision=request["revision"],
         input_fingerprint=fingerprint, entries=entries() if values is None else values, verified_owner_user_id=OWNER, **changes)
 
 
 def confirm(repository, request):
     window = request["current_window"]
-    return repository.confirm_creation_request_window(WORKSPACE, request["id"], window["id"],
+    return repository.creation_request_adoption.confirm_creation_request_window(WORKSPACE, request["id"], window["id"],
         expected_revision=request["revision"], input_fingerprint=window["input_fingerprint"], verified_owner_user_id=OWNER)
 
 
 def header(repository, request):
-    return repository.get_creation_request(WORKSPACE, request["id"], viewer_user_id=OWNER)
+    return repository.creation_requests.get_creation_request(WORKSPACE, request["id"], viewer_user_id=OWNER)
 
 
 def test_large_goal_is_scalar_then_two_bounded_windows_replay_and_rebuild(repository, monkeypatch):
-    monkeypatch.setattr(repository, "list_creation_tasks", lambda *_a, **_kw: pytest.fail("header must aggregate with SQL"))
+    monkeypatch.setattr(repository.task_records, "list_creation_tasks", lambda *_a, **_kw: pytest.fail("header must aggregate with SQL"))
     request = create(repository)
     assert request["target_count"] == 10000 and request["expanded_count"] == request["confirmed_count"] == 0
     assert request["current_window"] is None and len(json.dumps(request)) < 2000
@@ -69,7 +71,7 @@ def test_large_goal_is_scalar_then_two_bounded_windows_replay_and_rebuild(reposi
     planned = save(repository, request)
     assert planned["status"] == "awaiting_confirmation"
     assert planned["expanded_count"] == 8 and planned["confirmed_count"] == 0
-    assert all(item["task"] is None for item in repository.list_creation_request_items(WORKSPACE,request["id"],viewer_user_id=OWNER)["items"])
+    assert all(item["task"] is None for item in repository.creation_requests.list_creation_request_items(WORKSPACE,request["id"],viewer_user_id=OWNER)["items"])
     assert [item["ordinal"] for item in planned["current_window"]["entries"]] == list(range(1, 9))
     assert save(repository, request)["current_window"]["id"] == planned["current_window"]["id"]
     rebuilt = ProductionRepository(repository.database_path, repository.video_library_path)
@@ -85,10 +87,10 @@ def test_large_goal_is_scalar_then_two_bounded_windows_replay_and_rebuild(reposi
     assert second["current_window"]["ordinal_start"] == 9
     final = confirm(rebuilt, second)
     assert final["confirmed_count"] == 16 and final["remaining_count"] == 9984
-    page = rebuilt.list_creation_request_items(WORKSPACE, request["id"], limit=5, viewer_user_id=OWNER)
+    page = rebuilt.creation_requests.list_creation_request_items(WORKSPACE, request["id"], limit=5, viewer_user_id=OWNER)
     assert [item["ordinal"] for item in page["items"]] == list(range(1, 6))
     assert page["has_more"] and page["next_after_ordinal"] == 5
-    next_page = rebuilt.list_creation_request_items(WORKSPACE, request["id"], after_ordinal=5, limit=100, viewer_user_id=OWNER)
+    next_page = rebuilt.creation_requests.list_creation_request_items(WORKSPACE, request["id"], after_ordinal=5, limit=100, viewer_user_id=OWNER)
     assert [item["ordinal"] for item in next_page["items"]] == list(range(6, 17))
     assert not next_page["has_more"] and next_page["next_after_ordinal"] is None
     # A live task fact changes after confirmation; the header must read the
@@ -102,7 +104,7 @@ def test_large_goal_is_scalar_then_two_bounded_windows_replay_and_rebuild(reposi
 
 def test_window_cannot_attach_existing_task_identity(repository):
     existing_plan,existing_task = entries(count=1)[0]
-    repository.confirm_creation_plan(existing_plan,existing_task,verified_owner_user_id="another-member")
+    repository.plan_confirmation.confirm_creation_plan(existing_plan,existing_task,verified_owner_user_id="another-member")
     request = create(repository)
     with pytest.raises(CreationRequestConflict,match="现有对象"):
         save(repository,request,[(existing_plan,existing_task)])
@@ -118,7 +120,7 @@ def test_total_goal_rejects_non_safe_positive_integer(repository, count):
 def test_maximum_safe_count_still_creates_no_items(repository):
     request = create(repository, target_count=9007199254740991)
     assert request["remaining_count"] == 9007199254740991
-    assert repository.list_creation_request_items(WORKSPACE, request["id"], viewer_user_id=OWNER)["items"] == []
+    assert repository.creation_requests.list_creation_request_items(WORKSPACE, request["id"], viewer_user_id=OWNER)["items"] == []
 
 
 def test_one_output_does_not_require_batch_relation_clarification(repository):
@@ -135,29 +137,29 @@ def test_incremental_request_migration_preserves_old_multi_count_plan_without_ex
         old = ProductionRepository(database, tmp_path / "library")
         plan,task = entries(count=1)[0]
         plan.target_count = 5
-        old.confirm_creation_plan(plan,task,verified_owner_user_id=OWNER)
+        old.plan_confirmation.confirm_creation_plan(plan,task,verified_owner_user_id=OWNER)
         with old._connect() as conn:
             before = tuple(conn.execute("SELECT payload FROM creation_plans").fetchone())
     upgraded = ProductionRepository(database,tmp_path / "library")
-    assert upgraded.get_creation_plan(WORKSPACE,plan.id).target_count == 5
+    assert upgraded.plan_records.get_creation_plan(WORKSPACE,plan.id).target_count == 5
     with upgraded._connect() as conn:
         assert tuple(conn.execute("SELECT payload FROM creation_plans").fetchone()) == before
         assert conn.execute("SELECT COUNT(*) FROM creation_tasks").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM creation_requests").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM production_schema_migrations WHERE version=17").fetchone()[0] == 1
     reopened = ProductionRepository(database,tmp_path / "library")
-    assert reopened.get_creation_task(WORKSPACE,task.id).owner_user_id == OWNER
+    assert reopened.task_records.get_creation_task(WORKSPACE,task.id).owner_user_id == OWNER
 
 
 def test_owner_scope_request_identity_and_revision_conflicts(repository):
     request = create(repository)
     for reader in (None, "another-member"):
         with pytest.raises(KeyError):
-            repository.get_creation_request(WORKSPACE, request["id"], viewer_user_id=reader)
+            repository.creation_requests.get_creation_request(WORKSPACE, request["id"], viewer_user_id=reader)
     with pytest.raises(PermissionError):
         create(repository, verified_owner_user_id=None)
     with pytest.raises(KeyError):
-        repository.save_creation_request_window(WORKSPACE, request["id"], expected_revision=1,
+        repository.creation_requests.save_creation_request_window(WORKSPACE, request["id"], expected_revision=1,
             input_fingerprint="window", entries=entries(), verified_owner_user_id="another-member")
     with pytest.raises(CreationRequestConflict):
         create(repository, goal="同key但改变输入")
@@ -167,10 +169,10 @@ def test_owner_scope_request_identity_and_revision_conflicts(repository):
     with pytest.raises(CreationRequestConflict):
         save(repository, planned, fingerprint="new-unconfirmed-window")
     with pytest.raises(CreationRequestConflict):
-        repository.confirm_creation_request_window(WORKSPACE, request["id"], planned["current_window"]["id"],
+        repository.creation_request_adoption.confirm_creation_request_window(WORKSPACE, request["id"], planned["current_window"]["id"],
             expected_revision=1, input_fingerprint="window-1", verified_owner_user_id=OWNER)
     with pytest.raises(KeyError):
-        repository.confirm_creation_request_window(WORKSPACE, request["id"], planned["current_window"]["id"],
+        repository.creation_request_adoption.confirm_creation_request_window(WORKSPACE, request["id"], planned["current_window"]["id"],
             expected_revision=2, input_fingerprint="window-1", verified_owner_user_id="another-member")
     assert header(repository, request)["confirmed_count"] == 0
 
@@ -179,11 +181,11 @@ def test_clarification_and_revision_retire_only_unconfirmed_candidate_window(rep
     request = create(repository, output_relation=None, clarification_questions=["不同主题还是同主题版本？"])
     with pytest.raises(CreationRequestConflict, match="澄清"):
         save(repository, request)
-    revised = repository.revise_creation_request(WORKSPACE, request["id"], expected_revision=1,
+    revised = repository.creation_requests.revise_creation_request(WORKSPACE, request["id"], expected_revision=1,
         output_relation="series", requirements={"duration_seconds": 60}, material_scope={}, clarification_questions=[], verified_owner_user_id=OWNER)
     assert revised["status"] == "awaiting_plan"
     pending = save(repository, revised)
-    changed = repository.revise_creation_request(WORKSPACE, request["id"], expected_revision=pending["revision"],
+    changed = repository.creation_requests.revise_creation_request(WORKSPACE, request["id"], expected_revision=pending["revision"],
         output_relation="series", requirements={"duration_seconds": 30}, material_scope={}, clarification_questions=[], verified_owner_user_id=OWNER)
     assert changed["expanded_count"] == 0 and changed["current_window"] is None
     with repository._connect() as conn:
@@ -193,7 +195,7 @@ def test_clarification_and_revision_retire_only_unconfirmed_candidate_window(rep
     assert new_pending["current_window"]["ordinal_start"] == 1
     active = confirm(repository, new_pending)
     with pytest.raises(CreationRequestConflict, match="已有确认窗口"):
-        repository.revise_creation_request(WORKSPACE, request["id"], expected_revision=active["revision"],
+        repository.creation_requests.revise_creation_request(WORKSPACE, request["id"], expected_revision=active["revision"],
             output_relation="series", requirements={}, material_scope={}, clarification_questions=[], verified_owner_user_id=OWNER)
 
 
@@ -214,7 +216,7 @@ def test_window_bounds_independent_single_video_and_frozen_payload(repository):
 
 def test_failure_after_first_real_plan_insert_rolls_back_entire_window(repository, monkeypatch):
     request = save(repository, create(repository))
-    insert = repository.insert_confirmed_creation_plan
+    insert = repository.creation_request_adoption.insert_plan
     inserted = []
     def fail_second(conn, plan, task):
         if inserted:
@@ -222,7 +224,7 @@ def test_failure_after_first_real_plan_insert_rolls_back_entire_window(repositor
         insert(conn, plan, task)
         assert conn.execute("SELECT COUNT(*) FROM creation_tasks").fetchone()[0] == 1
         inserted.append(task.id)
-    monkeypatch.setattr(repository, "insert_confirmed_creation_plan", fail_second)
+    monkeypatch.setattr(repository.creation_request_adoption, "insert_plan", fail_second)
     with pytest.raises(sqlite3.IntegrityError):
         confirm(repository, request)
     with repository._connect() as conn:
@@ -271,7 +273,7 @@ def test_replan_pending_window_preserves_prior_confirmed_tasks_and_common_requir
     if confirmed_before:
         request = confirm(repository,save(repository,request))
     pending = save(repository,request,entries(confirmed_before+1),fingerprint="pending-window")
-    replaced = repository.save_creation_request_window(WORKSPACE,pending["id"],
+    replaced = repository.creation_requests.save_creation_request_window(WORKSPACE,pending["id"],
         expected_revision=pending["revision"],input_fingerprint="fresh-preflight-window",
         entries=replacement_entries(pending),replace_window_id=pending["current_window"]["id"],verified_owner_user_id=OWNER)
     assert replaced["current_window"]["id"] != pending["current_window"]["id"]
@@ -279,14 +281,14 @@ def test_replan_pending_window_preserves_prior_confirmed_tasks_and_common_requir
     assert replaced["expanded_count"] == confirmed_before+8 and replaced["confirmed_count"] == confirmed_before
     assert replaced["requirements"] == pending["requirements"] and replaced["material_scope"] == pending["material_scope"]
     with pytest.raises(CreationRequestConflict,match="窗口已变化"):
-        repository.save_creation_request_window(WORKSPACE,pending["id"],expected_revision=replaced["revision"],
+        repository.creation_requests.save_creation_request_window(WORKSPACE,pending["id"],expected_revision=replaced["revision"],
             input_fingerprint="another-preflight",entries=replacement_entries(pending),
             replace_window_id=pending["current_window"]["id"],verified_owner_user_id=OWNER)
     with repository._connect() as conn:
         assert conn.execute("SELECT status FROM creation_request_windows WHERE id=?",(pending["current_window"]["id"],)).fetchone()[0] == "superseded"
         assert conn.execute("SELECT COUNT(*) FROM creation_tasks").fetchone()[0] == confirmed_before
     assert confirm(repository,replaced)["confirmed_count"] == confirmed_before+8
-    page = repository.list_creation_request_items(WORKSPACE,request["id"],viewer_user_id=OWNER)
+    page = repository.creation_requests.list_creation_request_items(WORKSPACE,request["id"],viewer_user_id=OWNER)
     assert len(page["items"]) == confirmed_before+8
     assert [item["ordinal"] for item in page["items"]] == list(range(1,confirmed_before+9))
 
@@ -295,14 +297,14 @@ def test_replan_same_fingerprint_is_readback_but_stale_revision_and_window_are_r
     pending = save(repository,create(repository))
     arguments = dict(expected_revision=pending["revision"],input_fingerprint="window-1",
         entries=replacement_entries(pending),replace_window_id=pending["current_window"]["id"],verified_owner_user_id=OWNER)
-    replay = repository.save_creation_request_window(WORKSPACE,pending["id"],**arguments)
+    replay = repository.creation_requests.save_creation_request_window(WORKSPACE,pending["id"],**arguments)
     assert replay["current_window"] == pending["current_window"] and replay["revision"] == pending["revision"]
     for changes in ({"expected_revision":pending["revision"]-1},{"replace_window_id":"old-window"},{"verified_owner_user_id":"another-member"}):
         with pytest.raises((CreationRequestConflict,KeyError)):
-            repository.save_creation_request_window(WORKSPACE,pending["id"],**{**arguments,**changes})
+            repository.creation_requests.save_creation_request_window(WORKSPACE,pending["id"],**{**arguments,**changes})
     active = confirm(repository,pending)
     with pytest.raises(CreationRequestConflict,match="已确认"):
-        repository.save_creation_request_window(WORKSPACE,pending["id"],**{**arguments,"expected_revision":active["revision"]})
+        repository.creation_requests.save_creation_request_window(WORKSPACE,pending["id"],**{**arguments,"expected_revision":active["revision"]})
 
 
 @pytest.mark.parametrize("confirmed_before",[0,8])
@@ -315,7 +317,7 @@ def test_replan_insert_failure_rolls_back_supersession_and_keeps_original_pendin
         conn.executescript(f"""CREATE TRIGGER fail_replanned_second_item BEFORE INSERT ON creation_request_items
             WHEN NEW.ordinal={confirmed_before+2} BEGIN SELECT RAISE(ABORT,'controlled replacement insert failure'); END;""")
     with pytest.raises(sqlite3.IntegrityError):
-        repository.save_creation_request_window(WORKSPACE,pending["id"],expected_revision=pending["revision"],
+        repository.creation_requests.save_creation_request_window(WORKSPACE,pending["id"],expected_revision=pending["revision"],
             input_fingerprint="new-preflight",entries=replacement_entries(pending),
             replace_window_id=pending["current_window"]["id"],verified_owner_user_id=OWNER)
     restored = header(repository,pending)

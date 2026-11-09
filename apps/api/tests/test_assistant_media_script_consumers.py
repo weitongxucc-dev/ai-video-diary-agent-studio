@@ -1,5 +1,7 @@
-from assistant_sdk_fixtures import project_event_fixture
 """API doubles and installed QuickJS only; never execute Python, model, or real media."""
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
+
+from assistant_sdk_fixtures import project_event_fixture
 import json
 import os
 from pathlib import Path
@@ -8,9 +10,11 @@ from uuid import UUID
 
 import pytest
 
-import app.assistant_pi as host
+import app.assistant_pi as _owner_app_assistant_pi
 from app.schemas import MediaScriptPreviewRequest
 from test_assistant_typed_tools import caps, installed_pi, preview
+
+host = _owner_app_assistant_pi
 
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
 SOURCE = {"source_ref": "artifact:png-actual", "artifact_id": "png-actual", "sha256": "a" * 64,
@@ -18,7 +22,7 @@ SOURCE = {"source_ref": "artifact:png-actual", "artifact_id": "png-actual", "sha
 SCRIPT = {"script_source": "from PIL import Image\nImage.new('RGBA',(64,64),'blue').save(outputs['panel.png'])",
           "language": "python", "purpose": "preview", "parameters": {}, "input_refs": [],
           "requested_outputs": [{"name": "panel.png", "max_bytes": 65536, "width": 64, "height": 64}]}
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 let text='';for await(const part of process.stdin)text+=part;
 const input=JSON.parse(text), calls=[], tools=new Map(), results=[];let reads=0;
 const job=()=>{const status=input.alwaysPending||reads++===0?'queued':'succeeded';return {job_id:'script-job',status,
@@ -43,7 +47,7 @@ const {default:register}=await import(process.argv[2]);
 await register({registerTool:t=>tools.set(t.name,t),getAllTools:()=>[...tools.values()],getSettings:()=>({}),appendEntry:()=>{}});
 for(const step of input.steps){
  try{const args=step.fromReceipt?{request_id:results[0].result.details.request_id}:step.args||{};
- results.push({ok:true,result:await tools.get(step.tool).execute('call-'+results.length,args)});}
+ results.push(toolOutcome(await tools.get(step.tool).execute('call-'+results.length,args)));}
  catch(error){results.push({ok:false,error:error.message});}
 }
 if(input.code){
@@ -52,7 +56,7 @@ if(input.code){
    return {toolCall:{id:'nested-'+calls.length},isError:Boolean(result.isError),result};}
   catch(error){return {toolCall:{id:'error-'+calls.length},isError:true,result:{content:[{type:'text',text:error.message}]}};}
  }};
- results.push({ok:true,result:await tools.get('codemode').execute('script-parent',{code:input.code},undefined,undefined,ctx)});
+ results.push(toolOutcome(await tools.get('codemode').execute('script-parent',{code:input.code},undefined,undefined,ctx)));
 }
 console.log(JSON.stringify({calls,results,parameters:tools.get('preview_media_script').parameters,
  description:tools.get('preview_media_script').description}));

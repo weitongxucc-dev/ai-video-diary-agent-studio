@@ -1,5 +1,5 @@
 import pytest
-from app.production import SubtitleCue, SubtitleTrack
+from app.creation.contracts import SubtitleCue, SubtitleTrack
 from app.subtitle_edits import replace_subtitle_text
 
 

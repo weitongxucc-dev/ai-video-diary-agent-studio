@@ -2,11 +2,21 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
+from contextlib import nullcontext
+import json
+from app.creation.task_input_reads import require_creation_task
 from copy import deepcopy
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from app.creation.contracts import EditIntent, EditProposal, SubtitleTrack, SubtitleCue, CoverAsset, TimelineVersion, TaskEvent
+from app.creation.contracts import (
+    EditIntent,
+    EditProposal,
+    SubtitleTrack,
+    SubtitleCue,
+    CoverAsset,
+    TimelineVersion,
+)
 from app.creation.editing.metadata_use_case import (
     MetadataEditUseCase, MetadataEditResult, prepare_changed_montage, logical_montage_output_refs,
 )
@@ -17,7 +27,9 @@ from app.models import utc_now
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload
 
 if TYPE_CHECKING:
-    from app.production import CreationTask, NarrationSegment, NarrationArtifactRecord, ProductionRepository
+    from app.creation.contracts import CreationTask, NarrationSegment
+    from app.creation.narration_artifacts import NarrationArtifactRecord
+    from app.production import ProductionRepository
 
 
 @dataclass(frozen=True)
@@ -88,28 +100,28 @@ class TimelineRestoreUseCase:
             raise PermissionError('当前成员不能读取或恢复此作品的修改')
 
     def history(self, workspace_id, task_id, actor, *, limit=20, before_sequence=None):
-        self.require_actor(self.repository.get_creation_task(workspace_id, task_id), actor)
-        return self.repository.timeline_history_page(workspace_id, task_id, limit=limit, before_sequence=before_sequence)
+        self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id), actor)
+        return self.repository.timeline_history.page(workspace_id, task_id, limit=limit, before_sequence=before_sequence)
 
     def read_request(self, workspace_id, task_id, request_id, actor):
-        self.require_actor(self.repository.get_creation_task(workspace_id, task_id), actor)
-        return self.repository.timeline_restore_receipt(workspace_id, task_id, actor.user_id or actor.member_id, request_id)
+        self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id), actor)
+        return self.repository.restore_requests.receipt(workspace_id, task_id, actor.user_id or actor.member_id, request_id)
 
     def replay(self, workspace_id, task_id, receipt):
-        operation = self.repository.get_edit_operation(workspace_id, receipt['operation_id'])
-        version = self.repository.get_timeline_version(workspace_id, operation.result_version_id)
+        operation = self.repository.edit_records.get_edit_operation(workspace_id, receipt['operation_id'])
+        version = self.repository.timeline_records.get_timeline_version(workspace_id, operation.result_version_id)
         payload = version.snapshot.get('montage')
         plan = creation_task_montage_plan_from_payload(payload) if payload else None
         key = version.snapshot.get('narration_cache_key')
-        narration = self.repository.get_narration_artifact(workspace_id, key) if key else None
-        return MetadataEditResult(operation, plan, self.repository.get_creation_task(workspace_id, task_id), narration, receipt,
+        narration = self.repository.narration_artifacts.get_narration_artifact(workspace_id, key) if key else None
+        return MetadataEditResult(operation, plan, self.repository.task_records.get_creation_task(workspace_id, task_id), narration, receipt,
             receipt.get('execution_readiness'))
 
     def execute(self, command, *, actor, request_id, target_operation_id=None,
                 expected_timeline_version_id=None, expected_timeline_sequence=None, write_guard=None, source=None):
         from app.device_scheduler import RecoveryBlocked
         workspace_id, task_id = command.workspace_id, command.task.id
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         self.require_actor(task, actor)
         member_id = actor.user_id or actor.member_id
         if not request_id or len(request_id) > 128:
@@ -124,18 +136,18 @@ class TimelineRestoreUseCase:
             if self.conversations is None:
                 raise PermissionError('恢复指令的来源核验未装配')
             source_input = self.conversations.task_turn_source(source['assistant_turn_id'], workspace_id, member_id, task_id)
-            if source_input['input_id'] != source['input_id']:
+            if source_input.get('input_id') != source['input_id']:
                 raise PermissionError('恢复动作不属于原已消费输入')
             CreationIntentUseCase.reject_discussion_only_input(source_input['raw_command'])
         def guarded(connection):
-            self.require_actor(self.repository.get_creation_task(workspace_id, task_id, connection=connection), actor)
+            self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection), actor)
             if source_input is not None:
                 current_source = self.conversations._task_turn_source(connection, source['assistant_turn_id'], workspace_id, member_id, task_id)
                 if current_source != source_input:
                     raise EditConflict('原恢复指令在提交前已变化')
             if write_guard is not None:
                 write_guard(connection)
-        event_id, fresh = self.repository.claim_timeline_restore(task, member_id, request_id, inputs, write_guard=guarded)
+        event_id, fresh = self.repository.restore_requests.claim(task, member_id, request_id, inputs, write_guard=guarded)
         if not fresh:
             receipt = self.read_request(workspace_id, task_id, request_id, actor)
             if receipt['status'] == 'applied':
@@ -149,9 +161,9 @@ class TimelineRestoreUseCase:
             if target_operation_id is not None and expected_timeline_version_id is None:
                 raise EditConflict('指定修改的恢复需要原读取版本')
             if expected_timeline_version_id is not None:
-                seen = self.repository.get_timeline_version(workspace_id, expected_timeline_version_id)
+                seen = self.repository.timeline_records.get_timeline_version(workspace_id, expected_timeline_version_id)
                 if (seen.task_id != task_id or seen.sequence != expected_timeline_sequence
-                        or not self.repository.timeline_contains_version(workspace_id, task_id, task.current_timeline_version_id, seen.id)):
+                        or not self.repository.timeline_records.timeline_contains_version(workspace_id, task_id, task.current_timeline_version_id, seen.id)):
                     raise EditConflict('恢复所依据的版本不属于当前作品历史')
             command = replace(command, task=task, target_operation_id=target_operation_id,
                 restore_request_id=request_id, restore_member_id=member_id, write_guard=guarded,
@@ -162,10 +174,10 @@ class TimelineRestoreUseCase:
                 changed_version, _ = (redo_target_versions if command.redo else undo_target_versions)(self.repository, workspace_id, task)
                 if changed_version is None:
                     raise TimelineRestoreUnavailable(command.redo)
-                changed = self.repository.get_edit_operation(workspace_id, changed_version.created_by_operation_id)
+                changed = self.repository.edit_records.get_edit_operation(workspace_id, changed_version.created_by_operation_id)
                 resolved = changed.payload.get('target_operation_id')
                 if resolved is None and changed.operation_type in {'UndoTimelineVersion', 'RedoTimelineVersion'}:
-                    original_version = self.repository.get_timeline_version(workspace_id, changed.payload['changed_version_id'])
+                    original_version = self.repository.timeline_records.get_timeline_version(workspace_id, changed.payload['changed_version_id'])
                     resolved = original_version.created_by_operation_id
                 command = replace(command, target_operation_id=resolved or changed.id)
             prepared = self.prepare_restore(command)
@@ -176,31 +188,29 @@ class TimelineRestoreUseCase:
             receipt = self.read_request(workspace_id, task_id, request_id, actor)
             if receipt['status'] == 'applied':
                 return self.replay(workspace_id, task_id, receipt)
-            self.repository.append_task_event(TaskEvent(event_id+'_refusal', workspace_id, task_id, None,
-                'timeline_restore_refused', {'code': 'timeline_restore_refused', 'effect': 'refused',
-                    'reason': str(exc)[:512], 'retryable': False}))
+            self.repository.restore_requests.record_refusal(event_id, workspace_id, task_id, str(exc))
             raise
 
     def prepare_restore(self, command: TimelineRestoreCommand) -> PreparedTimelineRestore:
         workspace_id, task = command.workspace_id, command.task
         task_id = task.id
         if command.target_operation_id is not None:
-            target = self.repository.get_edit_operation(workspace_id, command.target_operation_id)
+            target = self.repository.edit_records.get_edit_operation(workspace_id, command.target_operation_id)
             if (target.task_id != task_id or target.operation_type in {'UndoTimelineVersion', 'RedoTimelineVersion'}
-                    or not self.repository.timeline_contains_version(workspace_id, task_id, task.current_timeline_version_id, target.result_version_id)):
+                    or not self.repository.timeline_records.timeline_contains_version(workspace_id, task_id, task.current_timeline_version_id, target.result_version_id)):
                 raise EditConflict('指定原修改不属于当前作品的有效历史')
-            last = self.repository.latest_operation_restore(workspace_id, task_id, target.id)
+            last = self.repository.restore_requests.latest_operation_restore(workspace_id, task_id, target.id)
             if command.redo:
                 if last is None or last.operation_type != 'UndoTimelineVersion':
                     raise EditConflict('指定原修改没有对应的可重做撤销记录')
                 command = replace(command, target_undo_operation_id=last.id)
-                changed_version = self.repository.get_timeline_version(workspace_id, last.result_version_id)
-                target_version = self.repository.get_timeline_version(workspace_id, target.result_version_id)
+                changed_version = self.repository.timeline_records.get_timeline_version(workspace_id, last.result_version_id)
+                target_version = self.repository.timeline_records.get_timeline_version(workspace_id, target.result_version_id)
             else:
                 if last is not None and last.operation_type == 'UndoTimelineVersion':
                     raise EditConflict('指定原修改已经撤销')
-                changed_version = self.repository.get_timeline_version(workspace_id, target.result_version_id)
-                target_version = self.repository.get_timeline_version(workspace_id, target.base_version_id)
+                changed_version = self.repository.timeline_records.get_timeline_version(workspace_id, target.result_version_id)
+                target_version = self.repository.timeline_records.get_timeline_version(workspace_id, target.base_version_id)
         else:
             changed_version, target_version = (redo_target_versions if command.redo else undo_target_versions)(self.repository, workspace_id, task)
         operation_type = "RedoTimelineVersion" if command.redo else "UndoTimelineVersion"
@@ -208,24 +218,24 @@ class TimelineRestoreUseCase:
         if changed_version is None or target_version is None:
             raise TimelineRestoreUnavailable(command.redo)
         try:
-            changed_operation = self.repository.get_edit_operation(
+            changed_operation = self.repository.edit_records.get_edit_operation(
                 workspace_id, changed_version.created_by_operation_id or ""
             )
         except KeyError as exc:
             raise EditConflict("timeline undo operation is unavailable") from exc
         history = changed_operation.payload if changed_operation.operation_type == 'ReviseScriptSection' else changed_operation.payload.get('section_history')
         if isinstance(history,dict) and 'before_publication' in history:
-            expected = (history['before_dependencies'] if command.redo else self.repository.get_task_event(
+            expected = (history['before_dependencies'] if command.redo else self.repository.execution_records.get_task_event(
                 workspace_id,f'event_{history["operation_id"]}_dependencies').payload['dependencies'])
             # A prior scoped control version records the exact composed dependencies it created.
             cursor = task.current_timeline_version_id
             while cursor:
-                recent = self.repository.get_timeline_version(workspace_id,cursor)
+                recent = self.repository.timeline_records.get_timeline_version(workspace_id,cursor)
                 if recent.created_by_operation_id:
-                    control = self.repository.get_edit_operation(workspace_id,recent.created_by_operation_id)
+                    control = self.repository.edit_records.get_edit_operation(workspace_id,recent.created_by_operation_id)
                     if (control.payload.get('section_history',{}).get('after_publication') == history['after_publication']
                             and control.payload.get('section_restore_side') == ('before' if command.redo else 'after')):
-                        expected = self.repository.get_task_event(workspace_id,f'event_{control.id}_dependencies').payload['dependencies']
+                        expected = self.repository.execution_records.get_task_event(workspace_id,f'event_{control.id}_dependencies').payload['dependencies']
                         break
                     if control.operation_type == 'ReviseScriptSection':
                         break
@@ -233,12 +243,12 @@ class TimelineRestoreUseCase:
             return PreparedTimelineRestore(command,changed_version,target_version,None,None,None,None,False,
                 operation_type,action_label,history,expected)
         if command.target_operation_id is not None:
-            original = self.repository.get_edit_operation(workspace_id, command.target_operation_id)
+            original = self.repository.edit_records.get_edit_operation(workspace_id, command.target_operation_id)
             if original.operation_type in {'AdjustVisualEffects', 'SetClipLock', 'SetClipAudio', 'ReplaceClip',
                     'SetClipTransition', 'EditGraphicOverlay', 'UpdateSubtitleCue', 'ReplaceSubtitleText',
                     'ConfigureSubtitleTrack', 'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'}:
                 return self.prepare_local_restore(command, original, changed_version, target_version, operation_type, action_label)
-        self.repository.verify_whole_timeline_restore(workspace_id,task_id,changed_version.id)
+        self.verify_whole_timeline_restore(workspace_id,task_id,changed_version.id)
         subtitle_cover_undo = command.redo or changed_operation.operation_type in {
             "RedoTimelineVersion",
             "ConfigureSubtitleTrack",
@@ -272,7 +282,7 @@ class TimelineRestoreUseCase:
             restored_narration = None
             restored_cache_key = target_version.snapshot.get("narration_cache_key")
             if isinstance(restored_cache_key, str) and restored_cache_key:
-                restored_narration = self.repository.get_narration_artifact(
+                restored_narration = self.repository.narration_artifacts.get_narration_artifact(
                     workspace_id, restored_cache_key
                 )
                 if restored_narration is None:
@@ -333,10 +343,10 @@ class TimelineRestoreUseCase:
 
     def prepare_local_restore(self, command, original, changed_version, target_version, operation_type, action_label):
         ws, task = command.workspace_id, command.task
-        expected_version = self.repository.get_timeline_version(ws, original.base_version_id if command.redo else original.result_version_id)
-        desired_version = self.repository.get_timeline_version(ws, original.result_version_id if command.redo else original.base_version_id)
+        expected_version = self.repository.timeline_records.get_timeline_version(ws, original.base_version_id if command.redo else original.result_version_id)
+        desired_version = self.repository.timeline_records.get_timeline_version(ws, original.result_version_id if command.redo else original.base_version_id)
         expected, desired = expected_version.snapshot.get('montage'), desired_version.snapshot.get('montage')
-        current_version = self.repository.get_timeline_version(ws, task.current_timeline_version_id)
+        current_version = self.repository.timeline_records.get_timeline_version(ws, task.current_timeline_version_id)
         current = current_version.snapshot.get('montage')
         if not all(isinstance(value, dict) for value in (expected, desired, current)):
             raise EditConflict('原局部操作缺少完整时间线依据')
@@ -355,7 +365,8 @@ class TimelineRestoreUseCase:
         plans = [creation_task_montage_plan_from_payload(value) for value in (current, expected, desired)]
         tracks = [self.montage_edits.current_subtitle_tracks(ws, task, current_version=version, montage=plan)
             for version, plan in zip((current_version, expected_version, desired_version), plans)]
-        key = lambda track: (track.language, track.source_language, track.generation_method)
+        def key(track):
+            return (track.language, track.source_language, track.generation_method)
         mapped = [{key(track): track for track in values} for values in tracks]
         if any(len(mapping) != len(values) for mapping, values in zip(mapped, tracks)) or mapped[1].keys() != mapped[2].keys():
             raise EditConflict('原字幕轨身份或集合不适合局部恢复')
@@ -374,7 +385,7 @@ class TimelineRestoreUseCase:
         for clip_id in affected_clips:
             desired_clip = next(item for item in desired['clips'] if item['id']==clip_id)
             replacement = (desired_clip['asset_id'], desired_clip['segment_id'])
-            facts = self.repository.clip_edit_source_facts(ws, task.id, clip_ids=[clip_id], replacement=replacement,
+            facts = self.repository.clip_sources.facts(ws, task.id, clip_ids=[clip_id], replacement=replacement,
                 user_id=command.restore_member_id, local_diagnostic=False)
             sources.append((clip_id, replacement, facts))
         still_changed = changed_stage_sections(desired_version.snapshot, restored, tracks[2], merged_tracks)
@@ -408,36 +419,35 @@ class TimelineRestoreUseCase:
             for key in ('created_at','updated_at'):
                 values[key] = datetime.fromisoformat(values[key])
             segment = NarrationSegment(**values)
-            desired_version = self.repository.get_timeline_version(workspace_id,history[f'{side}_timeline_version_id'])
-            publication = self.repository.get_task_event(workspace_id,history[f'{side}_publication'])
-            job = self.repository.create_job_run(JobRun(id=f'job_{uuid4().hex}',workspace_id=workspace_id,task_id=task_id,
+            desired_version = self.repository.timeline_records.get_timeline_version(workspace_id,history[f'{side}_timeline_version_id'])
+            publication = self.repository.execution_records.get_task_event(workspace_id,history[f'{side}_publication'])
+            job = self.repository.job_records.create_job_run(JobRun(id=f'job_{uuid4().hex}',workspace_id=workspace_id,task_id=task_id,
                 kind='section_timeline_restore',idempotency_key=f'section_restore:{uuid4().hex}',
                 input_digest=hashlib.sha256(json.dumps([history,command.redo,prepared.section_dependencies],sort_keys=True).encode()).hexdigest()))
-            self.repository.claim_job_run(workspace_id,job.id)
+            self.repository.job_records.claim_job_run(workspace_id,job.id)
             change = SectionTimelineChange(self.repository,self.montage_edits.artifact_store)
             try:
                 for attempt in range(2):
                     change.prepare_current(workspace_id,task_id,history['section_id'],publication.payload['montage'],segment,job,
                         desired_version=desired_version)
-                    latest=self.repository.get_creation_task(workspace_id,task_id)
-                    baseline=self.repository.get_timeline_version(workspace_id,latest.current_timeline_version_id)
-                    rows=self.repository.list_narration_segments(workspace_id,task_id,latest.confirmed_script_id)
-                    rows=[segment if row.source_section_id==history['section_id'] else row for row in rows]
-                    prospective,_,_=change.compute(latest,baseline.snapshot,history['section_id'],
-                        publication.payload['montage'],rows,'restore-permission-preparation',desired_version=desired_version)
+                    with self.repository.execution_inputs.creation_execution_read() as reader:
+                        latest=self.repository.task_records.get_creation_task(workspace_id,task_id,connection=reader)
+                        baseline=self.repository.timeline_records.get_timeline_version(workspace_id,latest.current_timeline_version_id,connection=reader)
+                        prospective,_,_=change.compute(latest,baseline.snapshot,history['section_id'],
+                            publication.payload['montage'],segment,'restore-permission-preparation',reader,desired_version=desired_version)
                     if baseline.snapshot.get('montage') is not None and prospective.get('montage') is not None:
                         authorization_write=self.montage_edits.prepare_material_scope(latest,
                             creation_task_montage_plan_from_payload(baseline.snapshot['montage']),
                             creation_task_montage_plan_from_payload(prospective['montage']),command.actor_identity,connection=None)
                     else:
-                        current_section=self.repository.stage_segment_state(workspace_id,task_id,history['section_id'])
+                        current_section=self.repository.section_inputs.stage_segment_state(workspace_id,task_id,history['section_id'])
                         if current_section is None:
                             raise EditConflict('目标段的当前采用来源已丢失')
                         authorization_write=self.montage_edits.prepare_material_scope(latest,
                             creation_task_montage_plan_from_payload(current_section['montage']),
                             creation_task_montage_plan_from_payload(publication.payload['montage']),command.actor_identity,connection=None)
                     try:
-                        operation,payload,current = self.repository.restore_script_section(workspace_id,task_id,
+                        operation,payload,current = self.repository.section_adoption.restore_script_section(workspace_id,task_id,
                             history=history,expected_dependencies=prepared.section_dependencies,redo=command.redo,
                             changed_version_id=prepared.changed_version.id,restore_version_id=prepared.target_version.id,
                             timeline_change=change,job=job,control_payload=command.control_payload(),write_guard=command.write_guard,
@@ -447,8 +457,8 @@ class TimelineRestoreUseCase:
                         if attempt:
                             raise
             except Exception as exc:
-                if self.repository.get_job_run(workspace_id,job.id).status=='running':
-                    self.repository.finish_job_run(workspace_id,job.id,status='failed',failure_reason=str(exc),
+                if self.repository.job_records.get_job_run(workspace_id,job.id).status=='running':
+                    self.repository.job_records.finish_job_run(workspace_id,job.id,status='failed',failure_reason=str(exc),
                         impact='原时间线与已采用成果保留',repair_action='读取当前目标段及原恢复请求后核对冲突')
                 raise
             plan = creation_task_montage_plan_from_payload(payload) if payload is not None else None
@@ -458,7 +468,7 @@ class TimelineRestoreUseCase:
         def verify_restore(connection):
             if command.write_guard is not None:
                 command.write_guard(connection)
-            self.repository.verify_whole_timeline_restore(workspace_id,task_id,changed_version.id,connection=connection)
+            self.verify_whole_timeline_restore(workspace_id,task_id,changed_version.id,connection=connection)
         current_plan, restored_plan = prepared.current_plan, prepared.restored_plan
         restored_segments, restored_narration = prepared.restored_segments, prepared.restored_narration
         subtitle_cover_undo = prepared.subtitle_cover_undo
@@ -468,7 +478,7 @@ class TimelineRestoreUseCase:
             restored_plan, _ = prepare_changed_montage(
                 restored_plan, message="草稿已恢复；原成片依赖或产物已失效，请明确重新生成。",
             )
-        current_version = self.repository.get_timeline_version(
+        current_version = self.repository.timeline_records.get_timeline_version(
             workspace_id, task.current_timeline_version_id or ""
         )
         restored_tracks: list[SubtitleTrack] = []
@@ -517,7 +527,7 @@ class TimelineRestoreUseCase:
                     restored_plan, message="草稿已恢复，可以重新生成。",
                 )
         now = utc_now()
-        intent = self.repository.create_edit_intent(
+        intent = self.repository.edit_records.create_edit_intent(
             EditIntent(
                 id=f"intent_{uuid4().hex}",
                 workspace_id=workspace_id,
@@ -534,7 +544,7 @@ class TimelineRestoreUseCase:
                 created_at=now,
             )
         )
-        proposal = self.repository.create_edit_proposal(
+        proposal = self.repository.edit_records.create_edit_proposal(
             EditProposal(
                 id=f"proposal_{uuid4().hex}",
                 workspace_id=workspace_id,
@@ -556,7 +566,7 @@ class TimelineRestoreUseCase:
                     "before": {
                         "ref": f"timeline:{task.current_timeline_version_id}",
                         "label": "当前版本",
-                        "detail": f"版本 {self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id or '').sequence}",
+                        "detail": f"版本 {self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id or '').sequence}",
                     },
                     "after": {
                         "ref": f"timeline:{target_version.id}",
@@ -607,9 +617,9 @@ class TimelineRestoreUseCase:
         from app.subtitle_tracks import render_srt
         command = prepared.command
         ws, task = command.workspace_id, command.task
-        base = self.repository.get_timeline_version(ws, prepared.local_sources['current_version_id'])
+        base = self.repository.timeline_records.get_timeline_version(ws, prepared.local_sources['current_version_id'])
         now = utc_now()
-        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}',workspace_id=ws,
+        intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}',workspace_id=ws,
             task_id=task.id,raw_command=f'{prepared.action_label}指定原修改',context_stage='montage',
             selected_object_refs=[f'operation:{command.target_operation_id}'],playhead_ms=None,
             intent_type='redo_timeline' if command.redo else 'undo_timeline',scope={'operation_id':command.target_operation_id},
@@ -617,7 +627,7 @@ class TimelineRestoreUseCase:
         payload = {'changed_version_id':prepared.changed_version.id,'restore_version_id':prepared.target_version.id,
             'base_version_id':base.id,**command.control_payload(),
             'stage_adoption_restore':prepared.local_sources['stage_adoption_restore']}
-        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}',workspace_id=ws,
+        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}',workspace_id=ws,
             task_id=task.id,intent_id=intent.id,summary=f'{prepared.action_label}指定原修改，保留无关后续编辑',
             target_refs=[f'operation:{command.target_operation_id}'],operation={'operation_type':prepared.operation_type,'payload':payload},
             invalidated_refs=logical_montage_output_refs(prepared.current_plan),preview={},external_effects=[],created_at=now,updated_at=now))
@@ -637,7 +647,7 @@ class TimelineRestoreUseCase:
             if command.write_guard is not None:
                 command.write_guard(connection)
             for clip_id,replacement,facts in prepared.local_sources['sources']:
-                current = self.repository.clip_edit_source_facts(ws,task.id,clip_ids=[clip_id],replacement=replacement,
+                current = self.repository.clip_sources.facts(ws,task.id,clip_ids=[clip_id],replacement=replacement,
                     user_id=command.restore_member_id,local_diagnostic=False,connection=connection)
                 if current != facts:
                     raise EditConflict('局部恢复的实际来源或权限已变化')
@@ -645,3 +655,45 @@ class TimelineRestoreUseCase:
         return self.montage_edits.persist_montage_edit(workspace_id=ws,task=task,proposal=proposal,base_version=base,
             updated_plan=prepared.restored_plan,operation_type=prepared.operation_type,operation_payload=payload,
             edited_subtitle_tracks=tracks,verify_sources=verify,actor_identity=command.actor_identity)
+
+    def _timeline_restore_business_facts(self,version,connection):
+        snapshot = dict(version.snapshot)
+        for field in ('edit_operation_id','invalidated_refs'):
+            snapshot.pop(field,None)
+        if isinstance(snapshot.get('montage'),dict):
+            snapshot['montage'] = {key:value for key,value in snapshot['montage'].items()
+                if key not in {'created_at','updated_at','message'}}
+        if isinstance(snapshot.get('narration_segments'),list):
+            snapshot['narration_segments'] = [{key:value for key,value in row.items()
+                if key not in {'created_at','updated_at'}} for row in snapshot['narration_segments']]
+        record_fields = {'id','workspace_id','task_id','timeline_version_id','created_at','updated_at'}
+        tracks = self.repository.subtitle_records.list_subtitle_tracks(version.workspace_id,version.task_id,timeline_version_id=version.id,connection=connection)
+        track_facts = [{key:value for key,value in asdict(track).items() if key not in record_fields} for track in tracks]
+        declared_tracks = snapshot.pop('subtitle_track_ids',None)
+        snapshot['subtitles'] = {'items':sorted(track_facts,key=lambda item:json.dumps(item,sort_keys=True)),
+            'explicit_empty':declared_tracks==[] and not track_facts}
+        cover_id = snapshot.pop('cover_asset_id',None)
+        cover = None
+        if cover_id:
+            cover = self.repository.cover_records.read_restore_facts(
+                version.workspace_id, version.task_id, cover_id, connection=connection)
+        snapshot['cover'] = cover
+        return snapshot
+
+    def verify_whole_timeline_restore(self,workspace_id,task_id,changed_version_id,*,connection=None):
+        """The legacy snapshot restore is safe only while no later facts are lost."""
+        with nullcontext(connection) if connection is not None else self.repository._connect() as conn:
+            task = require_creation_task(conn,workspace_id,task_id)
+            changed = self.repository.timeline_records.get_timeline_version(workspace_id,changed_version_id,connection=conn)
+            current = self.repository.timeline_records.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
+            if (changed.task_id!=task_id or self._timeline_restore_business_facts(current,conn)
+                    !=self._timeline_restore_business_facts(changed,conn)):
+                raise ValueError('此修改之后已有其他时间线成果；当前编辑尚不支持局部反向恢复，不能覆盖后来成果')
+            if 'narration_segments' in changed.snapshot:
+                rows = self.repository.narration_records.list_narration_segments(workspace_id,task_id,task.confirmed_script_id,connection=conn)
+                def facts(items):
+                    return [{key:value for key,value in item.items() if key not in {'created_at','updated_at'}} for item in items]
+                if facts([asdict(row) for row in rows])!=facts(changed.snapshot['narration_segments']):
+                    raise ValueError('此修改之后已有新的配音成果；不能用旧整片快照覆盖，请保留当前成果并核对目标修改')
+            if 'narration_cache_key' in changed.snapshot and task.narration_cache_key!=changed.snapshot['narration_cache_key']:
+                raise ValueError('此修改之后已有新的配音总轨；不能用旧整片快照覆盖')

@@ -29,7 +29,8 @@ export type CreationTaskExactEditInput = {
     source_start_seconds: number;
 }
 // InsertClip 在锚点镜头之后插入一个片段。clip_id 是锚点，必填：后端
-// _preview_exact_montage_edit 对每个操作都要求 clip_id，缺了直接 409。
+// ExactPreviewUseCase 按操作分派，InsertClip 由 linked 用例校验锚点；
+// MetadataEditUseCase 单独校验 ReplaceClip 等精确镜头操作的必填参数。
 // 不带 duration：既有 25 个操作都没有该参数，时长继承源片段 span。
 // 落点不是播放头——既有 SplitClip 就是 plan.clips.insert(index + 1, ...)，
 // 插在锚点后面是这个编辑器一贯的做法。字面量名与后端 schemas.py 的三处
@@ -282,3 +283,29 @@ export type CreationTaskEditQueuedResponse = {
     request_id: string;
 };
 export type CreationTaskEditResult = CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse;
+
+export type CreationTaskClipMetadataInput = Extract<CreationTaskExactEditInput, {
+    operation_type: "ChangeCrop" | "ReplaceClip" | "SplitClip" | "TrimClip" | "ReorderClip" | "SetClipLock" | "ConfirmClip";
+}> | (Extract<CreationTaskExactEditInput, { operation_type: "ChangeClipSpeed" | "ChangeLinkedSpeed" }> & {
+    operation_type: "ChangeClipSpeed";
+});
+
+/** 保存输入在原请求结果核实前保持不变。 */
+export type CreationTaskSubtitleSaveInput = Extract<CreationTaskExactEditInput, { operation_type: "UpdateSubtitleCue" }> & {
+    request_id: string;
+    expected_timeline_version_id: string | null;
+    expected_timeline_sequence: number;
+};
+export type CreationTaskMetadataSaveInput = (CreationTaskClipMetadataInput | Extract<CreationTaskExactEditInput, {
+    operation_type: "UpdateSubtitleCue";
+}>) & Pick<CreationTaskSubtitleSaveInput, "request_id" | "expected_timeline_version_id" | "expected_timeline_sequence">;
+export type CreationTaskEditRequestReceipt = {
+    request_id: string;
+    task_id: string;
+    phase: "apply";
+    input_digest: string;
+    status: "unknown" | "recorded";
+    submitted_input: CreationTaskMetadataSaveInput;
+    result_status_code: number | null;
+    result: CreationTaskEditResult | { detail: unknown } | null;
+};

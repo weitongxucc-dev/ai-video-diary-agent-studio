@@ -401,18 +401,75 @@ def test_media_profiles_are_versioned_workspace_scoped_and_honest_about_revocati
     ],
 )
 def test_media_management_rejects_blank_required_values(
-    client: TestClient,
+    request: pytest.FixtureRequest,
     path: str,
     payload: dict[str, object],
 ) -> None:
+    client = request.getfixturevalue(
+        "authorization_client" if path in {"/api/media/pronunciation-entries",
+                                         "/api/media/person-profiles", "/api/media/voice-profiles"} else "client"
+    )
     if path == "/api/media/voice-profiles":
-        assert client.post("/api/media/person-profiles", json=_person_payload()).status_code == 200
-        payload = {
-            **payload,
-            "reference_audio_path": client.voice_reference,
-            "reference": {"asset_id": client.voice_asset_id},
-        }
-    assert client.post(path, json=payload).status_code == 422
+        # Blank-name validation precedes source resolution; no successful media
+        # registration is needed to prove this rejection.
+        payload = {**payload, "person_profile_id": "", "person_version": "",
+                   "reference_audio_path": "workspace://metadata/unused.wav", "reference": {}}
+    rejected = client.post(path, json=payload)
+    assert rejected.status_code == 422
+
+    if path in {"/api/media/person-profiles", "/api/media/voice-profiles"}:
+        assert rejected.json()["detail"] == ("display name must not be blank"
+            if path == "/api/media/person-profiles" else "独立声音需要名称")
+        assert client.get(path).json() == {"items": [], "total_count": 0}
+        assert client.get(path + "/missing").status_code == 404
+        assert client.get(path + "/missing/versions").status_code == 404
+        kind = path.rsplit("/", 1)[-1]
+        assert client.get(f"/api/media/{kind}/missing/reference?version=v1").status_code == 404
+        foreign = {"x-test-workspace": "workspace-b"}
+        assert client.get(path, headers=foreign).json() == {"items": [], "total_count": 0}
+        if path == "/api/media/voice-profiles":
+            assert client.get("/api/media/default-voice").json() is None
+            assert client.put("/api/media/default-voice", json={"profile_id": "missing", "version": "v1"}).status_code == 422
+        with main_module.production_repo._connect() as conn:
+            for table in ("person_profiles", "versioned_voice_profiles", "media_authorizations"):
+                assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+    if path == "/api/media/pronunciation-entries":
+        endpoint = "/api/media/pronunciation-entries"
+        assert client.get(endpoint).json() == {"items": [], "total_count": 0}
+        first_payload = {**payload, "term": "Codex", "target_pronunciation": "KO-deks"}
+        first = client.post(endpoint, json=first_payload)
+        assert first.status_code == 200
+        first_body = first.json()
+        assert first_body["workspace_id"] == "workspace-a"
+        conflict = client.post(endpoint, json={**first_payload, "target_pronunciation": "changed"})
+        assert conflict.status_code == 409
+        missing_person = client.post(endpoint, json={**first_payload, "id": "missing-person-entry",
+                                                     "scope": "person", "scope_reference": "missing"})
+        assert missing_person.status_code == 404
+        second = client.post(endpoint, json={**first_payload, "version": "v2", "target_pronunciation": "new"})
+        assert second.status_code == 200
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(main_module, "production_repo", ProductionRepository(
+                database_path=client.authorization_database, video_library_path=client.authorization_library,
+            ))
+            entry_id = first_payload["id"]
+            assert client.get(f"{endpoint}/{entry_id}").json() == second.json()
+            assert client.get(f"{endpoint}/{entry_id}?version=v1").json() == first_body
+            assert client.get(f"{endpoint}/{entry_id}/versions").json() == {
+                "items": [second.json(), first_body], "total_count": 2,
+            }
+            assert client.get(endpoint).json() == {"items": [second.json()], "total_count": 1}
+            assert client.get(f"{endpoint}/{entry_id}?version=missing").status_code == 404
+            assert client.get(f"{endpoint}/missing-person-entry").status_code == 404
+            foreign = {"x-test-workspace": "workspace-b"}
+            assert client.get(endpoint, headers=foreign).json() == {"items": [], "total_count": 0}
+            for suffix in [entry_id, f"{entry_id}?version=v1", f"{entry_id}/versions"]:
+                assert client.get(f"{endpoint}/{suffix}", headers=foreign).status_code == 404
+            saved_foreign = client.post(endpoint, headers=foreign,
+                                        json={**first_payload, "target_pronunciation": "foreign"})
+            assert saved_foreign.status_code == 200
+            assert client.get(f"{endpoint}/{entry_id}?version=v1").json() == first_body
 
 
 def test_media_management_rejects_semantic_change_without_new_version_and_reports_capabilities(
@@ -444,7 +501,22 @@ def test_media_management_rejects_semantic_change_without_new_version_and_report
     assert "media_url" not in avatar_capability.json()["detail"]
 
 
-def test_media_requests_reject_forged_workspace(client: TestClient) -> None:
+@pytest.fixture
+def authorization_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    database = tmp_path / "authorization.sqlite3"
+    library = tmp_path / "metadata-library"
+    repository = ProductionRepository(database_path=database, video_library_path=library)
+    monkeypatch.setattr(main_module, "production_repo", repository)
+    monkeypatch.setattr(main_module, "current_workspace_id",
+                        lambda request: request.headers.get("x-test-workspace", "workspace-a"))
+    client = TestClient(main_module.app)
+    client.authorization_database = database
+    client.authorization_library = library
+    return client
+
+
+def test_media_requests_reject_forged_workspace(authorization_client: TestClient, monkeypatch) -> None:
+    client = authorization_client
     response = client.post(
         "/api/media/authorizations",
         json={
@@ -454,6 +526,38 @@ def test_media_requests_reject_forged_workspace(client: TestClient) -> None:
     )
 
     assert response.status_code == 422
+
+
+    assert client.get("/api/media/authorizations").json() == {"items": [], "total_count": 0}
+    payload = _authorization_payload("authorization-a")
+    first = client.post("/api/media/authorizations", json=payload)
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["workspace_id"] == "workspace-a"
+    conflict = client.post("/api/media/authorizations", json={**payload, "rights_holder": "其他人"})
+    assert conflict.status_code == 409
+    invalid = client.post("/api/media/authorizations", json={**payload, "rights_holder": "   "})
+    assert invalid.status_code == 422
+    assert client.get("/api/media/authorizations/authorization-a?version=v1").json() == first_body
+    revoked = client.post("/api/media/authorizations", json={**payload, "version": "v2", "status": "revoked"})
+    assert revoked.status_code == 200
+    monkeypatch.setattr(main_module, "production_repo", ProductionRepository(
+        database_path=client.authorization_database, video_library_path=client.authorization_library,
+    ))
+    assert client.get("/api/media/authorizations/authorization-a").json() == revoked.json()
+    assert client.get("/api/media/authorizations/authorization-a?version=v1").json() == first_body
+    history = client.get("/api/media/authorizations/authorization-a/versions").json()
+    assert history == {"items": [revoked.json(), first_body], "total_count": 2}
+    assert client.get("/api/media/authorizations").json() == {"items": [revoked.json()], "total_count": 1}
+    foreign = {"x-test-workspace": "workspace-b"}
+    assert client.get("/api/media/authorizations", headers=foreign).json() == {"items": [], "total_count": 0}
+    for path in ["authorization-a", "authorization-a/versions", "authorization-a?version=v1", "missing"]:
+        assert client.get("/api/media/authorizations/" + path, headers=foreign).status_code == 404
+    assert client.get("/api/media/authorizations/authorization-a?version=missing").status_code == 404
+    foreign_save = client.post("/api/media/authorizations", headers=foreign,
+                               json={**payload, "rights_holder": "其他空间"})
+    assert foreign_save.status_code == 200
+    assert client.get("/api/media/authorizations/authorization-a?version=v1").json() == first_body
 
 
 @pytest.mark.parametrize(

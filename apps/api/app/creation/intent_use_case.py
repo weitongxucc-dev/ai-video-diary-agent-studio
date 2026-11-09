@@ -105,7 +105,7 @@ class CreationIntentUseCase:
 
         # Authorization belongs to the current reader, never the original owner
         # supplied by the Plan. This read also preserves the repository's 404.
-        original = repository.get_creation_request(plan.workspace_id, adoption["request_id"],
+        original = repository.creation_requests.get_creation_request(plan.workspace_id, adoption["request_id"],
             viewer_user_id=viewer_user_id)
         saved_intent = original["requirements"].get("creation_intent") or {}
         source = intent.get("source") or {}
@@ -132,7 +132,7 @@ class CreationIntentUseCase:
         else:
             # Adopted Plan + Task + window receipt were committed atomically.
             # Re-read that exact persisted proof, never scan historical items.
-            persisted = repository.get_creation_plan(plan.workspace_id, plan.id)
+            persisted = repository.plan_records.get_creation_plan(plan.workspace_id, plan.id)
             if persisted.adoption == adoption and persisted.creation_task_id == task.id:
                 return original["goal"]
             raise ValueError("文案目标不属于该请求已采用窗口中的当前任务，请重新核对采用关联。")

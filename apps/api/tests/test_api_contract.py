@@ -665,40 +665,62 @@ def test_build_preference_memory_respects_disabled_state():
 
 
 
-def test_preference_disable_endpoint(tmp_path, monkeypatch):
+def _preference_http_case(tmp_path, monkeypatch, signal):
     import app.repository as repo_mod
 
-    monkeypatch.setattr(
-        repo_mod,
-        "_GLOBAL_STATE_FILE",
-        tmp_path / "global_state.json",
-    )
-    resp = client.patch(
-        "/api/preferences/disable",
-        json={"signal": "太像概念课"},
-    )
+    monkeypatch.setattr(repo_mod, "_GLOBAL_STATE_FILE", tmp_path / "global_state.json")
+    monkeypatch.setattr(repo_mod, "active_workspace_id", lambda: "local")
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "local")
+    episodes = repo_mod.EpisodeRepository()
+    active = FeedbackEvent("topic", "t1", FeedbackValue.DOWN, signal, id="active")
+    positive = FeedbackEvent("topic", "t2", FeedbackValue.UP, "真实项目", id="positive")
+    inactive = FeedbackEvent("topic", "t3", FeedbackValue.DOWN, signal, id="inactive", active=False)
+    episode = Episode("preference-episode", 1, date(2026, 9, 28), EpisodeStatus.CREATED,
+                      feedback_events=[active, positive, inactive])
+    foreign = Episode("foreign", 2, date(2026, 9, 28), EpisodeStatus.CREATED,
+                      workspace_id="foreign", feedback_events=[active])
+    episodes._episodes = {episode.id: episode, foreign.id: foreign}
+    monkeypatch.setattr(main_module, "repo", episodes)
+    return repo_mod
+
+
+def test_preference_disable_endpoint(tmp_path, monkeypatch):
+    repo_mod = _preference_http_case(tmp_path, monkeypatch, "太像概念课")
+    resp = client.patch("/api/preferences/disable", json={"signal": "太像概念课"})
     assert resp.status_code == 200
     body = resp.json()
-    # Check at least one preference has enabled=False
-    enabled_flags = [p["enabled"] for p in body["preferences"]]
-    # After disabling, the preference list is rebuilt; if no matching
-    # feedback exists, the signal is just stored in disabled state
-    assert any(not flag for flag in enabled_flags) or True  # at minimum the request worked
+    assert body["total_feedback_count"] == 2
+    assert {p["signal"]: p["enabled"] for p in body["preferences"]} == {
+        "真实项目": True, "太像概念课": False,
+    }
+    assert repo_mod.load_preference_state_payload(workspace_id="local") == {
+        "disabled_signals": ["太像概念课"],
+    }
+    assert (tmp_path / "global_state.json").is_file()
+    assert client.get("/api/preferences").json() == body
+    cards = client.get("/api/preferences/cards").json()
+    assert (cards["total_count"], cards["enabled_count"], cards["disabled_count"]) == (2, 1, 1)
+    assert next(c for c in cards["cards"] if c["signal"] == "太像概念课")["enabled"] is False
+    evidence = client.get("/api/preferences/cards/太像概念课/evidence").json()
+    assert evidence["total"] == 1
+    assert [e["feedback_event_id"] for e in evidence["items"]] == ["active"]
+    summary = client.get("/api/feedback/summary").json()
+    assert (summary["total_count"], summary["up_count"], summary["down_count"]) == (2, 1, 1)
+    assert {e["id"] for e in summary["recent_events"]} == {"active", "positive", "inactive"}
 
 
 def test_preference_restore_endpoint(tmp_path, monkeypatch):
-    import app.repository as repo_mod
-
-    monkeypatch.setattr(
-        repo_mod,
-        "_GLOBAL_STATE_FILE",
-        tmp_path / "global_state.json",
-    )
-    # First disable
-    client.patch("/api/preferences/disable", json={"signal": "test_signal"})
-    # Then restore
+    repo_mod = _preference_http_case(tmp_path, monkeypatch, "test_signal")
+    disabled = client.patch("/api/preferences/disable", json={"signal": "test_signal"})
+    assert disabled.status_code == 200
+    assert next(p for p in disabled.json()["preferences"] if p["signal"] == "test_signal")["enabled"] is False
     resp = client.patch("/api/preferences/restore", json={"signal": "test_signal"})
     assert resp.status_code == 200
+    assert all(p["enabled"] for p in resp.json()["preferences"])
+    assert repo_mod.load_preference_state_payload(workspace_id="local") == {"disabled_signals": []}
+    assert client.get("/api/preferences").json() == resp.json()
+    cards = client.get("/api/preferences/cards").json()
+    assert (cards["total_count"], cards["enabled_count"], cards["disabled_count"]) == (2, 2, 0)
 
 
 def test_source_sync_status_endpoint_returns_list():

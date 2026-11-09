@@ -1,3 +1,4 @@
+from app.content_identity_http import ContentIdentityHttpAdapter
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -18,12 +19,14 @@ def test_voice_preview_request_passes_explicit_language_without_inference(monkey
     boundary = Mock(side_effect=HTTPException(409, "captured before model execution"))
     monkeypatch.setattr(main, "voice_preview_service", SimpleNamespace(request=boundary))
     monkeypatch.setattr(main, "current_workspace_id", lambda request: "workspace")
-    monkeypatch.setattr(main, "_content_reader", lambda request, workspace: ("member", False))
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, request, workspace: ("member", False))
     monkeypatch.setattr(main, "_require_permit_actor", lambda request, workspace:
         SimpleNamespace(identity_payload=lambda: {"member_id": "member"}))
     monkeypatch.setattr(main, "_creation_runtime", lambda: object())
     with pytest.raises(HTTPException, match="captured before model execution"):
-        main.request_voice_preview(Request({"type": "http"}), payload)
+        router = main._media_preview_http_router()
+        endpoint = next(route.endpoint for route in router.routes if route.name == "request_voice_preview")
+        endpoint(Request({"type": "http"}), payload)
     assert boundary.call_args.kwargs["language"] == language
 
 

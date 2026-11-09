@@ -18,9 +18,9 @@ from app.device_runtime import build_device_runtime
 from app.device_scheduler import ProcessIdentity, VerifiedSession
 from app.platform_publish.queue import platform_publish_registration, recover_platform_publish_jobs
 from app.platform_publish.routes import build_platform_publish_router
-from app.production import (
-    CreationPlan, CreationTask, ProductionRepository, TimelineVersion, _json_payload,
-)
+from app.production import ProductionRepository, _json_payload
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import CreationTask, TimelineVersion
 
 
 class _Driver:
@@ -240,13 +240,13 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
     )
     task = CreationTask(id=task_id, workspace_id=workspace, plan_id=plan.id,
                         name=plan.name, scenario=plan.goal)
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=member)
-    repository.create_timeline_version(TimelineVersion(
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member)
+    repository.timeline_records.create_timeline_version(TimelineVersion(
         id=version_id, workspace_id=workspace, task_id=task_id, parent_version_id=None,
         sequence=1, snapshot={"montage": {"output_path": ref}, "output_refs": [ref]},
         created_by_operation_id=None,
     ))
-    current = repository.get_creation_task(workspace, task_id)
+    current = repository.task_records.get_creation_task(workspace, task_id)
     from dataclasses import replace
     current = replace(current, output_ready=True)
     with repository._connect() as conn:
@@ -261,8 +261,8 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
     auth.verify_current(workspace, member, "douyin")
 
     def output_for(ws, current_task_id, user_id):
-        persisted_task = repository.get_creation_task(ws, current_task_id)
-        persisted_version = repository.get_timeline_version(ws, version_id)
+        persisted_task = repository.task_records.get_creation_task(ws, current_task_id)
+        persisted_version = repository.timeline_records.get_timeline_version(ws, version_id)
         assert user_id == member and persisted_task.output_ready
         assert persisted_task.current_timeline_version_id == version_id
         assert persisted_version.snapshot["montage"]["output_path"] == ref
@@ -290,7 +290,7 @@ def _persistent_runtime_fixture(tmp_path, *, publish_status="发布成功", rece
         actor_for=lambda _request, current_workspace: CreationExecutionActor(
             current_workspace, member,
         ), auth_service=auth,
-        task_for_user=lambda ws, current_task_id, user_id: repository.get_creation_task(ws, current_task_id),
+        task_for_user=lambda ws, current_task_id, user_id: repository.task_records.get_creation_task(ws, current_task_id),
         publishable_output_for=output_for, runtime_for=lambda: runtime,
     ))
     return TestClient(app), repository, runtime, driver, auth
@@ -319,9 +319,9 @@ def test_real_repository_device_runtime_persists_result_and_never_replays_unknow
     assert runtime.run_once() is True
 
     persisted = ProductionRepository(repository.database_path, repository.video_library_path)
-    job = persisted.get_job_run("local", job_id)
+    job = persisted.job_records.get_job_run("local", job_id)
     assert job.status == expected
-    events = [event for event in persisted.list_task_events("local", "task-1")
+    events = [event for event in persisted.execution_records.list_task_events("local", "task-1")
               if event.job_id == job_id]
     assert any(event.event_type == "platform_publish_submission_started" for event in events)
     if expected == "succeeded":

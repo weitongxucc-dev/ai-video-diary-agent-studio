@@ -112,7 +112,7 @@ def test_real_scene_windows_resume_from_checkpoint_and_assemble_source_ranges(tm
         check=True, capture_output=True, timeout=20,
     )
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
 
     def make_runtime(current_repo):
         scheduler = _scene_test_scheduler(current_repo, tmp_path)
@@ -134,7 +134,7 @@ def test_real_scene_windows_resume_from_checkpoint_and_assemble_source_ranges(tm
         probe_grant = scheduler.pick_and_grant()
         assert probe_grant is not None and probe_grant.unit_key.startswith("probe-meta:v1:")
         executor.execute(probe_grant, scheduler)
-        candidates = repo.pending_material_scene_windows()
+        candidates = repo.scene_records.pending_material_scene_windows()
         assert len(candidates) == 3
         assert [item.window.scan_seconds for item in candidates] == [14, 15, 5]
         with sqlite3.connect(repo.database_path) as conn:
@@ -153,7 +153,7 @@ def test_real_scene_windows_resume_from_checkpoint_and_assemble_source_ranges(tm
         first_grant = scheduler.pick_and_grant()
         assert first_grant is not None and first_grant.unit_key == candidates[0].unit_key
         executor.execute(first_grant, scheduler)
-        assert len(repo.pending_material_scene_windows()) == 2
+        assert len(repo.scene_records.pending_material_scene_windows()) == 2
         asset = repo.list_assets("one")[0]
         assert asset.segments == []
         asset.segments = [
@@ -173,7 +173,7 @@ def test_real_scene_windows_resume_from_checkpoint_and_assemble_source_ranges(tm
     restarted = ProductionRepository(repo.database_path, library)
     scheduler, service, executor = make_runtime(restarted)
     try:
-        assert len(restarted.pending_material_scene_windows()) == 2
+        assert len(restarted.scene_records.pending_material_scene_windows()) == 2
         assert service.submit_pending_scene_windows()
         for _ in range(2):
             grant = scheduler.pick_and_grant()
@@ -185,10 +185,10 @@ def test_real_scene_windows_resume_from_checkpoint_and_assemble_source_ranges(tm
             (0.0, 5.0), (5.0, 17.0), (17.0, 20.0), (20.0, 32.0),
         ]
         assert asset.segments[0].description == "人工匹配说明"
-        assert [item["description"] for item in restarted.list_unmatched_material_corrections(
+        assert [item["description"] for item in restarted.material_assets.list_unmatched_material_corrections(
             "one", asset.id,
         )] == ["人工未匹配说明"]
-        assert restarted.pending_material_scene_windows() == []
+        assert restarted.scene_records.pending_material_scene_windows() == []
         with sqlite3.connect(repo.database_path) as conn:
             rows = conn.execute(
                 "SELECT result_json FROM material_analysis_checkpoints "
@@ -231,7 +231,7 @@ def test_scene_timeout_or_resource_stop_never_commits_a_checkpoint(
         check=True, capture_output=True, timeout=10,
     )
     repo = ProductionRepository(tmp_path / "production.sqlite", library)
-    repo.bind_material_ingestion("one", expected_directory=str(library))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
 
     scheduler = _scene_test_scheduler(repo, tmp_path)
     service = MaterialIngestionService(
@@ -515,3 +515,150 @@ def test_scene_probe_resume_skips_completed_segments(tmp_path: Path) -> None:
     assert clean_calls == {0: 1, 1: 1, 2: 1}
     assert result == clean
     assert len(result) == 6  # 3 segments * 2 scenes each
+
+
+@pytest.fixture
+def typed_scene_record_case(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import _media_preview_test_fixtures as media_fixtures
+    from test_material_probe import _Processes, _Resources, probe_payload
+    from app.material_probe import parse_ffprobe_output
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("scene records verification must not execute media, models or drivers")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(media_fixtures, "write_synthetic_video", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "start", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "run_granted_probe", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "run_granted_scene", forbidden)
+    monkeypatch.setattr(MaterialHashUnitExecutor, "execute", forbidden)
+    # Tool presence is a controlled metadata fixture; execution remains forbidden.
+    monkeypatch.setattr(shutil, "which", lambda name: "/isolated-fixture/" + name)
+    assert subprocess.Popen is forbidden
+    assert media_fixtures.write_synthetic_video is forbidden
+    assert MaterialIngestionService.run_granted_scene is forbidden
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "clip.mp4").write_bytes(b"typed scene checkpoint source")
+    repo = ProductionRepository(tmp_path / "records.sqlite3", library)
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
+
+    def runtime(repository):
+        scheduler = DeviceScheduler(repository.database_path, tmp_path / "device.lock",
+            owners=MaterialHashOwnerVerifier(repository), resources=_Resources(), processes=_Processes())
+        service = MaterialIngestionService(repository, execution_mode="scheduled", scheduler=scheduler, stable_seconds=0)
+        return scheduler, service
+
+    scheduler, service = runtime(repo)
+    state = SimpleNamespace(repo=repo, scheduler=scheduler, service=service, runtime=runtime)
+    try:
+        service.discover_and_submit_hashes()
+        service.discover_and_submit_hashes()
+        hash_grant = scheduler.pick_and_grant()
+        assert hash_grant is not None
+        assert service.run_granted_hash(hash_grant) is not None
+        probe_grant = scheduler.pick_and_grant()
+        assert probe_grant is not None
+        candidate = repo.probe_records.material_probe_candidate_for_grant(probe_grant)
+        payload = json.loads(probe_payload(duration="32.000"))
+        for stream in payload["streams"]:
+            stream["duration"] = "32.000"
+        payload["streams"][0].update(codec_name="mpeg4", width=160, height=90,
+            avg_frame_rate="5/1", r_frame_rate="5/1")
+        facts = parse_ffprobe_output(json.dumps(payload).encode())
+        scheduler.complete_unit(probe_grant, checkpoint_database_path=repo.database_path,
+            checkpoint_write=lambda conn, active: repo.probe_records.commit_material_probe(conn, active, candidate, facts))
+        state.asset_id = candidate.asset_id
+        yield state
+    finally:
+        state.scheduler.close()
+
+
+def _complete_typed_scene_window(state):
+    grant = state.scheduler.pick_and_grant()
+    assert grant is not None and grant.unit_key.startswith("scene-window:v1:")
+    candidate = state.repo.scene_records.material_scene_candidate_for_grant(grant)
+    cuts = {0.0: (5.0,), 14.0: (20.0,), 28.0: ()}[candidate.window.start_seconds]
+    state.scheduler.complete_unit(grant, checkpoint_database_path=state.repo.database_path,
+        checkpoint_write=lambda conn, active: state.repo.scene_records.commit_material_scene(
+            conn, active, candidate, SceneWindowFacts(candidate.window, cuts)))
+    return grant
+
+
+def test_typed_scene_records_resume_only_missing_windows_and_preserve_manual_changes(typed_scene_record_case):
+    from app.materials.scene_records import MaterialSceneRecordStore
+
+    state = typed_scene_record_case
+    assert isinstance(state.repo.scene_records, MaterialSceneRecordStore)
+    assert len(state.repo.scene_records.pending_material_scene_windows()) == 3
+    state.service.submit_pending_scene_windows()
+    first = _complete_typed_scene_window(state)
+    assert len(state.repo.scene_records.pending_material_scene_windows()) == 2
+    asset = state.repo.get_asset("one", state.asset_id)
+    assert asset.segments == []
+    state.repo.update_asset_tags("one", asset.id, ["人工标签"])
+    asset = state.repo.get_asset("one", asset.id)
+    asset.review_status = "approved"
+    asset.segments = [
+        MaterialSegment(_segment_id(asset.id, 0, 5), asset.id, 0, 5, description="人工匹配说明"),
+        MaterialSegment(_segment_id(asset.id, 0, 10), asset.id, 0, 10, description="人工未匹配说明"),
+    ]
+    state.repo._save_asset(asset)
+    state.scheduler.close()
+    state.repo = ProductionRepository(state.repo.database_path, state.repo.video_library_path)
+    state.scheduler, state.service = state.runtime(state.repo)
+    pending = state.repo.scene_records.pending_material_scene_windows()
+    assert [item.window.start_seconds for item in pending] == [14.0, 28.0]
+    assert first.unit_key not in {item.unit_key for item in pending}
+    state.service.submit_pending_scene_windows()
+    _complete_typed_scene_window(state)
+    assert len(state.repo.get_asset("one", asset.id).segments) == 2  # Still the manual draft, not assembled early.
+    _complete_typed_scene_window(state)
+    result = state.repo.get_asset("one", asset.id)
+    assert [(item.start_seconds, item.end_seconds) for item in result.segments] == [(0.0, 5.0), (5.0, 17.0), (17.0, 20.0), (20.0, 32.0)]
+    assert result.user_tags == ["人工标签"] and result.review_status == "approved"
+    assert result.segments[0].description == "人工匹配说明"
+    assert [item["description"] for item in state.repo.material_assets.list_unmatched_material_corrections("one", asset.id)] == ["人工未匹配说明"]
+    assert state.repo.scene_records.pending_material_scene_windows() == []
+    with sqlite3.connect(state.repo.database_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM material_analysis_checkpoints WHERE unit_key LIKE 'scene-window:%'").fetchone() == (3,)
+        assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone() == (5,)
+
+
+def test_typed_scene_tail_assembly_sql_refusal_rolls_back_original_permit(typed_scene_record_case, monkeypatch):
+    state = typed_scene_record_case
+    state.service.submit_pending_scene_windows()
+    _complete_typed_scene_window(state)
+    _complete_typed_scene_window(state)
+    tail = state.scheduler.pick_and_grant()
+    assert tail is not None
+    candidate = state.repo.scene_records.material_scene_candidate_for_grant(tail)
+    assert candidate.window.start_seconds == 28.0
+    original_asset = state.repo.get_asset("one", state.asset_id)
+    with sqlite3.connect(state.repo.database_path) as conn:
+        original_request = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (tail.request_id,)).fetchone()
+        original_permit = conn.execute("SELECT * FROM device_permit WHERE id=1").fetchone()
+        conn.execute("""CREATE TRIGGER refuse_scene_assembly BEFORE UPDATE ON material_assets
+            BEGIN SELECT RAISE(ABORT, 'isolated scene assembly refusal'); END""")
+    observed = []
+    assemble = state.repo.scene_records._assemble_scene_segments
+
+    def observe_assembly(connection, *args):
+        assert connection.in_transaction
+        assert connection.execute("SELECT COUNT(*) FROM material_analysis_checkpoints WHERE unit_key LIKE 'scene-window:%'").fetchone()[0] == 3
+        observed.append(connection)
+        return assemble(connection, *args)
+
+    monkeypatch.setattr(state.repo.scene_records, "_assemble_scene_segments", observe_assembly)
+    with pytest.raises(sqlite3.IntegrityError, match="isolated scene assembly refusal"):
+        state.scheduler.complete_unit(tail, checkpoint_database_path=state.repo.database_path,
+            checkpoint_write=lambda conn, active: state.repo.scene_records.commit_material_scene(
+                conn, active, candidate, SceneWindowFacts(candidate.window, ())))
+    assert len(observed) == 1
+    assert state.repo.get_asset("one", state.asset_id) == original_asset
+    with sqlite3.connect(state.repo.database_path) as conn:
+        assert conn.execute("SELECT * FROM device_work_requests WHERE id=?", (tail.request_id,)).fetchone() == original_request
+        assert conn.execute("SELECT * FROM device_permit WHERE id=1").fetchone() == original_permit
+        assert conn.execute("SELECT COUNT(*) FROM material_analysis_checkpoints WHERE unit_key LIKE 'scene-window:%'").fetchone() == (2,)
+        assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone() == (5,)

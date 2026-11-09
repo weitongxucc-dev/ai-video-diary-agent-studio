@@ -20,9 +20,14 @@ def storyboard(person_render_edit_state):
         clips=[replace(source, id=f"clip-{index + 1}", timeline_start_seconds=start,
             timeline_end_seconds=end, source_start_seconds=4, source_end_seconds=4 + end - start)
             for index, (start, end) in enumerate(((0, 2), (2, 5), (5, 8)))])
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
-    main._ensure_montage_base_version(state.workspace_id, state.task, state.montage)
+    original = state.production.timeline_records.get_timeline_version(
+        state.workspace_id, state.task.current_timeline_version_id)
+    state.production.timeline_records.create_timeline_version(replace(original,
+        id="storyboard-base", parent_version_id=original.id, sequence=original.sequence + 1,
+        snapshot={**original.snapshot, "montage": creation_task_montage_plan_to_payload(state.montage)}))
+    state.task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     state.base_url = f"/api/creation-tasks/{state.task.id}"
     return state
 
@@ -64,7 +69,7 @@ def test_indexed_reorder_is_one_version_and_one_undo_without_render(storyboard, 
     assert after["task"]["timeline_sequence"] == before["task"]["timeline_sequence"] + 1
     assert state.provider.output_cache_keys == []
     assert state.client.post(state.base_url + f"/edits/{proposal['id']}/confirm").status_code == 409
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={'request_id': 'test_indexed_reorder_is_one_version_and_one_undo_without_render:undo:67'}).status_code == 200
     assert _plan(current(state))["clips"] == _plan(before)["clips"]
 
 
@@ -93,7 +98,7 @@ def test_person_swap_reports_and_applies_existing_narration_subtitle_linkage(per
     after = current(state)
     assert _cues(after, "zh-CN")[0]["text"] == "第二句。"
     assert _plan(after)["audio_timeline"] != _plan(before)["audio_timeline"]
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={'request_id': 'test_person_swap_reports_and_applies_existing_narration_subtitle_linkage:undo:96'}).status_code == 200
     assert _cues(current(state), "zh-CN") == _cues(before, "zh-CN")
     assert _plan(current(state))["audio_timeline"] == _plan(before)["audio_timeline"]
 
@@ -111,7 +116,7 @@ def test_unequal_material_swap_cannot_move_incidental_presenter_without_explicit
                middle,
                replace(material, id="clip-last", source_start_seconds=4, source_end_seconds=8,
                     timeline_start_seconds=5, timeline_end_seconds=9)])
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
         creation_task_montage_plan_to_payload(plan))
     main._ensure_montage_base_version(state.workspace_id, state.task, plan)
     state.base_url = f"/api/creation-tasks/{state.task.id}"
@@ -122,21 +127,21 @@ def test_unequal_material_swap_cannot_move_incidental_presenter_without_explicit
         # Recheck fresh person facts as well as version/order: attachment facts
         # can change while the proposal still carries the same timeline pointer.
         middle.person_render_id = person.person_render_id
-        state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
+        state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
             creation_task_montage_plan_to_payload(plan))
     before = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
-    versions = state.production.list_timeline_versions(state.workspace_id, state.task.id)
+    versions = state.production.timeline_records.list_timeline_versions(state.workspace_id, state.task.id)
     response = (preview(state, "1↔3") if phase == "preview"
                 else state.client.post(state.base_url + f"/edits/{proposal_id}/confirm"))
     assert response.status_code == 409, response.text
     assert "这次换位会移动人物口型镜头" in response.json()["detail"]
     assert "明确联动范围" in response.json()["detail"]
     assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id) == before
-    assert state.production.list_timeline_versions(state.workspace_id, state.task.id) == versions
+    assert state.production.timeline_records.list_timeline_versions(state.workspace_id, state.task.id) == versions
     if phase == "preview":
-        assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+        assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     else:
-        assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+        assert state.production.edit_records.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
 
 
 @pytest.mark.parametrize("command", ["把第0个镜头和第2个镜头交换", "1↔4", "1↔2，然后删除配音", "那你把镜头1和镜头2的位置互换一下，然后删除配音"])
@@ -144,16 +149,16 @@ def test_invalid_or_extra_reorder_does_not_create_partial_proposal(storyboard, c
     state = storyboard
     before = current(state)
     assert preview(state, command).status_code == 422
-    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     assert _plan(current(state)) == _plan(before)
 
 
 @pytest.mark.parametrize("command", ["把这个镜头换成另一个镜头", "给当前选中的镜头换一段其他素材", "替换当前镜头", "把这个镜头换成另一个镜头，保留当前配音", "换一个更好的镜头吧", "你现在就任意帮我换一条"])
 def test_generic_replacement_selects_real_candidate_in_unrendered_draft(material_edit_state, monkeypatch, command):
     state = material_edit_state
-    monkeypatch.setattr(state.production, "search_material_segments", lambda *_a, **_kw: pytest.fail("typed candidate must not re-search the raw sentence"))
+    monkeypatch.setattr(state.production.material_search, "search_material_segments", lambda *_a, **_kw: pytest.fail("typed candidate must not re-search the raw sentence"))
     montage = replace(state.montage, status="ready", output_path=None, subtitle_path=None)
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, montage.id,
         creation_task_montage_plan_to_payload(montage))
     before = current(state)
     response = preview(state, command, selected_object_refs=[f"clip:{state.clip.id}"],
@@ -169,7 +174,7 @@ def test_generic_replacement_selects_real_candidate_in_unrendered_draft(material
     assert _plan(after)["duration_seconds"] == _plan(before)["duration_seconds"]
     persisted = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     assert persisted["narration_audio_path"] == montage.narration_audio_path
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={'request_id': 'test_generic_replacement_selects_real_candidate_in_unrendered_draft:undo:172'}).status_code == 200
     assert _plan(current(state))["clips"] == _plan(before)["clips"]
 
 
@@ -197,9 +202,9 @@ def test_replacement_candidate_requalified_at_confirmation(material_edit_state, 
 
 def test_task_clip_snapshot_binds_both_revisions_and_never_falls_back_from_person(material_edit_state, monkeypatch):
     state = material_edit_state
-    monkeypatch.setattr(main.settings, "video_inbox_path", str(Path(state.asset.path).parent), raising=False)
+    monkeypatch.setattr(main, "settings", replace(main.settings, video_inbox_path=str(Path(state.asset.path).parent)))
     selection = main._assistant_task_clip_material_selection(state.request, state.task, [f"clip:{state.clip.id}"])
-    asset = main.get_production_material(state.clip.asset_id, state.request)
+    asset = main._material_library_http_adapter().get_production_material(state.clip.asset_id, state.request)
     segment = next(item for item in asset.segments if item.id == state.clip.segment_id)
     assert selection == {"scope": "segment", "asset_id": asset.id, "segment_id": segment.id,
         "expected_updated_at": asset.updated_at.isoformat(), "expected_segment_updated_at": segment.updated_at.isoformat(),
@@ -214,12 +219,12 @@ def test_untyped_replacement_keeps_objective_description_search(material_edit_st
     def no_matching_description(_workspace, **kwargs):
         queries.append(kwargs["query"])
         return []
-    monkeypatch.setattr(state.production, "search_material_segments", no_matching_description)
+    monkeypatch.setattr(state.production.material_search, "search_material_segments", no_matching_description)
     before = current(state)
     response = preview(state, "把这个镜头换成完全不存在的景象", selected_object_refs=[f"clip:{state.clip.id}"])
     assert response.status_code == 409, response.text
     assert queries == ["完全不存在的景象"]
-    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     assert _plan(current(state)) == _plan(before)
 
 
@@ -230,7 +235,7 @@ def test_typed_replacement_cannot_override_other_action_or_path(material_edit_st
     response = preview(state, command, selected_object_refs=[f"clip:{state.clip.id}"],
         replacement_asset_id=state.asset.id, replacement_segment_id=state.asset.segments[0].id)
     assert response.status_code == 409, response.text
-    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == []
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == []
     assert _plan(current(state)) == _plan(before)
 
 
@@ -263,7 +268,7 @@ def test_candidate_source_span_and_role_follow_existing_exact_speed_invariant(ma
     original = state.production.get_asset(state.workspace_id, clip.asset_id)
     original.segments = [replace(item, start_seconds=0, end_seconds=8) if item.id == clip.segment_id else item for item in original.segments]
     state.production._save_asset(original)
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.montage.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     asset = replace(state.asset, segments=[replace(state.asset.segments[0], usage_role=usage_role, start_seconds=0, end_seconds=length)])
     monkeypatch.setattr(state.production, "list_assets", lambda *_a, **_kw: [asset])

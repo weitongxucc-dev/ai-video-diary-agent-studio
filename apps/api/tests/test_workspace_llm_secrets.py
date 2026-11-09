@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from workspace_secret_test_fixtures import workspace_secrets_tool_double as workspace_secrets_tool_double
 from fastapi import HTTPException
 
 from app import workspace_settings as module
@@ -198,7 +199,8 @@ def test_settings_routes_scope_reads_and_writes_to_the_request_workspace(real_ke
             ),
             client=SimpleNamespace(host="127.0.0.1"),
         )
-        return main_module.update_runtime_settings(
+        return next(route.endpoint for route in main_module._runtime_settings_http_router(("update_runtime_settings",)).routes
+             if route.name == "update_runtime_settings")(
             request, RuntimeSettingsUpdateRequest(**payload)
         )
 
@@ -229,7 +231,8 @@ def test_settings_route_reports_a_refused_keychain_instead_of_success(monkeypatc
     )
 
     with pytest.raises(HTTPException) as refused:
-        main_module.update_runtime_settings(
+        next(route.endpoint for route in main_module._runtime_settings_http_router(("update_runtime_settings",)).routes
+             if route.name == "update_runtime_settings")(
             request, RuntimeSettingsUpdateRequest(llm_api_key="key-a")
         )
 
@@ -286,8 +289,8 @@ def test_topic_route_snapshot_reads_the_requesting_workspace():
     module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_model": "MiniMax-M3"})
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
 
-    snapshot = main_module._topic_route_snapshot("ws-a")
-    unconfigured = main_module._topic_route_snapshot("ws-b")
+    snapshot = main_module._workspace_llm_route_snapshot().snapshot("ws-a")
+    unconfigured = main_module._workspace_llm_route_snapshot().snapshot("ws-b")
 
     assert snapshot["availability"] == "unverified"
     assert snapshot["model_id"] == "MiniMax-M3"
@@ -320,7 +323,7 @@ def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
         client=SimpleNamespace(host="127.0.0.1"),
         headers={},
     )
-    main_module.update_assistant_conversation(
+    main_module._conversation_http_adapter().update(
         conversation["id"], request, AssistantConversationUpdateRequest(
             draft_text="帮我列个提纲", expected_draft_version=conversation["draft_version"],
         ),
@@ -328,7 +331,7 @@ def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
     conversation = main_module.conversation_repo.get(conversation["id"], "ws-a", "u")
     assert conversation is not None and conversation["draft_text"] == "帮我列个提纲"
 
-    response = main_module.workspace_assistant_plan_turn(
+    response = next(route.endpoint for route in main_module.app.routes if route.name == 'workspace_assistant_plan_turn')(
         request, WorkspaceAssistantPlanTurnRequest(
             conversation_id=conversation["id"], message="帮我列个提纲",
             client_request_id=str(uuid4()), expected_draft_version=conversation["draft_version"],

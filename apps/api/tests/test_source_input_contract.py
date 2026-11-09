@@ -11,11 +11,8 @@ import app.main as main_module
 from app.external_sources import FetchedWebPage
 from app.knowledge_web import snapshot_web_page
 from app.local_members import LocalMemberService
-from app.production import (
-    CreationPlanKnowledgeReference,
-    CreationPlanSourceReference,
-    ProductionRepository,
-)
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlanKnowledgeReference, CreationPlanSourceReference
 from app.source_repository import SourceRepository
 from app.sources import KnowledgeItem, SourceConnector, SourceItem
 
@@ -236,7 +233,7 @@ def test_topic_inputs_allow_reference_only_unknown_license_and_block_automation_
         )],
     )
     task = SimpleNamespace(id="topic-task", plan_id=plan.id, owner_user_id=owner_id)
-    prepared, references, _ = main_module._creation_task_topic_inputs(
+    prepared, references, _ = main_module._source_inputs_use_case().prepare(
         workspace, task, plan, cloud_egress=True,
     )
     assert [item.reference_id for item in prepared] == [
@@ -246,12 +243,12 @@ def test_topic_inputs_allow_reference_only_unknown_license_and_block_automation_
 
     repo.set_knowledge_item_use_state(workspace, knowledge.id, "not_for_automation")
     with pytest.raises(main_module._CreationTaskTopicPreflightError) as denied_knowledge:
-        main_module._creation_task_topic_inputs(workspace, task, plan, cloud_egress=False)
+        main_module._source_inputs_use_case().prepare(workspace, task, plan, cloud_egress=False)
     assert denied_knowledge.value.reason == "knowledge_use_restricted"
     repo.set_knowledge_item_use_state(workspace, knowledge.id, "available")
     repo.set_source_item_use_state(workspace, source.id, "not_for_automation")
     with pytest.raises(main_module._CreationTaskTopicPreflightError) as denied_source:
-        main_module._creation_task_topic_inputs(workspace, task, plan, cloud_egress=False)
+        main_module._source_inputs_use_case().prepare(workspace, task, plan, cloud_egress=False)
     assert denied_source.value.reason == "source_use_restricted"
 
 

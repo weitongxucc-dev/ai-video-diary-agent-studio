@@ -89,9 +89,9 @@ class CompoundEditUseCase:
     def prepare_preview(self, control: CompoundPreviewCommand):
         if not self.applicable(control.raw_command):
             return None
-        task = self.repository.get_creation_task(control.workspace_id, control.task_id)
+        task = self.repository.task_records.get_creation_task(control.workspace_id, control.task_id)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(control.workspace_id, task.id))
-        current = self.repository.get_timeline_version(control.workspace_id, control.base_version_id) if control.base_version_id else None
+        current = self.repository.timeline_records.get_timeline_version(control.workspace_id, control.base_version_id) if control.base_version_id else None
         tracks = self.montage_edits.current_subtitle_tracks(control.workspace_id, task, current_version=current, montage=plan)
         calculated = calculate_compound_edit(plan, tracks, effective_audio_timeline(plan),
             raw_command=control.raw_command, selected_refs=control.selected_object_refs,
@@ -102,7 +102,7 @@ class CompoundEditUseCase:
         service = self.montage_edits.audio_service
         service.validate(control.workspace_id, task.id, calculated.plan.audio_timeline, calculated.plan.duration_seconds, draft_only=True)
         base = current if current is not None else self.montage_edits.ensure_montage_base(control.workspace_id, task, plan)
-        task = self.repository.get_creation_task(control.workspace_id, task.id)
+        task = self.repository.task_records.get_creation_task(control.workspace_id, task.id)
         command = EditCommand(control.workspace_id, task.id, control.actor_identity, base.id,
             'EditCompoundTimeline', {'base_version_id': base.id}, control.source)
         verifier = EditSourceVerifier(self.repository, identity=command.actor_identity,
@@ -114,13 +114,13 @@ class CompoundEditUseCase:
         return PreparedCompoundEdit(task, base, plan, tracks, calculated, command, intent, proposal)
 
     def save_preview(self, prepared: PreparedCompoundEdit):
-        return self.repository.save_clip_preview_proposal(prepared.intent, prepared.proposal,
+        return self.repository.edit_adoption.save_clip_preview_proposal(prepared.intent, prepared.proposal,
             expected_version_id=prepared.base.id)
 
     def prepare_selection(self, control: CompoundSelectionCommand):
-        task = self.repository.get_creation_task(control.workspace_id, control.task_id)
+        task = self.repository.task_records.get_creation_task(control.workspace_id, control.task_id)
         try:
-            proposal = self.repository.get_edit_proposal(control.workspace_id, control.proposal_id)
+            proposal = self.repository.edit_records.get_edit_proposal(control.workspace_id, control.proposal_id)
         except KeyError as exc:
             raise CompoundProposalMissing('修改提案不存在') from exc
         if proposal.task_id != task.id:
@@ -136,16 +136,16 @@ class CompoundEditUseCase:
             included = control.included_step_indices if control.raw_command is None else compile_compound_selection(control.raw_command, data['steps'])
         except ValueError as exc:
             raise CompoundSelectionInputError(str(exc)) from exc
-        intent = self.repository.get_edit_intent(control.workspace_id, proposal.intent_id)
+        intent = self.repository.edit_records.get_edit_intent(control.workspace_id, proposal.intent_id)
         return self.prepare_preview(CompoundPreviewCommand(control.workspace_id, task.id, control.actor_identity,
             data['base_version_id'], intent.raw_command, intent.context_stage, intent.scope['context_refs'],
             intent.playhead_ms, included, control.raw_command, control.source))
 
     def _binding(self, command: EditCommand, proposal_id):
-        task = self.repository.get_creation_task(command.workspace_id, command.task_id)
+        task = self.repository.task_records.get_creation_task(command.workspace_id, command.task_id)
         check_command(task, EditCommand(command.workspace_id, command.task_id, command.actor_identity,
             task.current_timeline_version_id, 'Compound', {}))
-        proposal = self.repository.get_edit_proposal(command.workspace_id, proposal_id)
+        proposal = self.repository.edit_records.get_edit_proposal(command.workspace_id, proposal_id)
         if proposal.task_id != command.task_id:
             raise KeyError(proposal_id)
         payload = proposal.operation.get('payload')
@@ -153,7 +153,7 @@ class CompoundEditUseCase:
             raise EditConflict('提案不是复合编辑')
         if command.operation_type != 'EditCompoundTimeline' or command.values != payload:
             raise EditConflict('原复合提案输入已变化')
-        intent = self.repository.get_edit_intent(command.workspace_id, proposal.intent_id)
+        intent = self.repository.edit_records.get_edit_intent(command.workspace_id, proposal.intent_id)
         source = intent.constraints.get('request_source')
         if source != command.source:
             raise EditConflict('原提案来源已变化')
@@ -164,12 +164,12 @@ class CompoundEditUseCase:
 
     def read_result(self, command: EditCommand, proposal_id):
         task, proposal, _intent = self._binding(command, proposal_id)
-        operations = [item for item in self.repository.list_edit_operations(command.workspace_id, task.id)
+        operations = [item for item in self.repository.edit_records.list_edit_operations(command.workspace_id, task.id)
             if item.proposal_id == proposal.id]
         if not operations:
             return None
         operation = operations[0]
-        version = self.repository.get_timeline_version(command.workspace_id, operation.result_version_id)
+        version = self.repository.timeline_records.get_timeline_version(command.workspace_id, operation.result_version_id)
         montage = creation_task_montage_plan_from_payload(version.snapshot['montage'])
         return MetadataEditResult(operation, montage, task, None)
 
@@ -181,7 +181,7 @@ class CompoundEditUseCase:
         if task.current_timeline_version_id != operation_payload.get('base_version_id'):
             raise EditConflict('时间线已变化，请重新预览全部修改')
         montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(command.workspace_id, task.id))
-        base = self.repository.get_timeline_version(command.workspace_id, task.current_timeline_version_id)
+        base = self.repository.timeline_records.get_timeline_version(command.workspace_id, task.current_timeline_version_id)
         tracks = self.montage_edits.current_subtitle_tracks(command.workspace_id, task, current_version=base, montage=montage)
         bound = intent.constraints.get('affected_source_scope')
         if bound is None:
@@ -238,12 +238,12 @@ class CompoundEditUseCase:
             raise PicturePreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else "复合修改预览失败，请检查来源后重试") from exc
 
     def prepare_source(self, workspace_id, task_id, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         plan_payload = self.repository.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None
@@ -254,13 +254,13 @@ class CompoundEditUseCase:
         picture_candidates = [plan] if plan is not None else []
         compound_proposal = None
         if plan is not None and arguments.get('_media_kind') == 'picture_preview':
-            proposal = self.repository.get_edit_proposal(workspace_id, arguments['proposal_id'])
+            proposal = self.repository.edit_records.get_edit_proposal(workspace_id, arguments['proposal_id'])
             selection = CompoundEditSelectionRequest.model_validate(payload)
             data = proposal.operation.get('payload', {})
             if proposal.task_id != task_id or proposal.status != 'proposed' or proposal.operation.get('operation_type') != 'EditCompoundTimeline' or (not data.get('selection_enabled')) or (data.get('base_version_id') != task.current_timeline_version_id):
                 raise ValueError('当前复合修改提案已失效，不能封存预览')
             included = selection.included_step_indices if selection.raw_command is None else compile_compound_selection(selection.raw_command, data['steps'])
-            intent = self.repository.get_edit_intent(workspace_id, proposal.intent_id)
+            intent = self.repository.edit_records.get_edit_intent(workspace_id, proposal.intent_id)
             command_payload = {'raw_command': intent.raw_command, 'selected_object_refs': intent.scope['context_refs'], 'playhead_ms': intent.playhead_ms}
             compound_proposal = json.loads(_json_object(asdict(proposal)))
             compiled = compile_compound_edit(command_payload['raw_command'], plan, effective_audio_timeline(plan), command_payload.get('selected_object_refs', []), task.current_timeline_version_id, command_payload.get('playhead_ms'), included)
@@ -285,7 +285,7 @@ class CompoundEditUseCase:
                     files.append(fact)
                 values = service.source_metadata(workspace_id, task_id, reference)
                 audio_inputs.append({'reference': reference, 'path': str(path.resolve()), 'size_bytes': stat.st_size, 'uses': audio_uses.get(reference, 1), **values})
-        facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id, 'script_digest': self.repository.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None, 'plan_id': task.plan_id, 'plan_digest': media_digest(asdict(self.repository.get_creation_plan(workspace_id, task.plan_id))), 'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
+        facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id, 'script_digest': self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None, 'plan_id': task.plan_id, 'plan_digest': media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))), 'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
         if graphics:
             facts['graphic_sources'] = graphics
         if compound_proposal is not None:

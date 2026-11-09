@@ -7,6 +7,7 @@ def test_section_business_defers_to_original_dependencies_after_unrelated_head_c
     from types import SimpleNamespace
     from threading import Event
     from app.assistant.task_business import TaskBusiness, TaskBusinessRejected
+    from app.assistant.task_business_adapter import TaskBusinessAdapter
     case = object.__new__(TaskBusiness)
     binding = {'turn_id':'turn', 'input_id':'input', 'task_version':{'timeline_version_id':'read-version'}}
     original = {'input_id':'input', 'base_version_id':'read-version', 'dependency_digest':'read-target-digest'}
@@ -15,7 +16,7 @@ def test_section_business_defers_to_original_dependencies_after_unrelated_head_c
         if revoked:
             raise TaskBusinessRejected('原授权已撤销')
         if check_version:
-            raise TaskBusinessRejected('整片HEAD已由另一段发布推进', status_code=409)
+            raise TaskBusinessRejected('整片HEAD已由另一段发布推进', kind='conflict')
         return None, SimpleNamespace(id='task'), None, {'input_id':'input'}, None
     def owner(operation, args, actor, task, goal, origin, sealed, guard):
         guard(None)
@@ -25,7 +26,7 @@ def test_section_business_defers_to_original_dependencies_after_unrelated_head_c
         return {'request_id':'original-request', 'status':'queued'}
     case.check, case.execute = authorize, owner
     def invoke(operation):
-        return case(operation, {'payload':dict(original)}, call_id='call', tool_call_id='tool',
+        return TaskBusinessAdapter(case)(operation, {'payload':dict(original)}, call_id='call', tool_call_id='tool',
             source_binding=binding, cancel_event=Event(), deadline_monotonic=float('inf'))
     assert invoke('revise_narration_segment')['value']['request_id'] == 'original-request'
     assert not invoke('save_assistant_script_draft')['ok']
@@ -216,10 +217,12 @@ def test_restart_reconciles_original_input_request_without_replaying_it(tmp_path
     assert item['status']=='consumed' and item['reason']=='read_original_input_request'
     with restarted._connect() as conn:
         assert restarted._goal_origin_current(conn,restarted._goal_root(conn,claim['turn_id']))
-    reads=[]; observed={'available':submission_state!='result_unknown','status':'queued'}
+    reads=[]
+    observed={'available':submission_state!='result_unknown','status':'queued'}
     def read_request(ws,task,request_id,actor):
         reads.append(request_id)
-        if not observed['available']: raise KeyError(request_id)
+        if not observed['available']:
+            raise KeyError(request_id)
         return {'task_id':task,'request_id':request_id,'input_id':'edit','section_id':'first',
             'job_id':'original-revision-job','status':observed['status']}
     bound=SimpleNamespace(original=lambda goal:(object(),SimpleNamespace(workspace_id='w',id='t'),{}),

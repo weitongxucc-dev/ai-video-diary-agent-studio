@@ -10,18 +10,35 @@ from pathlib import Path
 
 import pytest
 
-from app.production import (
-    CreationPlan,
-    CreationTask,
-    ProductionRepository,
-    VideoTemplate,
-    content_readable,
-)
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.source_policy import knowledge_item_readable as content_readable
+from app.creation.contracts import CreationTask
 
 ALICE = "member-alice"
 BOB = "member-bob"
 WORKSPACE = "workspace-110"
 LOCAL = "local"
+
+
+@pytest.fixture(autouse=True)
+def no_read_identity_execution(monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
+    import subprocess
+    import _media_preview_test_fixtures as media_fixtures
+    from app.material_ingestion import MaterialHashUnitExecutor, MaterialIngestionService
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("read identity verification must not execute media, models or drivers")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(media_fixtures, "write_synthetic_video", forbidden)
+    monkeypatch.setattr(MaterialHashUnitExecutor, "execute", forbidden)
+    monkeypatch.setattr(MaterialIngestionService, "start", forbidden)
+    assert subprocess.Popen is forbidden
+    assert media_fixtures.write_synthetic_video is forbidden
 
 
 @pytest.fixture
@@ -69,15 +86,15 @@ def task_for(workspace_id: str, plan_id: str, task_id: str = "task-1") -> Creati
 def test_task_and_plan_owner_binds_to_verified_identity_and_is_not_self_reported(
     production: ProductionRepository,
 ) -> None:
-    plan, task = production.confirm_creation_plan(
+    plan, task = production.plan_confirmation.confirm_creation_plan(
         plan_for(WORKSPACE), task_for(WORKSPACE, "plan-1"),
         verified_owner_user_id=ALICE,
     )
     # 归属来自已验证身份并随持久化回读。
     assert plan.owner_user_id == ALICE
     assert task.owner_user_id == ALICE
-    assert production.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == ALICE
-    assert production.get_creation_task(WORKSPACE, "task-1").owner_user_id == ALICE
+    assert production.plan_records.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == ALICE
+    assert production.task_records.get_creation_task(WORKSPACE, "task-1").owner_user_id == ALICE
 
     # 私有只对上传者：另一位成员读不到。
     assert content_readable(
@@ -88,13 +105,13 @@ def test_task_and_plan_owner_binds_to_verified_identity_and_is_not_self_reported
     ) is True
     # 显式共享后对成员可读；收回共享立即对他人失效。
     production.set_creation_plan_visibility(WORKSPACE, "plan-1", "shared")
-    production.set_creation_task_visibility(WORKSPACE, "task-1", "shared")
-    shared = production.get_creation_task(WORKSPACE, "task-1")
+    production.task_records.set_creation_task_visibility(WORKSPACE, "task-1", "shared")
+    shared = production.task_records.get_creation_task(WORKSPACE, "task-1")
     assert content_readable(
         user_id=BOB, local_diagnostic=False, visibility=shared.visibility, owner_user_id=shared.owner_user_id
     ) is True
-    production.set_creation_task_visibility(WORKSPACE, "task-1", "private")
-    revoked = production.get_creation_task(WORKSPACE, "task-1")
+    production.task_records.set_creation_task_visibility(WORKSPACE, "task-1", "private")
+    revoked = production.task_records.get_creation_task(WORKSPACE, "task-1")
     assert content_readable(
         user_id=BOB, local_diagnostic=False, visibility=revoked.visibility, owner_user_id=revoked.owner_user_id
     ) is False
@@ -104,11 +121,11 @@ def test_template_owner_binds_and_survives_version_save(production: ProductionRe
     template = VideoTemplate(
         id="tpl-1", workspace_id=WORKSPACE, version=1, name="我的模板", origin="user", settings={}
     )
-    saved = production.save_video_template(template, verified_owner_user_id=ALICE)
+    saved = production.video_templates.save_video_template(template, verified_owner_user_id=ALICE)
     assert saved.owner_user_id == ALICE
-    assert production.get_video_template(WORKSPACE, "tpl-1", 1).owner_user_id == ALICE
+    assert production.video_templates.get_video_template(WORKSPACE, "tpl-1", 1).owner_user_id == ALICE
     # 后续版本不覆盖已有归属。
-    v2 = production.save_video_template(
+    v2 = production.video_templates.save_video_template(
         VideoTemplate(id="tpl-1", workspace_id=WORKSPACE, version=2, name="我的模板", origin="user", settings={}),
         verified_owner_user_id=BOB,
     )
@@ -117,11 +134,11 @@ def test_template_owner_binds_and_survives_version_save(production: ProductionRe
 
 def test_local_members_in_one_workspace_are_isolated_by_member_id(production: ProductionRepository) -> None:
     # 本地产品多名成员同处 local：私有按 member_id 隔离，不因有令牌就全量可见。
-    production.confirm_creation_plan(
+    production.plan_confirmation.confirm_creation_plan(
         plan_for(LOCAL), task_for(LOCAL, "plan-1"),
         verified_owner_user_id="member-owner",
     )
-    task = production.get_creation_task(LOCAL, "task-1")
+    task = production.task_records.get_creation_task(LOCAL, "task-1")
     assert content_readable(
         user_id="member-other", local_diagnostic=False, visibility=task.visibility, owner_user_id=task.owner_user_id
     ) is False
@@ -136,14 +153,20 @@ def test_local_members_in_one_workspace_are_isolated_by_member_id(production: Pr
 
 def test_confirm_without_verified_identity_keeps_legacy_ownerless_row(production: ProductionRepository) -> None:
     # legacy 调用不传身份：归属留空，不被算成任何成员的私有资产，且不报错。
-    plan, task = production.confirm_creation_plan(plan_for(WORKSPACE), task_for(WORKSPACE, "plan-1"))
+    plan, task = production.plan_confirmation.confirm_creation_plan(plan_for(WORKSPACE), task_for(WORKSPACE, "plan-1"))
     assert plan.owner_user_id is None
     assert task.owner_user_id is None
-    assert production.get_creation_task(WORKSPACE, "task-1").owner_user_id is None
+    assert production.task_records.get_creation_task(WORKSPACE, "task-1").owner_user_id is None
 
 
 def test_content_readable_matches_the_knowledge_domain_rule() -> None:
-    # 转发同一规则，不是第二套：无身份不可读、未知范围保守、local 仅诊断范围可见。
+    from app import production as production_module
+    from app.source_policy import knowledge_item_readable
+
+    assert content_readable is knowledge_item_readable
+    assert production_module._content_readable is knowledge_item_readable
+    assert not hasattr(production_module, "content_readable")
+    # 直接绑定唯一规则：无身份不可读、未知范围保守、local 仅诊断范围可见。
     assert content_readable(
         user_id=None, local_diagnostic=False, visibility="shared", owner_user_id="x"
     ) is False
@@ -162,24 +185,24 @@ def test_self_reported_owner_is_ignored_on_create_and_on_a_new_template(
 
     forged = replace(plan_for(WORKSPACE), owner_user_id=ALICE)
     forged_task = replace(task_for(WORKSPACE, "plan-1"), owner_user_id=ALICE)
-    plan, task = production.confirm_creation_plan(
+    plan, task = production.plan_confirmation.confirm_creation_plan(
         forged, forged_task, verified_owner_user_id=BOB
     )
 
     assert plan.owner_user_id == BOB
     assert task.owner_user_id == BOB
-    assert production.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == BOB
-    assert production.get_creation_task(WORKSPACE, "task-1").owner_user_id == BOB
+    assert production.plan_records.get_creation_plan(WORKSPACE, "plan-1").owner_user_id == BOB
+    assert production.task_records.get_creation_task(WORKSPACE, "task-1").owner_user_id == BOB
 
     # 没有可验证身份时，自填的归属也不算数：不算任何成员的私有内容。
     other = replace(plan_for("ws-2", plan_id="plan-unowned"), owner_user_id=ALICE)
     other_task = replace(task_for("ws-2", "plan-unowned", task_id="task-unowned"), owner_user_id=ALICE)
-    unowned_plan, unowned_task = production.confirm_creation_plan(other, other_task)
+    unowned_plan, unowned_task = production.plan_confirmation.confirm_creation_plan(other, other_task)
     assert unowned_plan.owner_user_id is None
     assert unowned_task.owner_user_id is None
 
     # 新模板同样不继承输入里的 owner_user_id。
-    saved = production.save_video_template(
+    saved = production.video_templates.save_video_template(
         VideoTemplate(
             id="tpl-forged", workspace_id=WORKSPACE, version=1, name="伪造归属",
             origin="user", settings={}, owner_user_id=ALICE,
@@ -187,4 +210,4 @@ def test_self_reported_owner_is_ignored_on_create_and_on_a_new_template(
         verified_owner_user_id=BOB,
     )
     assert saved.owner_user_id == BOB
-    assert production.get_video_template(WORKSPACE, "tpl-forged", 1).owner_user_id == BOB
+    assert production.video_templates.get_video_template(WORKSPACE, "tpl-forged", 1).owner_user_id == BOB

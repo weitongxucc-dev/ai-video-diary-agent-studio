@@ -202,7 +202,9 @@ def test_main_consumers_read_original_space_and_recheck_fixed_reference_grants(t
     from dataclasses import replace
     from fastapi.testclient import TestClient
     import app.main as main
-    from app.production import CreationTask, ProductionRepository
+    from app.creation.script_library_use_case import ScriptLibrarySource
+    from app.creation.contracts import CreationTask
+    from app.production import ProductionRepository
 
     ctx = build_granted_pair(tmp_path)
     repo, item = ctx["repo"], ctx["item"]
@@ -239,23 +241,24 @@ def test_main_consumers_read_original_space_and_recheck_fixed_reference_grants(t
     request = Request({
         "type": "http", "headers": [(b"x-local-member-token", ctx["token_b"].encode())],
     })
-    plan = main._creation_plan_preflight(request, target_space, main.CreationPlanPreviewRequest(**payload))
+    plan = main._creation_plan_preflight_http_adapter().preflight(request, target_space, main.CreationPlanPreviewRequest(**payload))
     plan.knowledge_references[0] = replace(plan.knowledge_references[0], version="1")
     task = CreationTask(id="fixed-task", workspace_id=target_space, plan_id=plan.id,
                         name="固定引用", scenario="knowledge_explanation", owner_user_id=ctx["reader"].member_id)
     # Read-only input assembly: no model, worker or production write.
-    provider_sources, references, _ = main._creation_task_topic_inputs(target_space, task, plan, cloud_egress=False)
+    provider_sources, references, _ = main._source_inputs_use_case().prepare(target_space, task, plan, cloud_egress=False)
     assert provider_sources[0].text == "第一版原文"
     assert references[0]["version_or_identity"] == "1"
-    facts = main.ScriptLibrarySourceResponse(reference_id=f"knowledge:{item.id}:1", status="readable")
-    main._attach_cited_version_facts(facts, repo, detail.json()["workspace_id"], item.id, "1")
+    facts = ScriptLibrarySource(reference_id=f"knowledge:{item.id}:1", status="readable")
+    main._script_library_use_case(request)._attach_cited_version_facts(
+        facts, detail.json()["workspace_id"], item.id, "1")
     assert facts.cited_version == "1" and facts.cited_content_hash == "hash-v1"
     repo.revoke_knowledge_grant(source_space, item.id, grant.id, user_id=ctx["uploader"].member_id)
     assert client.get("/api/knowledge-items", headers=headers).json()["items"] == []
     assert client.get(f"/api/knowledge-items/{item.id}", headers=headers).status_code == 404
     assert client.post("/api/creation-plans/preview", headers=headers, json=payload).json()["knowledge_references"] == []
     with pytest.raises(main._CreationTaskTopicPreflightError) as blocked:
-        main._creation_task_topic_inputs(target_space, task, plan, cloud_egress=False)
+        main._source_inputs_use_case().prepare(target_space, task, plan, cloud_egress=False)
     assert blocked.value.reason == "knowledge_reference_missing"
     client.close()
     assert repo.get_knowledge_item(source_space, item.id).owner_user_id == ctx["uploader"].member_id

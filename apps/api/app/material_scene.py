@@ -556,3 +556,22 @@ def run_scene_probe(
 
     ordered = sorted(results, key=lambda segment: segment.index)
     return tuple(scene for segment in ordered for scene in segment.scenes)
+
+
+@dataclass(frozen=True)
+class MaterialSceneCandidate:
+    workspace_id: str
+    asset_id: str
+    file_path: str
+    source_sha256: str
+    provisional_revision: str
+    probe_result_ref: str
+    video_stream_index: int
+    video_codec: str
+    video_width_px: int
+    video_height_px: int
+    source_frame_rate_fps: float | None
+    duration_seconds: float
+    size_bytes: int
+    window: SceneWindow
+    unit_key: str

@@ -49,10 +49,10 @@ def test_segment_usage_role_updates_only_its_derived_system_tag(tmp_path: Path) 
     assert updated.system_tags == ["主体:人物", "场景:办公", "用途:a_roll"]
     assert updated.user_tags == ["人工校正"]
     assert updated.transcript == "保留转写"
-    assert [item.segment_ref for item in repo.search_material_segments(
+    assert [item.segment_ref for item in repo.material_search.search_material_segments(
         "workspace-one", tags=["用途:a_roll"],
     )] == ["segment:segment-one"]
-    assert repo.search_material_segments("workspace-one", tags=["用途:b_roll"]) == []
+    assert repo.material_search.search_material_segments("workspace-one", tags=["用途:b_roll"]) == []
 
     unchanged_role = repo.update_segment(
         "workspace-one", "asset-one", "segment-one",

@@ -7,6 +7,7 @@ import app.main as main
 from app.local_members import LocalMemberService
 from app.production import MaterialVersionConflict
 from test_material_tag_navigation import make_repo, register, WORKSPACE
+from test_content_visibility_routes import material_library_no_execution
 
 
 def prepared(tmp_path):
@@ -45,6 +46,7 @@ def test_same_frozen_revision_only_one_atomic_material_writer_wins(tmp_path, sco
 
 
 def test_segment_revision_conflict_rolls_back_all_fields_and_api_is_409(tmp_path, monkeypatch):
+    material_library_no_execution(monkeypatch)
     repo, original=prepared(tmp_path)
     segment=original.segments[0]
     current=repo.update_segment(WORKSPACE,original.id,segment.id,description="并发修订",transcript="新记录",review_status="raw",user_tags=["其他人的新标签"])

@@ -2,7 +2,6 @@
 from dataclasses import asdict, dataclass, replace
 from collections import Counter
 from copy import deepcopy
-from pathlib import Path
 import re
 import subprocess
 from uuid import uuid4
@@ -34,6 +33,18 @@ class AudioEditUseCase:
         self.repository, self.audio, self.montage_edits = repository, audio, montage_edits
         self.execution_mode = execution_mode
 
+    def prepare_queued_preview(self, task, actor, values, *, facts, verify_identity):
+        if task.montage_plan_id and task.current_timeline_version_id is None:
+            workspace_id, task_id = task.workspace_id, task.id
+            facts(workspace_id, task_id, 'audio_edit_preview', values, actor)
+            if verify_identity(actor) != 'ready':
+                raise PermissionError('媒体处理身份失效或无法复核')
+            plan = creation_task_montage_plan_from_payload(
+                self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+            base = self.montage_edits.ensure_montage_base(workspace_id, task, plan)
+            values['payload']['base_version_id'] = base.id
+        return values
+
     @staticmethod
     def handles(operation, arguments):
         if operation == 'audio_edit_preview':
@@ -64,7 +75,7 @@ class AudioEditUseCase:
         return {'member_id':actor.user_id or actor.member_id,'user_id':actor.user_id,'local_diagnostic':False}
 
     def preview(self, workspace_id, task_id, payload, actor, *, draft_only, context=None, job=None, event=None, source=None):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if task.current_timeline_version_id != payload.base_version_id:
             raise AudioEditRejected(status_code=409, detail='时间线已经变化，请刷新后重新预览音频修改')
         try:
@@ -91,11 +102,11 @@ class AudioEditUseCase:
                 original_ref = next((clip.source_ref for track in before.tracks if track.role == 'narration' for clip in track.clips))
                 service.source(workspace_id, task_id, original_ref, actor=actor)
                 if original_ref.startswith('narration://artifact/'):
-                    if original_ref != self.repository.narration_artifact_reference(task.narration_cache_key or ''):
+                    if original_ref != self.repository.narration_artifacts.narration_artifact_reference(task.narration_cache_key or ''):
                         raise ValueError('当前旁白引用与任务版本不一致，请刷新后重试')
                     before_url = f'/api/creation-tasks/{task_id}/narration/audio'
                 else:
-                    original = next((record for record in self.repository.list_artifact_records(workspace_id, task_id) if record.logical_ref == original_ref))
+                    original = next((record for record in self.repository.execution_records.list_artifact_records(workspace_id, task_id) if record.logical_ref == original_ref))
                     before_url = f'/api/creation-tasks/{task_id}/audio/artifacts/{original.id}'
                 preview_media = {'before': {'ref': original_ref, 'label': '当前旁白', 'detail': '当前版本的完整旁白', 'audio_url': before_url}, 'after': {'ref': source_ref, 'label': '本次电脑录音', 'detail': '确认后替换整条旁白；画面时长不变', 'audio_url': f'/api/creation-tasks/{task_id}/audio/artifacts/{recording.id}'}}
                 start = 0.0
@@ -114,15 +125,15 @@ class AudioEditUseCase:
                 raise
             detail = str(exc) if isinstance(exc, ValueError) else '本地音频预览失败，请检查源文件、FFmpeg 与外接盘'
             raise AudioEditRejected(status_code=422, detail=detail) from exc
-        if self.repository.get_creation_task(workspace_id, task_id).current_timeline_version_id != payload.base_version_id:
+        if self.repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id != payload.base_version_id:
             raise AudioEditRejected(status_code=409, detail='试听生成期间时间线发生变化，请重新预览')
         base = self.montage_edits.ensure_montage_base(workspace_id, task, plan, source=source)
-        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=payload.raw_command, context_stage='montage', selected_object_refs=[f'audio:{payload.target_id}'], playhead_ms=round(start * 1000), intent_type='edit_audio', scope={'kind': 'audio', 'target_id': payload.target_id}, constraints={'preserve_video': True, 'audio_source_facts': self.source_facts(task, before, after, actor)}, confidence=1, status='interpreted'), source=source)
+        intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=payload.raw_command, context_stage='montage', selected_object_refs=[f'audio:{payload.target_id}'], playhead_ms=round(start * 1000), intent_type='edit_audio', scope={'kind': 'audio', 'target_id': payload.target_id}, constraints={'preserve_video': True, 'audio_source_facts': self.source_facts(task, before, after, actor)}, confidence=1, status='interpreted'), source=source)
         labels = {'add': '添加音频片段', 'update': '修改音频片段', 'delete': '删除音频片段（保留时间空隙）', 'split': '分割音频片段', 'duplicate': '复制音频片段', 'track': '修改音轨设置', 'replace_narration': '用本机录音替换整条旁白'}
         summary = labels[payload.action]
         if payload.action == 'add' and any((track.id == payload.target_id and track.role == 'original' for track in before.tracks)):
             summary = '添加原声，与现有音轨混合；画面和配音不变'
-        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f'audio:{payload.target_id}'], operation={'operation_type': 'EditAudioTimeline', 'payload': {'base_version_id': base.id, 'audio_timeline': after.model_dump(), 'edit': edit.model_dump(), 'expected_audio_timeline': before.model_dump(), **({'recording_duration_ms': measured_ms, 'recording_sha256': recording.sha256, 'recording_file_signature': recording_file_signature} if payload.action == 'replace_narration' else {})}}, invalidated_refs=logical_montage_output_refs(plan), preview=preview_media, external_effects=['新录音使用原画面与字幕时轴；确认后旧成片失效，需核对字幕与重新渲染。'] if payload.action == 'replace_narration' else []))
+        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f'audio:{payload.target_id}'], operation={'operation_type': 'EditAudioTimeline', 'payload': {'base_version_id': base.id, 'audio_timeline': after.model_dump(), 'edit': edit.model_dump(), 'expected_audio_timeline': before.model_dump(), **({'recording_duration_ms': measured_ms, 'recording_sha256': recording.sha256, 'recording_file_signature': recording_file_signature} if payload.action == 'replace_narration' else {})}}, invalidated_refs=logical_montage_output_refs(plan), preview=preview_media, external_effects=['新录音使用原画面与字幕时轴；确认后旧成片失效，需核对字幕与重新渲染。'] if payload.action == 'replace_narration' else []))
         return AudioEditPreviewResult(intent, proposal)
 
     def source_facts(self, task, before, after, actor):
@@ -142,7 +153,7 @@ class AudioEditUseCase:
             raise AudioEditRejected(409,'音频提案不再适用，请检查源文件并重新预览')
         edit = AudioEditRequest.model_validate(payload['edit'])
         after = AudioTimeline.model_validate(payload['audio_timeline'])
-        intent = self.repository.get_edit_intent(task.workspace_id,proposal.intent_id)
+        intent = self.repository.edit_records.get_edit_intent(task.workspace_id,proposal.intent_id)
         expected = intent.constraints.get('audio_source_facts')
         if expected is None:
             raise AudioEditRejected(409,'原音频提案未绑定完整来源，请重新预览')
@@ -155,16 +166,18 @@ class AudioEditUseCase:
         try:
             if edit.action == 'replace_narration':
                 self.verify_recording(task,plan,payload,edit,after,actor)
-                changed = deepcopy(plan);changed.audio_timeline=after
+                changed = deepcopy(plan)
+                changed.audio_timeline=after
             else:
                 plan.audio_timeline=before
                 changed=apply_audio_metadata(task,plan,command,validate_sources=lambda graph,duration:
                     self.audio.validate(task.workspace_id,task.id,graph,duration,draft_only=True,actor=actor))
         except (KeyError,ValueError,OSError,subprocess.SubprocessError) as exc:
-            if isinstance(exc,AudioEditRejected):raise
+            if isinstance(exc,AudioEditRejected):
+                raise
             raise AudioEditRejected(409,'音频提案不再适用，请检查源文件并重新预览') from exc
         prepare_changed_montage(changed,message='音轨已更新，可以试听或重新渲染成片。')
-        base=self.repository.get_timeline_version(task.workspace_id,task.current_timeline_version_id)
+        base=self.repository.timeline_records.get_timeline_version(task.workspace_id,task.current_timeline_version_id)
         guard=AudioEditSourceGuard(self,task,proposal,actor,before,expected,verifier)
         return self.montage_edits.persist_montage_edit(workspace_id=task.workspace_id,task=task,proposal=proposal,
             base_version=base,updated_plan=changed,operation_type='EditAudioTimeline',operation_payload=payload,
@@ -176,7 +189,8 @@ class AudioEditUseCase:
         if any(clip.person_render_id for clip in plan.clips):
             raise ValueError('当前人物口型依赖旧配音，请先移除或重做口型')
         source_ref=edit.values.get('source_ref')
-        if not isinstance(source_ref,str):raise ValueError('录音引用无效')
+        if not isinstance(source_ref,str):
+            raise ValueError('录音引用无效')
         recording,measured_ms=self.audio.recording(task.workspace_id,task.id,source_ref,actor=actor)
         stat=self.audio.artifact_store.resolve_file(recording.logical_ref).stat()
         duration_ms=round(plan.duration_seconds*1000)
@@ -187,7 +201,7 @@ class AudioEditUseCase:
             raise ValueError('录音或旁白替换提案已变化，请重新预览')
 
     def original_clip(self, workspace_id, task_id, payload, actor, *, draft_only, context=None, job=None, event=None, source=None):
-        task=self.repository.get_creation_task(workspace_id,task_id)
+        task=self.repository.task_records.get_creation_task(workspace_id,task_id)
         plan,clip,track,start,end,reference=self.original_inputs(task,payload)
         if context is None:
             raise TaskMediaRequired('audio_stretch')
@@ -212,13 +226,18 @@ class AudioEditUseCase:
             raise AudioEditRejected(422,'请先选择一个镜头，再提取原声。')
         plan=creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(task.workspace_id,task.id))
         clip=next((item for item in plan.clips if item.id==refs[0][5:]),None)
-        if clip is None:raise AudioEditRejected(404,'所选镜头不存在。')
-        if clip.person_render_id:raise AudioEditRejected(409,'生成口型片段使用的是配音；提取真实原声请先选择原视频镜头。')
+        if clip is None:
+            raise AudioEditRejected(404,'所选镜头不存在。')
+        if clip.person_render_id:
+            raise AudioEditRejected(409,'生成口型片段使用的是配音；提取真实原声请先选择原视频镜头。')
         tracks=[track for track in effective_audio_timeline(plan).tracks if track.role=='original']
-        if len(tracks)!=1:raise AudioEditRejected(409,'需要唯一的原声音轨才能添加镜头原声。')
+        if len(tracks)!=1:
+            raise AudioEditRejected(409,'需要唯一的原声音轨才能添加镜头原声。')
         track=tracks[0]
-        if clip.locked or track.locked:raise AudioEditRejected(409,'镜头或原声音轨已锁定，请先解锁。')
-        if track.muted:raise AudioEditRejected(409,'原声音轨已静音，请先取消静音再预览。')
+        if clip.locked or track.locked:
+            raise AudioEditRejected(409,'镜头或原声音轨已锁定，请先解锁。')
+        if track.muted:
+            raise AudioEditRejected(409,'原声音轨已静音，请先取消静音再预览。')
         start,end=round(clip.timeline_start_seconds*1000),round(clip.timeline_end_seconds*1000)
         if any(item.timeline_start_ms<end and item.timeline_start_ms+item.duration_ms>start for item in track.clips):
             raise AudioEditRejected(409,'该范围已有原声，请编辑现有音频片段，避免重复叠加。')
@@ -227,7 +246,8 @@ class AudioEditUseCase:
         return plan,clip,track,start,end,reference
 
     def execute(self, job, event, actor, context):
-        arguments=event['arguments'];operation=event['operation']
+        arguments=event['arguments']
+        operation=event['operation']
         source=arguments.get('_typed_source')
         if source is not None:
             source={**source,'media_job_id':job.id,'actor_identity':actor.identity_payload()}
@@ -236,7 +256,7 @@ class AudioEditUseCase:
             result=self.original_clip(job.workspace_id,job.task_id,arguments['payload'],actor,draft_only=draft,
                 context=context,job=job,event=event,source=source)
         else:
-            task=self.repository.get_creation_task(job.workspace_id,job.task_id)
+            task=self.repository.task_records.get_creation_task(job.workspace_id,job.task_id)
             edit=self.edit_from_arguments(task,operation,arguments)
             result=self.preview(job.workspace_id,job.task_id,edit,actor,draft_only=draft,context=context,job=job,event=event,source=source)
         return {'intent':asdict(result.intent),'proposal':asdict(result.proposal)}
@@ -247,38 +267,43 @@ class AudioEditUseCase:
         return owner.validate_result(job,event,result,context)
 
     def seal(self, workspace_id, task_id, operation, arguments, actor, budget):
-        task=self.repository.get_creation_task(workspace_id,task_id)
+        task=self.repository.task_records.get_creation_task(workspace_id,task_id)
         source=arguments.get('_typed_source')
-        version=self.repository.get_timeline_version(workspace_id,task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version=self.repository.timeline_records.get_timeline_version(workspace_id,task.current_timeline_version_id) if task.current_timeline_version_id else None
         if source is not None and (source['workspace_id'],source['task_id'],source['member_id'],source['expected_timeline_version_id'],source['expected_timeline_sequence']) != (
                 workspace_id,task_id,actor.user_id or actor.member_id,task.current_timeline_version_id,version.sequence if version else 0):
             raise ValueError('封存的类型化编辑输入或成员已失效')
         plan=creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id,task_id))
-        before=effective_audio_timeline(plan);graphs=[before]
+        before=effective_audio_timeline(plan)
+        graphs=[before]
         original=(operation=='command_edit_preview' and re.fullmatch(r'(?:提取|添加|保留)(?:(?:当前|这个|所选)镜头的?)?原声[。！]?',arguments['payload']['raw_command'].strip()) is not None)
         if not original:
             edit=self.edit_from_arguments(task,operation,arguments)
-            if edit.base_version_id!=task.current_timeline_version_id:raise ValueError('时间线已变化，请重新安排当前要求')
-            if edit.action=='replace_narration':edit=edit.model_copy(update={'values':{**edit.values,'source_end_ms':round(plan.duration_seconds*1000)}})
+            if edit.base_version_id!=task.current_timeline_version_id:
+                raise ValueError('时间线已变化，请重新安排当前要求')
+            if edit.action=='replace_narration':
+                edit=edit.model_copy(update={'values':{**edit.values,'source_end_ms':round(plan.duration_seconds*1000)}})
             graphs.append(apply_audio_edit(before,edit,round(plan.duration_seconds*1000)))
         uses=Counter()
         for graph in graphs:
             audible=Counter(clip.source_ref for track in graph.tracks if not track.muted for clip in track.clips if not clip.muted)
-            for ref,count in audible.items():uses[ref]=max(uses.get(ref,0),count)
+            for ref,count in audible.items():
+                uses[ref]=max(uses.get(ref,0),count)
         references=set(uses)
         if original:
             _plan,clip,_track,_start,_end,reference=self.original_inputs(task,arguments['payload'])
             references.add(reference)
         files,inputs=[],[]
         for ref in sorted(references):
-            path=self.audio.source(workspace_id,task_id,ref,actor=actor);stat=path.stat()
+            path=self.audio.source(workspace_id,task_id,ref,actor=actor)
+            stat=path.stat()
             files.append([ref,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns])
             inputs.append({'reference':ref,'path':str(path.resolve()),'size_bytes':stat.st_size,'uses':uses.get(ref,1),
                 **self.audio.source_metadata(workspace_id,task_id,ref)})
         snapshot={k:v for k,v in creation_task_montage_plan_to_payload(plan).items() if k not in {'status','message','output_path','subtitle_path','updated_at'}}
         facts={'base_version_id':task.current_timeline_version_id,'script_id':task.confirmed_script_id,
-            'script_digest':self.repository.confirmed_creation_task_script_digest(workspace_id,task_id,task.confirmed_script_id) if task.confirmed_script_id else None,
-            'plan_id':task.plan_id,'plan_digest':media_digest(asdict(self.repository.get_creation_plan(workspace_id,task.plan_id))),
+            'script_digest':self.repository.script_records.confirmed_creation_task_script_digest(workspace_id,task_id,task.confirmed_script_id) if task.confirmed_script_id else None,
+            'plan_id':task.plan_id,'plan_digest':media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),
             'montage':snapshot,'files':files,'narration_cache_key':task.narration_cache_key}
         if original:
             if budget is None:

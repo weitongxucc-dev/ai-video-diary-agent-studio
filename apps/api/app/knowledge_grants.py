@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from app.repository import LEGACY_WORKSPACE_ID
-from app.source_storage_schema import KNOWLEDGE_GRANTS_DDL
+from app.source_storage_schema import KNOWLEDGE_GRANTS_DDL as KNOWLEDGE_GRANTS_DDL
 
 if TYPE_CHECKING:
     from fastapi import Request

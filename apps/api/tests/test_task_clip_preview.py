@@ -1,4 +1,5 @@
 """A long movie's selected-clip preview remains a silent five-second unit."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict, replace
 from uuid import uuid4
 from datetime import datetime, timezone
@@ -14,7 +15,8 @@ import app.main as main
 from app.artifact_store import ArtifactStore
 from app.host_resource_probes import CpuRenderBudget, HostProcessProbe, HostBudget, HostResourceProbe
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-from app.production import MaterialAsset, MaterialSegment, TimelineVersion
+from app.production import MaterialAsset, MaterialSegment
+from app.creation.contracts import TimelineVersion
 from test_task_media_grants import case
 
 
@@ -63,9 +65,9 @@ def test_exposure_preview_uses_explicit_grant_then_atomic_adoption_and_undo(tmp_
         assert current['clips'][1]['visual_effects']['exposure'] == .15
         assert current['clips'][0] == original['clips'][0] and current['clips'][2:] == original['clips'][2:]
         assert current['audio_timeline'] == original['audio_timeline']
-        current_id = repo.get_creation_task('local', 'task').current_timeline_version_id
+        current_id = repo.task_records.get_creation_task('local', 'task').current_timeline_version_id
         assert current_id != 'timeline'
-        kept = repo.list_subtitle_tracks('local', 'task', timeline_version_id=current_id)
+        kept = repo.subtitle_records.list_subtitle_tracks('local', 'task', timeline_version_id=current_id)
         assert [(item.text, item.start_seconds, item.end_seconds) for item in kept[0].cues] == [
             (item.text, item.start_seconds, item.end_seconds) for item in track.cues]
         undo = client.post('/api/creation-tasks/task/timeline/undo', json={'request_id':str(uuid4())})
@@ -84,7 +86,7 @@ def test_short_preview_replay_cancel_and_changed_base_do_not_execute(tmp_path, m
         request_id = str(uuid4())
         payload = {'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'exposure':.15},
             'request_id':request_id, 'expected_timeline_version_id':'timeline', 'expected_timeline_sequence':1}
-        count = len(repo.list_job_runs('local', 'task'))
+        count = len(repo.job_records.list_job_runs('local', 'task'))
         queued = client.post('/api/creation-tasks/task/edits/exact/preview', json=payload)
         assert queued.status_code == 202, queued.text
         receipt = queued.json()
@@ -99,19 +101,19 @@ def test_short_preview_replay_cancel_and_changed_base_do_not_execute(tmp_path, m
         with pytest.raises(PermissionError, match='操作者身份'):
             main._task_media_facts('local', 'task', event['operation'], wrong_actor, actor)
         replay = client.post('/api/creation-tasks/task/edits/exact/preview', json=payload)
-        assert replay.json()['job_id'] == receipt['job_id'] and len(repo.list_job_runs('local', 'task')) == count + 1
+        assert replay.json()['job_id'] == receipt['job_id'] and len(repo.job_records.list_job_runs('local', 'task')) == count + 1
         cancelled = client.post(receipt['result_url'] + '/cancel')
         assert cancelled.json()['status'] == 'cancelled' and not runtime.run_once()
         payload['request_id'] = str(uuid4())
         second = client.post('/api/creation-tasks/task/edits/exact/preview', json=payload)
         assert second.status_code == 202, second.text
         version = TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None)
-        repo.create_timeline_version(version)
+        repo.timeline_records.create_timeline_version(version)
         replay = client.post('/api/creation-tasks/task/edits/exact/preview', json=payload)
         assert replay.status_code == 202 and replay.json()['job_id'] == second.json()['job_id']
         assert client.get(second.json()['result_url']).json()['status'] == 'stale'
         assert not runtime.run_once()
-        assert not [item for item in repo.list_artifact_records('local', 'task') if item.kind == 'color_preview']
+        assert not [item for item in repo.execution_records.list_artifact_records('local', 'task') if item.kind == 'color_preview']
     finally:
         runtime.stop(0)
 
@@ -120,14 +122,16 @@ def test_missing_profile_or_base_never_changes_draft_or_submits_work(tmp_path, m
     from test_task_media_grants import _visual_scope_case
     main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(tmp_path, monkeypatch)
     try:
-        count = len(repo.list_job_runs('local', 'task'))
-        monkeypatch.setattr(main, 'clip_preview_budget_from_env', lambda:None)
+        count = len(repo.job_records.list_job_runs('local', 'task'))
+        selected_budget_for = main._device_operation_budget
+        monkeypatch.setattr(main, '_device_operation_budget',
+            lambda name: None if name == 'clip_preview' else selected_budget_for(name))
         payload = {'base_version_id':'timeline', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}}
         refused = client.post('/api/creation-tasks/task/visual/preview', json=payload)
         assert refused.status_code == 503 and '尚未标定' in refused.text
-        assert len(repo.list_job_runs('local', 'task')) == count
+        assert len(repo.job_records.list_job_runs('local', 'task')) == count
         assert repo.get_creation_task_montage_plan('local', 'task') == original
-        task = repo.get_creation_task('local', 'task')
+        task = repo.task_records.get_creation_task('local', 'task')
         task.current_timeline_version_id = None
         with repo._connect() as conn:
             conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",
@@ -135,8 +139,8 @@ def test_missing_profile_or_base_never_changes_draft_or_submits_work(tmp_path, m
         payload['base_version_id'] = None
         missing = client.post('/api/creation-tasks/task/visual/preview', json=payload)
         assert missing.status_code == 409 and '基础版本' in missing.text
-        assert repo.get_creation_task('local', 'task').current_timeline_version_id is None
-        assert len(repo.list_timeline_versions('local', 'task')) == 1
+        assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id is None
+        assert len(repo.timeline_records.list_timeline_versions('local', 'task')) == 1
     finally:
         runtime.stop(0)
 
@@ -226,11 +230,11 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
     from test_task_media_grants import _visual_scope_case
     main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(tmp_path, monkeypatch)
     def commit_other_edit():
-        repo.create_timeline_version(TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None))
+        repo.timeline_records.create_timeline_version(TimelineVersion('next', 'local', 'task', 'timeline', 2, {'montage':original}, None))
     try:
-        job_count = len(repo.list_job_runs('local', 'task'))
-        intent_count = len(repo.list_edit_intents('local', 'task'))
-        proposal_count = len(repo.list_edit_proposals('local', 'task'))
+        job_count = len(repo.job_records.list_job_runs('local', 'task'))
+        intent_count = len(repo.edit_records.list_edit_intents('local', 'task'))
+        proposal_count = len(repo.edit_records.list_edit_proposals('local', 'task'))
         if race_at == 'adapter':
             from app.creation.clip_preview import ClipPreviewUseCase
             prepare = ClipPreviewUseCase.prepare
@@ -249,12 +253,12 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
                 return sealed
             monkeypatch.setattr(media, 'facts', after_sealing)
         else:
-            save = repo.save_clip_preview_proposal
+            save = repo.edit_adoption.save_clip_preview_proposal
             def before_proposal_write(*args, **kwargs):
                 assert kwargs['expected_version_id'] == 'timeline'
                 commit_other_edit()
                 return save(*args, **kwargs)
-            monkeypatch.setattr(repo, 'save_clip_preview_proposal', before_proposal_write)
+            monkeypatch.setattr(repo.edit_adoption, 'save_clip_preview_proposal', before_proposal_write)
         if route == 'visual':
             path = '/api/creation-tasks/task/visual/preview'
             payload = {'base_version_id':'timeline', 'clip_ids':['clip_1'], 'effects':{'exposure':.15}}
@@ -269,10 +273,10 @@ def test_preview_version_race_rejects_original_base_without_job_or_proposal(tmp_
             path += '?draft=true'
         response = client.post(path, json=payload)
         assert response.status_code == 409, response.text
-        assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'next'
-        assert len(repo.list_job_runs('local', 'task')) == job_count
-        assert len(repo.list_edit_intents('local', 'task')) == intent_count
-        assert len(repo.list_edit_proposals('local', 'task')) == proposal_count
+        assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == 'next'
+        assert len(repo.job_records.list_job_runs('local', 'task')) == job_count
+        assert len(repo.edit_records.list_edit_intents('local', 'task')) == intent_count
+        assert len(repo.edit_records.list_edit_proposals('local', 'task')) == proposal_count
         assert repo.get_creation_task_montage_plan('local', 'task') == original
         assert not runtime.run_once()
     finally:
@@ -302,23 +306,23 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
         status='ready',cues=[NarrationCue('cue','section','first',6),NarrationCue('othercue','section2','other',21)],
         clips=clips,duration_seconds=27,low_confidence_clip_count=0)
     with repo._connect() as conn:
-        task=repo.get_creation_task('local','task')
+        task=repo.task_records.get_creation_task('local','task')
         task.montage_plan_id='montage'
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",(json.dumps(asdict(task),default=str),))
         conn.execute("INSERT INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) VALUES (?,?,?,?,?)",
             ('montage','local','task',json.dumps(creation_task_montage_plan_to_payload(plan)),task.updated_at.isoformat()))
-    repo.create_timeline_version(TimelineVersion('timeline','local','task',None,1,{'montage':creation_task_montage_plan_to_payload(plan)},None))
+    repo.timeline_records.create_timeline_version(TimelineVersion('timeline','local','task',None,1,{'montage':creation_task_montage_plan_to_payload(plan)},None))
     budget=CpuRenderBudget(max_duration_seconds=20.401,max_pixel_seconds=1920*1920*20.401,max_width_px=1920,max_height_px=1920,
         max_input_bytes=10000000,max_clip_count=64,max_overlay_count=16,max_output_bytes=2000000,max_threads=1,max_timeout_seconds=30,
         additional_memory_bytes=1,additional_disk_bytes=1,max_process_threads=16)  # Synthetic test profile.
-    monkeypatch.setattr(main,'clip_preview_budget_from_env',lambda:budget)
-    # _task_media_facts imports the calibration reader at its boundary.
-    monkeypatch.setattr('app.member_permits.cpu_render_budget_from_env',lambda:budget)
+    selected_budget_for = main._device_operation_budget
+    monkeypatch.setattr(main, '_device_operation_budget',
+        lambda name: budget if name in {'clip_preview', 'cpu_render'} else selected_budget_for(name))
     monkeypatch.setattr(main,'production_repo',repo)
     monkeypatch.setattr(main,'artifact_store',ArtifactStore(tmp_path/'output'))
     monkeypatch.setattr(main,'settings',replace(main.settings,temporary_root_path=str(tmp_path/'temp'),video_output_path=str(tmp_path/'output')))
     monkeypatch.setattr(main,'_require_permit_actor',lambda *args:actor)
-    monkeypatch.setattr(main,'_assistant_member_id',lambda *args:actor.member_id)
+    monkeypatch.setattr(ContentIdentityHttpAdapter,'assistant_member',lambda adapter, *args:actor.member_id)
     monkeypatch.setattr(main,'current_workspace_id',lambda request:'local')
     media.facts=main._task_media_facts
     from app.media.clip_preview import ClipPreviewExecutor
@@ -340,7 +344,7 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
     assert runtime.run_once()
     done=client.get(queued.json()['result_url']).json()
     assert done['status']=='succeeded',done
-    records=[record for record in repo.list_artifact_records('local','task') if record.producer_job_id==queued.json()['job_id']]
+    records=[record for record in repo.execution_records.list_artifact_records('local','task') if record.producer_job_id==queued.json()['job_id']]
     assert len(records)==2
     for record in records:
         probe=subprocess.run(['ffprobe','-v','error','-show_entries','stream=codec_type,width,height:format=duration',
@@ -350,14 +354,14 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
         assert [stream['codec_type'] for stream in metadata['streams']]==['video']
     assert client.post('/api/creation-tasks/task/edits/exact/preview',json=payload).json()['job_id']==queued.json()['job_id']
     assert not runtime.run_once()
-    count_before=len(repo.list_job_runs('local','task'))
+    count_before=len(repo.job_records.list_job_runs('local','task'))
     def no_runtime():
         raise AssertionError('metadata proposal must not construct the device runtime')
     monkeypatch.setattr(main,'_creation_runtime',no_runtime)
     metadata=client.post('/api/creation-tasks/task/edits/exact/preview',json={
         'operation_type':'SetClipLock','clip_id':'clip','locked':True})
     assert metadata.status_code==200,metadata.text
-    assert len(repo.list_job_runs('local','task'))==count_before
+    assert len(repo.job_records.list_job_runs('local','task'))==count_before
     # Budget refusal concerns this declared window, independently of the 27s parent.
     host=HostResourceProbe(tmp_path/'budget.sqlite',disk_paths=(tmp_path,),budget=HostBudget(max_cpu_percent=100,
         min_available_memory_bytes=0,max_swap_used_bytes=10**12,min_free_disk_bytes=0,max_disk_io_bytes_per_second=10**12,

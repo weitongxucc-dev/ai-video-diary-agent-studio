@@ -11,7 +11,7 @@ from app.creation_execution import CreationExecutionActor
 from app.graphic_sources import graphic_source_facts
 from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.production import content_readable
+from app.source_policy import knowledge_item_readable as content_readable
 from app.schemas import CreationTaskObservationRequest
 from app.task_audio import TASK_MEDIA_KIND
 from app.task_observation import observe_output, MAX_SAMPLE_EDGE, MAX_OBSERVATION_BYTES
@@ -58,7 +58,7 @@ class OutputObservationUseCase:
             raise OutputObservationRejected(409,str(exc)) from exc
         event_id=None
         if payload.request_id is not None:
-            event_id,fresh=self.repository.claim_edit_request(task,actor.user_id or actor.member_id,
+            event_id,fresh=self.repository.execution_records.claim_edit_request(task,actor.user_id or actor.member_id,
                 payload.request_id,'observation',payload.model_dump(mode='json',exclude_unset=True),write_guard=write_guard)
             if not fresh:
                 return self.original_request(task,actor,payload)
@@ -68,12 +68,12 @@ class OutputObservationUseCase:
             job=media.submit(runtime,actor,task.id,'output_observation',values,'observation',write_guard=write_guard)
             receipt=receipt_for(media,job,actor,runtime)
             if event_id is not None:
-                self.repository.save_edit_request_result(task,event_id,status_code=202,response=receipt)
+                self.repository.execution_records.save_edit_request_result(task,event_id,status_code=202,response=receipt)
         except Exception:
             if event_id is not None:
                 # A durable claim survives both queue and projection failures.
                 return self.original_request(task,actor,payload)
-            located=next((event for event in reversed(self.repository.list_task_events(task.workspace_id,task.id))
+            located=next((event for event in reversed(self.repository.execution_records.list_task_events(task.workspace_id,task.id))
                 if event.event_type=='task_media_submitted' and event.payload['arguments']==values
                 and CreationExecutionActor.from_event(task.workspace_id,event.payload)==actor),None)
             if located is not None:
@@ -89,12 +89,12 @@ class OutputObservationUseCase:
 
     def _task_or_404(self, workspace_id: str, task_id: str) -> CreationTask:
         try:
-            return self.repository.get_creation_task(workspace_id, task_id)
+            return self.repository.task_records.get_creation_task(workspace_id, task_id)
         except KeyError as exc:
             raise OutputObservationRejected(status_code=404, detail='creation task not found') from exc
 
     def version(self, task, payload):
-        version = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = self.repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
             raise ValueError('观察目标时间线已变化，请回读当前版本')
         return version
@@ -109,7 +109,7 @@ class OutputObservationUseCase:
         if plan.status != 'rendered' or not raw_path:
             raise OutputObservationRejected(status_code=404, detail='creation task output not found')
         expected_kind = 'subtitle_track' if subtitle else 'rendered_video'
-        registered = next((artifact for artifact in self.repository.list_artifact_records(workspace_id, task.id) if artifact.logical_ref == raw_path and artifact.kind == expected_kind), None)
+        registered = next((artifact for artifact in self.repository.execution_records.list_artifact_records(workspace_id, task.id) if artifact.logical_ref == raw_path and artifact.kind == expected_kind), None)
         if registered is None:
             raise OutputObservationRejected(status_code=409, detail='creation task output is not a registered artifact')
         try:
@@ -125,7 +125,7 @@ class OutputObservationUseCase:
         if task.current_timeline_version_id is None:
             return OutputDownload(self.output_path(workspace_id, task_id, subtitle=subtitle), None, None)
         try:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id)
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
         except KeyError as exc:
             raise OutputObservationRejected(404, '作品版本不存在。') from exc
         if version.task_id != task_id:
@@ -136,7 +136,7 @@ class OutputObservationUseCase:
                 or ref not in version.snapshot.get('output_refs', [])):
             raise OutputObservationRejected(409, '当前版本尚无可下载的有效产物，请等待该版本制作完成。')
         kind = 'subtitle_track' if subtitle else 'rendered_video'
-        registered = next((item for item in self.repository.list_artifact_records(workspace_id, task_id)
+        registered = next((item for item in self.repository.execution_records.list_artifact_records(workspace_id, task_id)
             if item.logical_ref == ref and item.kind == kind), None)
         if registered is None:
             raise OutputObservationRejected(409, '当前版本产物尚未登记。')
@@ -154,7 +154,7 @@ class OutputObservationUseCase:
         task = self._task_or_404(workspace_id, task_id)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task_id))
         path = self.output_path(workspace_id, task_id, subtitle=False)
-        registered = next((record for record in self.repository.list_artifact_records(workspace_id, task_id) if record.logical_ref == plan.output_path and record.kind == 'rendered_video'))
+        registered = next((record for record in self.repository.execution_records.list_artifact_records(workspace_id, task_id) if record.logical_ref == plan.output_path and record.kind == 'rendered_video'))
         if path.stat().st_size != registered.size_bytes:
             raise ValueError('成片与登记产物不匹配，请重新生成。')
         return (task, plan, path, registered)
@@ -171,11 +171,11 @@ class OutputObservationUseCase:
             raise ValueError('观察媒体与真实登记摘要不一致')
 
     def published_outputs_current(self, job):
-        records = [item for item in self.repository.list_artifact_records(job.workspace_id, job.task_id) if item.producer_job_id == job.id]
+        records = [item for item in self.repository.execution_records.list_artifact_records(job.workspace_id, job.task_id) if item.producer_job_id == job.id]
         if not records:
             return True
         try:
-            verified = self.repository.get_task_event(job.workspace_id, f'event_{job.id}_verified').payload['outputs']
+            verified = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_verified').payload['outputs']
             if not verified or {item['reference'] for item in verified} != {item.logical_ref for item in records}:
                 return False
             for item in verified:
@@ -187,19 +187,19 @@ class OutputObservationUseCase:
         return True
 
     def registered_output(self, workspace_id, task_id, target, actor, *, context=None):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if target.kind == 'final':
             _task, plan, path, record = self.quality_source_metadata(workspace_id, task_id)
             binding = {'kind': 'composed_output', 'montage': creation_task_montage_plan_to_payload(plan)}
             width, height = canvas_size(plan.aspect_ratio)
         else:
-            job = self.repository.get_job_run(workspace_id, target.job_id)
+            job = self.repository.job_records.get_job_run(workspace_id, target.job_id)
             if job.task_id != task_id or job.kind != TASK_MEDIA_KIND or job.status != 'succeeded':
                 raise ValueError('只能观察本任务真实成功的媒体作业输出')
-            start = self.repository.get_task_event(workspace_id, f'event_{job.id}_start').payload
+            start = self.repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_start').payload
             if CreationExecutionActor.from_event(workspace_id, start) != actor or start['input_facts']['base_version_id'] != task.current_timeline_version_id:
                 raise PermissionError('原媒体作业身份或输入版本不再适用当前目标')
-            record = self.repository.get_artifact_record(workspace_id, target.artifact_id)
+            record = self.repository.execution_records.get_artifact_record(workspace_id, target.artifact_id)
             if record.task_id != task_id or record.producer_job_id != job.id:
                 raise ValueError('产物不属于指定任务媒体作业')
             path = self.artifact_store.resolve_file(record.logical_ref)
@@ -210,7 +210,7 @@ class OutputObservationUseCase:
             elif path.suffix == '.mp4':
                 self.audio.validate_source_access(workspace_id, task_id, record.logical_ref, actor)
                 self.audio.validate_material_use(workspace_id, task_id, record.logical_ref)
-                saved = self.repository.get_task_event(workspace_id, f"event_{job.id}_{record.id.removeprefix('artifact_')}_input").payload
+                saved = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_{record.id.removeprefix('artifact_')}_input").payload
                 binding = {'kind': 'composed_preview', 'media_input': saved['media_input']}
                 if 'clip' in saved['media_input']:
                     from app.canvas import preview_size
@@ -230,14 +230,14 @@ class OutputObservationUseCase:
         return (path, output, binding)
 
     def prepare_source(self, workspace_id, task_id, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         payload = CreationTaskObservationRequest.model_validate(arguments['payload'])
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         version = self.version(task, payload)
         path, output, binding = self.registered_output(workspace_id, task_id, payload.target, actor)
         return ObservationSource(task, version, payload, path, output, binding)
@@ -323,14 +323,14 @@ def read_original_observation_request(repository,task,actor,payload):
     member_id=actor.user_id or actor.member_id
     event_id='event_edit_request_'+media_digest([task.workspace_id,member_id,str(payload.request_id),'observation'])
     try:
-        event=repository.get_task_event(task.workspace_id,event_id)
+        event=repository.execution_records.get_task_event(task.workspace_id,event_id)
     except KeyError:
         return None
     inputs=payload.model_dump(mode='json',exclude_unset=True)
     digest=media_digest([task.id,inputs])
     if (event.task_id!=task.id or event.payload['member_id']!=member_id or event.payload['input_digest']!=digest):
         raise OutputObservationRejected(409,{'error':'observation_request_conflict','reason':'原观察请求身份已绑定不同任务或输入'})
-    result=repository.read_edit_request_result(task,event_id)
+    result=repository.execution_records.read_edit_request_result(task,event_id)
     if result is None:
         raise OutputObservationRejected(409,{'error':'observation_result_unknown','reason':'原观察请求结果尚未知，未重复执行；请查询原请求',
             'submission_effect':'unknown','task_id':task.id,'request_id':str(payload.request_id),'input_digest':digest,

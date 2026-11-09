@@ -256,11 +256,13 @@ describe("MembersAndSpacesWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "管理成员 小王" }));
     const trigger = screen.getByRole("button", { name: "移除" });
     trigger.focus(); fireEvent.click(trigger);
-    expect(screen.getByRole("dialog", { name: "移除成员" })).toHaveAttribute("aria-modal", "true");
-    expect(screen.getByRole("button", { name: "取消" })).toHaveFocus();
+    expect(screen.getByRole("alertdialog", { name: "移除成员" })).toHaveAttribute("aria-modal", "true");
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toHaveFocus());
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "移除成员" })).not.toBeInTheDocument();
-    expect(trigger).toHaveFocus();
+    expect(screen.getByRole("alertdialog", { name: "移除成员" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "移除成员" })).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
     expect(api.removeLocalMember).not.toHaveBeenCalled();
   });
 
@@ -272,12 +274,12 @@ describe("MembersAndSpacesWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "管理成员 小王" }));
     fireEvent.click(screen.getByRole("button", { name: "移除" }));
     fireEvent.click(screen.getByRole("button", { name: "确认移除" }));
-    const confirmation = screen.getByRole("dialog", { name: "移除成员" });
+    const confirmation = screen.getByRole("alertdialog", { name: "移除成员" });
     expect(await within(confirmation).findByRole("alert")).toHaveTextContent("成员操作被拒绝");
     expect(confirmation).toHaveTextContent("小王");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    expect(screen.queryByRole("dialog", { name: "移除成员" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog", { name: "移除成员" })).not.toBeInTheDocument();
   });
 
   it("shows an honest empty state when there are no members", async () => {

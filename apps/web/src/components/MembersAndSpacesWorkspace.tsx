@@ -181,10 +181,10 @@ export function MembersAndSpacesWorkspace({ role = "owner" }: { role?: Role }) {
             <button disabled={busy || lastOwner} onClick={() => { setActionError(null); setRemoveTarget(activeMember); }} type="button">移除</button>
             {lastOwner ? <p>至少保留一位所有者，暂不能降为成员或移除。</p> : null}
           </div>
-        </HomeCardDialog> : null}
         {removeTarget ? <HomeCardDialog kind="confirmation" title="移除成员" onClose={() => { setRemoveTarget(null); setActionError(null); }} footer={<><button data-card-cancel disabled={busy} onClick={() => { setRemoveTarget(null); setActionError(null); }} type="button">取消</button><button disabled={busy} onClick={() => void removeMember(removeTarget)} type="button">确认移除</button></>}>
             <p>移除成员「{removeTarget.name}」？该成员的本机成员令牌将失效，已有内容不会由此自动删除。</p>
             {actionError ? <p className={styles.fieldError} role="alert">{actionError}</p> : null}
+        </HomeCardDialog> : null}
         </HomeCardDialog> : null}
       </div>
     </AppShell>

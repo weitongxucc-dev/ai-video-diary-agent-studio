@@ -11,7 +11,9 @@ import pytest
 from app.creation.contracts import EditIntent, TimelineVersion
 from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier
 from app.device_runtime import OwnerRegistration, build_device_runtime
-from app.production import CreationPlan, CreationTask, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import CreationTask
 from app.task_audio import TaskMediaJobs
 from test_device_runtime import Access, CompletingExecutor, Processes, Resources
 
@@ -28,9 +30,9 @@ def media_case(tmp_path):
             knowledge_references=[], source_references=[], selected_voice=None, pronunciation_references=[],
             approved_asset_count=0, approved_clip_count=0, material_rule_summary="", model_snapshot=[],
             confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
-        repo.confirm_creation_plan(plan, CreationTask(id="task", workspace_id="local", plan_id="plan",
+        repo.plan_confirmation.confirm_creation_plan(plan, CreationTask(id="task", workspace_id="local", plan_id="plan",
             name="test", scenario="knowledge_explanation"))
-        base = repo.create_timeline_version(TimelineVersion("timeline-base", "local", "task", None, 1, {}, None))
+        base = repo.timeline_records.create_timeline_version(TimelineVersion("timeline-base", "local", "task", None, 1, {}, None))
         state = {"identity_calls": 0, "facts_calls": 0, "verdict": "ready", "revision": 1,
             "block_identity": False}
         entered, release = threading.Event(), threading.Event()
@@ -67,7 +69,7 @@ def media_case(tmp_path):
 
 
 def advance(case, connection=None):
-    return case.repo.create_timeline_version(TimelineVersion("timeline-next", "local", "task",
+    return case.repo.timeline_records.create_timeline_version(TimelineVersion("timeline-next", "local", "task",
         case.base.id, 2, {}, None), connection=connection)
 
 
@@ -121,7 +123,7 @@ def test_other_or_unbound_contracts_keep_original_identity_check(media_case, ope
 def test_original_request_fences_precede_fast_version_read(media_case, monkeypatch, changes, expected):
     case = media_case()
     advance(case)
-    monkeypatch.setattr(case.repo, "get_creation_task", lambda *args, **kwargs: pytest.fail("Fence bypassed"))
+    monkeypatch.setattr(case.repo.task_records, "get_creation_task", lambda *args, **kwargs: pytest.fail("Fence bypassed"))
     with case.repo._connect() as conn:
         assert case.media.check_current(replace(case.request, **changes), conn) == expected
     assert case.state["identity_calls"] == 0
@@ -134,7 +136,7 @@ def test_full_sealed_digest_is_checked_before_fast_version_read(media_case, monk
         event["input_facts"]["base_version_id"] = "forged-version"
         conn.execute("UPDATE task_events SET payload_json=? WHERE id=?",
             (json.dumps(event), "event_" + case.job.id + "_start"))
-        monkeypatch.setattr(case.repo, "get_creation_task", lambda *args, **kwargs: pytest.fail("Corrupt seal bypassed"))
+        monkeypatch.setattr(case.repo.task_records, "get_creation_task", lambda *args, **kwargs: pytest.fail("Corrupt seal bypassed"))
         assert case.media.check_current(case.request, conn) == "stale"
     assert case.state["identity_calls"] == 0
 
@@ -144,19 +146,19 @@ def test_same_connection_sees_uncommitted_version_without_opening_another_connec
     with case.repo._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         next_version = advance(case, conn)
-        assert case.repo.get_creation_task("local", "task").current_timeline_version_id == case.base.id
+        assert case.repo.task_records.get_creation_task("local", "task").current_timeline_version_id == case.base.id
         with monkeypatch.context() as patch:
             patch.setattr(case.repo, "_connect", lambda: pytest.fail("Unexpected extra connection"))
-            assert case.repo.get_creation_task("local", "task", connection=conn).current_timeline_version_id == next_version.id
+            assert case.repo.task_records.get_creation_task("local", "task", connection=conn).current_timeline_version_id == next_version.id
             with pytest.raises(KeyError):
-                case.repo.get_creation_task("other-workspace", "task", connection=conn)
+                case.repo.task_records.get_creation_task("other-workspace", "task", connection=conn)
             with pytest.raises(KeyError):
-                case.repo.get_creation_task("local", "task", include_private=False, connection=conn)
+                case.repo.task_records.get_creation_task("local", "task", include_private=False, connection=conn)
             assert case.media.check_current(case.request, conn) == "stale"
         conn.rollback()
-    assert case.repo.get_creation_task("local", "task").current_timeline_version_id == case.base.id
+    assert case.repo.task_records.get_creation_task("local", "task").current_timeline_version_id == case.base.id
     with pytest.raises(KeyError):
-        case.repo.get_creation_task("local", "task", include_private=False)
+        case.repo.task_records.get_creation_task("local", "task", include_private=False)
     assert case.state["identity_calls"] == 0
 
 
@@ -187,12 +189,12 @@ def test_old_scan_does_not_hold_write_lock_waiting_for_identity(media_case, monk
     try:
         if expired:
             assert done.wait(1) and not case.entered.is_set()
-            assert case.repo.create_edit_intent(intent, source=None).id == intent.id
+            assert case.repo.edit_records.create_edit_intent(intent, source=None).id == intent.id
             assert case.state["identity_calls"] == 0
         else:
             assert case.entered.wait(1) and not done.is_set()
             with pytest.raises(sqlite3.OperationalError, match="locked"):
-                case.repo.create_edit_intent(intent, source=None)
+                case.repo.edit_records.create_edit_intent(intent, source=None)
     finally:
         case.release.set()
         worker.join(3)

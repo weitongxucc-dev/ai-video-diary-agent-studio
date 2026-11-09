@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+from app.materials.intake import MaterialIntakeUseCase
+
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -15,6 +17,22 @@ from app.local_members import LocalMemberService
 from app.production import ProductionRepository
 
 client = TestClient(main_module.app)
+
+
+def material_library_no_execution(monkeypatch):
+    """HTTP metadata facts only; fail before any provider/media/runtime work."""
+    import subprocess
+    import wave
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("material HTTP metadata must not execute media or runtime")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(wave, "open", forbidden)
+    for name in ("run_plan_turn", "run_task_turn", "_start_device_runtime", "_creation_runtime"):
+        monkeypatch.setattr(main_module, name, forbidden)
+    monkeypatch.setattr(MaterialIntakeUseCase, "scan_library", forbidden)
+    monkeypatch.setattr(ProductionRepository, "analyze_asset", forbidden)
 
 
 def _setup(tmp_path, monkeypatch):
@@ -43,7 +61,8 @@ def _headers(token: str) -> dict[str, str]:
 
 
 def _confirm_task(production, workspace_id: str, owner_user_id: str):
-    from app.production import CreationPlan, CreationTask
+    from app.creation.plan_contracts import CreationPlan
+    from app.creation.contracts import CreationTask
 
     plan = CreationPlan(
         id="plan-vis", workspace_id=workspace_id, goal="做一条真实短视频", name="计划",
@@ -55,13 +74,14 @@ def _confirm_task(production, workspace_id: str, owner_user_id: str):
     )
     task = CreationTask(id="task-vis", workspace_id=workspace_id, plan_id=plan.id,
                         name="任务", scenario="talking_head")
-    production.confirm_creation_plan(
+    production.plan_confirmation.confirm_creation_plan(
         plan, task, verified_owner_user_id=owner_user_id
     )
     return plan, task
 
 
 def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch):
+    material_library_no_execution(monkeypatch)
     production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
     from app.production import MaterialAsset
     from datetime import datetime
@@ -74,6 +94,9 @@ def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch
         owner_user_id=owner_member_id,
     ))
 
+    _other, other_token = _service.join(_service.create_invite_code(), "另一成员")
+    hidden = client.get("/api/production/materials/asset-vis", headers=_headers(other_token))
+    assert hidden.status_code == 404
     detail = client.get("/api/production/materials/asset-vis", headers=_headers(owner_token))
     assert detail.status_code == 200
     assert detail.json()["visibility"] == CONTENT_VISIBILITY_DEFAULT
@@ -85,6 +108,7 @@ def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch
     )
     assert shared.status_code == 200, shared.text
     assert shared.json()["visibility"] == CONTENT_VISIBILITY_LEGACY
+    assert client.get("/api/production/materials/asset-vis", headers=_headers(other_token)).status_code == 200
 
     revoked = client.put(
         "/api/production/materials/asset-vis/visibility",
@@ -98,6 +122,7 @@ def test_material_visibility_round_trips_through_the_route(tmp_path, monkeypatch
     )
     assert after_revoke.status_code == 200
     assert after_revoke.json()["visibility"] == CONTENT_VISIBILITY_DEFAULT
+    assert client.get("/api/production/materials/asset-vis", headers=_headers(other_token)).status_code == 404
 
 
 def test_task_and_plan_visibility_round_trip(tmp_path, monkeypatch):
@@ -129,10 +154,11 @@ def test_task_and_plan_visibility_round_trip(tmp_path, monkeypatch):
 
 
 def test_template_visibility_round_trips_and_a_new_version_inherits(tmp_path, monkeypatch):
+    material_library_no_execution(monkeypatch)
     production, _service, owner_token, owner_member_id = _setup(tmp_path, monkeypatch)
-    from app.production import VideoTemplate
+    from app.creation.video_template_records import VideoTemplate
 
-    production.save_video_template(VideoTemplate(
+    production.video_templates.save_video_template(VideoTemplate(
         id="tpl-vis", workspace_id="ws", version=1, name="模板", origin="user",
         settings={"a": 1},
     ), verified_owner_user_id=owner_member_id)

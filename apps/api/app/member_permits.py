@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import os
 import json
-import math
 from dataclasses import fields
 from pathlib import Path
 from typing import Callable, Mapping
@@ -168,13 +167,13 @@ def cpu_render_limits_from_budget(
     )
 
 
-def creation_job_registration(repository, *, render_action: Callable[[str, str, object], object], render_is_valid: Callable[[str, str, object], bool], cpu_render_budget: CpuRenderBudget | None=None, verify_identity: Callable[[CreationExecutionActor], str] | None=None, narration_budget: NarrationBudget | None=None, narration_audio_budget: CpuAudioBudget | None=None, montage_budget: MontageBudget | None=None, montage_stage=None, presenter_budget: PresenterBudget | None=None, presenter_cpu_render_budget: CpuRenderBudget | None=None, presenter_models: dict | None=None, resolve_presenter_output=None, task_media=None, graphic_source_facts=None, audio_mix_facts=None, narration_stage=None, person_stage=None, cover=None, task_authorizations=None, source_verifier=None, audio_assembly=None) -> OwnerRegistration:
+def creation_job_registration(repository, *, render_action: Callable[[str, str, object], object], render_is_valid: Callable[[str, str, object], bool], cpu_render_budget: CpuRenderBudget | None=None, verify_identity: Callable[[CreationExecutionActor], str] | None=None, narration_budget: NarrationBudget | None=None, narration_audio_budget: CpuAudioBudget | None=None, montage_budget: MontageBudget | None=None, montage_stage=None, presenter_budget: PresenterBudget | None=None, presenter_cpu_render_budget: CpuRenderBudget | None=None, presenter_models: dict | None=None, resolve_presenter_output=None, task_media=None, graphic_source_facts=None, audio_mix_facts=None, narration_stage=None, person_stage=None, cover=None, task_authorizations=None, source_verifier=None, audio_assembly=None, narration_runtime_facts=None, packet_copy_assembly=None, audio_delivery=None, picture_fragments=None) -> OwnerRegistration:
     """交互式制作作业的注册项：既有验证者 + 既有单元执行器。
 
     ``cpu_render_budget`` 为 ``None`` 表示这台机器还没有标定 CPU 成片预算；
     成片阶段会因此拒绝准入，而不是被放行。
     """
-    return OwnerRegistration(CreationJobOwnerVerifier(repository, cpu_render_limits=cpu_render_limits_from_budget(cpu_render_budget), verify_identity=verify_identity, narration_budget=narration_budget, narration_audio_budget=narration_audio_budget, montage_budget=montage_budget, presenter_budget=presenter_budget, presenter_cpu_render_limits=cpu_render_limits_from_budget(presenter_cpu_render_budget), presenter_models=presenter_models, resolve_presenter_output=resolve_presenter_output, task_media=task_media, graphic_source_facts=graphic_source_facts, audio_mix_facts=audio_mix_facts, cover=cover, task_authorizations=task_authorizations, source_verifier=source_verifier, audio_assembly=audio_assembly), CreationJobUnitExecutor(repository, render_action=render_action, render_is_valid=render_is_valid, montage_stage=montage_stage, task_media=task_media, narration_stage=narration_stage, person_stage=person_stage, cover=cover, source_verifier=source_verifier, audio_assembly=audio_assembly))
+    return OwnerRegistration(CreationJobOwnerVerifier(repository, cpu_render_limits=cpu_render_limits_from_budget(cpu_render_budget), verify_identity=verify_identity, narration_budget=narration_budget, narration_audio_budget=narration_audio_budget, montage_budget=montage_budget, presenter_budget=presenter_budget, presenter_cpu_render_limits=cpu_render_limits_from_budget(presenter_cpu_render_budget), presenter_models=presenter_models, resolve_presenter_output=resolve_presenter_output, task_media=task_media, graphic_source_facts=graphic_source_facts, audio_mix_facts=audio_mix_facts, cover=cover, task_authorizations=task_authorizations, source_verifier=source_verifier, audio_assembly=audio_assembly, narration_runtime_facts=narration_runtime_facts, packet_copy_assembly=packet_copy_assembly, audio_delivery=audio_delivery, picture_fragments=picture_fragments), CreationJobUnitExecutor(repository, render_action=render_action, render_is_valid=render_is_valid, montage_stage=montage_stage, task_media=task_media, narration_stage=narration_stage, person_stage=person_stage, cover=cover, source_verifier=source_verifier, audio_assembly=audio_assembly, packet_copy_assembly=packet_copy_assembly, audio_delivery=audio_delivery, picture_fragments=picture_fragments))
 
 
 #: 整机预算的标定项。这些值必须由这台设备的标定结果显式给出，没有内置默认值。
@@ -183,8 +182,11 @@ def creation_stage_budgets_from_env(env: Mapping[str, str] | None = None):
     environment = os.environ if env is None else env
     budgets = []
     for budget_type, prefix in ((NarrationBudget, "DEVICE_NARRATION_"), (MontageBudget, "DEVICE_MONTAGE_")):
-        numeric_fields = [item for item in fields(budget_type) if item.name not in {"running_cpu_policy", "input_scope"}]
+        numeric_fields = [item for item in fields(budget_type) if item.name not in {"running_cpu_policy", "input_scope",
+            "preparation_backend_identity", "preparation_shape_digest", "preparation_receipt_sha256"}]
         cpu_policy = environment.get("DEVICE_NARRATION_RUNNING_CPU_POLICY_JSON", "").strip() if budget_type is NarrationBudget else ""
+        if budget_type is NarrationBudget and environment.get("DEVICE_NARRATION_INPUT_SCOPE", "legacy_stage") not in {"legacy_stage", "single_call_experiment_v1"}:
+            raise HostBudgetUncalibrated("显式实验环境不能声明preparation/prepared准备回执，仅允许legacy_stage/single_call_experiment_v1")
         if not cpu_policy and not any(environment.get(prefix + item.name.upper(), "").strip() for item in numeric_fields):
             budgets.append(None)
             continue
@@ -399,7 +401,7 @@ def clip_preview_budget_from_env(environ: Mapping[str, str] | None = None) -> Cp
 def build_host_probes(
     *,
     database_path: str | Path,
-    disk_paths: tuple[str | Path, ...],
+    disk_paths: tuple[str | Path, ...] | Mapping[str, str | Path],
     budget: HostBudget,
     device_poll_interval_seconds: float | None = None,
 ) -> tuple[HostResourceProbe, HostProcessProbe]:

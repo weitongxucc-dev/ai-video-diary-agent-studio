@@ -449,6 +449,7 @@ class MaterialAssetStore:
         include_private: bool = True,
         viewer_user_id: str | None = None,
         local_diagnostic: bool = False,
+        connection: sqlite3.Connection | None = None,
     ) -> list[MaterialAsset]:
         """列出素材。与分页同一判据：可信身份下私有素材只对上传者本人可见。"""
         clauses = ["workspace_id = ?"]
@@ -462,7 +463,7 @@ class MaterialAssetStore:
             parameters.append(viewer_user_id)
         elif not include_private:
             clauses.append("visibility = 'shared'")
-        with self._connect() as conn:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             rows = conn.execute(
                 f"""
                 SELECT payload, visibility FROM material_assets
@@ -968,6 +969,32 @@ class MaterialAssetStore:
     @staticmethod
     def _corrected_material_segments(segments: list[MaterialSegment]) -> list[MaterialSegment]:
         return [segment for segment in segments if segment.description or segment.transcript or segment.user_tags or segment.collection_ids or segment.usage_role != "unassigned" or segment.review_status != "raw"]
+
+    def reset_changed_material_asset(self, asset: MaterialAsset) -> None:
+        self.preserve_unmatched_corrections(asset, asset.segments)
+        asset.segments = []
+        asset.speech_analysis = None
+        asset.duration_seconds = None
+        asset.analysis_status = "pending"
+        asset.analysis_message = "源文件已变化，正在重新分析；原有人工纠正已保留待核对。"
+        self.save_asset(asset)
+
+    def preserve_unmatched_corrections(self, asset: MaterialAsset, segments: list[MaterialSegment]) -> int:
+        corrected = self._corrected_material_segments(segments)
+        if not corrected:
+            return 0
+        with self._connect() as conn:
+            for segment in corrected:
+                conn.execute(
+                    "INSERT OR IGNORE INTO material_unmatched_corrections (workspace_id, asset_id, segment_id, payload, preserved_at) VALUES (?, ?, ?, ?, ?)",
+                    (asset.workspace_id, asset.id, segment.id, _json_payload(segment), utc_now().isoformat()),
+                )
+        return len(corrected)
+
+    def list_unmatched_material_corrections(self, workspace_id: str, asset_id: str) -> list[dict[str, object]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM material_unmatched_corrections WHERE workspace_id=? AND asset_id=? ORDER BY preserved_at", (workspace_id, asset_id)).fetchall()
+        return [json.loads(str(row["payload"])) for row in rows]
 
 
 def _normalized_labels(values: list[str]) -> list[str]:

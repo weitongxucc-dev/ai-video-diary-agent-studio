@@ -1,4 +1,5 @@
 """查看历史时间线版本：只读旧版本自己的快照与产物，不动当前版本。"""
+from script_seed_fixtures import script_seed_payload
 
 import json
 from dataclasses import asdict, replace
@@ -11,8 +12,15 @@ import app.main as main_module
 from app.artifact_store import ArtifactStore
 from app.montage import (CreationTaskMontagePlan, MontageClip, NarrationCue,
                          creation_task_montage_plan_to_payload)
-from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
-                            ProductionRepository, SubtitleCue, SubtitleTrack, TimelineVersion)
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import (
+    CreationPlanVoiceReference,
+    CreationTask,
+    SubtitleCue,
+    SubtitleTrack,
+    TimelineVersion,
+)
 
 WORKSPACE_ID = "local"
 
@@ -63,11 +71,12 @@ def persist_task(repo: ProductionRepository, task: CreationTask, script_id: str,
               "selection_status": "confirmed", "created_at": now, "updated_at": now,
               "confirmed_at": now}
     with repo._connect() as conn:
+        conn.execute("BEGIN")
         if insert_script:
             conn.execute(
                 "INSERT INTO creation_task_scripts (id,workspace_id,task_id,run_id,payload,updated_at)"
                 " VALUES (?,?,?,?,?,?)",
-                (script_id, WORKSPACE_ID, task.id, script["run_id"], json.dumps(script), now))
+                (script_id, WORKSPACE_ID, task.id, script["run_id"], script_seed_payload(repo, conn, script), now))
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
                      (json.dumps(asdict(task), default=str), WORKSPACE_ID, task.id))
         conn.execute(
@@ -78,7 +87,36 @@ def persist_task(repo: ProductionRepository, task: CreationTask, script_id: str,
 
 
 @pytest.fixture
-def history_task(tmp_path, monkeypatch):
+def history_task(tmp_path, monkeypatch, request):
+    from test_production_foundation import edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
+    metadata_only = request.node.name in {
+        "test_version_list_shows_sequence_time_and_current_marker",
+        "test_old_version_detail_reads_its_own_snapshot_without_touching_current",
+        "test_history_rejects_another_task_version_and_unknown_version",
+    }
+    if metadata_only:
+        from app.auth import SupabaseAuthContext
+        from app.config import Settings
+        from app.device_scheduler import DeviceScheduler
+        from app.device_runtime import DeviceRuntime
+        from app.local_members import LocalMemberService
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("timeline history metadata forbids scheduling or media execution")
+
+        monkeypatch.setattr(DeviceRuntime, "wake", forbidden)
+        monkeypatch.setattr(DeviceScheduler, "pick_and_grant", forbidden)
+        settings = Settings(database_path=str(tmp_path / "production.sqlite3"),
+            video_inbox_path=str(tmp_path / "inbox"), video_output_path=str(tmp_path / "outputs"),
+            model_root_path=str(tmp_path / "models"), temporary_root_path=str(tmp_path / "temp"),
+            obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+            local_whisper_cli_path=None, local_whisper_model_path=None,
+            supabase_url=None, supabase_publishable_key=None)
+        monkeypatch.setattr(main_module, "settings", settings)
+        monkeypatch.setattr(main_module, "auth_context", SupabaseAuthContext(settings))
+        monkeypatch.setattr(main_module, "local_members_service",
+                            LocalMemberService(tmp_path / "production.sqlite3"))
     repo = ProductionRepository(database_path=tmp_path / "production.sqlite3",
                                 video_library_path=tmp_path / "library")
     store = ArtifactStore(tmp_path / "artifacts")
@@ -87,8 +125,8 @@ def history_task(tmp_path, monkeypatch):
     plan = make_plan("plan_history", "历史版本测试")
     task = CreationTask(id="task_history", workspace_id=WORKSPACE_ID, plan_id=plan.id,
                         name="历史版本测试", scenario="knowledge_explanation")
-    repo.confirm_creation_plan(plan, task)
-    task = repo.get_creation_task(WORKSPACE_ID, task.id)
+    repo.plan_confirmation.confirm_creation_plan(plan, task)
+    task = repo.task_records.get_creation_task(WORKSPACE_ID, task.id)
     task.confirmed_script_id = "script_history"
     task.montage_plan_id = "montage_history"
     task.stage = "montage"
@@ -104,7 +142,7 @@ def history_task(tmp_path, monkeypatch):
                               output_path="artifacts/task_history/v1.mp4",
                               subtitle_path=None)
     old_payload = creation_task_montage_plan_to_payload(old_montage)
-    repo.create_timeline_version(TimelineVersion(
+    repo.timeline_records.create_timeline_version(TimelineVersion(
         id="timeline_history_v1", workspace_id=WORKSPACE_ID, task_id=task.id,
         parent_version_id=None, sequence=1,
         snapshot={"montage": old_payload,
@@ -112,7 +150,7 @@ def history_task(tmp_path, monkeypatch):
                   "narration_segments": [{"id": "segment_1", "text": "旧版本文案",
                                           "duration_seconds": 1.0, "status": "ready"}]},
         created_by_operation_id=None))
-    repo.create_subtitle_track(SubtitleTrack(
+    repo.subtitle_records.create_subtitle_track(SubtitleTrack(
         id="subtitle_history_v1", workspace_id=WORKSPACE_ID, task_id=task.id,
         timeline_version_id="timeline_history_v1", language="zh-CN", source_language="zh-CN",
         style={}, cues=[SubtitleCue("subtitle_cue_1", "cue_1", "旧版本文案", 0, 1)],
@@ -122,7 +160,7 @@ def history_task(tmp_path, monkeypatch):
     store.publish_bytes("artifacts/task_history/v1.mp4", b"old-version-video-bytes")
     store.publish_bytes("artifacts/task_history/v1.srt", "旧版本字幕\n".encode())
 
-    repo.create_timeline_version(TimelineVersion(
+    repo.timeline_records.create_timeline_version(TimelineVersion(
         id="timeline_history_v2", workspace_id=WORKSPACE_ID, task_id=task.id,
         parent_version_id="timeline_history_v1", sequence=2,
         snapshot={"montage": creation_task_montage_plan_to_payload(current_montage),
@@ -134,15 +172,15 @@ def history_task(tmp_path, monkeypatch):
     other_plan = make_plan("plan_other", "另一个任务")
     other_task = CreationTask(id="task_other", workspace_id=WORKSPACE_ID, plan_id=other_plan.id,
                               name="另一个任务", scenario="knowledge_explanation")
-    repo.confirm_creation_plan(other_plan, other_task)
-    other_task = repo.get_creation_task(WORKSPACE_ID, other_task.id)
+    repo.plan_confirmation.confirm_creation_plan(other_plan, other_task)
+    other_task = repo.task_records.get_creation_task(WORKSPACE_ID, other_task.id)
     other_task.confirmed_script_id = "script_other"
     other_task.montage_plan_id = "montage_other"
     other_montage = montage_for(other_task.id, "script_other", "montage_other",
                                 cue_text="别的任务文案",
                                 output_path=None, subtitle_path=None)
     persist_task(repo, other_task, "script_other", other_montage)
-    repo.create_timeline_version(TimelineVersion(
+    repo.timeline_records.create_timeline_version(TimelineVersion(
         id="timeline_other_v1", workspace_id=WORKSPACE_ID, task_id=other_task.id,
         parent_version_id=None, sequence=1,
         snapshot={"montage": creation_task_montage_plan_to_payload(other_montage)},
@@ -153,7 +191,28 @@ def history_task(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "settings", replace(main_module.settings,
         video_output_path=str(tmp_path / 'outputs'), temporary_root_path=str(tmp_path / 'temp')))
     monkeypatch.setattr(main_module, "creation_execution_mode", "legacy")
-    return repo, task.id, TestClient(main_module.app)
+    client = TestClient(main_module.app)  # No lifespan; anonymous local diagnostic policy.
+    if metadata_only:
+        def database_facts():
+            with repo._connect() as connection:
+                tables = [row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                return {name: sorted((tuple(row) for row in connection.execute(
+                    'SELECT * FROM "' + name.replace('"', '""') + '"')), key=repr) for name in tables}
+
+        def tree():
+            return {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                    for path in tmp_path.rglob('*')}
+
+        before_facts, before_tree = database_facts(), tree()
+
+        def verify_no_writes():
+            assert database_facts() == before_facts
+            assert tree() == before_tree
+            client.close()
+
+        request.addfinalizer(verify_no_writes)
+    return repo, task.id, client
 
 
 def test_version_list_shows_sequence_time_and_current_marker(history_task):
@@ -188,10 +247,10 @@ def test_old_version_detail_reads_its_own_snapshot_without_touching_current(hist
     assert [cue["text"] for cue in body["subtitle_tracks"][0]["cues"]] == ["旧版本文案"]
 
     # 当前版本与指针都不得因为查看旧版本而变化。
-    assert repo.get_creation_task(WORKSPACE_ID, task_id).current_timeline_version_id == "timeline_history_v2"
+    assert repo.task_records.get_creation_task(WORKSPACE_ID, task_id).current_timeline_version_id == "timeline_history_v2"
     listed = client.get(f"/api/creation-tasks/{task_id}/timeline/versions").json()
     assert listed["current_version_id"] == "timeline_history_v2"
-    assert repo.get_creation_task(WORKSPACE_ID, task_id).montage_plan_id == "montage_history"
+    assert repo.task_records.get_creation_task(WORKSPACE_ID, task_id).montage_plan_id == "montage_history"
     assert repo.get_creation_task_montage_plan(WORKSPACE_ID, task_id)["cues"][0]["text"] == "当前版本文案"
     assert repo.get_creation_task_montage_plan(WORKSPACE_ID, task_id)["output_path"] == "artifacts/task_history/v2.mp4"
 
@@ -236,36 +295,44 @@ def test_history_rejects_another_task_version_and_unknown_version(history_task):
     unknown = client.get(f"/api/creation-tasks/{task_id}/timeline/versions/timeline_nope")
     assert unknown.status_code == 404
     assert client.get("/api/creation-tasks/task_nope/timeline/versions").status_code == 404
+    no_cover = client.get(
+        f"/api/creation-tasks/{task_id}/timeline/versions/timeline_history_v1/artifacts/cover")
+    assert no_cover.status_code == 404
+    assert no_cover.json()["detail"] == "该版本没有封面；这一版没有生成封面。"
+    missing_video = client.get(
+        f"/api/creation-tasks/{task_id}/timeline/versions/timeline_history_v2/artifacts/video")
+    assert missing_video.status_code == 404
+    assert missing_video.json()["detail"] == "该版本记录的成片已不在受控产物目录内。"
 
 
 def test_history_detail_preserves_original_operation_from_list(history_task):
     from app.creation.contracts import EditIntent,EditProposal,EditOperation
     from app.graphic_overlays import TextOverlay
     repo,task_id,client=history_task
-    base=repo.get_timeline_version(WORKSPACE_ID,'timeline_history_v2')
+    base=repo.timeline_records.get_timeline_version(WORKSPACE_ID,'timeline_history_v2')
     overlay=TextOverlay(id='history-overlay',text='公开演示',start_seconds=0,end_seconds=1,x=.48,font_size=24).model_dump()
     snapshot=json.loads(json.dumps(base.snapshot))
     snapshot['montage'].update(graphic_overlays=[overlay],status='ready',output_path=None,subtitle_path=None)
     payload={'base_version_id':base.id,'graphic_overlays':[overlay]}
-    intent=repo.create_edit_intent(EditIntent('history-overlay-intent',WORKSPACE_ID,task_id,'添加图文标题','montage',
+    intent=repo.edit_records.create_edit_intent(EditIntent('history-overlay-intent',WORKSPACE_ID,task_id,'添加图文标题','montage',
         ['overlay:history-overlay'],None,'edit_graphic_overlay',{}, {},1,'parsed'))
-    proposal=repo.create_edit_proposal(EditProposal('history-overlay-proposal',WORKSPACE_ID,task_id,intent.id,
+    proposal=repo.edit_records.create_edit_proposal(EditProposal('history-overlay-proposal',WORKSPACE_ID,task_id,intent.id,
         '添加图文标题',['overlay:history-overlay'],{'operation_type':'EditGraphicOverlay','payload':payload},[],{},[]))
     now=datetime.now(timezone.utc)
     operation=EditOperation('history-overlay-operation',WORKSPACE_ID,task_id,proposal.id,'EditGraphicOverlay',payload,
         base.id,'timeline_history_overlay','applied',created_at=now,applied_at=now)
     version=TimelineVersion(operation.result_version_id,WORKSPACE_ID,task_id,base.id,3,snapshot,operation.id)
-    repo.confirm_edit_proposal(WORKSPACE_ID,task_id,proposal.id,operation=operation,result_version=version,
+    repo.edit_adoption.confirm(WORKSPACE_ID,task_id,proposal.id,operation=operation,result_version=version,
         montage_plan_id=snapshot['montage']['id'],montage_payload=snapshot['montage'])
     later=replace(version,id='timeline_history_after_overlay',sequence=4,parent_version_id=version.id,created_by_operation_id=None)
-    repo.create_timeline_version(later)
+    repo.timeline_records.create_timeline_version(later)
     listed=client.get(f'/api/creation-tasks/{task_id}/timeline/versions')
     detail=client.get(f'/api/creation-tasks/{task_id}/timeline/versions/{version.id}')
     assert listed.status_code==200 and detail.status_code==200
     summary=next(item for item in listed.json()['items'] if item['id']==version.id)
     for key,expected in [('operation_id',operation.id),('operation_type','EditGraphicOverlay')]:
         assert detail.json()['version'][key]==summary[key]==expected
-    assert repo.get_creation_task(WORKSPACE_ID,task_id).current_timeline_version_id==later.id
+    assert repo.task_records.get_creation_task(WORKSPACE_ID,task_id).current_timeline_version_id==later.id
 
 
 def test_history_detail_without_source_operation_keeps_null(history_task):

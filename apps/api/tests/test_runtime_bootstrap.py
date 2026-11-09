@@ -1,11 +1,14 @@
 """Actual runtime bindings and failed preparation with synthetic device paths."""
 import asyncio
+import ast
+import inspect
 import json
 import os
 from pathlib import Path
 import sqlite3
 import tempfile
 import threading
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
@@ -21,8 +24,9 @@ def client():
     return TestClient(main.app, client=("127.0.0.1", 50000), raise_server_exceptions=False)
 
 
-def assert_legacy_worker_usable(worker, ingestion):
-    assert worker.submit(lambda: "ready").result(timeout=2) == "ready"
+def assert_device_driver_usable(runtime, ingestion):
+    assert runtime is main.device_runtime and runtime.running
+    assert runtime._thread is not None and runtime._thread.is_alive()
     assert ingestion._thread is not None and ingestion._thread.is_alive()
 
 
@@ -59,16 +63,60 @@ def healthy_idle_predecessor(tmp_path, monkeypatch, later_owner):
     return predecessor, completed
 
 
-def test_database_switch_moves_five_actual_service_writes_together(isolated_host, tmp_path):
+@pytest.fixture
+def isolated_database_host(tmp_path, monkeypatch):
+    from app.config import Settings
+    from app.model_installer import ModelInstaller
+
+    for function in (main._publish_runtime_dependencies, main._activate_runtime_reload, main._publish_runtime_routes):
+        for node in ast.walk(ast.parse(inspect.getsource(function))):
+            if isinstance(node, ast.Global):
+                for name in node.names:
+                    monkeypatch.setattr(main, name, getattr(main, name))
+    monkeypatch.setattr(main.app.router, "routes", list(main.app.router.routes))
+    monkeypatch.setattr(main.app, "openapi_schema", main.app.openapi_schema)
+    for name in ("material_ingestion", "device_runtime", "automation_runtime", "assistant_continuation_driver"):
+        monkeypatch.setattr(main, name, None)
+    monkeypatch.setattr(main, "creation_execution_mode", "legacy")
+    monkeypatch.setattr(main, "material_execution_mode", "legacy")
+    # Exercise real preparation/publication, without starting background drivers.
+    monkeypatch.setattr(main, "_start_material_ingestion", lambda: None)
+    monkeypatch.setattr(main, "_start_device_runtime", lambda **kwargs: None)
+    monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
+    monkeypatch.setenv("TMPDIR", os.environ["TMPDIR"])
+    env_path = tmp_path / "accepted.env"
+    env_path.write_text("")
+    monkeypatch.setenv("AI_VIDEO_DIARY_DOTENV", str(env_path))
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "old.sqlite3"))
+    monkeypatch.setenv("MODEL_ROOT_PATH", str(tmp_path / "models"))
+    main._publish_runtime_dependencies(main.prepare_runtime_dependencies(Settings.from_env()))
+    monkeypatch.setattr(main, "model_installer", ModelInstaller(main.model_catalog))
+
+
+@pytest.mark.parametrize("path_kind", ["absolute", "home", "relative"])
+def test_database_switch_moves_five_actual_service_writes_together(isolated_database_host, tmp_path, monkeypatch, path_kind):
     old_db = Path(main.settings.database_path)
     main.conversation_repo.create("probe", "member", "home", "home", "OLD")
     new_db = tmp_path / "new" / "studio.sqlite3"
-    response = client().post("/api/settings/runtime", json={"database_path": str(new_db)})
+    if path_kind == "home":
+        monkeypatch.setenv("HOME", str(tmp_path))
+        configured_db = "~/new/studio.sqlite3"
+    elif path_kind == "relative":
+        monkeypatch.chdir(tmp_path)
+        configured_db = "new/studio.sqlite3"
+    else:
+        configured_db = str(new_db)
+    response = client().post("/api/settings/runtime", json={"database_path": configured_db})
     assert response.status_code == 200, response.text
-    assert Path(main.settings.database_path) == Path(main.production_repo.database_path) == new_db
+    assert Path(main.settings.database_path).expanduser().resolve() == main.production_repo.database_path.resolve() == new_db
+    assert isinstance(main.quality_check_repo.database_path, str)
+    assert main.quality_check_repo.database_path == str(Path(configured_db).expanduser())
+    assert Path(main.quality_check_repo.database_path).samefile(main.production_repo.database_path)
     assert main.conversation_repo.current_or_create("probe", "member", "home", "home")["title"] != "OLD"
     main.conversation_repo.create("probe", "member", "home", "home", "AFTER")
     main.quality_check_repo.begin("probe", "after-task", "after-version", None, None)
+    with closing(main._quality_inspection_use_case(budget=None)._connect()) as conn:
+        assert conn.execute("SELECT task_id FROM creation_task_quality_checks WHERE workspace_id='probe'").fetchone()[0] == "after-task"
     main.local_members_service.add_member("AFTER")
     main.scheduled_task_service.create_task("probe", ScheduledTaskCreateRequest(
         task_type="creation_render", trigger_mode="idle", target_ref="AFTER",
@@ -103,13 +151,13 @@ def test_database_switch_moves_five_actual_service_writes_together(isolated_host
 def test_invalid_tmp_refuses_before_env_workspace_installer_and_driver_changes(isolated_host, tmp_path, monkeypatch):
     installer, _, _, env_path, _ = isolated_host
     main._reload_runtime_dependencies()
-    worker, ingestion, settings, catalog = main.execution_worker, main.material_ingestion, main.settings, main.model_catalog
+    worker, ingestion, settings, catalog = main.device_runtime, main.material_ingestion, main.settings, main.model_catalog
     before = env_path.read_bytes(), dict(os.environ), tempfile.tempdir
     invalid = tmp_path / "ordinary-file"
     invalid.write_text("not a directory")
     def forbidden(*args):
         pytest.fail("invalid candidate must not persist workspace values or rebind installer")
-    monkeypatch.setattr(main, "apply_workspace_runtime_settings_update", forbidden)
+    monkeypatch.setattr(main, "apply_runtime_settings_save", forbidden)
     monkeypatch.setattr(installer, "rebind_catalog", forbidden)
     response = client().post("/api/settings/runtime", json={
         "temporary_root_path": str(invalid), "model_root_path": str(tmp_path / "next-models"), "llm_model": "not-saved",
@@ -118,8 +166,8 @@ def test_invalid_tmp_refuses_before_env_workspace_installer_and_driver_changes(i
     assert "FileExistsError" in response.text
     assert (env_path.read_bytes(), dict(os.environ), tempfile.tempdir) == before
     assert main.settings is settings and main.model_catalog is catalog
-    assert main.execution_worker is worker and main.material_ingestion is ingestion
-    assert_legacy_worker_usable(worker, ingestion)
+    assert main.device_runtime is worker and main.material_ingestion is ingestion
+    assert_device_driver_usable(worker, ingestion)
 
 
 def test_same_database_reload_retains_pending_invite_and_identity_owner(isolated_host):
@@ -158,7 +206,7 @@ def test_stream_in_progress_refuses_reload_before_configuration_write(isolated_h
         entered.set()
         assert release.wait(5)
         return SimpleNamespace(model_dump=lambda **kwargs: {}, turn_status="completed")
-    stream = main._assistant_stream_response(execute, workspace_id=LEGACY_WORKSPACE_ID)
+    stream = main._assistant_stream_transport().response(execute, workspace_id=LEGACY_WORKSPACE_ID)
     async def consume():
         async for _ in stream.body_iterator:
             pass
@@ -494,8 +542,17 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
     ]
     server_tree = ast.parse((root / 'apps/api/server.py').read_text())
     server_main = next(node for node in server_tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
-    assert [ast.unparse(node) for node in server_main.body[:3]] == [
-        "if sys.argv[1:2] == ['--grant-exec']:\n    _exec_granted_command(sys.argv[2:])\n    return",
+    child_entries = server_main.body[:6]
+    assert all(isinstance(node, ast.If) for node in child_entries)
+    assert [ast.unparse(node.test) for node in child_entries] == [
+        "sys.argv[1:2] == ['--pcm-assembly-worker']", "sys.argv[1:2] == ['--grant-exec']",
+        "sys.argv[1:2] == ['--grant-exec-background']", "sys.argv[1:2] == ['--grant-exec-nice']",
+        "sys.argv[1:2] == ['--cover-worker']", "sys.argv[1:2] == ['--quality-worker']",
+    ]
+    assert ast.unparse(child_entries[1]) == (
+        "if sys.argv[1:2] == ['--grant-exec']:\n    _exec_granted_command(sys.argv[2:])\n    return")
+    assert all(isinstance(node.body[-1], (ast.Return, ast.Raise)) for node in child_entries)
+    assert [ast.unparse(node) for node in server_main.body[6:8]] == [
         "if sys.argv[1:]:\n    raise SystemExit('api-server accepts only its fixed --grant-exec child entry')",
         '_configure_env()',
     ]
@@ -543,8 +600,8 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
 
         def finish():
             module = sys.modules.get('app.main')
-            if module is not None and module.execution_worker is not None:
-                module._stop_execution_worker()
+            if module is not None and module.device_runtime is not None:
+                module._stop_device_runtime()
             if tracker is not None:
                 activity['actual_source_loads'] = tracker.records
                 activity['actual_origins_post'] = tracker.origins()
@@ -618,7 +675,7 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
         assert not database.exists()
         assert 'model_installer' not in vars(main) and 'creation_execution' not in vars(main)
         assert 'settings' not in vars(main) and 'production_repo' not in vars(main)
-        assert main.execution_worker is None and main._bound_runtime_routes == []
+        assert main.device_runtime is None and main._bound_runtime_routes == []
         assert main.device_runtime is main.material_ingestion is main.automation_runtime is main.assistant_continuation_driver is None
         before = tuple(main.app.router.routes)
         position = main._runtime_routes_insert_at
@@ -628,7 +685,7 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
             activity['actual_origins_after_pure_import'] = tracker.origins()
 
         assert main.create_app() is main.app
-        assert activity['construction_order'] == ['graph', 'installer', 'knowledge_routes', 'publish_routes', 'creation', 'worker']
+        assert activity['construction_order'] == ['graph', 'installer', 'knowledge_routes', 'publish_routes', 'creation']
         assert len(graphs) == 1
         graph = graphs[0]
         assert main.settings is graph.settings and main.production_repo is graph.database.production
@@ -646,9 +703,8 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
             'montage_plan': main._create_creation_task_montage_plan_for_workspace,
             'render': main._render_creation_task_montage_for_workspace}
         assert execution.render_is_valid is main._creation_render_is_valid
-        worker = main.execution_worker
-        assert worker._max_workers == 1 and worker._thread_name_prefix == 'creation-execution'
-        assert worker._threads == set() and not worker._shutdown
+        assert main.device_runtime is None
+        assert 'execution_worker' not in vars(main)
         assert main.model_installer._active_thread is None and main.model_installer._writer is None
         bound = tuple(main._bound_runtime_routes)
         after = tuple(main.app.router.routes)
@@ -671,10 +727,10 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
                 'creation_task_quality_checks'} <= tables
         assert main.device_runtime is main.material_ingestion is main.automation_runtime is main.assistant_continuation_driver is None
         assert all(activity[name] == [] for name in ('thread_starts', 'native_commands', 'resource_samples', 'dispatches', 'network'))
-        main._stop_execution_worker()
-        assert worker._shutdown and main.execution_worker is None
+        main._stop_device_runtime()
+        assert main.device_runtime is None
         activity['explicit_factory'] = {'same_dependency_graph': True, 'original_callbacks': True,
-            'original_installer_reload_callback_forwarded': True, 'one_unstarted_worker_closed': True,
+            'original_installer_reload_callback_forwarded': True, 'no_legacy_pool_or_started_device_driver': True,
             'runtime_routes': len(bound), 'static_route_and_handler_order_preserved': True,
             'real_schema_tables': sorted(tables), 'original_37_value_profile': True,
             'startup_shutdown_or_reload_executions': 0}

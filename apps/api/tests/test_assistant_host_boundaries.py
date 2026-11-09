@@ -9,8 +9,6 @@ import shutil
 import subprocess
 import sys
 import threading
-import signal
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -400,9 +398,12 @@ def test_native_release_proof_runs_after_host_worker_drains_and_keeps_unreleased
     control=TurnControl(terminate=host._terminate_process_group)
     control.begin('native-release')
     active,finish,drained=threading.Event(),threading.Event(),threading.Event()
-    native_released={'value':False};proofs=[]
+    native_released={'value':False}
+    proofs=[]
     def worker():
-        active.set();assert finish.wait(1);drained.set()
+        active.set()
+        assert finish.wait(1)
+        drained.set()
     def verify(deadline):
         assert drained.is_set()
         proofs.append(deadline)
@@ -426,7 +427,9 @@ def test_native_release_proof_runs_after_host_worker_drains_and_keeps_unreleased
         def cancel(self, **kwargs):
             return {'jobs': [] if self.complete else [{'status':'queued','process_state':'not_started','release_state':'not_acquired'}],
                     'total_count':0 if self.complete else 1,'truncated':False,'cancellation_complete':self.complete}
-    owner=NativeOwner();entered=threading.Event();failures=[]
+    owner=NativeOwner()
+    entered=threading.Event()
+    failures=[]
     turn_id='native-queued-cancellation'
     host.register_turn_control(turn_id)
     def run_host():
@@ -438,7 +441,8 @@ def test_native_release_proof_runs_after_host_worker_drains_and_keeps_unreleased
                 source_binding={'turn_id':turn_id,'task_id':'task','conversation_id':'conversation','input_id':'input'})
         except BaseException as error:
             failures.append(error)
-    worker=threading.Thread(target=run_host);worker.start()
+    worker=threading.Thread(target=run_host)
+    worker.start()
     try:
         assert entered.wait(3)
         with pytest.raises(AssistantProcessReleaseError):

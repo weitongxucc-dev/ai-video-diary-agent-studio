@@ -10,11 +10,101 @@ import struct
 import wave
 from contextlib import contextmanager, ExitStack
 import fcntl
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from app.device_scheduler import RecoveryBlocked
 
 EMPTY_PCM_SHA256 = hashlib.sha256(b'').hexdigest()
+
+
+def pcm_manifest_chunks(fields, segments):
+    """The original sorted JSON bytes, retaining only one segment's text.
+
+    PCM keys use json.dumps' default ensure_ascii=True, including its spaces
+    and datetime str() encoding. They are not execution_input digest bytes.
+    """
+    def encoded(value):
+        return json.dumps(value, sort_keys=True, default=str).encode()
+
+    yield b'{'
+    for index, name in enumerate(sorted((*fields, 'segments'))):
+        if index:
+            yield b', '
+        yield encoded(name) + b': '
+        if name != 'segments':
+            yield encoded(fields[name])
+            continue
+        yield b'['
+        for ordinal, segment in enumerate(segments):
+            if ordinal:
+                yield b', '
+            yield encoded(asdict(segment))
+        yield b']'
+    yield b'}'
+
+
+def pcm_manifest_digest(fields, segments, *, resources=None):
+    digest = hashlib.sha256()
+    if resources is not None:
+        digest.update(b'[')
+    for chunk in pcm_manifest_chunks(fields, segments):
+        digest.update(chunk)
+    if resources is not None:
+        digest.update(b', ')
+        digest.update(json.dumps(resources, sort_keys=True, default=str).encode())
+        digest.update(b']')
+    return digest.hexdigest()
+
+
+def narration_edit_manifest_chunks(fields, script_fields, sections, segments):
+    """Encode the original edit manifest, with independent ordered body streams.
+
+    Script sections use their original ordinal; narration rows use their saved
+    created_at/id order. These are the legacy default-ASCII JSON bytes, not the
+    execution digest encoding or the effective/adopted script projection.
+    """
+    if 'script' in fields or 'segments' in fields or 'sections' in script_fields:
+        raise ValueError('局部配音摘要 metadata 不能携带正文')
+
+    def encoded(value):
+        return json.dumps(value, sort_keys=True, default=str).encode()
+
+    def records(values):
+        yield b'['
+        for index, value in enumerate(values):
+            if index:
+                yield b', '
+            yield encoded(asdict(value))
+        yield b']'
+
+    yield b'{'
+    for index, name in enumerate(sorted((*fields, 'script', 'segments'))):
+        if index:
+            yield b', '
+        yield encoded(name) + b': '
+        if name == 'segments':
+            yield from records(segments)
+        elif name == 'script':
+            yield b'{'
+            for ordinal, field in enumerate(sorted((*script_fields, 'sections'))):
+                if ordinal:
+                    yield b', '
+                yield encoded(field) + b': '
+                if field == 'sections':
+                    yield from records(sections)
+                else:
+                    yield encoded(script_fields[field])
+            yield b'}'
+        else:
+            yield encoded(fields[name])
+    yield b'}'
+
+
+def narration_edit_manifest_digest(fields, script_fields, sections, segments):
+    digest = hashlib.sha256()
+    for chunk in narration_edit_manifest_chunks(fields, script_fields, sections, segments):
+        digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _source_stat(info):
@@ -22,8 +112,26 @@ def _source_stat(info):
 
 
 @contextmanager
-def prepare_narration_source(repository, task, plan, actor, *, binding=None):
+def prepare_narration_source(repository, task, plan, actor, *, binding=None, selected_voice=None):
     """Host-owned full-byte evidence, held until the short adoption/recovery commit."""
+    from app.creation.execution_input import execution_input_digest, validate_execution_relationships
+    with repository.execution_inputs.creation_execution_read() as conn:
+        snapshot = repository.execution_inputs.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
+        if (snapshot.task.confirmed_script_id != task.confirmed_script_id or snapshot.plan != plan):
+            raise ValueError('文案或方案在来源准备前变化，未封存新输入')
+        task, plan = snapshot.task, snapshot.plan
+        validate_execution_relationships(task, snapshot.script_header, plan)
+        revision = snapshot.input_digest
+        if selected_voice is not None:
+            # Existing voice replacement prepares a candidate before its guarded
+            # adoption; the caller seals the adopted plan in the write transaction.
+            plan = replace(plan, selected_voice=selected_voice)
+            _, fields = repository.script_records.read_execution_script_metadata(
+                conn, task.workspace_id, task.confirmed_script_id)
+            revision = execution_input_digest(fields, plan,
+                repository.script_records.iter_execution_script_sections(conn, task.workspace_id, task.confirmed_script_id))
+        authorization = repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id, connection=conn)
+        goal_revision = repository.task_authorization_records.task_authorization_goal_revision(task.workspace_id, task.id, connection=conn)
     if task.owner_user_id is not None and task.owner_user_id != (actor.user_id or actor.member_id):
         raise PermissionError('配音来源采用不属于原任务成员')
     inputs, reference, qualified = narration_reference_facts(repository, task, plan)
@@ -65,7 +173,7 @@ def prepare_narration_source(repository, task, plan, actor, *, binding=None):
             'sha256': digest.hexdigest(), 'size_bytes': before.st_size,
             'segment_id': reference.segment_id, 'start_seconds': reference.start_seconds,
             'end_seconds': reference.end_seconds,
-            'goal_revision': repository.task_authorization_goal_revision(task.workspace_id, task.id)}
+            'goal_revision': goal_revision}
         receipt = repository.voice_sampling.received_source_evidence(inputs.voice)
         if receipt is not None and (receipt['sha256'], receipt['size_bytes']) != (content['sha256'], content['size_bytes']):
             raise RecoveryBlocked('original_source_content_changed: 当前声音与原采样接收字节不一致')
@@ -75,9 +183,6 @@ def prepare_narration_source(repository, task, plan, actor, *, binding=None):
             if (binding['narration_reference']['profile'] != qualified['profile']
                     or binding['narration_reference']['source_asset_digest'] != qualified['source_asset_digest']):
                 raise RecoveryBlocked('原配音档案或来源依赖已变化')
-        authorization = repository.get_task_authorization(task.workspace_id, task.id)
-        from app.creation_execution import revision_digest
-        revision = revision_digest(repository.get_creation_task_script(task.workspace_id, task.confirmed_script_id), plan)
         yield {'content': content, 'narration_reference': qualified, 'fd': fd,
             'authorization': authorization, 'sampling_receipt': receipt,
             'adoption_revision_digest': revision,
@@ -93,9 +198,9 @@ def verify_narration_source(repository, task, plan, prepared, *, connection):
     if _source_stat(os.fstat(prepared['fd'])) != tuple(reference[key] for key in (
             'device', 'inode', 'size_bytes', 'mtime_ns', 'ctime_ns')):
         raise RecoveryBlocked('配音来源在封存提交前变化')
-    if (repository.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection)
+    if (repository.task_authorization_records.task_authorization_goal_revision(task.workspace_id, task.id, connection=connection)
             != prepared['content']['goal_revision']
-            or repository.get_task_authorization(task.workspace_id, task.id, connection=connection)
+            or repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id, connection=connection)
             != prepared['authorization']):
         raise RecoveryBlocked('配音目标或任务授权在来源准备后变化')
 
@@ -116,18 +221,18 @@ def narration_reference_facts(repository,task,plan,prepared=None):
         return (hashlib.sha256(json.dumps(json_value(repository.get_asset(task.workspace_id,identity)),
             sort_keys=True).encode()).hexdigest() if identity else None)
     if prepared is None:
-        inputs=repository.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,task_id=task.id,
+        inputs=repository.profile_inputs.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,task_id=task.id,
             voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
         reference=repository.profile_reference_input(inputs.voice,viewer_user_id=task.owner_user_id)
         prepared={'profile':json_value(inputs.voice),'reference':asdict(reference),'reader':task.owner_user_id,
             'source_asset_digest':asset_digest(reference.asset_id)}
     else:
-        inputs=repository.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
+        inputs=repository.profile_inputs.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
             voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
         reference=ProfileReferenceInput(**prepared['reference'])
         from app.profiles.contracts import profile_use_failure
-        from app.production import content_readable
-        current=repository.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
+        from app.source_policy import knowledge_item_readable as content_readable
+        current=repository.profile_inputs.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
             voice_profile_id=plan.selected_voice.profile_id).voice
         for profile in (inputs.voice,current):
             failure=profile_use_failure(profile,content_type='voice',usage_scope='narration')
@@ -294,7 +399,9 @@ def read_receipt(path, *, unit_id, job_id, source_digest, baseline, sources, fin
             part=os.pread(fd,min(65536,remaining),offset)
             if not part:
                 raise RecoveryBlocked('原PCM封存数据不完整')
-            digest.update(part);offset+=len(part);remaining-=len(part)
+            digest.update(part)
+            offset+=len(part)
+            remaining-=len(part)
         after=os.fstat(fd)
         if (digest.hexdigest()!=value['pcm_sha256'] or
                 (after.st_size,after.st_mtime_ns,after.st_ctime_ns,after.st_nlink)!=

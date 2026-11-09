@@ -1,4 +1,5 @@
 """Real preview service/repository/device request; synthetic provider, no model load."""
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
@@ -10,18 +11,18 @@ from app.granted_subprocess import GrantedCommandMemoryPressure
 from app.host_memory import MemoryDecision, MemorySample
 from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
 from app.persistence_json import _json_payload
-from tests.test_profile_api_contract import repo, setup_preview, VoiceProvider
+from tests.test_profile_api_contract import repo as repo, setup_preview, VoiceProvider, record_only_preview
 
 
 class PressureProvider(VoiceProvider):
     def __init__(self, error):
         self.error, self.calls = error, 0
 
-    def generate(self, **kwargs):
+    def generate_granted(self, **kwargs):
         if self.error is not None:
             self.calls += 1
             raise self.error
-        return super().generate(**kwargs)
+        return super().generate_granted(**kwargs)
 
 
 def _pressure():
@@ -34,7 +35,7 @@ def test_voice_preview_text_budget_includes_fixed_reference_transcript(repo, tmp
     runtime, _, _, queued = setup_preview(repo, tmp_path)
     owner = runtime.registrations["media_preview"].owner
     _, _, resources = owner.facts(queued)
-    voice = repo.get_versioned_voice_profile("ws", queued.voice_profile_id, queued.voice_version)
+    voice = repo.profile_records.get_versioned_voice_profile("ws", queued.voice_profile_id, queued.voice_version)
     assert resources["text_chars"] == len(queued.preview_input["preview_text"]) + len(voice.reference_text)
     with repo._connect() as connection:
         request = connection.execute("SELECT resources_json FROM device_work_requests WHERE id=?",
@@ -99,12 +100,12 @@ def test_invalid_resource_contract_releases_proven_group_without_pressure_retry(
 
 
 def test_owner_write_failure_rolls_back_owner_queue_and_permit_together(repo, tmp_path, monkeypatch):
-    provider = PressureProvider(_pressure())
-    runtime, resources, _, queued = setup_preview(repo, tmp_path, provider=provider)
+    runtime, resources, _, queued = record_only_preview(repo, tmp_path, monkeypatch)
     resources.admit_value = True
     registration = runtime.registrations["media_preview"]
     grant = runtime.scheduler.pick_and_grant()
-    original = repo.bind_preview_device_request
+    repo.preview_records.save_media_preview_run(replace(queued, status="running"))
+    original = repo.preview_records.bind_preview_device_request
     def fail_after_owner_write(run, request_id, *, conn=None):
         current = original(run, request_id, conn=conn)
         if run.status == "queued" and run.reason == "resource_pressure":
@@ -112,9 +113,14 @@ def test_owner_write_failure_rolls_back_owner_queue_and_permit_together(repo, tm
                          (_json_payload(run), run.workspace_id, run.id))
             raise OSError("injected owner checkpoint failure")
         return current
-    monkeypatch.setattr(repo, "bind_preview_device_request", fail_after_owner_write)
+    monkeypatch.setattr(repo.preview_records, "bind_preview_device_request", fail_after_owner_write)
     with pytest.raises(OSError, match="checkpoint failure"):
-        registration.executor.execute(grant, runtime.scheduler)
+        waiting = replace(queued, status='queued', reason='resource_pressure',
+            impact='Declared pressure observation', repair_action='Wait for resources')
+        runtime.scheduler.defer_unit(grant, reason='resource_pressure',
+            retry_not_before_utc=datetime.now(timezone.utc)+timedelta(seconds=30),
+            owner_database_path=repo.database_path, owner_write=lambda conn, _:
+                repo.preview_records.checkpoint(waiting, grant.request_id, connection=conn))
     assert registration.owner.read("ws", queued.id).status == "running"
     with repo._connect() as conn:
         assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (queued.device_request_id,)).fetchone()[0] == "granted"
@@ -133,14 +139,16 @@ def test_defer_owner_callback_requires_same_database(repo, tmp_path):
 
 
 def test_unknown_release_prevents_owner_callback_and_defer_commit(repo, tmp_path, monkeypatch):
-    provider = PressureProvider(_pressure())
-    runtime, resources, _, queued = setup_preview(repo, tmp_path, provider=provider)
+    runtime, resources, _, queued = record_only_preview(repo, tmp_path, monkeypatch)
     resources.admit_value = True
     grant = runtime.scheduler.pick_and_grant()
     monkeypatch.setattr(resources, "released", lambda _: None)
-    monkeypatch.setattr(repo, "bind_preview_device_request", lambda *_a, **_k: pytest.fail("owner changed before release proof"))
+    monkeypatch.setattr(repo.preview_records, "bind_preview_device_request", lambda *_a, **_k: pytest.fail("owner changed before release proof"))
     with pytest.raises(RecoveryBlocked):
-        runtime.registrations["media_preview"].executor.execute(grant, runtime.scheduler)
+        runtime.scheduler.defer_unit(grant, reason='resource_pressure',
+            retry_not_before_utc=datetime.now(timezone.utc)+timedelta(seconds=30),
+            owner_database_path=repo.database_path, owner_write=lambda conn, _:
+                repo.preview_records.checkpoint(queued, grant.request_id, connection=conn))
     with repo._connect() as conn:
         assert conn.execute("SELECT state FROM device_work_requests WHERE id=?", (queued.device_request_id,)).fetchone()[0] == "granted"
         assert conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()[0] != "free"

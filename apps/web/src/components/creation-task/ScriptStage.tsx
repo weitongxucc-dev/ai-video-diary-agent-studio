@@ -5,19 +5,48 @@ import Link from "next/link";
 import { Check, LoaderCircle } from "lucide-react";
 import { Button } from "../ui/button";
 import { useEffect, useRef, useState } from "react";
-import { transferAssistantReplyToScript, getAssistantScriptContext, saveAssistantScriptDraft, saveScriptLibraryEntry, getCreationPlan, getCreationTaskScriptSections } from "@/lib/api";
+import { transferAssistantReplyToScript, getAssistantScriptContext, getCreationTaskScriptEditSources, saveAssistantScriptDraft, saveScriptLibraryEntry, getCreationPlan, getCreationTaskScriptSections } from "@/lib/api";
 import type { CreationTask, CreationTaskScript, CreationTaskScriptSectionWindow, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 import styles from "../CreationTaskWorkspace.module.css";
 import { ScriptWindowEditor } from "./ScriptWindowEditor";
+import { getScriptLibraryRequest, isScriptLibraryWriteRejected } from "@/lib/api/script-library";
+import { CreationPlanApiError } from "@/lib/api/creation-transport";
+export function ScriptGenerationStatus({ requestId, receipt, working, stopping, error, onRead, onStop }: {
+    requestId: string;
+    receipt: import("@/lib/types/creation-tasks").CreationTaskScriptGenerationReceipt | null;
+    working: "submit" | "read" | "stop" | null;
+    stopping: boolean;
+    error: string | null;
+    onRead: () => void;
+    onStop: () => void;
+}) {
+    const [reading, setReading] = useState(false);
+    const turnLabels = { running: "运行中", completed: "已结束", failed: "失败", stopped: "已停止" };
+    const runLabels = { running: "运行中", succeeded: "已结束", failed: "失败" };
+    const labels = { running: "生成进行中", stopping: "正在停止", draft_ready: "草稿已保存，待用户检查和采用", failed: "生成失败", stopped: "已停止", incomplete: "目标文案尚未完整", unknown: "原结果尚未核实" };
+    return <div aria-label="原生成请求">
+        <p role="status">原生成请求 {requestId}：{receipt ? `${labels[receipt.status]}；回合${turnLabels[receipt.turn_status]}；文案运行${runLabels[receipt.run_status]}。` : working === "submit" ? "正在提交，结果尚待核对。" : "结果尚待核对，不重复提交。"}</p>
+        <p>此按钮只生成草稿，不会自动确认或执行。</p>
+        {receipt?.result_stale ? <p>原结果与当前来源或版本不一致，仅按原请求查看。</p> : null}
+        {(stopping || receipt?.stop_requested) && receipt?.turn_status === "running" ? <p role="status">已请求停止，等待原回合回执。</p> : null}
+        {error ? <p role="alert">{error}</p> : null}
+        <button type="button" disabled={working !== null} onClick={onRead}>查询原生成结果</button>
+        {receipt?.turn_status === "running" ? <button type="button" disabled={working !== null || stopping || receipt.stop_requested} onClick={onStop}>停止本次生成</button> : null}
+        {receipt?.script_id && receipt.script_updated_at ? <>
+            <button type="button" onClick={() => setReading(value => !value)}>{reading ? "收起原请求稿件" : "只读查看原请求稿件"}</button>
+            {reading ? <ScriptSectionReader key={`${receipt.script_id}:${receipt.script_updated_at}`} script={{task_id: receipt.task_id, id: receipt.script_id}} expectedVersion={receipt.script_updated_at}/> : null}
+        </> : null}
+    </div>;
+}
 export function ConfirmedScriptView({ script }: {
     script: CreationTaskScript;
 }) {
     return <ScriptSectionReader key={`${script.task_id}:${script.id}:${script.updated_at}`} script={script}/>;
 }
-function ScriptSectionReader({ script }: { script: CreationTaskScript }) {
+function ScriptSectionReader({ script, expectedVersion }: { script: { task_id: string; id: string; title?: string; selection_status?: CreationTaskScript["selection_status"] }; expectedVersion?: string }) {
     const [cursors, setCursors] = useState([0]);
     const [reload, setReload] = useState(0);
-    const revision = useRef<string | undefined>(undefined);
+    const revision = useRef<string | undefined>(expectedVersion);
     const [read, setRead] = useState<
         { status: "loading" } | { status: "failed"; message: string }
         | { status: "ready"; page: CreationTaskScriptSectionWindow }
@@ -30,21 +59,22 @@ function ScriptSectionReader({ script }: { script: CreationTaskScript }) {
             after_ordinal: after, expected_updated_at: revision.current,
         }).then((page) => {
             if (!active) return;
+            if (expectedVersion && (page.task_id !== script.task_id || page.script_id !== script.id || page.updated_at !== expectedVersion)) throw new Error("原请求稿件版本与回执不符，当前草稿保留。");
             revision.current = page.updated_at;
             setRead({ status: "ready", page });
         }).catch((cause) => {
             if (active) setRead({ status: "failed", message: cause instanceof Error ? cause.message : "文案段落没有读回。" });
         });
         return () => { active = false; };
-    }, [script.task_id, script.id, after, reload]);
+    }, [script.task_id, script.id, after, reload, expectedVersion]);
     function restart() {
-        revision.current = undefined;
+        revision.current = expectedVersion;
         setCursors([0]);
         setReload((value) => value + 1);
     }
     const page = read.status === "ready" ? read.page : null;
     return <section className={styles.workSection}>
-        <div className={styles.sectionHeading}><h2>{page?.title ?? script.title}</h2><span className={styles.artifactStatus}>{(page?.selection_status ?? script.selection_status) === "confirmed" ? "已确认" : "待确认草稿"}</span></div>
+        <div className={styles.sectionHeading}><h2>{page?.title ?? script.title}</h2><span className={styles.artifactStatus}>{(page?.selection_status ?? script.selection_status) === "confirmed" ? "已确认" : (page?.selection_status ?? script.selection_status) === "draft" ? "待确认草稿" : "正在核对原稿状态"}</span></div>
         {read.status === "loading" ? <p role="status">正在读取文案段落…</p> : null}
         {read.status === "failed" ? <><p role="alert">{read.message}</p><Button variant="outline" onClick={restart}>重新读取文案</Button></> : null}
         {page ? <>
@@ -70,46 +100,82 @@ export function ReadonlyScriptsView({ scripts, confirmedScriptId }: {
     <Tabs.Panel value="draft" keepMounted><ConfirmedScriptView script={latest}/></Tabs.Panel>
   </Tabs.Root>;
 }
-export function ScriptLibrarySave({ script }: {
-    script: CreationTaskScript;
-}) {
-    const [name, setName] = useState(script.title);
-    const [category, setCategory] = useState("");
+type LibrarySavePending = { source_task_id: string; input: import('@/lib/types/script-library').ScriptLibrarySaveInput };
+type LibrarySaveProps = { script: CreationTaskScript; onReloadSource?: () => Promise<void> };
+export function ScriptLibrarySave(props: LibrarySaveProps) {
+    return <ScriptLibrarySaveForm key={`${props.script.task_id}:${props.script.id}`} {...props}/>;
+}
+function ScriptLibrarySaveForm({ script, onReloadSource }: LibrarySaveProps) {
+    const [form, setForm] = useWorkspaceViewState<{ name: string; category: string; pending: LibrarySavePending | null }>(`library-save-input:${script.task_id}:${script.id}`, () => ({ name: script.title, category: '', pending: null }));
     const [saving, setSaving] = useState(false);
-    const [feedback, setFeedback] = useState<string | null>(null);
-    const [failed, setFailed] = useState(false);
-    const [savedEntry, setSavedEntry] = useState<{
-        id: string;
-        source_task_id: string;
-        version: number;
-    } | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [sourceStale, setSourceStale] = useState(false);
+    const [saved, setSaved] = useState<import('@/lib/types/script-library').ScriptLibrarySaveReceipt | null>(null);
+    const active = useRef(true);
+    const pendingRef = useRef(form.pending);
+    pendingRef.current = form.pending;
+    useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
+    useEffect(() => { setSourceStale(false); setError(null); }, [script.updated_at]);
+    function settle(original: LibrarySavePending, receipt: import('@/lib/types/script-library').ScriptLibrarySaveReceipt) {
+        if (receipt.status !== 'saved' || receipt.request_id !== original.input.request_id
+            || receipt.source_script_id !== original.input.source_script_id || receipt.source_task_id !== original.source_task_id
+            || receipt.source_updated_at !== original.input.expected_source_updated_at
+            || receipt.entry.id !== receipt.entry_id || receipt.entry.version !== receipt.version) {
+            throw new Error('原入库回执与来源版本或请求不符，当前表单和原 UUID 保留。');
+        }
+        setSaved(receipt);
+        pendingRef.current = null;
+        setForm(current => current.pending?.input.request_id === original.input.request_id ? { ...current, pending: null } : current);
+        setError(null);
+    }
     async function save() {
-        setSaving(true);
-        setFeedback(null);
-        setFailed(false);
+        if (pendingRef.current) return;
+        const original: LibrarySavePending = { source_task_id: script.task_id, input: {
+            request_id: crypto.randomUUID(), expected_source_updated_at: script.updated_at,
+            source_script_id: script.id, name: form.name, category: form.category,
+        } };
+        pendingRef.current = original;
+        setForm(current => ({ ...current, pending: original }));
+        setSaving(true); setError(null); setSourceStale(false);
         try {
-            const entry = await saveScriptLibraryEntry({ source_script_id: script.id, name, category });
-            setSavedEntry(entry);
-            setFeedback(`已保存「${entry.name}」版本 ${entry.version}；原文案与成片不变。`);
-        }
-        catch (cause) {
-            setFailed(true);
-            setFeedback(cause instanceof Error ? cause.message : "文案保存失败");
-        }
-        finally {
-            setSaving(false);
-        }
+            const receipt = await saveScriptLibraryEntry(original.input);
+            if (active.current) settle(original, receipt);
+        } catch (cause) {
+            if (!active.current) return;
+            if (isScriptLibraryWriteRejected(cause)) {
+                pendingRef.current = null;
+                setForm(current => ({ ...current, pending: null }));
+                if (cause instanceof CreationPlanApiError && cause.status === 409) setSourceStale(true);
+            }
+            setError(cause instanceof Error ? cause.message : '入库结果未能读回，当前表单仍保留。');
+        } finally { if (active.current) setSaving(false); }
+    }
+    async function inspect() {
+        const original = form.pending;
+        if (!original) return;
+        setSaving(true); setError(null);
+        try {
+            const receipt = await getScriptLibraryRequest(original.input.request_id, 'save');
+            if (active.current) settle(original, receipt);
+        } catch (cause) { if (active.current) setError(cause instanceof CreationPlanApiError && cause.status === 404
+            ? '尚未查到原入库回执，不代表未提交；原 UUID 和当前表单继续保留。'
+            : cause instanceof Error ? cause.message : '原入库回执未能读回，没有重新提交。'); }
+        finally { if (active.current) setSaving(false); }
     }
     return <section className={styles.workSection} aria-label="保存到文案库">
-    <h3>保存为可复用文案</h3>
-    <label className={styles.field}><span>文案名称</span><input value={name} onChange={event => setName(event.target.value)}/></label>
-    <label className={styles.field}><span>文案分类</span><input placeholder="例如产品介绍" value={category} onChange={event => setCategory(event.target.value)}/></label>
-    <button className="modern-primary-button" disabled={saving || !name.trim()} onClick={() => void save()} type="button">{saving ? "正在保存…" : "存入文案库"}</button>
-    <Link href={savedEntry ? `/knowledge?entry_id=${encodeURIComponent(savedEntry.id)}&source_task_id=${encodeURIComponent(savedEntry.source_task_id)}` : "/knowledge"}>{savedEntry ? `查看该条目 · 版本 ${savedEntry.version}` : "查看文案库"}</Link>
-    <p>同一原任务以同名再次保存会追加历史版本；复用的新稿仍需重新确认。</p>
-    {feedback ? <p role={failed ? "alert" : "status"}>{feedback}</p> : null}
-  </section>;
+        <h3>保存为可复用文案</h3>
+        <label className={styles.field}><span>文案名称</span><input value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))}/></label>
+        <label className={styles.field}><span>文案分类</span><input placeholder="例如产品介绍" value={form.category} onChange={event => setForm(current => ({ ...current, category: event.target.value }))}/></label>
+        <button className="modern-primary-button" disabled={saving || form.pending !== null || !form.name.trim()} onClick={() => void save()} type="button">{saving ? '正在核对入库请求…' : form.pending ? '入库结果待核对' : '存入文案库'}</button>
+        {form.pending ? <><p role="status">原入库请求 {form.pending.input.request_id} 的结果尚待核对；来源版本 {form.pending.input.expected_source_updated_at} 与原输入已保留，不重复提交。</p><Button variant="outline" disabled={saving} onClick={() => void inspect()}>查询原入库结果</Button></> : null}
+        {sourceStale && onReloadSource ? <Button variant="outline" disabled={saving} onClick={() => { setSaving(true); void onReloadSource().catch(cause => { if (active.current) setError(cause instanceof Error ? cause.message : '来源版本未能读回。'); }).finally(() => { if (active.current) setSaving(false); }); }}>读取当前来源版本</Button> : null}
+        <Link href={saved ? `/knowledge?entry_id=${encodeURIComponent(saved.entry_id)}&source_task_id=${encodeURIComponent(saved.source_task_id)}` : '/knowledge'}>{saved ? `查看该条目 · 版本 ${saved.version}` : '查看文案库'}</Link>
+        <p>同一原任务以同名再次保存会追加历史版本；复用的新稿仍需重新确认。</p>
+        {saved ? <p role="status">原请求已保存「{saved.entry.name}」版本 {saved.version}；来源版本 {saved.source_updated_at}，原文案与成片不变。</p> : null}
+        {error ? <p role="alert">{error}</p> : null}
+    </section>;
 }
+
 export function PlanReplyDraftAction({ task, busy = false, onComplete }: {
     task: CreationTask;
     busy?: boolean;
@@ -223,19 +289,19 @@ function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm }: Om
     const [draft, setDraft] = useWorkspaceViewState(`script:${script.id}:${script.updated_at}`+".draft", script);
     const [sourceRead, setSourceRead] = useState<
         { status: "loading" } | { status: "failed"; message: string }
-        | { status: "ready"; sources: { reference_id: string; title: string; text: string }[] }
+        | { status: "ready"; sources: { reference_id: string; title: string }[] }
     >({ status: "loading" });
     const [savingDraft, setSavingDraft] = useState(false);
     const [draftError, setDraftError] = useState<string | null>(null);
     useEffect(() => {
         let active = true;
         setSourceRead({ status: "loading" });
-        void getAssistantScriptContext(taskId).then((context) => { if (active)
+        void getCreationTaskScriptEditSources(taskId, script.id).then((context) => { if (active)
             setSourceRead({ status: "ready", sources: context.sources }); })
             .catch((cause) => { if (active)
             setSourceRead({ status: "failed", message: cause instanceof Error ? cause.message : "无法读取当前任务资料。" }); });
         return () => { active = false; };
-    }, [taskId]);
+    }, [taskId, script.id]);
     async function saveDraft() {
         const submittedDraft = draft;
         setSavingDraft(true);

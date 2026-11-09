@@ -6,18 +6,16 @@ import json
 import time
 import hashlib
 
-from pydantic import ValidationError
-from fastapi import HTTPException
 from app.creation.editing.metadata_use_case import EditPreviewRejected
-from app.assistant_goal_continuation import GoalProjectionRejected
-from app.assistant.projection import _safe_business_failure
+from app.assistant.task_business_errors import TaskBusinessRejected, TaskOperationRejected, TaskInvocation
+from app.assistant.script_generation_policy import SCRIPT_GENERATION_OPERATIONS, is_script_generation
 from app.creation.intent_use_case import CreationIntentUseCase
-from app.creation.script_draft_use_case import ScriptDraftRejected
-from app.creation.execution_control import ExecutionControlRejected
-from app.creation.output_observation_use_case import OutputObservationRejected, read_original_observation_request
+from app.creation.output_observation_use_case import read_original_observation_request
 from app.creation_execution import CreationExecutionActor, ExecutionStartRequest
 from app.schemas import CreationTaskScriptDraftRequest, CreationTaskScriptConfirmRequest, CreationTaskTopicConfirmRequest
 
+
+from contextlib import nullcontext as _Borrow
 
 def record_narration_semantic_review(production, task, origin, payload, *, write_guard):
     """Store a model comparison, never a deterministic factual verdict."""
@@ -51,19 +49,12 @@ def record_narration_semantic_review(production, task, origin, payload, *, write
     return {'semantic_review_ref':event.id,**event.payload}
 
 
-class TaskBusinessRejected(PermissionError):
-    def __init__(self, reason, *, status_code=403):
-        self.status_code=status_code
-        self.detail={"error":"task_goal_authority_unavailable","reason":reason}
-        super().__init__(reason)
-
-
 class TaskBusiness:
     """Finite operations on one persisted goal, with the same check at owner commit."""
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -81,35 +72,33 @@ class TaskBusiness:
         self.media_jobs_list=media_jobs_list
         self.execution_capabilities=execution_capabilities
         self.read_script_sections=read_script_sections
+        self.quality=quality
         self.device_preparation=device_preparation
+        self.generation_case,self.creator_memory=generation_case,creator_memory
+        self.execution_status=execution_status
 
-    def native_call(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic):
+    def invoke_native(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic, invocation: TaskInvocation):
         """Same task authorization, with the native owner as sole execution writer."""
-        entered=False
-        try:
-            actor,task,goal,origin,_scope=self.check(source_binding,cancel_event,deadline_monotonic,check_version=False)
-            if self.native_case is None: raise TaskBusinessRejected('原生执行用例尚未装配')
-            native_origin={**origin,'task_id':task.id,'assistant_turn_id':source_binding['turn_id'],
-                'input_id':origin.get('input_id') or source_binding['turn_id'],
-                'session_id':source_binding['session_id'],'sdk_round':source_binding.get('sdk_round',0)}
-            guard=lambda conn:self.check(source_binding,cancel_event,deadline_monotonic,connection=conn,check_version=False)
-            entered=True
-            value=self.native_case.dispatch(operation,arguments,actor=actor,origin=native_origin,
-                write_guard=guard,runtime=self.runtime() if operation in {'submit_task_command','cancel_task_command','register_task_artifacts'} else None,
-                call_id=call_id,cancel_event=cancel_event,
-                deadline_monotonic=deadline_monotonic)
-            from fastapi.encoders import jsonable_encoder
-            return {'ok':True,'value':jsonable_encoder(value)}
-        except (TaskBusinessRejected,HTTPException) as exc:
-            return {'ok':False,'failure':{'status_code':exc.status_code,'reason':str(exc.detail),
-                'submission_effect':'unknown' if entered else 'not_submitted'}}
-        except (KeyError,ValueError,PermissionError) as exc:
-            return {'ok':False,'failure':{'status_code':403 if isinstance(exc,PermissionError) else 409,
-                'reason':str(exc),'submission_effect':'unknown' if entered else 'not_submitted'}}
+        if is_script_generation(source_binding):
+            raise TaskBusinessRejected('生成按钮不授权原生执行或采用操作')
+        actor,task,goal,origin,_scope=self.check(source_binding,cancel_event,deadline_monotonic,check_version=False)
+        if self.native_case is None:
+            raise TaskBusinessRejected('原生执行用例尚未装配')
+        native_origin={**origin,'task_id':task.id,'assistant_turn_id':source_binding['turn_id'],
+            'input_id':origin.get('input_id') or source_binding['turn_id'],
+            'session_id':source_binding['session_id'],'sdk_round':source_binding.get('sdk_round',0)}
+        def guard(conn):
+            return self.check(source_binding,cancel_event,deadline_monotonic,connection=conn,check_version=False)
+        invocation.owner_entered=True
+        value=self.native_case.dispatch(operation,arguments,actor=actor,origin=native_origin,
+            write_guard=guard,runtime=self.runtime() if operation in {'submit_task_command','cancel_task_command','register_task_artifacts'} else None,
+            call_id=call_id,cancel_event=cancel_event,
+            deadline_monotonic=deadline_monotonic)
+        return value
 
     def original(self, goal):
         ws,task_id=goal['workspace_id'],goal['task_id']
-        authorization=self.production.get_task_authorization(ws,task_id)
+        authorization=self.production.task_authorization_records.get_task_authorization(ws,task_id)
         if authorization is None:
             raise TaskBusinessRejected('原目标没有持久任务授权；须从可信采用入口核实')
         actor=CreationExecutionActor.from_event(ws,authorization.identity)
@@ -117,15 +106,17 @@ class TaskBusiness:
             raise TaskBusinessRejected('原目标成员与任务授权不一致')
         if self.authorizations.verdict(actor,task_id,'task_goal',check_scope=False)!='ready':
             raise TaskBusinessRejected('原任务授权已撤销、到期或目标已变化')
-        scope=self.production.get_task_event(ws,self.authorizations.business_context_id(goal)).payload
+        scope=self.production.execution_records.get_task_event(ws,self.authorizations.business_context_id(goal)).payload
         if scope['authorization_id']!=authorization.id or scope['identity']!=authorization.identity:
             raise TaskBusinessRejected('原目标封存范围与任务授权不一致')
-        task=self.production.get_creation_task(ws,task_id)
+        task=self.production.task_records.get_creation_task(ws,task_id)
         return actor,task,scope
 
     def check(self, binding, cancelled, deadline, *, connection=None, check_version=True):
         if cancelled.is_set() or time.monotonic()>=deadline:
-            raise TaskBusinessRejected('本次原目标调用已停止或超过截止',status_code=409)
+            raise TaskBusinessRejected('本次原目标调用已停止或超过截止',kind='conflict')
+        if is_script_generation(binding):
+            return self._check_generation(binding,connection=connection)
         ws,task_id=binding['workspace_id'],binding['task_id']
         with (self.production._connect() if connection is None else _Borrow(connection)) as conn:
             origin=self.conversations._task_turn_source(conn,binding['turn_id'],ws,binding['member_id'],task_id)
@@ -135,46 +126,73 @@ class TaskBusiness:
                     or origin.get('input_id')!=binding.get('input_id')
                     or origin['conversation_id']!=binding['conversation_id']
                     or not self.conversations._goal_origin_current(conn,root)):
-                raise TaskBusinessRejected('原目标修订或已消费输入已变化',status_code=409)
-            authorization=self.production.get_task_authorization(ws,task_id,connection=conn,metadata_only=True)
+                raise TaskBusinessRejected('原目标修订或已消费输入已变化',kind='conflict')
+            authorization=self.production.task_authorization_records.get_task_authorization(ws,task_id,connection=conn,metadata_only=True)
             if authorization is None:
                 raise TaskBusinessRejected('原任务授权不存在')
             actor=CreationExecutionActor.from_event(ws,authorization.identity)
             if ((actor.user_id or actor.member_id)!=binding['member_id']
                     or self.authorizations.verdict(actor,task_id,'task_goal',connection=conn,check_scope=False)!='ready'):
                 raise TaskBusinessRejected('原任务授权已到期或撤销')
-            task=self.production.get_creation_task(ws,task_id,connection=conn)
+            task=self.production.task_records.get_creation_task(ws,task_id,connection=conn)
             version=conn.execute('SELECT sequence FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=?',
                 (ws,task_id,task.current_timeline_version_id)).fetchone() if task.current_timeline_version_id else None
             snapshot=binding.get('task_version')
             if check_version and snapshot is not None and (snapshot.get('timeline_version_id'),snapshot.get('timeline_sequence',0)) != (task.current_timeline_version_id,version[0] if version else 0):
-                raise TaskBusinessRejected('原目标的预期作品版本已变化',status_code=409)
-            sealed=self.production.get_task_event(ws,self.authorizations.business_context_id(root['goal']),connection=conn).payload
+                raise TaskBusinessRejected('原目标的预期作品版本已变化',kind='conflict')
+            sealed=self.production.execution_records.get_task_event(ws,self.authorizations.business_context_id(root['goal']),connection=conn).payload
             if sealed['authorization_id']!=authorization.id or sealed['identity']!=authorization.identity:
                 raise TaskBusinessRejected('原目标封存范围不匹配')
             row=conn.execute('SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?',(ws,task.plan_id)).fetchone()
             plan=json.loads(row[0])
             if (sealed['knowledge']!=plan['knowledge_references'] or sealed['sources']!=plan['source_references']):
-                raise TaskBusinessRejected('原目标引用范围已变化，未读取新增私人资料',status_code=409)
-            if self.production.task_source_revisions(ws,[item['id'] for item in sealed['knowledge']],
+                raise TaskBusinessRejected('原目标引用范围已变化，未读取新增私人资料',kind='conflict')
+            if self.production.task_authorization_records.task_source_revisions(ws,[item['id'] for item in sealed['knowledge']],
                     [item['id'] for item in sealed['sources']],connection=conn)!=sealed['source_revisions']:
-                raise TaskBusinessRejected('原目标固定资料或本地读取权限已变化',status_code=409)
+                raise TaskBusinessRejected('原目标固定资料或本地读取权限已变化',kind='conflict')
         return actor,task,root['goal'],origin,sealed
+
+    def _check_generation(self, binding, *, connection):
+        if (binding.get('intent_kind') != 'script_generation' or not binding.get('generation_request_id')
+                or binding.get('input_id') is not None or binding.get('input_turn_id') is not None):
+            raise TaskBusinessRejected('生成动作没有原始按钮请求来源')
+        if self.generation_case is None:
+            raise TaskBusinessRejected('原生成请求业务尚未装配',kind='unavailable')
+        ws,task_id,member=binding['workspace_id'],binding['task_id'],binding['member_id']
+        with (self.production._connect() if connection is None else _Borrow(connection)) as conn:
+            try:
+                facts=self.generation_case.read_generation_request(conn,ws,task_id,binding['generation_request_id'],member)
+            except PermissionError as exc:
+                raise TaskBusinessRejected(str(exc)) from exc
+            source=facts['source']
+            if (facts['request_id']!=binding['generation_request_id'] or facts['task_id']!=task_id
+                    or facts['conversation_id']!=binding['conversation_id'] or facts['turn_id']!=binding['turn_id']
+                    or facts['requested_effect']!='draft' or facts['can_continue'] is not True
+                    or source!={'kind':'user_action','request_id':facts['request_id'],'member_id':member,
+                        'conversation_id':facts['conversation_id'],'assistant_turn_id':facts['turn_id']}):
+                raise TaskBusinessRejected('原生成请求、回合或写稿范围已变化',kind='conflict')
+            actor=CreationExecutionActor.from_event(ws,facts['actor'])
+            if (actor.user_id or actor.member_id)!=member:
+                raise TaskBusinessRejected('原生成动作成员与真实身份不一致')
+            task=self.production.task_records.get_creation_task(ws,task_id,connection=conn)
+        origin={**source,'intent_kind':'script_generation','generation_request_id':facts['request_id'],
+                'requested_effect':'draft','raw_command':''}
+        return actor,task,facts,origin,None
 
     def visual_job_belongs_to_goal(self, goal, actor, job_id):
         from app.assistant_goal_continuation import GoalResultProjection
-        job=self.production.get_job_run(goal['workspace_id'],job_id)
+        job=self.production.job_records.get_job_run(goal['workspace_id'],job_id)
         if job.task_id!=goal['task_id']:
             return False
         if job.kind=='creation_task_execution':
             return any(event.job_id==job_id for event in self.execution_sources(goal))
         if job.kind!='creation_task_segment_revision':
             return False
-        start=self.production.get_task_event(goal['workspace_id'],f'event_{job_id}_start')
+        start=self.production.execution_records.get_task_event(goal['workspace_id'],f'event_{job_id}_start')
         if CreationExecutionActor.from_event(job.workspace_id,start.payload)!=actor:
             return False
         command=start.payload['command']
-        review=self.production.get_task_event(job.workspace_id,command['semantic_review_ref'])
+        review=self.production.execution_records.get_task_event(job.workspace_id,command['semantic_review_ref'])
         if review.task_id!=goal['task_id'] or review.event_type!='narration_semantic_review':
             return False
         source=review.payload['source']
@@ -196,7 +214,7 @@ class TaskBusiness:
                     "ORDER BY j.created_at DESC,j.id DESC LIMIT 24",(ws,task_id,actor.member_id)).fetchall()
             candidates.update(row['id'] for row in revisions if self.visual_job_belongs_to_goal(goal,actor,row['id']))
             if candidates:
-                job_id=max((self.production.get_job_run(ws,key) for key in candidates),key=lambda job:(job.created_at,job.id)).id
+                job_id=max((self.production.job_records.get_job_run(ws,key) for key in candidates),key=lambda job:(job.created_at,job.id)).id
             else:
                 return {'task_id':task_id,'job':None,'stages':[],'video_ready':False,
                     'waiting_reason':'原目标没有可核验的制作作业定位，请按原回执查询。',
@@ -208,52 +226,46 @@ class TaskBusiness:
     def execution_sources(self,goal):
         from app.assistant_goal_continuation import GoalResultProjection
         projection=GoalResultProjection(self.production,self.conversations)
-        return [event for event in self.production.list_task_events(goal['workspace_id'],goal['task_id'])
+        return [event for event in self.production.execution_records.list_task_events(goal['workspace_id'],goal['task_id'])
             if event.event_type=='assistant_execution_located' and projection.source_belongs_to_goal(goal,event.payload['source'])]
 
-    def __call__(self, operation, arguments, *, call_id, tool_call_id, source_binding, cancel_event, deadline_monotonic):
-        entered=False
-        try:
-            binding=dict(source_binding)
-            reconcile_original=(operation in {'read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
-                or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
-            # Section owners validate the frozen target and dependency digest at
-            # commit. An unrelated timeline publication may legitimately move HEAD.
-            section_scoped=operation in {'read_narration_segment_context','read_narration_segments',
-                'read_narration_segment_sources','record_narration_semantic_review','revise_narration_segment','resume_narration_revision'}
-            targeted_restore=operation=='restore_timeline' and bool((arguments.get('payload') or {}).get('target_operation_id'))
-            check_version=not (reconcile_original or section_scoped or targeted_restore)
-            actor,task,goal,origin,sealed=self.check(binding,cancel_event,deadline_monotonic,check_version=check_version)
-            if arguments.get('task_id',task.id)!=task.id:
-                raise TaskBusinessRejected('工具参数不能切换原任务')
-            if operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None:
-                from app.schemas import CreationTaskObservationRequest
-                previous=read_original_observation_request(self.production,task,actor,
-                    CreationTaskObservationRequest.model_validate(arguments['payload']))
-                if previous is not None:
-                    return {'ok':True,'value':previous}
-            declared=arguments.get('assistant_turn_id') or (arguments.get('payload') or {}).get('assistant_turn_id')
-            if declared is not None and declared!=binding['turn_id']:
-                raise TaskBusinessRejected('工具参数不能切换原回合')
-            if operation in {'record_input_understanding','record_narration_semantic_review','revise_narration_segment'}:
-                if arguments['payload'].get('input_id')!=(origin.get('input_id') or binding['turn_id']):
-                    raise TaskBusinessRejected('局部修改不能切换原输入')
-            if operation in {'save_assistant_script_draft','start_script_window','patch_script_sections','confirm_saved_script','confirm_creation_task_script','confirm_creation_task_topic','observe_task_output'}:
-                arguments={**arguments,'payload':{**arguments['payload'],'assistant_turn_id':binding['turn_id']}}
-            guard=lambda conn:self.check(binding,cancel_event,deadline_monotonic,connection=conn,check_version=check_version)
-            entered=True
-            value=self.execute(operation,arguments,actor,task,goal,{**origin,'assistant_turn_id':binding['turn_id']},sealed,guard)
-            from fastapi.encoders import jsonable_encoder
-            value=jsonable_encoder(value)
-            return {"ok":True,"value":value}
-        except (TaskBusinessRejected,ScriptDraftRejected,ExecutionControlRejected,OutputObservationRejected,EditPreviewRejected,GoalProjectionRejected,HTTPException) as exc:
-            failure={"status_code":exc.status_code,**(_safe_business_failure(exc.detail) if isinstance(exc.detail,dict) else {"reason":str(exc.detail)})}
-            if not entered and 'submission_effect' not in failure:
-                failure['submission_effect']='not_submitted'
-            return {"ok":False,"failure":failure}
-        except (KeyError,ValueError,PermissionError,ValidationError) as exc:
-            return {"ok":False,"failure":{"status_code":403 if isinstance(exc,PermissionError) else 409,
-                "reason":str(exc)}}
+    def invoke(self, operation, arguments, *, call_id, tool_call_id, source_binding, cancel_event, deadline_monotonic, invocation: TaskInvocation):
+        binding=dict(source_binding)
+        if is_script_generation(binding) and operation not in SCRIPT_GENERATION_OPERATIONS:
+            raise TaskBusinessRejected('本次生成动作仅授权读取与保存原请求草稿')
+        reconcile_original=(operation in {'read_task_quality_check','read_task_quality_continuation','continue_task_quality_check','read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
+            or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
+        # Section owners validate the frozen target and dependency digest at
+        # commit. An unrelated timeline publication may legitimately move HEAD.
+        section_scoped=operation in {'read_narration_segment_context','read_narration_segments',
+            'read_narration_segment_sources','record_narration_semantic_review','revise_narration_segment','resume_narration_revision'}
+        targeted_restore=operation=='restore_timeline' and bool((arguments.get('payload') or {}).get('target_operation_id'))
+        check_version=not (reconcile_original or section_scoped or targeted_restore)
+        actor,task,goal,origin,sealed=self.check(binding,cancel_event,deadline_monotonic,check_version=check_version)
+        if arguments.get('task_id',task.id)!=task.id:
+            raise TaskBusinessRejected('工具参数不能切换原任务')
+        if operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None:
+            from app.schemas import CreationTaskObservationRequest
+            previous=read_original_observation_request(self.production,task,actor,
+                CreationTaskObservationRequest.model_validate(arguments['payload']))
+            if previous is not None:
+                return previous
+        declared=arguments.get('assistant_turn_id') or (arguments.get('payload') or {}).get('assistant_turn_id')
+        if declared is not None and declared!=binding['turn_id']:
+            raise TaskBusinessRejected('工具参数不能切换原回合')
+        if operation in {'record_input_understanding','record_narration_semantic_review','revise_narration_segment'}:
+            if arguments['payload'].get('input_id')!=(origin.get('input_id') or binding['turn_id']):
+                raise TaskBusinessRejected('局部修改不能切换原输入')
+        if operation in {'save_assistant_script_draft','start_script_window','patch_script_sections','confirm_saved_script','confirm_creation_task_script','confirm_creation_task_topic','observe_task_output'}:
+            arguments={**arguments,'payload':{**arguments['payload'],'assistant_turn_id':binding['turn_id']}}
+        def guard(conn):
+            return self.check(binding,cancel_event,deadline_monotonic,connection=conn,
+            check_version=check_version or operation=='continue_task_quality_check')
+        invocation.owner_entered=True
+        value=self.execute(operation,arguments,actor,task,goal,{**origin,'assistant_turn_id':binding['turn_id']},sealed,guard)
+        if is_script_generation(binding):
+            self.check(binding,cancel_event,deadline_monotonic,check_version=False)
+        return value
 
     def input_delivery(self, source_binding):
         from app.assistant.input_delivery import AssistantInputDelivery
@@ -264,11 +276,12 @@ class TaskBusiness:
                 return self._input_context(conn,current['request_context'],task,actor,old_goal,sealed)
             def seal(conn, old_goal, goal, context):
                 if cancel_event.is_set() or time.monotonic()>=deadline_monotonic:
-                    raise TaskBusinessRejected('追加输入消费已停止或超过截止',status_code=409)
+                    raise TaskBusinessRejected('追加输入消费已停止或超过截止',kind='conflict')
                 return self.authorizations.inherit_business_context(old_goal,goal,context,connection=conn)
             consumed=self.conversations.consume_task_goal_input(binding['conversation_id'],binding['workspace_id'],
                 binding['member_id'],item['input_id'],expected_binding=binding,validate=validate,seal=seal)
-            goal,context=consumed['goal'],consumed['context'];snapshot=context['target_snapshot']
+            goal,context=consumed['goal'],consumed['context']
+            snapshot=context['target_snapshot']
             version={key:snapshot[key] for key in ('timeline_version_id','timeline_sequence')}
             trusted={'goal_revision':str(goal['revision']),'input_id':goal['source_input_id'],
                 'input_turn_id':goal['source_input_turn_id'],'task_version':version}
@@ -311,20 +324,20 @@ class TaskBusiness:
 
     def _input_context(self, conn, frozen, task, actor, old_goal, sealed):
         from app.assistant.references import normalize_selection, validate_timeline_reference, timeline_object_refs
-        from app.production import content_readable
+        from app.source_policy import knowledge_item_readable as content_readable
         from datetime import datetime
         if frozen.get('kind')!='task' or frozen.get('task_id')!=task.id:
             raise TaskBusinessRejected('追加输入切换了任务，需要从交互入口重新授权')
         snapshot=frozen['target_snapshot']
-        timeline=(self.production.get_timeline_version(task.workspace_id,task.current_timeline_version_id,connection=conn)
+        timeline=(self.production.timeline_records.get_timeline_version(task.workspace_id,task.current_timeline_version_id,connection=conn)
             if task.current_timeline_version_id else None)
         version={'timeline_version_id':task.current_timeline_version_id,'timeline_sequence':timeline.sequence if timeline else 0}
         if any(snapshot.get(key)!=value for key,value in version.items()):
             raise ValueError('追加输入接收后作品版本已变化，请查看当前作品后重新发送')
         reference=normalize_selection(frozen.get('selected_reference'))
         items=reference['items'] if reference and reference['kind']=='selection' else [reference] if reference else []
-        tracks=self.production.list_subtitle_tracks(task.workspace_id,task.id,connection=conn)
-        authorization=self.production.get_task_authorization(task.workspace_id,task.id,connection=conn)
+        tracks=self.production.subtitle_records.list_subtitle_tracks(task.workspace_id,task.id,connection=conn)
+        authorization=self.production.task_authorization_records.get_task_authorization(task.workspace_id,task.id,connection=conn)
         if self.authorizations.status(task.workspace_id,task.id,identity=authorization.identity,
                 operation='task_goal',connection=conn)!='valid':
             raise TaskBusinessRejected('原任务有限资源范围已变化，追加输入需要重新授权')
@@ -362,22 +375,40 @@ class TaskBusiness:
             **{key:sealed.get(key) if frozen.get(key) else None for key in ('profile_reference','knowledge_reference')}}
         return {**frozen,'target_snapshot':snapshot,'selected_object_refs':timeline_object_refs(items,task.id,tracks)}
 
-    def finish(self, claim, reply, *, script_window_request=None):
+    def finish_goal(self, claim, reply, preview):
+        if isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
+            return self.finish(claim, reply, script_window_request=preview)
+        if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
+            return self.finish(claim, reply, quality_continuation=preview)
+        return self.finish(claim, reply)
+
+    def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None):
         """Project real host receipts; a model's proposed result is never adopted here."""
         goal=self.conversations.get_task_goal(claim['turn_id'])
         if (goal is None or goal['current_turn_id']!=claim['turn_id'] or goal['status']!='running'
                 or any(goal[key]!=claim['goal'][key] for key in ('original_turn_id','task_id','workspace_id','member_id','conversation_id'))):
-            raise TaskBusinessRejected('后台回合已不属于当前目标',status_code=409)
+            raise TaskBusinessRejected('后台回合已不属于当前目标',kind='conflict')
         claim.update(goal=goal,request_context=goal['request_context'])
         ws,task_id=goal['workspace_id'],goal['task_id']
         actor,task,_sealed=self.original(goal)
-        events=self.production.list_task_events(ws,task_id)
+        events=self.production.execution_records.list_task_events(ws,task_id)
         response={'reply':reply,'turn_id':claim['turn_id'],'draft_version':1}
         proofs=[]
+        if quality_continuation is not None:
+            from app.assistant.result_projection import resolve_quality_continuation, quality_continuation_message
+            try:
+                actual = resolve_quality_continuation(quality_continuation, task_id=task_id,
+                    invocation_input_id=goal.get('source_input_id') or claim['turn_id'],
+                    read_original=lambda job_id, failed_request_id: self.quality.read_continuation(
+                        ws, task_id, job_id, failed_request_id, actor))
+            except ValueError as exc:
+                raise TaskBusinessRejected(str(exc), kind='conflict') from exc
+            reply = quality_continuation_message(actual)
+            response.update(reply=reply, quality_continuation=actual)
         if script_window_request is not None:
-            from app.assistant.result_projection import resolve_script_window_request, script_window_message
+            from app.assistant.script_window_receipts import resolve_script_window_request, script_window_message
             if script_window_request.get('input_id')!=goal.get('source_input_id'):
-                raise TaskBusinessRejected('文案窗口回执不属于当前输入',status_code=409)
+                raise TaskBusinessRejected('文案窗口回执不属于当前输入',kind='conflict')
             window=resolve_script_window_request(script_window_request,task_id=task_id,
                 read_original=lambda request_id,operation,script_id:self.script_case(actor).window_request_result(
                     ws,task_id,request_id,member_id=actor.user_id or actor.member_id,
@@ -399,7 +430,7 @@ class TaskBusiness:
             and event.payload['source']['turn_id']==claim['turn_id']
             and event.payload['source'].get('input_id')==goal.get('source_input_id')]
         if drafts and script_window_request is None:
-            response['script_draft']=asdict(self.production.get_creation_task_script(ws,drafts[-1].payload['script_id']))
+            response['script_draft']=asdict(self.production.script_records.get_creation_task_script(ws,drafts[-1].payload['script_id']))
         jobs=[event for event in events if event.event_type=='task_media_submitted'
             and event.payload['arguments'].get('_typed_source',{}).get('assistant_turn_id')==claim['turn_id']
             and event.payload['arguments'].get('_typed_source',{}).get('input_id')==goal.get('source_input_id')]
@@ -420,6 +451,11 @@ class TaskBusiness:
 
     def execute(self, operation, args, actor, task, goal, origin, sealed, guard):
         ws,task_id=task.workspace_id,task.id
+        generation = is_script_generation(origin)
+        if generation and (origin.get('requested_effect')!='draft' or operation not in SCRIPT_GENERATION_OPERATIONS):
+            raise TaskBusinessRejected('本次生成动作不授权采用、制作或其他写入')
+        if generation and operation in {'patch_script_sections','read_script_sections'} and args['script_id']!=goal['script_id']:
+            raise TaskBusinessRejected('生成窗口不能切换原请求的稿件')
         if operation=='read_segment_visual_decision':
             if not self.visual_job_belongs_to_goal(goal,actor,args['job_id']):
                 raise TaskBusinessRejected('画面决定不属于原目标来源')
@@ -435,7 +471,8 @@ class TaskBusiness:
             else:
                 result=case.submit_preview(self.runtime,actor,task,payload,identity=identity,
                     origin=origin,draft_only=args.get('draft_only',False),project_media=lambda media,job,actor,runtime:self.media_result(task,actor,job.id))
-            if result.status_code>=400: raise HTTPException(result.status_code,result.value.get('detail',result.value))
+            if result.status_code>=400:
+                raise EditPreviewRejected(result.status_code,result.value.get('detail',result.value))
             return result.value
         if operation=='read_task_edit_request':
             from app.assistant_goal_continuation import GoalResultProjection
@@ -450,21 +487,25 @@ class TaskBusiness:
         if operation in {'select_narration_voice','read_narration_voice_request'}:
             member=actor.user_id or actor.member_id
             if operation=='read_narration_voice_request':
-                return self.production.get_creation_task_narration_voice_selection(ws,task_id,args['request_id'],member_id=member)
+                return self.production.narration_voice_selection.get_creation_task_narration_voice_selection(ws,task_id,args['request_id'],member_id=member)
             from app.schemas import CreationTaskNarrationVoiceSelectionRequest
             payload=CreationTaskNarrationVoiceSelectionRequest.model_validate(args['payload'])
-            return self.execution.select_narration_voice(runtime=self.runtime(),actor=actor,write_guard=guard,
+            return self.execution.select_narration_voice(runtime_for=self.runtime,actor=actor,write_guard=guard,
                 workspace_id=ws,task_id=task_id,member_id=member,
                 **{**payload.model_dump(exclude={'assistant_turn_id'}),'request_id':str(payload.request_id)})
         if operation in {'read_timeline_history','read_timeline_restore_request','restore_timeline'}:
-            if self.timeline_restores is None: raise TaskBusinessRejected('原修改恢复用例尚未装配')
-            if operation=='read_timeline_history': return self.timeline_restores.history(ws,task_id,actor,
+            if self.timeline_restores is None:
+                raise TaskBusinessRejected('原修改恢复用例尚未装配')
+            if operation=='read_timeline_history':
+                return self.timeline_restores.history(ws,task_id,actor,
                 limit=args.get('limit',20),before_sequence=args.get('before_sequence'))
-            if operation=='read_timeline_restore_request': return self.timeline_restores.read_request(ws,task_id,args['request_id'],actor)
+            if operation=='read_timeline_restore_request':
+                return self.timeline_restores.read_request(ws,task_id,args['request_id'],actor)
             from app.creation.editing.timeline_restore_use_case import TimelineRestoreCommand
             from app.schemas import CreationTaskTimelineRestoreRequest
             payload=CreationTaskTimelineRestoreRequest.model_validate(args['payload'])
-            if args['action'] not in {'undo','redo'}: raise TaskBusinessRejected('恢复动作不可用')
+            if args['action'] not in {'undo','redo'}:
+                raise TaskBusinessRejected('恢复动作不可用')
             result=self.timeline_restores.execute(TimelineRestoreCommand(ws,task,args['action']=='redo'),actor=actor,
                 request_id=payload.request_id,target_operation_id=payload.target_operation_id,
                 expected_timeline_version_id=payload.expected_timeline_version_id,
@@ -473,14 +514,20 @@ class TaskBusiness:
             return {'operation':result.operation,'montage':result.montage,'narration':result.narration,
                 'restore_request':result.restore_request,'execution_readiness':result.execution_readiness}
         if operation in {'read_narration_segment_context','read_narration_segment_sources','read_narration_segments','read_narration_revision','revise_narration_segment','resume_narration_revision'}:
-            if self.segments is None: raise TaskBusinessRejected('局部修改业务用例尚未装配')
-            if operation=='read_narration_segment_context': return self.segments.context(ws,task_id,args['segment_id'],actor)
-            if operation=='read_narration_segment_sources': return self.segments.sources(ws,task_id,args['segment_id'],actor,
+            if self.segments is None:
+                raise TaskBusinessRejected('局部修改业务用例尚未装配')
+            if operation=='read_narration_segment_context':
+                return self.segments.context(ws,task_id,args['segment_id'],actor)
+            if operation=='read_narration_segment_sources':
+                return self.segments.sources(ws,task_id,args['segment_id'],actor,
                 offset=args.get('offset',0),limit=args.get('limit',8),text_offset=args.get('text_offset',0),max_chars=args.get('max_chars',3000))
-            if operation=='read_narration_segments': return self.segments.list_segments(ws,task_id,actor,
+            if operation=='read_narration_segments':
+                return self.segments.list_segments(ws,task_id,actor,
                 offset=args.get('offset',0),limit=args.get('limit',24))
-            if operation=='read_narration_revision': return self.segments.read_request(ws,task_id,args['request_id'],actor)
-            if operation=='resume_narration_revision': return self.segments.resume_request(ws,task_id,args['request_id'],actor,
+            if operation=='read_narration_revision':
+                return self.segments.read_request(ws,task_id,args['request_id'],actor)
+            if operation=='resume_narration_revision':
+                return self.segments.resume_request(ws,task_id,args['request_id'],actor,
                 runtime=self.runtime(),write_guard=guard)
             from app.schemas import NarrationRevisionRequest
             payload=NarrationRevisionRequest.model_validate({k:v for k,v in args['payload'].items() if k!='assistant_turn_id'})
@@ -500,9 +547,16 @@ class TaskBusiness:
             return record_narration_semantic_review(self.production,task,
                 {**origin,'assistant_turn_id':goal['current_turn_id']},
                 {k:v for k,v in args['payload'].items() if k not in {'assistant_turn_id','input_id'}},write_guard=guard)
-        if operation=='read_task_workspace': return self.workspace_facts(ws,task)
-        if operation=='read_creator_memory': return sealed['memory']
-        if operation=='read_assistant_script_context': return self.script_context(ws,task_id,actor.user_id or actor.member_id)
+        if operation=='read_task_workspace':
+            return self.workspace_facts(ws,task)
+        if operation=='read_creator_memory':
+            if generation:
+                if self.creator_memory is None:
+                    raise TaskBusinessRejected('当前成员偏好读取尚未装配',kind='unavailable')
+                return self.creator_memory(ws,actor.user_id or actor.member_id)
+            return sealed['memory']
+        if operation=='read_assistant_script_context':
+            return self.script_context(ws,task_id,actor.user_id or actor.member_id)
         if operation in {'prepare_device_resources','read_device_preparation','finalize_device_preparation'}:
             from pydantic import ValidationError
             from app.schemas import DevicePreparationRequest
@@ -510,61 +564,77 @@ class TaskBusiness:
             from app.device_preparation_application import DevicePreparationConflict
             from app.device_scheduler import RecoveryBlocked
             if self.device_preparation is None:
-                raise TaskBusinessRejected('设备准备业务用例尚未装配',status_code=503)
+                raise TaskBusinessRejected('设备准备业务用例尚未装配',kind='unavailable')
             try:
                 if operation=='prepare_device_resources':
                     payload=DevicePreparationRequest.model_validate(args['payload'])
                     shape=payload.shape.model_dump()
-                    if payload.kind=='narration': shape['task_id']=task.id
+                    if payload.kind=='narration':
+                        shape['task_id']=task.id
                     result=self.device_preparation('prepare',kind=payload.kind,shape=shape,request_id=str(payload.request_id),actor=actor)
                 elif operation=='read_device_preparation':
                     result=self.device_preparation('status',request_id=args['request_id'],actor=actor)
                 else:
                     result=self.device_preparation('finalize',request_id=args['request_id'],actor=actor)
             except ValidationError as exc:
-                raise HTTPException(status_code=422,detail=str(exc)) from exc
+                raise TaskOperationRejected(kind='invalid_input',detail=str(exc)) from exc
             except KeyError as exc:
-                raise HTTPException(status_code=404,detail='设备准备请求不存在') from exc
+                raise TaskOperationRejected(kind='not_found',detail='设备准备请求不存在') from exc
             except (DevicePreparationConflict,DeviceProfileUnavailable,RecoveryBlocked,ValueError) as exc:
-                raise HTTPException(status_code=409,detail=str(exc)) from exc
+                raise TaskOperationRejected(kind='conflict',detail=str(exc)) from exc
             except RuntimeError as exc:
-                raise HTTPException(status_code=503,detail=str(exc)) from exc
+                raise TaskOperationRejected(kind='unavailable',detail=str(exc)) from exc
             return {key:result[key] for key in ('id','plan_id','state','wait_reason','profile_published',
                 'profile_id','revision','profile_digest','normal_work_started') if key in result}
         if operation=='read_script_sections':
             from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT, ScriptWindowConflict
             if self.read_script_sections is None:
-                raise TaskBusinessRejected('文案窗口读面尚未装配',status_code=503)
+                raise TaskBusinessRejected('文案窗口读面尚未装配',kind='unavailable')
             try:
                 return self.read_script_sections(task,args['script_id'],
                     after_ordinal=args.get('after_ordinal',0),limit=args.get('limit',SCRIPT_SECTION_WINDOW_LIMIT),
                     expected_updated_at=args.get('expected_updated_at'))
             except ScriptWindowConflict as exc:
-                raise HTTPException(status_code=409,detail=str(exc)) from exc
+                raise TaskOperationRejected(kind='conflict',detail=str(exc)) from exc
             except KeyError as exc:
-                raise HTTPException(status_code=404,detail='文案不存在') from exc
+                raise TaskOperationRejected(kind='not_found',detail='文案不存在') from exc
             except ValueError as exc:
-                raise HTTPException(status_code=422,detail=str(exc)) from exc
-        if operation=='read_task_edit_capabilities': return self.edit_capabilities(task)
+                raise TaskOperationRejected(kind='invalid_input',detail=str(exc)) from exc
+        if operation=='read_task_edit_capabilities':
+            return self.edit_capabilities(task)
         if operation=='read_execution_capabilities':
             if self.execution_capabilities is None:
-                raise TaskBusinessRejected('执行能力读面尚未装配',status_code=503)
+                raise TaskBusinessRejected('执行能力读面尚未装配',kind='unavailable')
             return self.execution_capabilities(task)
-        if operation=='read_media_script_capabilities': return self.script_capabilities(task,actor.user_id or actor.member_id)
-        if operation=='read_media_script_tool_capabilities': return self.tool_capabilities()
-        if operation=='read_creation_execution_preview': return self.execution.preview(ws,task_id)
-        if operation=='read_creation_execution': return self.read_execution(goal,actor,job_id=args.get('job_id'))
+        if operation=='read_media_script_capabilities':
+            return self.script_capabilities(task,actor.user_id or actor.member_id)
+        if operation=='read_media_script_tool_capabilities':
+            return self.tool_capabilities()
+        if operation=='read_creation_execution_preview':
+            return self.execution.preview(ws,task_id)
+        if operation=='read_creation_execution':
+            if generation:
+                if args.get('job_id') is not None:
+                    raise TaskBusinessRejected('生成动作只读取当前任务的制作摘要')
+                if self.execution_status is None:
+                    raise TaskBusinessRejected('任务制作摘要读取尚未装配',kind='unavailable')
+                return self.execution_status(ws,task_id,actor=actor)
+            return self.read_execution(goal,actor,job_id=args.get('job_id'))
         if operation in {'search_task_materials','read_task_material'}:
             allowed=self.authorizations.material_asset_ids(ws,task_id)
             if operation=='read_task_material':
-                if args['asset_id'] not in allowed: raise TaskBusinessRejected('素材不在原目标固定范围内')
+                if args['asset_id'] not in allowed:
+                    raise TaskBusinessRejected('素材不在原目标固定范围内')
                 return self.material_facts(self.production.get_asset(ws,args['asset_id']))
-            query=str(args.get('query','')).casefold();limit=int(args.get('limit',8))
-            if not 1<=limit<=20: raise ValueError('素材搜索范围须为1至20')
+            query=str(args.get('query','')).casefold()
+            limit=int(args.get('limit',8))
+            if not 1<=limit<=20:
+                raise ValueError('素材搜索范围须为1至20')
             if args.get('include_eligibility'):
                 purpose=args.get('purpose','manual')
-                if purpose not in {'manual','automatic'}: raise ValueError('镜头检索用途无效')
-                return self.production.search_material_segments(ws,query=query,asset_ids=sorted(allowed),
+                if purpose not in {'manual','automatic'}:
+                    raise ValueError('镜头检索用途无效')
+                return self.production.material_search.search_material_segments(ws,query=query,asset_ids=sorted(allowed),
                     usage_roles=['a_roll','b_roll'],limit=limit,viewer_user_id=actor.user_id or actor.member_id,
                     purpose=purpose,include_eligibility=True)
             assets=[asset for asset in self.production.list_assets(ws,viewer_user_id=actor.user_id or actor.member_id)
@@ -577,6 +647,8 @@ class TaskBusiness:
             from uuid import UUID
             case=self.script_case(actor)
             common={'member_id':actor.user_id or actor.member_id}
+            if generation:
+                common['generation_request_id']=origin['generation_request_id']
             try:
                 if operation=='read_script_window_request':
                     if type(args.get('include_input',False)) is not bool:
@@ -586,6 +658,8 @@ class TaskBusiness:
                 common.update(instruction_origin=origin,reread_origin=lambda draft_only:self._adoption_origin(origin,draft_only),write_guard=guard)
                 if operation=='start_script_window':
                     payload=CreationTaskScriptWindowStartRequest.model_validate(args['payload'])
+                    if generation:
+                        return case.start_generation_window(ws,task_id,payload,**common)
                     return case.start_window(ws,task_id,payload,**common)
                 if operation=='patch_script_sections':
                     payload=CreationTaskScriptSectionsPatchRequest.model_validate(args['payload'])
@@ -594,11 +668,11 @@ class TaskBusiness:
                 payload=CreationTaskScriptConfirmSavedRequest.model_validate({**args['payload'],'adoption_kind':'delegated_system'})
                 return case.confirm_saved(ws,task_id,args['script_id'],payload,**common)
             except ScriptWindowConflict as exc:
-                raise HTTPException(status_code=409,detail=str(exc)) from exc
+                raise TaskOperationRejected(kind='conflict',detail=str(exc)) from exc
             except KeyError as exc:
-                raise HTTPException(status_code=404,detail='文案或原请求不存在') from exc
+                raise TaskOperationRejected(kind='not_found',detail='文案或原请求不存在') from exc
             except ValueError as exc:
-                raise HTTPException(status_code=422,detail=str(exc)) from exc
+                raise TaskOperationRejected(kind='invalid_input',detail=str(exc)) from exc
         if operation=='save_assistant_script_draft':
             payload=CreationTaskScriptDraftRequest.model_validate(args['payload'])
             return self.script_case(actor).save(ws,task_id,payload,instruction_origin=origin,
@@ -611,34 +685,63 @@ class TaskBusiness:
             adopted,_script=self.script_case(actor).confirm(ws,task_id,args['script_id'],payload,member_id=goal['member_id'],
                 origin=origin,write_guard=guard)
             return self.script_facts(ws,adopted)
-        if operation=='generate_creation_task_topics': return self.generate_topics(ws,task,guard)
+        if operation=='generate_creation_task_topics':
+            return self.generate_topics(ws,task,guard)
         if operation=='confirm_creation_task_topic':
-            payload=CreationTaskTopicConfirmRequest.model_validate(args['payload']);self._adoption_origin(origin,False)
-            task,_=self.production.confirm_topic_candidate(ws,task_id,args['candidate_id'],title=payload.title,
+            payload=CreationTaskTopicConfirmRequest.model_validate(args['payload'])
+            self._adoption_origin(origin,False)
+            task,_=self.production.topic_records.confirm_topic_candidate(ws,task_id,args['candidate_id'],title=payload.title,
                 adoption_kind='delegated_system',verified_owner_user_id=goal['member_id'],write_guard=guard)
             return self.topic_facts(ws,task)
         if operation in {'start_creation_execution','resume_creation_execution','cancel_creation_execution'}:
             return self.execute_creation(operation,args,actor,task,goal,origin,guard)
-        if operation=='read_task_observations': return self.observation_facts(task,actor)
-        if operation=='observe_task_output': return self.observe_output(task,actor,args['payload'],origin,guard)
-        if operation=='read_task_observation_request': return self.request_result(task,actor,args['request_id'],'observation')
-        if operation=='read_task_media_job': return self.media_result(task,actor,args['job_id'])
+        if operation in {'read_task_quality_check','read_task_quality_continuation','continue_task_quality_check'}:
+            from app.schemas import QualityContinuationRequest
+            from app.device_scheduler import RecoveryBlocked
+            from app.device_runtime import RuntimeUnavailable
+            if self.quality is None:
+                raise TaskBusinessRejected('原质检应用尚未装配',kind='unavailable')
+            try:
+                if operation=='read_task_quality_check':
+                    return self.quality.read(ws,task_id,actor.user_id or actor.member_id,actor=actor)
+                payload=QualityContinuationRequest.model_validate(args['payload'] if operation=='continue_task_quality_check'
+                    else {key:value for key,value in args.items() if key!='task_id'})
+                if operation=='read_task_quality_continuation':
+                    return self.quality.read_continuation(ws,task_id,payload.job_id,payload.failed_request_id,actor)
+                return self.quality.continue_failed(ws,task_id,payload.job_id,payload.failed_request_id,actor,
+                    write_guard=guard)
+            except RecoveryBlocked as exc:
+                raise TaskBusinessRejected(str(exc),kind='conflict') from exc
+            except RuntimeUnavailable as exc:
+                raise TaskBusinessRejected(str(exc),kind='unavailable') from exc
+        if operation=='read_task_observations':
+            return self.observation_facts(task,actor)
+        if operation=='observe_task_output':
+            return self.observe_output(task,actor,args['payload'],origin,guard)
+        if operation=='read_task_observation_request':
+            return self.request_result(task,actor,args['request_id'],'observation')
+        if operation=='read_task_media_job':
+            return self.media_result(task,actor,args['job_id'])
         raise TaskBusinessRejected('该操作未被授权用于原目标后台接续')
 
     @staticmethod
     def _adoption_origin(origin,draft_only):
-        if not draft_only: CreationIntentUseCase.reject_discussion_only_input(origin['raw_command'])
+        if is_script_generation(origin) and not draft_only:
+            raise TaskBusinessRejected('生成按钮不能升级为采用授权')
+        if not draft_only:
+            CreationIntentUseCase.reject_discussion_only_input(origin['raw_command'])
         return origin
 
     def execute_creation(self, operation,args,actor,task,goal,origin,guard):
         ws,task_id=task.workspace_id,task.id
         self._adoption_origin(origin,False)
-        runtime=self.runtime()
         if operation=='cancel_creation_execution':
             sources=self.execution_sources(goal)
             if not sources or self.execution.execution.latest(ws,task_id).id!=sources[-1].job_id:
                 raise TaskBusinessRejected('当前可停止作业不是原目标绑定的作业')
+            runtime=self.runtime()
             return self.execution.cancel(ws,task_id,actor,runtime,verify_media=False,write_guard=guard)
+        runtime=self.runtime()
         if args.get('assistant_turn_id') not in {None,goal.get('current_turn_id')}:
             raise ValueError('制作请求不能绑定其他助手回合')
         source={"workspace_id":ws,"task_id":task_id,"member_id":goal['member_id'],
@@ -650,7 +753,8 @@ class TaskBusiness:
         try:
             if operation=='start_creation_execution':
                 payload=ExecutionStartRequest.model_validate(args['payload'])
-                if not payload.requirements_confirmed: raise ValueError('制作要求尚未确认')
+                if not payload.requirements_confirmed:
+                    raise ValueError('制作要求尚未确认')
                 result=self.execution.start(ws,task_id,payload.script_id,payload.input_digest,actor,runtime,
                     verify_media=False,write_guard=guard,execution_source=source)
             else:
@@ -667,17 +771,14 @@ class TaskBusiness:
             # failed conversation projection or queue acknowledgement.
             event_id=f"event_assistant_execution_locator_{source['assistant_turn_id']}"+(f"_{source['input_id']}" if source.get('input_id') else '')
             try:
-                located=self.production.get_task_event(ws,event_id)
+                located=self.production.execution_records.get_task_event(ws,event_id)
             except KeyError:
                 raise exc
             if located.payload['source']!=source:
                 raise ValueError('原回合已绑定其他制作来源') from exc
-            failure=TaskBusinessRejected('原制作作业已持久化，后续安排或回填未确认；请查询原作业',status_code=409)
+            failure=TaskBusinessRejected('原制作作业已持久化，后续安排或回填未确认；请查询原作业',kind='conflict')
             failure.detail.update(submission_effect='unknown',task_id=task_id,job_id=located.job_id,
                 input_digest=located.payload['input_digest'],query_tool='read_creation_execution',
                 query_url=f'/api/creation-tasks/{task_id}/execution')
             raise failure from exc
         return result
-
-
-from contextlib import nullcontext as _Borrow

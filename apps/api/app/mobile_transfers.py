@@ -13,7 +13,6 @@ import logging
 import os
 from pathlib import Path
 import shutil
-import sqlite3
 from uuid import UUID, uuid4
 
 import psutil

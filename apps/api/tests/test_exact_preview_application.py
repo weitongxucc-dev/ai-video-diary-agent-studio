@@ -17,8 +17,8 @@ from app.creation_execution import CreationExecutionActor
 from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
 from app.creation.editing.metadata_use_case import EditPreviewRejected
 from app.schemas import CreationTaskExactEditRequest
-from test_visual_preview_application import visual_application, _inspect
-from test_montage_pipeline import person_render_edit_state, permitted_media_state
+from test_visual_preview_application import visual_application as visual_application, _inspect
+from test_montage_pipeline import person_render_edit_state as person_render_edit_state, permitted_media_state as permitted_media_state
 
 
 def test_typed_graphic_action_keeps_validated_id_and_defaults_out_of_request_digest():
@@ -66,7 +66,7 @@ def test_source_facts_distinguishes_missing_target_from_source_failures(failure,
         calls.append((workspace_id, task_id, kwargs))
         raise failure
     use_case = ExactPreviewUseCase(
-        repository=SimpleNamespace(clip_edit_source_facts=read_source), metadata=None,
+        repository=SimpleNamespace(clip_sources=SimpleNamespace(facts=read_source)), metadata=None,
         subtitles=None, linked=None, audio_edit=None, visual=None, clip_preview=None,
         conversations=None, settings=None,
     )
@@ -89,7 +89,7 @@ def test_typed_picture_exact_preview_preserves_source_and_request_journal(visual
     assert case.metadata is case.subtitles.montage_edits is case.linked.montage_edits
     assert case.metadata.audio_service is case.audio_edit.audio is case.visual.audio
     assert case.metadata.picture_renderer is case.visual.renderer
-    task_before = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task_before = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     montage_before = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     request_id = str(uuid4())
     graphic = {**state.visual_plan.graphic_overlays[0], 'x': .25}
@@ -117,12 +117,13 @@ def test_typed_picture_exact_preview_preserves_source_and_request_journal(visual
     expected_actor = CreationExecutionActor.from_event(state.workspace_id,start).identity_payload()
     assert saved_source == {**source, 'media_job_id': job_id, 'actor_identity': expected_actor}
     assert saved_source['request_id'] == request_id and saved_source['action'] == source['action']
-    records = [r for r in state.production.list_artifact_records(state.workspace_id, state.task.id) if r.producer_job_id == job_id]
+    records = [r for r in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id) if r.producer_job_id == job_id]
     assert len(records) == 2 and {r.kind for r in records} == {'graphic_preview'}
     sides = {case.metadata.audio_service._transform_for(state.workspace_id,state.task.id,r).parameters['graphic_overlays'][0]['x']: r for r in records}
     assert set(sides) == {.5, .25}
     files = {side:main.artifact_store.resolve_file(sides[x].logical_ref) for side,x in [('before',.5),('after',.25)]}
-    directory = tmp_path / 'frames'; directory.mkdir()
+    directory = tmp_path / 'frames'
+    directory.mkdir()
     with granted_media(files.values(),kind='creation_render') as context:
         visuals = {side:_inspect(context,path,directory,side) for side,path in files.items()}
     for side,visual in visuals.items():
@@ -145,10 +146,10 @@ def test_typed_picture_exact_preview_preserves_source_and_request_journal(visual
     assert replay.status_code == 202 and replay.json() == queued.json(), replay.text
     assert not state.runtime.run_once()
     assert state.client.get(queued.json()['result_url']).json() == completed.json()
-    assert state.production.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id == task_before.current_timeline_version_id
+    assert state.production.task_records.get_creation_task(state.workspace_id,state.task.id).current_timeline_version_id == task_before.current_timeline_version_id
     assert state.production.get_creation_task_montage_plan(state.workspace_id,state.task.id) == montage_before
     assert not hasattr(main,'_TASK_MEDIA_HANDLERS')
-    assert not hasattr(main.preview_creation_task_exact_edit,'__wrapped__')
+    assert not hasattr(next(route.endpoint for route in main.app.routes if route.name == 'preview_creation_task_exact_edit'),'__wrapped__')
     assert TASK_MEDIA_CONTEXT.get() is None and EXACT_EDIT_SOURCE.get() is None
     with state.production._connect() as conn:
         permit = dict(conn.execute('SELECT state,children_json FROM device_permit WHERE id=1').fetchone())

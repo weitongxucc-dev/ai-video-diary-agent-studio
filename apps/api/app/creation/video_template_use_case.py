@@ -11,7 +11,11 @@ from app.content_templates import list_content_templates
 from app.creation.contracts import SubtitleTrack
 from app.creation.editing.metadata_use_case import default_subtitle_style
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload
-from app.production import CreationPlan, CreationTask, ProductionRepository, VideoTemplate, content_readable
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.source_policy import knowledge_item_readable as content_readable
+from app.creation.contracts import CreationTask
 from app.visual_effects import reusable_color_settings
 
 
@@ -95,7 +99,7 @@ class VideoTemplateUseCase:
                         name: str, style_instruction: str, template_id: str | None,
                         expected_version: int | None) -> VideoTemplate:
         source_track = next((item for item in tracks if item.source_language is None), None)
-        scripts = self.production.list_creation_task_scripts(workspace_id, task_id)
+        scripts = self.production.script_records.list_creation_task_scripts(workspace_id, task_id)
         script = next((item for item in scripts if item.id == task.confirmed_script_id), None)
         color_settings = [reusable_color_settings(clip.visual_effects) for clip in montage.clips]
         common_color = color_settings[0] if color_settings and all(
@@ -126,7 +130,7 @@ class VideoTemplateUseCase:
     def _save(self, template: VideoTemplate, *, verified_owner_user_id: str | None,
               local_diagnostic: bool) -> VideoTemplate:
         try:
-            return self.production.save_video_template(template,
+            return self.production.video_templates.save_video_template(template,
                 verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic)
         except ValueError as exc:
             raise VideoTemplateRejected("persist_conflict", str(exc)) from exc

@@ -18,13 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from app.production import (
-    CreationPlan,
-    CreationTask,
-    MaterialAsset,
-    ProductionRepository,
-    VideoTemplate,
-)
+from app.creation.video_template_records import VideoTemplate
+from app.production import MaterialAsset, ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import CreationTask
 
 
 WORKSPACE = "workspace_116"
@@ -97,7 +94,7 @@ def _task(workspace_id: str, plan_id: str, task_id: str = "task-1") -> CreationT
 
 def _confirm(production: ProductionRepository, plan: CreationPlan, task: CreationTask) -> None:
     # 沿既有确认契约：方案与任务的上传者取自这次已验证身份。
-    production.confirm_creation_plan(
+    production.plan_confirmation.confirm_creation_plan(
         plan, task, verified_owner_user_id=UPLOADER
     )
 
@@ -118,8 +115,8 @@ def test_new_content_is_private_in_both_column_and_read_back(tmp_path):
 
     assert _stored_visibility(production, "creation_plans", plan.id, WORKSPACE) == "private"
     assert _stored_visibility(production, "creation_tasks", task.id, WORKSPACE) == "private"
-    assert production.get_creation_plan(WORKSPACE, plan.id).visibility == "private"
-    assert production.get_creation_task(WORKSPACE, task.id).visibility == "private"
+    assert production.plan_records.get_creation_plan(WORKSPACE, plan.id).visibility == "private"
+    assert production.task_records.get_creation_task(WORKSPACE, task.id).visibility == "private"
 
 
 def test_new_material_is_private_and_reads_back_private(tmp_path):
@@ -137,12 +134,12 @@ def test_explicit_share_and_revoke_are_visible_to_readers(tmp_path):
     _confirm(production, plan, task)
     production._save_asset(_asset(WORKSPACE))
 
-    production.set_creation_task_visibility(WORKSPACE, task.id, "shared")
+    production.task_records.set_creation_task_visibility(WORKSPACE, task.id, "shared")
     production.set_creation_plan_visibility(WORKSPACE, plan.id, "shared")
     production.set_asset_visibility(WORKSPACE, "asset-1", "shared")
 
-    assert production.get_creation_task(WORKSPACE, task.id).visibility == "shared"
-    assert production.get_creation_plan(WORKSPACE, plan.id).visibility == "shared"
+    assert production.task_records.get_creation_task(WORKSPACE, task.id).visibility == "shared"
+    assert production.plan_records.get_creation_plan(WORKSPACE, plan.id).visibility == "shared"
     assert production.get_asset(WORKSPACE, "asset-1").visibility == "shared"
 
     production.set_asset_visibility(WORKSPACE, "asset-1", "private")
@@ -226,7 +223,7 @@ def test_legacy_rows_without_the_column_are_shared_after_migration(tmp_path):
 
     assert _stored_visibility(production, "creation_tasks", "legacy-task", WORKSPACE) == "shared"
     assert _stored_visibility(production, "creation_plans", "legacy-plan", WORKSPACE) == "shared"
-    assert production.get_creation_task(WORKSPACE, "legacy-task").visibility == "shared"
+    assert production.task_records.get_creation_task(WORKSPACE, "legacy-task").visibility == "shared"
 
 
 def _repository_with_database(tmp_path: Path, database: Path) -> ProductionRepository:
@@ -246,15 +243,15 @@ def test_template_visibility_applies_to_new_versions(tmp_path):
         id="tpl-1", workspace_id=WORKSPACE, version=1, name="模板", origin="user",
         settings={"a": 1},
     )
-    production.save_video_template(template, verified_owner_user_id=TEMPLATE_OWNER)
-    production.set_video_template_visibility(WORKSPACE, "tpl-1", "shared")
+    production.video_templates.save_video_template(template, verified_owner_user_id=TEMPLATE_OWNER)
+    production.video_templates.set_video_template_visibility(WORKSPACE, "tpl-1", "shared")
 
-    production.save_video_template(VideoTemplate(
+    production.video_templates.save_video_template(VideoTemplate(
         id="tpl-1", workspace_id=WORKSPACE, version=2, name="模板", origin="user",
         settings={"a": 2},
     ))
 
-    latest = production.get_video_template(WORKSPACE, "tpl-1", 2)
+    latest = production.video_templates.get_video_template(WORKSPACE, "tpl-1", 2)
     assert latest.visibility == "shared"
     assert _stored_visibility(production, "video_templates", "tpl-1", WORKSPACE) == "shared"
 
@@ -269,13 +266,13 @@ def test_visibility_never_crosses_workspace(tmp_path):
 
 def test_template_second_version_reads_back_the_stored_visibility_everywhere(tmp_path):
     production = _repository(tmp_path)
-    production.save_video_template(VideoTemplate(
+    production.video_templates.save_video_template(VideoTemplate(
         id="tpl-2", workspace_id=WORKSPACE, version=1, name="模板", origin="user",
         settings={"a": 1},
     ), verified_owner_user_id=TEMPLATE_OWNER)
-    production.set_video_template_visibility(WORKSPACE, "tpl-2", "shared")
+    production.video_templates.set_video_template_visibility(WORKSPACE, "tpl-2", "shared")
 
-    saved = production.save_video_template(VideoTemplate(
+    saved = production.video_templates.save_video_template(VideoTemplate(
         id="tpl-2", workspace_id=WORKSPACE, version=2, name="模板", origin="user",
         settings={"a": 2},
     ))
@@ -286,14 +283,14 @@ def test_template_second_version_reads_back_the_stored_visibility_everywhere(tmp
     # 列出是带读取身份的读：这里用与创建同一条可信身份。
     listed = {
         item.version: item.visibility
-        for item in production.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
+        for item in production.video_templates.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
     }
     assert listed == {2: "shared", 1: "shared"}
 
     reopened = _repository(tmp_path)
     assert {
         item.version: item.visibility
-        for item in reopened.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
+        for item in reopened.video_templates.list_video_templates(WORKSPACE, viewer_user_id=TEMPLATE_OWNER)
     } == {2: "shared", 1: "shared"}
 
 

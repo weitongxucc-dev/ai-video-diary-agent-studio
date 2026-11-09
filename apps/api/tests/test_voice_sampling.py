@@ -74,7 +74,7 @@ def test_receive_replays_exact_receipt_after_restart_without_readiness_or_defaul
     assert receive(fresh, task) == received
     assert fresh.get(task.workspace_id, task.owner_user_id, task.id) == received
     assert counts(repo) == dict(material_assets=1, versioned_voice_profiles=1, workspace_media_references=1)
-    voice = repo.get_versioned_voice_profile(task.workspace_id, received.voice_profile_id, received.voice_version)
+    voice = repo.profile_records.get_versioned_voice_profile(task.workspace_id, received.voice_profile_id, received.voice_version)
     source = repo._material_assets.get_asset(task.workspace_id, voice.reference.asset_id)
     assert (source.file_name, repo.resolve_workspace_media_reference(task.workspace_id, voice.reference_audio_path).name) == (
         f"{task.display_name}.wav", f"{task.id}-{received.audio_sha256}.wav")

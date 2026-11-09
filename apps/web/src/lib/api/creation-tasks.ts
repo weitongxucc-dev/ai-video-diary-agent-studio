@@ -1,10 +1,11 @@
+import type { CreationTaskScriptGenerationInput, CreationTaskScriptGenerationReceipt } from "../types/creation-tasks";
 import type { CreationTaskStoryboardRegenerationInput, CreationTaskStoryboardRegenerationReceipt } from '../types/creation-tasks';
 import type { TaskMediaJob } from '../types/task-edits';
 import type { CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse } from '../types/creation-tasks';
 import { ensureLocalMemberIdentity, readLocalMemberToken } from "../local-member-auth";
 import { isLocalAuthMode } from "../auth/routing";
 import type { CreationTasksResponse, CreationTaskWorkspace, CreationExecutionPreview, CreationExecutionStatus, TaskJobProgress, CreationTaskScriptsResponse, CreationTaskScript, CreationTaskScriptSection, CreationTaskScriptSectionWindow, CreationTaskScriptWindowStartInput, CreationTaskScriptSectionsPatchInput, CreationTaskScriptWindowSaved, CreationTaskScriptWindowUnsettled, CreationTaskScriptConfirmSavedInput, CreationTaskScriptConfirmed, CreationTaskScriptWindowResult, CreationTaskScriptRequestLocator, CreationTaskPersonRender, CreationTaskTopicsResponse } from '../types/creation-tasks';
-import type { CreationTaskExactEditInput, CreationTaskEditConfirmResponse, CreationTaskEditResult, CreationTaskEditPreviewResponse } from '../types/task-edits';
+import type { CreationTaskMetadataSaveInput, CreationTaskEditRequestReceipt, CreationTaskExactEditInput, CreationTaskEditConfirmResponse, CreationTaskEditResult, CreationTaskEditPreviewResponse } from '../types/task-edits';
 import type { CreationTaskAssistantTurnResponse, CreationTaskAssistantHistory, AssistantStreamEvent } from '../types/assistant';
 import type { CreationTaskTimelineVersionDetail, CreationTaskTimelineVersionList } from '../types/timeline-history';
 import type { ContentVisibility } from '../types/common';
@@ -19,6 +20,11 @@ export function getCreationTaskEditPreview(taskId: string, proposalId: string): 
 }
 export function listCreationTasks(): Promise<CreationTasksResponse> {
     return creationPlanRequest<CreationTasksResponse>("/api/creation-tasks");
+}
+export function getCreationTaskScriptEditSources(taskId: string, scriptId: string): Promise<{
+    task_id: string; script_id: string; sources: { reference_id: string; title: string }[];
+}> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/${encodeURIComponent(scriptId)}/sources`);
 }
 export function getCreationTaskTopics(taskId: string): Promise<CreationTaskTopicsResponse> {
     return creationPlanRequest<CreationTaskTopicsResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/topics`);
@@ -92,8 +98,11 @@ export function getCreationTaskScriptWindowRequest(taskId: string, requestId: st
     if (locator.operation !== "start") query.set("script_id", locator.script_id);
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/script-window-requests/${encodeURIComponent(requestId)}?${query}`);
 }
-export function generateCreationTaskScript(taskId: string): Promise<CreationTaskScriptsResponse> {
-    return creationPlanRequest<CreationTaskScriptsResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/generate`, { method: "POST", body: JSON.stringify({}) });
+export function generateCreationTaskScript(taskId: string, input: CreationTaskScriptGenerationInput): Promise<CreationTaskScriptGenerationReceipt> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/generate`, { method: "POST", body: JSON.stringify(input) });
+}
+export function getCreationTaskScriptGenerationRequest(taskId: string, requestId: string): Promise<CreationTaskScriptGenerationReceipt> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/scripts/generation-requests/${encodeURIComponent(requestId)}`);
 }
 export function confirmCreationTaskScript(taskId: string, scriptId: string, input: {
     title: string;
@@ -157,7 +166,7 @@ export function generateCreationTaskPersonRender(taskId: string, input: {
 }): Promise<CreationTaskPersonRender> {
     return creationPlanRequest<CreationTaskPersonRender>(`/api/creation-tasks/${encodeURIComponent(taskId)}/person-renders/generate`, { method: "POST", body: JSON.stringify(input) });
 }
-export function applyCreationTaskExactEdit(taskId: string, input: CreationTaskExactEditInput): Promise<CreationTaskEditResult> {
+export function applyCreationTaskExactEdit(taskId: string, input: CreationTaskExactEditInput | CreationTaskMetadataSaveInput): Promise<CreationTaskEditResult> {
     return creationPlanRequest<CreationTaskEditResult>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact`, { method: "POST", body: JSON.stringify(input) });
 }
 export function previewCreationTaskExactEdit(taskId: string, input: CreationTaskExactEditInput): Promise<CreationTaskEditPreviewResponse | TaskMediaJob> {
@@ -263,4 +272,8 @@ export function regenerateCreationTaskStoryboard(taskId: string, input: Creation
 
 export function readCreationTaskStoryboardRegeneration(taskId: string, requestId: string): Promise<CreationTaskStoryboardRegenerationReceipt> {
     return request(`/api/creation-tasks/${encodeURIComponent(taskId)}/montage/plan/requests/${encodeURIComponent(requestId)}`);
+}
+
+export function getCreationTaskEditRequest(taskId: string, requestId: string): Promise<CreationTaskEditRequestReceipt> {
+    return creationPlanRequest<CreationTaskEditRequestReceipt>(`/api/creation-tasks/${encodeURIComponent(taskId)}/assistant/edit-requests/${encodeURIComponent(requestId)}?phase=apply`);
 }

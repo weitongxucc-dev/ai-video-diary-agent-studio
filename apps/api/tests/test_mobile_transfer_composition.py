@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app.production import ProductionRepository
-from test_companion_identity_http import linked, USER, OTHER, WORKSPACE
+from test_companion_identity_http import linked as linked, USER, OTHER, WORKSPACE
 from test_mobile_transfers import DATA, declaration
 
 
@@ -17,7 +17,7 @@ def client_for(linked, tmp_path, monkeypatch):
     root = tmp_path / 'library'
     root.mkdir()
     repository = ProductionRepository(tmp_path / 'app.sqlite3', root)
-    repository.bind_material_ingestion(WORKSPACE, expected_directory=str(root))
+    repository.material_source_files.bind_material_ingestion(WORKSPACE, expected_directory=str(root))
     owners = replace(main._current_database_owners(), production=repository)
     app = FastAPI()
     app.middleware('http')(main.auth_boundary_middleware)

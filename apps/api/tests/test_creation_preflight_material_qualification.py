@@ -25,6 +25,9 @@ GOAL = '制作一条两分钟接口演示视频'
 
 @pytest.fixture
 def qualification_state(tmp_path, monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main, "_creation_task_script_generator_for", forbidden)
     library = tmp_path / 'library'
     library.mkdir()
     repository = ProductionRepository(tmp_path / 'isolated.sqlite', library)
@@ -69,18 +72,20 @@ def qualification_state(tmp_path, monkeypatch):
                     reference=repository.workspace_media_reference_for_asset(WORKSPACE, asset_id))
         return asset
 
-    good_b = add_asset('valid-b-roll', role='b_roll', mixed=True)
+    good_b = add_asset('valid-b-roll', role='b_roll')
     good_a = add_asset('valid-a-roll', role='a_roll')
     # More than the eight-result limit: post-filtering alone must not let these
     # consume the whole search window before qualified assets are considered.
-    bad = [add_asset(f'suggested-only-{index}', role='unassigned') for index in range(9)]
+    # Unassigned suggestions are valid under the current policy. Registration,
+    # not the old role threshold, makes these real manual-only sources.
+    bad = [add_asset(f'suggested-only-{index}', role='unassigned', registered=False) for index in range(9)]
     bad.append(add_asset('not-for-automation', role='b_roll', use_state='not_for_automation'))
     bad.append(add_asset('unregistered-source', role='b_roll', registered=False))
     app = FastAPI()
     for path, handler in [
-        ('/api/creation-requests', main.create_creation_request),
-        ('/api/creation-requests/{request_id}/windows', main.preview_creation_request_window),
-        ('/api/creation-requests/{request_id}/windows/{window_id}/confirm', main.confirm_creation_request_window),
+        ('/api/creation-requests', next(route.endpoint for route in main.app.routes if route.name == "create_creation_request")),
+        ('/api/creation-requests/{request_id}/windows', next(route.endpoint for route in main.app.routes if route.name == "preview_creation_request_window")),
+        ('/api/creation-requests/{request_id}/windows/{window_id}/confirm', next(route.endpoint for route in main.app.routes if route.name == "confirm_creation_request_window")),
     ]:
         app.add_api_route(path, handler, methods=['POST'])
 
@@ -88,7 +93,7 @@ def qualification_state(tmp_path, monkeypatch):
     # preflight itself and its search/qualification are the actual implementation.
     @app.post('/scoped-preflight')
     def scoped_preflight(request: Request, payload: CreationPlanPreviewRequest):
-        return asdict(main._creation_plan_preflight(request, WORKSPACE, payload, automation_scope={
+        return asdict(main._creation_plan_preflight_http_adapter().preflight(request, WORKSPACE, payload, automation_scope={
             'knowledge_ids': ['knowledge'], 'connector_ids': [],
             'material_asset_ids': [asset.id for asset in bad],
         }))
@@ -110,28 +115,33 @@ def test_prepare_confirm_freezes_only_actual_qualified_pairs(qualification_state
     expected = {(state.good_a.id, state.good_a.segments[0].id), (state.good_b.id, state.good_b.segments[0].id)}
     assert {(asset.id, segment.id) for asset, segment in repository.automatic_material_segments(
         WORKSPACE, viewer_user_id=state.owner.member_id)} == expected
-    manual = repository.search_material_segments(WORKSPACE, query=GOAL,
+    manual = repository.material_search.search_material_segments(WORKSPACE, query=GOAL,
         usage_roles=['a_roll', 'b_roll'], limit=100, viewer_user_id=state.owner.member_id)
     # These really remain manually searchable; test data must exhibit the gap.
     assert any(item.asset_ref == 'asset:suggested-only-0' for item in manual)
     assert any(item.asset_ref == 'asset:not-for-automation' for item in manual)
-    ordinary_limited = repository.search_material_segments(WORKSPACE, query=GOAL,
-        asset_ids=[state.good_b.id], usage_roles=['a_roll', 'b_roll'], limit=8,
+    suggested_asset_ids = {f'suggested-only-{index}' for index in range(9)}
+    assert suggested_asset_ids <= {item.asset_ref.removeprefix('asset:') for item in manual}
+    automatic_asset_ids = {asset.id for asset, _ in repository.automatic_material_segments(
+        WORKSPACE, viewer_user_id=state.owner.member_id)}
+    assert suggested_asset_ids.isdisjoint(automatic_asset_ids)
+    ordinary_limited = repository.material_search.search_material_segments(WORKSPACE, query=GOAL,
+        asset_ids=[state.good_b.id, *sorted(suggested_asset_ids)], usage_roles=['a_roll', 'b_roll'], limit=8,
         viewer_user_id=state.owner.member_id)
     assert len(ordinary_limited) == 8
     assert all(item.segment_ref != 'segment:' + state.good_b.segments[0].id for item in ordinary_limited)
-    scoped_matches = repository.search_material_segments(WORKSPACE, query=GOAL,
+    scoped_matches = repository.material_search.search_material_segments(WORKSPACE, query=GOAL,
         asset_ids=[state.good_a.id, state.good_b.id], eligible_segment_refs=expected,
         usage_roles=['a_roll', 'b_roll'], limit=8, viewer_user_id=state.owner.member_id)
     assert {(item.asset_ref.removeprefix('asset:'), item.segment_ref.removeprefix('segment:'))
             for item in scoped_matches} == expected
     if empty_query_result:
-        original_search = repository.search_material_segments
+        original_search = repository.material_search.search_material_segments
         def no_query_hits(workspace_id, **kwargs):
             if kwargs.get('query'):
                 return []
             return original_search(workspace_id, **kwargs)
-        monkeypatch.setattr(repository, 'search_material_segments', no_query_hits)
+        monkeypatch.setattr(repository.material_search, "search_material_segments", no_query_hits)
     created = state.client.post('/api/creation-requests', json={
         'request_key': str(uuid4()), 'goal': GOAL, 'target_count': 1, 'output_relation': 'single',
         'duration_target_seconds': 120, 'presenter_share_target': 0,
@@ -146,7 +156,7 @@ def test_prepare_confirm_freezes_only_actual_qualified_pairs(qualification_state
     proposed = prepared.json()
     window = proposed['current_window']
     plan = window['entries'][0]['plan']
-    assert repository.list_creation_tasks(WORKSPACE) == []
+    assert repository.task_records.list_creation_tasks(WORKSPACE) == []
     confirmed = state.client.post(base + '/windows/' + window['id'] + '/confirm', json={
         'expected_revision': proposed['revision'], 'input_fingerprint': window['input_fingerprint'],
     })
@@ -160,8 +170,8 @@ def test_prepare_confirm_freezes_only_actual_qualified_pairs(qualification_state
     with repository._connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM creation_plans').fetchone()[0] == 1
         assert conn.execute('SELECT COUNT(*) FROM creation_tasks').fetchone()[0] == 1
-    task = repository.list_creation_tasks(WORKSPACE)[0]
-    persisted = repository.get_creation_plan(WORKSPACE, task.plan_id)
+    task = repository.task_records.list_creation_tasks(WORKSPACE)[0]
+    persisted = repository.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     assert {(item.asset_ref.removeprefix('asset:'), item.segment_ref.removeprefix('segment:'))
             for item in persisted.material_matches} == expected
     assert material_rows(repository) == before
@@ -178,5 +188,5 @@ def test_scope_with_only_unqualified_materials_has_no_candidates_and_existing_bl
     assert plan['material_matches'] == []
     assert plan['approved_asset_count'] == 0 and plan['approved_clip_count'] == 0
     assert any(item['reason'] == 'approved_material_clips_missing' for item in plan['blockers'])
-    assert state.repository.list_creation_tasks(WORKSPACE) == []
+    assert state.repository.task_records.list_creation_tasks(WORKSPACE) == []
     assert material_rows(state.repository) == before

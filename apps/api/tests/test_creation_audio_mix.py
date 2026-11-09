@@ -30,8 +30,8 @@ def audio_budget():
 
 def case(tmp_path, *, normalize=False, budget=True):
     repo, task_id, script_id, digest, actor, execution, owner, scheduler, base, members = _render_version_fixture(tmp_path)
-    narration = repo.get_narration_artifact('local', 'cache_1')
-    repo.save_narration_artifact(replace(narration, sample_rate=8000, duration_seconds=2))
+    narration = repo.narration_artifacts.get_narration_artifact('local', 'cache_1')
+    repo.narration_artifacts.save_narration_artifact(replace(narration, sample_rate=8000, duration_seconds=2))
     music = tmp_path / 'library/music.wav'
     music.write_bytes(synthetic_wav_bytes())
     repo._save_asset(MaterialAsset(id='music', workspace_id='local', file_name=music.name, path=str(music),
@@ -48,8 +48,8 @@ def case(tmp_path, *, normalize=False, budget=True):
             id='music-clip', name='music', source_ref=reference, source_start_ms=0, timeline_start_ms=0, source_end_ms=1000, gain_db=-6)])])
     payload = repo.get_creation_task_montage_plan('local', task_id)
     payload.update(audio_timeline=graph.model_dump(), narration_linkage_created_audio_timeline=normalize)
-    repo.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
-    repo.create_timeline_version(replace(base, id='timeline_audio', parent_version_id=base.id, sequence=2,
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
+    repo.timeline_records.create_timeline_version(replace(base, id='timeline_audio', parent_version_id=base.id, sequence=2,
                                         snapshot={'montage': payload}))
     service = TaskAudio(repo, ArtifactStore(tmp_path/'artifacts'), tmp_path/'temp')
     cap = audio_budget() if budget else None
@@ -120,12 +120,12 @@ def test_missing_audio_budget_marks_registered_job_rejected_without_queue(tmp_pa
         job = execution.start('local', task_id, script_id, digest, actor=actor)
         with pytest.raises(ValueError, match='音频处理预算尚未标定'):
             submit_creation_stage(execution, scheduler, job, actor)
-        saved = repo.get_job_run('local', job.id)
+        saved = repo.job_records.get_job_run('local', job.id)
         assert saved.status == 'failed' and '音频处理预算尚未标定' in saved.failure_reason
         assert saved.impact and saved.repair_action
         with repo._connect() as conn:
             assert conn.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 0
-        event = repo.get_task_event('local', f'event_{job.id}_admission_failed')
+        event = repo.execution_records.get_task_event('local', f'event_{job.id}_admission_failed')
         assert event.payload['status'] == 'failed'
     finally:
         scheduler.close()
@@ -138,8 +138,8 @@ def test_unknown_submission_does_not_invent_failed_state(tmp_path, monkeypatch):
         monkeypatch.setattr(scheduler, 'submit', lambda *args: (_ for _ in ()).throw(OSError('transport unknown')))
         with pytest.raises(OSError, match='transport unknown'):
             submit_creation_stage(execution, scheduler, job, actor)
-        assert repo.get_job_run('local', job.id).status == 'queued'
-        assert not any(event.id == f'event_{job.id}_admission_failed' for event in repo.list_task_events('local', task_id))
+        assert repo.job_records.get_job_run('local', job.id).status == 'queued'
+        assert not any(event.id == f'event_{job.id}_admission_failed' for event in repo.execution_records.list_task_events('local', task_id))
     finally:
         scheduler.close()
 
@@ -147,8 +147,8 @@ def test_unknown_submission_does_not_invent_failed_state(tmp_path, monkeypatch):
 def test_composite_missing_specs_or_purpose_cannot_borrow_render_budget(tmp_path, monkeypatch):
     repo, task_id, _, _, actor, _, owner, scheduler, _, _, _, _ = case(tmp_path)
     try:
-        task = repo.get_creation_task('local', task_id)
-        plan = repo.get_creation_plan('local', task.plan_id)
+        task = repo.task_records.get_creation_task('local', task_id)
+        plan = repo.plan_records.get_creation_plan('local', task.plan_id)
         with repo._connect() as conn:
             _, resources = owner.render_facts(conn, task, plan, actor=actor)
         no_audio_budget = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,),
@@ -263,7 +263,8 @@ def test_long_fade_preview_seals_scoped_audio_and_whole_source_linkage(tmp_path,
         monkeypatch.setattr(main, 'settings', replace(main.settings,video_inbox_path=str(repo.video_library_path),
             video_output_path=str(tmp_path/'artifacts'),temporary_root_path=str(tmp_path/'temp')))
         configure_synthetic_media_budgets(monkeypatch, main)
-        monkeypatch.setattr('app.creation.editing.command_preview_use_case.cpu_audio_budget_from_env',audio_budget)
+        selected_budget = main._device_host_budget()
+        monkeypatch.setattr(main, '_device_host_budget', lambda: replace(selected_budget, cpu_audio=audio_budget()))
         payload = repo.get_creation_task_montage_plan('local', task_id)
         original = payload['clips'][0]
         payload['clips'] = [
@@ -277,9 +278,9 @@ def test_long_fade_preview_seals_scoped_audio_and_whole_source_linkage(tmp_path,
             track['locked'] = True
             track['clips'][0].update(source_end_ms=2000, playback_rate=.25, locked=True)
         payload['audio_timeline'] = graph
-        repo.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
+        repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
         payload = repo.get_creation_task_montage_plan('local', task_id)
-        task = repo.get_creation_task('local', task_id)
+        task = repo.task_records.get_creation_task('local', task_id)
         facts, resources = main._task_media_facts('local', task_id, 'exact_edit_preview',
             {'payload':{'operation_type':'AdjustVisualEffects', 'clip_ids':['clip_1'], 'effects':{'fade_out_seconds':0},
                 'expected_timeline_version_id':task.current_timeline_version_id, 'expected_timeline_sequence':2},
@@ -310,8 +311,8 @@ def test_existing_blocked_request_is_not_invented_as_never_submitted_failure(tmp
         owner.audio_mix_facts = lambda *args, **kwargs: (_ for _ in ()).throw(ValueError('audio input changed'))
         with pytest.raises(ValueError, match='audio input changed'):
             submit_creation_stage(execution, scheduler, job, actor)
-        assert repo.get_job_run('local', job.id).status == 'queued'
-        assert not any(event.id == f'event_{job.id}_admission_failed' for event in repo.list_task_events('local', task_id))
+        assert repo.job_records.get_job_run('local', job.id).status == 'queued'
+        assert not any(event.id == f'event_{job.id}_admission_failed' for event in repo.execution_records.list_task_events('local', task_id))
         with repo._connect() as conn:
             pending = conn.execute('SELECT state,wait_reason FROM device_work_requests WHERE id=?',(request_id,)).fetchone()
         assert dict(pending) == {'state':'blocked', 'wait_reason':'worker_interrupted'}
@@ -330,8 +331,9 @@ def test_compound_music_and_subtitle_previews_seal_before_and_after_audio(tmp_pa
         monkeypatch.setattr(main, 'settings', replace(main.settings,video_inbox_path=str(repo.video_library_path),
             video_output_path=str(tmp_path/'artifacts'),temporary_root_path=str(tmp_path/'temp')))
         configure_synthetic_media_budgets(monkeypatch, main)
-        monkeypatch.setattr('app.creation.editing.command_preview_use_case.cpu_audio_budget_from_env',audio_budget)
-        task = repo.get_creation_task('local', task_id)
+        selected_budget = main._device_host_budget()
+        monkeypatch.setattr(main, '_device_host_budget', lambda: replace(selected_budget, cpu_audio=audio_budget()))
+        task = repo.task_records.get_creation_task('local', task_id)
         command = '音乐小一点，同时字幕字号改成64'
         args = {'payload':{'raw_command':command, 'context_stage':'montage', 'selected_object_refs':[],
                          'playhead_ms':None}, '_media_kind':'picture_preview'}
@@ -353,7 +355,7 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
     import app.main as main
     from app.creation_execution import CpuRenderGrantContext
     from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-    from app.production import TaskEvent
+    from app.creation.contracts import TaskEvent
     from app.task_audio import TaskMediaJobs, TASK_MEDIA_CONTEXT
     from _media_preview_test_fixtures import configure_synthetic_media_budgets
     repo, task_id, _, _, actor, _, owner, scheduler, _, service, _, _ = case(tmp_path, normalize=True)
@@ -362,18 +364,18 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
         # A single audible voice splits into two uses. Music remains muted.
         payload = repo.get_creation_task_montage_plan('local', task_id)
         payload['audio_timeline']['tracks'][1]['muted'] = True
-        repo.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
-        current = repo.get_timeline_version('local', 'timeline_audio')
-        repo.create_timeline_version(replace(current, id='timeline_silence', parent_version_id=current.id, sequence=3, snapshot={'montage':payload}))
+        repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, 'montage_1', payload)
+        current = repo.timeline_records.get_timeline_version('local', 'timeline_audio')
+        repo.timeline_records.create_timeline_version(replace(current, id='timeline_silence', parent_version_id=current.id, sequence=3, snapshot={'montage':payload}))
         monkeypatch.setattr(main, 'production_repo', repo)
         monkeypatch.setattr(main, 'artifact_store', service.artifact_store)
         monkeypatch.setattr(main, 'settings', replace(main.settings,video_inbox_path=str(repo.video_library_path),
             video_output_path=str(tmp_path/'artifacts'),temporary_root_path=str(tmp_path/'temp')))
         monkeypatch.setattr(main, '_verify_creation_identity', owner.verify_identity)
         configure_synthetic_media_budgets(monkeypatch, main)
-        monkeypatch.setattr('app.creation.editing.command_preview_use_case.cpu_audio_budget_from_env',audio_budget)
-        monkeypatch.setattr(main, 'cpu_audio_budget_from_env', audio_budget)
-        monkeypatch.setattr('app.member_permits.cpu_render_budget_from_env', lambda:scheduler.resources.budget.cpu_render)
+        selected_budget = main._device_host_budget()
+        monkeypatch.setattr(main, '_device_host_budget', lambda: replace(selected_budget,
+            cpu_audio=audio_budget(), cpu_render=scheduler.resources.budget.cpu_render))
         args = {'payload':{'raw_command':'剪掉当前镜头停顿', 'context_stage':'montage',
                           'selected_object_refs':['clip:clip_1'], 'playhead_ms':None}, '_media_kind':'picture_preview'}
         media = TaskMediaJobs(repo, facts=main._task_media_facts,
@@ -382,7 +384,7 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
         job = media.submit(SimpleNamespace(scheduler=scheduler, wake=lambda:None), actor, task_id, 'command_edit_preview', args, 'edit_preview')
         grant = scheduler.pick_and_grant()
         assert grant is not None
-        repo.claim_job_run('local', job.id)
+        repo.job_records.claim_job_run('local', job.id)
         context = CpuRenderGrantContext(scheduler, grant, time.monotonic()+30, 8_000_000, 1)
         token = TASK_MEDIA_CONTEXT.set((context, job, media.read('local',job.id)[1], actor))
         before = creation_task_montage_plan_from_payload(repo.get_creation_task_montage_plan('local', task_id))
@@ -395,7 +397,7 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
         transform = service._transform_for('local', task_id, analysis)
         cuts = [[300,600]]
         after, tracks = remove_time_ranges(before, [], graph, cuts)
-        repo.append_task_event(TaskEvent(id=f'event_{job.id}_{analysis.id}_silence_detected', workspace_id='local',
+        repo.execution_records.append_task_event(TaskEvent(id=f'event_{job.id}_{analysis.id}_silence_detected', workspace_id='local',
             task_id=task_id, job_id=job.id, event_type='silence_analysis_result', payload={
                 'base_version_id':'timeline_silence', 'clip_id':'clip_1', 'analysis_ref':analysis.logical_ref,
                 'analysis_sha256':analysis.sha256, 'transform_id':transform.id, 'removed_ranges_ms':cuts}))
@@ -404,7 +406,7 @@ def test_dynamic_silence_after_is_exact_measured_derivative_with_finite_uses(tmp
         actual = {'operation':'picture_preview', 'parameters':{'side':'after','removed_ranges_ms':cuts,
                   'analysis_ref':analysis.logical_ref if mutation != 'missing_analysis' else 'artifacts/absent.wav'},
                   'media_input':{'plan':creation_task_montage_plan_to_payload(after), 'subtitle_tracks':[]}}
-        repo.append_task_event(TaskEvent(id='actual-after-input', workspace_id='local', task_id=task_id, job_id=job.id,
+        repo.execution_records.append_task_event(TaskEvent(id='actual-after-input', workspace_id='local', task_id=task_id, job_id=job.id,
                                         event_type='task_media_input', payload=actual))
         if mutation in {'uses', 'video_uses'}:
             # The existing calibrated profile remains three; a smaller sealed

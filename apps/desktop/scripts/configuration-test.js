@@ -29,6 +29,14 @@ try {
   assert.equal(api.DEVICE_PROOF, identity.proof);
   assert.equal(configuration.apiEnvironment(32102).DEVICE_PROOF, identity.proof, 'API restarts reuse persisted identity');
   assert.equal(api.AI_VIDEO_DIARY_DOTENV, path.join(userDataPath, '.env'));
+  assert.equal(api.DEVICE_RESOURCE_PROFILE_PATH, path.join(userDataPath, 'device-resource-profile.json'));
+  assert.equal(api.DEVICE_RESOURCE_MODE, 'normal');
+  assert.equal(fs.existsSync(api.DEVICE_RESOURCE_PROFILE_PATH), false, 'startup never invents a measured resource profile');
+  const experiment = createServiceConfiguration({ userDataPath, desktopDirectory, resourcesPath,
+    environment: { DEVICE_RESOURCE_MODE: 'experiment', DEVICE_RESOURCE_EXPERIMENT_ID: 'finite-fixture', DEVICE_RESOURCE_PROFILE_PATH: '/wrong-owner' } }).apiEnvironment(32104);
+  assert.equal(experiment.DEVICE_RESOURCE_MODE, 'experiment');
+  assert.equal(experiment.DEVICE_RESOURCE_EXPERIMENT_ID, 'finite-fixture');
+  assert.equal(experiment.DEVICE_RESOURCE_PROFILE_PATH, api.DEVICE_RESOURCE_PROFILE_PATH);
   assert.equal(api.API_HOST, '127.0.0.1');
   assert.equal(api.API_PORT, '32101');
   assert.equal(api.TMPDIR, path.join(userDataPath, 'temporary'));

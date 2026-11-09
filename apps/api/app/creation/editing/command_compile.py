@@ -3,6 +3,10 @@
 
 import re
 
+from dataclasses import dataclass
+from app.creation.editing.clips import ClipPreviewCommand
+from app.schemas import CreationTaskExactEditRequest
+
 class CommandParseRejected(Exception):
     def __init__(self,status_code,detail):
         super().__init__(str(detail))
@@ -70,10 +74,6 @@ def edit_material_constraint(command: str) -> str:
     return value
 
 
-from dataclasses import dataclass
-from app.audio_timeline import AudioEditRequest
-from app.creation.editing.clips import ClipPreviewCommand
-from app.schemas import CreationTaskExactEditRequest
 
 @dataclass(frozen=True)
 class AudioCommandPreview:

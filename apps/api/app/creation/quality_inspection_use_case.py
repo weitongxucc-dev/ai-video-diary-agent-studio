@@ -18,7 +18,7 @@ from app.creation_execution import CreationExecutionActor
 from app.device_scheduler import RecoveryBlocked, SchedulePolicy, SourceRef, SubmissionIntent, VerifiedWork, Window
 from app.device_runtime import RuntimeUnavailable
 from app.montage import creation_task_montage_plan_from_payload
-from app.production import content_readable
+from app.source_policy import knowledge_item_readable as content_readable
 from app.quality_inspection import final_quality_check_payload
 from app.quality_checks import fit_quality_result
 from app.quality_worker_runtime import (QualityBudget, file_identity, source_receipt,
@@ -86,7 +86,7 @@ class QualityInspectionUseCase:
             digest = successor["unit_key"].rsplit(":", 1)[-1]
             if not re.fullmatch(r"[0-9a-f]{64}", digest):
                 raise ValueError("质检后继缺少封存尝试身份")
-            event = self.production.get_task_event(workspace_id, f"event_{job_id}_quality_attempt_{digest}")
+            event = self.production.execution_records.get_task_event(workspace_id, f"event_{job_id}_quality_attempt_{digest}")
             payload = event.payload
             attempt = payload.get("attempt", {})
             if (event.task_id != job.task_id or event.job_id != job_id
@@ -118,7 +118,7 @@ class QualityInspectionUseCase:
         """
         return self._read_failed_phase_link(workspace_id, job_id, failed_request_id, actor)[-1]
 
-    def continue_failed_phase(self, scheduler, workspace_id, job_id, failed_request_id, actor):
+    def continue_failed_phase(self, scheduler, workspace_id, job_id, failed_request_id, actor, *, write_guard=None):
         """Explicit finite preparation under the original check/Job and prefix.
 
         Policy is read from the trusted bound runtime, never from tool/HTTP caps.
@@ -160,6 +160,8 @@ class QualityInspectionUseCase:
         source = sealed["source"]
         generation = scheduler.reconcile_released()
         def write(conn, old_request, new_request_id):
+            if write_guard is not None:
+                write_guard(conn)
             current_job, _, current_record, current_sealed = self.read(workspace_id, job_id, connection=conn)
             current_access = conn.execute("SELECT json_extract(payload,'$.owner_user_id'),"
                 "json_extract(payload,'$.visibility') FROM creation_tasks WHERE workspace_id=? AND id=?",
@@ -175,11 +177,11 @@ class QualityInspectionUseCase:
             if artifact is None or tuple(artifact) != (job.task_id, "rendered_video", source["source_ref"],
                     source["render_ref"], source["size_bytes"]):
                 raise ValueError("质检固定产物在接续观察后发生变化")
-            self.production.reopen_failed_job_run(workspace_id, job_id, expected_updated_at=job.updated_at,
+            self.production.job_records.reopen_failed_job_run(workspace_id, job_id, expected_updated_at=job.updated_at,
                 expected_attempt=job.attempt, connection=conn)
             self.checks.reopen_phase(workspace_id, job.task_id, record["check_id"],
                 expected_updated_at=record["updated_at"], attempt=attempt, connection=conn)
-            self.production.append_task_event(TaskEvent(id=f"event_{job_id}_quality_attempt_{attempt['digest']}",
+            self.production.execution_records.append_task_event(TaskEvent(id=f"event_{job_id}_quality_attempt_{attempt['digest']}",
                 workspace_id=workspace_id, task_id=job.task_id, job_id=job_id,
                 event_type="quality_check_phase_attempt_created", payload={"check_id": record["check_id"],
                     "attempt": attempt, "new_request_id": new_request_id, "previous_failure": record["error"]}), connection=conn)
@@ -207,7 +209,7 @@ class QualityInspectionUseCase:
     def require_actor(self, workspace_id, task_id, actor):
         if self.authorization_verdict(workspace_id, task_id, actor) != "ready":
             raise PermissionError("质检执行身份失效或尚未就绪")
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False,
                                 visibility=task.visibility, owner_user_id=task.owner_user_id):
             raise PermissionError("当前成员无权检查此创作任务")
@@ -221,14 +223,14 @@ class QualityInspectionUseCase:
             "file_identity": file_identity(path), "path": str(path)}
         from app.creation.duration_requirement import DurationRequirement
         source['duration_requirement'] = DurationRequirement.from_plan(
-            self.production.get_creation_plan(workspace_id, task.plan_id)).payload()
+            self.production.plan_records.get_creation_plan(workspace_id, task.plan_id)).payload()
         return task, plan, source
 
     def resources(self, source, budget):
         return quality_stream_resources({"source": source, "budget": asdict(budget)}, "metadata", {})
 
     def projection(self, workspace_id, task_id):
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         try:
             plan = creation_task_montage_plan_from_payload(self.production.get_creation_task_montage_plan(workspace_id, task_id))
         except KeyError:
@@ -304,8 +306,8 @@ class QualityInspectionUseCase:
         return result
 
     def read(self, workspace_id, job_id, *, connection=None):
-        job = self.production.get_job_run(workspace_id, job_id)
-        event = self.production.get_task_event(workspace_id, f"event_{job_id}_start").payload
+        job = self.production.job_records.get_job_run(workspace_id, job_id)
+        event = self.production.execution_records.get_task_event(workspace_id, f"event_{job_id}_start").payload
         if job.kind != QUALITY_KIND:
             raise ValueError("该作业不属于独立质检")
         record = self.checks.get_check(workspace_id, job.task_id, event["check_id"], connection=connection)
@@ -325,14 +327,14 @@ class QualityInspectionUseCase:
         try:
             if render_job_id is None:
                 raise ValueError("自动质检缺少原制作作业身份，请使用可信成员重新检查。")
-            job = self.production.get_job_run(workspace_id, render_job_id)
+            job = self.production.job_records.get_job_run(workspace_id, render_job_id)
             if job.task_id != task_id:
                 raise ValueError("自动质检与原制作任务不一致")
-            event = self.production.get_task_event(workspace_id, f"event_{job.id}_start")
+            event = self.production.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
             actor = CreationExecutionActor.from_event(workspace_id, event.payload)
             return self.start(runtime, actor, workspace_id, task_id)
         except (KeyError, PermissionError, ValueError) as exc:
-            task = self.production.get_creation_task(workspace_id, task_id)
+            task = self.production.task_records.get_creation_task(workspace_id, task_id)
             try:
                 _, _, source = self.source_metadata(workspace_id, task_id)
             except (KeyError, OSError, ValueError):
@@ -374,18 +376,18 @@ class QualityInspectionUseCase:
     def verify_source(self, request, actor):
         source = request["source"]
         self.require_actor(source["workspace_id"], source["task_id"], actor)
-        record = self.production.get_artifact_record(source["workspace_id"], source["artifact_id"])
+        record = self.production.execution_records.get_artifact_record(source["workspace_id"], source["artifact_id"])
         if (record.task_id, record.kind, record.logical_ref, record.sha256, record.size_bytes) != (
                 source["task_id"], "rendered_video", source["source_ref"], source["render_ref"], source["size_bytes"]):
             raise ValueError("质检固定来源产物已变化")
         if source["timeline_version_id"] is not None:
-            version = self.production.get_timeline_version(source["workspace_id"], source["timeline_version_id"])
+            version = self.production.timeline_records.get_timeline_version(source["workspace_id"], source["timeline_version_id"])
             if version.task_id != source["task_id"] or source["source_ref"] not in version.snapshot.get("output_refs", []):
                 raise ValueError("质检固定版本与登记产物不一致")
         from app.creation.duration_requirement import DurationRequirement
-        task = self.production.get_creation_task(source['workspace_id'], source['task_id'])
+        task = self.production.task_records.get_creation_task(source['workspace_id'], source['task_id'])
         current_requirement = DurationRequirement.from_plan(
-            self.production.get_creation_plan(task.workspace_id, task.plan_id))
+            self.production.plan_records.get_creation_plan(task.workspace_id, task.plan_id))
         if ('duration_requirement' not in source
                 or DurationRequirement(**source['duration_requirement']) != current_requirement):
             raise ValueError("质检固定的交付时长约定已变化，请重新检查当前成片")
@@ -395,7 +397,7 @@ class QualityInspectionUseCase:
 
     def start(self, runtime, actor, workspace_id, task_id, *, force=False):
         if self.task_authorizations is not None:
-            self.task_authorizations.ensure(self.production.get_creation_task(workspace_id, task_id), actor)
+            self.task_authorizations.ensure(self.production.task_records.get_creation_task(workspace_id, task_id), actor)
         check_id, job = self._reserve(actor, workspace_id, task_id, force=force)
         if job is None:
             return check_id
@@ -453,10 +455,10 @@ class QualityInspectionUseCase:
                 "budget": asdict(self.budget), "resources": self.resources(source, self.budget), "thresholds": {},
                 "protocol": QUALITY_STREAM_PROTOCOL}
             digest = quality_input_digest(request)
-            job = self.production.create_job_run(JobRun(id=f"job_quality_{check_id}", workspace_id=workspace_id,
+            job = self.production.job_records.create_job_run(JobRun(id=f"job_quality_{check_id}", workspace_id=workspace_id,
                 task_id=task_id, kind=QUALITY_KIND, idempotency_key=f"quality:{check_id}", input_digest=digest), connection=conn)
             self.checks.seal_request(workspace_id, task_id, check_id, request, connection=conn)
-            self.production.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id=workspace_id,
+            self.production.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id=workspace_id,
                 task_id=task_id, job_id=job.id, event_type="quality_check_submitted",
                 payload={"check_id": check_id, "input_digest": digest, **actor.identity_payload()}), connection=conn)
         return check_id, job
@@ -505,7 +507,8 @@ class QualityInspectionUseCase:
                     'detail': f'成片技术有效不代表时长达标：目标 {requirement.target_seconds:g} 秒，'
                               f'实际视频 {evidence.get("video_duration_seconds")} 秒。'})
             else:
-                if evidence['status'] == 'clean': evidence['status'] = 'unavailable'
+                if evidence['status'] == 'clean':
+                    evidence['status'] = 'unavailable'
                 evidence.setdefault('unavailable', []).append({'kind': 'delivery_duration',
                     'reason': '缺少实际视频时基或帧率，不能证明交付时长', 'status': 'unavailable'})
 
@@ -550,7 +553,7 @@ class QualityInspectionUseCase:
             payload={"check_id": check_id, "phase": request["phase"], "checkpoint_digest": request["checkpoint_digest"],
                 "worker_sha256": result["worker_sha256"],
                 **({"file_sha256": result["file_sha256"]} if "file_sha256" in result else {})})
-        self.production.append_task_event(event, connection=connection)
+        self.production.execution_records.append_task_event(event, connection=connection)
         return event.id
 
     def read_measurements(self, workspace_id, job_id, actor):
@@ -599,13 +602,13 @@ class QualityInspectionUseCase:
         private = {key: value for key, value in record["evidence"].items() if key in {"_request", "_source_input", "_worker_result", "_phases", "_phase_attempt"}}
         evidence = ({**private, **result["evidence"], "_source_receipt": result["receipt"]} if result is not None else private)
         self.checks.finish(job.workspace_id, job.task_id, check_id, evidence=evidence, error=error, connection=connection)
-        self.production.finish_job_run(job.workspace_id, job.id, status=status, output_refs=[],
+        self.production.job_records.finish_job_run(job.workspace_id, job.id, status=status, output_refs=[],
             failure_reason=error, impact="检查未完成，原成片保持不变。" if error is not None else None,
             repair_action="恢复质检执行条件后重新检查当前成片。" if error is not None else None, connection=connection)
         suffix = "_" + private["_phase_attempt"]["digest"] if "_phase_attempt" in private else ""
         event = TaskEvent(id=f"event_{job.id}_quality_terminal{suffix}", workspace_id=job.workspace_id, task_id=job.task_id,
             job_id=job.id, event_type="quality_check_terminal", payload={"check_id": check_id, "status": status})
-        self.production.append_task_event(event, connection=connection)
+        self.production.execution_records.append_task_event(event, connection=connection)
         return event.id
 
     def cancel_queued(self, request_id, actor):
@@ -626,14 +629,14 @@ class QualityInspectionUseCase:
         if job.status == "interrupted" and job.failure_reason == reason:
             return
         if job.status in {"queued", "interrupted"}:
-            job = self.production.claim_job_run(job.workspace_id, job.id, connection=connection)
-        self.production.finish_job_run(job.workspace_id, job.id, status="interrupted",
+            job = self.production.job_records.claim_job_run(job.workspace_id, job.id, connection=connection)
+        self.production.job_records.finish_job_run(job.workspace_id, job.id, status="interrupted",
             failure_reason=reason, impact="检查暂停，原成片和已有检查回执保留。",
             repair_action="原任务授权及执行条件恢复后继续同一次检查。", connection=connection)
         event = TaskEvent(id=f"event_{job.id}_quality_pause_{uuid4().hex}",
             workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
             event_type="quality_check_paused", payload={"check_id": check_id, "reason": reason})
-        self.production.append_task_event(event, connection=connection)
+        self.production.execution_records.append_task_event(event, connection=connection)
 
     def recover(self, scheduler):
         if scheduler is None or Path(scheduler.database_path).resolve() != Path(self.production.database_path).resolve():
@@ -649,7 +652,7 @@ class QualityInspectionUseCase:
             authorization_denied = False
             if self.task_authorizations is not None:
                 try:
-                    self.task_authorizations.ensure(self.production.get_creation_task(job.workspace_id, job.task_id), actor)
+                    self.task_authorizations.ensure(self.production.task_records.get_creation_task(job.workspace_id, job.task_id), actor)
                 except TaskAuthorizationDenied:
                     authorization_denied = True
             result = record["evidence"].get("_worker_result")
@@ -691,7 +694,7 @@ class QualityInspectionUseCase:
                 else:
                     status = "failed" if error is not None else "succeeded"
                     if job.status in {"queued", "interrupted"}:
-                        job = self.production.claim_job_run(job.workspace_id, job.id, connection=conn)
+                        job = self.production.job_records.claim_job_run(job.workspace_id, job.id, connection=conn)
                     checkpoint = (self.complete_result(conn, job, record["check_id"], result) if status == "succeeded"
                         else self.settle(conn, job, record["check_id"], status=status, error=error))
                     source = request["source"]

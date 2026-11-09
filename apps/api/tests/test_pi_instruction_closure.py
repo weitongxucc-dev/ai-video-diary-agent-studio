@@ -1,12 +1,12 @@
-from assistant_sdk_fixtures import project_event_fixture, sdk_completed
 """Trusted instruction binding and actual shipped-Node preflight; never call a model."""
+
+from assistant_sdk_fixtures import project_event_fixture, sdk_completed
 import json
 import os
 import threading
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -16,7 +16,7 @@ from starlette.requests import Request
 import app.assistant_pi as pi
 import app.main as main
 from app.config import Settings
-from app.production import TimelineVersion
+from app.creation.contracts import TimelineVersion
 from app.schemas import CreationTaskEditPreviewRequest, CreationTaskExactEditRequest, MediaScriptPreviewRequest, EXACT_EDIT_FIELDS, MediaScriptToolSaveRequest, MediaScriptToolUpdateRequest, MediaScriptToolRevokeRequest, MediaScriptToolPreviewRequest
 from app.visual_effects import compile_crop_command
 from test_assistant_task_context_tools import task_workspace
@@ -59,7 +59,7 @@ def bound_turn(task_client):
                                                         str(uuid4()), 2, request_context=context)
     assert created
     req = Request({"type":"http", "headers":[(key.lower().encode(), value.encode()) for key,value in headers.items()]})
-    task = production.get_creation_task("qa", "task")
+    task = production.task_records.get_creation_task("qa", "task")
     payload = CreationTaskEditPreviewRequest(assistant_turn_id=turn["id"], raw_command="水平裁剪到0%",
                                             context_stage="montage", selected_object_refs=["clip:clip-1"], playhead_ms=12)
     return req, task, payload, production, conversations
@@ -91,9 +91,9 @@ def test_server_rechecks_running_owner_and_timeline(bound_turn, monkeypatch):
         main._bind_assistant_edit_instruction(req, task, payload)
     assert caught.value.status_code == 404
     monkeypatch.setattr(main, "current_workspace_id", lambda _: "qa")
-    production.create_timeline_version(TimelineVersion(id="changed", workspace_id="qa", task_id="task", parent_version_id=None,
+    production.timeline_records.create_timeline_version(TimelineVersion(id="changed", workspace_id="qa", task_id="task", parent_version_id=None,
                                                      sequence=1, snapshot={}, created_by_operation_id=None))
-    task = production.get_creation_task("qa", "task")
+    task = production.task_records.get_creation_task("qa", "task")
     with pytest.raises(HTTPException, match="版本已变化"):
         main._bind_assistant_edit_instruction(req, task, payload)
     conversations.finish_turn(str(payload.assistant_turn_id), status="failed", result={"reason":"controlled"})
@@ -182,12 +182,14 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
         assert "preview_edit" not in json.loads(kwargs.get("message", kwargs.get("input")))["tools"]
         model_input = json.loads(json.loads(kwargs["message"])["message"].split("本轮输入（JSON）：\n", 1)[1])
         assert model_input["original_user_instruction"] == ORIGINAL
-        assert model_input["current_task_facts"]["task_id"] == "task-real"
-        assert model_input["current_task_facts"]["selected_refs"] == []
-        assert model_input["current_task_facts"]["timeline_sequence"] == 0
-        prompt = json.loads(kwargs.get("message", kwargs.get("input")))["systemPrompt"]
-        assert '"knowledge_reference_count": 1' in prompt and '"source_reference_count": 1' in prompt
-        assert "large-body" not in prompt and "secret-token" not in prompt and "/private/" not in prompt
+        assert model_input["task_binding"]["task_id"] == "task-real"
+        assert model_input["task_binding"]["selected_refs"] == []
+        assert model_input["task_binding"]["timeline_sequence"] == 0
+        context = json.loads(kwargs["message"])["taskContext"]
+        assert context["plan"]["knowledge_reference_count"] == 1
+        assert context["plan"]["source_reference_count"] == 1
+        model_payload = kwargs["message"]
+        assert "large-body" not in model_payload and "secret-token" not in model_payload and "/private/" not in model_payload
         return sdk_completed(cmd, 0, stdout=json.dumps({"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"已核对当前任务。"}]}})+"\n"+json.dumps({"type":"agent_settled"}), stderr="")
     monkeypatch.setattr(pi, "_run_pi_streaming", launch)
     values = dict(workspace_id="qa", task_id="task-real", message=ORIGINAL, stage="montage", selected_refs=[], playhead_ms=None,
@@ -238,11 +240,14 @@ def test_task_switch_updates_current_model_input_without_rewriting_bound_instruc
                      tool_names="read_current_task,preview_typed_edit", preview_kind="edit_preview", session_key="conversation:shared",
                      turn_id=str(payload.assistant_turn_id) if streaming else None, on_event=(lambda _: None) if streaming else None)
         cmd, kwargs = launches[-1]
-        model_input = json.loads(kwargs["message"] if streaming else kwargs["input"])["message"]
+        envelope = json.loads(kwargs["message"])
+        model_input = envelope["message"]
         current = json.loads(model_input.split("本轮输入（JSON）：\n", 1)[1])
-        assert current == {"current_task_facts":facts, "original_user_instruction":ORIGINAL}
+        assert current == {"task_binding": {key: facts[key] for key in (
+            "task_id", "current_timeline_version_id", "timeline_sequence", "selected_refs", "selected_stage")},
+            "trusted_input_identity": {}, "original_user_instruction": ORIGINAL}
         assert "历史工具结果及失败只属于其当时的任务和版本" in model_input
-        assert json.dumps(facts, ensure_ascii=False) in json.loads(kwargs.get("message", kwargs.get("input")))["systemPrompt"]
+        assert envelope["taskContext"] == facts
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == ORIGINAL
         assert kwargs["env"]["AI_VIDEO_DIARY_AGENT_TURN_ID"] == (str(payload.assistant_turn_id) if streaming else "")
         assert "preview_typed_edit" in json.loads(kwargs.get("message", kwargs.get("input")))["tools"]

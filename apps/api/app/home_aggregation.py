@@ -6,7 +6,7 @@
 三条规矩：
 1. 可见性不重写。素材、知识、任务一律走既有读过滤入口
    （``production_repo.list_assets``、``source_repository.list_knowledge_items_readable_by``、
-   ``production_repo.list_creation_tasks``），本模块只是它们的调用方——
+   ``production_repo.task_records.list_creation_tasks``），本模块只是它们的调用方——
    聚合本身如果另写一套判据，就会泄露别人的私有内容。
 2. 每个数字都带 scope/source/as_of。没有真实载体的项如实进 ``unknown``，
    不猜趋势口径、不把素材文件大小冒充整机用量、不造行业分布。
@@ -23,7 +23,8 @@ from datetime import UTC, date, datetime, timedelta
 import psutil
 
 from app.models import utc_now
-from app.production import CreationTask, MaterialAsset, ProductionRepository
+from app.creation.contracts import CreationTask
+from app.production import MaterialAsset, ProductionRepository
 from app.schemas import (
     HomeAggregationResponse,
     HomeCountResponse,
@@ -141,7 +142,7 @@ def _storage(
     不递归、不读文件内容。目录断开、未绑定或读取失败时容量留空并说明原因，
     不用素材文件大小或任何估算顶替。
     """
-    state = repository.material_ingestion_directory_state(workspace_id)
+    state = repository.material_source_files.material_ingestion_directory_state(workspace_id)
     directory_state = str(state["status"])
     directory = state["directory"]
     unknown: list[HomeUnknownFact] = []
@@ -252,7 +253,7 @@ def aggregate_home(
     """按当前身份汇总整机首页。
 
     ``viewer_user_id`` / ``local_diagnostic`` / ``include_private`` 直接来自既有的
-    ``_content_reader`` 与 ``_content_include_private``，路由层照旧解析后传入；
+    ``ContentIdentityHttpAdapter.reader`` 与 ``ContentIdentityHttpAdapter.include_private``，路由层照旧解析后传入；
     认证态拿不到可信身份时，知识读取照旧失败，不退化成只看共享。
 
     ``days`` 只影响日趋势的跨度，不改变其他统计的口径。
@@ -276,7 +277,7 @@ def aggregate_home(
         viewer_user_id=viewer_user_id,
         local_diagnostic=local_diagnostic,
     )
-    tasks = repository.list_creation_tasks(
+    tasks = repository.task_records.list_creation_tasks(
         workspace_id,
         include_private=include_private,
         viewer_user_id=viewer_user_id,
@@ -287,7 +288,7 @@ def aggregate_home(
         user_id=viewer_user_id,
         local_diagnostic=local_diagnostic,
     )
-    voices = repository.list_versioned_voice_profiles(workspace_id)
+    voices = repository.profile_records.list_versioned_voice_profiles(workspace_id)
 
     material_meta = HomeFactMeta(
         scope=scope,

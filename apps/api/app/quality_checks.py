@@ -29,7 +29,6 @@ import shutil
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
-from fractions import Fraction
 from pathlib import Path
 
 from app.quality_worker_runtime import QualityWorkerContext

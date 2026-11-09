@@ -7,7 +7,7 @@ const profileReference = {type: ["object", "null"], properties: {
 const deliveryProperties = {
   language: {type: "string", enum: ["zh-CN", "en-US", "zh-CN/en-US"]},
   aspect_ratio: {type: "string", enum: ["9:16", "16:9", "1:1"]},
-  duration_target_seconds: {type: "integer", minimum: 15, maximum: 600},
+  duration_target_seconds: {type: "integer", minimum: 1},
   presenter_share_target: {type: "integer", enum: [0, 20, 40, 60, 80, 100]},
   lipsync_quality: {type: "string", enum: ["high", "fast"]},
   selected_voice: profileReference, selected_person: profileReference,
@@ -184,6 +184,7 @@ export function registerCreationPlans(pi: ToolRegistrar, {request, readActionSou
       additionalProperties: false,
     },
     execute: async (_id: string, params: { goal: string; intent: IntakeIntent; target_count?: number; output_relation?: string; material_scope?: string; name?: string; language?: string; aspect_ratio?: string; duration_target_seconds?: number; presenter_share_target?: number; lipsync_quality?: "high" | "fast"; template_id?: string; template_version?: number; selected_voice?: any; selected_person?: any }) => {
+      if (parentCreationPromise) throw new Error("原完整目标正在保存，请等待原请求，不重复提交");
       if (hasPreview()) throw new Error("本轮已生成新视频预检，请用户检查后再决定下一步");
       if (creationUnknown || needsRead) throw new Error("原目标保存结果或修订待核对，请先read_creation_request核对原请求，不另建目标");
       const source = readActionSource();

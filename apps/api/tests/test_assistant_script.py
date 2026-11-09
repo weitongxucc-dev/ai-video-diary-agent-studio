@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.creation_task_responses import CreationTaskResponseAdapter
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +10,9 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.production import CreationPlan, CreationPlanKnowledgeReference, CreationTask, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanKnowledgeReference
+from app.creation.contracts import CreationTask
 from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
 
@@ -58,7 +61,7 @@ def _script_task(tmp_path: Path):
         id="task-one", workspace_id="local", plan_id=plan.id, name="测试视频",
         scenario="knowledge_explanation", stage="script", selected_topic_id="topic-one", visibility="shared",
     )
-    repo.confirm_creation_plan(plan, task)
+    repo.plan_confirmation.confirm_creation_plan(plan, task)
     return repo
 
 
@@ -66,7 +69,7 @@ def test_script_turn_rejects_missing_authorized_sources_before_pi(tmp_path, monk
     repo = _script_task(tmp_path)
     conversations, member_id, token, conversation = _assistant_task_session(tmp_path, monkeypatch, "task-one")
     monkeypatch.setattr(main_module, "production_repo", repo)
-    monkeypatch.setattr(repo, "list_topic_candidates", lambda _workspace_id, _task_id: [
+    monkeypatch.setattr(repo.topic_records, "list_topic_candidates", lambda _workspace_id, _task_id: [
         SimpleNamespace(id="topic-one", title="测试主题", angle="讲清楚", audience="普通人", outline=["开头"]),
     ])
     monkeypatch.setattr(main_module, "run_task_turn", lambda *_args, **_kwargs:
@@ -81,14 +84,14 @@ def test_script_turn_rejects_missing_authorized_sources_before_pi(tmp_path, monk
     foreign = client.post("/api/creation-tasks/foreign-task/assistant/turn", headers={"X-Local-Member-Token": token},
                           json=_task_turn_payload(conversations, member_id, conversation, "请写开头", "montage"))
     assert foreign.status_code == 404
-    assert repo.list_task_events("local", "task-one") == []
+    assert repo.execution_records.list_task_events("local", "task-one") == []
 
 
 def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeypatch):
     repo = _script_task(tmp_path)
     conversations, member_id, token, conversation = _assistant_task_session(tmp_path, monkeypatch, "task-one")
     monkeypatch.setattr(main_module, "production_repo", repo)
-    monkeypatch.setattr(repo, "list_topic_candidates", lambda _workspace_id, _task_id: [
+    monkeypatch.setattr(repo.topic_records, "list_topic_candidates", lambda _workspace_id, _task_id: [
         SimpleNamespace(id="topic-one"),
     ])
     def stale_sources(*_args, **_kwargs):
@@ -96,7 +99,7 @@ def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeyp
             reason="knowledge_reference_stale", impact="来源版本已变化，未调用模型。",
             repair_action="重新确认来源。", retryable=True,
         )
-    monkeypatch.setattr(main_module, "_creation_task_topic_inputs", stale_sources)
+    monkeypatch.setattr(main_module.CreationSourceInputs, "prepare", stale_sources)
     monkeypatch.setattr(main_module, "run_task_turn", lambda *_args, **_kwargs:
                         (_ for _ in ()).throw(AssertionError("Pi must not be called")))
     response = TestClient(main_module.app).post(
@@ -105,7 +108,7 @@ def test_script_turn_rejects_stale_sources_before_pi_or_events(tmp_path, monkeyp
     )
     assert response.status_code == 409
     assert response.json()["detail"]["reason"] == "knowledge_reference_stale"
-    assert repo.list_task_events("local", "task-one") == []
+    assert repo.execution_records.list_task_events("local", "task-one") == []
 
 
 def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_path, monkeypatch):
@@ -116,7 +119,8 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     from app.creation.contracts import TimelineVersion
     from app.creation_execution import CreationExecution, CreationExecutionActor
     from app.montage import MontageClip
-    from app.production import JobRun, MaterialAsset, MaterialSegment, TaskEvent
+    from app.creation.contracts import JobRun, TaskEvent
+    from app.production import MaterialAsset, MaterialSegment
 
     conversations, member_id, token, conversation = _assistant_task_session(tmp_path, monkeypatch, "task-one")
     material_repo = _script_task(tmp_path)
@@ -144,26 +148,26 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
                               clips=[clip], graphic_overlays=[])
     with material_repo._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
-    material_repo.create_timeline_version(TimelineVersion(
+    material_repo.timeline_records.create_timeline_version(TimelineVersion(
         id=task.current_timeline_version_id, workspace_id=task.workspace_id, task_id=task.id,
         parent_version_id=None, sequence=1, created_by_operation_id=None,
         snapshot={"montage": {"clips": [asdict(clip)]}, "narration_segments": [
             {"id": "segment-current", "workspace_id": task.workspace_id, "task_id": task.id}]}))
-    task = material_repo.get_creation_task("local", task.id)
-    monkeypatch.setattr(material_repo, "get_narration_artifact", lambda workspace_id, key: SimpleNamespace(
+    task = material_repo.task_records.get_creation_task("local", task.id)
+    monkeypatch.setattr(material_repo.narration_artifacts, "get_narration_artifact", lambda workspace_id, key: SimpleNamespace(
             task_id=task.id, script_id=task.confirmed_script_id,
         ))
-    monkeypatch.setattr(material_repo, "list_narration_segments", lambda workspace_id, task_id, script_id: [
+    monkeypatch.setattr(material_repo.narration_records, "list_narration_segments", lambda workspace_id, task_id, script_id: [
             SimpleNamespace(id="segment-current", status="ready"),
         ])
     monkeypatch.setattr(material_repo, "get_creation_task_montage_plan", lambda workspace_id, task_id: {})
     monkeypatch.setattr(main_module, "production_repo", material_repo)
     monkeypatch.setattr(main_module, "creation_task_montage_plan_from_payload", lambda payload: montage)
-    monkeypatch.setattr(main_module, "_effective_audio_timeline", lambda plan: SimpleNamespace(tracks=[]))
+    monkeypatch.setattr(CreationTaskResponseAdapter, "effective_audio_timeline", lambda adapter, plan: SimpleNamespace(tracks=[]))
     def no_execution(*_):
         pytest.fail("this scope test must not run a media executor")
     monkeypatch.setattr(main_module, "creation_execution", CreationExecution(material_repo,
-        run_narration=no_execution, run_montage_plan=no_execution, run_render=no_execution,
+        run_montage_plan=no_execution, run_render=no_execution,
         render_is_valid=lambda *_: False))
     def run_turn(_settings, **kwargs):
         calls.append(kwargs)
@@ -172,10 +176,10 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
             source, existing = main_module._assistant_execution_source(task.id, bound_request, kwargs["turn_id"],
                 "start", "actual-scope-input")
             assert existing is None
-            job = material_repo.create_job_run(JobRun(id="job-one", workspace_id="local", task_id=task.id,
+            job = material_repo.job_records.create_job_run(JobRun(id="job-one", workspace_id="local", task_id=task.id,
                 kind="creation_task_execution", idempotency_key="scope-execution", input_digest="actual-scope-input"))
             actor = CreationExecutionActor("local", member_id)
-            material_repo.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id="local",
+            material_repo.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_start", workspace_id="local",
                 task_id=task.id, job_id=job.id, event_type="creation_execution_started",
                 payload={"input_digest": job.input_digest, **actor.identity_payload()}))
             status = main_module._bind_assistant_execution_result(task.id, bound_request, kwargs["turn_id"],
@@ -241,7 +245,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     assert selection["asset_id"] == material.id and selection["segment_id"] == material.segments[0].id
     assert selection["expected_updated_at"] == material.updated_at.isoformat()
     assert selection["expected_segment_updated_at"] == material.segments[0].updated_at.isoformat()
-    assert {item.event_type for item in material_repo.list_task_events("local", task.id)} == {
+    assert {item.event_type for item in material_repo.execution_records.list_task_events("local", task.id)} == {
         "creation_execution_started", "assistant_execution_located"}  # Actual binding facts; no legacy chat rows.
     saved_turns = conversations.list_turns(conversation["id"])
     assert [(item["user_message"], item["status"]) for item in saved_turns] == [
@@ -251,7 +255,12 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     ]
 
 
-def test_topic_scope_is_current_task_only():
+def test_topic_scope_is_current_task_only(monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace())
+    monkeypatch.setattr(main_module, "_script_context_use_case", forbidden)
+    monkeypatch.setattr(main_module, "_metadata_edit_use_case", forbidden)
     topic_task = SimpleNamespace(id="task-one", stage="topic")
     request = main_module.CreationTaskAssistantTurnRequest(
         conversation_id=uuid4(), message="请生成选题", client_request_id=uuid4(), expected_draft_version=0,
@@ -261,6 +270,10 @@ def test_topic_scope_is_current_task_only():
 
 
 def test_confirmed_task_without_production_artifacts_can_use_general_assistant_scope(monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main_module, "_script_context_use_case", forbidden)
+    monkeypatch.setattr(main_module, "_metadata_edit_use_case", forbidden)
     task = SimpleNamespace(
         id="task-one", stage="narration", confirmed_script_id="script-confirmed",
         narration_cache_key=None, current_timeline_version_id=None, montage_plan_id=None,
@@ -285,7 +298,9 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     import json
     import httpx
     from test_creation_task_topic_provider import _review_tool_response
-    from app.production import TopicCandidate
+    from app.creation.topic_contracts import (
+        TopicCandidate,
+    )
     from app.topics import CreationTaskTopicSource, OpenAICompatibleCreationTaskScriptGenerator
 
     repo = _script_task(tmp_path)
@@ -301,18 +316,18 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
         candidate = json.loads(payload["messages"][1]["content"])["script"]
         response = {"sections": [{"index": index,
             "supports": [{"candidate_quote_id": section["content"][0]["quote_id"],
-                          "source_quote_id": json.loads(payload["messages"][1]["content"])["sources"][0]["text"][0]["quote_id"]}], "issues": []}
+                          "source_quote_id": json.loads(payload["messages"][1]["content"])["sources"][0]["text"][0]["quote_id"]}]}
             for index, section in enumerate(candidate["sections"], start=1)]}
         return _review_tool_response(response)
     checker = OpenAICompatibleCreationTaskScriptGenerator("https://models.invalid/v1", "controlled-review",
         transport=httpx.MockTransport(review))
     monkeypatch.setattr(main_module, "_creation_task_script_generator_for", lambda settings: checker)
 
-    def inputs(workspace_id, task_id):
+    def inputs(_case, workspace_id, task_id):
         task = main_module._creation_task_or_404(workspace_id, task_id)
         if task.stage != "script" or task.confirmed_script_id:
             raise HTTPException(status_code=409, detail="当前任务不在待确认文案阶段")
-        plan = repo.get_creation_plan(workspace_id, task.plan_id)
+        plan = repo.plan_records.get_creation_plan(workspace_id, task.plan_id)
         plan.knowledge_references = [CreationPlanKnowledgeReference(
             id="one", version="v1", title=source.title, authorization="available", ownership="workspace",
         )]
@@ -322,7 +337,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
         }]
 
     monkeypatch.setattr(main_module, "production_repo", repo)
-    monkeypatch.setattr(main_module, "_assistant_script_inputs", inputs)
+    monkeypatch.setattr(main_module.ScriptContextUseCase, "read_inputs", inputs)
     monkeypatch.setattr(main_module, "source_repository", SimpleNamespace(
         get_knowledge_reference_readable_by=lambda *_args, **_kwargs: SimpleNamespace(
             version="v1", title="已授权资料", authorization="available",
@@ -340,27 +355,27 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     }]}
     invented = {**body, "sections": [{**body["sections"][0], "evidence_reference_ids": ["made-up"]}]}
     assert client.post(base + "/script-draft", json=invented).status_code == 422
-    assert repo.list_creation_task_scripts("local", "task-one") == []
+    assert repo.script_records.list_creation_task_scripts("local", "task-one") == []
 
     first = client.post(base + "/script-draft", json=body)
     assert first.status_code == 200
     script_id = first.json()["id"]
     assert first.json()["selection_status"] == "draft"
-    assert repo.get_creation_task("local", "task-one").confirmed_script_id is None
+    assert repo.task_records.get_creation_task("local", "task-one").confirmed_script_id is None
     second = client.post(base + "/script-draft", json={
-        **body, "sections": [{**body["sections"][0], "content": "把开头缩短。"}],
+        **body, "edit_mode": "replace_all", "sections": [{**body["sections"][0], "content": "把开头缩短。"}],
         "expected_updated_at": first.json()["updated_at"],
     })
     assert second.status_code == 200 and second.json()["id"] == script_id
-    assert len(repo.list_creation_task_scripts("local", "task-one")) == 1
+    assert len(repo.script_records.list_creation_task_scripts("local", "task-one")) == 1
     stale = client.post(base + "/script-draft", json={
-        **body,
+        **body, "edit_mode": "replace_all",
         "sections": [{**body["sections"][0], "content": "迟到的旧版本"}],
         "expected_updated_at": first.json()["updated_at"],
     })
     assert stale.status_code == 409
     assert len(review_requests) == 2  # First draft and revision; stale CAS never calls the model.
-    assert repo.get_creation_task_script("local", script_id).sections[0].content == "把开头缩短。"
+    assert repo.script_records.get_creation_task_script("local", script_id).sections[0].content == "把开头缩短。"
 
     def run_turn(_settings, **kwargs):
         if kwargs["stage"] == "script":
@@ -376,7 +391,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     assert turn.json()["script_draft"]["id"] == script_id
     assert turn.json()["edit_preview"] is None
     persisted = ProductionRepository(tmp_path / "isolated.sqlite3", tmp_path / "library")
-    events = persisted.list_task_events("local", "task-one")
+    events = persisted.execution_records.list_task_events("local", "task-one")
     assert not [item for item in events if item.event_type == "assistant_turn"]
     saved_turns = conversations.list_turns(conversation["id"])
     assert [(item["user_message"], item["assistant_text"], item["status"]) for item in saved_turns] == [
@@ -390,10 +405,10 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
                                   _task_turn_payload(conversations, member_id, conversation,
                                                      "api_key=private-test-key 请加到文案", "script"))
     assert rejected_secret.status_code == 422
-    assert not [item for item in repo.list_task_events("local", "task-one") if item.event_type == "assistant_turn"]
+    assert not [item for item in repo.execution_records.list_task_events("local", "task-one") if item.event_type == "assistant_turn"]
 
-    saved = repo.get_creation_task_script("local", script_id)
-    repo.confirm_creation_task_script("local", "task-one", script_id,
+    saved = repo.script_records.get_creation_task_script("local", script_id)
+    repo.script_records.confirm_creation_task_script("local", "task-one", script_id,
                                       title=saved.title, sections=saved.sections,
                                       expected_updated_at=saved.updated_at)
     assert client.post(base + "/script-draft", json=body).status_code == 409
@@ -408,7 +423,7 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     assert narration_turn.json()["script_draft"] is None
     assert narration_turn.json()["edit_preview"] is None
     persisted_after_narration = ProductionRepository(tmp_path / "isolated.sqlite3", tmp_path / "library")
-    events = persisted_after_narration.list_task_events("local", "task-one")
+    events = persisted_after_narration.execution_records.list_task_events("local", "task-one")
     assert not [item for item in events if item.event_type == "assistant_turn"]
     saved_turns = conversations.list_turns(conversation["id"])
     assert [(item["user_message"], item["assistant_text"], item["status"]) for item in saved_turns] == [
@@ -418,4 +433,4 @@ def test_script_draft_stays_unconfirmed_and_assistant_history_is_persisted(tmp_p
     history = client.get(base + "/history")
     assert history.status_code == 200
     assert history.json()["items"] == []
-    assert repo.get_creation_task("local", "task-one").confirmed_script_id == script_id
+    assert repo.task_records.get_creation_task("local", "task-one").confirmed_script_id == script_id

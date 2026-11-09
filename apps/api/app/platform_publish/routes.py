@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from app.device_scheduler import SchedulePolicy, SubmissionIntent
 from app.platform_auth import CAPABILITIES, PlatformAuthService
-from app.production import JobRun, TaskEvent
+from app.creation.contracts import JobRun, TaskEvent
 
 
 class PublishRequest(BaseModel):
@@ -120,9 +120,9 @@ def build_platform_publish_router(
             raise HTTPException(403, "当前成员无权查看此创作任务") from exc
         # publishable_output_for applies the repository's content visibility and
         # current artifact/version validity rules before exposing job history.
-        jobs = [job for job in repository.list_job_runs(workspace_id, task_id)
+        jobs = [job for job in repository.job_records.list_job_runs(workspace_id, task_id)
                 if job.kind == "platform_publish"]
-        events = repository.list_task_events(workspace_id, task_id)
+        events = repository.execution_records.list_task_events(workspace_id, task_id)
         event_by_job = {}
         for event in events:
             if event.job_id and event.event_type.startswith("platform_publish_"):
@@ -183,7 +183,7 @@ def build_platform_publish_router(
         if type(content["content_size_bytes"]) is not int or content["content_size_bytes"] <= 0:
             raise HTTPException(409, "当前成片缺少可验证的真实文件大小")
         digest = _json_hash(content)
-        existing = repository.get_job_run_by_idempotency_key(workspace_id, payload.idempotency_key)
+        existing = repository.job_records.get_job_run_by_idempotency_key(workspace_id, payload.idempotency_key)
         if existing is not None:
             if existing.task_id != task_id or existing.kind != "platform_publish" or existing.input_digest != digest:
                 raise HTTPException(409, "幂等键已用于不同的发布内容")
@@ -191,10 +191,10 @@ def build_platform_publish_router(
 
         # A different key must not repeat a prior non-terminal or successful
         # send for the same confirmed account, version and body.
-        events = repository.list_task_events(workspace_id, task_id)
+        events = repository.execution_records.list_task_events(workspace_id, task_id)
         for event in events:
             if event.event_type == "platform_publish_prepared" and event.payload.get("content_digest") == digest:
-                previous = repository.get_job_run(workspace_id, event.job_id)
+                previous = repository.job_records.get_job_run(workspace_id, event.job_id)
                 if previous.status in {"queued", "running", "succeeded", "interrupted"}:
                     raise HTTPException(409, "相同内容已有发布作业；未知或处理中结果不能自动重发")
                 if not any(e.event_type == "platform_publish_safe_retry" for e in events if e.job_id == previous.id):
@@ -216,8 +216,8 @@ def build_platform_publish_router(
         )
         with repository._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            repository.create_job_run(job, connection=conn)
-            repository.append_task_event(prepared, connection=conn)
+            repository.job_records.create_job_run(job, connection=conn)
+            repository.execution_records.append_task_event(prepared, connection=conn)
         intent = SubmissionIntent(
             workspace_id=workspace_id, owner_type="platform_publish", owner_id=job_id,
             input_digest=digest, unit_key=f"publish:{payload.timeline_version_id}:{digest}",
@@ -228,16 +228,16 @@ def build_platform_publish_router(
         except Exception as exc:
             # No browser side effect has started. Mark safe-to-retry only after
             # an explicit retry path; this route never silently retries queueing.
-            current = repository.get_job_run(workspace_id, job_id)
+            current = repository.job_records.get_job_run(workspace_id, job_id)
             if current.status == "queued":
-                claimed = repository.claim_job_run(workspace_id, job_id)
-                failed = repository.finish_job_run(
+                claimed = repository.job_records.claim_job_run(workspace_id, job_id)
+                failed = repository.job_records.finish_job_run(
                     workspace_id, claimed.id, status="failed",
                     failure_reason="publish_queue_unavailable",
                     impact="发布尚未提交到平台。",
                     repair_action="修复本地发布队列后由用户重新确认并提交。",
                 )
-                repository.append_task_event(TaskEvent(
+                repository.execution_records.append_task_event(TaskEvent(
                     id=f"event_{job_id}_queue_failure", workspace_id=workspace_id,
                     task_id=task_id, job_id=job_id, event_type="platform_publish_queue_failure",
                     payload={"detail": type(exc).__name__}, created_at=datetime.now(UTC),
@@ -245,7 +245,7 @@ def build_platform_publish_router(
                 return serialize_job(repository, failed)
             raise HTTPException(503, "发布队列拒绝了此作业") from exc
         runtime.wake()
-        return serialize_job(repository, repository.get_job_run(workspace_id, job_id))
+        return serialize_job(repository, repository.job_records.get_job_run(workspace_id, job_id))
 
     return router
 
@@ -256,7 +256,7 @@ def attach_and_login(adapter, driver):
 
 
 def serialize_job(repository, job: JobRun, *, known_events=None) -> dict[str, object]:
-    events = [event for event in repository.list_task_events(job.workspace_id, job.task_id)
+    events = [event for event in repository.execution_records.list_task_events(job.workspace_id, job.task_id)
               if event.job_id == job.id and event.event_type.startswith("platform_publish_")] if known_events is None else known_events
     with repository._connect() as conn:
         row = conn.execute(

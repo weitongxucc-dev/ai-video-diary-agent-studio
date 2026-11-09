@@ -19,15 +19,88 @@ def reset_source_repository(tmp_path, monkeypatch):
     )
 
 
-def test_knowledge_endpoint_lists_real_obsidian_notes(tmp_path):
+@pytest.fixture(autouse=True)
+def knowledge_notes_metadata_guard(request, monkeypatch, tmp_path):
+    if request.node.originalname != 'test_knowledge_endpoint_lists_real_obsidian_notes':
+        return None
+    import sqlite3
+    import subprocess
+    import wave
+    import httpx
+    from types import SimpleNamespace
+    from PIL import Image
+    from app.auth import SupabaseAuthContext
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+    from app.sources import ObsidianVault
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('notes-model-network-or-media-execution')
+        pytest.fail('notes browsing metadata permits only temporary Markdown and SQLite reads')
+
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    # TestClient has its own in-process transport; block actual network transports.
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', forbidden)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', forbidden)
+    for name in ('start', 'run_once', 'wake'):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    monkeypatch.setattr(DeviceScheduler, 'pick_and_grant', forbidden)
+    for name in ('_creation_runtime', '_start_device_runtime', 'run_task_turn', 'run_plan_turn',
+                 '_creation_task_topic_generator_for', '_creation_task_script_generator_for',
+                 '_execute_script_generation', '_lipsync_provider', 'start_assistant_continuation_driver'):
+        monkeypatch.setattr(main_module, name, forbidden)
+    settings = Settings(database_path=str(tmp_path / 'studio.sqlite3'),
+        video_inbox_path=str(tmp_path / 'library'), video_output_path=str(tmp_path / 'output'),
+        model_root_path=str(tmp_path / 'models'), temporary_root_path=str(tmp_path / 'temporary'),
+        draft_output_path=str(tmp_path / 'drafts'), jianying_draft_root_path=str(tmp_path / 'jianying'),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main_module, 'settings', settings)
+    monkeypatch.setattr(main_module, 'auth_context', SupabaseAuthContext(settings))
+    monkeypatch.setattr(main_module, 'device_runtime', None)
+    # Records the original value for teardown, including the original test's
+    # subsequent direct assignment of its own temporary Vault.
+    monkeypatch.setattr(main_module, 'vault', ObsidianVault(None))
+    request.getfixturevalue('reset_source_repository')
+
+    def snapshot():
+        with sqlite3.connect(f'file:{tmp_path / "sources.sqlite3"}?mode=ro', uri=True) as conn:
+            tables = [row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+            facts = {table: sorted((tuple(row) for row in conn.execute(
+                'SELECT * FROM "' + table.replace('"', '""') + '"')), key=repr) for table in tables}
+        return facts, {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                       for path in tmp_path.rglob('*')}
+
+    def check_no_execution():
+        assert violations == []
+
+    request.addfinalizer(check_no_execution)
+    return SimpleNamespace(snapshot=snapshot, violations=violations)
+
+
+def test_knowledge_endpoint_lists_real_obsidian_notes(tmp_path, knowledge_notes_metadata_guard):
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "agent.md").write_text(
         "# Agent 工作流\n\n人工复核让 Agent 产品更可靠。",
         encoding="utf-8",
     )
+    import os
+    (vault / "rEfOnLy.md").write_text("# TITLEneedle\n\nstable body", encoding="utf-8")
+    (vault / "other.md").write_text("# Neutral\n\nExCerPtneedle", encoding="utf-8")
+    for name, stamp in (("agent.md", 1700000300), ("rEfOnLy.md", 1700000200), ("other.md", 1700000100)):
+        os.utime(vault / name, (stamp, stamp))
     main_module.vault = main_module.ObsidianVault(vault)
 
+    before_metadata = knowledge_notes_metadata_guard.snapshot()
     response = client.get("/api/knowledge/notes")
 
     assert response.status_code == 200
@@ -35,6 +108,17 @@ def test_knowledge_endpoint_lists_real_obsidian_notes(tmp_path):
     assert body[0]["title"] == "Agent 工作流"
     assert body[0]["ref"] == "agent.md"
     assert "人工复核" in body[0]["excerpt"]
+
+    assert [note['ref'] for note in body] == ['agent.md', 'rEfOnLy.md', 'other.md']
+    for query, ref in (('titleneedle', 'rEfOnLy.md'), ('REFONLY', 'rEfOnLy.md'), ('excerptneedle', 'other.md')):
+        matched = client.get('/api/knowledge/notes', params={'q': query})
+        assert matched.status_code == 200 and [note['ref'] for note in matched.json()] == [ref]
+    assert client.get('/api/knowledge/notes', params={'q': 'no-matching-phrase'}).json() == []
+    clamped = client.get('/api/knowledge/notes', params={'limit': 0})
+    assert clamped.status_code == 200 and [note['ref'] for note in clamped.json()] == ['agent.md']
+    assert client.get('/api/knowledge/notes', params={'limit': 'invalid'}).status_code == 422
+    assert knowledge_notes_metadata_guard.snapshot() == before_metadata
+    assert knowledge_notes_metadata_guard.violations == []
 
 
 def test_sources_endpoint_lists_hermes_radar_items(tmp_path):

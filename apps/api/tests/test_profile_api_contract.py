@@ -1,4 +1,5 @@
 """Synthetic/isolated API and queue consumers; not model or GUI acceptance."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 
 from dataclasses import replace
 from pathlib import Path
@@ -10,6 +11,7 @@ from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 import app.main as main
+from app.schemas import CreationPlanConfirmRequest
 from app.production import (
     ProductionRepository,
     MaterialAsset,
@@ -46,7 +48,14 @@ def wav_bytes():
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path, monkeypatch, request):
+    if request.node.originalname in {
+        "test_material_search_reader_filters_private_before_limit",
+        "test_automation_and_coverage_keep_observation",
+    }:
+        from test_production_foundation import edit_adoption_no_execution
+        forbidden = edit_adoption_no_execution(monkeypatch)
+        monkeypatch.setattr(main, "_creation_task_script_generator_for", forbidden)
     return ProductionRepository(
         database_path=tmp_path / "db.sqlite3",
         video_library_path=tmp_path / "library",
@@ -64,9 +73,9 @@ def client(repo, monkeypatch):
         lambda request: request.headers.get("x-test-workspace", "ws"),
     )
     monkeypatch.setattr(
-        main,
-        "_content_reader",
-        lambda request, ws: (request.headers.get("x-test-member", "member"), False),
+        ContentIdentityHttpAdapter,
+        'reader',
+        lambda adapter, request, ws: (request.headers.get("x-test-member", "member"), False),
     )
     return TestClient(main.app)
 
@@ -222,6 +231,74 @@ def test_automation_and_coverage_keep_observation(repo, tmp_path):
     )
     assert {"戴眼镜女性", "笔记本", "办公室"} <= {i["tag"] for i in insights["tags"]}
 
+    from copy import deepcopy
+    from dataclasses import asdict
+    import sqlite3
+    from app.materials.library_insights import material_library_insights
+
+    # Fixed value inputs: the policy must never mutate the caller's observations.
+    first_segment = replace(segment, system_tags=['repeat', 'repeat', '办公室'],
+        user_tags=['repeat', ''], usage_count=3)
+    second_segment = replace(segment, id='second-segment', start_seconds=2, end_seconds=4,
+        system_tags=['repeat'], user_tags=['repeat'], usage_count=4)
+    first_asset = replace(asset, duration_seconds=4, user_tags=['repeat', 'repeat', 'asset-only', ''],
+        segments=[first_segment, second_segment])
+    second_asset = replace(asset, id='second-value-asset', user_tags=['repeat'], duration_seconds=2,
+        segments=[replace(segment, id='third-segment', asset_id='second-value-asset',
+            start_seconds=0, end_seconds=1.23456, system_tags=['repeat'], user_tags=['repeat'], usage_count=5)])
+    values = (first_asset, second_asset)
+    untouched = deepcopy([asdict(item) for item in values])
+    projected = material_library_insights(values)
+    assert [asdict(item) for item in values] == untouched
+    assert (projected['asset_count'], projected['segment_count']) == (2, 3)
+    assert [item['tag'] for item in projected['tags']] == [
+        'repeat', '', '办公室', 'asset-only', '主体:人物', '内容:软件界面', '动作:打字',
+        '场景:办公', '场景:户外', '物体:电脑', '镜头:特写']
+    tags = {item['tag']: item for item in projected['tags']}
+    assert tags['repeat'] == {'tag': 'repeat', 'asset_count': 2, 'segment_count': 3,
+        'duration_seconds': 5.235, 'usage_count': 12}
+    assert tags['asset-only'] == {'tag': 'asset-only', 'asset_count': 1, 'segment_count': 0,
+        'duration_seconds': 0.0, 'usage_count': 0}
+    assert tags[''] == {'tag': '', 'asset_count': 0, 'segment_count': 1,
+        'duration_seconds': 2.0, 'usage_count': 3}
+    assert tags['主体:人物']['asset_count'] == tags['主体:人物']['segment_count'] == 0
+    assert projected['recommended_gaps'] == ['内容:软件界面', '动作:打字', '场景:户外', '物体:电脑', '镜头:特写']
+
+    # A second private asset is actual persisted input, never a mocked visible list.
+    other_path = repo.video_library_path / 'other-private.mp4'
+    other_path.write_bytes(b'isolated other-member metadata; no media decoding')
+    repo._save_asset(replace(asset, id='other-private', owner_user_id='other', path=str(other_path),
+        file_name=other_path.name, size_bytes=other_path.stat().st_size,
+        segments=[replace(segment, id='other-private-segment', asset_id='other-private',
+            system_tags=['other-private-tag'], user_tags=[])], user_tags=['other-private-tag']))
+    reopened = ProductionRepository(repo.database_path, repo.video_library_path,
+        duration_reader=lambda _: 2, scene_reader=lambda *_: [])
+
+    def snapshot():
+        databases = {}
+        for path in tmp_path.rglob('*'):
+            if path.is_file() and path.suffix in {'.sqlite', '.sqlite3', '.db'}:
+                with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as connection:
+                    tables = [row[0] for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                    databases[str(path.relative_to(tmp_path))] = {
+                        name: sorted(connection.execute('SELECT * FROM "' + name.replace('"', '""') + '"').fetchall(), key=repr)
+                        for name in tables}
+        return databases, {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                           for path in tmp_path.rglob('*')}
+
+    before = snapshot()
+    visible = reopened.list_assets('ws', viewer_user_id='member', local_diagnostic=False)
+    assert [item.id for item in visible] == [asset.id]
+    assert reopened.library_insights('ws', viewer_user_id='member') == material_library_insights(visible) == insights
+    other = reopened.library_insights('ws', viewer_user_id='other')
+    assert other['asset_count'] == 1 and other['segment_count'] == 1
+    assert 'other-private-tag' in {item['tag'] for item in other['tags']}
+    assert 'other-private-tag' not in {item['tag'] for item in insights['tags']}
+    # Legacy repository calls without a viewer include private assets; this is not anonymous HTTP.
+    assert reopened.library_insights('ws')['asset_count'] == 2
+    assert snapshot() == before
+
 
 class VoiceProvider:
     ready = True
@@ -230,7 +307,7 @@ class VoiceProvider:
     supported_languages = ("zh",)
     calls = 0
 
-    def generate(self, **kwargs):
+    def generate_granted(self, **kwargs):
         self.calls += 1
         assert kwargs["grant_context"].grant.owner_type == "media_preview"
         out = Path(kwargs["output_path"])
@@ -269,6 +346,68 @@ class Processes:
 class Access:
     def can_view_device_summary(self, actor):
         return True
+
+
+def preview_record_guards(monkeypatch):
+    import subprocess
+    from app.device_runtime import DeviceRuntime
+    import _media_preview_test_fixtures as helpers
+    import test_creation_execution as creation_helpers
+    def forbidden(*args, **kwargs):
+        pytest.fail('preview-record evidence forbids provider, waveform, Popen, runtime, model and driver execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'run_once', forbidden)
+    monkeypatch.setattr(VoiceProvider, 'generate_granted', forbidden)
+    monkeypatch.setattr(UnavailableAvatarAndLipSyncProvider, 'render', forbidden)
+    monkeypatch.setattr(main, 'run_task_turn', forbidden)
+    monkeypatch.setattr(main, 'start_assistant_continuation_driver', forbidden)
+    for owner in (helpers, creation_helpers):
+        for name in ('write_synthetic_video', 'register_synthetic_video_asset', 'register_synthetic_profiles', 'synthetic_wav_bytes'):
+            monkeypatch.setattr(owner, name, forbidden)
+    return forbidden
+
+
+def record_only_preview(repo, tmp_path, monkeypatch, *, before_submit=None):
+    """Real profile/reference metadata and scheduler; declared bytes, no media execution."""
+    forbidden = preview_record_guards(monkeypatch)
+    root = repo.video_library_path
+    root.mkdir(parents=True, exist_ok=True)
+    path = root/'declared-reference.mp4'
+    path.write_bytes(b'declared registered reference metadata only')
+    stat = path.stat()
+    asset = repo._save_asset(MaterialAsset(id='declared-reference', workspace_id='ws',file_name=path.name,
+        path=str(path),size_bytes=stat.st_size,modified_at=datetime.fromtimestamp(stat.st_mtime),
+        duration_seconds=2,media_type='video',analysis_status='ready',review_status='approved',owner_user_id='member'))
+    ref = repo.workspace_media_reference_for_asset('ws', asset.id)
+    with repo._connect() as conn:
+        repo._claim_workspace_media_reference(conn, workspace_id='ws', reference=ref)
+    voice = VoiceProfile(id='voice',workspace_id='ws',version='v1',language='zh',owner_user_id='member',
+        display_name='declared voice',reference_audio_path=ref,reference_text='已声明参考文字',model_id='fixture-model',
+        reference=ProfileReference(asset_id=asset.id))
+    # Seed an already registered profile fact; registration's real ffprobe is outside this evidence.
+    with repo._connect() as conn:
+        repo.profile_records._save_versioned_voice_profile(conn, voice)
+    provider = VoiceProvider()
+    service = VoicePreviewService(tmp_path/'output',provider)
+    budget = NarrationBudget(100,1,10**6,5,10**6,1,10,10**6,2,0.1,10**6,10**6)
+    reg = profile_preview_registration(repo,voice_service=service,
+        avatar_service=AvatarPreviewService(tmp_path/'output',UnavailableAvatarAndLipSyncProvider()),
+        narration_budget=budget,presenter_budget=None,verify_identity=lambda actor:'ready')
+    resources = Resources()
+    runtime = build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'record-device.lock',
+        device_access=Access(),registrations={'media_preview':reg},resources=resources,processes=Processes())
+    # The executor is forbidden too: tests call only the real scheduler's transactional owner callback.
+    monkeypatch.setattr(reg.executor, 'execute', forbidden)
+    actor = CreationExecutionActor('ws','member')
+    params = {'voice_profile_id':voice.id,'voice_version':voice.version,'preview_text':'metadata binding check'}
+    prepared = service.request(repository=repo,workspace_id='ws',viewer_user_id='member',prepare_only=True,**params)
+    assert prepared.status=='queued' and provider.calls==0
+    if before_submit is not None:
+        before_submit(runtime,resources,provider)
+    queued = submit_profile_preview(runtime,prepared,actor,params)
+    return runtime,resources,provider,queued
 
 
 def setup_preview(
@@ -340,14 +479,14 @@ def setup_preview(
 def test_preview_binding_tick_before_submitter_bind(
     repo, tmp_path, monkeypatch, binding_time, outcome
 ):
-    original_bind = repo.bind_preview_device_request
+    original_bind = repo.preview_records.bind_preview_device_request
     phases = []
     runtime_ref = []
 
     def arrange(runtime, resources, provider):
         runtime_ref.append(runtime)
         resources.admit_value = True
-        generate = provider.generate
+        generate = provider.generate_granted
 
         def delayed_bind(run, request_id, *, conn=None):
             if conn is not None:
@@ -374,9 +513,9 @@ def test_preview_binding_tick_before_submitter_bind(
                 kwargs["grant_context"].check()
                 raise AssertionError("cancelled provider must not produce an artifact")
 
-            provider.generate = interleaved_generate
+            provider.generate_granted = interleaved_generate
             assert runtime.run_once()
-            terminal = repo.get_media_preview_run("ws", "voice", run.identity)
+            terminal = repo.preview_records.get_media_preview_run("ws", "voice", run.identity)
             phases.append(terminal)
             # Inspect the committed checkpoint before the submitter can repair it.
             assert terminal.device_request_id == request_id
@@ -384,7 +523,7 @@ def test_preview_binding_tick_before_submitter_bind(
             assert rebound == terminal
             return rebound
 
-        monkeypatch.setattr(repo, "bind_preview_device_request", delayed_bind)
+        monkeypatch.setattr(repo.preview_records, "bind_preview_device_request", delayed_bind)
 
     try:
         runtime, _, provider, final = setup_preview(
@@ -427,7 +566,7 @@ def test_preview_binding_tick_before_submitter_bind(
 def test_preview_binding_queued_cancel_before_late_bind_preserves_terminal(
     repo, tmp_path, monkeypatch
 ):
-    original_bind = repo.bind_preview_device_request
+    original_bind = repo.preview_records.bind_preview_device_request
     runtime_ref = []
 
     def arrange(runtime, resources, provider):
@@ -442,7 +581,7 @@ def test_preview_binding_queued_cancel_before_late_bind_preserves_terminal(
                 )["state"]
                 == "cancelled"
             )
-            cancelled = repo.save_media_preview_run(
+            cancelled = repo.preview_records.save_media_preview_run(
                 replace(
                     run,
                     status="cancelled",
@@ -456,16 +595,15 @@ def test_preview_binding_queued_cancel_before_late_bind_preserves_terminal(
             assert bound == replace(cancelled, device_request_id=request_id)
             return bound
 
-        monkeypatch.setattr(repo, "bind_preview_device_request", delayed_bind)
+        monkeypatch.setattr(repo.preview_records, "bind_preview_device_request", delayed_bind)
 
     try:
-        runtime, resources, provider, final = setup_preview(
-            repo, tmp_path, before_submit=arrange
+        runtime, resources, provider, final = record_only_preview(
+            repo, tmp_path, monkeypatch, before_submit=arrange
         )
         resources.admit_value = True
         assert (
             final.status == "cancelled"
-            and not runtime.run_once()
             and provider.calls == 0
         )
         assert original_bind(final, final.device_request_id) == final
@@ -485,7 +623,7 @@ def test_preview_binding_recovery_unknown_keeps_metadata_and_permit(
         monkeypatch.setattr(resources, "released", lambda grant: None)
         with pytest.raises(RecoveryBlocked, match="未确认释放"):
             runtime.run_once()
-        pending = repo.get_media_preview_run("ws", "voice", queued.identity)
+        pending = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert (
             pending.status == "running"
             and pending.device_request_id == queued.device_request_id
@@ -496,7 +634,7 @@ def test_preview_binding_recovery_unknown_keeps_metadata_and_permit(
             and pending.preview_input == queued.preview_input
         )
         assert (
-            repo.bind_preview_device_request(queued, queued.device_request_id)
+            repo.preview_records.bind_preview_device_request(queued, queued.device_request_id)
             == pending
         )
         with repo._connect() as conn:
@@ -527,13 +665,23 @@ def test_preview_binding_recovery_unknown_keeps_metadata_and_permit(
         with pytest.raises(RecoveryBlocked):
             recovered.run_once()
         assert (
-            repo.get_media_preview_run("ws", "voice", queued.identity) == pending
+            repo.preview_records.get_media_preview_run("ws", "voice", queued.identity) == pending
             and provider.calls == 1
         )
         recovery["state"] = "released"
         monkeypatch.setattr(resources, "released", lambda grant: True)
+        assert isinstance(recovered.last_error, RecoveryBlocked)
+        assert recovered.stop(1)
+        recovered = build_device_runtime(
+            database_path=repo.database_path,
+            device_lock_path=tmp_path / "device.lock",
+            device_access=Access(),
+            registrations=runtime.registrations,
+            resources=resources,
+            processes=processes,
+        )
         assert recovered.run_once()
-        final = repo.get_media_preview_run("ws", "voice", queued.identity)
+        final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert (
             final.status == "succeeded"
             and final.id == queued.id
@@ -557,34 +705,44 @@ def test_preview_binding_recovery_unknown_keeps_metadata_and_permit(
             assert recovered.stop(1)
 
 
-def test_preview_binding_stale_snapshot_cannot_erase_or_replace_request(repo, tmp_path):
-    runtime, resources, provider, queued = setup_preview(repo, tmp_path)
+def test_preview_binding_stale_snapshot_cannot_erase_or_replace_request(repo, tmp_path, monkeypatch):
+    runtime, resources, provider, queued = record_only_preview(repo, tmp_path, monkeypatch)
     try:
         unbound = replace(queued, device_request_id=None)
-        assert repo.save_media_preview_run(unbound) == queued
+        assert repo.preview_records.save_media_preview_run(unbound) == queued
         with pytest.raises(ValueError, match="其他设备请求"):
-            repo.save_media_preview_run(
+            repo.preview_records.save_media_preview_run(
                 replace(queued, device_request_id="other-request")
             )
         with pytest.raises(ValueError, match="输入不一致"):
-            repo.bind_preview_device_request(queued, "nonexistent-request")
+            repo.preview_records.bind_preview_device_request(queued, "nonexistent-request")
         with pytest.raises(ValueError, match="输入不一致"):
-            repo.bind_preview_device_request(
+            repo.preview_records.bind_preview_device_request(
                 replace(queued, input_digest="changed"), queued.device_request_id
             )
         assert (
-            repo.get_media_preview_run("ws", "voice", queued.identity) == queued
+            repo.preview_records.get_media_preview_run("ws", "voice", queued.identity) == queued
             and provider.calls == 0
         )
         resources.admit_value = True
-        assert runtime.run_once()
-        final = repo.get_media_preview_run("ws", "voice", queued.identity)
+        grant = runtime.scheduler.pick_and_grant()
+        assert grant is not None
+        # Service terminal receipts stay provisional until the sole device transaction.
+        from app.profile_preview_execution import _PreviewCheckpointRecords
+        port = _PreviewCheckpointRecords(repo.preview_records)
+        assert not hasattr(port, 'profile_inputs')
+        declared = VoicePreviewService._finish(port, queued, status='failed', reason='declared_failure',
+            impact='No provider execution in this evidence', repair_action='Explicit retry')
+        assert repo.preview_records.get_media_preview_run('ws','voice',queued.identity)==queued
+        runtime.scheduler.fail_unit(grant, reason='preview_failed', failure_write=lambda conn, _:
+            repo.preview_records.checkpoint(declared, grant.request_id, connection=conn))
+        final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         with pytest.raises(ValueError, match="不可覆盖"):
-            repo.save_media_preview_run(unbound)
+            repo.preview_records.save_media_preview_run(unbound)
         assert (
-            repo.bind_preview_device_request(unbound, queued.device_request_id) == final
+            repo.preview_records.bind_preview_device_request(unbound, queued.device_request_id) == final
         )
-        assert repo.get_media_preview_run("ws", "voice", queued.identity) == final
+        assert repo.preview_records.get_media_preview_run("ws", "voice", queued.identity) == final
     finally:
         assert runtime.stop(1)
 
@@ -631,27 +789,59 @@ def test_material_search_reader_filters_private_before_limit(
     repo, private_search_assets, reader, owned
 ):
     args = {"query": "预算", "usage_roles": ["b_roll"], "viewer_user_id": reader}
-    first = repo.search_material_segments("ws", limit=1, **args)
+    first = repo.material_search.search_material_segments("ws", limit=1, **args)
     assert [item.asset_ref for item in first] == ["asset:" + owned]
     assert first[0].rank == 1
     assert {
         item.asset_ref
-        for item in repo.search_material_segments("ws", limit=100, **args)
+        for item in repo.material_search.search_material_segments("ws", limit=100, **args)
     } == {"asset:" + owned, "asset:shared"}
+
+    # The same readable rows feed explanatory ranking; private rows cannot
+    # influence qualification counts, the limit, or the reported candidate total.
+    search = repo.material_search.search_material_segments
+    report = search("ws", query="没有字面交集", usage_roles=["b_roll"],
+                    viewer_user_id=reader, limit=1, include_eligibility=True)
+    assert set(report) == {"matches", "qualification_message", "total_count", "truncated"}
+    assert report["total_count"] == 2 and report["truncated"] is True
+    match = report["matches"][0]
+    assert match.asset_ref == min("asset:" + owned, "asset:shared")
+    assert match.rank == 1 and match.match_tier == "structural"
+    assert match.needs_confirmation and match.matched_conditions == ["用途 b_roll"]
+    assert "文字未匹配，按结构化条件返回" in match.reasons
+    assert match.reasons[-1] == "综合排第 1 名（本次候选 1 条）"
+    assert match.duration_seconds == 2 and match.time_range == "00:00 – 00:02"
+    assert match.evidence_excerpt and len(match.evidence_excerpt) <= 900
+    assert "人工用途返回1条候选" in report["qualification_message"]
+    assert "未提交画面语义推理" in report["qualification_message"]
+    assert search("ws", viewer_user_id=reader, asset_ids=[], usage_roles=["b_roll"]) == []
+    # IDs/pairs restrict scope but do not authorize structural fallback.
+    assert search("ws", viewer_user_id=reader, asset_ids=[owned],
+                  eligible_segment_refs={(owned, owned + "-segment")}, query="没有字面交集") == []
+    current = repo.get_asset("ws", owned)
+    repo._save_asset(replace(current, use_state="not_for_automation"))
+    manual = search("ws", asset_ids=[owned], viewer_user_id=reader, purpose="manual",
+                    include_eligibility=True)
+    automatic = search("ws", asset_ids=[owned], viewer_user_id=reader, purpose="automatic",
+                       include_eligibility=True)
+    assert [item.asset_ref for item in manual["matches"]] == ["asset:" + owned]
+    assert automatic["matches"] == [] and automatic["total_count"] == 0
+    assert automatic["truncated"] is False
+    assert "1项受本次用途限制" in automatic["qualification_message"]
 
 
 def test_material_search_missing_reader_keeps_only_legacy_shared(
     repo, private_search_assets
 ):
     args = {"query": "预算", "usage_roles": ["b_roll"], "limit": 1}
-    assert [item.asset_ref for item in repo.search_material_segments("ws", **args)] == [
+    assert [item.asset_ref for item in repo.material_search.search_material_segments("ws", **args)] == [
         "asset:shared"
     ]
-    assert repo.search_material_segments("other", **args) == []
+    assert repo.material_search.search_material_segments("other", **args) == []
     # Explicit existing local diagnostics are a different, controlled caller.
     assert [
         item.asset_ref
-        for item in repo.search_material_segments("ws", local_diagnostic=True, **args)
+        for item in repo.material_search.search_material_segments("ws", local_diagnostic=True, **args)
     ] == ["asset:a-two"]
 
 
@@ -679,7 +869,7 @@ def restricted_preview(repo, tmp_path):
     try:
         resources.admit_value = True
         assert runtime.run_once()
-        voice = repo.get_versioned_voice_profile("ws", "voice", "v1")
+        voice = repo.profile_records.get_versioned_voice_profile("ws", "voice", "v1")
         path = repo.video_library_path / "person.png"
         Image.new("RGB", (2, 2)).save(path)
         asset = repo._save_asset(
@@ -722,7 +912,7 @@ def restricted_preview(repo, tmp_path):
 
         avatar_provider = NoAvatarProvider()
         avatar_service = AvatarPreviewService(tmp_path / "output", avatar_provider)
-        audio = repo.get_media_preview_run("ws", "voice", queued.identity)
+        audio = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         avatar_params = dict(
             person_id=person.id,
             person_version=person.version,
@@ -802,13 +992,13 @@ def test_preview_restriction_exact_blocked_reason_no_cache_reuse(
         None,
     )
     assert f.voice_provider.calls == 1 and f.avatar_provider.calls == 0
-    assert repo.get_media_preview_run("ws", "voice", f.audio.identity) == f.audio
+    assert repo.preview_records.get_media_preview_run("ws", "voice", f.audio.identity) == f.audio
     # Default facts/generation resolution remains strict, even though preview
     # preparation can read the reference and describe the explicit restriction.
     with pytest.raises(ValueError, match="受限"):
         if kind == "voice":
             repo.profile_reference_input(
-                repo.resolve_narration_inputs(
+                repo.profile_inputs.resolve_narration_inputs(
                     workspace_id="ws",
                     episode_id="voice_preview",
                     voice_profile_id=f.voice.id,
@@ -817,7 +1007,7 @@ def test_preview_restriction_exact_blocked_reason_no_cache_reuse(
                 viewer_user_id="member",
             )
         else:
-            repo.resolve_avatar_lipsync_request(
+            repo.profile_inputs.resolve_avatar_lipsync_request(
                 workspace_id="ws", viewer_user_id="member", **f.avatar_params
             )
 
@@ -862,7 +1052,7 @@ def test_preview_restriction_private_read_denied_before_authorization(
         asset = repo.get_asset("ws", profile.reference.asset_id)
         repo._save_asset(replace(asset, owner_user_id="other"))
         Path(asset.path).unlink()
-    before = repo.list_media_preview_runs("ws")
+    before = repo.preview_records.list_media_preview_runs("ws")
     service = f.voice_service if kind == "voice" else f.avatar_service
     params = f.voice_params if kind == "voice" else f.avatar_params
     with pytest.raises(PermissionError):
@@ -873,7 +1063,7 @@ def test_preview_restriction_private_read_denied_before_authorization(
             prepare_only=True,
             **params,
         )
-    assert repo.list_media_preview_runs("ws") == before
+    assert repo.preview_records.list_media_preview_runs("ws") == before
     assert f.voice_provider.calls == 1 and f.avatar_provider.calls == 0
 
 
@@ -923,7 +1113,7 @@ def test_preview_source_excluded_is_explicit_use_restriction(
     )
     assert "excluded" in result.repair_action
     assert f.voice_provider.calls == 1 and f.avatar_provider.calls == 0
-    assert repo.get_media_preview_run("ws", "voice", f.audio.identity) == f.audio
+    assert repo.preview_records.get_media_preview_run("ws", "voice", f.audio.identity) == f.audio
     assert Path(f.audio.output_path).is_file()
     with pytest.raises(ValueError, match="使用状态限制"):
         repo.profile_reference_input(profile, viewer_user_id="member")
@@ -936,7 +1126,7 @@ def test_preview_queue_zero_provider_until_grant_and_atomic_success(repo, tmp_pa
         assert runtime.run_once() is False and provider.calls == 0
         resources.admit_value = True
         assert runtime.run_once()
-        final = repo.get_media_preview_run("ws", "voice", queued.identity)
+        final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert final.status == "succeeded", final
         assert (
             Path(final.output_path).read_bytes() == wav_bytes() and provider.calls == 1
@@ -949,7 +1139,7 @@ def test_preview_queue_zero_provider_until_grant_and_atomic_success(repo, tmp_pa
 def test_preview_stale_and_cancel_do_not_generate(repo, tmp_path):
     runtime, resources, provider, queued = setup_preview(repo, tmp_path)
     try:
-        voice = repo.get_versioned_voice_profile("ws", "voice", "v1")
+        voice = repo.profile_records.get_versioned_voice_profile("ws", "voice", "v1")
         asset = repo.get_asset("ws", voice.reference.asset_id)
         repo.update_asset_use_state("ws", asset.id, "excluded")
         resources.admit_value = True
@@ -964,7 +1154,7 @@ def test_preview_stale_and_cancel_do_not_generate(repo, tmp_path):
 
 def test_preview_failure_is_not_success_and_preserves_input(repo, tmp_path):
     class Failing(VoiceProvider):
-        def generate(self, **kwargs):
+        def generate_granted(self, **kwargs):
             self.calls += 1
             raise OSError("synthetic provider failure")
 
@@ -972,7 +1162,7 @@ def test_preview_failure_is_not_success_and_preserves_input(repo, tmp_path):
     try:
         resources.admit_value = True
         assert runtime.run_once()
-        final = repo.get_media_preview_run("ws", "voice", queued.identity)
+        final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert (
             final.status == "failed"
             and final.output_path is None
@@ -992,7 +1182,7 @@ def test_preview_submission_failure_is_persisted_without_provider(
         runtime.scheduler.cancel(
             queued.device_request_id, CreationExecutionActor("ws", "member")
         )
-        repo.save_media_preview_run(
+        repo.preview_records.save_media_preview_run(
             replace(
                 queued,
                 status="cancelled",
@@ -1020,7 +1210,7 @@ def test_preview_submission_failure_is_persisted_without_provider(
             submit_profile_preview(
                 runtime, prepared, CreationExecutionActor("ws", "member"), params
             )
-        last = repo.get_media_preview_run("ws", "voice", prepared.identity)
+        last = repo.preview_records.get_media_preview_run("ws", "voice", prepared.identity)
         assert (
             last.status == "failed"
             and last.reason == "device_submission_failed"
@@ -1065,7 +1255,7 @@ def test_default_and_profile_usage_are_not_upgraded_on_reopen(client, repo):
 def test_plan_duration_pin_and_zero_person_do_not_query_lipsync(
     client, repo, monkeypatch
 ):
-    from app.production import VideoTemplate
+    from app.creation.video_template_records import VideoTemplate
     from app.schemas import CreationPlanPreviewRequest
     from starlette.requests import Request
 
@@ -1097,7 +1287,7 @@ def test_plan_duration_pin_and_zero_person_do_not_query_lipsync(
         raise AssertionError("0 percent must not inspect lipsync provider")
 
     monkeypatch.setattr(main, "_lipsync_provider", no_lipsync)
-    template = repo.save_video_template(
+    template = repo.video_templates.save_video_template(
         VideoTemplate(
             id="t",
             workspace_id="ws",
@@ -1119,16 +1309,16 @@ def test_plan_duration_pin_and_zero_person_do_not_query_lipsync(
         "template_version": 1,
         "presenter_share_target": 0,
     }
-    inherited = main._creation_plan_preflight(
+    inherited = main._creation_plan_preflight_http_adapter().preflight(
         request, "ws", CreationPlanPreviewRequest(**base)
     )
-    explicit = main._creation_plan_preflight(
+    explicit = main._creation_plan_preflight_http_adapter().preflight(
         request, "ws", CreationPlanPreviewRequest(**base, duration_target_seconds=30)
     )
-    confirm = main._creation_plan_preflight(
+    confirm = main._creation_plan_preflight_http_adapter().preflight(
         request,
         "ws",
-        main.CreationPlanConfirmRequest(
+        CreationPlanConfirmRequest(
             **base,
             duration_target_seconds=30,
             preflight_fingerprint=explicit.preflight_fingerprint,
@@ -1188,7 +1378,7 @@ def test_plan_duration_pin_and_zero_person_do_not_query_lipsync(
         ),
         verified_owner_user_id="member",
     )
-    pinned = main._creation_plan_preflight(
+    pinned = main._creation_plan_preflight_http_adapter().preflight(
         request,
         "ws",
         CreationPlanPreviewRequest(
@@ -1285,10 +1475,10 @@ def test_preview_unknown_admission_recovery_and_cache_stay_same_request(repo, tm
         assert not runtime.run_once() and provider.calls == 0
         # Interrupted executor state; the existing queue grants after its process
         # recovery verifier declares the prior group released, not a second queue.
-        repo.save_media_preview_run(replace(queued, status="running"))
+        repo.preview_records.save_media_preview_run(replace(queued, status="running"))
         resources.admit_value = True
         assert runtime.run_once() and provider.calls == 1
-        final = repo.get_media_preview_run("ws", "voice", queued.identity)
+        final = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         assert (
             final.id == queued.id
             and final.device_request_id == queued.device_request_id
@@ -1317,7 +1507,7 @@ def test_changed_pronunciation_before_admission_does_not_use_old_queue(repo, tmp
 
     runtime, resources, provider, queued = setup_preview(repo, tmp_path)
     try:
-        repo.save_pronunciation_entry(
+        repo.profile_records.save_pronunciation_entry(
             PronunciationEntry(
                 "rule", "ws", "AI", "zh", "诶艾", "workspace", None, "v1"
             )
@@ -1376,7 +1566,7 @@ def test_api_preview_posts_queue_and_cancel_with_member_filtered_read(
         resources.admit_value = True
         assert not runtime.run_once() and provider.calls == 0
         assert (
-            repo.get_media_preview_run("ws", "voice", queued.identity).preview_input
+            repo.preview_records.get_media_preview_run("ws", "voice", queued.identity).preview_input
             == queued.preview_input
         )
     finally:
@@ -1406,7 +1596,7 @@ def test_avatar_preview_uses_own_grant_and_independent_person_version(
     try:
         resources.admit_value = True
         assert runtime.run_once()
-        audio = repo.get_media_preview_run("ws", "voice", queued.identity)
+        audio = repo.preview_records.get_media_preview_run("ws", "voice", queued.identity)
         path = repo.video_library_path / "avatar.png"
         Image.new("RGB", (2, 2)).save(path)
         asset = repo._save_asset(
@@ -1471,80 +1661,66 @@ def test_avatar_preview_uses_own_grant_and_independent_person_version(
         )
         assert avatar_provider.calls == 0
         assert runtime.run_once()
-        result = repo.get_media_preview_run("ws", "avatar_lipsync", submitted.identity)
+        result = repo.preview_records.get_media_preview_run("ws", "avatar_lipsync", submitted.identity)
         assert (
             result.status == "failed"
             and result.output_path is None
             and result.person_version == "p1"
         )
         assert avatar_provider.calls == 1
-        assert repo.get_person_profile("ws", person.id, person.version) == person
-        assert repo.get_media_preview_run("ws", "voice", queued.identity) == audio
+        assert repo.profile_records.get_person_profile("ws", person.id, person.version) == person
+        assert repo.preview_records.get_media_preview_run("ws", "voice", queued.identity) == audio
     finally:
         assert runtime.stop(1)
 
 
 def test_person_cache_validation_uses_actual_task_reader(repo, tmp_path, monkeypatch):
-    monkeypatch.setattr(main, "production_repo", repo)
-    render = SimpleNamespace(
-        workspace_id="ws",
-        task_id="task",
-        person_profile_id="person",
-        person_version="p1",
-        cache_key="render-key",
-        artifact_ref="artifact",
-        motion="natural",
-        expression="neutral",
-        model_id="fixture",
-    )
-    segment = SimpleNamespace(
-        audio_reference="audio",
-        voice_profile_id="voice",
-        voice_version="v1",
-        language="zh",
-    )
-    facts = {"source": "exact-source-revision"}
-    transform = SimpleNamespace(
-        transform_type="person_render",
-        status="succeeded",
-        input_digest="render-key",
-        output_refs=["artifact"],
-        input_refs=["audio"],
-        parameters={"language": "zh", "presenter_input_facts": facts},
-    )
-    monkeypatch.setattr(
-        repo,
-        "get_creation_task",
-        lambda ws, task: SimpleNamespace(owner_user_id="member"),
-    )
-    monkeypatch.setattr(
-        repo,
-        "get_person_profile",
-        lambda *args: SimpleNamespace(id="person", version="p1", authorization=None),
-    )
-    monkeypatch.setattr(
-        repo,
-        "resolve_authorized_narration_audio_reference",
-        lambda *args: tmp_path / "synthetic.wav",
-    )
+    from tests._media_preview_test_fixtures import register_synthetic_profiles
+    from app.creation.contracts import CreationTask
+    from app.creation.narration_artifacts import NarrationArtifactRecord
+    from app.creation_execution import presenter_input_facts
+    from app.persistence_json import _json_payload
+
+    monkeypatch.setattr(main, 'production_repo', repo)
+    person, voice, _, audio_path, _ = register_synthetic_profiles(repo,
+        workspace_id='ws', member_id='member', person_id='person', person_version='p1',
+        voice_id='voice', voice_version='v1', language='zh')
+    task = CreationTask('task', 'ws', 'plan', 'cache', 'knowledge_explanation', owner_user_id='member')
+    with repo._connect() as conn:
+        conn.execute('INSERT INTO creation_tasks(id,workspace_id,plan_id,payload,updated_at,visibility) '
+            'VALUES(?,?,?,?,?,?)', (task.id, 'ws', task.plan_id, _json_payload(task),
+                task.updated_at.isoformat(), task.visibility))
+    repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
+        id='audio', workspace_id='ws', task_id=task.id, script_id='script', voice_profile_id=voice.id,
+        cache_key='audio', audio_path=str(audio_path), duration_seconds=2, sample_rate=8000, model_id=voice.model_id))
+    render = SimpleNamespace(workspace_id='ws', task_id=task.id, person_profile_id=person.id,
+        person_version=person.version, cache_key='render-key', artifact_ref='artifact',
+        motion='natural', expression='neutral', model_id='fixture')
+    segment = SimpleNamespace(audio_reference='narration://artifact/audio',
+        voice_profile_id=voice.id, voice_version=voice.version, language='zh')
+    original = repo.profile_inputs.resolve_avatar_lipsync_request
+    request = original(workspace_id='ws', person_id=person.id, person_version=person.version,
+        voice_profile_id=voice.id, voice_version=voice.version, audio_path=str(audio_path),
+        audio_cache_key=segment.audio_reference, language='zh', motion=render.motion,
+        expression=render.expression, authorization_id=person.authorization.id,
+        authorization_version=person.authorization.version, model_id=render.model_id, viewer_user_id=task.owner_user_id)
+    facts = presenter_input_facts(request)
+    transform = SimpleNamespace(transform_type='person_render', status='succeeded',
+        input_digest=render.cache_key, output_refs=[render.artifact_ref], input_refs=[segment.audio_reference],
+        parameters={'language': 'zh', 'presenter_input_facts': facts})
     captured = []
-    monkeypatch.setattr(
-        repo,
-        "resolve_avatar_lipsync_request",
-        lambda **kw: captured.append(kw) or SimpleNamespace(),
-    )
-    monkeypatch.setattr(main, "presenter_input_facts", lambda request: facts)
-    monkeypatch.setattr(
-        "app.avatar_lipsync._authorization_failure", lambda request: None
-    )
+
+    def resolve(**kwargs):
+        captured.append(kwargs)
+        return original(**kwargs)
+
+    monkeypatch.setattr(repo.profile_inputs, 'resolve_avatar_lipsync_request', resolve)
     assert main._person_render_matches_narration(render, segment, [transform])
-    assert (
-        captured[0]["viewer_user_id"] == "member"
-        and captured[0]["person_version"] == "p1"
-    )
+    assert captured[0]['viewer_user_id'] == 'member' and captured[0]['person_version'] == 'p1'
+    assert captured[0]['audio_path'] == str(audio_path)
 
-    def denied(**kw):
-        raise PermissionError("source sharing revoked")
+    def denied(**kwargs):
+        raise PermissionError('source sharing revoked')
 
-    monkeypatch.setattr(repo, "resolve_avatar_lipsync_request", denied)
+    monkeypatch.setattr(repo.profile_inputs, 'resolve_avatar_lipsync_request', denied)
     assert not main._person_render_matches_narration(render, segment, [transform])

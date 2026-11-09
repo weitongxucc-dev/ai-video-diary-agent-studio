@@ -25,17 +25,17 @@ def permitted_audio_rendering(granted_media, monkeypatch):
 
 def registered_audio(repository, service, workspace, task_id, logical_ref, input_refs=()):
     """Synthetic stored lineage for source-isolation tests, without a media executor."""
-    from app.production import ArtifactRecord, JobRun
+    from app.creation.contracts import ArtifactRecord, JobRun
     source = repository.database_path.parent / (logical_ref.rsplit('/', 1)[-1])
     tone(source, 440)
     published = service.artifact_store.publish_file(logical_ref, source)
     job_id = "synthetic-lineage:" + logical_ref
-    repository.create_job_run(JobRun(id=job_id, workspace_id=workspace, task_id=task_id, kind="synthetic_lineage",
+    repository.job_records.create_job_run(JobRun(id=job_id, workspace_id=workspace, task_id=task_id, kind="synthetic_lineage",
         idempotency_key=job_id, input_digest=published.sha256))
     record = ArtifactRecord(id=logical_ref, workspace_id=workspace, task_id=task_id,
         kind="audio_source", logical_ref=logical_ref, sha256=published.sha256,
         size_bytes=published.size_bytes, producer_job_id=job_id, input_refs=list(input_refs))
-    repository.create_artifact_record(record)
+    repository.execution_records.create_artifact_record(record)
     return record
 
 
@@ -171,7 +171,8 @@ def test_audio_artifact_cannot_cross_workspace_or_task_boundaries(tmp_path):
     import json
     from dataclasses import asdict
     from app.artifact_store import ArtifactStore
-    from app.production import CreationTask, ProductionRepository
+    from app.creation.contracts import CreationTask
+    from app.production import ProductionRepository
     from app.task_audio import TaskAudio
     repo=ProductionRepository(tmp_path/"db.sqlite",tmp_path/"library")
     for workspace,task_id in (("a","task-a"),("a","task-other"),("b","task-b")):
@@ -313,7 +314,8 @@ def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use
     from dataclasses import asdict
     from app.artifact_store import ArtifactStore
     from app.models import utc_now
-    from app.production import CreationTask, MaterialAsset, ProductionRepository
+    from app.creation.contracts import CreationTask
+    from app.production import MaterialAsset, ProductionRepository
     from app.task_audio import TaskAudio
     repo = ProductionRepository(tmp_path/'db.sqlite', tmp_path/'library')
     task = CreationTask(id='task', workspace_id='workspace', plan_id='plan', name='原声', scenario='test')
@@ -324,7 +326,7 @@ def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use
     source.parent.mkdir(parents=True)
     tone(source, 440)
     asset = MaterialAsset(id='asset', workspace_id=task.workspace_id, file_name=source.name,
-        path=str(source.resolve()), size_bytes=source.stat().st_size, modified_at=utc_now())
+        path=str(source.resolve()), size_bytes=source.stat().st_size, modified_at=utc_now(), analysis_status='ready')
     repo._save_asset(asset)
     reference = repo.workspace_media_reference_for_asset(task.workspace_id, asset.id)
     with repo._connect() as conn:

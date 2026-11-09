@@ -2,6 +2,7 @@
 
 Opaque fixture source bytes are never decoded, and no provider/media job is run.
 """
+from script_seed_fixtures import script_seed_payload
 import json
 import pytest
 import os
@@ -13,14 +14,37 @@ from pathlib import Path
 from uuid import uuid4
 from types import SimpleNamespace
 from dataclasses import asdict, replace
-from app.production import CreationTaskScript, CreationTaskScriptSection, NarrationSegment
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+from app.creation.contracts import NarrationSegment
 
 import app.main as main
 from app.assistant.result_projection import read_sdk_result
 from app.assistant.runtime_checks import _pi_executable, sdk_module
 from app.conversation_repository import ConversationRepository
 from app.assistant_goal_continuation import GoalResultProjection, GoalCandidate
-from test_typed_assistant_edits_api import metadata_http_state  # noqa: F401
+from test_typed_assistant_edits_api import metadata_http_state as metadata_http_state  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def edit_result_native_guards(request, monkeypatch):
+    # Apply to this slice's original metadata representatives before their
+    # metadata_http_state dependency is resolved; SDK/media nodes are not run.
+    selected = {'test_rejected_direct_request_replays_original_error_without_business_writes',
+                'test_http_exact_journal_source_is_readable_from_business_after_head_advances'}
+    if request.node.originalname not in selected:
+        return
+    def forbidden(*args, **kwargs):
+        pytest.fail('edit result metadata evidence forbids Popen/media/model/driver execution')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    import _media_preview_test_fixtures as helpers
+    import test_creation_execution as creation_helpers
+    for owner in (helpers, creation_helpers):
+        for name in ('write_synthetic_video', 'register_synthetic_video_asset',
+                     'register_synthetic_profiles', 'synthetic_wav_bytes'):
+            monkeypatch.setattr(owner, name, forbidden)
+    monkeypatch.setattr(main, 'run_task_turn', forbidden)
+    monkeypatch.setattr(main, 'start_assistant_continuation_driver', forbidden)
+    monkeypatch.setattr(main.montage_renderer, 'render', forbidden)
 
 
 SDK_RUNNER = r"""
@@ -78,24 +102,28 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     script = CreationTaskScript("fixed-script", "ws", state.task.id, "fixture-run", "fixture-topic", "既有文案", "zh-CN",
         [CreationTaskScriptSection("section", "开头", "原字幕", "既有画面", ["fixture-evidence"])], selection_status="confirmed")
     task = replace(state.task, confirmed_script_id=script.id)
-    plan = replace(state.repo.get_creation_plan("ws", task.plan_id), duration_target_seconds=15)
+    plan = replace(state.repo.plan_records.get_creation_plan("ws", task.plan_id), duration_target_seconds=15)
     with state.repo._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan),default=str),plan.id))
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
-            (script.id,"ws",task.id,script.run_id,json.dumps(asdict(script),default=str),script.updated_at.isoformat()))
+            (script.id,"ws",task.id,script.run_id,script_seed_payload(state.repo, conn, script),script.updated_at.isoformat()))
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?",(json.dumps(asdict(task),default=str),task.id))
     audio_path=tmp_path / "outputs/artifacts/task/fixed-narration.wav"
     with wave.open(str(audio_path),"wb") as audio:
-        audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(16000); audio.writeframes(b"\0\0" * 64000)
-    state.repo.save_narration_artifact(replace(state.narration,audio_path=str(audio_path)))
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(16000)
+        audio.writeframes(b"\0\0" * 64000)
+    state.repo.narration_artifacts.save_narration_artifact(replace(state.narration,audio_path=str(audio_path)))
     segment=NarrationSegment("fixed-segment","ws",task.id,script.id,"section","原字幕",state.narration.audio_path,4,16000,
         "fixture-input","fixture-voice","1","zh","fixture-rules","ready")
-    state.repo.save_narration_segments("ws",task.id,script.id,[segment])
+    state.repo.narration_records.save_narration_segments("ws",task.id,script.id,[segment])
     state.base=replace(state.base,id="confirmed-input",parent_version_id=state.base.id,sequence=2,
         snapshot={**state.base.snapshot,"subtitle_track_ids":["confirmed-zh"],
                   "narration_segments":[json.loads(json.dumps(asdict(segment),default=str))]})
-    state.repo.create_timeline_version(state.base)
-    state.repo.create_subtitle_track(replace(state.track,id="confirmed-zh",timeline_version_id=state.base.id))
+    state.repo.timeline_records.create_timeline_version(state.base)
+    state.repo.subtitle_records.create_subtitle_track(replace(state.track,id="confirmed-zh",timeline_version_id=state.base.id))
     conversations = ConversationRepository(tmp_path / "assistant.sqlite")
     monkeypatch.setattr(main, "conversation_repo", conversations)
     monkeypatch.setattr(main, "creation_execution", main._new_creation_execution(state.repo))
@@ -124,8 +152,11 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
                     assert accepted.status_code == 200,accepted.text
                     delivery["input_id"]=input_id
                 result=delivery["handler"](value["phase"],value.get("input_id"),value.get("mode"))
-                self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers()
-                self.wfile.write(json.dumps(result).encode());return
+                self.send_response(200)
+                self.send_header("Content-Type","application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(result).encode())
+                return
             response = state.client.request(self.command, self.path, content=body,
                 headers={"Content-Type": "application/json", "X-Local-Member-Token": state.token,
                     **({"X-Assistant-Input-ID":self.headers["X-Assistant-Input-ID"]} if self.headers.get("X-Assistant-Input-ID") else {})})
@@ -175,7 +206,8 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
                 message="只澄清当前保存结果，不再修改或生成" if clarification else "把字幕改成追加输入文字，然后继续生成视频")
             bridge=f"http://127.0.0.1:{server.server_port}/fixture/input-checkpoint"
             steps += [{"name":"apply_typed_edit","args":{"operation_type":"UpdateSubtitleCue","cue_id":"cue","text":"澄清前的修改" if clarification else "旧输入文字"}}]
-            if not clarification:steps += [{"name":"read_current_task","args":{}},
+            if not clarification:
+                steps += [{"name":"read_current_task","args":{}},
                 {"name":"read_task_edit_capabilities","args":{}},
                 {"name":"apply_typed_edit","args":{"operation_type":"UpdateSubtitleCue","cue_id":"cue","text":"追加输入文字"}}]
         elif kwargs["message"] == "撤销上一步修改":
@@ -205,8 +237,8 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     replies = []
     try:
         for message in ("把当前字幕改为：第一轮文字", "再把这句改为：第二轮文字", "撤销上一步修改", "画布改成横屏16:9", "撤销上一步修改"):
-            current = state.repo.get_creation_task("ws", state.task.id)
-            version = state.repo.get_timeline_version("ws", current.current_timeline_version_id)
+            current = state.repo.task_records.get_creation_task("ws", state.task.id)
+            version = state.repo.timeline_records.get_timeline_version("ws", current.current_timeline_version_id)
             saved = conversations.get(chat["id"], "ws", state.member.member_id)
             draft = conversations.save_draft(chat["id"], "ws", state.member.member_id, message, saved["draft_version"])
             payload = {"conversation_id": chat["id"], "client_request_id": str(uuid4()),
@@ -223,12 +255,12 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
                 cue = state.repo.get_creation_task_montage_plan("ws", state.task.id)["cues"][0]
                 assert cue["text"] == message.split("：")[1]
                 locator=response.json()["edit_request"]
-                saved_source=state.repo.get_task_event("ws",f"event_edit_locator_{response.json()['turn_id']}_{locator['request_id']}").payload["source"]
+                saved_source=state.repo.execution_records.get_task_event("ws",f"event_edit_locator_{response.json()['turn_id']}_{locator['request_id']}").payload["source"]
                 assert saved_source["expected_timeline_version_id"] == version.id
                 candidate={"workspace_id":"ws","task_id":task.id,"event_id":f"recovered-{len(replies)}",
                     "request":{"locator":locator}}
                 context=GoalCandidate(candidate,saved_source,{"status":"completed"},None,
-                    state.repo.get_creation_task("ws",task.id),False)
+                    state.repo.task_records.get_creation_task("ws",task.id),False)
                 owner=GoalResultProjection(state.repo,conversations)
                 observed=owner.request_result(context,{"status_code":200,"response":locator["result"]},runtime_available=False)
                 projection=owner.request_projection(context,observed,{"edit_request":locator})
@@ -253,10 +285,10 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert [output["history_count"] for output in outputs] == sorted({output["history_count"] for output in outputs})
         reopened = ConversationRepository(conversations.database_path)
         assert [turn["status"] for turn in reopened.list_turns(chat["id"])] == ["completed"] * 5
-        assert state.repo.get_timeline_version("ws", state.base.id).snapshot == state.base.snapshot
-        assert state.repo.get_creation_task("ws", state.task.id).narration_cache_key == state.narration.cache_key
-        current=state.repo.get_creation_task("ws",state.task.id)
-        version=state.repo.get_timeline_version("ws",current.current_timeline_version_id)
+        assert state.repo.timeline_records.get_timeline_version("ws", state.base.id).snapshot == state.base.snapshot
+        assert state.repo.task_records.get_creation_task("ws", state.task.id).narration_cache_key == state.narration.cache_key
+        current=state.repo.task_records.get_creation_task("ws",state.task.id)
+        version=state.repo.timeline_records.get_timeline_version("ws",current.current_timeline_version_id)
         saved=conversations.get(chat["id"],"ws",state.member.member_id)
         message="先改成旧输入文字，然后继续生成视频"
         draft=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,saved["draft_version"])
@@ -276,7 +308,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert input_headers[-1] == receipt["input_id"]
         assert state.repo.get_creation_task_montage_plan("ws",state.task.id)["cues"][0]["text"] == "追加输入文字"
         locator=response.json()["edit_request"]
-        source=state.repo.get_task_event("ws",f"event_edit_locator_{root_id}_{locator['request_id']}").payload["source"]
+        source=state.repo.execution_records.get_task_event("ws",f"event_edit_locator_{root_id}_{locator['request_id']}").payload["source"]
         assert source["input_id"] == receipt["input_id"] and source["expected_timeline_version_id"] == receipt["request_context"]["target_snapshot"]["timeline_version_id"]
         monkeypatch.setattr(main,"LEGACY_WORKSPACE_ID","ws")
         assert main._reconcile_assistant_business_results() > 0
@@ -295,7 +327,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert conversations.list_turns(chat["id"])[-1]["user_message"] == ""
         assert len([item for item in requests if item[0] == "POST" and item[1].endswith("/edits/exact")]) == 5
         monkeypatch.setattr(main,"run_task_turn",run_sdk)
-        version=state.repo.get_timeline_version("ws",state.repo.get_creation_task("ws",state.task.id).current_timeline_version_id)
+        version=state.repo.timeline_records.get_timeline_version("ws",state.repo.task_records.get_creation_task("ws",state.task.id).current_timeline_version_id)
         saved=conversations.get(chat["id"],"ws",state.member.member_id)
         message="先修改，追加输入只作澄清"
         draft=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,saved["draft_version"])
@@ -335,8 +367,8 @@ def test_rejected_direct_request_replays_original_error_without_business_writes(
         assert receipt.status_code == 200, receipt.text
         assert receipt.json()["result_status_code"] == expected
         assert receipt.json()["submitted_input"]["cue_id"] == payload["cue_id"]
-    assert state.repo.get_creation_task("ws",state.task.id).current_timeline_version_id == state.base.id
-    assert state.repo.list_edit_operations("ws",state.task.id) == []
+    assert state.repo.task_records.get_creation_task("ws",state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.edit_records.list_edit_operations("ws",state.task.id) == []
 
 
 def test_common_business_exact_apply_preview_and_linked_subtitle(metadata_http_state,monkeypatch):
@@ -351,23 +383,23 @@ def test_common_business_exact_apply_preview_and_linked_subtitle(metadata_http_s
     origin={**conversations.task_turn_source(turn['id'],'ws',s.member.member_id,s.task.id),'assistant_turn_id':turn['id']}
     business=main._task_business()
     def invoke(operation,action):
-        task=s.repo.get_creation_task('ws',s.task.id)
-        version=s.repo.get_timeline_version('ws',task.current_timeline_version_id)
+        task=s.repo.task_records.get_creation_task('ws',s.task.id)
+        version=s.repo.timeline_records.get_timeline_version('ws',task.current_timeline_version_id)
         payload={**action,'request_id':str(uuid4()),'expected_timeline_version_id':version.id,
                  'expected_timeline_sequence':version.sequence}
         return business.execute(operation,{'payload':payload,'draft_only':True},actor,task,{},origin,{},lambda conn:None)
     preview=invoke('preview_task_edit',{'operation_type':'ChangeCanvas','aspect_ratio':'1:1'})
     assert preview['proposal']['operation']['operation_type']=='ChangeCanvas'
-    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
+    assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
     canvas=invoke('apply_task_edit',{'operation_type':'ChangeCanvas','aspect_ratio':'1:1'})
     assert canvas['montage']['aspect_ratio']=='1:1'
     linked=invoke('apply_task_edit',{'operation_type':'DuplicateClip','clip_id':'clip'})
     assert len(linked['montage']['clips'])==2
-    task=s.repo.get_creation_task('ws',s.task.id)
-    track=s.repo.list_subtitle_tracks('ws',task.id,timeline_version_id=task.current_timeline_version_id)[0]
+    task=s.repo.task_records.get_creation_task('ws',s.task.id)
+    track=s.repo.subtitle_records.list_subtitle_tracks('ws',task.id,timeline_version_id=task.current_timeline_version_id)[0]
     result=invoke('apply_task_edit',{'operation_type':'ReplaceSubtitleText','track_id':track.id,
         'find_text':track.cues[0].text,'replacement_text':'共同入口字幕'})
-    current=s.repo.list_subtitle_tracks('ws',task.id,timeline_version_id=result['operation']['result_version_id'])
+    current=s.repo.subtitle_records.list_subtitle_tracks('ws',task.id,timeline_version_id=result['operation']['result_version_id'])
     assert current[0].cues[0].text=='共同入口字幕'
 
 
@@ -390,8 +422,8 @@ def test_common_exact_rechecks_guard_in_real_commit(metadata_http_state,monkeypa
     name='persist_subtitle_edit' if operation=='ChangeCanvas' else 'persist_montage_edit'
     persist=getattr(case.metadata,name)
     def revoke_before_commit(**values):
-        current=s.repo.get_task_authorization('ws',s.task.id)
-        s.repo.save_task_authorization(replace(current,revision=current.revision+1,revoked_at=datetime.now(timezone.utc)),
+        current=s.repo.task_authorization_records.get_task_authorization('ws',s.task.id)
+        s.repo.task_authorization_records.save_task_authorization(replace(current,revision=current.revision+1,revoked_at=datetime.now(timezone.utc)),
             expected_revision=current.revision)
         return persist(**values)
     monkeypatch.setattr(case.metadata,name,revoke_before_commit)
@@ -402,8 +434,8 @@ def test_common_exact_rechecks_guard_in_real_commit(metadata_http_state,monkeypa
     with pytest.raises(EditPreviewRejected) as error:
         case.apply(s.task,actor,payload,identity=s.identity)
     assert error.value.status_code==403
-    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
-    assert s.repo.list_edit_operations('ws',s.task.id)==[]
+    assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id==s.base.id
+    assert s.repo.edit_records.list_edit_operations('ws',s.task.id)==[]
 
 
 def test_business_original_read_survives_head_but_rejects_foreign_input_and_revocation(metadata_http_state,monkeypatch):
@@ -421,12 +453,13 @@ def test_business_original_read_survives_head_but_rejects_foreign_input_and_revo
     goal={'original_turn_id':turn['id'],'current_turn_id':turn['id'],'original_instruction':'修改这个作品',
         'workspace_id':'ws','member_id':s.member.member_id,'task_id':s.task.id,'conversation_id':chat['id'],
         'revision':0,'status':'running'}
-    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    with conversations._connect() as conn:
+        conversations._write_goal(conn,{'id':turn['id']},goal)
     actor=CreationExecutionActor('ws',s.member.member_id)
     authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
     granted=authority.ensure(s.task,actor,interactive=True)
     required=authority._requirements('ws',s.task.id)[1]
-    s.repo.save_task_authorization(replace(granted,revision=granted.revision+1,
+    s.repo.task_authorization_records.save_task_authorization(replace(granted,revision=granted.revision+1,
         resource_scope={**granted.resource_scope,'references':required['references']}),expected_revision=granted.revision)
     authority.bind_business_context(s.task,actor,goal,memory={})
     business=main._task_business()
@@ -435,22 +468,23 @@ def test_business_original_read_survives_head_but_rejects_foreign_input_and_revo
         'turn_id':turn['id'],'input_id':None,'goal_revision':0,
         'task_version':{'timeline_version_id':s.base.id,'timeline_sequence':s.base.sequence}}
     def call(operation,arguments):
-        return business(operation,arguments,call_id='fixture',tool_call_id='fixture',source_binding=binding,
+        from app.assistant.task_business_adapter import TaskBusinessAdapter
+        return TaskBusinessAdapter(business)(operation,arguments,call_id='fixture',tool_call_id='fixture',source_binding=binding,
             cancel_event=Event(),deadline_monotonic=float('inf'))
     request_id=str(uuid4())
     saved=call('apply_task_edit',{'payload':{'operation_type':'ChangeCrop','clip_id':'clip','fit_mode':'fit','crop_x':0.3,'crop_y':0.7,
         'request_id':request_id,'expected_timeline_version_id':s.base.id,'expected_timeline_sequence':s.base.sequence}})
     assert saved['ok'],saved
-    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id!=s.base.id
+    assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id!=s.base.id
     read=call('read_task_edit_request',{'request_id':request_id,'phase':'apply'})
     assert read['ok'] and read['value']['result']==saved['value'],read
     assert not call('read_task_edit_request',{'task_id':'other-task','request_id':request_id,'phase':'apply'})['ok']
     foreign_id=str(uuid4())
-    s.repo.claim_edit_request(s.task,s.member.member_id,foreign_id,'apply',{'_business_source':{
+    s.repo.execution_records.claim_edit_request(s.task,s.member.member_id,foreign_id,'apply',{'_business_source':{
         'actor_identity':actor.identity_payload(),'assistant_turn_id':turn['id'],'input_id':'another-input','input_turn_id':turn['id']}})
     assert not call('read_task_edit_request',{'request_id':foreign_id,'phase':'apply'})['ok']
-    authorization=s.repo.get_task_authorization('ws',s.task.id)
-    s.repo.save_task_authorization(replace(authorization,revision=authorization.revision+1,revoked_at=datetime.now(timezone.utc)),
+    authorization=s.repo.task_authorization_records.get_task_authorization('ws',s.task.id)
+    s.repo.task_authorization_records.save_task_authorization(replace(authorization,revision=authorization.revision+1,revoked_at=datetime.now(timezone.utc)),
         expected_revision=authorization.revision)
     assert not call('read_task_edit_request',{'request_id':request_id,'phase':'apply'})['ok']
 
@@ -470,16 +504,19 @@ def test_edit_origin_queued_work_accepts_finished_turn_only_with_current_goal(me
         'actor_identity':actor.identity_payload(),'assistant_turn_id':turn['id']}
     validate_edit_origin(conversations,source,actor)
     conversations.finish_turn(turn['id'],'completed','已排队',{})
-    with pytest.raises(ValueError): validate_edit_origin(conversations,source,actor)
+    with pytest.raises(ValueError):
+        validate_edit_origin(conversations,source,actor)
     goal={'workspace_id':'ws','task_id':s.task.id,'member_id':s.member.member_id,'original_turn_id':turn['id'],
         'current_turn_id':turn['id'],'status':'waiting_result','original_instruction':'继续完成这段修改'}
-    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    with conversations._connect() as conn:
+        conversations._write_goal(conn,{'id':turn['id']},goal)
     validate_edit_origin(conversations,source,actor)
     with conversations._connect() as conn:
         conn.execute('BEGIN IMMEDIATE')
         validate_edit_origin(conversations,source,actor,connection=conn)
         conversations._write_goal(conn,{'id':turn['id']},{**goal,'status':'stopped'})
-        with pytest.raises(ValueError): validate_edit_origin(conversations,source,actor,connection=conn)
+        with pytest.raises(ValueError):
+            validate_edit_origin(conversations,source,actor,connection=conn)
 
 
 @pytest.mark.parametrize('phase',['apply','preview'])
@@ -499,12 +536,13 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
     goal={'original_turn_id':turn['id'],'current_turn_id':turn['id'],'original_instruction':'调整画幅并继续完成',
         'workspace_id':'ws','member_id':s.member.member_id,'task_id':s.task.id,'conversation_id':chat['id'],
         'revision':0,'status':'running'}
-    with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+    with conversations._connect() as conn:
+        conversations._write_goal(conn,{'id':turn['id']},goal)
     actor=CreationExecutionActor('ws',s.member.member_id)
     authority=TaskAuthorizationUseCase(s.repo,lambda identity:'ready')
     granted=authority.ensure(s.task,actor,interactive=True)
     required=authority._requirements('ws',s.task.id)[1]
-    s.repo.save_task_authorization(replace(granted,revision=granted.revision+1,
+    s.repo.task_authorization_records.save_task_authorization(replace(granted,revision=granted.revision+1,
         resource_scope={**granted.resource_scope,'references':required['references']}),expected_revision=granted.revision)
     authority.bind_business_context(s.task,actor,goal,memory={})
     payload={'operation_type':'ChangeCanvas','aspect_ratio':'1:1','assistant_turn_id':turn['id'],
@@ -521,14 +559,29 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
         case.apply(s.task,actor,CreationTaskExactEditRequest(operation_type='ChangeCrop',clip_id='clip',
             fit_mode='fit',crop_x=.3,crop_y=.7,request_id=uuid4(),expected_timeline_version_id=s.base.id,
             expected_timeline_sequence=s.base.sequence),identity=s.identity)
-    current=s.repo.get_creation_task('ws',s.task.id)
+    current=s.repo.task_records.get_creation_task('ws',s.task.id)
     assert current.current_timeline_version_id!=s.base.id
+    if phase == 'apply':
+        from copy import deepcopy
+        from starlette.requests import Request
+        from app.assistant.edit_result_binding import AssistantEditResultBinding, EditResultRejected
+        request = Request({'type':'http', 'headers':[(b'x-local-member-token', s.token.encode())]})
+        locator = main._assistant_applied_edit_receipt(s.task.id, request, turn['id'], {
+            'request_id':payload['request_id'], 'phase':'apply',
+            'query_url':s.url+f"/assistant/edit-requests/{payload['request_id']}?phase=apply"})
+        assert locator.result['operation']['result_version_id'] == current.current_timeline_version_id
+        forged = deepcopy(locator.result)
+        forged['operation']['result_version_id'] = 'not-the-committed-head'
+        with pytest.raises(EditResultRejected, match='实际操作不一致'):
+            AssistantEditResultBinding(s.repo, conversations).require_applied('ws', s.task.id, turn['id'],
+                locator.model_copy(update={'result':forged}))
     business=main._task_business()
     business.authorizations=authority
     binding={'workspace_id':'ws','task_id':s.task.id,'member_id':s.member.member_id,'conversation_id':chat['id'],
         'turn_id':turn['id'],'input_id':None,'goal_revision':0,
         'task_version':{'timeline_version_id':s.base.id,'timeline_sequence':s.base.sequence}}
-    result=business('read_task_edit_request',{'request_id':payload['request_id'],'phase':phase},
+    from app.assistant.task_business_adapter import TaskBusinessAdapter
+    result=TaskBusinessAdapter(business)('read_task_edit_request',{'request_id':payload['request_id'],'phase':phase},
         call_id='read-http',tool_call_id='read-http',source_binding=binding,cancel_event=Event(),deadline_monotonic=float('inf'))
     assert result['ok'] and result['value']['result']==submitted.json(),result
     from app.assistant_goal_continuation import GoalResultProjection
@@ -539,44 +592,96 @@ def test_http_exact_journal_source_is_readable_from_business_after_head_advances
         business.execute('read_task_edit_request',{'request_id':payload['request_id'],'phase':phase},actor,current,
             {**goal,'source_input_id':'another-input','source_input_turn_id':turn['id']},{},{},None)
     legacy_id=str(uuid4())
-    legacy_event,_=s.repo.claim_edit_request(current,s.member.member_id,legacy_id,phase,{'request_id':legacy_id})
-    s.repo.save_edit_request_result(current,legacy_event,status_code=200,response={'original_result':'preserved'})
+    legacy_event,_=s.repo.execution_records.claim_edit_request(current,s.member.member_id,legacy_id,phase,{'request_id':legacy_id})
+    s.repo.execution_records.save_edit_request_result(current,legacy_event,status_code=200,response={'original_result':'preserved'})
     with pytest.raises(EditPreviewRejected) as unknown:
         business.execute('read_task_edit_request',{'request_id':legacy_id,'phase':phase},actor,current,goal,{},{},None)
     assert unknown.value.detail['submission_effect']=='unknown'
-    assert s.repo.read_edit_request_result(current,legacy_event)=={'status_code':200,'response':{'original_result':'preserved'}}
+    assert s.repo.execution_records.read_edit_request_result(current,legacy_event)=={'status_code':200,'response':{'original_result':'preserved'}}
     gap_payload={**payload,'request_id':str(uuid4())}
     gap_inputs={**gap_payload,**({'_draft':True} if phase=='preview' else {})}
-    gap_event,_=s.repo.claim_edit_request(current,s.member.member_id,gap_payload['request_id'],phase,gap_inputs)
+    gap_event,_=s.repo.execution_records.claim_edit_request(current,s.member.member_id,gap_payload['request_id'],phase,gap_inputs)
     gap=s.client.post(endpoint,json=gap_payload)
     assert gap.status_code==409 and gap.json()['detail']['submission_effect']=='unknown',gap.text
-    with pytest.raises(KeyError): s.repo.get_task_event('ws',gap_event+'_source')
-    assert s.repo.read_edit_request_result(current,gap_event) is None
+    with pytest.raises(KeyError):
+        s.repo.execution_records.get_task_event('ws',gap_event+'_source')
+    assert s.repo.execution_records.read_edit_request_result(current,gap_event) is None
     conversations.finish_turn(turn['id'],'completed','原请求已提交',{})
     foreign_input=s.client.post(endpoint,json=payload,headers={'X-Assistant-Input-ID':'another-input'})
     assert foreign_input.status_code==403,foreign_input.text
     replay=s.client.post(endpoint,json=payload)
     assert replay.status_code==200 and replay.json()==submitted.json(),replay.text
-    assert s.repo.get_creation_task('ws',s.task.id).current_timeline_version_id==current.current_timeline_version_id
+    assert s.repo.task_records.get_creation_task('ws',s.task.id).current_timeline_version_id==current.current_timeline_version_id
+
+
+    from fastapi import Request
+    request = Request({'type': 'http', 'headers': [(b'x-local-member-token', s.token.encode())]})
+    main._resolve_assistant_edit_request(s.task.id, request, turn['id'], {
+        'request_id': payload['request_id'], 'phase': phase,
+        'query_url': f"{s.url}/assistant/edit-requests/{payload['request_id']}?phase={phase}"})
+    candidate = next(item for item in s.repo.execution_records.assistant_business_candidates()
+        if item['kind'] == 'request' and item['request']['locator']['request_id'] == payload['request_id'])
+    original_result = s.repo.execution_records.get_task_event('ws', event_id + '_result')
+    # Match the fixture's local namespace while retaining real member and owner checks.
+    monkeypatch.setattr(main, 'LEGACY_WORKSPACE_ID', 'ws')
+    monkeypatch.setattr(main, '_goal_continuation_service', None)
+    goal_service = main._goal_service()
+    real_observe = goal_service.observe_business_result
+    real_wake = main._wake_assistant_continuations
+    publication_order = []
+    def observe_committed(source_turn_id, event):
+        published = conversations.get_turn(source_turn_id)
+        assert any(item.get('event_id') == candidate['event_id'] for item in published['events'])
+        assert s.repo.execution_records.get_task_event('ws', candidate['event_id']).event_type == 'assistant_business_projected'
+        publication_order.append('observe')
+        return real_observe(source_turn_id, event)
+    def wake_after_observe():
+        assert publication_order == ['observe']
+        publication_order.append('wake')
+        real_wake()
+    monkeypatch.setattr(goal_service, 'observe_business_result', observe_committed)
+    monkeypatch.setattr(main, '_wake_assistant_continuations', wake_after_observe)
+    with s.repo._connect() as connection:
+        connection.execute('DELETE FROM task_events WHERE id=?', (event_id + '_result',))
+    before_unknown = conversations.get_turn(turn['id'])
+    assert main._assistant_business_projector()(candidate) is False
+    assert conversations.get_turn(turn['id']) == before_unknown
+    assert s.repo.execution_records.read_edit_request_result(s.task, event_id) is None
+    with pytest.raises(KeyError):
+        s.repo.execution_records.get_task_event('ws', candidate['event_id'])
+    assert publication_order == []
+    s.repo.execution_records.save_edit_request_result(current, event_id,
+        status_code=original_result.payload['status_code'], response=original_result.payload['response'])
+    assert main._assistant_business_projector()(candidate) is True
+    assert publication_order == ['observe', 'wake']
+    published = ConversationRepository(conversations.database_path).get_turn(turn['id'])
+    assert len([item for item in published['events'] if item.get('event_id') == candidate['event_id']]) == 1
+    locator = published['result']['response']['edit_request']
+    assert locator['request_id'] == payload['request_id'] and locator['phase'] == phase
+    assert locator['status'] == 'recorded'
+    assert [main._assistant_business_projector()(item) for item in s.repo.execution_records.assistant_business_candidates()
+        if item['kind'] == 'request' and item['id'] == candidate['id']] == []
+    assert ConversationRepository(conversations.database_path).get_turn(turn['id']) == published
+    assert publication_order == ['observe', 'wake']
 
 
 def _bootstrap_input(s, bootstrap):
     from copy import deepcopy
     from app.creation.contracts import TimelineVersion
     from app.montage import creation_task_montage_plan_to_payload
-    creation_plan=replace(s.repo.get_creation_plan('ws',s.task.plan_id),id='bootstrap-plan')
+    creation_plan=replace(s.repo.plan_records.get_creation_plan('ws',s.task.plan_id),id='bootstrap-plan')
     seeded_task=replace(s.task,id='bootstrap-task',plan_id=creation_plan.id,current_timeline_version_id=None,
         montage_plan_id=None)
-    s.repo.confirm_creation_plan(creation_plan,seeded_task,verified_owner_user_id=s.member.member_id)
+    s.repo.plan_confirmation.confirm_creation_plan(creation_plan,seeded_task,verified_owner_user_id=s.member.member_id)
     montage=deepcopy(s.plan)
     montage.id='bootstrap-montage'
     montage.task_id=seeded_task.id
-    s.repo.save_creation_task_montage_plan('ws',seeded_task.id,montage.id,creation_task_montage_plan_to_payload(montage))
+    s.repo.montage_plan_adoption.save_creation_task_montage_plan('ws',seeded_task.id,montage.id,creation_task_montage_plan_to_payload(montage))
     if bootstrap=='missing_montage':
-        s.repo.create_timeline_version(TimelineVersion(id='bootstrap-input',workspace_id='ws',task_id=seeded_task.id,sequence=1,
+        s.repo.timeline_records.create_timeline_version(TimelineVersion(id='bootstrap-input',workspace_id='ws',task_id=seeded_task.id,sequence=1,
             parent_version_id=None,created_by_operation_id=None,snapshot={}),
             expected_current_version_id=None)
-    task=s.repo.get_creation_task('ws',seeded_task.id)
+    task=s.repo.task_records.get_creation_task('ws',seeded_task.id)
     return task,montage
 
 
@@ -611,17 +716,18 @@ def test_bootstrap_revalidates_real_transaction_before_creating_a_version(metada
         request_id=uuid4(),expected_timeline_version_id=task.current_timeline_version_id,expected_timeline_sequence=expected_sequence)
     _,source=case._source(task,payload,s.identity,actor,None)
     if invalidation=='revoked':
-        s.repo.save_task_authorization(replace(authorization,revision=authorization.revision+1,revoked_at=datetime.now(timezone.utc)),
+        s.repo.task_authorization_records.save_task_authorization(replace(authorization,revision=authorization.revision+1,revoked_at=datetime.now(timezone.utc)),
             expected_revision=authorization.revision)
     elif invalidation=='stopped':
         goal={'workspace_id':'ws','task_id':task.id,'member_id':s.member.member_id,'original_turn_id':turn['id'],
             'current_turn_id':turn['id'],'status':'stopped'}
-        with conversations._connect() as conn: conversations._write_goal(conn,{'id':turn['id']},goal)
+        with conversations._connect() as conn:
+            conversations._write_goal(conn,{'id':turn['id']},goal)
     else:
-        s.repo.create_timeline_version(TimelineVersion(id='concurrent-head',workspace_id='ws',task_id=task.id,
+        s.repo.timeline_records.create_timeline_version(TimelineVersion(id='concurrent-head',workspace_id='ws',task_id=task.id,
             sequence=expected_sequence+1,parent_version_id=task.current_timeline_version_id,created_by_operation_id=None,snapshot={}),
             expected_current_version_id=task.current_timeline_version_id)
-    before_head=s.repo.get_creation_task('ws',task.id).current_timeline_version_id
+    before_head=s.repo.task_records.get_creation_task('ws',task.id).current_timeline_version_id
     with s.repo._connect() as conn:
         before=[tuple(row) for row in conn.execute('SELECT * FROM timeline_versions ORDER BY id')]
         montage_before=[tuple(row) for row in conn.execute('SELECT * FROM creation_task_montage_plans ORDER BY id')]
@@ -630,7 +736,7 @@ def test_bootstrap_revalidates_real_transaction_before_creating_a_version(metada
     with s.repo._connect() as conn:
         assert [tuple(row) for row in conn.execute('SELECT * FROM timeline_versions ORDER BY id')]==before
         assert [tuple(row) for row in conn.execute('SELECT * FROM creation_task_montage_plans ORDER BY id')]==montage_before
-    assert s.repo.get_creation_task('ws',task.id).current_timeline_version_id==before_head
+    assert s.repo.task_records.get_creation_task('ws',task.id).current_timeline_version_id==before_head
 
 
 @pytest.mark.parametrize('authorization_state',['revoked','expired','wrong_identity','unverified','missing_assistant','manual'])
@@ -655,11 +761,15 @@ def test_http_bootstrap_without_write_guard_checks_existing_authority(metadata_h
         authorization=authority.ensure(task,actor,interactive=True)
         now=datetime.now(timezone.utc)
         changes={'revision':authorization.revision+1}
-        if authorization_state=='revoked': changes['revoked_at']=now
-        elif authorization_state=='expired': changes['expires_at']=now-timedelta(seconds=1)
-        elif authorization_state=='unverified': changes['expires_at']=None
-        else: changes['identity']={**authorization.identity,'member_id':'another-member'}
-        s.repo.save_task_authorization(replace(authorization,**changes),expected_revision=authorization.revision)
+        if authorization_state=='revoked':
+            changes['revoked_at']=now
+        elif authorization_state=='expired':
+            changes['expires_at']=now-timedelta(seconds=1)
+        elif authorization_state=='unverified':
+            changes['expires_at']=None
+        else:
+            changes['identity']={**authorization.identity,'member_id':'another-member'}
+        s.repo.task_authorization_records.save_task_authorization(replace(authorization,**changes),expected_revision=authorization.revision)
     case=main._exact_preview_use_case()
     assert case.metadata.write_guard is None
     original_status=case.metadata.task_authorizations.status
@@ -676,11 +786,11 @@ def test_http_bootstrap_without_write_guard_checks_existing_authority(metadata_h
     response=s.client.post(f'/api/creation-tasks/{task.id}/edits/exact/preview?draft=true',json={
         'operation_type':'ChangeCanvas','aspect_ratio':'1:1','request_id':str(uuid4()),
         'expected_timeline_version_id':None,'expected_timeline_sequence':0,**assistant})
-    current=s.repo.get_creation_task('ws',task.id)
+    current=s.repo.task_records.get_creation_task('ws',task.id)
     if authorization_state=='manual':
         assert response.status_code==200,response.text
         assert current.current_timeline_version_id is not None
-        assert s.repo.get_task_authorization('ws',task.id) is None
+        assert s.repo.task_authorization_records.get_task_authorization('ws',task.id) is None
     else:
         assert response.status_code==403,response.text
         with s.repo._connect() as conn:

@@ -19,10 +19,10 @@ from test_montage_pipeline import _granted_domain_preview_adapter
 @pytest.fixture
 def fine_state(material_edit_state, monkeypatch):
     state = material_edit_state
-    monkeypatch.setattr(main.settings, "video_inbox_path", str(state.production.video_library_path), raising=False)
+    monkeypatch.setattr(main, "settings", replace(main.settings, video_inbox_path=str(state.production.video_library_path)))
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
     plan = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id))
-    graph = main._effective_audio_timeline(plan)
+    graph = main._creation_task_response_adapter().effective_audio_timeline(plan)
     voice = graph.tracks[0].clips[0]
     duration = main._task_audio().source_metadata(state.workspace_id, state.task.id, voice.source_ref)["duration_seconds"]
     voice.source_end_ms = min(voice.source_end_ms, round(duration * 1000))
@@ -32,20 +32,21 @@ def fine_state(material_edit_state, monkeypatch):
     plan.audio_timeline = graph
     plan.clips[0].visual_effects = VisualEffects(zoom=1.2, exposure=.4, fade_out_seconds=.2).model_dump()
     plan.clips[1].visual_effects = VisualEffects(zoom=1.4, exposure=.6, fade_out_seconds=.3).model_dump()
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
         creation_task_montage_plan_to_payload(plan))
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
-    original = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
-    state.production.create_timeline_version(replace(original, id="fine-original-version", parent_version_id=original.id,
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
+    original = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    state.production.timeline_records.create_timeline_version(replace(original, id="fine-original-version", parent_version_id=original.id,
         sequence=original.sequence + 1, snapshot={**original.snapshot, "montage": creation_task_montage_plan_to_payload(plan)}))
     state.before = deepcopy(state.client.get(state.base_url).json())
     state.plan = plan
+    state.initial_jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
     return state
 
 
 def bound(state, **action):
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
-    version = state.production.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
+    version = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     return {"request_id": str(uuid4()), "expected_timeline_version_id": version.id,
         "expected_timeline_sequence": version.sequence, **action}
 
@@ -101,7 +102,7 @@ def test_audio_mix_patch_adoption_preserves_other_parameters_and_undo(fine_state
     assert after["montage"]["clips"] == state.before["montage"]["clips"]
     assert after["montage"]["cues"] == state.before["montage"]["cues"]
     assert after["task"]["timeline_sequence"] == state.before["task"]["timeline_sequence"] + 1
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={'request_id': 'test_audio_mix_patch_adoption_preserves_other_parameters_and_undo:undo:104'}).status_code == 200
     assert state.client.get(state.base_url).json()["montage"]["audio_timeline"] == state.before["montage"]["audio_timeline"]
 
 
@@ -115,7 +116,7 @@ def test_visual_patch_applies_per_clip_without_resetting_other_effects_or_audio(
     for previous, current in zip(state.before["montage"]["clips"], after["montage"]["clips"]):
         assert current == {**previous, "visual_effects": {**previous["visual_effects"], "saturation": .7}}
     assert after["montage"]["audio_timeline"] == state.before["montage"]["audio_timeline"]
-    assert state.client.post(state.base_url + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(state.base_url + "/timeline/undo", json={'request_id': 'test_visual_patch_applies_per_clip_without_resetting_other_effects_or_audio:undo:118'}).status_code == 200
     assert state.client.get(state.base_url).json()["montage"]["clips"] == state.before["montage"]["clips"]
 
 
@@ -139,27 +140,27 @@ def test_fine_edits_reject_invalid_request_without_version_or_media_effect(fine_
         payload["audio_edit"]["values"] = {"playback_rate": 2}
     else:
         state.plan.audio_timeline.tracks[-1].locked = True
-        state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.plan.id,
+        state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.plan.id,
             creation_task_montage_plan_to_payload(state.plan))
     response = state.client.post(state.base_url + "/edits/exact/preview?draft=true", json=payload)
     assert response.status_code in {409, 422}, response.text
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     assert task.current_timeline_version_id == payload["expected_timeline_version_id"] or failure == "old_version"
-    assert state.production.list_edit_operations(state.workspace_id, task.id) == []
-    assert state.production.list_job_runs(state.workspace_id, task.id) == []
+    assert state.production.edit_records.list_edit_operations(state.workspace_id, task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, task.id) == state.initial_jobs
 
 
 def test_visual_lock_and_full_default_omission_boundaries(fine_state):
     state = fine_state
     selected = state.plan.clips[1]
     selected.locked = True
-    state.production.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.plan.id,
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, state.plan.id,
         creation_task_montage_plan_to_payload(state.plan))
     payload = bound(state, operation_type="AdjustVisualEffects", clip_ids=[selected.id], effects={"exposure": .8})
     response = state.client.post(state.base_url + "/edits/exact/preview?draft=true", json=payload)
     assert response.status_code == 409, response.text
     assert CreationTaskExactEditRequest.model_validate(payload).model_dump(exclude_unset=True)["effects"] == {"exposure": .8}
-    assert state.production.list_edit_operations(state.workspace_id, state.task.id) == []
+    assert state.production.edit_records.list_edit_operations(state.workspace_id, state.task.id) == []
 
 
 @pytest.mark.parametrize("audio", [True, False])
@@ -173,10 +174,14 @@ def test_queued_fine_edit_keeps_sparse_dto_and_real_target_refs(fine_state, monk
         assert response.status_code == 202, response.text
         receipt = response.json()
         assert receipt["target_refs"] == ["audio:fine-music-clip" if audio else f"clip:{state.clip.id}"]
-        saved = state.production.get_task_event(state.workspace_id, f"event_{receipt['job_id']}_start").payload
-        assert saved["arguments"]["payload"] == action
+        saved = state.production.execution_records.get_task_event(state.workspace_id, f"event_{receipt['job_id']}_start").payload
+        prepared_action = action if audio else {**action,
+            "base_version_id": "fine-original-version", "clip_id": state.clip.id}
+        assert saved["arguments"]["payload"] == prepared_action
         assert saved["arguments"]["_typed_source"]["action"] == action
-        assert len(state.production.list_job_runs(state.workspace_id, state.task.id)) == 1
+        jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
+        assert [job for job in jobs if job.id != receipt["job_id"]] == state.initial_jobs
+        assert [job.id for job in jobs if job.id == receipt["job_id"]] == [receipt["job_id"]]
     finally:
         runtime.scheduler.close()
 
@@ -210,4 +215,4 @@ def test_nonzero_face_effect_is_explicitly_unavailable_before_media_submission(f
     response = state.client.post(state.base_url + "/edits/exact/preview", json=bound(state,
         operation_type="AdjustVisualEffects", clip_ids=[state.clip.id], effects={"beauty_strength": .2}))
     assert response.status_code == 422 and "受许可执行路径" in response.text
-    assert state.production.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []

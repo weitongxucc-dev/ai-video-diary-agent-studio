@@ -155,7 +155,9 @@ describe("AppShell", () => {
     const first = render(<AppShell editorLayout><p>剪辑</p></AppShell>);
     const divider = screen.getByRole("separator", { name: "调整导航栏宽度" });
     fireEvent.keyDown(divider, { key: "ArrowRight" });
-    expect(divider).toHaveAttribute("aria-valuenow", "176");
+    expect(divider).toHaveAttribute("aria-valuenow", "280");
+    fireEvent.keyDown(divider, { key: "ArrowLeft" });
+    expect(divider).toHaveAttribute("aria-valuenow", "264");
     for (let i = 0; i < 10; i++) fireEvent.keyDown(divider, { key: "ArrowLeft" });
     expect(divider).toHaveAttribute("aria-valuenow", "160");
     fireEvent.click(screen.getByRole("button", { name: "收起导航栏" }));
@@ -172,7 +174,7 @@ describe("AppShell", () => {
     const view = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
     const shell = view.container.firstElementChild as HTMLElement;
     const grid = view.container.querySelector('[class*="contentGrid"]') as HTMLElement;
-    expect(shell).toHaveStyle({ "--editor-left": "160px", "--editor-right": "360px" });
+    expect(shell).toHaveStyle({ "--editor-left": "280px", "--editor-right": "360px" });
     fireEvent.click(screen.getByRole("button", { name: "收起导航栏" }));
     expect(shell).toHaveStyle({ "--editor-left": "56px" });
     fireEvent.click(screen.getByRole("button", { name: "收起对话栏" }));
@@ -190,7 +192,7 @@ describe("AppShell", () => {
     expect(shell).toHaveStyle({ "--editor-right": "360px" });
     expect(grid.className).not.toContain("chatCollapsed");
     fireEvent.click(screen.getByRole("button", { name: "展开导航栏" }));
-    expect(shell).toHaveStyle({ "--editor-left": "160px" });
+    expect(shell).toHaveStyle({ "--editor-left": "280px" });
     expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "360");
     view.unmount();
     localStorage.clear();
@@ -225,10 +227,10 @@ describe("AppShell", () => {
     localStorage.clear();
   });
 
-  it("uses v5.1 widths for a fresh workspace and keeps a previously saved layout", () => {
+  it("uses approved desktop widths for a fresh workspace and keeps a previously saved layout", () => {
     localStorage.clear();
     const first = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
-    expect(first.container.firstElementChild).toHaveStyle({ "--editor-left": "160px", "--editor-right": "360px" });
+    expect(first.container.firstElementChild).toHaveStyle({ "--editor-left": "280px", "--editor-right": "360px" });
     first.unmount();
     localStorage.setItem("video-editor-left-width", "224");
     localStorage.setItem("video-workspace-chat-width", "350");

@@ -10,8 +10,8 @@ import pytest
 
 import app.main as main
 from app.task_audio import TASK_MEDIA_CONTEXT
-from test_visual_preview_application import visual_application, _inspect
-from test_montage_pipeline import person_render_edit_state, permitted_media_state
+from test_visual_preview_application import visual_application as visual_application, _inspect
+from test_montage_pipeline import person_render_edit_state as person_render_edit_state, permitted_media_state as permitted_media_state
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None, reason='native media tools unavailable')
@@ -22,7 +22,7 @@ def test_compound_selection_renders_real_audio_caption_pair(visual_application, 
     assert case.picture_renderer.audio is case.montage_edits.audio_service
     assert case.picture_renderer.metadata is case.montage_edits
     assert case.montage_edits.audio_service.picture_renderer.__self__ is case.picture_renderer
-    before_task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    before_task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     before_montage = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     original = state.client.post(state.base_url + '/edits/preview?draft=true', json={
         'raw_command': '当前镜头亮一点，同时配音片段1音量降低3分贝，字幕字号改为64',
@@ -30,7 +30,7 @@ def test_compound_selection_renders_real_audio_caption_pair(visual_application, 
     assert original.status_code == 200, original.text
     original_proposal = original.json()['proposal']
     assert len(original_proposal['operation']['payload']['steps']) == 3
-    stored_original = asdict(state.production.get_edit_proposal(state.workspace_id, original_proposal['id']))
+    stored_original = asdict(state.production.edit_records.get_edit_proposal(state.workspace_id, original_proposal['id']))
     payload = {'included_step_indices': [0, 2]}
     route = state.base_url + '/edits/' + original_proposal['id'] + '/selection/preview'
     queued = state.client.post(route, json=payload)
@@ -54,7 +54,7 @@ def test_compound_selection_renders_real_audio_caption_pair(visual_application, 
     assert data['audio_timeline']['tracks'][0]['clips'][0]['gain_db'] == 0
     assert intent['raw_command'] == original.json()['intent']['raw_command']
     assert 'request_source' not in intent['constraints']
-    records = [r for r in state.production.list_artifact_records(state.workspace_id, state.task.id) if r.producer_job_id == job_id]
+    records = [r for r in state.production.execution_records.list_artifact_records(state.workspace_id, state.task.id) if r.producer_job_id == job_id]
     assert len(records) == 2 and {r.kind for r in records} == {'compound_preview'}
     side_records = {case.montage_edits.audio_service._transform_for(state.workspace_id, state.task.id, r).parameters['side']: r for r in records}
     assert set(side_records) == {'before', 'after'}
@@ -70,15 +70,15 @@ def test_compound_selection_renders_real_audio_caption_pair(visual_application, 
         assert visual['frames']['middle']['white_pixels'] > 5
         assert proposal['preview'][side]['ref'] == side_records[side].logical_ref
     assert visuals['after']['frames']['middle']['white_pixels'] > visuals['before']['frames']['middle']['white_pixels']
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before_task.current_timeline_version_id
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before_task.current_timeline_version_id
     assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id) == before_montage
-    assert state.production.get_edit_proposal(state.workspace_id, original_proposal['id']).status == 'proposed'
+    assert state.production.edit_records.get_edit_proposal(state.workspace_id, original_proposal['id']).status == 'proposed'
     assert state.client.get(queued.json()['result_url']).json() == completed.json()
     replay = state.client.post(route, json=payload)
     assert replay.status_code == 202 and replay.json()['job_id'] == job_id, replay.text
     assert not state.runtime.run_once()
     assert 'compound_selection_preview' not in main._TASK_MEDIA_HANDLERS
-    assert not hasattr(main.preview_compound_selection, '__wrapped__')
+    assert not hasattr(next(route.endpoint for route in main.app.routes if route.name == 'preview_compound_selection'), '__wrapped__')
     assert TASK_MEDIA_CONTEXT.get() is None
     with state.production._connect() as conn:
         permit = dict(conn.execute('SELECT state,children_json FROM device_permit WHERE id=1').fetchone())

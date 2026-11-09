@@ -4,7 +4,7 @@ from dataclasses import asdict
 import pytest
 
 import app.main as main_module
-from app.production import TimelineVersion
+from app.creation.contracts import TimelineVersion
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state, prepare_current_presenter_media
 
 
@@ -42,8 +42,8 @@ def preview_crop(state, clip_index=1, **values):
 
 
 def advance_version(state, version_id):
-    base = state.production.get_timeline_version(state.workspace_id, version_id)
-    return state.production.create_timeline_version(TimelineVersion(
+    base = state.production.timeline_records.get_timeline_version(state.workspace_id, version_id)
+    return state.production.timeline_records.create_timeline_version(TimelineVersion(
         id="timeline-crop-concurrent", workspace_id=state.workspace_id,
         task_id=state.task.id, parent_version_id=base.id, sequence=base.sequence + 1,
         snapshot=base.snapshot, created_by_operation_id=None,
@@ -103,9 +103,9 @@ def queue_crop(state, clip_index=1):
 
 def assert_failed(state, job_id):
     assert state.preview_runtime.run_once()
-    saved = state.production.get_job_run(state.workspace_id, job_id)
+    saved = state.production.job_records.get_job_run(state.workspace_id, job_id)
     assert saved.status == "failed"
-    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
+    assert not state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id)
 
 
 @pytest.mark.parametrize("clip_index", [0, 1], ids=["person", "material"])
@@ -120,7 +120,7 @@ def test_crop_preview_rejects_unavailable_source(legal_crop_state, crop_previews
     base, before, _, response = preview_crop(state, clip_index)
     assert response.status_code == (403 if clip_index == 0 else 422), response.text
     assert not crop_previews
-    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
+    assert not state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id)
     assert state.client.get(base).json()["montage"] == before["montage"]
 
 
@@ -142,18 +142,18 @@ def test_crop_preview_rechecks_version_after_publication(legal_crop_state, crop_
     def concurrent(*args):
         original(*args)
         if len(crop_previews) == 1:
-            task = state.production.get_creation_task(state.workspace_id, state.task.id)
+            task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
             advance_version(state, task.current_timeline_version_id)
     service.picture_renderer = concurrent
     monkeypatch.setattr(main_module, "_task_audio", lambda: service)
     _, _, job_id = queue_crop(state)
     assert state.preview_runtime.run_once()
-    assert state.production.get_job_run(state.workspace_id, job_id).status == 'interrupted'
+    assert state.production.job_records.get_job_run(state.workspace_id, job_id).status == 'interrupted'
     receipt = state.client.get(f'/api/creation-tasks/{state.task.id}/media-jobs/{job_id}').json()
     assert receipt['status'] == 'stale' and receipt['result'] is None
-    assert not state.production.list_edit_proposals(state.workspace_id, state.task.id)
+    assert not state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id)
     assert len(crop_previews) == 1
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == "timeline-crop-concurrent"
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == "timeline-crop-concurrent"
 
 
 def test_crop_preview_cannot_confirm_after_version_changes(person_render_edit_state, crop_previews):
@@ -164,5 +164,5 @@ def test_crop_preview_cannot_confirm_after_version_changes(person_render_edit_st
     newer = advance_version(state, before["task"]["current_timeline_version_id"])
     response = state.client.post(base + f"/edits/{proposal['id']}/confirm", json={})
     assert response.status_code == 409
-    assert state.production.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == newer.id
+    assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == newer.id
     assert len(crop_previews) == 2

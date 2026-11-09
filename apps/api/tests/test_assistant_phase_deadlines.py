@@ -32,8 +32,10 @@ def test_compaction_projection_keeps_estimates_usage_and_the_actual_end_reason(s
     if status=='completed':
         event['result']={'tokensBefore':112607,'estimatedTokensAfter':23000,'summary':'PRIVATE_PROMPT',
             'usage':{'input':61000,'output':2800,'totalTokens':63800,'cost':{'private':'not copied'}}}
-    if status=='cancelled':event['aborted']=True
-    if status=='failed':event['errorMessage']='Summarization failed: PRIVATE_USER_PROMPT PRIVATE_PROFILE api_key=private-key https://private.invalid/request'
+    if status=='cancelled':
+        event['aborted']=True
+    if status=='failed':
+        event['errorMessage']='Summarization failed: PRIVATE_USER_PROMPT PRIVATE_PROFILE api_key=private-key https://private.invalid/request'
     value=_PiStreamProjector().project(json.dumps(event))
     assert value['type']=='context_compaction' and value['status']==status and value['trigger']=='threshold'
     if status=='started':
@@ -43,7 +45,8 @@ def test_compaction_projection_keeps_estimates_usage_and_the_actual_end_reason(s
         assert value['provider_usage']=={'input':61000,'output':2800,'totalTokens':63800}
     if status=='failed':
         assert value['failure_origin']=='sdk' and value['reason_code']=='sdk_error_unknown'
-    if status=='cancelled':assert value['failure_origin']=='sdk_abort'
+    if status=='cancelled':
+        assert value['failure_origin']=='sdk_abort'
     assert not any(secret in json.dumps(value) for secret in ('PRIVATE_PROMPT','PRIVATE_USER_PROMPT','PRIVATE_PROFILE','private-key','private.invalid'))
 
 

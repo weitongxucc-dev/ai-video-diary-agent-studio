@@ -77,6 +77,79 @@ def _fake_jwks_client(public_pem: bytes):
     return FakeClient()
 
 
+@pytest.fixture(autouse=True)
+def device_invite_accept_metadata_guard(request, monkeypatch, tmp_path):
+    if request.node.originalname != 'test_device_accept_missing_device_credential_503':
+        return None
+    import sqlite3
+    import subprocess
+    import sys
+    import wave
+    from dataclasses import replace
+    import httpx
+    from PIL import Image
+    from app.device_accounts import DeviceAccountService
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append('device-service-rpc-runtime-or-media')
+        pytest.fail('missing-credential metadata forbids service construction, RPC, databases and execution')
+
+    # Missing credential is evaluated before the service constructor; neither it nor RPC may run.
+    monkeypatch.setattr(DeviceAccountService, '__init__', forbidden)
+    monkeypatch.setattr(DeviceAccountService, 'accept_invite', forbidden)
+    monkeypatch.setattr(DeviceAccountService, '_call', forbidden)
+    monkeypatch.setattr(sqlite3, 'connect', forbidden)
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(Image.Image, 'save', forbidden)
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', forbidden)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', forbidden)
+    for name in ('start', 'run_once', 'wake'):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    monkeypatch.setattr(DeviceScheduler, 'pick_and_grant', forbidden)
+    for name in ('_creation_runtime', '_build_device_components', '_start_device_runtime',
+                 '_workspace_settings_for', 'run_task_turn', 'run_plan_turn',
+                 'start_assistant_continuation_driver'):
+        monkeypatch.setattr(main_module, name, forbidden)
+    monkeypatch.setattr(main_module, 'montage_renderer', SimpleNamespace(render=forbidden))
+    monkeypatch.setattr(main_module, 'narration_generator', SimpleNamespace(generate_for_creation_task=forbidden))
+    # Preserve the original synthetic Supabase/JWT fields, isolate only paths and unrelated model keys.
+    settings = replace(_auth_enabled_settings(tmp_path),
+        deepseek_api_key=None, llm_api_key=None, tencentcloud_secret_id=None, tencentcloud_secret_key=None,
+        video_inbox_path=str(tmp_path / 'library'), video_output_path=str(tmp_path / 'outputs'),
+        model_root_path=str(tmp_path / 'models'), temporary_root_path=str(tmp_path / 'temporary'),
+        draft_output_path=str(tmp_path / 'drafts'), jianying_draft_root_path=str(tmp_path / 'jianying'),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None)
+    monkeypatch.setattr(sys.modules[__name__], '_auth_enabled_settings', lambda _path: settings)
+    monkeypatch.setattr(main_module, 'settings', settings)
+    for name in ('device_runtime', 'automation_runtime', 'production_repo', 'conversation_repo',
+                 'source_repository', 'artifact_store', 'local_members_service', 'vault'):
+        monkeypatch.setattr(main_module, name, None)
+    # Original entry still generates RSA keys, verifies signed JWTs and supplies only fake JWKS/no membership.
+    request.getfixturevalue('entry')
+
+    def snapshot():
+        return {str(path.relative_to(tmp_path)): path.read_bytes() if path.is_file() else None
+                for path in tmp_path.rglob('*')}
+
+    before = snapshot()
+    assert before == {}  # No SQL/member/Store preparation belongs to this failure path.
+
+    def assert_unchanged():
+        assert snapshot() == before
+        assert violations == []
+
+    return SimpleNamespace(assert_unchanged=assert_unchanged)
+
+
 @pytest.fixture
 def entry(monkeypatch, tmp_path):
     """App whose auth boundary holds no workspace membership for any identity.
@@ -292,7 +365,7 @@ def test_device_accept_error_mapping(entry, monkeypatch, kind, status):
 # ── Trusted device credential provisioning failures are 503 ────────────
 
 
-def test_device_accept_missing_device_credential_503(entry, monkeypatch):
+def test_device_accept_missing_device_credential_503(entry, monkeypatch, device_invite_accept_metadata_guard):
     client, private_pem, _ = entry
     monkeypatch.delenv("DEVICE_ID")
     monkeypatch.delenv("DEVICE_PROOF")
@@ -306,6 +379,7 @@ def test_device_accept_missing_device_credential_503(entry, monkeypatch):
 
     assert resp.status_code == 503
     assert resp.json()["error"] == "unavailable"
+    device_invite_accept_metadata_guard.assert_unchanged()
 
 
 def test_device_accept_malformed_device_credential_503(entry, monkeypatch):

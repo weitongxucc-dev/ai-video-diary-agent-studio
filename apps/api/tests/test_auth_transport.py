@@ -179,7 +179,7 @@ def test_reload_binds_new_auth_to_same_application_transport(isolated_host, monk
         # Stop actual isolated users before releasing the shared transport.
         main._stop_device_runtime()
         main._stop_material_ingestion()
-        main._stop_execution_worker()
+        main._stop_device_runtime()
         main.stop_auth_transport()
     assert client.is_closed and main.auth_context._http_client is None
 
@@ -220,7 +220,7 @@ def test_goal_unknown_can_reverify_but_actual_revocation_still_blocks(monkeypatc
         saved = {"authorization": "Bearer fixture-token", "cookie": None, "blocked": False}
         monkeypatch.setattr(main, "_assistant_goal_transports", {("ws", "member"): saved})
         goal = {"workspace_id": "ws", "member_id": "member", "task_id": "task"}
-        assert main._verify_current_goal(goal, {}) == {"status": "waiting_identity", "reason": "interactive_identity_not_available"}
+        assert main._goal_readiness_use_case().verify(goal, {}) == {"status": "waiting_identity", "reason": "interactive_identity_not_available"}
         assert saved["blocked"] is False
         outcome = "ready"
         request = main._goal_request(goal)

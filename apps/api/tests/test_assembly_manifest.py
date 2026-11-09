@@ -92,7 +92,6 @@ def test_actual_twenty_source_float_reduction_matches_one_master_mix(tmp_path, g
     (False, 'wrong_manifest'), (False, 'revoke'), (False, 'normalization_failure'),
     (False, 'normalization_unknown'), (False, 'same_transaction_head')])
 def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_path, monkeypatch, restart_after_first, preflight_attack):
-    import json
     import subprocess
     from datetime import datetime, timezone
     from types import SimpleNamespace
@@ -111,9 +110,9 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
     from test_creation_execution import _narration_units_case
     case = _narration_units_case(tmp_path, audio_input_count=5, local_policy=True, duration_seconds=2)
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
-    while case.repo.get_creation_task('local', case.task_id).narration_cache_key is None:
+    while case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key is None:
         case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
-    task = case.repo.get_creation_task('local', case.task_id)
+    task = case.repo.task_records.get_creation_task('local', case.task_id)
     source = tmp_path / 'library' / 'dynamic.mp4'
     subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=64x64:rate=30:duration=2',
         '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', str(source)], check=True)
@@ -125,11 +124,11 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
     source_ref = case.repo.workspace_media_reference_for_asset('local', asset.id)
     with case.repo._connect() as conn:
         case.repo._claim_workspace_media_reference(conn, workspace_id='local', reference=source_ref)
-    segments = case.repo.list_narration_segments('local', case.task_id, case.script_id)
+    segments = case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)
     graph = timeline([segments[i % 2].audio_reference for i in range(20)])
     for clip in graph.tracks[0].clips:
         clip.gain_db = -30
-    script = case.repo.get_creation_task_script('local', case.script_id)
+    script = case.repo.script_records.get_creation_task_script('local', case.script_id)
     cues = [NarrationCue(id=f'cue-{i}', source_section_id=section.id, text=section.content, duration_seconds=1,
         narration_segment_id=segments[i].id, timeline_start_seconds=i) for i, section in enumerate(script.sections)]
     montage = CreationTaskMontagePlan(id='montage-linear-assembly', workspace_id='local', task_id=case.task_id,
@@ -138,12 +137,12 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
             source_start_seconds=0, source_end_seconds=2, timeline_start_seconds=0, timeline_end_seconds=2,
             match_score=1, match_reasons=['隔离许可素材'], needs_confirmation=False)],
         duration_seconds=2, low_confidence_clip_count=0,
-        narration_audio_path=case.repo.narration_artifact_reference(task.narration_cache_key), audio_timeline=graph)
+        narration_audio_path=case.repo.narration_artifacts.narration_artifact_reference(task.narration_cache_key), audio_timeline=graph)
     if preflight_attack in {'normalization_failure', 'normalization_unknown'}:
         montage.narration_linkage_created_audio_timeline = True
-    case.repo.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))
+    case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', case.task_id, montage.id, creation_task_montage_plan_to_payload(montage))
     from app.creation.contracts import TimelineVersion
-    case.repo.create_timeline_version(TimelineVersion(id='adopted-input', workspace_id='local', task_id=case.task_id,
+    case.repo.timeline_records.create_timeline_version(TimelineVersion(id='adopted-input', workspace_id='local', task_id=case.task_id,
         parent_version_id=None, sequence=1, snapshot={'montage': creation_task_montage_plan_to_payload(montage)},
         created_by_operation_id=None), expected_current_version_id=None)
     def configure():
@@ -155,7 +154,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
             output_root=tmp_path / 'outputs', portrait_worker_path=None, temporary_root=tmp_path / 'temporary')
         metadata.picture_renderer = renderer
         settings = SimpleNamespace(video_output_path=str(tmp_path / 'outputs'), effective_temporary_root_path=tmp_path / 'temporary')
-        render = RenderStageUseCase(case.repo, metadata, None, VideoJobRunner(case.repo), settings)
+        render = RenderStageUseCase(case.repo, metadata, None, VideoJobRunner(case.repo.job_records), settings)
         case.owner.audio_assembly = case.executor.audio_assembly = audio
         case.owner.cpu_render_limits = CpuRenderLimits(max_output_bytes=32*1024**2, threads=1, timeout_seconds=60)
         render_errors = []
@@ -175,7 +174,7 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
     store, render_errors = configure()
     first_fragment = None
     scope_before_restart = None
-    submit_creation_stage(case.execution, case.scheduler, case.repo.get_job_run('local', case.job.id), case.actor)
+    submit_creation_stage(case.execution, case.scheduler, case.repo.job_records.get_job_run('local', case.job.id), case.actor)
     if preflight_attack is not None:
         from dataclasses import replace
         import time
@@ -184,24 +183,24 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
         request = case.scheduler._get(grant.request_id)
         assert request.unit_key.startswith('render:audio-assembly:')
         before = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
-        before_cache = case.repo.get_creation_task('local', case.task_id).narration_cache_key
+        before_cache = case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key
         if preflight_attack == 'same_transaction_head':
             class RolledBack(Exception):
                 pass
             with pytest.raises(RolledBack):
                 with case.repo._connect() as conn:
                     conn.execute('BEGIN IMMEDIATE')
-                    case.repo.create_timeline_version(TimelineVersion(id='uncommitted-adoption', workspace_id='local',
+                    case.repo.timeline_records.create_timeline_version(TimelineVersion(id='uncommitted-adoption', workspace_id='local',
                         task_id=case.task_id, parent_version_id='adopted-input', sequence=2,
                         snapshot={'montage': creation_task_montage_plan_to_payload(montage)},
                         created_by_operation_id=None), connection=conn, expected_current_version_id='adopted-input')
-                    actual_task = case.repo.get_creation_task('local', case.task_id, connection=conn)
-                    actual_plan = case.repo.get_creation_plan('local', actual_task.plan_id)
+                    actual_task = case.repo.task_records.get_creation_task('local', case.task_id, connection=conn)
+                    actual_plan = case.repo.plan_records.get_creation_plan('local', actual_task.plan_id)
                     _, current_resources = case.owner.render_facts(conn, actual_task, actual_plan,
                         actor=case.actor, job=case.job, prepare_assembly=True)
                     assert current_resources['input_timeline_version_id'] == 'uncommitted-adoption'
                     raise RolledBack()
-            assert case.repo.get_creation_task('local', case.task_id).current_timeline_version_id == 'adopted-input'
+            assert case.repo.task_records.get_creation_task('local', case.task_id).current_timeline_version_id == 'adopted-input'
             case.scheduler.fail_unit(grant, reason='isolated_same_transaction_check',
                 failure_write=lambda conn, current: 'isolated_same_transaction_check')
             case.scheduler.assert_released(grant)
@@ -240,10 +239,10 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
                 after = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
                 assert after['generated_bytes'] - before['generated_bytes'] == written[0] > 0
                 assert after['unknown_unit_count'] == after['reserved_bytes'] == 0
-                assert case.repo.get_job_run('local', case.job.id).status == 'failed'
+                assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
             assert len(case.generated) == 2
-            assert case.repo.get_creation_task('local', case.task_id).narration_cache_key == before_cache
-            assert not [record for record in case.repo.list_artifact_records('local', case.task_id)
+            assert case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key == before_cache
+            assert not [record for record in case.repo.execution_records.list_artifact_records('local', case.task_id)
                 if record.kind == 'audio_assembly_fragment']
             case.scheduler.assert_released(grant)
             case.scheduler.close()
@@ -271,11 +270,11 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
                 case.owner.audio_assembly.execute_assembly_unit('local', case.task_id, forged, unit.id,
                     actor=case.actor, budget=case.owner.narration_audio_budget, context=context)
         assert case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage'] == before
-        assert case.repo.get_creation_task('local', case.task_id).narration_cache_key == before_cache
-        assert not [record for record in case.repo.list_artifact_records('local', case.task_id)
+        assert case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key == before_cache
+        assert not [record for record in case.repo.execution_records.list_artifact_records('local', case.task_id)
             if record.kind == 'audio_assembly_fragment']
         assert len(case.generated) == 2
-        assert case.repo.get_job_run('local', case.job.id).status == 'queued'
+        assert case.repo.job_records.get_job_run('local', case.job.id).status == 'queued'
         case.scheduler.fail_unit(grant, reason='isolated_preflight_rejection',
             failure_write=lambda conn, current: 'isolated_preflight_rejection')
         case.scheduler.assert_released(grant)
@@ -291,12 +290,12 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
             assert request.resources['input_count'] <= 5
             admitted.append(request.resources['assembly_unit_id'])
         case.executor.execute(grant, case.scheduler)
-        current = case.repo.get_job_run('local', case.job.id)
+        current = case.repo.job_records.get_job_run('local', case.job.id)
         assert current.status != 'failed', (current.failure_reason, render_errors[-1] if render_errors else None)
         if current.status == 'succeeded':
             break
         if restart_after_first and len(admitted) == 1 and not restarted:
-            record = case.repo.get_artifact_record('local', f'artifact_audio_assembly_{admitted[0]}')
+            record = case.repo.execution_records.get_artifact_record('local', f'artifact_audio_assembly_{admitted[0]}')
             first_fragment = (record.logical_ref, record.sha256, store.resolve_file(record.logical_ref).stat().st_mtime_ns)
             scope_before_restart = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
             previous_owner = case.owner
@@ -320,15 +319,15 @@ def test_creation_job_uses_durable_audio_units_before_actual_hardcut_render(tmp_
         assert store.describe(ref).sha256 == sha and store.resolve_file(ref).stat().st_mtime_ns == modified
         assert case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']['generated_bytes'] > scope_before_restart['generated_bytes']
     assert len(case.execution.jobs('local', case.task_id)) == 1
-    task = case.repo.get_creation_task('local', case.task_id)
+    task = case.repo.task_records.get_creation_task('local', case.task_id)
     assert task.output_ready
     output = case.repo.get_creation_task_montage_plan('local', case.task_id)['output_path']
     actual = store.describe(output)
     assert actual.sha256 == hashlib.sha256(store.resolve_file(output).read_bytes()).hexdigest()
-    events = case.repo.list_task_events('local', case.task_id)
+    events = case.repo.execution_records.list_task_events('local', case.task_id)
     settlements = [event for event in events if event.event_type == 'task_execution_unit_settled']
     assert len(settlements) == 6 and all(event.payload['output_bytes'] > 0 for event in settlements)
-    assert not case.repo.creation_narration_usage('local', case.job.id)['unsettled']
+    assert not case.repo.narration_units.creation_narration_usage('local', case.job.id)['unsettled']
     case.scheduler.close()
 
 
@@ -350,7 +349,7 @@ def test_same_audio_recipe_has_distinct_persistent_task_and_producer_instances(t
     plans, records = [], []
     store = ArtifactStore(tmp_path / 'artifacts')
     for index, task_id in enumerate((first_task, second_task, first_task)):
-        job = repo.create_job_run(JobRun(id=f'identity-job-{index}', workspace_id='local', task_id=task_id,
+        job = repo.job_records.create_job_run(JobRun(id=f'identity-job-{index}', workspace_id='local', task_id=task_id,
             kind='creation_task_execution', idempotency_key=f'identity-{index}', input_digest='a'*64))
         plan = plan_audio_assembly(graph, 1000, workspace_id='local', task_id=task_id, producer_job_id=job.id,
             source_hashes={'workspace://shared-audio': sha}, max_input_count=5)
@@ -364,14 +363,14 @@ def test_same_audio_recipe_has_distinct_persistent_task_and_producer_instances(t
             output_refs=[record.logical_ref], engine='isolated-instance-identity-fixture',
             parameters={'manifest_digest': plan.digest}, status='succeeded', started_at=datetime.now(timezone.utc),
             finished_at=datetime.now(timezone.utc))
-        repo.record_task_media_publication(record, transform, [])
+        repo.task_media_publication.record_task_media_publication(record, transform, [])
         restored = AudioAssemblyManifest.from_payload(json.loads(json.dumps(plan.payload())))
         assert restored == plan
         restored.validate_scope('local', task_id, job.id)
         with pytest.raises(PermissionError):
             restored.validate_scope('local', task_id, 'another-producer')
         plans.append(plan)
-        records.append(repo.get_artifact_record('local', record.id))
+        records.append(repo.execution_records.get_artifact_record('local', record.id))
     assert len({plan.units[0].id for plan in plans}) == 3
     assert len({record.id for record in records}) == 3
     assert len({record.logical_ref for record in records}) == 3

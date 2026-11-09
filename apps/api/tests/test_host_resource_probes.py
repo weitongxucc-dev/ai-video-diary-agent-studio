@@ -16,12 +16,6 @@ import psutil
 from tests.host_memory_boundary import IsolatedMemoryMonitor, isolated_runtime_limits
 
 
-@pytest.fixture(autouse=True)
-def isolated_native_pressure_boundary(monkeypatch):
-    # This file isolates CPU/IO/child-group behavior. Native policy/recovery has
-    # its own counterexamples in test_host_memory.py; never read the developer's
-    # changing OS warning state to decide these unrelated checks.
-    monkeypatch.setattr("app.host_resource_probes.HostMemoryMonitor", lambda *_: IsolatedMemoryMonitor())
 
 from app.host_resource_probes import MediaScriptBudget
 from app.host_resource_probes import RuntimeCpuPolicy
@@ -57,6 +51,13 @@ from app.platform_browser.base import PUBLISH_OPERATION_TIMEOUT_SECONDS
 from app.database_migrations import apply_production_migrations
 from app.device_scheduler import DeviceScheduler, Grant, SchedulePolicy, SubmissionIntent, VerifiedWork
 
+
+@pytest.fixture(autouse=True)
+def isolated_native_pressure_boundary(monkeypatch):
+    # This file isolates CPU/IO/child-group behavior. Native policy/recovery has
+    # its own counterexamples in test_host_memory.py; never read the developer's
+    # changing OS warning state to decide these unrelated checks.
+    monkeypatch.setattr("app.host_resource_probes.HostMemoryMonitor", lambda *_: IsolatedMemoryMonitor())
 
 class RecordingScheduler:
     def __init__(self, *, reject_registration=False, cancel_on_registration=None):
@@ -137,8 +138,10 @@ def test_frozen_worker_context_is_reused_without_reaching_target(tmp_path,monkey
 
 def test_task_file_count_failure_keeps_actual_limit_and_release_receipt(tmp_path):
     scheduler=RecordingScheduler()
-    output=tmp_path/'task-output';output.mkdir()
-    for index in range(4): (output/str(index)).write_bytes(b'x')
+    output=tmp_path/'task-output'
+    output.mkdir()
+    for index in range(4):
+        (output/str(index)).write_bytes(b'x')
     with pytest.raises(GrantedCommandOutputLimit) as stopped:
         run(scheduler,[sys.executable,'-c','import time;time.sleep(5)'],output_paths=(output,),
             max_output_file_bytes=1024,max_output_files=3)
@@ -149,7 +152,6 @@ def test_task_file_count_failure_keeps_actual_limit_and_release_receipt(tmp_path
 
 
 def test_creation_permission_poll_is_independent_of_rss_sampling(tmp_path, monkeypatch):
-    from app.host_resource_probes import SceneRuntimeLimits
     import app.granted_subprocess as commands
 
     grant = Grant("request", "workspace", "creation_job", "job", "narration:digest",
@@ -230,6 +232,38 @@ def _render_resources():
             "max_output_bytes": 1_000_000, "threads": 1, "timeout_seconds": 3.0}
 
 
+def declare_render_metadata_host(monkeypatch):
+    """Declare the finite Darwin scheduling-policy case, without native sampling."""
+    import subprocess
+    import app.host_resource_probes as probes
+    def forbidden(*args, **kwargs):
+        pytest.fail("declared resource metadata forbids processes and device drivers")
+    from app.device_runtime import DeviceRuntime
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(DeviceRuntime, 'start', forbidden)
+    monkeypatch.setattr(probes, 'HostProcessProbe', forbidden)
+    monkeypatch.setattr(probes, 'sys', SimpleNamespace(platform='darwin'))
+    monkeypatch.setattr(probes, 'HostMemoryMonitor', lambda policy: IsolatedMemoryMonitor())
+    monkeypatch.setattr(psutil, 'cpu_percent', lambda **kwargs: 0)
+    monkeypatch.setattr(psutil, 'cpu_count', lambda **kwargs: 4)
+    monkeypatch.setattr(psutil, 'cpu_times', lambda: SimpleNamespace(
+        _asdict=lambda: {'user': 1., 'nice': 1., 'system': 1., 'idle': 1.}))
+    monkeypatch.setattr(psutil, 'virtual_memory', lambda: SimpleNamespace(available=8*1024**3, total=16*1024**3))
+    monkeypatch.setattr(psutil, 'swap_memory', lambda: SimpleNamespace(used=0))
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=16*1024**3))
+    counters = SimpleNamespace(read_bytes=100, write_bytes=100)
+    monkeypatch.setattr(psutil, 'disk_io_counters',
+        lambda **kwargs: {'metadata-disk': counters} if kwargs.get('perdisk') else counters)
+    import itertools
+    clock = itertools.count(time.monotonic(), .02)
+    monkeypatch.setattr(probes, 'time', SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda seconds: None))
+
+
+@pytest.fixture
+def render_metadata_host(monkeypatch):
+    declare_render_metadata_host(monkeypatch)
+
+
 def _render_budget():
     return CpuRenderBudget(
         max_duration_seconds=1, max_pixel_seconds=100_000,
@@ -242,7 +276,7 @@ def _render_budget():
     )
 
 
-def test_cpu_render_requires_explicit_budget_and_complete_bounded_contract(tmp_path):
+def test_cpu_render_requires_explicit_budget_and_complete_bounded_contract(tmp_path, render_metadata_host):
     base = dict(max_cpu_percent=100, min_available_memory_bytes=0,
                 max_swap_used_bytes=2**63, min_free_disk_bytes=0,
                 max_disk_io_bytes_per_second=2**63, max_unit_input_bytes=1024,
@@ -262,7 +296,7 @@ def test_cpu_render_requires_explicit_budget_and_complete_bounded_contract(tmp_p
 
 
 @pytest.mark.parametrize("running", [False, True])
-def test_render_running_memory_is_host_headroom_with_explicit_own_process_limits(tmp_path, monkeypatch, running):
+def test_render_running_memory_is_host_headroom_with_explicit_own_process_limits(tmp_path, monkeypatch, running, render_metadata_host):
     render = replace(_render_budget(), additional_memory_bytes=2*1024**3, max_process_threads=16)
     probe = HostResourceProbe(tmp_path/"db",disk_paths=(tmp_path,),budget=HostBudget(
         100,1024**3,2**63,0,2**63,1024,sample_seconds=.01,cpu_render=render))
@@ -282,7 +316,7 @@ def test_render_running_memory_is_host_headroom_with_explicit_own_process_limits
 
 
 @pytest.mark.parametrize("failure", ["headroom","memory_unknown","scope_unknown"])
-def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch, failure):
+def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch, failure, render_metadata_host):
     render = replace(_render_budget(),additional_memory_bytes=2*1024**3)
     probe = HostResourceProbe(tmp_path/"db",disk_paths=(tmp_path,),budget=HostBudget(
         91,1024**3,1024,0,2**63,1024,sample_seconds=.01,cpu_render=render))
@@ -295,15 +329,19 @@ def test_render_runtime_keeps_other_host_and_unknown_gates(tmp_path, monkeypatch
     monkeypatch.setattr(psutil,"cpu_percent",lambda **kwargs:pytest.fail("Running render reused admission CPU gate"))
     monkeypatch.setattr(psutil,"swap_memory",lambda:SimpleNamespace(used=0))
     grant = Grant("request", "workspace", "creation_job", "job", "render:digest", "a"*64, 1, 1, "token", probe.database_path)
-    with pytest.raises(HostResourceRefusal):
+    with pytest.raises(HostResourceRefusal) as refusal:
         probe.continue_unit(grant)
+    expected = {"headroom": "memory_headroom_insufficient",
+        "memory_unknown": "available_memory_bytes: OSError: synthetic unknown sample",
+        "scope_unknown": "granted_resources_unreadable"}
+    assert refusal.value.decision.reason == expected[failure]
+    assert refusal.value.decision.verdict is (False if failure == "headroom" else None)
 
 
 @pytest.mark.parametrize("rss,threads,accepted", [(1024,2,True),(1025,2,False),(1024,3,False)])
 def test_render_process_group_rss_and_total_threads_use_actual_cap(monkeypatch,rss,threads,accepted):
     from app.granted_subprocess import _check_scene_runtime
     from app.device_scheduler import ProcessIdentity
-    from app.host_resource_probes import SceneRuntimeLimits
     child=ProcessIdentity(100,'1.000000','synthetic-boot')
     current=SimpleNamespace(pid=100,create_time=lambda:1,memory_info=lambda:SimpleNamespace(rss=rss),num_threads=lambda:threads)
     monkeypatch.setattr(psutil,'Process',lambda _:current)
@@ -363,7 +401,7 @@ def test_render_process_group_rss_and_total_threads_use_actual_cap(monkeypatch,r
         assert observation["latest"]["sample_complete"] is False
 
 
-def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch):
+def test_cpu_render_simulated_memory_pressure_blocks(tmp_path, monkeypatch, render_metadata_host):
     budget = HostBudget(100, 1, 2**63, 0, 2**63, 1024, 0.02,
                         cpu_render=_render_budget())
     probe = HostResourceProbe(tmp_path / "db.sqlite", disk_paths=(tmp_path,), budget=budget)
@@ -451,7 +489,7 @@ def test_admission_logs_same_observation_without_resampling(
         assert check[boundary] == values[failure] + (1 if boundary == "minimum" else -1)
 
 
-def test_admission_logs_declared_render_limit_without_host_sample(tmp_path, monkeypatch, caplog):
+def test_admission_logs_declared_render_limit_without_host_sample(tmp_path, monkeypatch, caplog, render_metadata_host):
     import app.host_resource_probes as probes
 
     probe = HostResourceProbe(tmp_path / "db", disk_paths=(tmp_path,),
@@ -652,6 +690,12 @@ def test_real_scheduler_registers_child_before_exec_and_commits_after_release(tm
         def check_current(self, request, conn):
             return "ready"
 
+        def capture_local(self, request, conn):
+            return lambda current: self.check_current(request, current)
+
+        def check_local(self, request, conn, observed):
+            return observed(conn)
+
     database = tmp_path / "production.sqlite"
     with sqlite3.connect(database) as conn:
         conn.execute("""CREATE TABLE material_ingestion_files (
@@ -709,6 +753,12 @@ def test_isolated_cpu_ffmpeg_render_uses_measured_admission_and_real_grant(tmp_p
         def check_current(self, request, conn):
             return "ready"
 
+        def capture_local(self, request, conn):
+            return lambda current: self.check_current(request, current)
+
+        def check_local(self, request, conn, observed):
+            return observed(conn)
+
     database = tmp_path / "production.sqlite"
     with sqlite3.connect(database) as conn:
         conn.execute("""CREATE TABLE material_ingestion_files (
@@ -758,6 +808,12 @@ def test_scene_process_monitor_stops_real_child_after_output_eof(tmp_path, monke
 
         def check_current(self, request, conn):
             return "ready"
+
+        def capture_local(self, request, conn):
+            return lambda current: self.check_current(request, current)
+
+        def check_local(self, request, conn, observed):
+            return observed(conn)
 
     database = tmp_path / "production.sqlite"
     with sqlite3.connect(database) as conn:
@@ -1068,7 +1124,7 @@ def test_exact_host_boundaries_and_narration_caps_preserve_admission(tmp_path, m
     ("creation_narration", 1024**3, True),
     ("creation_narration", 1024**3 - 1, False),
     ("creation_narration", None, None),
-    ("creation_person_render", 29 * 1024**3 // 10, False),
+    ("creation_person_render", 29 * 1024**3 // 10, True),
 ])
 def test_narration_reserves_memory_at_admission_but_runtime_keeps_system_floor(
     tmp_path, monkeypatch, kind, available, runtime_verdict, narration_cpu_boundary,
@@ -1110,7 +1166,7 @@ def test_narration_reserves_memory_at_admission_but_runtime_keeps_system_floor(
             probe.continue_unit(grant)
         decision = stopped.value.decision
         assert decision.verdict is runtime_verdict
-        expected_floor = gib if kind == "creation_narration" else 3 * gib
+        expected_floor = gib  # Running units retain the system floor; admission reserves the peak.
         assert decision.checks["available_memory_bytes"]["minimum"] == expected_floor
         if available is None:
             assert "actual" not in decision.checks["available_memory_bytes"]
@@ -1142,7 +1198,6 @@ def test_resource_error_text_exposes_only_failed_checks_and_keeps_full_decision(
 @pytest.mark.parametrize("release_unknown", [False, True])
 def test_refusal_keeps_bounded_phase_output_after_real_group_release(tmp_path, monkeypatch, caplog, release_unknown):
     import app.granted_subprocess as commands
-    from app.host_resource_probes import SceneRuntimeLimits
     grant = Grant("request", "workspace", "creation_job", "job", "narration:digest",
                   "a" * 64, 1, 1, "token", tmp_path / "isolated.sqlite")
     decision = HostResourceDecision(False, {}, {
@@ -1555,7 +1610,6 @@ def test_media_preview_child_requires_real_probe_and_declared_budget(tmp_path, u
 @pytest.mark.parametrize("scenario", ["allowed", "register_refused", "cancel_before_exec", "revoked", "resource_limit", "timeout"])
 def test_media_preview_registered_child_gate_and_group_release(tmp_path, monkeypatch, scenario):
     """Real POSIX children, controlled resource facts; no host capacity sampling/model."""
-    from app.host_resource_probes import SceneRuntimeLimits
     import app.granted_subprocess as commands
     grant = Grant("preview-request", "local", "media_preview", "preview", "voice:input",
                   "digest", 1, 1, "token", tmp_path / "db")
@@ -1690,7 +1744,9 @@ def pcm_runner_case(tmp_path):
     source = tmp_path / 'next.wav'
     for path, frames in ((work,1000),(source,100)):
         with wave.open(str(path),'wb') as stream:
-            stream.setnchannels(1);stream.setsampwidth(2);stream.setframerate(24000)
+            stream.setnchannels(1)
+            stream.setsampwidth(2)
+            stream.setframerate(24000)
             stream.writeframes(b'\0\0'*frames)
     work.chmod(0o600)
     info, source_info = work.stat(),source.stat()
@@ -1734,7 +1790,7 @@ def pcm_runner_case(tmp_path):
     assert grant is not None
     manifest = {'version':1,'operation':'append','unit_id':f'{grant.request_id}:{grant.generation}',
         'job_id':'job','source_digest':'a'*64,**baseline,'expected_file_identity':baseline['file_identity'],
-        'sources':sources,'final':True}
+        'sources':sources,'final':True,'max_input_count':resources['input_count']}
     del manifest['file_identity'],manifest['header_bytes_allowance']
     manifest_path = Path(str(receipt)+'.manifest.json')
     manifest_path.write_text(json.dumps(manifest))
@@ -1770,11 +1826,13 @@ def test_pcm_runner_caps_do_not_charge_or_truncate_the_committed_prefix(pcm_runn
     check,_ = _pcm_assembly_monitor(scheduler,grant,argv,outputs,4096)
     target = outputs[0] if kind=='pcm_generated_bytes' else outputs[1]
     if kind=='pcm_generated_bytes':
-        with target.open('ab') as stream: stream.write(b'\0'*202)
+        with target.open('ab') as stream:
+            stream.write(b'\0'*202)
     else:
         target.write_bytes(b'x'*(PCM_METADATA_MAX_BYTES+1))
     length = target.stat().st_size
-    with pytest.raises(GrantedCommandOutputLimit) as failed: check()
+    with pytest.raises(GrantedCommandOutputLimit) as failed:
+        check()
     assert failed.value.file_sample['budget_kind']==kind
     assert target.stat().st_size==length  # Unknown tails and receipts are never repaired by the runner.
 
@@ -1846,7 +1904,10 @@ def test_script_keeps_host_and_runtime_envelope(tmp_path, monkeypatch, pressure)
     monkeypatch.setattr(psutil,'swap_memory',lambda:SimpleNamespace(used=101 if pressure=='swap' else 0))
     monkeypatch.setattr(psutil,'disk_usage',lambda path:SimpleNamespace(free=1 if pressure=='disk' else 100000))
     decision=probe._sample(_script_resources(),running_io=True)
-    assert decision.verdict is (True if pressure=='none' else False)
+    # Historical swap occupancy is diagnostic, not current memory pressure.
+    assert decision.verdict is (pressure in {'none', 'swap'})
+    assert decision.checks['swap_used_bytes']['diagnostic_only'] is True
+    assert decision.checks['swap_used_bytes']['value'] == (101 if pressure == 'swap' else 0)
     assert decision.checks['available_memory_bytes']['minimum']==100
     assert decision.checks[f'disk_free_bytes:{tmp_path}']['minimum']==100+8192+1024
     probe._grant_resources=lambda grant:_script_resources()
@@ -1876,3 +1937,52 @@ def test_script_reserves_peak_at_start_and_keeps_system_floor_while_running(tmp_
     assert running.checks['available_memory_bytes']['minimum']==100
     monkeypatch.setattr(psutil,'virtual_memory',lambda:SimpleNamespace(available=99))
     assert probe._sample(_script_resources(),running_io=True).verdict is False
+
+
+def test_quality_stream_declares_whole_artifact_without_bulk_byte_caps(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    from app.quality_worker_runtime import quality_stream_resources
+    from test_quality_resource_owner import fixture_budget
+    quality = fixture_budget()
+    probe = HostResourceProbe(tmp_path / 'quality.sqlite', disk_paths=(tmp_path,),
+        budget=HostBudget(100, 100, None, 200, None, 32, quality=quality),
+        memory_monitor=IsolatedMemoryMonitor())
+    monkeypatch.setattr(psutil, 'disk_io_counters', lambda **kw: None)
+    monkeypatch.setattr(psutil, 'cpu_percent', lambda **kw: 0)
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=2**30))
+    resources = quality_stream_resources({'budget': asdict(quality),
+        'source': {'render_ref': 'a' * 64, 'size_bytes': 33554433}}, 'metadata', {})
+    decision = probe._sample(resources)
+    assert decision.verdict is True, decision.reason
+    assert decision.checks['source_stream']['source_bytes'] == 33554433
+    assert decision.checks['source_stream']['resident_allocation'] is False
+    # The original bulk protocol still has its finite whole-buffer limits.
+    bulk = {**resources, 'max_pcm_bytes': quality.max_pcm_bytes, 'max_frame_json_bytes': quality.max_frame_json_bytes}
+    bulk.pop('read_mode')
+    assert probe._sample(bulk).reason == 'declared_resources_exceed_budget'
+    # Streaming does not relax finite report output or the sealed preparation deadline.
+    assert probe._sample({**resources, 'max_output_bytes': quality.max_report_bytes + 1}).verdict is False
+    assert probe._sample({**resources, 'timeout_seconds': quality.max_timeout_seconds + 1}).verdict is None
+    assert probe._sample({**resources, 'source_bytes': 33554432}).reason == 'quality_stream_contract_invalid'
+    # The protocol package is a temporary file; reports are stdout, not a
+    # published output copy. A different output volume cannot cover tmp shortage.
+    from app import device_resource_volumes as volumes
+    from app.quality_worker_runtime import quality_request_byte_limit, QUALITY_STREAM_PROTOCOL
+    roles = {role: tmp_path / role for role in ('database', 'output', 'temporary')}
+    ids = {path: index for index, path in enumerate(roles.values())}
+    monkeypatch.setattr(volumes, 'existing_volume', lambda path: (ids[path], path))
+    package = quality_request_byte_limit({'protocol': QUALITY_STREAM_PROTOCOL, 'budget': asdict(quality)})
+    required = probe.budget.min_free_disk_bytes + quality.additional_disk_bytes + package
+    free = {str(path): probe.budget.min_free_disk_bytes for path in roles.values()}
+    free[str(roles['temporary'])] = required - 1
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=free[path]))
+    by_volume = HostResourceProbe(tmp_path / 'quality-volumes.sqlite', disk_paths=roles,
+        budget=probe.budget, memory_monitor=IsolatedMemoryMonitor())
+    insufficient = by_volume._sample(resources)
+    assert insufficient.verdict is False
+    assert insufficient.checks['quality_budget']['sealed_request_bytes'] == package
+    for role, path in roles.items():
+        assert insufficient.checks[f'disk_free_bytes:{path}']['minimum'] == (
+            required if role == 'temporary' else probe.budget.min_free_disk_bytes)
+    free[str(roles['temporary'])] = required
+    assert by_volume._sample(resources).verdict is True

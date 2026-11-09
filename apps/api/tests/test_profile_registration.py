@@ -8,7 +8,7 @@ import pytest
 
 from app import production
 from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference
-from app.materials.contracts import MaterialAsset, MediaAuthorityError
+from app.materials.contracts import MaterialAsset
 from app.profiles.contracts import Authorization, PersonProfile, ProfileReference, VoiceProfile
 from app.profiles.registration import ProfileRegistrationUseCase
 from app.source_policy import content_owner
@@ -57,9 +57,9 @@ def case(tmp_path):
 def test_registration_and_fixed_selections_survive_new_versions_and_restart(tmp_path):
     repo, person, voice = case(tmp_path)
     assert isinstance(repo._profile_registration, ProfileRegistrationUseCase)
-    assert production.MediaAuthorityError is MediaAuthorityError
-    assert production.CreationPlanPersonReference is CreationPlanPersonReference
-    assert production.CreationPlanVoiceReference is CreationPlanVoiceReference
+    assert not hasattr(production, "MediaAuthorityError")
+    assert production._CreationPlanPersonReference is CreationPlanPersonReference
+    assert production._CreationPlanVoiceReference is CreationPlanVoiceReference
     assert production.content_owner is content_owner
     saved_person = repo.save_person_profile(person, verified_owner_user_id="member")
     saved_voice = repo.save_versioned_voice_profile(voice, verified_owner_user_id="member")
@@ -78,7 +78,7 @@ def test_registration_and_fixed_selections_survive_new_versions_and_restart(tmp_
     repo.save_person_profile(replace(saved_person, version="v2", display_name="新版"), verified_owner_user_id="member")
     reopened = production.ProductionRepository(repo.database_path, repo.video_library_path)
     assert reopened.get_default_versioned_voice("ws") == saved_voice
-    assert reopened.get_versioned_voice_profile("ws", "voice") == linked
+    assert reopened.profile_records.get_versioned_voice_profile("ws", "voice") == linked
     selected_person = reopened.creation_plan_person_reference("ws", "person", "v1", viewer_user_id="member")
     selected_voice = reopened.creation_plan_voice_reference("ws", "voice", "v1", viewer_user_id="member")
     assert selected_person == CreationPlanPersonReference("person", "v1")
@@ -102,7 +102,7 @@ def test_legacy_mapping_is_explicit_preserves_original_and_checks_language_first
         reference_audio_path=voice.reference_audio_path, consent_confirmed=True,
     ))
     with pytest.raises(KeyError):
-        repo.get_versioned_voice_profile("ws", legacy.id)
+        repo.profile_records.get_versioned_voice_profile("ws", legacy.id)
     authorization = Authorization(
         id="voice-grant", version="v1", rights_holder="合成夹具",
         content_types=("voice",), usage_scopes=("narration",),
@@ -117,6 +117,6 @@ def test_legacy_mapping_is_explicit_preserves_original_and_checks_language_first
         repo.migrate_legacy_voice_profile(legacy_voice_profile_id="absent", language="invalid", **arguments)
     mapped = repo.migrate_legacy_voice_profile(legacy_voice_profile_id=legacy.id, language="zh", **arguments)
     assert repo.get_voice_profile("ws", legacy.id) == legacy
-    assert repo.get_versioned_voice_profile("ws", legacy.id, "mapped-v1") == mapped
+    assert repo.profile_records.get_versioned_voice_profile("ws", legacy.id, "mapped-v1") == mapped
     assert mapped.authorization == authorization
     assert mapped.reference.asset_id == "audio" and mapped.person_version == "v1"

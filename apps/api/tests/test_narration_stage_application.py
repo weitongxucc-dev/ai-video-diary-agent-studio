@@ -23,7 +23,15 @@ from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess, creation_job_registration
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.narration import NarrationArtifact, NarrationGenerator, _pronunciation_version
-from app.production import CreationPlanPersonReference, CreationPlanVoiceReference, NarrationArtifactRecord, NarrationSegment, PronunciationEntry, SubtitleCue, SubtitleTrack
+from app.creation.contracts import (
+    CreationPlanPersonReference,
+    CreationPlanVoiceReference,
+    NarrationSegment,
+    SubtitleCue,
+    SubtitleTrack,
+)
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import PronunciationEntry
 from app.voice_clone import Qwen3TTSSubprocessProvider
 from app.creation.narration_stage_use_case import NarrationStageUseCase
 from app.audio_timeline import narration_audio_timeline
@@ -47,7 +55,8 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
 
 
 def _file_fact(path):
-    path=Path(path);stat=path.stat()
+    path=Path(path)
+    stat=path.stat()
     return {'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'size':stat.st_size,
         'mtime_ns':stat.st_mtime_ns,'ctime_ns':stat.st_ctime_ns,'inode':stat.st_ino}
 
@@ -67,28 +76,32 @@ def narration_preparation(tmp_path):
         payload={'script_id':script.id,'input_digest':job.input_digest})
     inputs=SimpleNamespace(voice=voice,pronunciation_entries=(
         PronunciationEntry('entry','workspace','term','en','first','workspace',None,'v1'),))
-    segments={};records={};calls=[];target_reads=[]
+    segments={}
+    records={}
+    calls=[]
+    target_reads=[]
     def read_task(*args):
         target_reads.append(args)
         return task
     def no_write(*args,**kwargs):
         pytest.fail('preparation must leave the business checkpoint to its owner')
     repository=SimpleNamespace(
-        get_job_run=lambda _ws,_job:job,get_task_event=lambda _ws,_event:start,
-        creation_execution_input=lambda *_:start.payload,
-        get_creation_task=read_task,get_creation_plan=lambda *_:plan,get_creation_task_script=lambda *_:script,
-        effective_creation_script=lambda *_:script,
-        resolve_creation_task_narration_inputs=lambda **_:inputs,
+        job_records=SimpleNamespace(get_job_run=lambda _ws,_job:job),execution_records=SimpleNamespace(get_task_event=lambda _ws,_event:start),
+        creation_execution_jobs=SimpleNamespace(creation_execution_input=lambda *_:start.payload),
+        task_records=SimpleNamespace(get_creation_task=read_task, fail_creation_task_stage=no_write),plan_records=SimpleNamespace(get_creation_plan=lambda *_:plan),script_records=SimpleNamespace(get_creation_task_script=lambda *_:script),
+        section_inputs=SimpleNamespace(effective_creation_script=lambda *_:script),
+        profile_inputs=SimpleNamespace(resolve_creation_task_narration_inputs=lambda **_:inputs),
         resolve_workspace_media_reference=lambda *args,**kwargs:tmp_path/'reference.wav',
-        get_narration_segment=lambda _ws,_task,identity:segments[identity],
-        list_narration_segments=lambda *_:list(reversed(list(segments.values()))),
-        narration_artifact_reference=lambda key:'narration://artifact/'+key,
-        resolve_authorized_narration_audio_reference=lambda _ws,ref:Path(records[ref.rsplit('/',1)[1]].audio_path),
-        get_narration_artifact=lambda _ws,key:records.get(key),
-        start_creation_task_narration=no_write,save_narration_artifact=no_write,
-        save_narration_segments=no_write,complete_creation_task_narration=no_write,fail_creation_task_stage=no_write)
+        narration_records=SimpleNamespace(get_narration_segment=lambda _ws,_task,identity:segments[identity], list_narration_segments=lambda *_:list(reversed(list(segments.values()))), save_narration_segments=no_write),
+
+        narration_artifacts=SimpleNamespace(narration_artifact_reference=lambda key:'narration://artifact/'+key, resolve_authorized_narration_audio_reference=lambda _ws,ref:Path(records[ref.rsplit('/',1)[1]].audio_path), get_narration_artifact=lambda _ws,key:records.get(key), save_narration_artifact=no_write),
+
+
+        start_creation_task_narration=no_write,
+        narration_completion=SimpleNamespace(complete_creation_task_narration=no_write))
     def artifact(key):
-        path=tmp_path/(key+'.wav');path.write_bytes(b'controlled-output')
+        path=tmp_path/(key+'.wav')
+        path.write_bytes(b'controlled-output')
         return NarrationArtifact(str(path),1.,24000,'fixture-model',task_id=task.id,script_id=script.id,
             voice_profile_id=voice.id,cache_key=key,language='en',
             pronunciation_version=_pronunciation_version(tuple(entry.task_input() for entry in inputs.pronunciation_entries)))
@@ -101,6 +114,22 @@ def narration_preparation(tmp_path):
             'merge_final':True,'inputs':[{'reference':'narration://artifact/'+use_case.segment_id(task.id,script.id,section.id)}
                 for section in script.sections]}
     from contextlib import nullcontext
+    repository.execution_inputs=SimpleNamespace()
+    repository.execution_inputs.creation_execution_read=lambda connection=None:nullcontext(SimpleNamespace(in_transaction=True))
+    def read_snapshot(workspace_id,task_id,*,connection):
+        read_task(workspace_id,task_id)
+        header=SimpleNamespace(id=script.id,selection_status=script.selection_status,language=script.language,
+            sections_total_count=len(script.sections),workspace_id=workspace_id,task_id=task_id)
+        return SimpleNamespace(task=task,plan=plan,script_header=header,input_digest=job.input_digest)
+    def section_inputs(current_task,header,*,connection):
+        for section in script.sections:
+            yield section,segments.get(use_case.segment_id(task.id,script.id,section.id))
+    def selected_input(current_task,header,section_id,*,connection):
+        section=next(item for item in script.sections if item.id==section_id)
+        return {'section':section,'audio':segments.get(use_case.segment_id(task.id,script.id,section.id))}
+    repository.execution_inputs.read_creation_execution_snapshot=read_snapshot
+    repository.section_inputs.iter_creation_narration_sections=section_inputs
+    repository.section_inputs.read_creation_section_input=selected_input
     repository._connect=lambda:nullcontext(SimpleNamespace(execute=lambda *_:SimpleNamespace(fetchone=lambda:
         {'resources_json':json.dumps(resources())})))
     for section in script.sections:
@@ -127,7 +156,7 @@ def narration_preparation(tmp_path):
                 duration_seconds=generated.duration_seconds,sample_rate=generated.sample_rate,model_id=generated.model_id,
                 language=generated.language,pronunciation_version=generated.pronunciation_version)
             records[record.cache_key]=record
-            segments[pending.id]=replace(pending,status='ready',audio_reference=repository.narration_artifact_reference(record.cache_key),
+            segments[pending.id]=replace(pending,status='ready',audio_reference=repository.narration_artifacts.narration_artifact_reference(record.cache_key),
                 duration_seconds=record.duration_seconds,sample_rate=record.sample_rate,model_id=record.model_id,
                 pronunciation_version=record.pronunciation_version)
     return SimpleNamespace(case=use_case,task=task,script=script,voice=voice,segments=segments,
@@ -137,7 +166,8 @@ def narration_preparation(tmp_path):
 
 
 def test_prepare_segment_keeps_context_and_pending_identity_without_checkpoint_write(narration_preparation):
-    s=narration_preparation;section=s.script.sections[0]
+    s=narration_preparation
+    section=s.script.sections[0]
     pending=s.segments[s.case.segment_id(s.task.id,s.script.id,section.id)]
     context=s.context('narration:segment:v1:'+section.id+':digest')
     record,segment,output_bytes=s.case.prepare_segment('workspace',s.task.id,
@@ -152,8 +182,10 @@ def test_prepare_segment_keeps_context_and_pending_identity_without_checkpoint_w
 
 
 def test_prepare_merge_orders_saved_ready_segments_without_publishing(narration_preparation):
-    s=narration_preparation;s.ready()
-    before=dict(s.segments);before_records=dict(s.records)
+    s=narration_preparation
+    s.ready()
+    before=dict(s.segments)
+    before_records=dict(s.records)
     context=s.context('narration:merge:v1:digest')
     record,output_bytes,receipt=s.case.prepare_merge('workspace',s.task.id,script_id=s.script.id,
         input_references=s.merge_inputs(),grant_context=context)
@@ -168,7 +200,8 @@ def test_prepare_merge_orders_saved_ready_segments_without_publishing(narration_
 @pytest.mark.parametrize('target',[('other-workspace','task','script'),('workspace','other-task','script'),
                                   ('workspace','task','other-script')])
 def test_prepare_merge_rejects_target_outside_original_grant_before_target_read(narration_preparation,target):
-    s=narration_preparation;s.ready()
+    s=narration_preparation
+    s.ready()
     with pytest.raises(PermissionError):
         s.case.prepare_merge(target[0],target[1],script_id=target[2],
             input_references=s.merge_inputs(),grant_context=s.context('narration:merge:v1:digest'))
@@ -177,11 +210,13 @@ def test_prepare_merge_rejects_target_outside_original_grant_before_target_read(
 
 @pytest.mark.parametrize('stale',['all','mixed'])
 def test_prepare_merge_rejects_old_or_mixed_fixed_pronunciation_input(narration_preparation,stale):
-    s=narration_preparation;s.ready()
+    s=narration_preparation
+    s.ready()
     s.inputs.pronunciation_entries=(replace(s.inputs.pronunciation_entries[0],version='v2',target_pronunciation='second'),)
     if stale=='mixed':
         current=_pronunciation_version(tuple(entry.task_input() for entry in s.inputs.pronunciation_entries))
-        identity=next(iter(s.segments));segment=s.segments[identity]
+        identity=next(iter(s.segments))
+        segment=s.segments[identity]
         s.segments[identity]=replace(segment,pronunciation_version=current)
         key=segment.audio_reference.rsplit('/',1)[1]
         s.records[key]=replace(s.records[key],pronunciation_version=current)
@@ -193,7 +228,8 @@ def test_prepare_merge_rejects_old_or_mixed_fixed_pronunciation_input(narration_
 
 @pytest.mark.parametrize('invalid',['wrong-unit','changed-script','ready-segment','incomplete-merge','stale-voice','exhausted-output'])
 def test_narration_preparation_rejects_unbound_or_unusable_work(narration_preparation,invalid):
-    s=narration_preparation;section=s.script.sections[0]
+    s=narration_preparation
+    section=s.script.sections[0]
     context=s.context('narration:segment:v1:'+section.id+':digest',limit=1 if invalid=='exhausted-output' else 128)
     script_id='old-script' if invalid=='changed-script' else s.script.id
     if invalid=='wrong-unit':
@@ -213,7 +249,8 @@ def test_narration_preparation_rejects_unbound_or_unusable_work(narration_prepar
     assert len(s.calls)==(1 if invalid=='exhausted-output' else 0)
     assert s.task.narration_cache_key is None
     with pytest.raises(PermissionError):
-        s.case.generate('workspace',s.task.id,grant_context=s.context('narration:segment:v1:'+section.id+':digest'))
+        s.case.prepare_segment('workspace',s.task.id,script_id=s.script.id,section_id=section.id,
+            grant_context=s.context('narration:legacy-stage'))
 
 
 def _metadata_retime_plan(durations, caption_durations=None):
@@ -316,20 +353,25 @@ def narration_application(tmp_path,monkeypatch):
     repo,task_id,script_id,_=_seed(tmp_path,workspace_id='local')
     members=LocalMemberService(repo.database_path)
     member,token=members.join(members.create_invite_code(),'配音 normal 合成成员')
-    model=tmp_path/'model';model.mkdir();(model/'manifest.json').write_text('{}')
-    worker=tmp_path/'synthetic_tts.py';worker.write_text(SYNTHETIC_TTS_WORKER)
+    model=tmp_path/'model'
+    model.mkdir()
+    (model/'manifest.json').write_text('{}')
+    worker=tmp_path/'synthetic_tts.py'
+    worker.write_text(SYNTHETIC_TTS_WORKER)
     provider=Qwen3TTSSubprocessProvider(runtime_python_path=sys.executable,worker_path=worker,model_path=model)
     generator=NarrationGenerator(tmp_path/'audio',provider)
     person,voice,*_=register_synthetic_profiles(repo,workspace_id='local',member_id=member.member_id,
         person_id='person_1',voice_id='voice_1',person_version='v1',voice_version='v1',language='zh',
         model_id=provider.model_id,person_authorization_id='person_auth_1',voice_authorization_id='voice_auth_1',
         voice_usage_scopes=('narration',))
-    plan=repo.get_creation_plan('local','plan_local');plan.presenter_share_target=0
+    plan=repo.plan_records.get_creation_plan('local','plan_local')
+    plan.presenter_share_target=0
     plan.selected_person=CreationPlanPersonReference(person.id,person.version)
     plan.selected_voice=CreationPlanVoiceReference(voice.id,voice.version,person.id,person.version,
         person.authorization.id,person.authorization.version,voice.authorization.id,voice.authorization.version,'zh-CN',voice.model_id)
     plan.owner_user_id=member.member_id
-    task=repo.get_creation_task('local',task_id);task.owner_user_id=member.member_id
+    task=repo.task_records.get_creation_task('local',task_id)
+    task.owner_user_id=member.member_id
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?',(json.dumps(asdict(plan),default=str),plan.id))
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(task),default=str),task.id))
@@ -345,11 +387,14 @@ def narration_application(tmp_path,monkeypatch):
     monkeypatch.setattr(main,'artifact_store',ArtifactStore(tmp_path/'artifacts'))
     monkeypatch.setattr(main,'settings',SimpleNamespace(video_output_path=str(tmp_path/'outputs'),
         video_inbox_path=str(tmp_path/'library'),effective_temporary_root_path=tmp_path/'temporary',native_portrait_worker_path=None))
-    execution=main._new_creation_execution(repo);monkeypatch.setattr(main,'creation_execution',execution)
+    execution=main._new_creation_execution(repo)
+    monkeypatch.setattr(main,'creation_execution',execution)
     budget=NarrationBudget(1000,10,1_000_000,300,8_000_000,1,90,1024**3,16,.1,1024**3,1_000_000)
     montage_budget=MontageBudget(10,20,1_000_000,1_000_000,30,1_000_000)
     host_budget=HostBudget(100,1,100*1024**3,1,10**12,10_000_000,narration=budget,montage=montage_budget)
-    swap=psutil.swap_memory();disk=psutil.disk_io_counters();disk_devices=psutil.disk_io_counters(perdisk=True)
+    swap=psutil.swap_memory()
+    disk=psutil.disk_io_counters()
+    disk_devices=psutil.disk_io_counters(perdisk=True)
     monkeypatch.setattr(psutil,'cpu_percent',lambda *args,**kwargs:0.0)
     monkeypatch.setattr(psutil,'swap_memory',lambda:swap._replace(used=0))
     monkeypatch.setattr(psutil,'disk_io_counters',lambda **kwargs:disk_devices if kwargs.get('perdisk') else disk)
@@ -376,8 +421,10 @@ def narration_application(tmp_path,monkeypatch):
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None,reason='native media tools unavailable')
 def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(narration_application):
-    s=narration_application;repo=s.repo;url='/api/creation-tasks/'+s.task_id
-    script=repo.get_creation_task_script('local',s.script_id)
+    s=narration_application
+    repo=s.repo
+    url='/api/creation-tasks/'+s.task_id
+    script=repo.script_records.get_creation_task_script('local',s.script_id)
     request={'script_id':script.id,'input_digest':revision_digest(script,s.plan),'requirements_confirmed':True}
     first=s.client.post(url+'/execution/start',json=request)
     assert first.status_code==202,first.text
@@ -387,19 +434,21 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     while not s.runtime.run_once():
         assert time.monotonic()<deadline,s.runtime.last_error
         time.sleep(.1)
-    task=repo.get_creation_task('local',s.task_id)
+    task=repo.task_records.get_creation_task('local',s.task_id)
     assert task.stage=='montage' and task.narration_cache_key
-    sections=repo.list_narration_segments('local',s.task_id,s.script_id)
+    sections=repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)
     assert len(sections)==2 and all(item.status=='ready' for item in sections)
-    combined=repo.get_narration_artifact('local',task.narration_cache_key)
-    initial_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in sections}
+    combined=repo.narration_artifacts.get_narration_artifact('local',task.narration_cache_key)
+    initial_files={item.id:_file_fact(repo.narration_artifacts.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in sections}
     for fact in [*initial_files.values(),_file_fact(combined.audio_path)]:
-        with wave.open(fact['path']) as stream:assert stream.getnchannels()==1 and stream.getframerate()==24000
-    event=repo.get_task_event('local',f'event_{full_job}_narration_queued')
+        with wave.open(fact['path']) as stream:
+            assert stream.getnchannels()==1 and stream.getframerate()==24000
+    event=repo.execution_records.get_task_event('local',f'event_{full_job}_narration_queued')
     assert event.payload['output']==task.narration_cache_key
     assert s.client.get(url+'/execution',params={'job_id':full_job}).status_code==200
     # Stop the queued downstream stage at the public boundary; only narration is this normal's execution target.
-    stopped=s.client.post(url+'/execution/cancel');assert stopped.status_code==200,stopped.text
+    stopped=s.client.post(url+'/execution/cancel')
+    assert stopped.status_code==200,stopped.text
     # Declared intermediate fixture: a minimal montage/base using the actual generated segments and a registered source.
     cues=[NarrationCue('cue-'+item.id,item.source_section_id,item.text,item.duration_seconds,item.id) for item in sections]
     clips=[MontageClip('clip-'+str(i),cue.id,s.asset.id,s.asset.segments[i].id,
@@ -407,42 +456,48 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
         s.asset.segments[i].start_seconds+cue.duration_seconds,float(i),float(i)+cue.duration_seconds,1,['合成 normal'],False)
         for i,cue in enumerate(cues)]
     montage=CreationTaskMontagePlan('normal-montage','local',s.task_id,s.script_id,'合成 normal','ready',cues,clips,2,0,
-        narration_audio_path=repo.narration_artifact_reference(combined.cache_key))
-    repo.save_creation_task_montage_plan('local',s.task_id,montage.id,creation_task_montage_plan_to_payload(montage))
-    base=main._ensure_montage_base_version('local',repo.get_creation_task('local',s.task_id),montage)
+        narration_audio_path=repo.narration_artifacts.narration_artifact_reference(combined.cache_key))
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local',s.task_id,montage.id,creation_task_montage_plan_to_payload(montage))
+    base=main._ensure_montage_base_version('local',repo.task_records.get_creation_task('local',s.task_id),montage)
     caption_ref,caption_transform=s.case.metadata.publish_subtitle_text(workspace_id='local',task_id=s.task_id,
         proposal_id='normal-fixture-caption',kind='subtitle_fixture',input_refs=['timeline:'+base.id],
         content='1\n00:00:00,000 --> 00:00:01,000\n配音 normal\n',engine='fixture-subtitle-text',parameters={'language':'zh-CN'})
-    repo.create_subtitle_track(SubtitleTrack('normal-caption','local',s.task_id,base.id,'zh-CN',None,{},
+    repo.subtitle_records.create_subtitle_track(SubtitleTrack('normal-caption','local',s.task_id,base.id,'zh-CN',None,{},
         [SubtitleCue('subtitle-'+item.id,item.id,item.text,float(i),float(i+1)) for i,item in enumerate(sections)],
         'timeline',None,caption_ref,caption_transform,'valid'))
-    target=sections[0];untouched=sections[1]
+    target=sections[0]
+    untouched=sections[1]
     preview=s.client.post(url+'/edits/preview',json={'raw_command':'这句重新配音','context_stage':'narration',
         'selected_object_refs':['narration:'+target.id]})
     assert preview.status_code==200,preview.text
-    proposal=preview.json()['proposal'];assert proposal['operation']['operation_type']=='RegenerateNarrationSegment'
+    proposal=preview.json()['proposal']
+    assert proposal['operation']['operation_type']=='RegenerateNarrationSegment'
     confirm_url=url+'/edits/'+proposal['id']+'/confirm'
-    queued=s.client.post(confirm_url,json={});assert queued.status_code==202,queued.text
+    queued=s.client.post(confirm_url,json={})
+    assert queued.status_code==202,queued.text
     assert s.client.post(confirm_url,json={}).json()==queued.json()
     assert s.runtime.run_once(),s.runtime.last_error
-    job=repo.get_job_run('local',queued.json()['job_id']);assert job.status=='succeeded',asdict(job)
-    current=repo.get_creation_task('local',s.task_id);assert current.current_timeline_version_id!=base.id
-    updated=repo.list_narration_segments('local',s.task_id,s.script_id)
+    job=repo.job_records.get_job_run('local',queued.json()['job_id'])
+    assert job.status=='succeeded',asdict(job)
+    current=repo.task_records.get_creation_task('local',s.task_id)
+    assert current.current_timeline_version_id!=base.id
+    updated=repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)
     changed=next(item for item in updated if item.id==target.id)
     assert changed.audio_reference!=target.audio_reference
     assert next(item for item in updated if item.id==untouched.id)==untouched
-    assert _file_fact(repo.resolve_authorized_narration_audio_reference('local',untouched.audio_reference))==initial_files[untouched.id]
-    assert all(repo.get_narration_artifact('local',item.audio_reference.removeprefix('narration://artifact/')) for item in updated)
-    new_combined=repo.get_narration_artifact('local',current.narration_cache_key)
+    assert _file_fact(repo.narration_artifacts.resolve_authorized_narration_audio_reference('local',untouched.audio_reference))==initial_files[untouched.id]
+    assert all(repo.narration_artifacts.get_narration_artifact('local',item.audio_reference.removeprefix('narration://artifact/')) for item in updated)
+    new_combined=repo.narration_artifacts.get_narration_artifact('local',current.narration_cache_key)
     assert current.narration_cache_key!=combined.cache_key
     changed_montage=repo.get_creation_task_montage_plan('local',s.task_id)
-    assert changed_montage['narration_audio_path']==repo.narration_artifact_reference(new_combined.cache_key)
-    tracks=repo.list_subtitle_tracks('local',s.task_id,timeline_version_id=current.current_timeline_version_id)
+    assert changed_montage['narration_audio_path']==repo.narration_artifacts.narration_artifact_reference(new_combined.cache_key)
+    tracks=repo.subtitle_records.list_subtitle_tracks('local',s.task_id,timeline_version_id=current.current_timeline_version_id)
     assert len(tracks)==1 and tracks[0].status=='unavailable' and tracks[0].artifact_ref is None
-    final_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in updated}
+    final_files={item.id:_file_fact(repo.narration_artifacts.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in updated}
     replay_started=time.monotonic()
     assert s.client.post(confirm_url,json={}).status_code==409
-    queried=s.client.get(url+'/execution',params={'job_id':full_job});assert queried.status_code==200
+    queried=s.client.get(url+'/execution',params={'job_id':full_job})
+    assert queried.status_code==200
     assert not s.runtime.run_once()
     with repo._connect() as conn:
         permit=dict(conn.execute('SELECT state,children_json FROM device_permit WHERE id=1').fetchone())
@@ -463,4 +518,5 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
         'actual_body':'repository/ProfileRecordStore/qualification/NarrationGenerator/Qwen subprocess protocol/concat/probe/concrete owner/editorial and job checkpoint',
         'model_GUI_production_auth_resources_full_inflight_PGID':'UNVERIFIED; only original synthetic worker and finite fixture budgets/OS ports'}
     destination=os.environ.get('NARRATION_STAGE_EVIDENCE_DIR')
-    if destination:(Path(destination)/'NORMAL_FLOW.json').write_text(json.dumps(flow,ensure_ascii=False,indent=2,default=str)+'\n')
+    if destination:
+        (Path(destination)/'NORMAL_FLOW.json').write_text(json.dumps(flow,ensure_ascii=False,indent=2,default=str)+'\n')

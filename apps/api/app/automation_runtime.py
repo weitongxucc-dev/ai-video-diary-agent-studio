@@ -11,7 +11,7 @@ from dataclasses import asdict, replace
 from app.automation_service import AutomationBlocked, AutomationService, AutomationTrigger, dump, utc_now
 from app.creation_execution import CreationJobOwnerVerifier
 from app.platform_publish.queue import PlatformPublishOwnerVerifier
-from app.production import CreationTask
+from app.creation.contracts import CreationTask
 from app.schemas import CreationPlanPreviewRequest
 from fastapi import HTTPException
 
@@ -204,18 +204,18 @@ class AutomationRuntime:
         plan.created_at = plan.confirmed_at = now
         task = CreationTask(id="task_"+hashlib.sha256(run_id.encode()).hexdigest()[:24],workspace_id=actor.workspace_id,
             plan_id=plan.id,name=plan.name,scenario=plan.goal,created_at=now,updated_at=now)
-        plan,task = self.production.prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=self.reader(actor),local_diagnostic=False)
+        plan,task = self.production.plan_confirmation.prepare_confirmed_creation_plan(plan,task,verified_owner_user_id=self.reader(actor),local_diagnostic=False)
         self.service.bind_confirmed_plan(self.production,actor,run_id,run,fingerprint,plan,task,now)
         return self.bound_result(actor,self.service.get_run(actor,run_id))
 
     def bound_result(self, actor, run):
-        return self.plan_response(self.production.get_creation_plan(actor.workspace_id,run["plan_id"]),self.production.get_creation_task(actor.workspace_id,run["task_id"]))
+        return self.plan_response(self.production.plan_records.get_creation_plan(actor.workspace_id,run["plan_id"]),self.production.task_records.get_creation_task(actor.workspace_id,run["task_id"]))
 
     def project_run(self, actor, run):
         projection = self.project_state(actor, run)
-        events = self.production.list_task_events(actor.workspace_id,run["task_id"])
+        events = self.production.execution_records.list_task_events(actor.workspace_id,run["task_id"])
         confirmation = dict(run["confirmation"])
-        task = self.production.get_creation_task(actor.workspace_id,run["task_id"])
+        task = self.production.task_records.get_creation_task(actor.workspace_id,run["task_id"])
         if task.selected_topic_id:
             confirmation["topic"] = {"topic_id":task.selected_topic_id}
         if task.confirmed_script_id:
@@ -226,19 +226,19 @@ class AutomationRuntime:
         publishes = [event for event in events if event.event_type == "platform_publish_prepared" and event.payload.get("confirmed") is True and event.payload.get("identity",{}).get("member_id") == actor.member_id]
         if publishes:
             confirmation["publish"] = {"event_id":publishes[-1].id,"confirmed_at":publishes[-1].created_at.isoformat(),"job_id":publishes[-1].job_id}
-        jobs = self.production.list_job_runs(actor.workspace_id,task.id)
+        jobs = self.production.job_records.list_job_runs(actor.workspace_id,task.id)
         with self.production._connect() as conn:
             requests = [row[0] for row in conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' AND owner_id IN (SELECT id FROM job_runs WHERE workspace_id=? AND task_id=?)",(actor.workspace_id,actor.workspace_id,task.id))]
         projection.update(confirmation=confirmation,execution={"job_ids":[job.id for job in jobs],"device_request_ids":requests,"output_refs":[ref for job in jobs for ref in job.output_refs]})
         return projection
 
     def project_state(self, actor, run):
-        task = self.production.get_creation_task(actor.workspace_id,run["task_id"])
+        task = self.production.task_records.get_creation_task(actor.workspace_id,run["task_id"])
         if task.owner_user_id != self.reader(actor):
             raise AutomationBlocked("task_permission_lost","本次任务当前归属无法核验","恢复原成员许可后重试")
         status = self.execution_status(actor.workspace_id,task.id)
         job = status["job"]
-        publish_jobs = [item for item in self.production.list_job_runs(actor.workspace_id,task.id) if item.kind == "platform_publish"]
+        publish_jobs = [item for item in self.production.job_records.list_job_runs(actor.workspace_id,task.id) if item.kind == "platform_publish"]
         if publish_jobs:
             published = publish_jobs[-1]
             if published.status == "succeeded":

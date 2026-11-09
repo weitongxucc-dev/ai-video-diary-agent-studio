@@ -27,15 +27,15 @@ def env(tmp_path):
     root = tmp_path / "library"
     root.mkdir()
     repository = ProductionRepository(tmp_path / "app.sqlite3", root)
-    repository.bind_material_ingestion("workspace", expected_directory=str(root))
+    repository.material_source_files.bind_material_ingestion("workspace", expected_directory=str(root))
     assets = MaterialAssetStore(repository._connect)
     references = WorkspaceMediaReferenceAccess(repository._connect,
         MaterialSourceFileAccess(repository._connect, root), assets)
     def confirm(conn, workspace_id, **values):
-        repository.confirm_material_copy_complete(workspace_id, connection=conn, **values)
+        repository.material_source_files.confirm_material_copy_complete(workspace_id, connection=conn, **values)
     def make():
         return MobileTransfers(repository._connect, assets=assets, workspace_references=references,
-            target_for=repository.material_link_target, confirm_copy_in_transaction=confirm,
+            target_for=repository.material_source_files.material_link_target, confirm_copy_in_transaction=confirm,
             min_free_disk_bytes=0, max_bytes=4 * 1024 * 1024)
     return SimpleNamespace(root=root, repository=repository, assets=assets,
         references=references, make=make, service=make(),
@@ -87,7 +87,7 @@ def test_whole_file_verification_then_atomic_receipt_and_canonical_reference(env
     with Path(asset.path).open("rb") as file:
         assert hashlib.file_digest(file, "sha256").hexdigest() == declaration()["sha256"]
     assert not list((env.root / ".mobile-transfers").glob("*.part"))
-    assert env.repository.pending_material_copies("workspace") == []  # Final ctime survives staging cleanup.
+    assert env.repository.material_source_files.pending_material_copies("workspace") == []  # Final ctime survives staging cleanup.
     assert env.make().query(env.actor, request_id) == completed
     assert env.make().complete(env.actor, request_id) == completed
     assert asyncio.run(env.service.receive_content(env.actor, request_id, chunks(b"ignored replay"))) == completed
@@ -250,10 +250,10 @@ def test_owner_write_failure_rolls_back_every_fact_and_reconciles_published_byte
     assert facts(env) == (0, 0, 0)
     assert env.make().query(env.actor, request_id)["state"] == "received"
     assert len(list(env.root.glob("discovery-*"))) == 1  # Complete bytes await reconciliation.
-    assert env.repository.scan_library("workspace") == []  # Unconfirmed publication cannot bypass completion.
+    assert env.repository.material_intake.scan_library("workspace") == []  # Unconfirmed publication cannot bypass completion.
     monkeypatch.setattr(env.references, "claim_asset_reference", original)
     assert env.make().complete(env.actor, request_id)["state"] == "completed"
-    assert facts(env) == (1, 1, 1) and env.repository.pending_material_copies("workspace") == []
+    assert facts(env) == (1, 1, 1) and env.repository.material_source_files.pending_material_copies("workspace") == []
 
 
 def test_changed_bytes_or_mount_never_register_or_fall_back(env):

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -22,6 +24,81 @@ from app.source_repository import SourceRepository
 
 client = TestClient(main_module.app)
 WORKSPACE = "ws-98-home"
+
+
+@pytest.fixture(autouse=True)
+def home_metadata_guard(request, monkeypatch, tmp_path):
+    if request.node.originalname not in {
+        "test_home_counts_follow_the_existing_visibility_predicate",
+        "test_home_trend_spans_the_requested_days_only",
+    }:
+        return None
+    import sqlite3
+    import subprocess
+    import wave
+    from pathlib import Path
+    import app.home_aggregation as aggregation
+    from app.auth import SupabaseAuthContext
+    from app.config import Settings
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+    calls, capacity_paths = [], []
+
+    def forbidden(*args, **kwargs):
+        calls.append("execution")
+        pytest.fail("home metadata forbids runtime, grants, Pi and media execution")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(wave, "open", forbidden)
+    for name in ("start", "run_once", "wake"):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    monkeypatch.setattr(DeviceScheduler, "pick_and_grant", forbidden)
+    for name in ("_creation_runtime", "run_task_turn", "run_plan_turn", "start_assistant_continuation_driver"):
+        monkeypatch.setattr(main_module, name, forbidden)
+    monkeypatch.setattr(main_module.montage_renderer, "render", forbidden)
+    monkeypatch.setattr(main_module.narration_generator, "generate_for_creation_task", forbidden)
+    settings = Settings(database_path=str(tmp_path / "studio.sqlite3"),
+        video_inbox_path=str(tmp_path / "library"), video_output_path=str(tmp_path / "output"),
+        model_root_path=str(tmp_path / "models"), temporary_root_path=str(tmp_path / "temporary"),
+        draft_output_path=str(tmp_path / "drafts"), jianying_draft_root_path=str(tmp_path / "jianying"),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, "auth_context", SupabaseAuthContext(settings))
+    monkeypatch.setattr(main_module, "device_runtime", None)
+    actual_disk_usage = aggregation.psutil.disk_usage
+
+    def temporary_capacity(path):
+        resolved = Path(path).resolve()
+        assert resolved == (tmp_path / "library").resolve()
+        capacity_paths.append(resolved)
+        return actual_disk_usage(path)  # Real filesystem metadata; no capacity mock.
+
+    monkeypatch.setattr(aggregation.psutil, "disk_usage", temporary_capacity)
+
+    def verify_boundaries():
+        assert calls == []
+        assert capacity_paths
+
+    request.addfinalizer(verify_boundaries)
+
+    def snapshot():
+        databases = {}
+        for path in sorted(tmp_path.rglob("*")):
+            if not path.is_file() or path.suffix not in {".sqlite3", ".sqlite", ".db"}:
+                continue
+            with sqlite3.connect(path) as connection:
+                tables = [row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                databases[str(path.relative_to(tmp_path))] = {
+                    name: sorted((tuple(row) for row in connection.execute(
+                        'SELECT * FROM "' + name.replace('"', '""') + '"')), key=repr) for name in tables}
+        tree = {str(item.relative_to(tmp_path)): item.read_bytes() if item.is_file() else None
+                for item in tmp_path.rglob('*')}
+        return databases, tree
+
+    return snapshot
 
 
 def _setup(tmp_path, monkeypatch):
@@ -65,7 +142,8 @@ def _counts(body) -> dict[str, int]:
 
 
 def _save_task(production, task_id, name, owner_user_id, visibility, status="created", **overrides):
-    from app.production import CreationPlan, CreationTask
+    from app.creation.plan_contracts import CreationPlan
+    from app.creation.contracts import CreationTask
 
     plan = CreationPlan(
         id=f"plan-{task_id}", workspace_id=WORKSPACE, goal="做一条真实短视频", name=f"{name}的计划",
@@ -81,7 +159,7 @@ def _save_task(production, task_id, name, owner_user_id, visibility, status="cre
         **overrides,
     )
     # 归属只认服务端核过的身份：直接往 dataclass 塞 owner_user_id 不算数。
-    production.confirm_creation_plan(plan, task, verified_owner_user_id=owner_user_id)
+    production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner_user_id)
     return task
 
 
@@ -91,13 +169,15 @@ def _home(token: str, days: int = 7):
     return response
 
 
-def test_home_counts_follow_the_existing_visibility_predicate(tmp_path, monkeypatch):
+def test_home_counts_follow_the_existing_visibility_predicate(tmp_path, monkeypatch, home_metadata_guard):
     production, library, party = _setup(tmp_path, monkeypatch)
     _save_asset(production, "asset-owner-1", "所有者的私有素材.mp4", party["owner_id"], "private")
     _save_asset(production, "asset-owner-2", "所有者的另一条私有.mp4", party["owner_id"], "private")
     _save_asset(production, "asset-member", "小王的私有素材.mp4", party["member_id"], "private")
     _save_asset(production, "asset-shared", "共享素材.mp4", party["member_id"], "shared")
 
+    before_reads = home_metadata_guard()
+    assert set(before_reads[0]) == {"studio.sqlite3", "agent.sqlite3", "sources.sqlite3"}
     owner_view = _home(party["owner_token"]).json()
     member_view = _home(party["member_token"]).json()
 
@@ -115,14 +195,17 @@ def test_home_counts_follow_the_existing_visibility_predicate(tmp_path, monkeypa
     assert client.get(
         "/api/production/home", headers={"X-Local-Member-Token": "not-a-real-token"}
     ).status_code == 401
+    assert home_metadata_guard() == before_reads
 
 
-def test_home_trend_spans_the_requested_days_only(tmp_path, monkeypatch):
+def test_home_trend_spans_the_requested_days_only(tmp_path, monkeypatch, home_metadata_guard):
     production, _library, party = _setup(tmp_path, monkeypatch)
     now = datetime.now(UTC)
     _save_asset(production, "asset-today", "今天.mp4", party["owner_id"], "private", created_at=now)
     _save_asset(production, "asset-old", "三天前.mp4", party["owner_id"], "private", created_at=now - timedelta(days=3))
 
+    before_reads = home_metadata_guard()
+    assert set(before_reads[0]) == {"studio.sqlite3", "agent.sqlite3", "sources.sqlite3"}
     week = _home(party["owner_token"], days=7).json()
     assert week["days"] == 7
     assert len(week["trend"]["points"]) == 7
@@ -144,6 +227,7 @@ def test_home_trend_spans_the_requested_days_only(tmp_path, monkeypatch):
     assert client.get(
         "/api/production/home?days=14", headers={"X-Local-Member-Token": party["owner_token"]}
     ).status_code == 422
+    assert home_metadata_guard() == before_reads
 
 
 def test_device_counts_separate_running_and_queued_from_history(tmp_path, monkeypatch):
@@ -251,7 +335,7 @@ def test_home_entries_follow_task_identity_and_real_task_state(tmp_path, monkeyp
 
 def test_storage_capacity_is_unknown_when_the_directory_is_another_workspaces(tmp_path, monkeypatch):
     production, library, party = _setup(tmp_path, monkeypatch)
-    production.bind_material_ingestion("ws-别的工作区", expected_directory=str(library))
+    production.material_source_files.bind_material_ingestion("ws-别的工作区", expected_directory=str(library))
 
     body = _home(party["owner_token"]).json()
     storage = body["storage"]

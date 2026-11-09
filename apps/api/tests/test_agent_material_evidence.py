@@ -229,8 +229,10 @@ class TestInstructionIsScopedToMissingCandidatesOnly:
 
 
 def test_returned_fields_are_unchanged_by_this_fix():
-    """回归护栏：本次只改文案，返回字段集合不得增减。"""
-    result = _call(_routes(_match(asset_file_name="city_night_001.mp4", tags=["城市"]), NOT_FOUND))
+    """素材字段保持完整，调用绑定由工具注册边界单独提供。"""
+    result = call("find_material_candidates", {"description": "城市夜景"},
+        _routes(_match(asset_file_name="city_night_001.mp4", tags=["城市"]), NOT_FOUND),
+        env_extra={"AI_VIDEO_DIARY_AGENT_INPUT_ID": "evidence-field-input"})
     first = result["candidates"][0]
     assert set(first) == {
         "asset_ref", "segment_ref", "score", "rank", "match_tier", "matched_terms",
@@ -240,5 +242,6 @@ def test_returned_fields_are_unchanged_by_this_fix():
     }, f"返回字段集合被改动了：{sorted(first)}"
     assert set(result) == {
         "candidates", "evidence_complete", "evidence_note",
-        "library_total", "library_has_more", "instruction",
+        "library_total", "library_has_more", "instruction", "invocation_input_id",
     }, f"details 字段集合被改动了：{sorted(result)}"
+    assert result["invocation_input_id"] == "evidence-field-input"

@@ -97,10 +97,26 @@ def _record_command_diagnostics(grant, child, diagnostic, *, failure=None):
 
 
 @dataclass(frozen=True)
+class ObservedCommandResources:
+    peak_rss_bytes: int | None
+    peak_threads: int | None
+    rss_sample_complete: bool
+    threads_sample_complete: bool
+
+
+def _observed_command_resources(observation) -> ObservedCommandResources:
+    rss, threads = observation.get("observed_peak_rss"), observation.get("observed_peak_threads")
+    return ObservedCommandResources(
+        None if rss is None else rss["rss_bytes"], None if threads is None else threads["threads"],
+        bool(rss and rss["sample_complete"]), bool(threads and threads["sample_complete"]))
+
+
+@dataclass(frozen=True)
 class GrantedCommandResult:
     returncode: int
     stdout: bytes
     stderr: bytes
+    observed_resources: ObservedCommandResources | None = None
 
 
 class GrantedCommandError(RuntimeError):
@@ -401,7 +417,8 @@ def _pcm_assembly_monitor(scheduler, grant, argv, output_paths, absolute_limit):
     manifest_bytes, manifest_identity = metadata(manifest_path)
     expected = {'version':1,'operation':'append','unit_id':f'{grant.request_id}:{grant.generation}',
         'job_id':grant.owner_id,'source_digest':resources['merge_source_digest'],
-        **baseline,'expected_file_identity':baseline['file_identity'],'sources':resources['pcm_sources'],'final':resources['merge_final']}
+        **baseline,'expected_file_identity':baseline['file_identity'],'sources':resources['pcm_sources'],'final':resources['merge_final'],
+        'max_input_count':resources['input_count']}
     del expected['file_identity'],expected['header_bytes_allowance']
     if json.loads(manifest_bytes) != expected:
         raise RecoveryBlocked('PCM manifest与原许可单元、来源或预算不一致')
@@ -439,7 +456,9 @@ def _pcm_assembly_monitor(scheduler, grant, argv, output_paths, absolute_limit):
                     data = os.pread(fd,min(65536,remaining),offset)
                     if not data:
                         raise RecoveryBlocked('原PCM前缀不可完整读取')
-                    digest.update(data);remaining-=len(data);offset+=len(data)
+                    digest.update(data)
+                    remaining-=len(data)
+                    offset+=len(data)
                 if digest.hexdigest() != baseline['committed_pcm_sha256']:
                     raise RecoveryBlocked('原PCM前缀内容已变化')
             finally:
@@ -686,7 +705,8 @@ def run_granted_command(
             "process_cpu_observation": process_cpu_observation,
             "process_resource_observation": process_resource_observation,
         })
-        return GrantedCommandResult(process.returncode, bytes(outputs["stdout"]), bytes(outputs["stderr"]))
+        return GrantedCommandResult(process.returncode, bytes(outputs["stdout"]), bytes(outputs["stderr"]),
+            _observed_command_resources(process_resource_observation))
     except BaseException as exc:
         before_termination_returncode = process.poll() if process is not None else None
         group_released = True if process is None else None

@@ -1,5 +1,7 @@
 """Scheduled material routes must never fall through to unscheduled heavy work."""
 
+from app.materials.intake import MaterialIntakeUseCase
+
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -7,10 +9,12 @@ import pytest
 from fastapi import HTTPException, Request
 
 from app import main as main_module
-from app.member_permits import HostBudgetUncalibrated
+from app.materials import intake_routes
+from test_material_copy_confirmation_api import material_intake_no_execution
+from app.member_permits import HostBudgetUncalibrated, cpu_render_budget_from_env, creation_stage_budgets_from_env, host_budget_from_env
 from app.production import ProductionRepository
 
-#: 一台机器标定完成后会拿到的真实数值。缺任何一项都应当被拒绝，不是给个默认。
+#: 有限隔离测试档；这些数值不是本机生产标定结果。
 _CALIBRATED_ENV = {
     "DEVICE_HOST_MAX_CPU_PERCENT": "60",
     "DEVICE_HOST_MIN_AVAILABLE_MEMORY_BYTES": "1073741824",
@@ -52,6 +56,45 @@ _CALIBRATED_ENV = {
 }
 
 
+@pytest.fixture(autouse=True)
+def material_processing_metadata_guard(request, monkeypatch, tmp_path):
+    if request.node.originalname not in {
+        "test_scheduled_material_routes_reject_missing_driver_before_heavy_work",
+        "test_scheduled_scan_rejects_scheduler_from_another_database",
+    }:
+        return None
+    from app.auth import SupabaseAuthContext
+    from app.config import Settings
+    from app.device_runtime import DeviceRuntime
+    from app.device_scheduler import DeviceScheduler
+
+    violations = []
+
+    def forbidden(*args, **kwargs):
+        violations.append("runtime, grant or scan outside rejection metadata scope")
+        pytest.fail(violations[-1])
+
+    for name in ("start", "run_once", "wake"):
+        monkeypatch.setattr(DeviceRuntime, name, forbidden)
+    monkeypatch.setattr(DeviceScheduler, "pick_and_grant", forbidden)
+    monkeypatch.setattr(MaterialIntakeUseCase, "scan_library", forbidden)
+    settings = Settings(database_path=str(tmp_path / "studio.sqlite3"),
+        video_inbox_path=str(tmp_path / "library"), video_output_path=str(tmp_path / "output"),
+        model_root_path=str(tmp_path / "models"), temporary_root_path=str(tmp_path / "temporary"),
+        draft_output_path=str(tmp_path / "drafts"), jianying_draft_root_path=str(tmp_path / "jianying"),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None, model_runtime_python_path=None,
+        native_portrait_worker_path=None, supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, "auth_context", SupabaseAuthContext(settings))
+    monkeypatch.setattr(main_module, "device_runtime", None)
+    monkeypatch.setattr(main_module, "material_ingestion", None)
+    request.addfinalizer(lambda: assert_no_execution())
+
+    def assert_no_execution():
+        assert violations == []
+
+
 def _request() -> Request:
     return Request({"type": "http", "method": "POST", "path": "/api/production/materials", "headers": []})
 
@@ -63,7 +106,7 @@ def _material_routes(monkeypatch: pytest.MonkeyPatch, database_path=None) -> Moc
     monkeypatch.setattr(main_module, "production_repo", repository)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda request: "workspace-one")
     monkeypatch.setattr(
-        main_module, "_material_binding_status",
+        intake_routes, "material_binding_status",
         lambda workspace_id, repo: SimpleNamespace(
             bound_to_current_workspace=True, directory_state="ready", directory_message="",
         ),
@@ -73,24 +116,26 @@ def _material_routes(monkeypatch: pytest.MonkeyPatch, database_path=None) -> Moc
 
 
 def test_scheduled_material_routes_reject_missing_driver_before_heavy_work(monkeypatch: pytest.MonkeyPatch) -> None:
+    violations = material_intake_no_execution(monkeypatch)
     repository = _material_routes(monkeypatch)
     monkeypatch.setattr(main_module, "device_runtime", None)
     monkeypatch.setattr(main_module, "material_ingestion", None)
 
     routes = (
-        lambda: main_module.scan_material_intake(_request()),
-        lambda: main_module.retry_material_intake("asset-one", _request()),
-        lambda: main_module.scan_production_materials(_request()),
-        lambda: main_module.analyze_production_material("asset-one", _request()),
+        lambda: main_module._material_intake_http_adapter().scan_material_intake(_request()),
+        lambda: main_module._material_intake_http_adapter().retry_material_intake("asset-one", _request()),
+        lambda: next(route.endpoint for route in main_module.app.routes if route.name == "scan_production_materials")(_request()),
+        lambda: next(route.endpoint for route in main_module.app.routes if route.name == "analyze_production_material")("asset-one", _request()),
     )
     for route in routes:
         with pytest.raises(HTTPException) as error:
             route()
         assert error.value.status_code == 503
 
-    repository.scan_library.assert_not_called()
+    repository.material_intake.scan_library.assert_not_called()
     repository.analyze_asset.assert_not_called()
-    repository.retry_material_ingestion.assert_not_called()
+    repository.material_intake.retry_material_ingestion.assert_not_called()
+    assert violations == []
 
 
 def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -106,23 +151,24 @@ def test_scheduled_scan_uses_discovery_and_manual_heavy_routes_stay_closed(monke
     monkeypatch.setattr(main_module, "device_runtime", runtime)
     monkeypatch.setattr(main_module, "material_ingestion", service)
 
-    result = main_module.scan_production_materials(_request())
+    result = next(route.endpoint for route in main_module.app.routes if route.name == "scan_production_materials")(_request())
     assert result.total_count == 0
     service.scan_once.assert_called_once_with()
-    repository.scan_library.assert_not_called()
+    repository.material_intake.scan_library.assert_not_called()
 
     for route in (
-        lambda: main_module.retry_material_intake("asset-one", _request()),
-        lambda: main_module.analyze_production_material("asset-one", _request()),
+        lambda: main_module._material_intake_http_adapter().retry_material_intake("asset-one", _request()),
+        lambda: next(route.endpoint for route in main_module.app.routes if route.name == "analyze_production_material")("asset-one", _request()),
     ):
         with pytest.raises(HTTPException) as error:
             route()
         assert error.value.status_code == 503
-    repository.retry_material_ingestion.assert_not_called()
+    repository.material_intake.retry_material_ingestion.assert_not_called()
     repository.analyze_asset.assert_not_called()
 
 
 def test_scheduled_scan_rejects_scheduler_from_another_database(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    violations = material_intake_no_execution(monkeypatch)
     repository = _material_routes(monkeypatch, tmp_path / "task.sqlite")
     scheduler = SimpleNamespace(database_path=tmp_path / "other.sqlite")
     service = SimpleNamespace(
@@ -135,10 +181,11 @@ def test_scheduled_scan_rejects_scheduler_from_another_database(monkeypatch: pyt
     monkeypatch.setattr(main_module, "material_ingestion", service)
 
     with pytest.raises(HTTPException) as error:
-        main_module.scan_production_materials(_request())
+        next(route.endpoint for route in main_module.app.routes if route.name == "scan_production_materials")(_request())
     assert error.value.status_code == 503
     service.scan_once.assert_not_called()
-    repository.scan_library.assert_not_called()
+    repository.material_intake.scan_library.assert_not_called()
+    assert violations == []
 
 
 def test_scheduled_mode_cannot_start_legacy_worker_or_stop_it_during_unwired_reload(
@@ -149,7 +196,7 @@ def test_scheduled_mode_cannot_start_legacy_worker_or_stop_it_during_unwired_rel
     stop_execution = Mock()
     stop_ingestion = Mock()
     monkeypatch.setattr(main_module, "_new_material_ingestion", new_legacy_service)
-    monkeypatch.setattr(main_module, "_stop_execution_worker", stop_execution)
+    monkeypatch.setattr(main_module, "_stop_device_runtime", stop_execution)
     monkeypatch.setattr(main_module, "_stop_material_ingestion", stop_ingestion)
 
     with pytest.raises(RuntimeError, match="尚未接入整机许可运行时"):
@@ -172,6 +219,17 @@ def test_one_runtime_carries_creation_job_and_scheduled_material_without_startin
     for name, value in _CALIBRATED_ENV.items():
         monkeypatch.setenv(name, value)
 
+    from dataclasses import replace
+    from app.audio_delivery_policy import AudioEncodeBudget, FinalMuxBudget
+    from app.packet_copy_policy import PacketCopyBudget
+    profile = main_module._device_resource_profile()
+    packet_budget = PacketCopyBudget('a'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30)
+    encode_budget = AudioEncodeBudget('b'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30)
+    mux_budget = FinalMuxBudget('c'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30)
+    profile = replace(profile, budget=replace(profile.budget, packet_copy=packet_budget,
+        audio_encode=encode_budget, final_mux=mux_budget))
+    monkeypatch.setattr(main_module, "_device_resource_profile", lambda: profile)
+
     runtime, service = main_module._build_device_components(repository=repository)
 
     # 只装好、不启动：驱动线程由生命周期统一启停，装配阶段不得自己起。
@@ -188,7 +246,34 @@ def test_one_runtime_carries_creation_job_and_scheduled_material_without_startin
     assert preview.owner.repository is repository
     assert type(preview.executor).__name__ == "ProfilePreviewExecutor"
     assert runtime.scheduler.database_path == repository.database_path.resolve()
-    assert runtime.scheduler.lock_path.parent == repository.database_path.resolve().parent
+    from app.device_paths import device_lock_path
+    assert runtime.scheduler.lock_path == device_lock_path()
+    creation = runtime.registrations["creation_job"]
+    assert creation.owner.audio_assembly is creation.executor.audio_assembly
+    assert creation.executor.audio_assembly.repository is repository
+    delivery = creation.owner.audio_delivery
+    assert delivery is creation.executor.audio_delivery
+    assert delivery.audio is creation.owner.audio_assembly
+    assert delivery.picture is creation.owner.packet_copy_assembly is creation.executor.packet_copy_assembly
+    assert delivery.repository is repository
+    assert delivery.audio_budget is encode_budget and delivery.mux_budget is mux_budget
+    assert delivery.reserve_bytes == profile.budget.min_free_disk_bytes
+    fragments = creation.owner.picture_fragments
+    assert fragments is creation.executor.picture_fragments
+    assert fragments.repository is repository
+    assert fragments.packet is delivery.picture
+    assert fragments.budget is profile.budget.cpu_render
+    assert fragments.metadata.audio_service is delivery.audio
+    assert fragments.metadata.picture_renderer is fragments.renderer
+    runtime_facts = Mock(return_value={"backend_identity": "actual-backend"})
+    monkeypatch.setattr(main_module, "_narration_runtime_facts", runtime_facts)
+    for consumer in (creation.owner, creation.owner.segments):
+        assert consumer.narration_runtime_facts("workspace-one", "task-one") == {
+            "backend_identity": "actual-backend"}
+    assert runtime_facts.call_args_list == [
+        (("workspace-one", "task-one"), {"repository": repository}),
+        (("workspace-one", "task-one"), {"repository": repository}),
+    ]
 
 
 def test_interactive_permit_survives_when_scheduled_material_is_off(
@@ -248,9 +333,9 @@ def test_explicit_device_binding_uses_supplied_repository_and_shared_material_sc
         video_inbox_path=str(repository.video_library_path), video_output_path=str(tmp_path / 'explicit-output'))
     for name, value in _CALIBRATED_ENV.items():
         monkeypatch.setenv(name, value)
-    cpu_budget = main_module.cpu_render_budget_from_env()
-    narration_budget, montage_budget = main_module.creation_stage_budgets_from_env()
-    budget = replace(main_module.host_budget_from_env(cpu_render=cpu_budget),
+    cpu_budget = cpu_render_budget_from_env()
+    narration_budget, montage_budget = creation_stage_budgets_from_env()
+    budget = replace(host_budget_from_env(cpu_render=cpu_budget),
         narration=narration_budget, montage=montage_budget)
     identity_access = MemberDeviceAccess(members)
     verify_identity = identity_access.verify_identity
@@ -302,7 +387,8 @@ def test_explicit_device_binding_uses_supplied_repository_and_shared_material_sc
         runtime_arguments = observations['runtime_arguments']
         assert probe_arguments['budget'] is budget
         assert probe_arguments['database_path'] == repository.database_path
-        assert probe_arguments['disk_paths'] == (repository.database_path.resolve().parent, Path(settings.video_output_path).expanduser())
+        assert probe_arguments['disk_paths'] == {'database': repository.database_path.resolve().parent,
+            'output': Path(settings.video_output_path).expanduser(), 'temporary': settings.effective_temporary_root_path}
         assert runtime_arguments['registrations'] is registrations
         assert runtime_arguments['resources'] is observations['probes'][0]
         assert runtime.host_observer is runtime_arguments['resources']
@@ -316,7 +402,8 @@ def test_explicit_device_binding_uses_supplied_repository_and_shared_material_sc
         assert runtime_arguments['admission_recorder'] is record_admission
         assert runtime_arguments['activity_source_reliable'] is True
         assert runtime.scheduler.database_path == repository.database_path.resolve()
-        assert runtime.scheduler.lock_path == repository.database_path.resolve().parent / 'device-permit.lock'
+        from app.device_paths import device_lock_path
+        assert runtime.scheduler.lock_path == device_lock_path()
         assert not runtime.running
         assert service._thread is None
         assert all(runtime.registrations[name] is value for name, value in registrations.items())

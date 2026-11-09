@@ -1,4 +1,5 @@
 """Real PNG registrations and resource decisions; no media execution or OS calibration."""
+from test_host_resource_probes import render_metadata_host as render_metadata_host
 from dataclasses import asdict, replace
 from functools import partial
 from types import SimpleNamespace
@@ -40,8 +41,8 @@ def state(tmp_path):
     montage = creation_task_montage_plan_from_payload(repo.get_creation_task_montage_plan(task.workspace_id, task.id))
     montage.graphic_overlays = [ImageOverlay(id=f'image-{index}', name='qa.png', source_ref=source['source_ref'],
         start_seconds=0, end_seconds=1).model_dump() for index in (1, 2)]
-    repo.save_creation_task_montage_plan(task.workspace_id, task.id, montage.id, creation_task_montage_plan_to_payload(montage))
-    return SimpleNamespace(repo=repo, task=repo.get_creation_task(task.workspace_id, task.id), plan=plan, limits=limits,
+    repo.montage_plan_adoption.save_creation_task_montage_plan(task.workspace_id, task.id, montage.id, creation_task_montage_plan_to_payload(montage))
+    return SimpleNamespace(repo=repo, task=repo.task_records.get_creation_task(task.workspace_id, task.id), plan=plan, limits=limits,
         store=store, source=source, actor=actor, resolver=resolver, montage=montage)
 
 
@@ -51,7 +52,7 @@ def facts(state, **changes):
             **{'actor': state.actor, 'graphic_source_facts': state.resolver, **changes})
 
 
-def test_normal_image_render_stat_facts_deduplicate_bytes_and_real_probe_counts(state, tmp_path, monkeypatch):
+def test_normal_image_render_stat_facts_deduplicate_bytes_and_real_probe_counts(state, tmp_path, monkeypatch, render_metadata_host):
     png = state.resolver(state.task.workspace_id, state.task.id, state.source['source_ref'], actor=state.actor)
     assert (png['width'], png['height']) == (16, 12)
     monkeypatch.setattr(state.store, 'describe', lambda *_: pytest.fail('admission must not hash content'))
@@ -82,7 +83,7 @@ def test_png_facts_refuse_unknown_or_foreign_provenance(state, invalid):
     elif invalid == 'other_task':
         task_id = 'missing-task'
     else:
-        record = state.repo.get_artifact_record(state.task.workspace_id, state.source['artifact_id'])
+        record = state.repo.execution_records.get_artifact_record(state.task.workspace_id, state.source['artifact_id'])
         if invalid == 'revision':
             path = state.store.resolve_file(record.logical_ref)
             path.write_bytes(path.read_bytes())  # Same bytes/length, different actual ctime.
@@ -90,7 +91,7 @@ def test_png_facts_refuse_unknown_or_foreign_provenance(state, invalid):
             with state.repo._connect() as conn:
                 conn.execute("UPDATE job_runs SET status='failed' WHERE id=?", (record.producer_job_id,))
         else:
-            transform = state.repo.list_transform_runs(state.task.workspace_id, state.task.id)[0]
+            transform = state.repo.lineage_records.list_transform_runs(state.task.workspace_id, state.task.id)[0]
             with state.repo._connect() as conn:
                 conn.execute('UPDATE transform_runs SET parameters_json=? WHERE id=?',
                     (json.dumps({**transform.parameters, 'width': None}), transform.id))
@@ -98,15 +99,15 @@ def test_png_facts_refuse_unknown_or_foreign_provenance(state, invalid):
         state.resolver(state.task.workspace_id, task_id, state.source['source_ref'], actor=actor)
 
 
-def test_text_render_uses_existing_overlay_budget_and_binds_text_values(state, tmp_path):
+def test_text_render_uses_existing_overlay_budget_and_binds_text_values(state, tmp_path, render_metadata_host):
     state.montage.graphic_overlays = [TextOverlay(text='公开素材演示', start_seconds=0, end_seconds=1).model_dump()]
-    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     before, resources = facts(state, graphic_source_facts=None)
     assert resources['overlay_count'] == 1 and resources['input_bytes'] == 512 + 4096
     assert _verdict(_probe(tmp_path, max_overlay_count=0), resources) is False
     state.montage.graphic_overlays[0]['text'] = '不同的画面文字'
-    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     after, changed = facts(state, graphic_source_facts=None)
     assert after != before and changed == resources
@@ -114,7 +115,7 @@ def test_text_render_uses_existing_overlay_budget_and_binds_text_values(state, t
 
 def test_text_does_not_weaken_mixed_png_source_authority(state):
     state.montage.graphic_overlays[1] = TextOverlay(text='公开素材演示', start_seconds=0, end_seconds=1).model_dump()
-    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     _, resources = facts(state)
     png = state.resolver(state.task.workspace_id, state.task.id, state.source['source_ref'], actor=state.actor)
@@ -133,7 +134,7 @@ def test_normal_render_keeps_unsupported_paths_blocked(state, unsupported):
         state.montage.graphic_overlays = [ArrowOverlay(name='unsupported', x=.5, y=.5, start_seconds=0, end_seconds=1).model_dump()]
     else:
         state.montage.audio_timeline = main.narration_audio_timeline(state.montage.narration_audio_path, state.montage.duration_seconds)
-    state.repo.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
+    state.repo.montage_plan_adoption.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
     with pytest.raises(ValueError, match='仅支持|音轨组合'):
         facts(state)
@@ -144,8 +145,8 @@ def test_grant_verifies_actual_png_digest_and_dimensions_before_renderer(state, 
     context = SimpleNamespace(check=lambda: checks.append(True), grant=SimpleNamespace(owner_id='current-render'))
     monkeypatch.setattr(main, 'production_repo', state.repo)
     monkeypatch.setattr(main, 'artifact_store', state.store)
-    original_event = state.repo.get_task_event
-    monkeypatch.setattr(state.repo, 'get_task_event', lambda workspace, identity:
+    original_event = state.repo.execution_records.get_task_event
+    monkeypatch.setattr(state.repo.execution_records, 'get_task_event', lambda workspace, identity:
         SimpleNamespace(payload=state.actor.identity_payload()) if identity == 'event_current-render_start' else original_event(workspace, identity))
     monkeypatch.setattr(main, '_verify_creation_identity', lambda actor: 'ready' if actor == state.actor else 'unauthorized')
     with pytest.raises(ValueError, match='设备许可'):
@@ -158,7 +159,7 @@ def test_grant_verifies_actual_png_digest_and_dimensions_before_renderer(state, 
         main._granted_graphic_source_paths(state.task.workspace_id, state.task.id, state.montage.graphic_overlays, context)
     monkeypatch.setattr(state.store, 'describe', original_describe)
     before, _ = facts(state)
-    transform = state.repo.list_transform_runs(state.task.workspace_id, state.task.id)[0]
+    transform = state.repo.lineage_records.list_transform_runs(state.task.workspace_id, state.task.id)[0]
     with state.repo._connect() as conn:
         conn.execute('UPDATE transform_runs SET parameters_json=? WHERE id=?',
             (json.dumps({**transform.parameters, 'width': 32}), transform.id))
@@ -187,7 +188,9 @@ def test_exact_image_preview_declares_union_and_candidate_peak(script_state, mon
     draft = state.client.post(state.base_url + '/edits/exact', json={
         'operation_type': 'EditGraphicOverlay', 'overlay_action': 'add', 'graphic_overlay': base_overlay})
     assert draft.status_code == 200, draft.text
-    monkeypatch.setattr(permits, 'cpu_render_budget_from_env', lambda: _render_budget())
+    selected_budget_for = main._device_operation_budget
+    monkeypatch.setattr(main, '_device_operation_budget',
+        lambda name: _render_budget() if name == 'cpu_render' else selected_budget_for(name))
     payload = {'operation_type': 'EditGraphicOverlay', 'overlay_action': 'add',
         'graphic_overlay': ImageOverlay(id='candidate-image', name='candidate.png', source_ref=second_ref, start_seconds=0, end_seconds=1).model_dump()}
     actor = CreationExecutionActor(state.workspace_id, state.member.member_id)
@@ -196,7 +199,10 @@ def test_exact_image_preview_declares_union_and_candidate_peak(script_state, mon
     graphics = actual['graphic_sources']
     assert {item['source_ref'] for item in graphics} == {first_ref, second_ref}
     assert resources['input_bytes'] == sum(item[1] for item in actual['files'])
-    assert _verdict(_probe(tmp_path, max_overlay_count=0), resources) is False
+    with monkeypatch.context() as scoped:
+        from test_host_resource_probes import declare_render_metadata_host
+        declare_render_metadata_host(scoped)
+        assert _verdict(_probe(tmp_path, max_overlay_count=0), resources) is False
     payload['graphic_overlay']['source_ref'] = first_ref
     duplicate, same_resources = main._task_media_facts(state.workspace_id, state.task.id, 'exact_edit_preview', {'payload': payload}, actor)
     assert same_resources['overlay_count'] == 2 and len(duplicate['graphic_sources']) == 1

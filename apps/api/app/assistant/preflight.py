@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from app.assistant.failures import _fail, FAILURE_RUNTIME_MISSING, FAILURE_TOOL_FAILED
 from app.assistant.runtime_checks import runtime_bundle
-from app.assistant.projection import _safe_business_failure
+from app.assistant.business_failure import _safe_business_failure
 
 def _read_host_facts(kind, extension, env, cwd, run_process, business_handler, source_binding):
     node = shutil.which("node", path=env["PATH"])

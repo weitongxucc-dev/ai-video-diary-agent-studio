@@ -450,7 +450,7 @@ def test_stream_tool_summary_uses_the_real_material_details_field():
 def test_assistant_stream_redacts_a_known_key_split_across_deltas(monkeypatch):
     monkeypatch.setattr(main_module, "_workspace_settings_for",
                         lambda _workspace: SimpleNamespace(effective_llm_api_key="fixture-secret-123"))
-    sanitizer = main_module._AssistantStreamTextSanitizer("local")
+    sanitizer = main_module._assistant_stream_transport().sanitizer("local")
     emitted = sanitizer.feed("先说结论：fixture-sec")
     emitted += sanitizer.feed("ret-123 已核实。")
     emitted += sanitizer.feed("", final=True)
@@ -458,7 +458,7 @@ def test_assistant_stream_redacts_a_known_key_split_across_deltas(monkeypatch):
     assert "fixture-secret-123" not in emitted
     assert "[已隐藏凭据]" in emitted
 
-    marked = main_module._AssistantStreamTextSanitizer("local")
+    marked = main_module._assistant_stream_transport().sanitizer("local")
     redacted = marked.feed("说明 api_key=fixture-")
     redacted += marked.feed("secret-123 可以读取。")
     redacted += marked.feed("", final=True)
@@ -489,7 +489,7 @@ def test_assistant_stream_response_sends_safe_events_then_authoritative_result(m
             publish({"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
                      "summary": "当前任务和所选对象状态已读取。", "result": {"token": "fixture-secret-123"}})
             return SimpleNamespace(model_dump=lambda mode: {"reply": "当前制作条件已回读。"})
-        return main_module._assistant_stream_response(execute, workspace_id="local",turn_id=turn['id'])
+        return main_module._assistant_stream_transport().response(execute, workspace_id="local",turn_id=turn['id'])
 
     response = TestClient(app).get("/assistant-stream", headers={"Accept": "text/event-stream"})
     assert response.status_code == 200
@@ -534,7 +534,7 @@ def test_background_goal_turn_persists_the_same_finite_compaction_diagnostic(mon
     goal={'task_id':'task','workspace_id':'local','member_id':'member','conversation_id':chat['id'],
         'original_turn_id':turn['id'],'original_instruction':raw,'round_count':1,'target_snapshot':{},
         'unfinished_steps':['read_original'],'handled_event_ids':[]}
-    main_module._run_goal_turn({'goal':goal,'turn_id':turn['id'],'request_context':{'stage':'montage'},
+    main_module._task_turn_http_adapter().run_goal({'goal':goal,'turn_id':turn['id'],'request_context':{'stage':'montage'},
         'event':{'status':'succeeded'},'phase':'business'}, {'business':business,'facts':{},'task_version':{}})
     saved=repo.get_turn(turn['id'])
     assert saved['status']=='failed' and saved['user_message']==raw
@@ -543,6 +543,30 @@ def test_background_goal_turn_persists_the_same_finite_compaction_diagnostic(mon
     assert diagnostic['limit_seconds']==180 and diagnostic['sdk_estimate']=={'tokens_before':112607}
     assert 'provider_usage' not in diagnostic
     assert 'PRIVATE_CONTEXT' not in json.dumps(diagnostic) and 'fixture-secret-123' not in json.dumps(diagnostic)
+
+
+def test_background_goal_setup_failure_forgets_registered_control_without_model(monkeypatch, tmp_path):
+    repo = ConversationRepository(tmp_path / 'goal-setup.sqlite')
+    chat = repo.current_or_create('local', 'member', 'home', 'home')
+    draft = repo.save_draft(chat['id'], 'local', 'member', '原委托', 0)
+    turn, _ = repo.create_turn_idempotent(chat['id'], 'local', 'member', '原委托', 'setup-request', draft['draft_version'])
+    turn_id = turn['id']
+    monkeypatch.setattr(main_module, 'conversation_repo', repo)
+    monkeypatch.setattr(main_module, 'assistant_continuation_driver', None)
+    monkeypatch.setattr(main_module, '_creation_task_or_404', lambda *_: SimpleNamespace(confirmed_script_id=None, stage='montage'))
+    monkeypatch.setattr(main_module, '_assistant_turn_scope', lambda *_: ('montage', []))
+    def refuse_stream_setup():
+        assert turn_id in pi_module._turn_stop_events
+        raise ValueError('injected goal stream setup failure')
+    monkeypatch.setattr(main_module, '_assistant_stream_transport', refuse_stream_setup)
+    monkeypatch.setattr(main_module, 'run_task_turn', lambda *_args, **_kwargs: pytest.fail('setup failure must not invoke model'))
+    claim = {'goal': {'task_id': 'task', 'workspace_id': 'local', 'original_instruction': '原委托'},
+        'turn_id': turn_id, 'request_context': {'stage': 'montage'}, 'event': {}}
+    assert turn_id not in pi_module._turn_stop_events
+    with pytest.raises(ValueError, match='goal stream setup failure'):
+        main_module._task_turn_http_adapter().run_goal(claim, {'business': None, 'facts': {}, 'task_version': {}})
+    assert turn_id not in pi_module._turn_stop_events
+    assert repo.get_turn(turn_id)['user_message'] == '原委托'
 
 
 def test_assistant_stream_reports_version_rejection_before_turn_started(monkeypatch):
@@ -556,7 +580,7 @@ def test_assistant_stream_reports_version_rejection_before_turn_started(monkeypa
     def stream():
         def execute(_publish):
             raise HTTPException(status_code=409, detail="当前任务版本已变化，请重新查看选中对象后发送。")
-        return main_module._assistant_stream_response(execute, workspace_id="local")
+        return main_module._assistant_stream_transport().response(execute, workspace_id="local")
 
     response = TestClient(app).get("/assistant-stream", headers={"Accept": "text/event-stream"})
     events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
@@ -934,7 +958,7 @@ def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch, tmp_path):
     monkeypatch.setattr(main_module, "_assistant_turn_scope",
                         lambda workspace_id, task, payload: (payload.context_stage, payload.selected_object_refs))
     monkeypatch.setattr(main_module, "_assistant_task_clip_material_selection", lambda *_args: None)
-    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(append_task_event=lambda event: event, list_subtitle_tracks=lambda *_: []))
+    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(execution_records=SimpleNamespace(append_task_event=lambda event: event), subtitle_records=SimpleNamespace(list_subtitle_tracks=lambda *_: [])))
     monkeypatch.setattr(main_module, "run_task_turn", lambda settings, **kwargs: (seen.append(kwargs) or ("收到。", None)))
     client = TestClient(main_module.app)
     message = "请检查镜头"
@@ -1073,7 +1097,8 @@ def test_script_window_projection_keeps_original_facts_and_discards_raw_candidat
     details={'kind':'script_window_request','operation':operation,'task_id':'task','script_id':'script',
              'request_id':request_id,'receipt':receipt,'invocation_input_id':'input','input_id':'input',
              'input_turn_id':'turn','raw_diagnostics':{'source':'/private/file'}}
-    if status=='failed': receipt['error_detail']=diagnostics
+    if status=='failed':
+        receipt['error_detail']=diagnostics
     if status in {'not_submitted','rejected','unknown'}:
         details['failure']={**(diagnostics if status=='rejected' else {}),'submission_effect':status}
     tool='confirm_saved_script' if operation=='confirm' else 'patch_script_sections'
@@ -1089,8 +1114,10 @@ def test_script_window_projection_keeps_original_facts_and_discards_raw_candidat
     assert projected['input_id']=='input'
     if status in {'saved','confirmed'}:
         assert projected['total_count']==45 and projected['updated_at']==receipt['updated_at']
-    if status in {'unknown','failed'}: assert projected['submission_effect']=='unknown'
-    if status in {'failed','rejected'}: assert projected['failure']['candidate_field']=='content'
+    if status in {'unknown','failed'}:
+        assert projected['submission_effect']=='unknown'
+    if status in {'failed','rejected'}:
+        assert projected['failure']['candidate_field']=='content'
     public=json.dumps(projected,ensure_ascii=False)
     assert '/private/' not in public and '原文秘密' not in public and 'submitted_input' not in public
 
@@ -1111,7 +1138,7 @@ def test_script_window_projection_filters_previous_input_and_queries_do_not_inve
 
 
 def test_script_window_resolver_reads_only_original_receipt_and_never_treats_404_as_unsubmitted():
-    from app.assistant.result_projection import resolve_script_window_request
+    from app.assistant.script_window_receipts import resolve_script_window_request
     value={'kind':'script_window_request','operation':'confirm','task_id':'task','script_id':'script',
            'request_id':str(uuid4()),'status':'unknown','submission_effect':'unknown'}
     calls=[]
@@ -1136,13 +1163,16 @@ def test_script_window_resolver_reads_only_original_receipt_and_never_treats_404
 @pytest.mark.parametrize('operation',['patch','confirm'])
 def test_real_window_query_producer_projects_script_identity_for_restored_requests(tmp_path,operation):
     node=shutil.which('node')
-    if not node: pytest.skip('node unavailable')
+    if not node:
+        pytest.skip('node unavailable')
     module=Path(__file__).resolve().parents[1]/'agent_tools/diary/script-tools.ts'
     request_id=str(uuid4())
     code="""
 const {registerScriptTools}=await import(process.argv[1]);
+const {createToolCallScope}=await import(new URL('./registration.ts',process.argv[1]));
 const operation=process.argv[2],request_id=process.argv[3],tools=new Map();
-registerScriptTools({registerTool:tool=>tools.set(tool.name,tool)},{taskId:'task',request:async()=>({
+const scope=createToolCallScope(()=>({turnId:'turn',inputId:'input',inputTurnId:'input-turn'}));
+registerScriptTools(scope.bind({registerTool:tool=>tools.set(tool.name,tool)}),{taskId:'task',request:async()=>({
  task_id:'task',script_id:'script',request_id,status:operation==='confirm'?'confirmed':'saved',
  updated_at:'2026-10-25T00:00:00+00:00',total_count:45,submitted_input:{content:'不能持久复制'}})});
 const result=await tools.get('read_script_window_request').execute('restore',{request_id,operation,script_id:'script',include_input:true});
@@ -1157,3 +1187,66 @@ console.log(JSON.stringify(result));
     assert projected['status']==('confirmed' if operation=='confirm' else 'saved')
     assert projected['script_id']=='script' and projected['request_id']==request_id
     assert projected['total_count']==45 and 'submitted_input' not in projected
+    from app.assistant.projection import _PiStreamProjector
+    streamed=_PiStreamProjector().project(json.dumps(event))
+    assert streamed['script_window_request']==projected and streamed['invocation_input_id']=='input'
+    assert '不能持久复制' not in json.dumps(streamed,ensure_ascii=False)
+
+
+def test_stream_window_receipt_is_available_before_agent_settles_and_keeps_initial_none_input():
+    from app.assistant.projection import _PiStreamProjector
+    request_id=str(uuid4())
+    details={'kind':'script_window_request','task_id':'task','request_id':request_id,'operation':'start',
+        'input_id':None,'input_turn_id':None,'invocation_input_id':'turn',
+        'receipt':{'task_id':'task','request_id':request_id,'script_id':'script','status':'saved',
+            'updated_at':'2026-10-25T00:00:00+00:00','submitted_input':{'content':'private candidate'}}}
+    event=_PiStreamProjector().project(json.dumps({'type':'tool_execution_end','toolName':'start_script_window',
+        'toolCallId':'call','result':{'details':details}}))
+    window=event['script_window_request']
+    assert window['request_id']==request_id and window['status']=='saved' and window['operation']=='start'
+    assert window.get('input_id') is None and window.get('input_turn_id') is None
+    assert event['invocation_input_id']=='turn' and 'private candidate' not in json.dumps(event)
+
+
+@pytest.mark.parametrize('invalid',['other_tool','wrong_operation','foreign_input','missing_source'])
+def test_stream_window_locator_rejects_unrelated_tool_and_unbound_invocation(invalid):
+    from app.assistant.projection import _PiStreamProjector
+    details={'kind':'script_window_request','task_id':'task','request_id':str(uuid4()),'script_id':'script','operation':'patch',
+        'input_id':'input','input_turn_id':'turn','invocation_input_id':'input',
+        'failure':{'submission_effect':'unknown'}}
+    tool='patch_script_sections'
+    if invalid=='other_tool':
+        tool='read_current_task'
+    if invalid=='wrong_operation':
+        details['operation']='confirm'
+    if invalid=='foreign_input':
+        details['invocation_input_id']='old-input'
+    if invalid=='missing_source':
+        del details['input_id']
+    event=_PiStreamProjector().project(json.dumps({'type':'tool_execution_end','toolName':tool,'result':{'details':details}}))
+    assert 'script_window_request' not in event and 'invocation_input_id' not in event
+
+
+def test_thirteen_review_issues_survive_real_stream_and_final_window_failure_projection():
+    import hashlib
+    issues=[{'error':'script_fact_unsupported','reason_code':'unsupported_fact','section_index':index,
+        'candidate_section_index':index,'candidate_field':'content','candidate_fragment_index':0,
+        'candidate_field_digest':hashlib.sha256(f'第{index}段待核实事实'.encode()).hexdigest(),
+        'review_explanation':f'第{index}段需要证据。 /private/review/source Bearer fixture-private-token',
+        'raw_candidate':'不得持久复制的候选正文'} for index in range(1,14)]
+    failure={'error':'script_fact_unsupported','reason_code':'unsupported_fact','reason':'13段事实需要核实',
+        'submission_effect':'rejected','review_issues':issues}
+    details={'kind':'script_window_request','operation':'patch','task_id':'task','script_id':'script',
+        'request_id':str(uuid4()),'input_id':'input','input_turn_id':'turn','invocation_input_id':'input','failure':failure}
+    event={'type':'tool_execution_end','toolName':'patch_script_sections','toolCallId':'review',
+        'isError':True,'result':{'details':details}}
+    streamed=_PiStreamProjector().project(json.dumps(event))
+    _,final=project_event_fixture(json.dumps(event)+'\n'+json.dumps({'type':'agent_settled'}))
+    for public in (streamed['failure'],streamed['script_window_request']['failure'],final['failure']):
+        assert len(public['review_issues'])==13
+        assert [issue['candidate_section_index'] for issue in public['review_issues']]==list(range(1,14))
+        assert [issue['candidate_field_digest'] for issue in public['review_issues']]==[issue['candidate_field_digest'] for issue in issues]
+        assert all(set(issue)=={'error','reason_code','section_index','candidate_section_index','candidate_field',
+            'candidate_fragment_index','candidate_field_digest','review_explanation'} for issue in public['review_issues'])
+    serialized=json.dumps({'stream':streamed,'final':final},ensure_ascii=False)
+    assert all(secret not in serialized for secret in ('/private/review/source','fixture-private-token','不得持久复制的候选正文'))

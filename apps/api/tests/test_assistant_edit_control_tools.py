@@ -3,14 +3,17 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from uuid import UUID
 
 import pytest
 
-from test_timeline_history import history_task  # noqa: F401
+from test_timeline_history import history_task as history_task  # noqa: F401
 
+
+from tool_result_test_fixtures import TOOL_OUTCOME_JS
 
 MODULE = Path(__file__).parents[1] / "agent_tools" / "diary_tools.ts"
-RUNNER = r"""
+RUNNER = TOOL_OUTCOME_JS + r"""
 let raw='';for await(const part of process.stdin)raw+=part;
 const input=JSON.parse(raw),tools=new Map(),calls=[],steps=[];
 let controlReads=0,savedParent=input.parent;
@@ -43,12 +46,13 @@ globalThis.fetch=async(url,init)=>{
   if(input.failure==='post')return{ok:false,status:409,json:async()=>({detail:'当前编辑基础已变化，未提交操作'})};
   if(input.failure==='partial_undo')return{ok:false,status:409,json:async()=>({detail:'上一编辑包含多项修改，不能只撤销调色；未撤销整个编辑'})};
   if(path.endsWith('/selection/preview'))return{ok:true,json:async()=>structuredClone(input.preview)};
+ if(path.endsWith('/timeline/undo')||path.endsWith('/timeline/redo'))return{ok:true,json:async()=>({restore_request:{...structuredClone(input.receipt),request_id:body.request_id}})};
   return{ok:true,json:async()=>structuredClone(input.receipt)};
  }
  throw new Error('Unexpected synthetic request: '+method+' '+path);
 };
 const {default:register}=await import(process.argv[1]);register({registerTool:tool=>tools.set(tool.name,tool)});
-async function execute(operation){try{return{ok:true,result:await tools.get(operation.tool).execute('synthetic-call',operation.params||{})};}catch(error){return{ok:false,error:error.message};}}
+async function execute(operation){try{return toolOutcome(await tools.get(operation.tool).execute('synthetic-call',operation.params||{}));}catch(error){return{ok:false,error:error.message};}}
 if(input.parallel)steps.push(...await Promise.all(input.operations.map(execute)));
 else for(const operation of input.operations)steps.push(await execute(operation));
 const parameters=Object.fromEntries(['read_edit_control_context','preview_edit_selection','discard_edit_proposal','undo_last_edit','redo_last_edit','prepare_creation_window'].map(name=>[name,tools.get(name).parameters]));
@@ -108,9 +112,11 @@ def test_public_control_schema_exposes_only_indices_and_actual_steps(tmp_path, c
     public = json.loads(out["steps"][0]["result"]["content"][0]["text"])
     assert public["proposals"][0]["proposal_index"] == 1
     assert "id" not in public["proposals"][0]
+    assert out["parameters"]["read_edit_control_context"]["properties"] == {}
     for name in ("read_edit_control_context", "undo_last_edit", "redo_last_edit"):
-        assert out["parameters"][name]["properties"] == {}
         assert out["parameters"][name]["additionalProperties"] is False
+    for name in ("undo_last_edit", "redo_last_edit"):
+        assert out["parameters"][name]["properties"] == {"target_operation_id": {"type": "string", "minLength": 1}}
     assert set(out["parameters"]["preview_edit_selection"]["properties"]) == {"proposal_index", "selection"}
     assert set(out["parameters"]["discard_edit_proposal"]["properties"]) == {"proposal_index"}
     assert all(item["member"] == "synthetic-member" for item in out["calls"])
@@ -165,16 +171,31 @@ def test_reordered_list_does_not_rebind_read_index_to_another_proposal(tmp_path,
 
 @pytest.mark.parametrize("tool,action", [("undo_last_edit", "undo"), ("redo_last_edit", "redo"), ("discard_edit_proposal", "reject")])
 def test_history_identity_and_result_are_host_bound_actual_receipts(tmp_path, context, tool, action):
-    out = call(tmp_path, context, [READ, {"tool": tool, "params": {"proposal_index": 1, "task_id": "model-other", "assistant_turn_id": "model-turn"}}])
+    out = call(tmp_path, context, [READ, {"tool": tool, "params": {"proposal_index": 1, "task_id": "model-other", "assistant_turn_id": "model-turn",
+                   "request_id": "model-request", "expected_timeline_version_id": "model-version", "expected_timeline_sequence": 999}}])
     assert out["steps"][1]["ok"]
-    assert posts(out)[0]["body"] == {"assistant_turn_id": "trusted-turn", "expected_timeline_version_id": "version-current", "expected_timeline_sequence": 4}
+    body = posts(out)[0]["body"]
+    expected_body = {"assistant_turn_id": "trusted-turn", "expected_timeline_version_id": "version-current", "expected_timeline_sequence": 4}
+    if action != "reject":
+        assert str(UUID(body["request_id"])) == body["request_id"]
+        expected_body["request_id"] = body["request_id"]
+    assert body == expected_body
+    assert posts(out)[0]["path"] == (f"/api/creation-tasks/task-current/timeline/{action}" if action != "reject"
+                                   else "/api/creation-tasks/task-current/edits/proposal-current/reject")
     details = out["steps"][1]["result"]["details"]
-    assert details == {"invocation_input_id": "trusted-turn", "input_id": None, "input_turn_id": None,
-                       "kind": "edit_control", "action": action, "task_id": "task-current",
-                       "result": {"task_id": "task-current", "timeline_version_id": "version-after", "status": "applied", "sentinel": "actual-http-receipt"}}
+    receipt = {"task_id": "task-current", "timeline_version_id": "version-after", "status": "applied", "sentinel": "actual-http-receipt"}
     model_text = out["steps"][1]["result"]["content"][0]["text"]
-    assert "receipt_returned" in model_text
-    assert "actual-http-receipt" not in model_text and "version-after" not in model_text
+    if action == "reject":
+        assert details == {"invocation_input_id": "trusted-turn", "input_id": None, "input_turn_id": None,
+                           "kind": "edit_control", "action": action, "task_id": "task-current", "result": receipt}
+        assert "receipt_returned" in model_text
+        assert "actual-http-receipt" not in model_text and "version-after" not in model_text
+    else:
+        receipt["request_id"] = body["request_id"]
+        expected = {"kind": "timeline_restore_request", "action": action,
+                    "request_id": body["request_id"], "receipt": receipt}
+        assert details == {**expected, "invocation_input_id": "trusted-turn", "input_id": None, "input_turn_id": None}
+        assert json.loads(model_text) == expected
 
 
 @pytest.mark.parametrize("failure", [None, "post", "partial_undo"])
@@ -246,7 +267,9 @@ def test_parallel_prepare_waits_for_same_create_promise_without_polling_or_recre
     assert not any(item["method"] == "GET" for item in out["calls"])
     if failure:
         assert not out["steps"][0]["ok"] and not out["steps"][1]["ok"]
-        assert "完整目标保存失败" in out["steps"][1]["error"]
+        failure = out["steps"][1]["result"]["details"]["failure"]
+        assert failure["reason"] == "目标保存失败"
+        assert failure["error"] == "http_503" and failure["submission_effect"] == "unknown"
         assert len(posts(out)) == 1
     else:
         assert all(step["ok"] for step in out["steps"])
@@ -271,10 +294,14 @@ def _history_owner(repo, tmp_path):
     return TimelineRestoreUseCase(repo, edits), CreationExecutionActor('local', 'history-reader')
 
 
-def test_history_http_and_background_share_bounded_read_projection(history_task, tmp_path):
+def test_history_http_and_background_share_bounded_read_projection(history_task, tmp_path, monkeypatch):
     from app.creation.editing.timeline_history_repository import TimelineHistoryReadRepository
     from app.schemas import TimelineVersionListResponse
     repo, task_id, client = history_task
+    def forbidden_full_version(*_args, **_kwargs):
+        pytest.fail("bounded history must not hydrate full version snapshots")
+    for name in ("get_timeline_version", "list_timeline_versions", "_decode_snapshot"):
+        monkeypatch.setattr(repo.timeline_records, name, forbidden_full_version)
     owner, actor = _history_owner(repo, tmp_path)
     path = f'/api/creation-tasks/{task_id}/timeline/versions'
     pages = []
@@ -318,10 +345,10 @@ def test_history_list_detail_and_background_use_original_operation_identity(hist
                  'AdjustVisualEffects', json.dumps({'request_id': 'synthetic-history-request'}),
                  'timeline_history_v2', 'timeline_history_v1' if association == 'result' else version_id,
                  'applied', '2026-01-01T00:00:00+00:00'))
-    repo.create_timeline_version(TimelineVersion(
+    repo.timeline_records.create_timeline_version(TimelineVersion(
         id=version_id, workspace_id='local', task_id=task_id, parent_version_id='timeline_history_v2',
         sequence=3, snapshot={}, created_by_operation_id=operation_id))
-    before = repo.get_creation_task('local', task_id)
+    before = repo.task_records.get_creation_task('local', task_id)
     owner, actor = _history_owner(repo, tmp_path)
     path = f'/api/creation-tasks/{task_id}/timeline/versions'
     listing, detail = client.get(path), client.get(f'{path}/{version_id}')
@@ -340,4 +367,4 @@ def test_history_list_detail_and_background_use_original_operation_identity(hist
         with pytest.raises(TimelineHistoryConflict) as caught:
             owner.history('local', task_id, actor)
         assert str(caught.value) == detail.json()['detail']
-    assert repo.get_creation_task('local', task_id) == before
+    assert repo.task_records.get_creation_task('local', task_id) == before

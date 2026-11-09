@@ -1,4 +1,5 @@
 """Shared HTTP integration with isolated SQLite/files; no model, microphone or GUI."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 import io
 import wave
 from uuid import uuid4
@@ -68,7 +69,7 @@ def test_sampling_http_persists_replay_and_keeps_member_ownership(tmp_path, monk
 
 
 def test_sampling_http_rejects_missing_or_forged_identity_and_unpaired_mobile(tmp_path, monkeypatch):
-    client, _, _, headers, _ = _sampling_context(tmp_path, monkeypatch)
+    client, repository, owner, headers, other = _sampling_context(tmp_path, monkeypatch)
     base = "/api/media/voice-sampling-tasks"
     create = {"request_id": str(uuid4()), "display_name": "我的声音"}
     assert client.post(base, json=create).status_code == 403
@@ -77,12 +78,36 @@ def test_sampling_http_rejects_missing_or_forged_identity_and_unpaired_mobile(tm
     task = client.post(base, json=create, headers=headers).json()
     response = client.post(f"{base}/{task['id']}/sample", headers=headers,
         data={"request_id": str(uuid4()), "purpose": "voice_profile", "text_version": task["text_version"], "source_device": "mobile"},
-        files={"audio": ("sample.wav", _pcm_sample(), "audio/wav")})
-    assert response.status_code == 422
+        files={"audio": ("sample.wav", b"opaque-unread-sample", "audio/wav")})
+    assert response.status_code == 401
     assert client.get(f"{base}/{task['id']}", headers=headers).json()["status"] == "awaiting_sample"
+
+    assert client.post(base, json=create, headers=headers).json() == task
+    assert client.post(base, json={**create, "display_name": "另一名称"}, headers=headers).status_code == 409
+    assert client.get(base, headers=headers).json() == {"items": [task], "total_count": 1}
+    assert client.get(base, headers=other).json() == {"items": [], "total_count": 0}
+    assert client.get(f"{base}/{task['id']}", headers=other).status_code == 404
+    rejected = client.post(f"{base}/{task['id']}/sample", headers=other,
+        data={"request_id": str(uuid4()), "purpose": "voice_profile", "text_version": task["text_version"], "source_device": "desktop"},
+        files={"audio": ("sample.wav", b"opaque-unread-sample", "audio/wav")})
+    assert rejected.status_code == 404
+    assert client.get(f"{base}/{task['id']}", headers=headers).json() == task
+    reopened = ProductionRepository(database_path=repository.database_path,
+                                    video_library_path=repository.video_library_path)
+    persisted = reopened.voice_sampling.get(task["workspace_id"], owner.member_id, task["id"])
+    assert persisted.status == "awaiting_sample"
+    assert persisted.last_error is None and persisted.submission_request_id is None
+    assert persisted.voice_profile_id is None
+    assert list(repository.video_library_path.iterdir()) == []
+    with reopened._connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM voice_sampling_tasks").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM material_assets").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM versioned_voice_profiles").fetchone()[0] == 0
 
 
 def test_discovery_http_selects_only_one_candidate_and_preserves_it_on_retry(tmp_path, monkeypatch):
+    from test_material_copy_confirmation_api import material_intake_no_execution
+    violations = material_intake_no_execution(monkeypatch)
     client, repository, owner, headers, other = _sampling_context(tmp_path, monkeypatch)
     source = tmp_path / "source"
     source.mkdir()
@@ -91,13 +116,13 @@ def test_discovery_http_selects_only_one_candidate_and_preserves_it_on_retry(tmp
     excluded = source / "excluded"
     excluded.mkdir()
     (excluded / "private.png").write_bytes(b"excluded source")
-    repository.bind_material_ingestion("local", expected_directory=str(repository.video_library_path), verified_owner_user_id=owner.member_id)
+    repository.material_source_files.bind_material_ingestion("local", expected_directory=str(repository.video_library_path), verified_owner_user_id=owner.member_id)
     repository.material_discovery = MaterialDiscoveryService(
         DiscoveryStore(repository._connect), root_provider=lambda: [source],
-        excluded_roots=lambda: [repository.video_library_path], target_for=repository.material_link_target,
+        excluded_roots=lambda: [repository.video_library_path], target_for=repository.material_source_files.material_link_target,
         accept_copy=DiscoveryIntake(repository._connect, repository._material_assets,
             workspace_references=repository._workspace_media_references,
-            target_for=repository.material_link_target, confirm_copy=repository.confirm_material_copy_complete),
+            target_for=repository.material_source_files.material_link_target, confirm_copy=repository.material_source_files.confirm_material_copy_complete),
     )
     monkeypatch.setattr(main, "material_ingestion", None)
     base = "/api/production/materials/discovery"
@@ -127,9 +152,13 @@ def test_discovery_http_selects_only_one_candidate_and_preserves_it_on_retry(tmp
     assert len(list(repository.video_library_path.iterdir())) == 1
     assert client.get(f"{target}/candidates/{chosen['id']}/preview", headers=other).status_code == 404
     assert client.get(f"{target}/candidates/{chosen['id']}/preview", headers=headers).content == b"isolated source A"
+    assert violations == []
 
 
 def test_running_input_http_replays_original_receipt_and_consumes_at_sdk_boundary(tmp_path, monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main, "_creation_task_script_generator_for", forbidden)
     from app.conversation_repository import ConversationRepository
     client, _, owner, headers, other = _sampling_context(tmp_path, monkeypatch)
     conversations = ConversationRepository(tmp_path / "conversations.sqlite3")
@@ -200,31 +229,50 @@ def test_first_turn_rejects_stale_reference_version_without_consuming_draft(tmp_
 
 def test_execution_finish_keeps_original_input_binding_after_steering(tmp_path, monkeypatch):
     from types import SimpleNamespace
+    import subprocess
+    import pytest
+    from app.assistant.execution_binding import execution_locator_id
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('original binding representative forbids media helpers, Popen, models and drivers')
+    # Install before any seed context/helper import, with no ASGI lifespan start.
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    import _media_preview_test_fixtures as media_helpers
+    import test_creation_execution as creation_helpers
+    for helpers in (media_helpers, creation_helpers):
+        for name in ('write_synthetic_video', 'register_synthetic_video_asset',
+                     'register_synthetic_profiles', 'synthetic_wav_bytes'):
+            monkeypatch.setattr(helpers, name, forbidden)
+    monkeypatch.setattr(main, 'run_task_turn', forbidden)
+    monkeypatch.setattr(main, 'run_plan_turn', forbidden)
+    monkeypatch.setattr(main, 'start_assistant_continuation_driver', forbidden)
+    monkeypatch.setattr(main.montage_renderer, 'render', forbidden)
     from app.creation.contracts import TaskEvent
 
     _, repository, owner, _, _ = _sampling_context(tmp_path, monkeypatch)
     # Isolated ledger seam: the host read has already verified the real job.
     source = {"assistant_turn_id": "turn", "input_id": "input-old"}
-    event = TaskEvent(id=main._assistant_execution_locator_id("turn", "input-old"),
+    event = TaskEvent(id=execution_locator_id("turn", "input-old"),
         workspace_id="local", task_id="task", job_id="job", event_type="assistant_execution_located",
         payload={"source": source, "job_id": "job", "input_digest": "digest"})
-    monkeypatch.setattr(repository, "list_task_events", lambda *_: [event])
-    monkeypatch.setattr(repository, "get_task_event", lambda *_: event)
+    monkeypatch.setattr(repository.execution_records, "list_task_events", lambda *_: [event])
+    monkeypatch.setattr(repository.execution_records, "get_task_event", lambda *_: event)
     receipt = {"job": {"id": "job", "input_digest": "digest", "status": "succeeded"}}
     records = []
     monkeypatch.setattr(main, "_read_bound_execution_result", lambda *_: receipt)
     monkeypatch.setattr(main, "current_workspace_id", lambda _: "local")
-    monkeypatch.setattr(main, "_assistant_member_id", lambda *_: owner.member_id)
-    monkeypatch.setattr(repository, "get_creation_task", lambda *_: SimpleNamespace(id="task"))
-    monkeypatch.setattr(main, "_execution_source_version_current", lambda *_: True)
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'assistant_member', lambda adapter, *_: owner.member_id)
+    monkeypatch.setattr(repository.task_records, "get_creation_task", lambda *_: SimpleNamespace(id="task"))
+    monkeypatch.setattr(main, "_goal_projection", lambda: SimpleNamespace(
+        execution_source_current=lambda *_: True))
     monkeypatch.setattr(main, "conversation_repo", SimpleNamespace(
         record_task_execution=lambda *args, **kwargs: records.append(kwargs)))
     monkeypatch.setattr(main, "_wake_assistant_continuations", lambda: None)
     assert main._bind_assistant_execution_result("task", object(), "turn", receipt) == receipt
     assert records == [{"current_source": True, "input_id": "input-old"}]
-    assert main._assistant_execution_locator_id("turn", "input-new") != event.id
-    assert main._assistant_execution_locator_id("turn") == "event_assistant_execution_locator_turn"
-    proofs = main._assistant_goal_action_proofs("local", "task", "turn",
+    assert execution_locator_id("turn", "input-new") != event.id
+    assert execution_locator_id("turn") == "event_assistant_execution_locator_turn"
+    proofs = main._task_turn_http_adapter().case().action_proofs("local", "task", "turn",
         media_job=None, edit_preview=None, edit_request=None, execution_status=receipt)
     assert proofs == [{"kind": "execution_status", "id": "job", "input_id": "input-old"}]
 
@@ -259,9 +307,9 @@ def test_received_material_reference_is_atomic_and_restored_by_rescan(tmp_path, 
     assert repository.resolve_workspace_media_reference('local', reference, require_registered=True) == path
     with repository._connect() as conn:
         conn.execute('DELETE FROM workspace_media_references WHERE reference=?', (reference,))
-    repository.bind_material_ingestion('local', expected_directory=str(repository.video_library_path), verified_owner_user_id=owner.member_id)
-    repository.confirm_material_copy_complete('local', relative_path=path.name,
-        expected_revision=repository.material_copy_revision(path.stat()), confirmation_source='app_import',
+    repository.material_source_files.bind_material_ingestion('local', expected_directory=str(repository.video_library_path), verified_owner_user_id=owner.member_id)
+    repository.material_source_files.confirm_material_copy_complete('local', relative_path=path.name,
+        expected_revision=repository.material_source_files.material_copy_revision(path.stat()), confirmation_source='app_import',
         verified_owner_user_id=owner.member_id)
     response = client.post('/api/production/materials/scan', headers=headers)
     assert response.status_code == 200

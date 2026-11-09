@@ -24,13 +24,13 @@ def test_local_speech_persists_time_evidence_caches_and_preserves_user_correctio
     transcribe = Mock(return_value=ASRTranscription("local_whisper", "USB port", [SubtitleSegment(0, 1300, "USB port")]))
     analyzer.transcriber = SimpleNamespace(configured=True, transcribe=transcribe)
     repo = ProductionRepository(tmp_path / "db.sqlite", library, scene_reader=lambda path, duration: [], speech_analyzer=analyzer)
-    repo.bind_material_ingestion("workspace", expected_directory=str(library))
-    repo.confirm_material_copy_complete(
+    repo.material_source_files.bind_material_ingestion("workspace", expected_directory=str(library))
+    repo.material_source_files.confirm_material_copy_complete(
         "workspace", relative_path="sample.mp4",
-        expected_revision=repo.material_copy_revision(source.stat()),
+        expected_revision=repo.material_source_files.material_copy_revision(source.stat()),
         confirmation_source="manual",
     )
-    asset = repo.scan_library("workspace")[0]
+    asset = repo.material_intake.scan_library("workspace")[0]
     analyzed = repo.analyze_asset("workspace", asset.id)
     assert analyzed.speech_analysis.status == "ready"
     assert analyzed.speech_analysis.observations[0].end_ms == 1000
@@ -40,8 +40,8 @@ def test_local_speech_persists_time_evidence_caches_and_preserves_user_correctio
     restarted = ProductionRepository(tmp_path / "db.sqlite", library, scene_reader=lambda path, duration: [], speech_analyzer=analyzer)
     restarted.analyze_asset("workspace", asset.id)
     assert transcribe.call_count == 1
-    assert restarted.search_material_segments("workspace", query="USB port")[0].segment_ref == f"segment:{segment.id}"
-    assert restarted.search_material_segments("other-workspace", query="USB port") == []
+    assert restarted.material_search.search_material_segments("workspace", query="USB port")[0].segment_ref == f"segment:{segment.id}"
+    assert restarted.material_search.search_material_segments("other-workspace", query="USB port") == []
     loaded = restarted.get_asset("workspace", asset.id)
     cue = NarrationCue(id="cue", source_section_id="section", narration_segment_id="voice", text="USB port", duration_seconds=1)
     score = _score_candidate(cue, loaded, loaded.segments[0], 0, 0)
@@ -54,9 +54,9 @@ def test_local_speech_persists_time_evidence_caches_and_preserves_user_correctio
     assert transcribe.call_count == 2
     assert reanalyzed.segments[0].transcript == "HDMI port"
     assert reanalyzed.segments[0].description == "人物在讲解"
-    assert restarted.search_material_segments("workspace", query="USB") == []
+    assert restarted.material_search.search_material_segments("workspace", query="USB") == []
     assert restarted.list_assets_page("workspace", limit=20, offset=0, query="USB")[1] == 0
-    assert restarted.search_material_segments("workspace", query="HDMI")[0].segment_ref == f"segment:{segment.id}"
+    assert restarted.material_search.search_material_segments("workspace", query="HDMI")[0].segment_ref == f"segment:{segment.id}"
     assert not list((tmp_path / "temp").iterdir())
 
 
@@ -83,7 +83,8 @@ def test_missing_audio_is_explicit_and_bad_media_does_not_keep_stale_evidence(tm
 
 
 def test_material_query_respects_non_chinese_word_boundaries():
-    from app.production import MaterialSegment, _material_query_reasons
+    from app.production import MaterialSegment
+    from app.materials.segment_search_use_case import _material_query_reasons
     from unittest.mock import Mock
     asset = Mock(usage_role="b_roll", speech_analysis=None)
     segment = MaterialSegment("segment", "asset", 0, 1, transcript="Education USB port", usage_role="b_roll")

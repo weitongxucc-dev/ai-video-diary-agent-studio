@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 from app.creation.contracts import EditOperation, TimelineVersion
 
 if TYPE_CHECKING:
-    from app.production import CreationTask, ProductionRepository
+    from app.creation.contracts import CreationTask
+    from app.production import ProductionRepository
 
 
 def history_edit_head(
@@ -20,11 +21,11 @@ def history_edit_head(
     # Render-only versions have no edit. Control versions point to the exact
     # restored snapshot, so repeated undo/redo walks the same immutable history.
     while version_id:
-        version = repository.get_timeline_version(workspace_id, version_id)
+        version = repository.timeline_records.get_timeline_version(workspace_id, version_id)
         if version.created_by_operation_id is None:
             version_id = version.parent_version_id
             continue
-        operation = repository.get_edit_operation(workspace_id, version.created_by_operation_id)
+        operation = repository.edit_records.get_edit_operation(workspace_id, version.created_by_operation_id)
         follow_restore = operation.operation_type == "RedoTimelineVersion" or (
             not for_redo and operation.operation_type == "UndoTimelineVersion"
         )
@@ -44,7 +45,7 @@ def undo_target_versions(
         )
         if changed is None or changed.parent_version_id is None:
             return None, None
-        return changed, repository.get_timeline_version(workspace_id, changed.parent_version_id)
+        return changed, repository.timeline_records.get_timeline_version(workspace_id, changed.parent_version_id)
     except KeyError:
         return None, None
 
@@ -61,7 +62,7 @@ def redo_target_versions(
         target_id = operation.payload.get("base_version_id")
         if not isinstance(target_id, str):
             return None, None
-        return current, repository.get_timeline_version(workspace_id, target_id)
+        return current, repository.timeline_records.get_timeline_version(workspace_id, target_id)
     except KeyError:
         return None, None
 
@@ -76,7 +77,7 @@ def project_task_summary(repository: ProductionRepository, task: CreationTask) -
     current = None
     if task.current_timeline_version_id is not None:
         try:
-            current = repository.get_timeline_version(
+            current = repository.timeline_records.get_timeline_version(
                 task.workspace_id, task.current_timeline_version_id
             )
         except KeyError:

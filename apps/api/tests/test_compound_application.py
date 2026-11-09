@@ -30,10 +30,10 @@ def compound_state(tmp_path):
     state.zh, state.en = tracks
     state.base = TimelineVersion('compound-base', 'ws', state.task.id, state.base.id, 3,
         {**state.base.snapshot, 'subtitle_track_ids': [track.id for track in tracks]}, None)
-    state.repo.create_timeline_version(state.base)
+    state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
-        state.repo.create_subtitle_track(track)
-    state.task = state.repo.get_creation_task('ws', state.task.id)
+        state.repo.subtitle_records.create_subtitle_track(track)
+    state.task = state.repo.task_records.get_creation_task('ws', state.task.id)
     state.application = CompoundEditUseCase(state.repo, state.case)
     return state
 
@@ -50,7 +50,7 @@ def test_prepared_selection_recompiles_original_context_and_original_save_base_C
     assert full.candidate.plan.audio_timeline.tracks[0].clips[0].gain_db == -3
     assert all(track.style['font_size'] == 64 for track in full.candidate.subtitle_tracks)
     intent, proposal = state.application.save_preview(full)
-    old = state.repo.get_edit_proposal('ws', proposal.id)
+    old = state.repo.edit_records.get_edit_proposal('ws', proposal.id)
     partial = state.application.prepare_selection(CompoundSelectionCommand('ws', state.task.id, proposal.id,
         state.identity, included_step_indices=[0, 2]))
     assert [step['index'] for step in partial.candidate.steps] == [0, 1, 2]
@@ -58,13 +58,13 @@ def test_prepared_selection_recompiles_original_context_and_original_save_base_C
     assert partial.candidate.plan.audio_timeline.tracks[0].clips[0].gain_db == 0
     assert partial.intent.raw_command == intent.raw_command and partial.intent.playhead_ms == 750
     assert partial.intent.scope['context_refs'] == ['clip:clip']
-    assert state.repo.get_edit_proposal('ws', proposal.id) == old
+    assert state.repo.edit_records.get_edit_proposal('ws', proposal.id) == old
     later_tracks = [clone_subtitle_track(track, timeline_version_id='later-head', track_id='later-' + track.id)
         for track in (state.zh, state.en)]
-    state.repo.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=4,
+    state.repo.timeline_records.create_timeline_version(replace(state.base, id='later-head', parent_version_id=state.base.id, sequence=4,
         snapshot={**state.base.snapshot, 'subtitle_track_ids': [track.id for track in later_tracks]}))
     for track in later_tracks:
-        state.repo.create_subtitle_track(track)
+        state.repo.subtitle_records.create_subtitle_track(track)
     with pytest.raises(ValueError, match='版本|变化|version'):
         state.application.save_preview(partial)
-    assert not state.repo.list_edit_operations('ws', state.task.id)
+    assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)

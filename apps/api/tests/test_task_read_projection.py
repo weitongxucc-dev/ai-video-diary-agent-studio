@@ -6,6 +6,8 @@ from test_task_media_grants import case
 from fastapi.testclient import TestClient
 
 
+from test_montage_pipeline import person_render_edit_state as person_render_edit_state
+
 def test_list_workspace_controls_agree_after_apply_undo_and_redo(tmp_path, monkeypatch):
     main,repo,actor,media,runtime,client,original,track,store=_visual_scope_case(tmp_path,monkeypatch)
     try:
@@ -26,13 +28,14 @@ def test_list_workspace_controls_agree_after_apply_undo_and_redo(tmp_path, monke
         assert saved.status_code==200,saved.text
         applied=read()
         assert applied['timeline_sequence']==2 and applied['can_undo'] and not applied['can_redo']
-        assert client.post('/api/creation-tasks/task/timeline/undo',json={}).status_code==200
+        assert client.post('/api/creation-tasks/task/timeline/undo',json={'request_id': 'test_list_workspace_controls_agree_after_apply_undo_and_redo:undo:31'}).status_code==200
         undone=read()
         assert undone['timeline_sequence']==3 and undone['can_redo'] and not undone['can_undo']
-        assert client.post('/api/creation-tasks/task/timeline/redo',json={}).status_code==200
+        assert client.post('/api/creation-tasks/task/timeline/redo',json={'request_id': 'test_list_workspace_controls_agree_after_apply_undo_and_redo:redo:34'}).status_code==200
         redone=read()
         assert redone['timeline_sequence']==4 and redone['can_undo'] and not redone['can_redo']
-    finally:runtime.stop(0)
+    finally:
+        runtime.stop(0)
 
 
 def test_workspace_and_list_share_revision_and_script_rule(person_render_edit_state):
@@ -77,8 +80,8 @@ def test_all_nested_task_responses_agree_after_edit_undo_and_redo(person_render_
             response = state.client.get(url)
             assert response.status_code == 200, response.text
             nested.append(response.json()[field])
-        current = state.production.get_creation_task(state.workspace_id, state.task.id)
-        plan = state.production.get_creation_plan(state.workspace_id, current.plan_id)
+        current = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
+        plan = state.production.plan_records.get_creation_plan(state.workspace_id, current.plan_id)
         item = CreationRequestItemResponse.model_validate(main._creation_request_item_response({
             "ordinal": 1, "plan_id": plan.id, "task_id": current.id,
             "plan": asdict(plan), "task": asdict(current),
@@ -100,10 +103,10 @@ def test_all_nested_task_responses_agree_after_edit_undo_and_redo(person_render_
     edited = read()
     assert edited["timeline_sequence"] == initial["timeline_sequence"] + 1
     assert edited["can_undo"] and not edited["can_redo"]
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_all_nested_task_responses_agree_after_edit_undo_and_redo:undo:106'}).status_code == 200
     undone = read()
     assert undone["timeline_sequence"] == edited["timeline_sequence"] + 1 and undone["can_redo"]
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={'request_id': 'test_all_nested_task_responses_agree_after_edit_undo_and_redo:redo:109'}).status_code == 200
     redone = read()
     assert redone["timeline_sequence"] == undone["timeline_sequence"] + 1
     assert redone["can_undo"] and not redone["can_redo"]
@@ -118,10 +121,7 @@ def test_no_history_and_script_revision_rule_are_real_entity_facts(tmp_path,monk
     item=client.get('/api/creation-tasks').json()['items'][0]
     assert item['timeline_sequence']==0 and not item['can_undo'] and not item['can_redo']
     from app.creation.projection import project_task_summary
-    task=repo.get_creation_task('local','task')
+    task=repo.task_records.get_creation_task('local','task')
     script=replace(task,confirmed_script_id='script',stage='script',stage_status='failed')
     assert script.can_revise_script
     assert project_task_summary(repo,script).summary['can_revise_script'] is True
-
-
-from test_montage_pipeline import person_render_edit_state as person_render_edit_state

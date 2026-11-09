@@ -5,7 +5,8 @@ from tempfile import TemporaryDirectory
 from uuid import uuid4
 from PIL import Image, ImageOps
 from app.models import utc_now
-from app.production import ArtifactRecord, JobRun, TransformRun, content_readable
+from app.creation.contracts import ArtifactRecord, JobRun, TransformRun
+from app.source_policy import knowledge_item_readable as content_readable
 
 
 def import_graphic_source(repository,store,temporary_root,workspace_id,task_id,upload):
@@ -35,32 +36,32 @@ def import_graphic_source(repository,store,temporary_root,workspace_id,task_id,u
         normalized.save(path)
         identity=uuid4().hex
         parameters={'name':name,'width':normalized.width,'height':normalized.height,'original_sha256':digest.hexdigest()}
-        job=repository.create_job_run(JobRun(id=f'job_{identity}',workspace_id=workspace_id,task_id=task_id,
+        job=repository.job_records.create_job_run(JobRun(id=f'job_{identity}',workspace_id=workspace_id,task_id=task_id,
             kind='graphic_import',idempotency_key=f'graphic_import:{identity}',input_digest=digest.hexdigest()))
-        running=repository.claim_job_run(workspace_id,job.id)
+        running=repository.job_records.claim_job_run(workspace_id,job.id)
         try:
             published=store.publish_file(f'artifacts/{task_id}/{job.id}/source.png',path)
             file_stat=store.resolve_file(published.logical_ref).stat()
             parameters['file_revision']={'size_bytes':file_stat.st_size,'mtime_ns':file_stat.st_mtime_ns,'ctime_ns':file_stat.st_ctime_ns}
-            record=repository.create_artifact_record(ArtifactRecord(id=f'artifact_{identity}',workspace_id=workspace_id,task_id=task_id,
+            record=repository.execution_records.create_artifact_record(ArtifactRecord(id=f'artifact_{identity}',workspace_id=workspace_id,task_id=task_id,
                 kind='graphic_source',logical_ref=published.logical_ref,sha256=published.sha256,size_bytes=published.size_bytes,
                 producer_job_id=job.id,input_refs=[]))
-            repository.create_transform_run(TransformRun(id=f'transform_{identity}',workspace_id=workspace_id,task_id=task_id,job_id=job.id,
+            repository.lineage_records.create_transform_run(TransformRun(id=f'transform_{identity}',workspace_id=workspace_id,task_id=task_id,job_id=job.id,
                 transform_type='graphic_import',input_digest=digest.hexdigest(),input_refs=[],output_refs=[record.logical_ref],engine='local-pillow-v1',
                 parameters=parameters,status='succeeded',started_at=running.started_at,finished_at=utc_now()))
-            repository.finish_job_run(workspace_id,job.id,status='succeeded',output_refs=[record.logical_ref])
+            repository.job_records.finish_job_run(workspace_id,job.id,status='succeeded',output_refs=[record.logical_ref])
             return {'source_ref':record.logical_ref,'artifact_id':record.id,**{key:parameters[key] for key in ('name','width','height')}}
         except Exception as exc:
-            repository.finish_job_run(workspace_id,job.id,status='failed',failure_reason=type(exc).__name__,
+            repository.job_records.finish_job_run(workspace_id,job.id,status='failed',failure_reason=type(exc).__name__,
                 impact='当前叠加层和成片没有改变',repair_action='检查外接盘后重新导入图片')
             raise
 
 
 def _successful_graphic_transform(repository,workspace_id,task_id,record):
-    job=repository.get_job_run(workspace_id,record.producer_job_id)
+    job=repository.job_records.get_job_run(workspace_id,record.producer_job_id)
     if job.task_id!=task_id or job.status!='succeeded' or record.logical_ref not in job.output_refs:
         raise ValueError('图片生产作业尚未成功，不作为可编辑来源')
-    transform=next((item for item in repository.list_transform_runs(workspace_id,task_id)
+    transform=next((item for item in repository.lineage_records.list_transform_runs(workspace_id,task_id)
         if item.job_id==job.id and item.status=='succeeded' and item.transform_type in {'graphic_import','media_script'}
         and record.logical_ref in item.output_refs),None)
     if transform is None:
@@ -69,7 +70,7 @@ def _successful_graphic_transform(repository,workspace_id,task_id,record):
 
 
 def graphic_sources(repository,workspace_id,task_id,store=None):
-    records={record.logical_ref:record for record in repository.list_artifact_records(workspace_id,task_id) if record.kind=='graphic_source'}
+    records={record.logical_ref:record for record in repository.execution_records.list_artifact_records(workspace_id,task_id) if record.kind=='graphic_source'}
     sources=[]
     for ref,record in records.items():
         try:
@@ -87,7 +88,7 @@ def graphic_sources(repository,workspace_id,task_id,store=None):
 
 
 def resolve_graphic_source(repository,store,workspace_id,task_id,reference):
-    record=next((item for item in repository.list_artifact_records(workspace_id,task_id)
+    record=next((item for item in repository.execution_records.list_artifact_records(workspace_id,task_id)
         if item.kind=='graphic_source' and item.logical_ref==reference),None)
     if record is None:
         raise ValueError('图片不是当前任务导入的来源，请重新导入或选择当前图片')
@@ -109,23 +110,23 @@ def graphic_source_facts(repository, store, workspace_id, task_id, reference, *,
     from app.task_audio import TASK_MEDIA_KIND
     if not isinstance(actor, CreationExecutionActor) or actor.workspace_id != workspace_id:
         raise PermissionError('图片来源缺少当前工作区成员身份')
-    task = repository.get_creation_task(workspace_id, task_id)
+    task = repository.task_records.get_creation_task(workspace_id, task_id)
     principal = actor.user_id or actor.member_id
     if ((task.owner_user_id is not None and task.owner_user_id != principal)
             or not content_readable(user_id=principal, local_diagnostic=False,
                 visibility=task.visibility, owner_user_id=task.owner_user_id)):
         raise PermissionError('当前成员不能读取此任务图片')
-    record = next((item for item in repository.list_artifact_records(workspace_id, task_id)
+    record = next((item for item in repository.execution_records.list_artifact_records(workspace_id, task_id)
                    if item.kind == 'graphic_source' and item.logical_ref == reference), None)
     if record is None:
         raise ValueError('图片不是当前任务登记来源')
     transform = _successful_graphic_transform(repository, workspace_id, task_id, record)
-    job = repository.get_job_run(workspace_id, record.producer_job_id)
+    job = repository.job_records.get_job_run(workspace_id, record.producer_job_id)
     if ((transform.transform_type == 'graphic_import' and job.kind != 'graphic_import')
             or (transform.transform_type == 'media_script' and job.kind != TASK_MEDIA_KIND)):
         raise ValueError('PNG生产作业类型与来源记录不一致')
     if job.kind == TASK_MEDIA_KIND:
-        event = repository.get_task_event(workspace_id, f'event_{job.id}_start')
+        event = repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_start')
         if CreationExecutionActor.from_event(workspace_id, event.payload) != actor:
             raise PermissionError('图片生产作业不属于当前成员')
         if transform.parameters.get('owner_member_id') != principal:

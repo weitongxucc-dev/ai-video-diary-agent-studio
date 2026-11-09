@@ -20,8 +20,9 @@ from app.creation_execution import CreationExecutionActor
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
 from app.models import utc_now
-from app.production import (ArtifactRecord, CreationPlan, CreationTask, JobRun,
-                            ProductionRepository, TaskEvent, TransformRun)
+from app.creation.contracts import ArtifactRecord, CreationTask, JobRun, TaskEvent, TransformRun
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
 from app.task_audio import TASK_MEDIA_KIND
 from app.media_script_jobs import script_definition
 from app.media_script import ScriptInputRevision
@@ -91,7 +92,17 @@ def test_schema_is_closed_and_bounded_not_full_jsonschema():
 
 
 @pytest.fixture
-def case(tmp_path):
+def case(tmp_path, monkeypatch):
+    import subprocess
+    import _media_preview_test_fixtures as media_fixtures
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("recipe metadata verification must not execute media or subprocesses")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(media_fixtures, "write_synthetic_video", forbidden)
+    assert subprocess.Popen is forbidden
+    assert media_fixtures.write_synthetic_video is forbidden
     repository = ProductionRepository(tmp_path / "metadata.sqlite", tmp_path / "library")
     members = LocalMemberService(repository.database_path)
     member = members.whoami(None)[0]
@@ -103,13 +114,13 @@ def case(tmp_path):
         confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
     task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="fixture",
         scenario="knowledge_explanation", owner_user_id=actor.member_id, visibility="private")
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=actor.member_id)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=actor.member_id)
     store = ArtifactStore(tmp_path / "blobs")
     access = MemberDeviceAccess(members)
 
     def write(actor, task):
         # Trusted owner callback re-reads canonical task ownership, no caller flag.
-        current = repository.get_creation_task(actor.workspace_id, task.id)
+        current = repository.task_records.get_creation_task(actor.workspace_id, task.id)
         if current.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError("current task is not writable")
 
@@ -117,9 +128,9 @@ def case(tmp_path):
         return MediaScriptTools(repository, store, verify_identity=access.verify_identity, authorize_task_write=write)
 
     def producer(number=1, *, owner=None, status="succeeded", kind=TASK_MEDIA_KIND, task_id="task", include_definition=True):
-        job = repository.create_job_run(JobRun(id=f"script-job-{number}", workspace_id="local", task_id=task_id,
+        job = repository.job_records.create_job_run(JobRun(id=f"script-job-{number}", workspace_id="local", task_id=task_id,
             kind=kind, idempotency_key=f"script-{number}", input_digest="whole-fixture-job"))
-        job = repository.claim_job_run("local", job.id)
+        job = repository.job_records.claim_job_run("local", job.id)
         digest = hashlib.sha256(f"sealed fixture {number}".encode()).hexdigest()
         payload = MediaScriptPreviewRequest(script_source=f"# successful fixture version {number}\nprint(parameters['label'])",
             request_id="12345678-1234-4321-8123-123456789abc",
@@ -134,25 +145,25 @@ def case(tmp_path):
             input_revisions=(ScriptInputRevision("frame.png","fixture-revision","a"*64),),
             digest=digest, toolchain=SimpleNamespace(version="fixture-runtime",digest="a"*64))
         blob = store.publish_bytes(f"definitions/{number}.json", script_definition(sealed,payload))
-        record = repository.create_artifact_record(ArtifactRecord(id=f"definition-{number}", workspace_id="local", task_id=task_id,
+        record = repository.execution_records.create_artifact_record(ArtifactRecord(id=f"definition-{number}", workspace_id="local", task_id=task_id,
             kind="media_script_definition", logical_ref=blob.logical_ref, sha256=blob.sha256,
             size_bytes=blob.size_bytes, producer_job_id=job.id, input_refs=[]))
         data = io.BytesIO()
         Image.new("RGB", (4,4), "green").save(data, format="PNG")
         png = store.publish_bytes(f"outputs/{number}.png", data.getvalue())
-        picture = repository.create_artifact_record(ArtifactRecord(id=f"png-{number}", workspace_id="local", task_id=task_id,
+        picture = repository.execution_records.create_artifact_record(ArtifactRecord(id=f"png-{number}", workspace_id="local", task_id=task_id,
             kind="graphic_source", logical_ref=png.logical_ref, sha256=png.sha256, size_bytes=png.size_bytes,
             producer_job_id=job.id, input_refs=[]))
         now = utc_now()
-        repository.create_transform_run(TransformRun(id=f"script-transform-{number}", workspace_id="local", task_id=task_id,
+        repository.lineage_records.create_transform_run(TransformRun(id=f"script-transform-{number}", workspace_id="local", task_id=task_id,
             job_id=job.id, transform_type="media_script", input_digest=digest, input_refs=[],
             output_refs=[record.logical_ref,picture.logical_ref], engine="fixture-python-pillow",
             parameters={"definition_ref":record.logical_ref,"script_digest":digest,"owner_member_id":owner or actor.member_id},
             status="succeeded", started_at=job.started_at, finished_at=now))
         outputs = ([record.logical_ref] if include_definition else []) + [picture.logical_ref]
-        repository.finish_job_run("local",job.id,status=status,output_refs=outputs if status=="succeeded" else [],
+        repository.job_records.finish_job_run("local",job.id,status=status,output_refs=outputs if status=="succeeded" else [],
             **({} if status=="succeeded" else {"failure_reason":"fixture","impact":"fixture","repair_action":"fixture"}))
-        repository.append_task_event(TaskEvent(id=f"event_{job.id}_verified",workspace_id="local",task_id=task_id,job_id=job.id,
+        repository.execution_records.append_task_event(TaskEvent(id=f"event_{job.id}_verified",workspace_id="local",task_id=task_id,job_id=job.id,
             event_type="fixture_verified",payload={"outputs":[{"reference":record.logical_ref},{"reference":picture.logical_ref}]}))
         return job.id,record
 
@@ -199,14 +210,14 @@ def test_persistent_discovery_reuse_version_cas_and_revoke_preserve_history(case
 def test_registration_does_not_expand_source_job_artifacts_or_rewrite_verified_event(case):
     repository,store,members,actor,tools,producer = case
     job,definition = producer()
-    before = [item for item in repository.list_artifact_records("local","task") if item.producer_job_id==job]
-    event = repository.get_task_event("local",f"event_{job}_verified")
+    before = [item for item in repository.execution_records.list_artifact_records("local","task") if item.producer_job_id==job]
+    event = repository.execution_records.get_task_event("local",f"event_{job}_verified")
     recipe = tools().create_from_job(actor,job,name="fixture",description="fixture",parameter_schema=SCHEMA,request_id="12345678-1234-4321-8123-123456789abc")
     tools().revoke(actor,recipe["tool_id"],expected_version=1)
-    after = [item for item in repository.list_artifact_records("local","task") if item.producer_job_id==job]
-    assert before == after and repository.get_task_event("local",event.id) == event
+    after = [item for item in repository.execution_records.list_artifact_records("local","task") if item.producer_job_id==job]
+    assert before == after and repository.execution_records.get_task_event("local",event.id) == event
     assert store.describe(definition.logical_ref).sha256 == definition.sha256
-    metadata_jobs = [job for job in repository.list_job_runs("local","task") if job.kind=="media_script_tool_registration"]
+    metadata_jobs = [job for job in repository.job_records.list_job_runs("local","task") if job.kind=="media_script_tool_registration"]
     assert len(metadata_jobs)==1 and metadata_jobs[0].status=="succeeded"
 
 
@@ -264,7 +275,7 @@ def test_concurrent_version_cas_has_one_winner_and_no_duplicate_version(case):
     with ThreadPoolExecutor(max_workers=2) as executor:
         assert sorted(executor.map(update,["one","two"])) == ["conflict","saved"]
     assert tools().get(actor,recipe["tool_id"])["version"] == 2
-    registrations = [job for job in repository.list_job_runs("local","task") if job.kind=="media_script_tool_registration"]
+    registrations = [job for job in repository.job_records.list_job_runs("local","task") if job.kind=="media_script_tool_registration"]
     assert len(registrations) == 2
 
 
@@ -298,16 +309,16 @@ def test_reuse_rejects_definition_change_after_registration(case,corruption):
 def test_metadata_registration_failure_rolls_back_all_repository_rows(case):
     repository,store,members,actor,tools,producer = case
     job,_ = producer()
-    before = (repository.list_job_runs("local","task"),repository.list_artifact_records("local","task"),
-              repository.list_transform_runs("local","task"))
+    before = (repository.job_records.list_job_runs("local","task"),repository.execution_records.list_artifact_records("local","task"),
+              repository.lineage_records.list_transform_runs("local","task"))
     with repository._connect() as conn:
         conn.execute("""CREATE TRIGGER reject_fixture_recipe BEFORE INSERT ON transform_runs
             WHEN NEW.transform_type='media_script_tool_recipe'
             BEGIN SELECT RAISE(ABORT,'synthetic metadata write failure'); END""")
     with pytest.raises(ValueError):
         tools().create_from_job(actor,job,name="fixture",description="fixture",parameter_schema=SCHEMA,request_id="12345678-1234-4321-8123-123456789abc")
-    after = (repository.list_job_runs("local","task"),repository.list_artifact_records("local","task"),
-             repository.list_transform_runs("local","task"))
+    after = (repository.job_records.list_job_runs("local","task"),repository.execution_records.list_artifact_records("local","task"),
+             repository.lineage_records.list_transform_runs("local","task"))
     assert after == before
     assert tools().list(actor) == []
 
@@ -318,10 +329,10 @@ def test_creation_nonce_replay_query_and_payload_conflict_use_existing_job_key(c
     request = "12345678-1234-4321-8123-123456789abc"
     kwargs = dict(request_id=request,name="fixture",description="fixture",parameter_schema=SCHEMA)
     saved = tools().create_from_job(actor,job,**kwargs)
-    before = repository.list_job_runs("local","task")
+    before = repository.job_records.list_job_runs("local","task")
     replay = tools().create_from_job(actor,job,**kwargs)
     assert replay == saved
-    assert repository.list_job_runs("local","task") == before
+    assert repository.job_records.list_job_runs("local","task") == before
     restarted = tools()
     assert restarted.get_created_for_request(actor,request)["tool_id"] == saved["tool_id"]
     with pytest.raises(ScriptToolConflict):
@@ -347,9 +358,9 @@ def test_same_uuid_is_private_to_current_member_and_workspace(case):
         tools().get_created_for_request(other,request)
     with pytest.raises(PermissionError):
         tools().get_created_for_request(replace(actor,workspace_id="foreign"),request)
-    plan = replace(repository.get_creation_plan("local","plan"),id="other-plan")
+    plan = replace(repository.plan_records.get_creation_plan("local","plan"),id="other-plan")
     task = CreationTask(id="other-task",workspace_id="local",plan_id=plan.id,name="other",scenario="knowledge_explanation")
-    repository.confirm_creation_plan(plan,task,verified_owner_user_id=other.member_id)
+    repository.plan_confirmation.confirm_creation_plan(plan,task,verified_owner_user_id=other.member_id)
     other_job,_ = producer(2,owner=other.member_id,task_id=task.id)
     created = tools().create_from_job(other,other_job,request_id=request,name="other",description="other",parameter_schema=SCHEMA)
     assert created["tool_id"] != saved["tool_id"]
@@ -364,12 +375,12 @@ def test_incomplete_registration_nonce_is_never_recreated(case):
     tools().create_from_job(actor,job,**kwargs)
     with repository._connect() as conn:
         conn.execute("UPDATE job_runs SET status='interrupted' WHERE kind='media_script_tool_registration'")
-    before = repository.list_job_runs("local","task")
+    before = repository.job_records.list_job_runs("local","task")
     with pytest.raises(ScriptToolUnknown):
         tools().create_from_job(actor,job,**kwargs)
     with pytest.raises(ScriptToolUnknown):
         tools().get_created_for_request(actor,request)
-    assert repository.list_job_runs("local","task") == before
+    assert repository.job_records.list_job_runs("local","task") == before
 
 
 @pytest.mark.parametrize("field",["input_digest","output_refs_json"])
@@ -388,9 +399,9 @@ def test_recipe_result_must_close_over_its_actual_registration_digest_and_output
 def test_definition_must_be_an_actual_output_of_the_successful_producer_job(case):
     repository,store,members,actor,tools,producer = case
     job,definition = producer(include_definition=False)
-    source = repository.get_job_run("local",job)
+    source = repository.job_records.get_job_run("local",job)
     assert source.status == "succeeded" and definition.logical_ref not in source.output_refs
-    assert definition.logical_ref in repository.get_transform_run("local","script-transform-1").output_refs
+    assert definition.logical_ref in repository.lineage_records.get_transform_run("local","script-transform-1").output_refs
     with pytest.raises(ScriptToolError,match="missing or unbound"):
         tools().create_from_job(actor,job,request_id="12345678-1234-4321-8123-123456789abc",
             name="fixture",description="fixture",parameter_schema=SCHEMA)

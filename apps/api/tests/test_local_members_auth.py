@@ -21,7 +21,8 @@ from app.database_migrations import (
     apply_production_migrations,
 )
 from app.local_members import LocalMemberService
-from app.production import CreationTask, ProductionRepository
+from app.creation.contracts import CreationTask
+from app.production import ProductionRepository
 
 client = TestClient(main_module.app)
 
@@ -176,6 +177,17 @@ def test_owner_token_passes_member_write_routes(tmp_path, monkeypatch):
     assert invite_response.status_code == 200
     assert invite_response.json()["invite_code"]
 
+    member_id = add_response.json()["member_id"]
+    promoted = client.patch(f"/api/members/{member_id}", json={"role": "owner"}, headers=headers)
+    assert promoted.status_code == 200
+    assert promoted.json()["role"] == "owner"
+    reopened = LocalMemberService(tmp_path / "agent.sqlite3")
+    assert next(m for m in reopened.list_members() if m.member_id == member_id).role == "owner"
+    removed = client.delete(f"/api/members/{member_id}", headers=headers)
+    assert removed.status_code == 200
+    assert removed.json() == {"deleted": member_id}
+    assert all(m.member_id != member_id for m in reopened.list_members())
+
 
 def test_invalid_token_is_unauthorized(tmp_path, monkeypatch):
     _member_service(tmp_path, monkeypatch)
@@ -208,8 +220,8 @@ def test_member_sees_only_shared_creation_tasks(tmp_path, monkeypatch):
     }
     # Single-task fetch keeps the same switch at the repository layer.
     with pytest.raises(KeyError):
-        repo.get_creation_task(workspace_id, "task-private", include_private=False)
-    assert repo.get_creation_task(workspace_id, "task-private").id == "task-private"
+        repo.task_records.get_creation_task(workspace_id, "task-private", include_private=False)
+    assert repo.task_records.get_creation_task(workspace_id, "task-private").id == "task-private"
 
 
 def test_member_sees_only_shared_materials(tmp_path, monkeypatch):
@@ -342,7 +354,7 @@ def test_migration_13_applies_twice_without_error(tmp_path):
     # Migration 13 is a version-only marker: it bumps the schema version without
     # touching creation_tasks/material_assets, so it stays safe on the bare
     # standalone chain (test_device_runtime). The visibility columns are added
-    # by ProductionRepository._init_database's PRAGMA-guarded ensures instead.
+    # by production_schema.initialize_production_schema's PRAGMA-guarded ensures instead.
 
 
 def test_migration_14_adds_confirmation_columns_after_a_bare_upgrade(tmp_path):
@@ -364,7 +376,7 @@ def test_migration_14_adds_confirmation_columns_after_a_bare_upgrade(tmp_path):
 
 
 def test_visibility_columns_are_provisioned_not_migrated(tmp_path, monkeypatch):
-    # The content visibility columns come from ProductionRepository._init_database's
+    # The content visibility columns come from production_schema.initialize_production_schema's
     # PRAGMA-guarded ensures, not from static migration SQL — SQLite has no
     # ADD COLUMN IF NOT EXISTS, and a plain ALTER would collide with the bare
     # standalone migration chain. A fresh repository must provision them.

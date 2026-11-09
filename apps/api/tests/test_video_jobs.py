@@ -7,7 +7,7 @@ from threading import Event, Lock, Thread
 import pytest
 
 from app.artifact_store import ArtifactStore
-from app.production import JobRun
+from app.creation.contracts import JobRun
 from app.task_runtime import JobFailure, JobResult
 from app.video_jobs import VideoJobRunner
 

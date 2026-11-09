@@ -88,7 +88,7 @@ def test_voice_reference_can_be_registered_without_transcript_and_read_back(
     assert reread.status_code == 200, reread.text
     assert reread.json()["version"] == "voice-v1"
     assert reread.json()["reference_text"] == (reference_text or "")
-    persisted = env.repository.get_versioned_voice_profile(
+    persisted = env.repository.profile_records.get_versioned_voice_profile(
         "voice-workspace", voice_id, "voice-v1"
     )
     assert persisted.reference_audio_path == env.reference_path
@@ -129,7 +129,7 @@ def test_missing_reference_text_blocks_real_preview_before_provider_and_preserve
     assert result.reason == "reference_text_missing"
     assert result.output_path is None
     assert provider.calls == 0
-    reread = env.repository.get_versioned_voice_profile(
+    reread = env.repository.profile_records.get_versioned_voice_profile(
         "voice-workspace", voice.id, voice.version
     )
     assert reread == voice

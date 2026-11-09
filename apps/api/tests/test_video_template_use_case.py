@@ -1,4 +1,5 @@
 """Template metadata only; rendered task/output qualification below is declared."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
@@ -13,15 +14,18 @@ from fastapi import Request
 from app import main
 from app.content_templates import list_content_templates
 from app.creation.video_template_use_case import VideoTemplateUseCase
-from app.production import ProductionRepository, VideoTemplate
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
 from app.schemas import SaveVideoTemplateRequest, VideoTemplateVersionRequest
+from test_content_visibility_routes import material_library_no_execution
 
 
 def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path, monkeypatch):
+    material_library_no_execution(monkeypatch)
     workspace, owner = "template-metadata", "declared-owner"
     database = tmp_path / "templates.sqlite3"
     repository = ProductionRepository(database, tmp_path / "unused-library")
-    original = repository.save_video_template(VideoTemplate(id="template-existing", workspace_id=workspace,
+    original = repository.video_templates.save_video_template(VideoTemplate(id="template-existing", workspace_id=workspace,
         version=1, name="原模板", origin="user", owner_user_id="untrusted-input",
         visibility="shared", source_task_id="original-task", source_timeline_version_id="original-timeline",
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc), settings={"aspect_ratio": "1:1",
@@ -43,7 +47,7 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
         trace.append("reader:" + user)
         return user, diagnostic
 
-    get_template, save_template = repository.get_video_template, repository.save_video_template
+    get_template, save_template = repository.video_templates.get_video_template, repository.video_templates.save_video_template
 
     def observe_template(*args):
         trace.append("template.read")
@@ -56,21 +60,21 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
 
     monkeypatch.setattr(main, "production_repo", repository)
     monkeypatch.setattr(main, "current_workspace_id", workspace_for)
-    monkeypatch.setattr(main, "_content_reader", trusted_reader)
-    monkeypatch.setattr(repository, "get_video_template", observe_template)
-    monkeypatch.setattr(repository, "save_video_template", observe_save)
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *args, **kwargs: trusted_reader(*args, **kwargs))
+    monkeypatch.setattr(repository.video_templates, "get_video_template", observe_template)
+    monkeypatch.setattr(repository.video_templates, "save_video_template", observe_save)
     request = Request({"type": "http", "method": "POST", "path": "/metadata", "headers": []})
-    appended = main.create_video_template_version(original.id, request,
+    appended = main._video_template_http_adapter().create_video_template_version(original.id, request,
         VideoTemplateVersionRequest(expected_version=1, name=" 新名称 ", style_instruction=" 新风格 "))
     append_trace = list(trace)
     assert append_trace == ["workspace", "reader:" + owner, "template.read",
         "reader:declared-shared-viewer", "template.save"]
     assert appended["can_edit"] is True
     fresh = ProductionRepository(database, tmp_path / "unused-library")
-    assert asdict(fresh.get_video_template(workspace, original.id, 1)) == original_snapshot
+    assert asdict(fresh.video_templates.get_video_template(workspace, original.id, 1)) == original_snapshot
     expected_v2 = {**original_snapshot, "version": 2, "name": "新名称", "created_at": appended["created_at"],
         "settings": {**original.settings, "style_instruction": "新风格"}}
-    assert asdict(fresh.get_video_template(workspace, original.id, 2)) == expected_v2
+    assert asdict(fresh.video_templates.get_video_template(workspace, original.id, 2)) == expected_v2
     assert {k: v for k, v in appended.items() if k != "can_edit"} == expected_v2
 
     # No video was produced. This tiny file tests nonempty stat only; the output port
@@ -140,9 +144,9 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     monkeypatch.setattr(main, "_creation_task_output_path", output_fact)
     monkeypatch.setattr(VideoTemplateUseCase, "require_nonempty_output", staticmethod(observe_nonempty))
     monkeypatch.setattr(main, "_current_subtitle_tracks", track_facts)
-    monkeypatch.setattr(repository, "list_creation_task_scripts", script_facts)
+    monkeypatch.setattr(repository.script_records, "list_creation_task_scripts", script_facts)
     trace.clear()
-    saved = main.save_creation_task_template(task_id, request,
+    saved = main._video_template_http_adapter().save_creation_task_template(task_id, request,
         SaveVideoTemplateRequest(name=" 新模板 ", style_instruction=" 新任务风格 "))
     task_trace = list(trace)
     assert task_trace == ["workspace", "task", "plan", "montage", "qualified-output-port", "nonempty-stat",
@@ -155,11 +159,11 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     assert re.fullmatch(r"template_[0-9a-f]{12}", saved["id"])
     assert (saved["version"], saved["source_task_id"], saved["source_timeline_version_id"], saved["owner_user_id"]) == (
         1, task_id, timeline_id, owner)
-    assert asdict(fresh.get_video_template(workspace, saved["id"], 1)) == saved
+    assert asdict(fresh.video_templates.get_video_template(workspace, saved["id"], 1)) == saved
     serialized = json.dumps(saved["settings"], ensure_ascii=False)
     assert all(value not in serialized for value in ("old-clip", "old-asset", "old-segment", "old-output", "OLD TEXT", "OLD ONE"))
     trace.clear()
-    builtins = main._builtin_video_templates(workspace)
+    builtins = VideoTemplateUseCase(main.production_repo).builtin_templates(workspace)
     catalog = list_content_templates()
     assert trace == [] and len(builtins) == len(catalog) and builtins
     first = builtins[0]

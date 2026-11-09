@@ -11,7 +11,8 @@ from fastapi.testclient import TestClient
 
 import app.main as main
 from app.auth import SupabaseAuthContext
-from app.production import CreationTask, ProductionRepository
+from app.creation.contracts import CreationTask
+from app.production import ProductionRepository
 from test_device_invite_accept_entry import _auth_enabled_settings, _fake_jwks_client, _make_rsa_keypair
 from test_reply_script_transfer import make_plan
 from test_voice_sampling import pcm
@@ -21,9 +22,44 @@ PROOF = 'ab' * 32
 
 
 @pytest.fixture
-def linked(tmp_path, monkeypatch):
+def linked(tmp_path, monkeypatch, request):
+    private_paths = {
+        '/api/creation-tasks/task/covers/cover/image',
+        '/api/creation-tasks/task/output/selected-subtitles?expected_version_id=v&mode=zh',
+    }
+    metadata_only = request.node.originalname == 'test_new_version_without_valid_registered_output_never_falls_back_to_old' or (
+        request.node.originalname == 'test_same_workspace_does_not_expose_another_members_private_task'
+        and request.node.callspec.params.get('path') in private_paths)
+    forbidden_calls = []
+    if metadata_only:
+        import subprocess
+        import wave
+        from app.device_runtime import DeviceRuntime
+        from app.device_scheduler import DeviceScheduler
+
+        def forbidden(*args, **kwargs):
+            forbidden_calls.append('execution')
+            pytest.fail('output metadata forbids runtime, scheduling and media execution')
+
+        monkeypatch.setattr(subprocess, 'Popen', forbidden)
+        monkeypatch.setattr(wave, 'open', forbidden)
+        for name in ('start', 'run_once', 'wake'):
+            monkeypatch.setattr(DeviceRuntime, name, forbidden)
+        monkeypatch.setattr(DeviceScheduler, 'pick_and_grant', forbidden)
+        monkeypatch.setattr(main, '_creation_runtime', forbidden)
+        monkeypatch.setattr(main, '_start_device_runtime', forbidden)
+        monkeypatch.setattr(main.montage_renderer, 'render', forbidden)
+        monkeypatch.setattr(main.narration_generator, 'generate_for_creation_task', forbidden)
+        request.addfinalizer(lambda: pytest.fail('unexpected output execution') if forbidden_calls else None)
     private, public = _make_rsa_keypair()
     settings = _auth_enabled_settings(tmp_path)
+    if metadata_only:
+        settings = replace(settings, video_inbox_path=str(tmp_path / 'inbox'),
+            video_output_path=str(tmp_path / 'outputs'), model_root_path=str(tmp_path / 'models'),
+            temporary_root_path=str(tmp_path / 'temp'), draft_output_path=str(tmp_path / 'drafts'),
+            jianying_draft_root_path=str(tmp_path / 'jianying'), obsidian_vault_path=None,
+            hermes_radar_path=None, local_whisper_python_path=None, local_whisper_cli_path=None,
+            local_whisper_model_path=None)
     auth = SupabaseAuthContext(settings)
     auth._jwks_client = lambda: _fake_jwks_client(public)
     state = SimpleNamespace(calls=[], member=True, permit=True, rpc_error=None, role='member', onboarded=True)
@@ -94,16 +130,26 @@ def test_session_uses_explicit_membership_native_device_and_current_permission(l
     ('missing_workspace', 400), ('bad_workspace', 403), ('wrong_workspace', 403),
     ('local_header', 403), ('missing_jwt', 401), ('bad_jwt', 401)])
 def test_session_does_not_fallback_on_unverified_binding(linked, failure, status):
-    if failure == 'membership': linked.member = False
-    elif failure == 'device': linked.permit = False
-    elif failure == 'unknown': linked.permit = {'ready': True}
-    elif failure == 'transport': linked.permit = httpx.ConnectError('offline')
-    elif failure == 'missing_workspace': del linked.client.headers['X-Workspace-Id']
-    elif failure == 'bad_workspace': linked.client.headers['X-Workspace-Id'] = 'local'
-    elif failure == 'wrong_workspace': linked.client.headers['X-Workspace-Id'] = str(uuid4())
-    elif failure == 'local_header': linked.client.headers['X-Local-Member-Token'] = 'development-token'
-    elif failure == 'missing_jwt': del linked.client.headers['Authorization']
-    elif failure == 'bad_jwt': linked.client.headers['Authorization'] = 'Bearer invalid'
+    if failure == 'membership':
+        linked.member = False
+    elif failure == 'device':
+        linked.permit = False
+    elif failure == 'unknown':
+        linked.permit = {'ready': True}
+    elif failure == 'transport':
+        linked.permit = httpx.ConnectError('offline')
+    elif failure == 'missing_workspace':
+        del linked.client.headers['X-Workspace-Id']
+    elif failure == 'bad_workspace':
+        linked.client.headers['X-Workspace-Id'] = 'local'
+    elif failure == 'wrong_workspace':
+        linked.client.headers['X-Workspace-Id'] = str(uuid4())
+    elif failure == 'local_header':
+        linked.client.headers['X-Local-Member-Token'] = 'development-token'
+    elif failure == 'missing_jwt':
+        del linked.client.headers['Authorization']
+    elif failure == 'bad_jwt':
+        linked.client.headers['Authorization'] = 'Bearer invalid'
     response = linked.client.get('/api/companion/session')
     assert response.status_code == status, response.text
     assert 'local' != response.json().get('workspace_id')
@@ -207,13 +253,36 @@ def test_same_workspace_does_not_expose_another_members_private_task(linked, tmp
     repository = ProductionRepository(tmp_path / 'task.sqlite3', tmp_path / 'library')
     plan = replace(make_plan(), workspace_id=WORKSPACE, id='plan', creation_task_id=None)
     task = CreationTask(id='task', workspace_id=WORKSPACE, plan_id='plan', name='私人作品', scenario='private')
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=OTHER)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=OTHER)
     monkeypatch.setattr(main, 'production_repo', repository)
     def forbidden_read(*args, **kwargs):
         pytest.fail('private output must be rejected before resolving a file')
     monkeypatch.setattr(main, '_creation_task_output_path', forbidden_read)
+    guarded_output = path in {
+        '/api/creation-tasks/task/covers/cover/image',
+        '/api/creation-tasks/task/output/selected-subtitles?expected_version_id=v&mode=zh',
+    }
+    if guarded_output:
+        monkeypatch.setattr(repository.cover_records, 'get_cover_asset', forbidden_read)
+        monkeypatch.setattr(main, '_current_subtitle_tracks', forbidden_read)
+
+        def facts():
+            with repository._connect() as connection:
+                tables = [row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+                return {name: sorted((tuple(row) for row in connection.execute(
+                    'SELECT * FROM "' + name.replace('"', '""') + '"')), key=repr) for name in tables}
+
+        def tree():
+            return {str(item.relative_to(tmp_path)): item.read_bytes() if item.is_file() else None
+                    for item in tmp_path.rglob('*')}
+
+        before_facts, before_tree = facts(), tree()
     response = linked.client.get(path)
     assert response.status_code == 404, response.text
+    if guarded_output:
+        assert facts() == before_facts
+        assert tree() == before_tree
 
 
 @pytest.mark.parametrize('owner', [USER, OTHER])
@@ -221,9 +290,9 @@ def test_current_member_can_read_own_private_or_explicitly_shared_task(linked, t
     repository = ProductionRepository(tmp_path / 'readable.sqlite3', tmp_path / 'library')
     plan = replace(make_plan(), workspace_id=WORKSPACE, id='plan', creation_task_id=None)
     task = CreationTask(id='readable', workspace_id=WORKSPACE, plan_id=plan.id, name='可读任务', scenario='read')
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=owner)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner)
     if owner == OTHER:
-        repository.set_creation_task_visibility(WORKSPACE, task.id, 'shared')
+        repository.task_records.set_creation_task_visibility(WORKSPACE, task.id, 'shared')
     monkeypatch.setattr(main, 'production_repo', repository)
     response = linked.client.get('/api/creation-tasks/readable/job-runs')
     assert response.status_code == 200 and response.json()['task_id'] == task.id

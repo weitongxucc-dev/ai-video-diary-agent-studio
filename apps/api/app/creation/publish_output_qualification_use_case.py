@@ -4,7 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.creation.contracts import TimelineVersion
-from app.production import CreationTask, ProductionRepository, content_readable
+from app.creation.contracts import CreationTask
+from app.production import ProductionRepository
+from app.source_policy import knowledge_item_readable as content_readable
 
 
 class PublishOutputQualificationUseCase:
@@ -12,7 +14,7 @@ class PublishOutputQualificationUseCase:
         self.production = production
 
     def task_for_user(self, workspace_id: str, task_id: str, user_id: str) -> CreationTask:
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if not content_readable(
             user_id=user_id, local_diagnostic=False,
             visibility=task.visibility, owner_user_id=task.owner_user_id,
@@ -21,7 +23,7 @@ class PublishOutputQualificationUseCase:
         return task
 
     def source_version(self, workspace_id: str, task_id: str, user_id: str) -> tuple[CreationTask, TimelineVersion]:
-        task = self.production.get_creation_task(workspace_id, task_id)
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if not content_readable(
             user_id=user_id, local_diagnostic=False,
             visibility=task.visibility, owner_user_id=task.owner_user_id,
@@ -29,7 +31,7 @@ class PublishOutputQualificationUseCase:
             raise PermissionError("当前成员无权发布此创作任务")
         if not task.output_ready or not task.current_timeline_version_id:
             raise ValueError("当前创作任务尚无可发布的有效成片")
-        version = self.production.get_timeline_version(workspace_id, task.current_timeline_version_id)
+        version = self.production.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
         if version.task_id != task.id:
             raise ValueError('当前时间线版本没有已验证的有效成片')
         return task, version
@@ -48,7 +50,7 @@ class PublishOutputQualificationUseCase:
 
     def qualified_output(self, workspace_id: str, task_id: str, task: CreationTask,
                          version: TimelineVersion, ref: str, path: Path) -> dict[str, object]:
-        artifact = next((item for item in self.production.list_artifact_records(workspace_id, task_id)
+        artifact = next((item for item in self.production.execution_records.list_artifact_records(workspace_id, task_id)
                          if item.logical_ref == ref and item.kind == "rendered_video"), None)
         if artifact is None or not path.is_file() or path.stat().st_size != artifact.size_bytes:
             raise ValueError("当前成片文件与已登记产物不一致")

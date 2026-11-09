@@ -15,14 +15,14 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.montage import CreationTaskMontagePlan
-from app.quality_checks import quality_report_evidence
+from app.quality_checks import quality_report_evidence as quality_report_evidence
 from app.quality_worker_runtime import (source_receipt, quality_phase_request,
     quality_unit_key, validate_phase_measurement, QUALITY_PHASES)
 
 
 class QualityCheckRepository:
     def __init__(self, database_path: str | Path) -> None:
-        self.database_path = str(database_path)
+        self.database_path = str(Path(database_path).expanduser())
         with self._connect() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS creation_task_quality_checks (

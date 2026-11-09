@@ -1,4 +1,7 @@
 """Complete caller-connection reads with native isolated SQLite and canonical values."""
+from app.creation.task_input_reads import narration_segment_from_row
+from app.creation.task_input_reads import creation_task_from_payload, require_creation_task
+from app.creation import plan_contracts
 from contextlib import closing
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
@@ -9,6 +12,7 @@ import pytest
 
 from app import production
 from app.creation import contracts, task_input_reads
+from app.creation.task_records import TaskRecordStore
 
 
 def records():
@@ -34,17 +38,24 @@ def records():
     return task, segment
 
 
-def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction(tmp_path):
-    assert production.CreationTask is contracts.CreationTask
-    assert production.NarrationSegment is contracts.NarrationSegment
-    assert production.NarrationSegmentStatus is contracts.NarrationSegmentStatus
+def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction(tmp_path, monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
+    assert production._CreationTask is contracts.CreationTask
+    assert production._NarrationSegment is contracts.NarrationSegment
+    assert production._NarrationSegmentStatus is contracts.NarrationSegmentStatus
     assert production._validate_logical_reference is contracts.validate_logical_reference
     task, segment = records()
     payload = asdict(task)
     for name in ("created_at", "updated_at"):
         payload[name] = payload[name].isoformat()
     assert task_input_reads.creation_task_from_payload(payload) == task
-    assert production.ProductionRepository._creation_task_from_payload(payload) == task
+    assert creation_task_from_payload is task_input_reads.creation_task_from_payload
+    assert require_creation_task is task_input_reads.require_creation_task
+    for retired in ("get_creation_task", "list_creation_tasks", "_list_creation_tasks_by_visibility",
+                    "set_creation_task_visibility", "_task_from_row", "_creation_task_from_payload",
+                    "_require_creation_task", "_write_topic_task"):
+        assert not hasattr(production.ProductionRepository, retired)
     assert task.needs_script_duration_repair and task.can_revise_script
     with pytest.raises(ValueError):
         task_input_reads.creation_task_from_payload({**payload, "updated_at": "bad-date"})
@@ -54,7 +65,9 @@ def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction
     ) as observer:
         conn.row_factory = sqlite3.Row
         conn.executescript("""
-            CREATE TABLE creation_tasks (workspace_id TEXT, id TEXT, payload TEXT);
+            CREATE TABLE creation_tasks (
+                workspace_id TEXT, id TEXT, payload TEXT, visibility TEXT, updated_at TEXT
+            );
             CREATE TABLE narration_segments (
                 id TEXT, workspace_id TEXT, task_id TEXT, script_id TEXT,
                 source_section_id TEXT, text TEXT, audio_reference TEXT,
@@ -65,8 +78,10 @@ def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction
                 created_at TEXT, updated_at TEXT
             );
         """)
-        conn.execute("INSERT INTO creation_tasks VALUES (?, ?, ?)", ("ws", task.id, json.dumps(payload)))
-        conn.execute("INSERT INTO creation_tasks VALUES (?, ?, ?)", ("ws", "broken", '{"id":"broken"}'))
+        conn.execute("INSERT INTO creation_tasks VALUES (?, ?, ?, ?, ?)",
+                     ("ws", task.id, json.dumps(payload), "private", "original-column-time"))
+        conn.execute("INSERT INTO creation_tasks (workspace_id, id, payload) VALUES (?, ?, ?)",
+                     ("ws", "broken", '{"id":"broken"}'))
         nullable = replace(
             segment, id="nullable", audio_reference=None, duration_seconds=None, sample_rate=None,
             model_id=None, voice_profile_id=None, voice_version=None, status="pending",
@@ -84,27 +99,45 @@ def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction
 
         statements = []
         conn.set_trace_callback(statements.append)
+        def forbidden_connection():
+            pytest.fail("borrowed Task record access must not open another connection")
+        task_records = TaskRecordStore(forbidden_connection)
         assert task_input_reads.require_creation_task(conn, "ws", task.id) == task
-        assert production.ProductionRepository._require_creation_task(conn, "ws", task.id) == task
+        assert task_records.get_creation_task("ws", task.id, connection=conn) == replace(task, visibility="private")
+        with pytest.raises(KeyError):
+            task_records.get_creation_task("ws", task.id, include_private=False, connection=conn)
+        with pytest.raises(KeyError):
+            task_records.get_creation_task("other", task.id, connection=conn)
         for item in (segment, nullable):
             row = conn.execute("SELECT * FROM narration_segments WHERE id = ?", (item.id,)).fetchone()
             decoded = task_input_reads.narration_segment_from_row(row)
             assert decoded == item
             assert isinstance(decoded, contracts.NarrationSegment)
-            assert production.ProductionRepository._narration_segment_from_row(row) == item
+            assert narration_segment_from_row(row) == item
         with pytest.raises(KeyError) as absent:
             task_input_reads.require_creation_task(conn, "ws", "absent")
         assert absent.value.args == ("absent",)
         with pytest.raises(KeyError):
-            production.ProductionRepository._require_creation_task(conn, "other", task.id)
+            require_creation_task(conn, "other", task.id)
         with pytest.raises(TypeError):
             task_input_reads.require_creation_task(conn, "ws", "broken")
         conn.set_trace_callback(None)
         assert conn.in_transaction
         assert statements and all(statement.lstrip().upper().startswith("SELECT") for statement in statements)
         assert observer.execute("SELECT COUNT(*) FROM narration_segments").fetchone()[0] == 0
+        adopted = replace(task, name="adopted in caller transaction",
+                          updated_at=task.updated_at + timedelta(seconds=7))
+        task_records.write_adopted_task(conn, adopted)
+        assert require_creation_task(conn, "ws", task.id) == adopted
+        assert task_records.get_creation_task("ws", task.id, connection=conn) == replace(adopted, visibility="private")
+        assert conn.execute("SELECT updated_at FROM creation_tasks WHERE id=?", (task.id,)).fetchone()[0] == adopted.updated_at.isoformat()
+        assert conn.in_transaction
+        assert observer.execute("SELECT COUNT(*) FROM creation_tasks").fetchone()[0] == 0
         conn.rollback()
         assert observer.execute("SELECT COUNT(*) FROM creation_tasks").fetchone()[0] == 0
+        with pytest.raises(ValueError, match="选题任务状态保存必须属于原事务"):
+            task_records.write_adopted_task(conn, adopted)
+        assert not conn.in_transaction
         with pytest.raises(KeyError):
             task_input_reads.require_creation_task(conn, "ws", task.id)
 
@@ -118,7 +151,9 @@ def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction
         "actual_public_functions": [task_input_reads.require_creation_task.__module__ + "." + task_input_reads.require_creation_task.__name__,
                                     task_input_reads.creation_task_from_payload.__module__ + "." + task_input_reads.creation_task_from_payload.__name__,
                                     task_input_reads.narration_segment_from_row.__module__ + "." + task_input_reads.narration_segment_from_row.__name__],
-        "production_static_delegates_called": 3,
+        "production_static_delegates_called": 0,
+        "task_record_column_visibility_differs_from_payload_only_require": True,
+        "borrowed_adoption_write_rolled_back_and_idle_refused": True,
         "caller_uncommitted_visible_and_observer_invisible": True,
         "complete_generated_and_recorded_rows": 2,
         "only_select_statements_during_reader_phase": statements,
@@ -127,7 +162,9 @@ def test_canonical_complete_reads_keep_errors_and_caller_uncommitted_transaction
     }, ensure_ascii=False, indent=2) + "\n")
 
 
-def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transaction(tmp_path):
+def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transaction(tmp_path, monkeypatch):
+    from test_production_foundation import edit_adoption_no_execution
+    edit_adoption_no_execution(monkeypatch)
     task, segment = records()
     library = tmp_path / "library"
     library.mkdir()
@@ -135,16 +172,21 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
         tmp_path / "narration-reads.sqlite3", library,
         duration_reader=lambda _: 2.0, scene_reader=lambda *_: [],
     )
-    plan = production.CreationPlan(
+    plan = plan_contracts.CreationPlan(
         id=task.plan_id, workspace_id=task.workspace_id, goal="合成读取", name="读取夹具",
         target_count=1, language="zh-CN", aspect_ratio="9:16", duration_target_seconds=60,
         knowledge_references=[], source_references=[], selected_voice=None, pronunciation_references=[],
         approved_asset_count=0, approved_clip_count=0, material_rule_summary="合成记录",
         model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint="reads-fixture",
     )
-    task = repo.confirm_creation_plan(plan, task)[1]
+    task = repo.plan_confirmation.confirm_creation_plan(plan, task)[1]
     segment = replace(segment, source_kind="generated", source_artifact_ref=None,
                       source_sha256=None, source_script_digest=None)
+
+    def forbidden_whole_input(*_args, **_kwargs):
+        pytest.fail("narration row reads must not enter complete-script ports")
+    for name in ("_decode_script", "_confirmed_script_digest", "_stage_segment_state"):
+        monkeypatch.setattr(repo.narration_records, name, forbidden_whole_input)
 
     def insert(conn, item):
         values = asdict(item)
@@ -155,9 +197,36 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
         conn.execute(f"INSERT INTO narration_segments ({columns}) VALUES ({placeholders})", tuple(values.values()))
 
     with closing(repo._connect()) as conn, closing(repo._connect()) as observer:
+        idle = repo.narration_records.iter_narration_segments("ws", task.id, "script", connection=conn)
+        with pytest.raises(ValueError, match="配音行读取必须属于原事务"):
+            next(idle)
+        assert not conn.in_transaction
         borrowed = replace(segment, id="borrowed", source_section_id="borrowed")
         insert(conn, borrowed)
         assert conn.in_transaction
+        assert repo.narration_records.get_narration_segment("ws", task.id, borrowed.id, connection=conn) == borrowed
+        assert repo.narration_records.list_narration_segments("ws", task.id, connection=conn) == [borrowed]
+        wrong_script = repo.narration_records.iter_narration_segments("ws", task.id, "other-script", connection=conn)
+        with pytest.raises(ValueError, match="配音行不属于当前确认文案"):
+            next(wrong_script)
+        closed = []
+        class TrackedCursor:
+            def __init__(self, cursor): self.cursor = cursor
+            def __iter__(self): return iter(self.cursor)
+            def fetchone(self): return self.cursor.fetchone()
+            def close(self):
+                closed.append(self.cursor)
+                self.cursor.close()
+        class TrackedConnection:
+            @property
+            def in_transaction(self): return conn.in_transaction
+            def execute(self, *args): return TrackedCursor(conn.execute(*args))
+        stream = repo.narration_records.iter_narration_segments("ws", task.id, "script", connection=TrackedConnection())
+        assert closed == []
+        assert next(stream) == borrowed
+        assert closed == []
+        stream.close()
+        assert len(closed) == 1 and conn.in_transaction
         statements = []
         conn.set_trace_callback(statements.append)
         raw = task_input_reads.narration_segment_row(conn, "ws", task.id, borrowed.id)
@@ -167,7 +236,7 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
         assert task_input_reads.narration_segment_rows(conn, "ws", "other", "script") == []
         assert observer.execute("SELECT COUNT(*) FROM narration_segments").fetchone()[0] == 0
         with pytest.raises(KeyError) as uncommitted:
-            repo.get_narration_segment("ws", task.id, borrowed.id)
+            repo.narration_records.get_narration_segment("ws", task.id, borrowed.id)
         assert uncommitted.value.args == (borrowed.id,)
         assert conn.in_transaction
         conn.set_trace_callback(None)
@@ -184,19 +253,19 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
     with repo._connect() as conn:
         for item in (b, first, a, override, empty):
             insert(conn, item)
-    assert repo.get_narration_segment("ws", task.id, first.id) == first
-    assert repo.list_narration_segments("ws", task.id) == [first, a, b]
-    assert repo.list_narration_segments("ws", task.id, "") == [first, a, b]
-    assert repo.list_narration_segments("ws", task.id, "override-script") == [override]
-    assert repo.list_narration_segments("ws", task.id, "missing-script") == []
+    assert repo.narration_records.get_narration_segment("ws", task.id, first.id) == first
+    assert repo.narration_records.list_narration_segments("ws", task.id) == [first, a, b]
+    assert repo.narration_records.list_narration_segments("ws", task.id, "") == [first, a, b]
+    assert repo.narration_records.list_narration_segments("ws", task.id, "override-script") == [override]
+    assert repo.narration_records.list_narration_segments("ws", task.id, "missing-script") == []
     with pytest.raises(KeyError) as absent:
-        repo.get_narration_segment("ws", task.id, "missing-segment")
+        repo.narration_records.get_narration_segment("ws", task.id, "missing-segment")
     assert absent.value.args == ("missing-segment",)
     with pytest.raises(KeyError) as wrong_workspace:
-        repo.get_narration_segment("other", task.id, first.id)
+        repo.narration_records.get_narration_segment("other", task.id, first.id)
     assert wrong_workspace.value.args == (task.id,)
     with pytest.raises(KeyError) as wrong_task:
-        repo.list_narration_segments("ws", "missing-task")
+        repo.narration_records.list_narration_segments("ws", "missing-task")
     assert wrong_task.value.args == ("missing-task",)
 
     def confirmed(value):
@@ -208,10 +277,10 @@ def test_narration_rows_and_public_reads_keep_scope_selector_and_caller_transact
                          (json.dumps(values), "ws", task.id))
 
     confirmed(None)
-    assert repo.list_narration_segments("ws", task.id) == []
-    assert repo.list_narration_segments("ws", task.id, "override-script") == [override]
+    assert repo.narration_records.list_narration_segments("ws", task.id) == []
+    assert repo.narration_records.list_narration_segments("ws", task.id, "override-script") == [override]
     confirmed("")
-    assert repo.list_narration_segments("ws", task.id) == [empty]
+    assert repo.narration_records.list_narration_segments("ws", task.id) == [empty]
     (tmp_path / "narration-read-observations.json").write_text(json.dumps({
         "actual_raw_readers": [task_input_reads.narration_segment_row.__module__ + ".narration_segment_row",
                                task_input_reads.narration_segment_rows.__module__ + ".narration_segment_rows"],

@@ -72,13 +72,13 @@ def test_analysis_commit_preserves_corrections_made_during_processing(tmp_path):
     library.mkdir()
     (library / "source.mp4").write_bytes(b"fixture")
     repo = ProductionRepository(tmp_path / "db.sqlite", library, duration_reader=lambda path: 2, scene_reader=lambda path, duration: [])
-    repo.bind_material_ingestion("workspace", expected_directory=str(library))
-    repo.confirm_material_copy_complete(
+    repo.material_source_files.bind_material_ingestion("workspace", expected_directory=str(library))
+    repo.material_source_files.confirm_material_copy_complete(
         "workspace", relative_path="source.mp4",
-        expected_revision=repo.material_copy_revision((library / "source.mp4").stat()),
+        expected_revision=repo.material_source_files.material_copy_revision((library / "source.mp4").stat()),
         confirmation_source="manual",
     )
-    asset = repo.scan_library("workspace")[0]
+    asset = repo.material_intake.scan_library("workspace")[0]
     analyzed = repo.analyze_asset("workspace", asset.id)
     segment_id = analyzed.segments[0].id
     repo.update_asset_review("workspace", asset.id, review_status="approved", usage_role="b_roll")
@@ -116,13 +116,13 @@ def test_low_confidence_ocr_is_retained_but_not_searchable(tmp_path):
     library.mkdir()
     (library / "source.mp4").write_bytes(b"fixture")
     repo = ProductionRepository(tmp_path / "db.sqlite", library, duration_reader=lambda path: 2, scene_reader=lambda path, duration: [])
-    repo.bind_material_ingestion("workspace", expected_directory=str(library))
-    repo.confirm_material_copy_complete(
+    repo.material_source_files.bind_material_ingestion("workspace", expected_directory=str(library))
+    repo.material_source_files.confirm_material_copy_complete(
         "workspace", relative_path="source.mp4",
-        expected_revision=repo.material_copy_revision((library / "source.mp4").stat()),
+        expected_revision=repo.material_source_files.material_copy_revision((library / "source.mp4").stat()),
         confirmation_source="manual",
     )
-    asset = repo.analyze_asset("workspace", repo.scan_library("workspace")[0].id)
+    asset = repo.analyze_asset("workspace", repo.material_intake.scan_library("workspace")[0].id)
     repo.update_asset_review("workspace", asset.id, review_status="approved", usage_role="b_roll")
     repo.update_segment("workspace", asset.id, asset.segments[0].id, description="", transcript="", review_status="approved", usage_role="b_roll")
     asset = repo.get_asset("workspace", asset.id)
@@ -133,9 +133,9 @@ def test_low_confidence_ocr_is_retained_but_not_searchable(tmp_path):
         ]}])
     repo._save_asset(asset)
     repo.set_asset_visibility("workspace", asset.id, "shared")
-    assert not repo.search_material_segments("workspace", query="uncertain")
+    assert not repo.material_search.search_material_segments("workspace", query="uncertain")
     assert repo.list_assets_page("workspace", limit=20, offset=0, query="uncertain")[1] == 0
-    assert repo.search_material_segments("workspace", query="verifiedword")
+    assert repo.material_search.search_material_segments("workspace", query="verifiedword")
     from app.schemas import OCRTextResponse
     response = OCRTextResponse.model_validate(asset.segments[0].understanding.ocr_frames[0]["observations"][0])
     assert response.model_dump()["retrieval_eligible"] is False
@@ -148,13 +148,13 @@ def test_changed_source_during_analysis_cannot_publish_new_observations(tmp_path
     source = library / "source.mp4"
     source.write_bytes(b"fixture")
     repo = ProductionRepository(tmp_path / "db.sqlite", library, duration_reader=lambda path: 2, scene_reader=lambda path, duration: [])
-    repo.bind_material_ingestion("workspace", expected_directory=str(library))
-    repo.confirm_material_copy_complete(
+    repo.material_source_files.bind_material_ingestion("workspace", expected_directory=str(library))
+    repo.material_source_files.confirm_material_copy_complete(
         "workspace", relative_path="source.mp4",
-        expected_revision=repo.material_copy_revision((library / "source.mp4").stat()),
+        expected_revision=repo.material_source_files.material_copy_revision((library / "source.mp4").stat()),
         confirmation_source="manual",
     )
-    asset = repo.analyze_asset("workspace", repo.scan_library("workspace")[0].id)
+    asset = repo.analyze_asset("workspace", repo.material_intake.scan_library("workspace")[0].id)
     def analyze(path, segments, fingerprint):
         path.write_bytes(b"changed source content")
         return {segments[0].id: SegmentUnderstanding("ready", summary="过期观察")}

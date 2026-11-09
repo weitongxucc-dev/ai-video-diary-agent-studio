@@ -71,13 +71,26 @@ class SectionWindow:
         return self.end_seconds - self.start_seconds
 
 
-def measured_section_windows(requirement, sections, measured, *, adopted=(), frame_rate=30):
+@dataclass(frozen=True)
+class SectionTiming:
+    section_id: str
+    speech_weight: float
+    measured_seconds: float = 0
+
+    @classmethod
+    def from_text(cls, section_id, text, measured_seconds=0):
+        return cls(section_id, estimate_speech_seconds(text), measured_seconds)
+
+
+def measured_section_windows(requirement, timings, *, adopted=(), frame_rate=30):
     """Fit known speech without moving adopted windows unless reconfirmation is needed."""
-    weights = [estimate_speech_seconds(section.content) for section in sections]
+    # Global allocation needs all scalar clocks, not all section bodies.
+    timings = tuple(timings)
+    weights = [timing.speech_weight for timing in timings]
     if not weights or any(weight <= 0 for weight in weights):
         raise DurationConflict("每段必须有可用于时长规划的采用正文")
     frames = round(requirement.target_seconds * frame_rate)
-    minimum = [max(1, math.ceil(measured.get(section.id, 0) * frame_rate - 1e-9)) for section in sections]
+    minimum = [max(1, math.ceil(timing.measured_seconds * frame_rate - 1e-9)) for timing in timings]
     if sum(minimum) > frames:
         raise DurationConflict("真实配音无法放入目标时长；请明确调整目标或采用新的正文，不会截尾或变速原声。")
 
@@ -108,11 +121,11 @@ def measured_section_windows(requirement, sections, measured, *, adopted=(), fra
         result, cursor = [], start
         for i in indices:
             end = cursor + lengths[i]
-            result.append(SectionWindow(sections[i].id, cursor / frame_rate, end / frame_rate))
+            result.append(SectionWindow(timings[i].section_id, cursor / frame_rate, end / frame_rate))
             cursor = end
         return result
 
-    positions = {section.id: i for i, section in enumerate(sections)}
+    positions = {timing.section_id: i for i, timing in enumerate(timings)}
     locks = sorted(adopted, key=lambda window: positions[window.section_id])
     result, index, cursor = [], 0, 0
     try:
@@ -124,12 +137,12 @@ def measured_section_windows(requirement, sections, measured, *, adopted=(), fra
             result.extend(block(list(range(index, position)), cursor, start))
             result.append(window)
             index, cursor = position + 1, end
-        result.extend(block(list(range(index, len(sections))), cursor, frames))
+        result.extend(block(list(range(index, len(timings))), cursor, frames))
         return result
     except DurationConflict:
         # A new proposal may move these windows; publication must require the
         # corresponding adopted sections to be confirmed again.
-        return block(list(range(len(sections))), 0, frames)
+        return block(list(range(len(timings))), 0, frames)
 
 
 def stream_duration_seconds(stream):

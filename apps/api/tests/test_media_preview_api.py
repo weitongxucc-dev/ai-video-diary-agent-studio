@@ -32,7 +32,7 @@ class _VoiceProvider:
         self.calls = 0
         self.reference_paths: list[Path] = []
 
-    def generate(self, *, output_path, reference_audio_path, **_kwargs):
+    def generate_granted(self, *, output_path, reference_audio_path, **_kwargs):
         self.calls += 1
         self.reference_paths.append(Path(reference_audio_path))
         grant = _kwargs.get("grant_context")
@@ -173,7 +173,7 @@ def test_voice_preview_success_reuse_safe_output_and_workspace_isolation(preview
     assert first.json()["output_url"] is None
     assert provider.calls == 0
     assert identity.runtime.run_once()
-    completed = repository.get_media_preview_run("workspace-a", "voice", first.json()["identity"])
+    completed = repository.preview_records.get_media_preview_run("workspace-a", "voice", first.json()["identity"])
     assert completed.status == "succeeded" and completed.output_path
     second = client.post("/api/media/previews/voice", json=_voice_payload(), headers=headers)
     listed = client.get("/api/media/previews?preview_type=voice", headers=headers)
@@ -231,7 +231,7 @@ def test_voice_preview_unavailable_failure_retry_and_attempt_order(preview_clien
     assert [(item["status"], item["attempt"]) for item in attempts.json()["items"]] == [
         ("succeeded", 2), ("failed", 1),
     ]
-    retried_final = repository.get_media_preview_run("workspace-a", "voice", retried.json()["identity"])
+    retried_final = repository.preview_records.get_media_preview_run("workspace-a", "voice", retried.json()["identity"])
     assert (retried_final.status, retried_final.attempt) == ("succeeded", 2)
     assert [item["attempt"] for item in attempts.json()["items"]] == [2, 1]
     assert [item["attempt"] for item in listed.json()["items"] if item["identity"] == failed.json()["identity"]] == [2]
@@ -295,7 +295,7 @@ def test_cancelled_voice_preview_never_calls_provider(preview_client):
 
     assert (cancelled.status_code, cancelled.json()["status"]) == (200, "cancelled")
     assert identity.runtime.run_once() is False
-    persisted = repository.get_media_preview_run("workspace-a", "voice", queued.json()["identity"])
+    persisted = repository.preview_records.get_media_preview_run("workspace-a", "voice", queued.json()["identity"])
     assert persisted.status == "cancelled" and provider.calls == 0
 
 

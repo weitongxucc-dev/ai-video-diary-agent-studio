@@ -27,29 +27,29 @@ def test_script_window_business_dispatch_uses_only_the_window_callback():
         calls.append((current,script_id,options))
         return page
     business.read_script_sections = read
-    assert business.execute('read_script_sections',{'script_id':'script'},None,task,None,None,None,None) is page
+    assert business.execute('read_script_sections',{'script_id':'script'},None,task,None,{},None,None) is page
     assert calls == [(task,'script',{'after_ordinal':0,'limit':SCRIPT_SECTION_WINDOW_LIMIT,'expected_updated_at':None})]
 
 
 def test_script_window_business_preserves_conflict_missing_and_invalid_errors():
     import pytest
     from types import SimpleNamespace
-    from fastapi import HTTPException
+    from app.assistant.task_business_errors import TaskOperationRejected
     from app.assistant.task_business import TaskBusiness, TaskBusinessRejected
     from app.creation.script_windows import ScriptWindowConflict
     business = object.__new__(TaskBusiness)
     task = SimpleNamespace(workspace_id='workspace',id='task')
-    for error, status in [(ScriptWindowConflict('stale'),409),(KeyError('missing'),404),(ValueError('cursor'),422)]:
+    for error, status in [(ScriptWindowConflict('stale'),'conflict'),(KeyError('missing'),'not_found'),(ValueError('cursor'),'invalid_input')]:
         def read(*args, **kwargs):
             raise error
         business.read_script_sections = read
-        with pytest.raises(HTTPException) as failed:
-            business.execute('read_script_sections',{'script_id':'script','after_ordinal':20,'expected_updated_at':'v1'},None,task,None,None,None,None)
-        assert failed.value.status_code == status
+        with pytest.raises(TaskOperationRejected) as failed:
+            business.execute('read_script_sections',{'script_id':'script','after_ordinal':20,'expected_updated_at':'v1'},None,task,None,{},None,None)
+        assert failed.value.kind == status
     business.read_script_sections = None
     with pytest.raises(TaskBusinessRejected) as failed:
-        business.execute('read_script_sections',{'script_id':'script'},None,task,None,None,None,None)
-    assert failed.value.status_code == 503
+        business.execute('read_script_sections',{'script_id':'script'},None,task,None,{},None,None)
+    assert failed.value.kind == 'unavailable'
 
 
 def test_device_preparation_uses_original_account_actor_and_only_public_facts():
@@ -73,7 +73,7 @@ def test_device_preparation_uses_original_account_actor_and_only_public_facts():
     for operation,args in [('prepare_device_resources',{'payload':{'request_id':key,'shape':shape},'actor':'forged'}),
                            ('read_device_preparation',{'request_id':'work','actor':'forged'}),
                            ('finalize_device_preparation',{'request_id':'work','actor':'forged'})]:
-        result = business.execute(operation,args,actor,task,None,None,None,None)
+        result = business.execute(operation,args,actor,task,None,{},None,None)
         assert result['id']=='work' and result['normal_work_started'] is False
         assert 'write_paths' not in result and 'bootstrap_budget' not in result
     assert [action for action,_ in calls] == ['prepare','status','finalize']
@@ -102,7 +102,7 @@ def test_device_preparation_status_reuses_pure_application_without_starting_runt
     business = object.__new__(TaskBusiness)
     business.device_preparation = application.dispatch
     result = business.execute('read_device_preparation',{'request_id':'original'},actor,
-        SimpleNamespace(workspace_id='workspace',id='task'),None,None,None,None)
+        SimpleNamespace(workspace_id='workspace',id='task'),None,{},None,None)
     assert result['state']=='waiting' and len(calls)==1
     assert calls[0]['database_path']=='isolated'
 
@@ -110,25 +110,25 @@ def test_device_preparation_status_reuses_pure_application_without_starting_runt
 def test_device_preparation_preserves_parameter_conflict_missing_and_unassembled_errors():
     import pytest
     from types import SimpleNamespace
-    from fastapi import HTTPException
+    from app.assistant.task_business_errors import TaskOperationRejected
     from app.assistant.task_business import TaskBusiness,TaskBusinessRejected
     from app.device_preparation_application import DevicePreparationConflict
     business = object.__new__(TaskBusiness)
     task = SimpleNamespace(workspace_id='workspace',id='task')
-    for error,status in [(DevicePreparationConflict('busy'),409),(KeyError('missing'),404),(RuntimeError('unavailable'),503)]:
+    for error,status in [(DevicePreparationConflict('busy'),'conflict'),(KeyError('missing'),'not_found'),(RuntimeError('unavailable'),'unavailable')]:
         def dispatch(*args,**kwargs):
             raise error
         business.device_preparation = dispatch
-        with pytest.raises(HTTPException) as failure:
-            business.execute('read_device_preparation',{'request_id':'work'},None,task,None,None,None,None)
-        assert failure.value.status_code==status
-    with pytest.raises(HTTPException) as failure:
-        business.execute('prepare_device_resources',{'payload':{'request_id':'invalid','shape':{}}},None,task,None,None,None,None)
-    assert failure.value.status_code==422
+        with pytest.raises(TaskOperationRejected) as failure:
+            business.execute('read_device_preparation',{'request_id':'work'},None,task,None,{},None,None)
+        assert failure.value.kind==status
+    with pytest.raises(TaskOperationRejected) as failure:
+        business.execute('prepare_device_resources',{'payload':{'request_id':'invalid','shape':{}}},None,task,None,{},None,None)
+    assert failure.value.kind=='invalid_input'
     business.device_preparation = None
     with pytest.raises(TaskBusinessRejected) as failure:
-        business.execute('read_device_preparation',{'request_id':'work'},None,task,None,None,None,None)
-    assert failure.value.status_code==503
+        business.execute('read_device_preparation',{'request_id':'work'},None,task,None,{},None,None)
+    assert failure.value.kind=='unavailable'
 
 
 def test_script_window_operations_reuse_actor_bound_case_and_do_not_write_repository_directly():
@@ -179,23 +179,27 @@ def test_window_finish_persists_public_original_receipt_without_legacy_full_scri
     from uuid import uuid4
     from app.assistant.task_business import TaskBusiness
     from app.creation_execution import CreationExecutionActor
-    turn=str(uuid4());request_id=str(uuid4())
+    turn=str(uuid4())
+    request_id=str(uuid4())
     goal={'current_turn_id':turn,'original_turn_id':turn,'task_id':'task','workspace_id':'workspace',
           'member_id':'member','conversation_id':'conversation','status':'running','request_context':{},
           'source_input_id':None,'source_input_turn_id':None}
-    actor=CreationExecutionActor('workspace','member');task=SimpleNamespace(id='task')
+    actor=CreationExecutionActor('workspace','member')
+    task=SimpleNamespace(id='task')
     saved=[]
     def finish_turn(*args,**kwargs): saved.append((args,kwargs))
     conversations=SimpleNamespace(get_task_goal=lambda _:goal,finish_turn=finish_turn)
     def forbidden(*args,**kwargs): raise AssertionError('new window results must not hydrate an old full script')
     event=SimpleNamespace(event_type='assistant_script_saved',payload={'source':{'turn_id':turn},'script_id':'script'})
-    production=SimpleNamespace(list_task_events=lambda *_:[event],get_creation_task_script=forbidden)
+    production=SimpleNamespace(execution_records=SimpleNamespace(list_task_events=lambda *_:[event]),script_records=SimpleNamespace(get_creation_task_script=forbidden))
     receipt={'task_id':'task','script_id':'script','request_id':request_id,'status':'saved',
              'updated_at':'2026-10-25T00:00:00+00:00','total_count':45,'submitted_input':{'text':'不复制原文'}}
     case=SimpleNamespace(window_request_result=lambda *args,**kwargs:receipt)
     business=object.__new__(TaskBusiness)
-    business.conversations=conversations;business.production=production
-    business.original=lambda _:(actor,task,None);business.script_case=lambda _:case
+    business.conversations=conversations
+    business.production=production
+    business.original=lambda _:(actor,task,None)
+    business.script_case=lambda _:case
     value={'kind':'script_window_request','operation':'patch','task_id':'task','script_id':'script',
            'request_id':request_id,'status':'unknown','submission_effect':'unknown'}
     response=business.finish({'turn_id':turn,'goal':dict(goal)},'模型说已全部完成',script_window_request=value)
@@ -209,4 +213,4 @@ def test_window_finish_persists_public_original_receipt_without_legacy_full_scri
     goal['source_input_id']='appended-input'
     with pytest.raises(TaskBusinessRejected) as failure:
         business.finish({'turn_id':turn,'goal':dict(goal)},'旧回执',script_window_request=value)
-    assert failure.value.status_code==409 and len(saved)==1
+    assert failure.value.kind=='conflict' and len(saved)==1

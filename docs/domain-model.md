@@ -118,7 +118,7 @@ MediaAsset 中可独立检索、预览和使用的时间片段。
 - TagFolder：用户管理标签的分组。
 - UsageRecord：记录素材或片段被哪条任务、哪个时间线版本、以什么用途使用。
 
-系统分析不等于用户确认，但 review_state 不构成全部自动分析素材的统一使用门槛。低置信分类、关键事实疑点和影响成片的素材缺口应显式交由人工选择；使用范围始终以 ContentUseState 为准。UserTag 和人工事实纠正保留对象与时间范围，再分析只能替换系统结果，不能清除人工结果。
+系统分析不等于用户确认，但 review_state 不构成全部自动分析素材的统一使用门槛。低置信分类、关键事实疑点和素材缺口记录为待解决证据；Agent按委托补证据、检查或更换候选，无法自主解决的关键取舍沿产品澄清边界处理，不以低置信本身设置全局人工门。使用范围始终以 ContentUseState 为准。UserTag 和人工事实纠正保留对象与时间范围，再分析只能替换系统结果，不能清除人工结果。
 
 分析证据必须保留来源模态、原资产时间区间、分析模型/规则版本与用户纠正来源，区分观察与推断。明确修改片段用途时，仅同步由该用途字段派生的用途标签；普通说明编辑不重算或清空画面识别标签、转写和用户标签。用户素材事实纠正不得被重新分析覆盖；任务内偏好与工作区长期偏好分开，偏好可取消且不能覆盖内容使用限制。具体持久化扩展沿既有 Repository 和版本迁移，不创建旁路素材库。
 
@@ -199,7 +199,7 @@ BusinessObject表达工作区内企业对象及其可扩展属性，不以行业
 - person_profile_ref、voice_profile_ref；
 - topic_strategy、script_style、visual_strategy；
 - presenter_share_target（制作方案六档 0%、20%、40%、60%、80%、100% 的露脸时长目标；无明确人物需求的产品介绍默认0%，其他情况依产品规则）；
-- lipsync_quality（口型制作档位 high=LatentSync、fast=MuseTalk；新方案默认 high，旧计划读取为 fast。PersonRender 的 model_id 与音频、人物、版本一起决定缓存身份；不能跨档位复用）；
+- lipsync_quality（口型质量/速度意图；具体后端、默认值及历史值迁移归执行适配，不把某个模型名定义为领域档位。PersonRender保存实际model_id、版本及执行参数，与音频、人物和版本共同决定缓存身份；质量标签相同不代表结果可复用）；
 - subtitle_strategy、cover_strategy；
 - confirmation_points、blocking_conditions；
 - status、version。
@@ -369,7 +369,7 @@ EditIntent 在需要澄清、扩大范围或用户要求先看方案时形成的
 
 ### 7.3 EditOperation
 
-由明确自然语言指令、普通精确控件或用户采用必要提案提交的确定性领域操作，例如 ReplaceClip、UpdateScriptSegment、RegenerateNarrationSegment、UpdateSubtitleCue、ChangeCrop 或 ReorderTimelineItems。
+由明确自然语言指令、普通精确控件或按有效委托采用提案提交的确定性领域操作，例如 ReplaceClip、UpdateScriptSegment、RegenerateNarrationSegment、UpdateSubtitleCue、ChangeCrop 或 ReorderTimelineItems。
 
 跨对象复合修改在同一基础版本上完整编译，明确指令直接提交；仅需要用户决定时先形成提案。提交时原子写入一个新版本；任一子操作失败不得保留部分修改，撤销恢复整组变更。
 
@@ -383,7 +383,7 @@ ChangeClipSpeed 设置画面的绝对播放速度，保留镜头占用时长、�
 
 明确指令：interpreted → validated → applied。需要决定时：interpreted → needs_scope / proposed → confirmed → validated → applied。validated 是领域校验步骤，不要求新增持久状态枚举。
 
-confirmed 表示实际必要提案已由用户采用；精确控件和明确指令直接提交 EditOperation，复用同一校验、依赖和撤销/重做。草稿版本提交与媒体作业的排队/运行/完成分开；后者按明确生成请求或已批准目标调度。确认边界见[产品编辑规则](product-requirements.md#23-自然语言与精确编辑共享同一事实源)。
+confirmed 表示提案已按用户明确选择或有效委托被采用，持久记录实际采用者及授权来源；只有提案包含仍需用户决定的取舍时才等待用户。精确控件和明确指令直接提交 EditOperation，复用同一校验、依赖和撤销/重做。草稿版本提交与媒体作业的排队/运行/完成分开；后者按明确生成请求或已批准目标调度。确认边界见[产品编辑规则](product-requirements.md#23-自然语言与精确编辑共享同一事实源)。
 
 异常分支为：
 

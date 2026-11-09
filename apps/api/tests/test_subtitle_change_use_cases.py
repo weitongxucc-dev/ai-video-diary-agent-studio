@@ -4,6 +4,7 @@ from dataclasses import asdict, replace
 import pytest
 
 from app.creation.contracts import EditCommand, SubtitleCue
+from app.media.picture_preview import PicturePreviewRenderer
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.subtitle_changes import (
     apply_subtitle_content_command, calculate_subtitle_content, calculate_subtitle_style,
@@ -143,7 +144,7 @@ def test_narration_audio_candidate_key_survives_sqlite_reopen_and_changes_with_g
     graph = narration_audio_timeline(state.montage.narration_audio_path, state.montage.duration_seconds)
     plan = replace(state.montage, audio_timeline=graph)
     sealed_key = media_digest([graph.model_dump(), plan.duration_seconds, plan.narration_linkage_created_audio_timeline])
-    state.production.save_creation_task_montage_plan(
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(
         state.workspace_id, state.task.id, plan.id, creation_task_montage_plan_to_payload(plan),
     )
     reopened = ProductionRepository(state.production.database_path, state.production.video_library_path)
@@ -168,11 +169,11 @@ def test_actual_draft_style_preview_adoption_and_undo_keep_all_other_facts(perso
     track = SubtitleTrack("actual-style", state.workspace_id, state.task.id, version.id, "en-US", None,
         {"enabled": False, "font_size": 40}, [SubtitleCue("caption", None, "Existing caption", 0, 4)],
         "timeline", None, "artifacts/existing.srt", "existing-transform", "valid")
-    state.production.create_subtitle_track(track)
+    state.production.subtitle_records.create_subtitle_track(track)
     before = state.client.get(base).json()
     def forbidden(*args, **kwargs):
         raise AssertionError("draft style proposal must not invoke media or runtime")
-    monkeypatch.setattr(main, "_publish_task_picture_preview", forbidden)
+    monkeypatch.setattr(PicturePreviewRenderer, "publish_picture", staticmethod(forbidden))
     monkeypatch.setattr(main, "_creation_runtime", forbidden)
     result = state.client.post(base + "/edits/exact/preview?draft=true", json={
         "operation_type": "ConfigureSubtitleTrack", "style": {"font_size": 64},
@@ -190,10 +191,10 @@ def test_actual_draft_style_preview_adoption_and_undo_keep_all_other_facts(perso
     assert current["montage"]["audio_timeline"] == before["montage"]["audio_timeline"]
     assert current["montage"]["clips"] == before["montage"]["clips"]
     assert current["narration"]["audio_reference"] == before["narration"]["audio_reference"]
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={"request_id": "test_actual_draft_style_preview_adoption_and_undo_keep_all_other_facts:undo"}).status_code == 200
     restored = state.client.get(base).json()
     assert restored["subtitle_tracks"][0]["style"] == before["subtitle_tracks"][0]["style"]
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={"request_id": "test_actual_draft_style_preview_adoption_and_undo_keep_all_other_facts:redo"}).status_code == 200
     assert state.client.get(base).json()["subtitle_tracks"][0]["style"]["font_size"] == 64
 
 
@@ -216,28 +217,28 @@ def test_legacy_display_proposal_confirms_one_version_and_fresh_readback(tmp_pat
     assert is_subtitle_edit(payload.operation_type, values) is False
     command = metadata_edit_command(state.task, state.identity, payload.operation_type, values)
     intent, proposal = make_metadata_proposal(command, refs, summary, values)
-    state.repo.create_edit_intent(intent)
-    state.repo.create_edit_proposal(proposal)
-    before = len(state.repo.list_timeline_versions('ws', state.task.id))
+    state.repo.edit_records.create_edit_intent(intent)
+    state.repo.edit_records.create_edit_proposal(proposal)
+    before = len(state.repo.timeline_records.list_timeline_versions('ws', state.task.id))
     result = case.confirm_legacy(state.task, proposal, settings=None)
     fresh = ProductionRepository(state.repo.database_path, tmp_path / 'library')
-    task = fresh.get_creation_task('ws', state.task.id)
-    version = fresh.get_timeline_version('ws', task.current_timeline_version_id)
-    tracks = fresh.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
-    operations = fresh.list_edit_operations('ws', task.id)
-    assert len(fresh.list_timeline_versions('ws', task.id)) == before + 1
+    task = fresh.task_records.get_creation_task('ws', state.task.id)
+    version = fresh.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
+    tracks = fresh.subtitle_records.list_subtitle_tracks('ws', task.id, timeline_version_id=version.id)
+    operations = fresh.edit_records.list_edit_operations('ws', task.id)
+    assert len(fresh.timeline_records.list_timeline_versions('ws', task.id)) == before + 1
     assert len(operations) == 1 and operations[0].proposal_id == proposal.id
     assert result.operation.id == operations[0].id and result.operation.result_version_id == version.id
     assert version.parent_version_id == state.base.id and version.sequence == 2
     assert len(tracks) == 1 and tracks[0].style['enabled'] is False
     assert [asdict(cue) for cue in tracks[0].cues] == [asdict(cue) for cue in state.track.cues]
     assert tracks[0].artifact_ref == state.track.artifact_ref
-    assert fresh.get_timeline_version('ws', state.base.id).snapshot == state.base.snapshot
+    assert fresh.timeline_records.get_timeline_version('ws', state.base.id).snapshot == state.base.snapshot
     assert state.track.style.get('enabled', True) is True
     assert result.montage.narration_audio_path == state.plan.narration_audio_path
     assert case.montage_edits.cover_asset_for_version('ws', task.id, version) is None
-    assert fresh.get_edit_proposal('ws', proposal.id).status == 'confirmed'
-    assert len(fresh.list_edit_operations('ws', task.id)) == 1
+    assert fresh.edit_records.get_edit_proposal('ws', proposal.id).status == 'confirmed'
+    assert len(fresh.edit_records.list_edit_operations('ws', task.id)) == 1
     evidence = os.environ.get('LEGACY_SUBTITLE_EVIDENCE_DIR')
     if evidence:
         Path(evidence, 'NORMAL_FACTS.json').write_text(json.dumps({'proposal': proposal.id,

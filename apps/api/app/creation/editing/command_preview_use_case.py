@@ -1,36 +1,33 @@
 """One command application: ordered compilation, source binding and explicit media work."""
 from __future__ import annotations
 
-from app.audio_timeline import AudioEditRequest
 from collections import Counter
 from app.creation.editing.picture import EditConflict
 from app.production import TimelineVersionConflict
-from app.audio_timeline import apply_audio_edit
 from app.task_audio import audio_mix_resources
 from app.audio_timeline import compile_audio_command
 from app.compound_edits import compile_compound_edit
 from app.graphic_overlays import compile_overlay_command
 from app.subtitle_style import compile_subtitle_style_command
 from app.visual_effects import compile_visual_command
-from app.member_permits import cpu_audio_budget_from_env
 from app.montage import creation_task_montage_plan_from_payload
 from app.montage import creation_task_montage_plan_to_payload
 from app.graphic_sources import graphic_sources
 from app.compound_edits import is_indexed_subtitle_command
 from app.task_audio import media_digest
-from app.member_permits import presenter_budgets_from_env
 import re
 import subprocess
 from dataclasses import asdict
-from app.creation.editing.command_compile import (AudioCommandPreview,CommandParseRejected,indexed_reorder_command,canvas_request,display_request,selected_reference,clip_request)
-from app.creation.editing.metadata_use_case import EditPreviewRejected,edit_preview_failure,effective_audio_timeline,metadata_edit_command
-from app.creation.editing.compound_use_case import CompoundEditUseCase,CompoundPreviewCommand
+from app.creation.editing.command_compile import (AudioCommandPreview,indexed_reorder_command,canvas_request,display_request,selected_reference,clip_request)
+from app.creation.editing.metadata_use_case import EditPreviewRejected,edit_preview_failure,effective_audio_timeline
+from app.creation.editing.compound_use_case import CompoundPreviewCommand
 from app.creation.clip_preview import ClipPreviewCommand,needs_full_visual_preview
 from app.schemas import CreationTaskExactEditRequest,CreationTaskEditPreviewRequest,CreationTaskEditPreviewResponse
 from app.visual_effects import VisualEditRequest
 
 class CommandPreviewUseCase:
-    def __init__(self,repository,conversations,metadata,subtitles,linked,compound,exact,audio,visual,narration,person):
+    def __init__(self,repository,conversations,metadata,subtitles,linked,compound,exact,audio,visual,narration,person,*,budgets_for):
+        self.budgets_for=budgets_for
         self.repository,self.conversations=repository,conversations
         self.metadata,self.subtitles,self.linked,self.compound=metadata,subtitles,linked,compound
         self.exact,self.audio,self.visual,self.narration,self.person=exact,audio,visual,narration,person
@@ -56,12 +53,16 @@ class CommandPreviewUseCase:
         return self.visual.preview_full(task,payload,prepared,draft_only=draft_only,source=request_source,execution=execution)
 
     def preview_compound(self,task,payload,*,identity,request_source,draft_only,execution,actor):
-        if not self.compound.applicable(payload.raw_command):return None
+        if not self.compound.applicable(payload.raw_command):
+            return None
         control=CompoundPreviewCommand(task.workspace_id,task.id,identity,task.current_timeline_version_id,payload.raw_command,
             payload.context_stage,payload.selected_object_refs,payload.playhead_ms,source=request_source)
-        try:return self.compound.preview(self.compound.prepare_preview(control),draft_only=draft_only,execution=execution)
-        except PermissionError as exc:raise EditPreviewRejected(status_code=403,detail=str(exc)) from exc
-        except (EditConflict,TimelineVersionConflict) as exc:raise EditPreviewRejected(status_code=409,detail=str(exc)) from exc
+        try:
+            return self.compound.preview(self.compound.prepare_preview(control),draft_only=draft_only,execution=execution)
+        except PermissionError as exc:
+            raise EditPreviewRejected(status_code=403,detail=str(exc)) from exc
+        except (EditConflict,TimelineVersionConflict) as exc:
+            raise EditPreviewRejected(status_code=409,detail=str(exc)) from exc
         except (ValueError,KeyError,OSError,subprocess.SubprocessError) as exc:
             raise EditPreviewRejected(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else '复合修改预览失败，请检查来源后重试') from exc
 
@@ -69,7 +70,8 @@ class CommandPreviewUseCase:
         options={} if execution is None else dict(zip(('context','job','event'),execution[:3]))
         if action.original_clip:
             result=self.audio.original_clip(task.workspace_id,task.id,action.request.model_dump(mode='json'),actor,draft_only=draft_only,source=request_source,**options)
-        else:result=self.audio.preview(task.workspace_id,task.id,action.request,actor,draft_only=draft_only,source=request_source,**options)
+        else:
+            result=self.audio.preview(task.workspace_id,task.id,action.request,actor,draft_only=draft_only,source=request_source,**options)
         return result.intent,result.proposal
 
     def execute(self,job,event,actor,context):
@@ -79,12 +81,15 @@ class CommandPreviewUseCase:
             payload=CreationTaskEditPreviewRequest.model_validate(payload.model_dump(mode='json',exclude_unset=True,exclude={'assistant_turn_id'}))
         identity={'member_id':actor.user_id or actor.member_id,'local_diagnostic':False}
         source=event['arguments'].get('_typed_source')
-        if source is not None:source={**source,'media_job_id':job.id,'actor_identity':actor.identity_payload()}
+        if source is not None:
+            source={**source,'media_job_id':job.id,'actor_identity':actor.identity_payload()}
         outcome=self.preview(task,payload,base_version_id=event['input_facts']['base_version_id'],identity=identity,
             reader_identity={'member_id':actor.user_id or actor.member_id,'local_diagnostic':False},request_source=source,
             draft_only=event['arguments'].get('_draft',False),execution=(context,job,event,actor),actor=actor)
-        if isinstance(outcome,AudioCommandPreview):outcome=self.preview_audio(task,outcome,actor,request_source=source,draft_only=event['arguments'].get('_draft',False),execution=(context,job,event,actor))
-        if outcome is None:return None
+        if isinstance(outcome,AudioCommandPreview):
+            outcome=self.preview_audio(task,outcome,actor,request_source=source,draft_only=event['arguments'].get('_draft',False),execution=(context,job,event,actor))
+        if outcome is None:
+            return None
         intent,proposal=outcome
         return CreationTaskEditPreviewResponse.model_validate({'intent':asdict(intent),'proposal':asdict(proposal)}).model_dump(mode='json')
 
@@ -200,7 +205,7 @@ class CommandPreviewUseCase:
         if turn['status'] != 'running' or context.get('kind') != 'task' or context.get('task_id') != task.id or (context.get('stage') != payload.context_stage) or (context.get('selected_object_refs') != sorted(payload.selected_object_refs)) or (context.get('playhead_ms') != payload.playhead_ms):
             raise EditPreviewRejected(status_code=409, detail='修改目标与本轮原始要求不一致，未生成提案。')
         snapshot = context.get('target_snapshot', {})
-        version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if snapshot.get('timeline_version_id') != task.current_timeline_version_id or snapshot.get('timeline_sequence') != (version.sequence if version else 0):
             raise EditPreviewRejected(status_code=409, detail='任务版本已变化，请重新查看目标后发送；未生成提案。')
         try:
@@ -213,15 +218,12 @@ class CommandPreviewUseCase:
 
 
     def facts(self, workspace_id, task_id, arguments, actor):
-        operation = 'command_edit_preview'
-        from app.canvas import canvas_size
-        from app.member_permits import cpu_render_budget_from_env
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         plan_payload = self.repository.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None
@@ -272,13 +274,14 @@ class CommandPreviewUseCase:
             audio_uses.update(Counter((clip.source_ref for clip in clips)))
             for reference in sorted(references):
                 remember(reference, service.source(workspace_id, task_id, reference, actor=actor), audio=True)
-        facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id, 'script_digest': self.repository.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None, 'plan_id': task.plan_id, 'plan_digest': media_digest(asdict(self.repository.get_creation_plan(workspace_id, task.plan_id))), 'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
+        facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id, 'script_digest': self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None, 'plan_id': task.plan_id, 'plan_digest': media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))), 'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
         if visual_scope is not None:
             facts['visual_preview'] = visual_scope
         if graphics:
             facts['graphic_sources'] = graphics
+        budgets = self.budgets_for()
         if 'command_edit_preview' in audio_operations:
-            budget = cpu_audio_budget_from_env()
+            budget = budgets.cpu_audio
             if budget is None:
                 raise ValueError('CPU 音频处理预算尚未标定，未启动媒体')
             if not audio_inputs:
@@ -288,7 +291,6 @@ class CommandPreviewUseCase:
                     value = source[field]
                     if value is not None and (not isinstance(value, (int, float)) or value <= 0 or value > cap):
                         raise ValueError('已保存的音频源规格超出标定预算')
-            known_duration = max((item['duration_seconds'] or 0 for item in audio_inputs), default=0)
             if plan is None:
                 raise ValueError('当前任务没有可试听的音轨')
             start = payload.get('start_seconds', 0)
@@ -305,17 +307,17 @@ class CommandPreviewUseCase:
         else:
             if plan is None:
                 raise ValueError('当前任务没有可预览的故事板')
-            budget = cpu_render_budget_from_env()
+            budget = budgets.cpu_render
             if budget is None:
                 raise ValueError('CPU 画面预览预算尚未标定，未启动媒体')
             if any((clip.person_render_id for clip in plan.clips)):
-                _, person_budget = presenter_budgets_from_env()
+                person_budget = budgets.presenter_cpu_render
                 if person_budget is None:
                     raise ValueError('人物组合 CPU 预览预算尚未标定，未启动媒体')
                 budget = person_budget
             renderer = self.metadata.picture_renderer
             resources = renderer.picture_resources(plan, payload, picture_candidates, facts, budget)
-            audio_budget = cpu_audio_budget_from_env()
+            audio_budget = budgets.cpu_audio
             facts, resources = renderer.seal_audio_resources(task, picture_candidates, facts, resources, audio_budget, actor=actor)
             if re.fullmatch('(?:剪掉|删掉|删除)(?:当前镜头(?:的)?)?(?:停顿|静音)[。！]?', payload.get('raw_command', '').strip()):
                 selected = payload.get('selected_object_refs', [])

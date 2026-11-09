@@ -15,6 +15,83 @@ export function registerObservationTools(pi: ToolRegistrar, {request, taskId, ve
         return {content: [{type: "text", text: JSON.stringify(details)}], details};
       },
     });
+    const qualityRoot = `/api/creation-tasks/${encodeURIComponent(taskId!)}/quality-check`;
+    type QualityPair = {job_id: string; failed_request_id: string};
+    const qualityParameters = {type: "object", properties: {
+      job_id: {type: "string", minLength: 1}, failed_request_id: {type: "string", minLength: 1},
+    }, required: ["job_id", "failed_request_id"], additionalProperties: false};
+    const originalQuality = async (pair: QualityPair) => {
+      const result = await request(`${qualityRoot}/continuation?job_id=${encodeURIComponent(pair.job_id)}&failed_request_id=${encodeURIComponent(pair.failed_request_id)}`);
+      if (result.job_id !== pair.job_id || result.failed_request_id !== pair.failed_request_id
+          || !["recorded", "unknown"].includes(result.status)
+          || (result.status === "recorded" && (!result.receipt?.request_id || result.receipt.job_id !== pair.job_id))
+          || (result.status === "unknown" && result.receipt != null))
+        throw new Error("原质检续作回执身份不一致");
+      if (result.status === "recorded" && uncertainQuality?.job_id === pair.job_id
+          && uncertainQuality.failed_request_id === pair.failed_request_id)
+        uncertainQuality = null;
+      return result;
+    };
+    const qualityDetails = (pair: QualityPair, status: string, receipt: any = null) => ({
+      kind: "quality_continuation", task_id: taskId, ...pair, status, receipt,
+    });
+    const qualityResult = (details: any, isError = false) => ({
+      ...(isError ? {isError: true} : {}), content: [{type: "text", text: JSON.stringify(details)}], details,
+    });
+    let uncertainQuality: QualityPair | null = null;
+    pi.registerTool({
+      name: "read_task_quality_check", label: "读取原成片质检",
+      description: "只读当前成片质检和原失败阶段continuation。stale为历史，can_request只是条件声明，不代表已获设备许可；不启动检查、不外发媒体。",
+      parameters: {type: "object", properties: {}, additionalProperties: false},
+      execute: async () => {
+        const details = await request(qualityRoot);
+        return {content: [{type: "text", text: JSON.stringify(details)}], details};
+      },
+    });
+    pi.registerTool({
+      name: "read_task_quality_continuation", label: "查询原质检续作回执",
+      description: "仅查询原job_id/failed_request_id对应的后继回执。unknown不表示未提交，继续只读核对，不能换前驱或另建观察Job。recorded仅表示已受理，不是质检通过。",
+      parameters: qualityParameters,
+      execute: async (_id: string, pair: QualityPair) => {
+        const original = await originalQuality(pair);
+        return qualityResult(qualityDetails(pair, original.status, original.receipt));
+      },
+    });
+    pi.registerTool({
+      name: "continue_task_quality_check", label: "接续原失败质检阶段",
+      description: "沿原Job及明确失败前驱接续有限质检，保留已成功前缀。先查原回执；新续检必须匹配当前HEAD和continuation。只接受原标识，不接受预算。回包未知后仅查原回执，不能重试或改用observe。排队不代表质检完成。",
+      parameters: qualityParameters,
+      execute: async (_id: string, pair: QualityPair) => {
+        if (uncertainQuality) {
+          const pending = uncertainQuality;
+          const original = await originalQuality(pending);
+          return qualityResult(qualityDetails(pending, original.status, original.receipt), original.status === "unknown");
+        }
+        const original = await originalQuality(pair);
+        if (original.status === "recorded") return qualityResult(qualityDetails(pair, original.status, original.receipt));
+        const task = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}`);
+        if (task.task?.id !== taskId) throw new Error("任务响应身份不一致");
+        verifyTaskVersion(task);
+        const facts = await request(qualityRoot);
+        if (!facts.continuation?.can_request || facts.continuation.job_id !== pair.job_id
+            || facts.continuation.failed_request_id !== pair.failed_request_id)
+          throw new Error("当前质检没有匹配的可续作失败阶段；先读取原结果");
+        uncertainQuality = {...pair};
+        try {
+          const receipt = await request(`${qualityRoot}/continue`, {method: "POST", body: JSON.stringify(pair)});
+          if (receipt.job_id !== pair.job_id || !receipt.request_id || !receipt.check_id)
+            throw new Error("续检未返回匹配的原Job回执；先查询原前驱");
+          uncertainQuality = null;
+          return qualityResult(qualityDetails(pair, "recorded", receipt));
+        } catch (error) {
+          const rejected = error instanceof BusinessRequestError && error.httpStatus < 500;
+          const notSubmitted = error instanceof RequestNotSubmitted;
+          if (rejected || notSubmitted) uncertainQuality = null;
+          return qualityResult({...qualityDetails(pair, notSubmitted ? "not_submitted" : rejected ? "rejected" : "unknown"),
+            failure_reason: boundedText(error instanceof Error ? error.message : String(error), 500)}, true);
+        }
+      },
+    });
     const observationAttempts = new Set<string>();
     let observationBlocked = false;
     pi.registerTool({
@@ -32,8 +109,8 @@ export function registerObservationTools(pi: ToolRegistrar, {request, taskId, ve
           params.target.kind === "media_job" ? params.target.job_id : null,
           params.target.kind === "media_job" ? params.target.artifact_id : null,
           params.sample_times_seconds?.length ? params.sample_times_seconds : null]);
-        if (observationBlocked || observationAttempts.has(signature) || observationAttempts.size >= 3)
-          throw new Error("本轮观察尚待核验、已提交相同观察或达到3次上限；请回读原请求与实际结果，不重复提交");
+        if (observationBlocked || observationAttempts.has(signature))
+          throw new Error("本轮观察尚待核验或已提交相同观察；请回读原请求与实际结果，不重复提交");
         const task = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}`);
         if (task.task?.id !== taskId) throw new Error("任务响应身份不一致");
         verifyTaskVersion(task);

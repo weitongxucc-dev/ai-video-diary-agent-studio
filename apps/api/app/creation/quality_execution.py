@@ -183,7 +183,7 @@ class QualityCheckOwnerVerifier:
         if not self.can_manage(request, actor):
             return False
         try:
-            job = self.service.production.get_job_run(request.workspace_id, request.owner_id)
+            job = self.service.production.job_records.get_job_run(request.workspace_id, request.owner_id)
             self.service.require_actor(request.workspace_id, job.task_id, actor)
             return True
         except (KeyError, PermissionError):
@@ -272,7 +272,7 @@ class QualityCheckUnitExecutor:
             try:
                 context.check()
                 if job.status in {"queued", "interrupted"}:
-                    job = self.service.production.claim_job_run(job.workspace_id, job.id)
+                    job = self.service.production.job_records.claim_job_run(job.workspace_id, job.id)
                 result = record["evidence"].get("_worker_result")
                 if result is None:
                     result = self.worker(context, request, self.service.temporary_root)
@@ -300,11 +300,11 @@ class QualityCheckUnitExecutor:
                     return
                 if not exc.recoverable_pressure:
                     scheduler.fail_unit(grant, reason="quality_resource_unavailable",
-                        failure_write=lambda conn, current: self.service.settle(conn, job, record["check_id"],
-                            status="failed", error=str(exc)))
+                        failure_write=lambda conn, current, error=exc: self.service.settle(conn, job, record["check_id"],
+                            status="failed", error=str(error)))
                     return
                 scheduler.defer_unit(grant, reason="resource_pressure", retry_not_before_utc=datetime.now(timezone.utc) + timedelta(seconds=30))
-                self.service.production.finish_job_run(job.workspace_id, job.id, status="interrupted",
+                self.service.production.job_records.finish_job_run(job.workspace_id, job.id, status="interrupted",
                     failure_reason=str(exc), impact="检查等待资源恢复，未产生通过结论。", repair_action="资源恢复后继续原检查。")
                 return
             except RecoveryBlocked:
@@ -315,8 +315,8 @@ class QualityCheckUnitExecutor:
                         self._cancel(grant,scheduler,job,record["check_id"],"user_cancelled")
                     return
                 scheduler.fail_unit(grant, reason="quality_check_failed",
-                    failure_write=lambda conn, current: self.service.settle(conn, job, record["check_id"],
-                        status="failed", error=str(exc)))
+                    failure_write=lambda conn, current, error=exc: self.service.settle(conn, job, record["check_id"],
+                        status="failed", error=str(error)))
                 return
             # Keep terminal SQL outside the worker-error handler. A late SQL error
             # rolls back the whole checkpoint and preserves its staged worker receipt.

@@ -1,6 +1,6 @@
 import { chooseSelectValue, inspectSelectOptions } from "./select-interaction";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
   listCreationTasks: vi.fn(), listPublishingPlatforms: vi.fn(), listPublishingAccounts: vi.fn(),
@@ -31,7 +31,7 @@ const platforms = { items: [
   { platform: "xiaohongshu", label: "小红书", browser_connect: false, browser_publish: false, verified: false, status: "not_connected", requirement: "尚未接通" },
 ] };
 
-afterEach(() => vi.clearAllMocks());
+beforeEach(() => vi.resetAllMocks());
 
 function versionDetail(taskId = "task-1", versionId = "timeline-v4") {
   const sequence = Number(versionId.match(/\d+$/)?.[0] ?? 4);
@@ -124,11 +124,13 @@ describe("PublishingWorkspace", () => {
     const browserButton=await screen.findByRole("button",{name:"打开专用浏览器"});
     await waitFor(()=>expect(browserButton).toBeEnabled());
     api.listPublishingPlatforms.mockResolvedValueOnce({items:platforms.items.map(item=>({...item,browser_connect:false,browser_publish:false,status:"not_connected"}))});
+    fireEvent.click(screen.getByRole("button",{name:"关闭卡片"}));
     fireEvent.click(screen.getByRole("button",{name:"刷新"}));
-    await waitFor(()=>expect(browserButton).toBeDisabled());
+    fireEvent.click(screen.getByRole("button",{name:"准备发布"}));
+    await waitFor(()=>expect(screen.getByRole("button",{name:"打开专用浏览器"})).toBeDisabled());
     expect(screen.getByRole("button",{name:"重新核验当前抖音账号"})).toBeDisabled();
     expect(screen.getByText(/抖音账号接入当前不可用/)).toBeVisible();
-    fireEvent.click(browserButton);
+    fireEvent.click(screen.getByRole("button",{name:"打开专用浏览器"}));
     expect(api.connectPublishingAccount).not.toHaveBeenCalled();
     expect(api.verifyPublishingAccount).not.toHaveBeenCalled();
   });
@@ -165,9 +167,9 @@ describe("PublishingWorkspace", () => {
     fireEvent.change(screen.getByLabelText("发布描述"), { target: { value: "完整确认文案" } });
     fireEvent.change(screen.getByLabelText("话题（逗号或换行分隔）"), { target: { value: "家庭,记录" } });
     fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
-    expect(await screen.findByRole("dialog", {name:"确认抖音发布内容"})).toHaveTextContent("账号：creator-001");
-    expect(screen.getByRole("dialog", {name:"确认抖音发布内容"})).toHaveTextContent("新品讲解视频 · 当前版本 V4");
-    expect(screen.getByRole("dialog", {name:"确认抖音发布内容"})).toHaveTextContent("完整确认文案");
+    expect(await screen.findByRole("alertdialog", {name:"确认抖音发布内容"})).toHaveTextContent("账号：creator-001");
+    expect(screen.getByRole("alertdialog", {name:"确认抖音发布内容"})).toHaveTextContent("新品讲解视频 · 当前版本 V4");
+    expect(screen.getByRole("alertdialog", {name:"确认抖音发布内容"})).toHaveTextContent("完整确认文案");
     fireEvent.click(screen.getByRole("button", { name: "我已核对，创建发布作业" }));
     await waitFor(() => expect(api.createPlatformPublishJob).toHaveBeenCalledTimes(1));
     expect(api.createPlatformPublishJob).toHaveBeenCalledWith("task-1", expect.objectContaining({
@@ -201,7 +203,7 @@ describe("PublishingWorkspace", () => {
     await verifyAccount();
     fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "确认过的标题" } });
     fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
-    expect(await screen.findByRole("dialog", {name:"确认抖音发布内容"})).toBeInTheDocument();
+    expect(await screen.findByRole("alertdialog", {name:"确认抖音发布内容"})).toBeInTheDocument();
     api.verifyPublishingAccount.mockResolvedValueOnce({ platform: "douyin", connected: true, account_ref: "creator-other" });
     fireEvent.click(screen.getByRole("button", { name: "我已核对，创建发布作业" }));
     expect(await screen.findByRole("status")).toHaveTextContent("账号与确认账号不同");
@@ -218,7 +220,7 @@ describe("PublishingWorkspace", () => {
     await chooseSelectValue(screen.getByLabelText("发布目标（任务与成片版本）"), "task-2");
     lateAccount.resolve({ platform: "douyin", connected: true, account_ref: "creator-001" });
     await waitFor(() => expect(screen.getByLabelText("发布目标（任务与成片版本）")).toHaveAttribute("data-selected-value", "task-2"));
-    expect(screen.queryByRole("dialog", {name:"确认抖音发布内容"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog", {name:"确认抖音发布内容"})).not.toBeInTheDocument();
     expect(api.createPlatformPublishJob).not.toHaveBeenCalled();
   });
 
@@ -250,7 +252,9 @@ describe("PublishingWorkspace", () => {
     } });
     await waitFor(() => expect(api.getCreationTaskTimelineVersion).toHaveBeenCalledTimes(1));
 
+    fireEvent.click(screen.getByRole("button", { name: "关闭卡片" }));
     fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+    fireEvent.click(screen.getByRole("button", { name: "准备发布" }));
     await waitFor(() => expect(api.getCreationTaskTimelineVersion).toHaveBeenCalledTimes(2));
     expect(api.getCreationTaskTimelineVersion).toHaveBeenLastCalledWith("task-1", "timeline-v4");
     refreshedRead.resolve(versionDetail());
@@ -264,7 +268,9 @@ describe("PublishingWorkspace", () => {
     setup({ versionRead: () => pendingRead.promise });
     await waitFor(() => expect(api.getCreationTaskTimelineVersion).toHaveBeenCalledTimes(1));
 
+    fireEvent.click(screen.getByRole("button", { name: "关闭卡片" }));
     fireEvent.click(screen.getByRole("button", { name: /新品讲解视频/ }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭卡片" }));
     fireEvent.click(screen.getByRole("button", { name: "成片" }));
     fireEvent.click(screen.getByRole("button", {name:"准备发布"}));
     expect(api.getCreationTaskTimelineVersion).toHaveBeenCalledTimes(1);
@@ -285,17 +291,19 @@ describe("PublishingWorkspace", () => {
     expect(api.createPlatformPublishJob).not.toHaveBeenCalled();
   });
 
-  it("aborts the final recheck after Escape cancels the card", async () => {
+  it("aborts the final recheck after explicitly cancelling the confirmation", async () => {
     setup();
     await verifyAccount();
     fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "待最终确认" } });
     fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
-    await screen.findByRole("dialog", {name:"确认抖音发布内容"});
+    await screen.findByRole("alertdialog", {name:"确认抖音发布内容"});
     const lateTasks = deferred<{ items: CreationTask[]; total_count: number }>();
     api.listCreationTasks.mockReturnValueOnce(lateTasks.promise);
     fireEvent.click(screen.getByRole("button", { name: "我已核对，创建发布作业" }));
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-    expect(screen.queryByRole("dialog", {name:"确认抖音发布内容"})).not.toBeInTheDocument();
+    expect(screen.getByRole("alertdialog", {name:"确认抖音发布内容"})).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
+    expect(screen.queryByRole("alertdialog", {name:"确认抖音发布内容"})).not.toBeInTheDocument();
     lateTasks.resolve({ items: [task], total_count: 1 });
     await waitFor(() => expect(api.createPlatformPublishJob).not.toHaveBeenCalled());
   });
@@ -305,12 +313,13 @@ describe("PublishingWorkspace", () => {
     await verifyAccount();
     fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "原文案" } });
     fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
-    await screen.findByRole("dialog", {name:"确认抖音发布内容"});
+    await screen.findByRole("alertdialog", {name:"确认抖音发布内容"});
     const lateTasks = deferred<{ items: CreationTask[]; total_count: number }>();
     api.listCreationTasks.mockReturnValueOnce(lateTasks.promise);
     fireEvent.click(screen.getByRole("button", { name: "我已核对，创建发布作业" }));
+    fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
     fireEvent.change(screen.getByLabelText("发布标题"), { target: { value: "修改后的文案" } });
-    expect(screen.queryByRole("dialog", {name:"确认抖音发布内容"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog", {name:"确认抖音发布内容"})).not.toBeInTheDocument();
     lateTasks.resolve({ items: [task], total_count: 1 });
     await waitFor(() => expect(screen.getByLabelText("发布标题")).toHaveValue("修改后的文案"));
     expect(api.createPlatformPublishJob).not.toHaveBeenCalled();
@@ -321,13 +330,15 @@ describe("PublishingWorkspace", () => {
     await verifyAccount();
     fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "任务一确认文案" } });
     fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
-    await screen.findByRole("dialog", {name:"确认抖音发布内容"});
+    await screen.findByRole("alertdialog", {name:"确认抖音发布内容"});
     const sentJob = deferred<PlatformPublishJob>();
     const job: PlatformPublishJob = { id: "publish-late", task_id: "task-1", status: "queued", progress: 0, queue_state: "waiting", queue_wait_reason: null, failure_reason: null, impact: null, repair_action: null, events: [] };
     api.createPlatformPublishJob.mockReturnValueOnce(sentJob.promise);
     fireEvent.click(screen.getByRole("button", { name: "我已核对，创建发布作业" }));
     await waitFor(() => expect(api.createPlatformPublishJob).toHaveBeenCalledWith("task-1", expect.any(Object)));
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.getByRole("alertdialog", {name:"确认抖音发布内容"})).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
     expect(await screen.findByRole("status")).toHaveTextContent("关闭确认卡不会撤回");
     await chooseSelectValue(screen.getByLabelText("发布目标（任务与成片版本）"), "task-2");
     sentJob.resolve(job);
@@ -341,9 +352,9 @@ describe("PublishingWorkspace", () => {
     await verifyAccount();
     fireEvent.change(await screen.findByLabelText("发布标题"), { target: { value: "暂存标题" } });
     fireEvent.click(screen.getByRole("button", { name: "检查并确认抖音发布" }));
-    expect(await screen.findByRole("dialog", {name:"确认抖音发布内容"})).toBeInTheDocument();
+    expect(await screen.findByRole("alertdialog", {name:"确认抖音发布内容"})).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "返回修改" }));
-    expect(screen.queryByRole("dialog", {name:"确认抖音发布内容"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog", {name:"确认抖音发布内容"})).not.toBeInTheDocument();
     expect(screen.getByLabelText("发布标题")).toHaveValue("暂存标题");
     expect(screen.getByRole("dialog",{name:"发布准备 · 新品讲解视频"})).toBeVisible();
     expect(api.createPlatformPublishJob).not.toHaveBeenCalled();
@@ -362,7 +373,7 @@ describe("PublishingWorkspace", () => {
 
   it("renders unknown publication outcomes as blocked from automatic retry", async () => {
     const jobs: { items: PlatformPublishJob[] } = { items: [{ id: "publish-unknown", task_id: "task-1", status: "interrupted", progress: 0, queue_state: "failed", queue_wait_reason: null, failure_reason: "publish_outcome_unknown", impact: "平台动作可能已经提交；系统不会自动重发。", repair_action: "先在平台账号后台核对结果。", events: [{ type: "platform_publish_unknown", payload: {}, created_at: "2026-10-09T00:00:00Z" }] }] };
-    setup({ jobs });
+    setup({ jobs, prepare: false });
     fireEvent.click(screen.getByRole("button",{name:"发布记录"}));
     fireEvent.click(await screen.findByRole("button",{name:/结果待核对/}));
     expect(within(screen.getByRole("dialog",{name:"结果待核对（不会自动重发）"})).getByText("结果待核对（不会自动重发）")).toBeInTheDocument();
@@ -380,7 +391,7 @@ describe("PublishingWorkspace", () => {
       ...queued, status: "succeeded", progress: 100, queue_state: "done",
       events: [{ type: "platform_publish_succeeded", payload: { remote_publish_id: "remote-42" }, created_at: "2026-10-09T00:01:00Z" }],
     };
-    setup({ jobs: { items: [queued] } });
+    setup({ jobs: { items: [queued] }, prepare: false });
     fireEvent.click(screen.getByRole("button",{name:"发布记录"}));
     expect(await screen.findByText("等待本机发布队列")).toBeInTheDocument();
     api.listPlatformPublishJobs.mockResolvedValueOnce({ items: [succeeded] });

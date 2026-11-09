@@ -79,12 +79,31 @@ class OwnerRegistration:
     on_stopped: Callable[[Grant, DeviceScheduler, Exception], None] | None = None
 
 
-class OwnerRouter(OwnerVerifier):
+class OwnerReadRouter:
+    """Share current owner detail and device summary policy without executors."""
+
+    def __init__(self, owner_for, access):
+        self._owner_for = owner_for
+        self.access = access
+
+    def can_view_detail(self, request: WorkRequest, actor: object) -> bool:
+        owner = self._owner_for(request.owner_type)
+        return owner is not None and owner.can_view_detail(request, actor)
+
+    def can_view_device_summary(self, actor: object) -> bool:
+        return self.access.can_view_device_summary(actor)
+
+
+class OwnerRouter(OwnerReadRouter, OwnerVerifier):
     """Route per-owner checks without inventing fallback identity or access."""
 
     def __init__(self, registrations: Mapping[str, OwnerRegistration], access: DeviceAccess) -> None:
         self.registrations = dict(registrations)
-        self.access = access
+        super().__init__(self._read_owner, access)
+
+    def _read_owner(self, owner_type):
+        registration = self.registrations.get(owner_type)
+        return registration.owner if registration is not None else None
 
     def verify_submission(self, intent: SubmissionIntent, actor: object) -> VerifiedWork:
         registration = self.registrations.get(intent.owner_type)
@@ -121,10 +140,6 @@ class OwnerRouter(OwnerVerifier):
         registration = self.registrations.get(request.owner_type)
         return registration is not None and registration.owner.can_wake(request, actor)
 
-    def can_view_detail(self, request: WorkRequest, actor: object) -> bool:
-        registration = self.registrations.get(request.owner_type)
-        return registration is not None and registration.owner.can_view_detail(request, actor)
-
     def verify_retry(self, request: WorkRequest, actor: object, reason: RetryReason,
                      conn: sqlite3.Connection) -> VerifiedRetry:
         registration = self.registrations.get(request.owner_type)
@@ -135,8 +150,6 @@ class OwnerRouter(OwnerVerifier):
     def verify_session(self, heartbeat: SessionHeartbeat, actor: object) -> VerifiedSession:
         return self.access.verify_session(heartbeat, actor)
 
-    def can_view_device_summary(self, actor: object) -> bool:
-        return self.access.can_view_device_summary(actor)
 
 
 class DeviceRuntime:
@@ -348,6 +361,7 @@ def build_device_runtime(
     poll_interval_seconds: float = 1.0,
     admission_recorder: ResourceAdmissionWrite | None = None,
     host_observer: HostResourceProbe | None = None,
+    dispatch_owner: tuple[str, str] | None = None,
 ) -> DeviceRuntime:
     """Build only from explicit trusted adapters; never supply permissive probes."""
     if not database_path or not device_lock_path or device_access is None or resources is None or processes is None:
@@ -375,6 +389,7 @@ def build_device_runtime(
         scheduler = DeviceScheduler(database, lock_path, owners=OwnerRouter(registered, device_access),
                                     resources=resources, processes=processes,
                                     admission_recorder=admission_recorder,
+                                    dispatch_owner=dispatch_owner,
                                     activity_source_reliable=activity_source_reliable)
     except ValueError as exc:
         raise RuntimeUnavailable(str(exc)) from exc

@@ -22,9 +22,9 @@ def repository(tmp_path: Path, duration: Mock) -> ProductionRepository:
 
 
 def confirm(repo: ProductionRepository, path: Path, source: str = "manual") -> None:
-    repo.confirm_material_copy_complete(
+    repo.material_source_files.confirm_material_copy_complete(
         "one", relative_path=str(path.relative_to(repo.video_library_path)),
-        expected_revision=repo.material_copy_revision(path.stat()), confirmation_source=source,
+        expected_revision=repo.material_source_files.material_copy_revision(path.stat()), confirmation_source=source,
     )
 
 
@@ -33,25 +33,25 @@ def test_external_copy_requires_confirmation_across_rescan_and_restart(tmp_path:
     repo = repository(tmp_path, duration)
     path = repo.video_library_path / "clip.mp4"
     path.write_bytes(b"external copy")
-    repo.bind_material_ingestion("one", expected_directory=str(repo.video_library_path))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(repo.video_library_path))
     service = MaterialIngestionService(repo, stable_seconds=0)
     assert service.scan_once() == []
     assert service.scan_once() == []
-    assert repo.scan_library("one") == []
+    assert repo.material_intake.scan_library("one") == []
     assert repo.list_assets("one") == []
-    assert repo.pending_material_copies("one") == [{
-        "relative_path": "clip.mp4", "expected_revision": repo.material_copy_revision(path.stat()),
+    assert repo.material_source_files.pending_material_copies("one") == [{
+        "relative_path": "clip.mp4", "expected_revision": repo.material_source_files.material_copy_revision(path.stat()),
     }]
     confirm(repo, path)
     reopened = repository(tmp_path, duration)
     with sqlite3.connect(reopened.database_path) as conn:
         saved = conn.execute("SELECT confirmed_revision, confirmation_source, copy_confirmed_at FROM material_ingestion_files").fetchone()
-    assert json.loads(saved[0]) == repo.material_copy_revision(path.stat())
+    assert json.loads(saved[0]) == repo.material_source_files.material_copy_revision(path.stat())
     assert saved[1] == "manual" and saved[2]
     resumed = MaterialIngestionService(reopened, stable_seconds=10_000)
     assert resumed.scan_once()[0].analysis_status == "ready"
-    assert reopened.pending_material_copies("one") == []
-    monkeypatch.setattr("app.production.hashlib.file_digest", Mock(side_effect=AssertionError("unchanged file rehashed")))
+    assert reopened.material_source_files.pending_material_copies("one") == []
+    monkeypatch.setattr("app.materials.intake.hashlib.file_digest", Mock(side_effect=AssertionError("unchanged file rehashed")))
     assert resumed.scan_once() == []
     assert len(reopened.list_assets("one")) == 1
     assert duration.call_count == 1
@@ -62,22 +62,22 @@ def test_changed_revision_invalidates_confirmation_and_blocks_direct_scan_analys
     repo = repository(tmp_path, duration)
     path = repo.video_library_path / "clip.mp4"
     path.write_bytes(b"original")
-    repo.bind_material_ingestion("one", expected_directory=str(repo.video_library_path))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(repo.video_library_path))
     confirm(repo, path, "app_import")
     service = MaterialIngestionService(repo)
     asset = service.scan_once()[0]
     before = path.stat()
-    old_revision = repo.material_copy_revision(before)
+    old_revision = repo.material_source_files.material_copy_revision(before)
     path.write_bytes(b"modified")
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
-    assert repo.material_copy_revision(path.stat()) != old_revision
+    assert repo.material_source_files.material_copy_revision(path.stat()) != old_revision
     with pytest.raises(ValueError, match="修订已变化"):
-        repo.confirm_material_copy_complete("one", relative_path="clip.mp4", expected_revision=old_revision, confirmation_source="manual")
-    assert repo.scan_library("one") == []
+        repo.material_source_files.confirm_material_copy_complete("one", relative_path="clip.mp4", expected_revision=old_revision, confirmation_source="manual")
+    assert repo.material_intake.scan_library("one") == []
     with pytest.raises(ValueError, match="先确认"):
         repo.analyze_asset("one", asset.id)
     with pytest.raises(ValueError, match="先确认"):
-        repo.retry_material_ingestion("one", asset.id)
+        repo.material_intake.retry_material_ingestion("one", asset.id)
     assert service.scan_once() == []
     assert service.scan_once() == []
     assert repo.get_asset("one", asset.id).analysis_status == "blocked"
@@ -93,9 +93,9 @@ def test_app_copy_can_confirm_before_discovery_and_restart_reclaims_interrupted_
     repo = repository(tmp_path, duration)
     path = repo.video_library_path / "app.mp4"
     path.write_bytes(b"fully committed app copy")
-    repo.bind_material_ingestion("one", expected_directory=str(repo.video_library_path))
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(repo.video_library_path))
     confirm(repo, path, "app_import")
-    claimed = repo.scan_material_ingestion(stable_seconds=10_000)
+    claimed = repo.material_intake.scan_material_ingestion(stable_seconds=10_000)
     assert len(claimed) == 1
     reopened = repository(tmp_path, duration)
     analyzed = MaterialIngestionService(reopened).scan_once()
@@ -111,12 +111,12 @@ def test_confirmation_is_not_validation_and_failed_media_retries_same_confirmed_
     repo = repository(tmp_path, duration)
     path = repo.video_library_path / "invalid.mp4"
     path.write_bytes(b"not a valid video")
-    repo.bind_material_ingestion("one", expected_directory=str(repo.video_library_path))
-    revision = repo.material_copy_revision(path.stat())
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(repo.video_library_path))
+    revision = repo.material_source_files.material_copy_revision(path.stat())
     with pytest.raises(ValueError, match="未绑定"):
-        repo.confirm_material_copy_complete("other", relative_path="invalid.mp4", expected_revision=revision, confirmation_source="manual")
+        repo.material_source_files.confirm_material_copy_complete("other", relative_path="invalid.mp4", expected_revision=revision, confirmation_source="manual")
     with pytest.raises(ValueError, match="绑定目录"):
-        repo.confirm_material_copy_complete("one", relative_path="../invalid.mp4", expected_revision=revision, confirmation_source="manual")
+        repo.material_source_files.confirm_material_copy_complete("one", relative_path="../invalid.mp4", expected_revision=revision, confirmation_source="manual")
     confirm(repo, path)
     assert duration.call_count == 0  # A manual declaration does not parse media.
     service = MaterialIngestionService(repo)
@@ -124,7 +124,7 @@ def test_confirmation_is_not_validation_and_failed_media_retries_same_confirmed_
     assert asset.analysis_status == "failed"
     assert "格式或内容无效" in asset.analysis_message
     assert service.scan_once() == []
-    repo.retry_material_ingestion("one", asset.id)
+    repo.material_intake.retry_material_ingestion("one", asset.id)
     duration.side_effect = None
     duration.return_value = 1.0
     assert service.scan_once()[0].analysis_status == "ready"

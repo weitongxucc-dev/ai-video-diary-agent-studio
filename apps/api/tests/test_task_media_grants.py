@@ -1,4 +1,5 @@
 """Persistent task-media work uses the sole device grant and isolated stores."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -13,7 +14,9 @@ from app.device_scheduler import RecoveryBlocked
 from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
-from app.production import CreationPlan, CreationTask, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import CreationTask
 from app.task_audio import TASK_MEDIA_CONTEXT, TaskMediaJobs, TaskMediaRequired
 from test_device_runtime import Resources, Processes
 
@@ -26,7 +29,7 @@ def case(tmp_path, action=None, validate=None, resources=None):
         knowledge_references=[], source_references=[], selected_voice=None,
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
         material_rule_summary='', model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint='test')
-    repo.confirm_creation_plan(plan, CreationTask(id='task', workspace_id='local', plan_id='plan', name='test', scenario='knowledge_explanation'))
+    repo.plan_confirmation.confirm_creation_plan(plan, CreationTask(id='task', workspace_id='local', plan_id='plan', name='test', scenario='knowledge_explanation'))
     members = LocalMemberService(repo.database_path)
     actor = CreationExecutionActor('local', members.whoami(None)[0].member_id)
     access = MemberDeviceAccess(members)
@@ -65,16 +68,16 @@ def test_submission_replay_is_persistent_and_does_not_start_work(tmp_path):
     job = media.submit(runtime, actor, 'task', 'audio_listen', {'payload': {'start': 0}}, 'audio_listen')
     again = factory().submit(runtime, actor, 'task', 'audio_listen', {'payload': {'start': 0}}, 'audio_listen')
     assert again.id == job.id
-    assert state['calls'] == 0 and repo.get_job_run('local', job.id).status == 'queued'
+    assert state['calls'] == 0 and repo.job_records.get_job_run('local', job.id).status == 'queued'
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 1
     runtime.stop(0)
     rebuilt = build(factory())
     assert rebuilt.run_once()
-    assert repo.get_job_run('local', job.id).status == 'succeeded'
+    assert repo.job_records.get_job_run('local', job.id).status == 'succeeded'
     assert state['calls'] == 1
     assert media.read('local', job.id)[1]['arguments'] == {'payload': {'start': 0}}
-    assert repo.get_task_event('local', f'event_{job.id}_result').payload['result']['audio_url'] == '/saved-output'
+    assert repo.execution_records.get_task_event('local', f'event_{job.id}_result').payload['result']['audio_url'] == '/saved-output'
     rebuilt.stop(0)
 
 
@@ -89,7 +92,7 @@ def test_waiting_units_do_not_run_after_input_identity_or_resource_rejection(tmp
     elif change == 'identity':
         media.verify_identity = lambda actor: 'unauthorized'
     assert not runtime.run_once()
-    assert state['calls'] == 0 and repo.get_job_run('local', job.id).status == 'queued'
+    assert state['calls'] == 0 and repo.job_records.get_job_run('local', job.id).status == 'queued'
     runtime.stop(0)
 
 
@@ -108,7 +111,7 @@ def test_cancel_before_grant_never_calls_media(tmp_path):
     with repo._connect() as conn:
         request_id = conn.execute('SELECT id FROM device_work_requests').fetchone()[0]
     runtime.scheduler.cancel(request_id, actor)
-    repo.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled', impact='unchanged', repair_action='resubmit')
+    repo.job_records.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled', impact='unchanged', repair_action='resubmit')
     assert not runtime.run_once()
     assert state['calls'] == 0
     runtime.stop(0)
@@ -123,12 +126,12 @@ def test_post_receipt_pressure_revalidates_without_reexecuting(tmp_path):
     runtime = build(media)
     job = media.submit(runtime, actor, 'task', 'audio_listen', {}, 'audio_listen')
     assert runtime.run_once()
-    assert repo.get_job_run('local', job.id).status == 'interrupted'
+    assert repo.job_records.get_job_run('local', job.id).status == 'interrupted'
     with repo._connect() as conn:
         conn.execute("UPDATE device_work_requests SET retry_not_before_utc=?", ((datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat(),))
     assert runtime.run_once()
     assert state['calls'] == 1 and state['checks'] == 2
-    assert repo.get_job_run('local', job.id).status == 'succeeded'
+    assert repo.job_records.get_job_run('local', job.id).status == 'succeeded'
     runtime.stop(0)
 
 
@@ -211,7 +214,7 @@ def test_resource_unknown_then_refused_is_scoped_bounded_and_not_resampled_on_re
             assert not runtime.run_once()
         repeated = media.resource_admission_receipt(job, start, actor, runtime.scheduler._get(request.id), 'queued')
         assert repeated == refused
-        assert len([item for item in repo.list_task_events('local','task')
+        assert len([item for item in repo.execution_records.list_task_events('local','task')
                     if item.event_type == 'task_media_resource_admission']) == 2
         for receipt in (unknown, refused):
             assert 'PRIVATE' not in json.dumps(receipt) and str(tmp_path) not in json.dumps(receipt)
@@ -232,18 +235,18 @@ def test_resource_unknown_then_refused_is_scoped_bounded_and_not_resampled_on_re
 def test_resource_receipt_write_failure_rolls_back_without_grant(tmp_path, monkeypatch):
     repo, actor, state, _, _, media, runtime, _ = _resource_admission_case(tmp_path, monkeypatch)
     job = media.submit(runtime, actor, 'task', 'visual_edit_preview', {}, 'edit_preview')
-    original = repo.append_task_event
+    original = repo.execution_records.append_task_event
     def fail(event, *, connection=None):
         if event.event_type == 'task_media_resource_admission':
             assert connection is not None and connection.in_transaction
             original(event, connection=connection)
             raise RuntimeError('fixture persistence failure')
         return original(event, connection=connection)
-    monkeypatch.setattr(repo, 'append_task_event', fail)
+    monkeypatch.setattr(repo.execution_records, 'append_task_event', fail)
     try:
         with pytest.raises(RuntimeError, match='fixture persistence failure'):
             runtime.run_once()
-        assert not [item for item in repo.list_task_events('local','task')
+        assert not [item for item in repo.execution_records.list_task_events('local','task')
                     if item.event_type == 'task_media_resource_admission']
         with repo._connect() as conn:
             row = conn.execute('SELECT state,wait_reason FROM device_work_requests WHERE owner_id=?',(job.id,)).fetchone()
@@ -264,14 +267,14 @@ def test_resource_receipt_history_survives_cancel_retry_and_restart(tmp_path, mo
             request_id = conn.execute('SELECT id FROM device_work_requests WHERE owner_id=?',(job.id,)).fetchone()[0]
         first = media.resource_admission_receipt(job, start, actor, runtime.scheduler._get(request_id), 'queued')
         runtime.scheduler.cancel(request_id, actor)
-        repo.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled',
+        repo.job_records.finish_job_run('local', job.id, status='cancelled', failure_reason='user_cancelled',
                             impact='unchanged', repair_action='resubmit')
-        cancelled = media.resource_admission_receipt(repo.get_job_run('local',job.id), start, actor,
+        cancelled = media.resource_admission_receipt(repo.job_records.get_job_run('local',job.id), start, actor,
                                                     runtime.scheduler._get(request_id), 'cancelled')
         assert cancelled['context'] == 'history' and cancelled['observation_id'] == first['observation_id']
         runtime.scheduler.retry_existing(request_id, actor, reason='cancelled')
         assert not runtime.run_once()
-        second = media.resource_admission_receipt(repo.get_job_run('local',job.id), start, actor,
+        second = media.resource_admission_receipt(repo.job_records.get_job_run('local',job.id), start, actor,
                                                  runtime.scheduler._get(request_id), 'interrupted')
         assert second['attempt_number'] == 2 and second['last_grant_generation'] is None
         assert second['observation_id'] != first['observation_id']
@@ -279,7 +282,7 @@ def test_resource_receipt_history_survives_cancel_retry_and_restart(tmp_path, mo
         rebuilt = build(media)
         try:
             monkeypatch.setattr(media, 'facts', lambda *args: (_ for _ in ()).throw(AssertionError('no fact resample on history read')))
-            history = media.resource_admission_receipt(repo.get_job_run('local',job.id), start, actor,
+            history = media.resource_admission_receipt(repo.job_records.get_job_run('local',job.id), start, actor,
                                                       rebuilt.scheduler._get(request_id), 'stale')
             assert history['context'] == 'history' and history['checked_at'] == second['checked_at']
         finally:
@@ -334,15 +337,15 @@ def test_real_short_audio_is_published_and_recovered_under_registered_grant(tmp_
     runtime.scheduler.processes = HostProcessProbe()
     job = media.submit(runtime, actor, 'task', 'audio_import', {}, 'audio_source')
     assert runtime.run_once()
-    saved = repo.get_job_run('local', job.id)
+    saved = repo.job_records.get_job_run('local', job.id)
     assert saved.status == 'succeeded' and len(saved.output_refs) == 1
-    record = repo.list_artifact_records('local','task')[0]
+    record = repo.execution_records.list_artifact_records('local','task')[0]
     with wave.open(str(store.resolve_file(record.logical_ref))) as wav:
         assert wav.getnframes() == 4800
     with repo._connect() as conn:
         permit = conn.execute('SELECT children_json,state FROM device_permit').fetchone()
         assert permit['state'] == 'free' and permit['children_json'] == '[]'
-    assert repo.list_transform_runs('local','task')[0].parameters['duration_ms'] == 100
+    assert repo.lineage_records.list_transform_runs('local','task')[0].parameters['duration_ms'] == 100
     runtime.stop(0)
 
 
@@ -415,7 +418,7 @@ def test_unknown_and_known_source_probe_rejects_before_dsp(tmp_path, monkeypatch
     runtime.scheduler.processes=HostProcessProbe()
     job=media.submit(runtime,actor,'task','audio_listen',{},'audio_listen')
     assert runtime.run_once()
-    assert repo.get_job_run('local',job.id).status == 'failed'
+    assert repo.job_records.get_job_run('local',job.id).status == 'failed'
     assert dsp == ['ffprobe']
     assert not (tmp_path/'mixed.wav').exists()
     runtime.stop(0)
@@ -476,15 +479,15 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
     runtime.scheduler.processes=HostProcessProbe()
     runtime.scheduler.resources=HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
         100, 1, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
-        cpu_render=replace(main.cpu_render_budget_from_env(),running_cpu_policy=_render_budget().running_cpu_policy)),
+        cpu_render=replace(main._device_operation_budget("cpu_render"),running_cpu_policy=_render_budget().running_cpu_policy)),
         memory_monitor=IsolatedMemoryMonitor())
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
-    saved=repo.get_job_run('local',job.id)
+    saved=repo.job_records.get_job_run('local',job.id)
     assert saved.status == 'succeeded', saved.failure_reason
     assert state['picture_calls'] == 1
     assert store.resolve_file(saved.output_refs[0]).stat().st_size > 0
-    assert repo.list_transform_runs('local','task')[0].parameters['duration_ms'] == 1000
+    assert repo.lineage_records.list_transform_runs('local','task')[0].parameters['duration_ms'] == 1000
     runtime.stop(0)
 
 
@@ -492,14 +495,14 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     import json
     import subprocess
     from dataclasses import asdict
-    from types import SimpleNamespace
     from fastapi.testclient import TestClient
     import app.main as main
     from app.artifact_store import ArtifactStore
     from app.audio_timeline import AudioTimeline, TimelineAudioClip, TimelineAudioTrack
     from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceProbe
     from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_to_payload
-    from app.production import MaterialAsset, MaterialSegment, SubtitleCue, SubtitleTrack, TimelineVersion
+    from app.production import MaterialAsset, MaterialSegment
+    from app.creation.contracts import SubtitleCue, SubtitleTrack, TimelineVersion
     from app.task_audio import TaskAudio
     from _media_preview_test_fixtures import configure_synthetic_media_budgets, synthetic_wav_bytes
     configure_synthetic_media_budgets(monkeypatch, main)
@@ -541,16 +544,17 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
                           {'kind':'text', 'id':'outside', 'text':'outside', 'start_seconds':9, 'end_seconds':10}])
     payload = creation_task_montage_plan_to_payload(plan)
     with repo._connect() as conn:
-        task = repo.get_creation_task('local', 'task')
+        task = repo.task_records.get_creation_task('local', 'task')
         task.montage_plan_id = plan.id
         task.stage = 'montage'
         task.owner_user_id = actor.member_id
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",
             (json.dumps(asdict(task), default=str),))
-    repo.save_creation_task_montage_plan('local', 'task', plan.id, payload)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local', 'task', plan.id, payload)
     payload = repo.get_creation_task_montage_plan('local', 'task')
-    repo.create_timeline_version(TimelineVersion('timeline', 'local', 'task', None, 1, {'montage':payload}, None))
-    monkeypatch.setattr(main, 'clip_preview_budget_from_env', main.cpu_render_budget_from_env)
+    repo.timeline_records.create_timeline_version(TimelineVersion('timeline', 'local', 'task', None, 1, {'montage':payload}, None))
+    selected_budget = main._device_host_budget()
+    monkeypatch.setattr(main, '_device_host_budget', lambda: replace(selected_budget, clip_preview=selected_budget.cpu_render))
     store = ArtifactStore(tmp_path/'output')
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, 'artifact_store', store)
@@ -565,12 +569,12 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
         {'font_family':'Arial', 'font_size':32, 'enabled':True},
         [SubtitleCue('inside', None, 'inside', 2, 3), SubtitleCue('outside', None, 'outside', 9, 10)],
         'timeline', None, subtitle_ref, transform_id, 'valid')
-    repo.create_subtitle_track(track)
+    repo.subtitle_records.create_subtitle_track(track)
     service = TaskAudio(repo, store, tmp_path/'temp', picture_renderer=main._picture_preview_renderer().render_picture_input)
     monkeypatch.setattr(main, 'montage_renderer', MontageRenderer(tmp_path/'render'))
     monkeypatch.setattr(main, '_task_audio', lambda:service)
     monkeypatch.setattr(main, '_require_permit_actor', lambda *args:actor)
-    monkeypatch.setattr(main, '_assistant_member_id', lambda *args:actor.member_id)
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'assistant_member', lambda adapter, *args:actor.member_id)
     monkeypatch.setattr(main, 'current_workspace_id', lambda request:'local')
     media.facts = main._task_media_facts
     from app.media.clip_preview import ClipPreviewExecutor
@@ -583,8 +587,9 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     runtime.scheduler.processes = HostProcessProbe()
     runtime.scheduler.resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
         100, 1, 2**63, 0, 2**63, 32*1024**2, sample_seconds=.01,
-        cpu_render=replace(main.cpu_render_budget_from_env(),running_cpu_policy=_render_budget().running_cpu_policy), clip_preview=main.clip_preview_budget_from_env(), cpu_audio=main.cpu_audio_budget_from_env()),memory_monitor=IsolatedMemoryMonitor())
+        cpu_render=replace(main._device_operation_budget("cpu_render"),running_cpu_policy=_render_budget().running_cpu_policy), clip_preview=main._device_operation_budget("clip_preview"), cpu_audio=main._device_operation_budget("cpu_audio")),memory_monitor=IsolatedMemoryMonitor())
     monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
+    monkeypatch.setattr(main, 'device_runtime', runtime)
     return main, repo, actor, media, runtime, TestClient(main.app), payload, track, store
 
 
@@ -613,13 +618,15 @@ def test_color_preview_on_21_shots_renders_only_representative_silent_window(tmp
         assert event['input_facts']['clip']['id'] == 'clip_1'
         assert resources['input_bytes'] == repo.resolve_clip_media_reference('local', 'asset', original['clips'][1]['source_path']).stat().st_size
         assert runtime.run_once()
-        done = client.get(queued.json()['result_url']).json()
+        response = client.get(queued.json()['result_url'])
+        assert response.status_code == 200, response.text
+        done = response.json()
         assert done['status'] == 'succeeded', done
         proposal = done['result']['proposal']
         assert set(proposal['operation']['payload']['expected_clips']) == {'clip_1', 'clip_20'}
         assert '代表镜头 2' in proposal['preview']['after']['detail']
         assert '静音画面' in proposal['preview']['after']['detail'] and '未覆盖相邻转场' in proposal['preview']['after']['detail']
-        records = [record for record in repo.list_artifact_records('local', 'task') if record.producer_job_id == job_id]
+        records = [record for record in repo.execution_records.list_artifact_records('local', 'task') if record.producer_job_id == job_id]
         assert len(records) == 2
         for record in records:
             metadata = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-show_entries',
@@ -627,7 +634,7 @@ def test_color_preview_on_21_shots_renders_only_representative_silent_window(tmp
             assert float(metadata['format']['duration']) == pytest.approx(5, abs=.05)
             assert [stream['codec_type'] for stream in metadata['streams']] == ['video']
         assert repo.get_creation_task_montage_plan('local', 'task') == original
-        assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
+        assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
         locked = client.post(path, json={**payload, 'clip_ids':['clip_0']})
         assert locked.status_code == 409 and '锁定' in locked.text
         asset = repo.get_asset('local', 'asset')
@@ -646,6 +653,18 @@ def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(t
     from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
     main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(
         tmp_path, monkeypatch, fade_out=.4 if existing_fade else 0)
+    failures = []
+    original_execute = media.exact_preview.execute
+
+    def execute(*args, **kwargs):
+        try:
+            return original_execute(*args, **kwargs)
+        except Exception:
+            import traceback
+            failures.append(traceback.format_exc())
+            raise
+
+    monkeypatch.setattr(media.exact_preview, 'execute', execute)
     try:
         patch = {'fade_out_seconds':0 if existing_fade else .4}
         queued = client.post('/api/creation-tasks/task/edits/exact/preview', json={
@@ -676,14 +695,16 @@ def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(t
             assert [(cue.id, cue.start_seconds, cue.end_seconds) for cue in tracks[0].cues] == [('inside', 1, 2)]
         assert creation_task_montage_plan_to_payload(plan) == original and asdict(track) == before_tracks
         assert runtime.run_once()
-        done = client.get(queued.json()['result_url']).json()
-        assert done['status'] == 'succeeded', done
+        response = client.get(queued.json()['result_url'])
+        assert response.status_code == 200, response.text
+        done = response.json()
+        assert done['status'] == 'succeeded', {'receipt': done, 'execution_failures': failures}
         assert '完整区间' in done['result']['proposal']['preview']['after']['detail']
         assert '未覆盖相邻转场' in done['result']['proposal']['preview']['after']['detail']
-        inputs = [item for item in repo.list_task_events('local', 'task')
+        inputs = [item for item in repo.execution_records.list_task_events('local', 'task')
                   if item.job_id == job_id and item.event_type == 'task_media_input']
         assert len(inputs) == 2
-        records = [record for record in repo.list_artifact_records('local', 'task') if record.producer_job_id == job_id]
+        records = [record for record in repo.execution_records.list_artifact_records('local', 'task') if record.producer_job_id == job_id]
         assert len(records) == 2
         for event_input in inputs:
             candidate = event_input.payload['media_input']['plan']
@@ -698,12 +719,12 @@ def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(t
                 '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'])
             assert len(raw) == 180*3
             event_input = next(item for item in inputs if item.payload['parameters']['side'] ==
-                next(transform.parameters['side'] for transform in repo.list_transform_runs('local', 'task')
+                next(transform.parameters['side'] for transform in repo.lineage_records.list_transform_runs('local', 'task')
                      if record.logical_ref in transform.output_refs))
             has_fade = event_input.payload['media_input']['plan']['clips'][0]['visual_effects'].get('fade_out_seconds', 0) > 0
             assert (max(raw[-3:]) < 8) if has_fade else (raw[-1] > 240)
         assert repo.get_creation_task_montage_plan('local', 'task') == original
-        assert repo.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
+        assert repo.task_records.get_creation_task('local', 'task').current_timeline_version_id == 'timeline'
     finally:
         runtime.stop(0)
 
@@ -717,14 +738,14 @@ def test_explicit_failed_retry_reuses_job_and_original_request(tmp_path):
     runtime=build(media)
     job=media.submit(runtime,actor,'task','audio_listen',{},'audio_listen')
     assert runtime.run_once()
-    assert repo.get_job_run('local',job.id).status == 'failed'
+    assert repo.job_records.get_job_run('local',job.id).status == 'failed'
     replay=media.submit(runtime,actor,'task','audio_listen',{},'audio_listen')
     assert replay.id == job.id and not runtime.run_once()
     with repo._connect() as conn:
         request_id=conn.execute('SELECT id FROM device_work_requests').fetchone()[0]
     runtime.scheduler.retry_existing(request_id,actor,reason='failed')
     assert runtime.run_once()
-    assert repo.get_job_run('local',job.id).status == 'succeeded'
+    assert repo.job_records.get_job_run('local',job.id).status == 'succeeded'
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM job_runs').fetchone()[0] == 1
         assert conn.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 1
@@ -759,27 +780,27 @@ def test_partial_artifact_receipt_reuses_frozen_candidate_after_explicit_retry(t
         record=audio.publish('local','task',kind='audio_preview',parameters={'side':'after'},input_refs=[],
             operation='picture_preview',media_input=inputs,execution=(context,job,event,actor))
         return {'artifact_id':record.id}
-    original_transform=repo.create_transform_run
+    original_transform=repo.lineage_records.create_transform_run
     attempts={'count':0}
     def transform(value, **kwargs):
         attempts['count']+=1
         if attempts['count']==1:
             raise ValueError('synthetic crash after immutable artifact receipt')
         return original_transform(value, **kwargs)
-    monkeypatch.setattr(repo,'create_transform_run',transform)
+    monkeypatch.setattr(repo.lineage_records,'create_transform_run',transform)
     media.visual_preview=SimpleNamespace(execute=operation,validate_result=media.audio_ingress.validate_result)
     runtime=build(media)
     runtime.scheduler.processes=HostProcessProbe()
     job=media.submit(runtime,actor,'task','visual_edit_preview',{},'edit_preview')
     assert runtime.run_once()
-    assert repo.get_job_run('local',job.id).status=='failed' and state['render_calls']==1
-    assert repo.list_artifact_records('local','task') == []
-    assert repo.list_transform_runs('local','task') == []
+    assert repo.job_records.get_job_run('local',job.id).status=='failed' and state['render_calls']==1
+    assert repo.execution_records.list_artifact_records('local','task') == []
+    assert repo.lineage_records.list_transform_runs('local','task') == []
     with repo._connect() as conn:
         request_id=conn.execute('SELECT id FROM device_work_requests').fetchone()[0]
     runtime.scheduler.retry_existing(request_id,actor,reason='failed')
     assert runtime.run_once()
-    assert repo.get_job_run('local',job.id).status=='succeeded' and state['render_calls']==1
-    assert len(repo.list_artifact_records('local','task'))==1
-    assert len(repo.list_transform_runs('local','task'))==1
+    assert repo.job_records.get_job_run('local',job.id).status=='succeeded' and state['render_calls']==1
+    assert len(repo.execution_records.list_artifact_records('local','task'))==1
+    assert len(repo.lineage_records.list_transform_runs('local','task'))==1
     runtime.stop(0)

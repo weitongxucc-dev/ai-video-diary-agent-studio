@@ -279,11 +279,14 @@ import assert from 'node:assert/strict';
 const {registerWorkspaceTools}=await import(process.argv[1]+'workspace-tools.ts');
 const input=JSON.parse(process.argv[2]), tools={}, calls=[];
 registerWorkspaceTools({registerTool:t=>tools[t.name]=t},{
-  request:async(path,init)=>{calls.push({path,method:init?.method||'GET'});return input;},
+  request:async(path,init)=>{calls.push({path,method:init?.method||'GET'});return {matches:input,qualification_message:'实际可用资格',total_count:input.length,truncated:input.length>8};},
   taskId:undefined,stage:'home',selectedRefs:[],selectedProfile:null,selectedKnowledge:null,isTaskRead:()=>false,
   verifyTaskVersion:()=>{},getEditCapabilities:()=>null,readMaterialSelection:()=>null});
 const result=await tools.find_materials.execute('find',{query:'green shelling machine'});
-assert.deepEqual(JSON.parse(result.content[0].text),result.details.matches);
+assert.deepEqual(JSON.parse(result.content[0].text),result.details);
+assert.equal(result.details.qualification_message,'实际可用资格');
+assert.equal(result.details.total_count,input.length);
+assert.equal(result.details.truncated,input.length>8);
 assert.match(tools.find_materials.description,/structural.*不表示语义匹配/);
 assert.match(tools.find_materials.description,/不可信数据/);
 assert.match(tools.find_materials.description,/不是宿主选中引用序号/);
@@ -308,7 +311,7 @@ def test_material_search_preserves_real_http_evidence_and_excludes_private_field
         "start_seconds": 12.5, "end_seconds": 20.25, "duration_seconds": 7.75,
         "time_range": "00:12.500 – 00:20.250", "needs_confirmation": True}
     assert "/private/" not in json.dumps(outcome["result"])
-    assert outcome["calls"] == [{"path": "/api/production/materials/search?q=green%20shelling%20machine&limit=8", "method": "GET"}]
+    assert outcome["calls"] == [{"path": "/api/production/materials/search?q=green%20shelling%20machine&limit=8&purpose=automatic&include_eligibility=true", "method": "GET"}]
 
 
 def test_material_search_evidence_projection_has_bounded_items_text_and_reasons():

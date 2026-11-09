@@ -19,7 +19,9 @@ from uuid import uuid4
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.creation.duration_requirement import DurationRequirement, DurationConflict, stream_duration_seconds
+from app.creation.duration_requirement import DurationRequirement, DurationConflict, SectionWindow, stream_duration_seconds
+from app.creation.execution_input import ExecutionScriptHeader
+from app.creation.script_contracts import CreationTaskScriptSection
 from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
 from app.device_scheduler import DeviceScheduler, Grant
 from app.host_resource_probes import (
@@ -39,13 +41,13 @@ from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
 from app.production import (
     automatic_segment_eligible,
-    CreationTaskScript,
     MaterialAsset,
     MaterialSegment,
     ProductionBatch,
     ProductionProfile,
     effective_segment_usage_role,
 )
+from app.creation.script_contracts import CreationTaskScript
 from app.video import SUPPORTED_VIDEO_EXTENSIONS
 from app.visual_semantics import VisualSemanticError, VisualSemanticProvider
 
@@ -429,12 +431,82 @@ class MontagePlanner:
         presenter_share_target: int = 0,
         delivery_windows=None,
     ) -> CreationTaskMontagePlan:
+        prepared = self.prepare_creation_inputs(
+            lambda: iter(script.sections), profile=profile, duration_target_seconds=duration_target_seconds,
+            narration_duration_seconds=narration_duration_seconds,
+            narration_segment_ids_by_section=narration_segment_ids_by_section,
+            narration_segment_durations_by_section=narration_segment_durations_by_section)
+        return self.build_for_creation_inputs(workspace_id=workspace_id, task_id=task_id,
+            script_header=script, prepared=prepared, assets=assets,
+            media_reference_for_asset=media_reference_for_asset, narration_audio_path=narration_audio_path,
+            person_render_by_section=person_render_by_section, presenter_share_target=presenter_share_target,
+            delivery_windows=delivery_windows)
+
+    @staticmethod
+    def prepare_creation_inputs(section_reader, *, profile, duration_target_seconds,
+                                narration_duration_seconds, narration_segment_ids_by_section,
+                                narration_segment_durations_by_section):
+        """Prepare real captions and semantic queries inside the source snapshot."""
+        cues = _build_creation_section_cues(None, section_reader=section_reader,
+            min_seconds=profile.target_duration_min_seconds, max_seconds=duration_target_seconds,
+            narration_duration_seconds=narration_duration_seconds,
+            narration_segment_ids_by_section=narration_segment_ids_by_section,
+            narration_segment_durations_by_section=narration_segment_durations_by_section)
+        grouped = {}
+        for cue in cues:
+            grouped.setdefault(cue.source_section_id, []).append(cue)
+        visual_cues, visual_requirements = [], {}
+        for section in section_reader():
+            section_cues = grouped.get(section.id)
+            if section_cues:
+                visual_cues.append(replace(section_cues[0], text=section.content,
+                    duration_seconds=round(sum(cue.duration_seconds for cue in section_cues), 3)))
+                visual_requirements[section.id] = section.visual_prompt.strip()
+        return cues, visual_cues, visual_requirements
+
+    def build_for_creation_inputs(self, *, workspace_id, task_id, script_header, prepared,
+                                  assets, media_reference_for_asset, narration_audio_path,
+                                  person_render_by_section=None, presenter_share_target=0, delivery_windows=None):
+        self._validate_creation_planning_source(workspace_id, task_id, script_header, narration_audio_path)
+        cues, visual_cues, visual_requirements = prepared
+        return self._build_creation_plan(
+            workspace_id=workspace_id, task_id=task_id, script_id=script_header.id, script_title=script_header.title,
+            cues=cues, visual_cues=visual_cues, visual_requirements=visual_requirements, assets=assets,
+            media_reference_for_asset=media_reference_for_asset, narration_audio_path=narration_audio_path,
+            person_render_by_section=person_render_by_section, presenter_share_target=presenter_share_target,
+            delivery_windows=delivery_windows)
+
+    def build_for_creation_section(
+        self, *, workspace_id: str, task_id: str, script_header: ExecutionScriptHeader,
+        section: CreationTaskScriptSection, profile: ProductionProfile, duration_target_seconds: int,
+        assets: list[MaterialAsset], media_reference_for_asset: Callable[[str], str],
+        narration_audio_path: str, narration_duration_seconds: float,
+        narration_segment_id: str, delivery_window: SectionWindow,
+    ) -> CreationTaskMontagePlan:
+        """Plan one selected section; the header still describes the real script."""
+        prepared = self.prepare_creation_inputs(lambda: iter((section,)), profile=profile,
+            duration_target_seconds=duration_target_seconds, narration_duration_seconds=narration_duration_seconds,
+            narration_segment_ids_by_section={section.id: narration_segment_id},
+            narration_segment_durations_by_section={section.id: narration_duration_seconds})
+        return self.build_for_creation_inputs(workspace_id=workspace_id, task_id=task_id,
+            script_header=script_header, prepared=prepared, assets=assets,
+            media_reference_for_asset=media_reference_for_asset, narration_audio_path=narration_audio_path,
+            delivery_windows=(delivery_window,))
+
+    @staticmethod
+    def _validate_creation_planning_source(workspace_id, task_id, script, narration_audio_path):
         if script.workspace_id != workspace_id or script.task_id != task_id:
             raise ValueError("文案不属于当前创作任务")
         if script.selection_status != "confirmed":
             raise ValueError("只有已确认文案才能生成剪辑计划")
         if not narration_audio_path.startswith("narration://artifact/"):
             raise ValueError("剪辑计划必须引用已持久化的创作任务配音")
+
+    def _build_creation_plan(
+        self, *, workspace_id, task_id, script_id, script_title, cues, visual_cues, visual_requirements, assets,
+        media_reference_for_asset, narration_audio_path, person_render_by_section,
+        presenter_share_target, delivery_windows,
+    ) -> CreationTaskMontagePlan:
         b_roll_candidates = [
             (asset, segment)
             for asset in assets
@@ -444,23 +516,9 @@ class MontagePlanner:
             and effective_segment_usage_role(asset, segment) == "b_roll"
             and segment.end_seconds - segment.start_seconds >= 0.75
         ]
-        cues = _build_creation_task_cues(
-            script,
-            min_seconds=profile.target_duration_min_seconds,
-            max_seconds=duration_target_seconds,
-            narration_duration_seconds=narration_duration_seconds,
-            narration_segment_ids_by_section=narration_segment_ids_by_section,
-            narration_segment_durations_by_section=narration_segment_durations_by_section,
-        )
         cues_by_section: dict[str, list[NarrationCue]] = {}
         for cue in cues:
             cues_by_section.setdefault(cue.source_section_id, []).append(cue)
-        sections_by_id = {section.id: section for section in script.sections}
-        # Captions keep their own clock. A shot covers the adopted semantic
-        # section's measured narration span, anchored to its first display cue.
-        visual_cues = [replace(section_cues[0], text=sections_by_id[section_id].content,
-            duration_seconds=round(sum(cue.duration_seconds for cue in section_cues), 3))
-            for section_id, section_cues in cues_by_section.items()]
         if delivery_windows is not None:
             windows = {window.section_id: window for window in delivery_windows}
             shifted = []
@@ -484,7 +542,6 @@ class MontagePlanner:
             raise error("可用素材库中没有可自动选用的补充画面，无法覆盖未露脸的配音段落")
         # Use the confirmed visual requirement for retrieval; narration remains
         # unchanged for audio and subtitles. These projections are never persisted.
-        visual_requirements = {section.id: section.visual_prompt.strip() for section in script.sections}
         retrieval_cues = {
             cue.id: replace(cue, text=visual_requirements.get(cue.source_section_id) or cue.text)
             for cue in visual_cues
@@ -657,8 +714,8 @@ class MontagePlanner:
             id=f"task_montage_{uuid4().hex[:10]}",
             workspace_id=workspace_id,
             task_id=task_id,
-            script_id=script.id,
-            script_title=script.title,
+            script_id=script_id,
+            script_title=script_title,
             status=status,
             cues=cues,
             clips=clips,
@@ -1146,25 +1203,39 @@ def _build_creation_task_cues(
     narration_segment_ids_by_section: dict[str, str] | None = None,
     narration_segment_durations_by_section: dict[str, float] | None = None,
 ) -> list[NarrationCue]:
+    return _build_creation_section_cues(
+        script.sections, min_seconds=min_seconds, max_seconds=max_seconds,
+        narration_duration_seconds=narration_duration_seconds,
+        narration_segment_ids_by_section=narration_segment_ids_by_section,
+        narration_segment_durations_by_section=narration_segment_durations_by_section)
+
+
+def _build_creation_section_cues(
+    sections, *, min_seconds: int, max_seconds: int, narration_duration_seconds: float,
+    narration_segment_ids_by_section: dict[str, str] | None = None,
+    narration_segment_durations_by_section: dict[str, float] | None = None,
+    section_reader=None,
+) -> list[NarrationCue]:
+    if section_reader is None:
+        def section_reader():
+            return iter(sections)
     if narration_duration_seconds > max_seconds:
         raise ValueError(
             f"实际配音时长 {narration_duration_seconds:.1f} 秒，超过创作方案上限 {max_seconds} 秒"
         )
     if not math.isfinite(narration_duration_seconds) or narration_duration_seconds <= 0:
         raise ValueError("旁白时长无效")
-    entries: list[tuple[str, str, float]] = []
-    for section in script.sections:
-        parts = _split_narration(section.content)
-        for part in parts:
-            entries.append((section.id, part, max(1.0, float(len(part)))))
-    if not entries:
+    raw_total = 0.0
+    weights_by_section: dict[str, float] = {}
+    for section in section_reader():
+        for part in _split_narration(section.content):
+            weight = max(1.0, float(len(part)))
+            raw_total += weight
+            weights_by_section[section.id] = weights_by_section.get(section.id, 0.0) + weight
+    if not weights_by_section:
         raise ValueError("文案没有可用于时间线的旁白内容")
-    raw_total = sum(weight for _, _, weight in entries)
     requested_total = narration_duration_seconds
     scale = requested_total / raw_total
-    weights_by_section: dict[str, float] = {}
-    for section_id, _text, weight in entries:
-        weights_by_section[section_id] = weights_by_section.get(section_id, 0.0) + weight
     if narration_segment_durations_by_section is not None:
         durations = [narration_segment_durations_by_section.get(section_id) for section_id in weights_by_section]
         if any(value is None or not math.isfinite(value) or value <= 0 for value in durations):
@@ -1174,40 +1245,42 @@ def _build_creation_task_cues(
     cues: list[NarrationCue] = []
     cursor = 0.0
     rounded_cursor = 0.0
-    for section_id, text, weight in entries:
-        section_duration = (
-            narration_segment_durations_by_section.get(section_id)
-            if narration_segment_durations_by_section
-            else None
-        )
-        scaled_duration = (
-            section_duration * weight / weights_by_section[section_id]
-            if section_duration is not None
-            else weight * scale
-        )
-        part_count = max(1, math.ceil(scaled_duration / 8.0))
-        text_parts = _split_text_evenly(text, part_count)
-        part_duration = scaled_duration / len(text_parts)
-        for text_part in text_parts:
-            cursor += part_duration
-            rounded_end = round(cursor, 3)
-            cue_duration = round(rounded_end - rounded_cursor, 3)
-            if cue_duration <= 0:
-                raise ValueError("配音时长不足以为字幕分配有效时间区间")
-            rounded_cursor = rounded_end
-            cues.append(
-                NarrationCue(
-                    id=f"cue_{len(cues) + 1:03d}",
-                    source_section_id=section_id,
-                    text=text_part,
-                    duration_seconds=cue_duration,
-                    narration_segment_id=(
-                        narration_segment_ids_by_section.get(section_id, "")
-                        if narration_segment_ids_by_section
-                        else ""
-                    ),
-                )
+    for section in section_reader():
+        for text in _split_narration(section.content):
+            section_id, weight = section.id, max(1.0, float(len(text)))
+            section_duration = (
+                narration_segment_durations_by_section.get(section_id)
+                if narration_segment_durations_by_section
+                else None
             )
+            scaled_duration = (
+                section_duration * weight / weights_by_section[section_id]
+                if section_duration is not None
+                else weight * scale
+            )
+            part_count = max(1, math.ceil(scaled_duration / 8.0))
+            text_parts = _split_text_evenly(text, part_count)
+            part_duration = scaled_duration / len(text_parts)
+            for text_part in text_parts:
+                cursor += part_duration
+                rounded_end = round(cursor, 3)
+                cue_duration = round(rounded_end - rounded_cursor, 3)
+                if cue_duration <= 0:
+                    raise ValueError("配音时长不足以为字幕分配有效时间区间")
+                rounded_cursor = rounded_end
+                cues.append(
+                    NarrationCue(
+                        id=f"cue_{len(cues) + 1:03d}",
+                        source_section_id=section_id,
+                        text=text_part,
+                        duration_seconds=cue_duration,
+                        narration_segment_id=(
+                            narration_segment_ids_by_section.get(section_id, "")
+                            if narration_segment_ids_by_section
+                            else ""
+                        ),
+                    )
+                )
     return cues
 
 
@@ -1436,9 +1509,22 @@ def _subtitle_frame_boundary(seconds: float) -> int:
 
 def _write_timed_subtitle_input(schedule, images: list[Path], output_dir: Path, *,
                                 size: tuple[int, int], duration_seconds: float) -> tuple[Path, tuple[int, int]]:
-    """One bounded-cadence PNG stream with the same frame visibility/layer order."""
+    frame_count = round(duration_seconds * 30)
+    spans = [(min(frame_count, _subtitle_frame_boundary(cue.start_seconds)),
+              min(frame_count, _subtitle_frame_boundary(cue.end_seconds))) for cue in schedule]
+    return _write_frame_subtitle_input(spans, images, output_dir, size=size, frame_count=frame_count)
+
+
+def _write_frame_subtitle_input(spans, images, output_dir, *, size, frame_count, crop_to_content=True, check=None):
+    """Rasterize the existing subtitle layers on an explicit integer frame clock."""
+    if (len(spans) != len(images) or type(frame_count) is not int or frame_count <= 0
+            or any(type(first) is not int or type(last) is not int or not 0 <= first <= last <= frame_count
+                   for first, last in spans)):
+        raise ValueError('字幕图层帧区间与输入数量不符合画面窗口')
     bounds = None
     for path in images:
+        if check is not None:
+            check()
         with Image.open(path) as layer:
             # Alpha content is always retained. A zero-opacity colored panel
             # also stores RGB with A=0; retain those bytes for exact RGBA recovery.
@@ -1448,7 +1534,7 @@ def _write_timed_subtitle_input(schedule, images: list[Path], output_dir: Path, 
                 min(bounds[0], visible[0]), min(bounds[1], visible[1]),
                 max(bounds[2], visible[2]), max(bounds[3], visible[3]),
             )
-    if bounds is None:
+    if bounds is None or not crop_to_content:
         bounds = (0, 0, *size)
     # Every frame shares this box. Even offsets preserve the original positions
     # when overlay negotiates yuv420 chroma coordinates; never shrink alpha edges.
@@ -1457,20 +1543,19 @@ def _write_timed_subtitle_input(schedule, images: list[Path], output_dir: Path, 
             min(size[1], (bounds[3] + 1) // 2 * 2))
     cropped_size = (crop[2] - crop[0], crop[3] - crop[1])
     for path in dict.fromkeys(images):
+        if check is not None:
+            check()
         with Image.open(path) as layer:
             cropped = layer.crop(crop)
         cropped.save(path)
-    # Match clip_video_filters' absolute picture endpoint, rather than rounding
-    # the six-decimal cue enable expression into an extra terminal frame.
-    frame_count = round(duration_seconds * 30)
-    spans = [(min(frame_count, _subtitle_frame_boundary(cue.start_seconds)),
-              min(frame_count, _subtitle_frame_boundary(cue.end_seconds))) for cue in schedule]
     boundaries = sorted({0, frame_count, *(frame for span in spans for frame in span)})
     transparent = output_dir / "subtitle-transparent.png"
     Image.new("RGBA", cropped_size, (0, 0, 0, 0)).save(transparent)
     frames: dict[tuple[int, ...], Path] = {(): transparent}
     lines = ["ffconcat version 1.0"]
     for start, end in zip(boundaries, boundaries[1:]):
+        if check is not None:
+            check()
         active = tuple(index for index, (first, last) in enumerate(spans) if first <= start < last)
         if active not in frames:
             if len(active) == 1:
@@ -1498,6 +1583,8 @@ def _write_timed_subtitle_input(schedule, images: list[Path], output_dir: Path, 
     lines.extend([f"file {transparent.name}", "option framerate 30"])
     manifest = output_dir / "subtitles.ffconcat"
     manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if check is not None:
+        check()
     return manifest, (crop[0], crop[1])
 
 
@@ -1769,8 +1856,13 @@ def _run_granted_media_command(scheduler: DeviceScheduler, grant: Grant, command
         raise GrantedCommandTimeout("渲染阶段已超出总时限")
     timeout_seconds = min(timeout_seconds, remaining) if timeout_seconds is not None else remaining
 
+    resources = scheduler._get(grant.request_id).resources
+    if resources.get('kind') == 'creation_packet_copy':
+        stdout_bytes, stderr_bytes = resources['max_stdout_bytes'], resources['max_stderr_bytes']
+    else:
+        stdout_bytes, stderr_bytes = 64 * 1024, 256 * 1024
     result = run_granted_command(scheduler, grant, command, timeout_seconds=timeout_seconds,
-                                 max_stdout_bytes=64 * 1024, max_stderr_bytes=256 * 1024,
+                                 max_stdout_bytes=stdout_bytes, max_stderr_bytes=stderr_bytes,
                                  cancel_event=cancel_event, output_paths=output_paths,
                                  max_output_file_bytes=max_output_file_bytes)
     if result.returncode:
@@ -1928,6 +2020,167 @@ def _plan_from_payload(data: dict[str, object]) -> MontagePlan:
         cues=[NarrationCue(**item) for item in cue_payloads if isinstance(item, dict)],
         clips=[MontageClip(**item) for item in clip_payloads if isinstance(item, dict)],
     )
+
+
+def _picture_window_input(window, source: Path, context):
+    window.validate()
+    context.check()
+    clip = window.clip
+    width, height = canvas_size(window.aspect_ratio)
+    if clip_video_filters(clip, width=width, height=height) != window.filter_recipe:
+        raise ValueError('画面窗口滤镜契约已变化，不能复用旧片段')
+    source = source.expanduser().resolve()
+    if not source.is_file() or source.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
+        raise ValueError('画面窗口来源不存在或格式不支持')
+    # Decode from the cut origin so fps conversion and fades have the same state
+    # as the unsplit cut. The input declaration must include this decode prefix.
+    filters = window.filter_recipe + (f',trim=start_frame={window.first_frame_in_clip}'
+        f':end_frame={window.last_frame_in_clip},setpts=PTS-STARTPTS')
+    return (['ffmpeg', '-v', 'error', '-y', '-protocol_whitelist', 'file,pipe',
+        '-filter_threads', str(context.threads), '-filter_complex_threads', str(context.threads),
+        '-ss', f'{clip.source_start_seconds:.10f}', '-t', f'{clip.source_end_seconds-clip.source_start_seconds:.10f}',
+        '-threads', str(context.threads), '-i', str(source)], (width, height), filters)
+
+
+def _picture_window_layers(window, output, context, layers, filters, size):
+    if not layers:
+        return ['-vf', filters]
+    directory = output.parent / f'.{output.stem}-layers'
+    directory.mkdir(exist_ok=False)
+    arguments = []
+    def check_layers():
+        context.check()
+        request = context.scheduler._get(context.grant.request_id)
+        cap = request.resources.get('picture_temporary_limit_bytes')
+        if cap is not None and sum(path.stat().st_size for path in directory.iterdir() if path.is_file()) > cap:
+            raise ValueError('画面窗口PNG与字幕manifest超过原临时卷许可分配')
+    graph = [f'[0:v]{filters}[windowbase]']
+    label = '[windowbase]'
+    captions, caption_paths = [], []
+    input_index = 1
+    for index, layer in enumerate(layers):
+        check_layers()
+        if not 0 <= layer.first_frame < layer.last_frame <= window.frame_count:
+            raise ValueError('烧录图层不属于当前完整画面帧窗口')
+        path = directory / f'layer-{index}.png'
+        if layer.kind == 'subtitle':
+            _write_subtitle_image(layer.value, path, size=size)
+            captions.append((layer.first_frame, layer.last_frame))
+            caption_paths.append(path)
+        elif layer.kind == 'graphic':
+            write_graphic_overlay(layer.value, path, size)
+            arguments.extend(['-loop', '1', '-framerate', '30', '-i', str(path)])
+            following = f'[graphic{input_index}]'
+            graph.append(f"{label}[{input_index}:v]overlay=0:0:shortest=1:"
+                f"enable='gte(n,{layer.first_frame})*lt(n,{layer.last_frame})'{following}")
+            label = following
+            input_index += 1
+        else:
+            raise ValueError('画面窗口图层类型无效')
+    if captions:
+        manifest, position = _write_frame_subtitle_input(captions, caption_paths, directory,
+            size=size, frame_count=window.frame_count, crop_to_content=False, check=check_layers)
+        arguments.extend(['-f', 'concat', '-safe', '0', '-protocol_whitelist', 'file', '-i', str(manifest)])
+        graph.append(f'[{input_index}:v]setpts=PTS-STARTPTS,format=rgba[subtitleclock]')
+        graph.append(f'{label}[subtitleclock]overlay={position[0]}:{position[1]}:'
+            'shortest=0:eof_action=pass:repeatlast=0[windowcaptioned]')
+        label = '[windowcaptioned]'
+    check_layers()
+    return arguments + ['-filter_complex', ';'.join(graph), '-map', label]
+
+
+def render_granted_picture_window(window, source: Path, output: Path, context, *, frame_layers=()):
+    """Select a lossless diagnostic window on the original clip's filter clock."""
+    command, (width, height), filters = _picture_window_input(window, source, context)
+    command += _picture_window_layers(window, output, context, frame_layers, filters, (width, height))
+    command += ['-an', '-c:v', 'ffv1', '-level', '3', '-coder', '0', '-context', '0', '-g', '1',
+        '-slices', '4', '-slicecrc', '1', '-pix_fmt', 'yuv420p', '-frames:v', str(window.frame_count),
+        '-threads:v', str(context.threads), '-fs', str(context.max_output_bytes), '-f', 'nut', str(output)]
+    _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic,
+        output_paths=(output,), max_output_file_bytes=context.max_output_bytes)
+    _probe_serial_picture_input(output, context, expected_size=(width, height), expected_frames=window.frame_count)
+    context.check()
+    return output
+
+
+PICTURE_FRAGMENT_CONTRACT = 'h264-crf20-b0-fmp4/v1'
+_PICTURE_FRAGMENT_FLAGS = '+empty_moov+frag_keyframe+default_base_moof+negative_cts_offsets+skip_trailer+skip_sidx'
+
+
+def render_granted_picture_fragment(window, source: Path, output: Path, context, *, frame_layers=()):
+    """Encode each selected frame once; fragments use a fixed 90 kHz packet clock."""
+    if frame_layers:
+        from app.creation.picture_fragment_layers import picture_fragment_recipe
+        context.check()
+        request = context.scheduler._get(context.grant.request_id)
+        if request.resources.get('picture_fragment_recipe') != picture_fragment_recipe(window, frame_layers):
+            raise PermissionError('烧录窗口的实际图层内容或栅格合同不属于原许可配方')
+    command, size, filters = _picture_window_input(window, source, context)
+    command += _picture_window_layers(window, output, context, frame_layers, filters, size)
+    command += ['-an', '-map_metadata', '-1', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+        '-bf', '0', '-pix_fmt', 'yuv420p', '-frames:v', str(window.frame_count),
+        '-threads:v', str(context.threads), '-video_track_timescale', '90000',
+        '-movflags', _PICTURE_FRAGMENT_FLAGS, '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
+    _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic,
+        output_paths=(output,), max_output_file_bytes=context.max_output_bytes)
+    probe_granted_picture_fragment(output, context, expected_size=size, expected_frames=window.frame_count,
+        max_bytes=context.max_output_bytes)
+    context.check()
+    return output
+
+
+def probe_granted_picture_fragment(path: Path, context, *, expected_size, expected_frames, max_bytes=None):
+    context.check()
+    command = ['ffprobe', '-v', 'error', '-count_packets', '-show_entries',
+        'stream=codec_type,codec_name,width,height,pix_fmt,avg_frame_rate,time_base,start_pts,duration_ts,nb_read_packets,has_b_frames',
+        '-of', 'json', str(path)]
+    completed = _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic)
+    streams = json.loads(completed.stdout).get('streams', [])
+    if (len(streams) != 1 or streams[0].get('codec_type') != 'video'
+            or streams[0].get('codec_name') != 'h264' or streams[0].get('pix_fmt') != 'yuv420p'
+            or (streams[0].get('width'), streams[0].get('height')) != expected_size
+            or streams[0].get('avg_frame_rate') != '30/1' or streams[0].get('time_base') != '1/90000'
+            or streams[0].get('start_pts') != 0 or streams[0].get('has_b_frames') != 0
+            or streams[0].get('duration_ts') != expected_frames * 3000
+            or streams[0].get('nb_read_packets') != str(expected_frames)):
+        raise ValueError(f'画面片段的编码、静音范围、画幅或完整30fps包时钟不符合请求（期望{expected_frames}帧）：{streams}')
+    if not path.is_file() or path.stat().st_size <= 0 or max_bytes is not None and path.stat().st_size > max_bytes:
+        raise ValueError('画面片段文件不存在、为空或超出本单元实际许可输出上限')
+    return streams[0]
+
+
+def concatenate_granted_picture_fragments(inputs, output: Path, context, *, expected_size):
+    """Use FFmpeg packet copy; every actual parent remains a declared input."""
+    context.check()
+    request = context.scheduler._get(context.grant.request_id)
+    if not inputs or len(inputs) != request.resources.get('input_count'):
+        raise ValueError('画面归约必须声明全部真实父片段，不能用manifest冒充一个媒体输入')
+    frames = 0
+    lines = ['ffconcat version 1.0']
+    for path, count in inputs:
+        path = Path(path).resolve()
+        if type(count) is not int or count <= 0 or '\n' in str(path) or '\r' in str(path):
+            raise ValueError('画面父片段路径或完整帧计数无效')
+        probe_granted_picture_fragment(path, context, expected_size=expected_size, expected_frames=count)
+        escaped = str(path).replace("'", "'\\''")
+        lines.append(f"file '{escaped}'")
+        frames += count
+    manifest = output.with_suffix('.ffconcat')
+    manifest.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    command = ['ffmpeg', '-v', 'error', '-y', '-protocol_whitelist', 'file,pipe', '-f', 'concat',
+        '-safe', '0', '-i', str(manifest), '-map', '0:v:0', '-map_metadata', '-1', '-an', '-c:v', 'copy',
+        '-video_track_timescale', '90000', '-movflags', _PICTURE_FRAGMENT_FLAGS,
+        '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
+    _run_granted_media_command(context.scheduler, context.grant, command, timeout_seconds=None,
+        cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic,
+        output_paths=(output,), max_output_file_bytes=context.max_output_bytes)
+    probe_granted_picture_fragment(output, context, expected_size=expected_size, expected_frames=frames,
+        max_bytes=context.max_output_bytes)
+    context.check()
+    return output
 
 
 def _probe_serial_picture_input(path: Path, context, *, expected_size, expected_frames):

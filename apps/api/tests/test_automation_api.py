@@ -1,9 +1,12 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 from fastapi import HTTPException
 import pytest
 import app.main as main
+from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
 from app.creation_execution import CreationExecutionActor
-from app.production import ProductionRepository, VideoTemplate
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
 from app.source_repository import SourceRepository
 from fastapi.testclient import TestClient
 from test_production_foundation import _repository, _seed_creation_plan_facts, _missing_model_catalog, plan_owner as plan_owner
@@ -15,7 +18,7 @@ def automation_state(tmp_path,monkeypatch,plan_owner):
     sources=SourceRepository(production.database_path)
     actor=CreationExecutionActor('local',plan_owner[0].member_id)
     _seed_creation_plan_facts(production,sources,workspace_id=actor.workspace_id,verified_owner_user_id=actor.member_id)
-    template=production.save_video_template(VideoTemplate(id='template-automation',workspace_id='local',version=1,name='真实测试模板',origin='user',settings={'voice':{'profile_id':'voice-local','version':'v1'},'presenter_share_target':0,'lipsync_quality':'fast'}),verified_owner_user_id=actor.member_id)
+    template=production.video_templates.save_video_template(VideoTemplate(id='template-automation',workspace_id='local',version=1,name='真实测试模板',origin='user',settings={'voice':{'profile_id':'voice-local','version':'v1'},'presenter_share_target':0,'lipsync_quality':'fast'}),verified_owner_user_id=actor.member_id)
     monkeypatch.setattr(main,'production_repo',production)
     monkeypatch.setattr(main,'source_repository',sources)
     monkeypatch.setattr(main,'model_catalog',_missing_model_catalog(tmp_path))
@@ -23,7 +26,7 @@ def automation_state(tmp_path,monkeypatch,plan_owner):
     monkeypatch.setattr(main,'current_workspace_id',lambda request:'local')
     client=TestClient(main.app,headers=plan_owner[1])
     monkeypatch.setattr(main,'automation_runtime',None)
-    monkeypatch.setattr(main,'_topic_route_snapshot',lambda ws:{'availability':'unconfigured'})
+    monkeypatch.setattr(WorkspaceLlmRouteSnapshot,"snapshot",lambda adapter, ws:{'availability':'unconfigured'})
     asset=next(item for item in production.list_assets('local',viewer_user_id=actor.member_id) if item.file_name=='local.mp4')
     for segment in asset.segments:
         segment.description='梳理真实信息源'
@@ -79,23 +82,23 @@ def test_actual_plan_confirm_same_transaction_replay_and_input_mismatch(automati
         persisted=conn.execute('SELECT plan_id,task_id FROM automation_runs WHERE id=?',(run['id'],)).fetchone()
     assert tuple(persisted)==(plan_id,task_id)
     fresh=ProductionRepository(production.database_path,production.video_library_path)
-    assert fresh.get_creation_task(actor.workspace_id,task_id).plan_id==plan_id
+    assert fresh.task_records.get_creation_task(actor.workspace_id,task_id).plan_id==plan_id
 
 
 def test_atomic_confirm_rollback_does_not_leave_partial_plan_or_run_binding(automation_state,monkeypatch):
     production,template,client,actor,payload=automation_state
     definition,run=create_and_due(client,actor,payload)
     fp=client.post(f"/api/automations/runs/{run['id']}/preview").json()['preflight_fingerprint']
-    insert=production.insert_confirmed_creation_plan
+    insert=production.plan_records.insert_confirmed_creation_plan
     def interrupted(conn,plan,task):
         insert(conn,plan,task)
         raise ValueError('crash before binding')
-    monkeypatch.setattr(production,'insert_confirmed_creation_plan',interrupted)
+    monkeypatch.setattr(production.plan_records,'insert_confirmed_creation_plan',interrupted)
     assert client.post(f"/api/automations/runs/{run['id']}/confirm",json={'preflight_fingerprint':fp}).status_code==409
     with production._connect() as conn:
         assert conn.execute('SELECT count(*) FROM creation_plans').fetchone()[0]==0
         assert conn.execute('SELECT task_id FROM automation_runs WHERE id=?',(run['id'],)).fetchone()[0] is None
-    monkeypatch.setattr(production,'insert_confirmed_creation_plan',insert)
+    monkeypatch.setattr(production.plan_records,'insert_confirmed_creation_plan',insert)
     assert client.post(f"/api/automations/runs/{run['id']}/confirm",json={'preflight_fingerprint':fp}).status_code==200
 
 
@@ -121,7 +124,7 @@ def test_empty_scope_stays_empty_and_foreign_fixed_knowledge_rejected(automation
     from starlette.requests import Request
     request=Request({'type':'http','headers':[(b'x-local-member-token',client.headers['x-local-member-token'].encode())]})
     with pytest.raises(HTTPException) as error:
-        main._creation_plan_preflight(request,actor.workspace_id,CreationPlanPreviewRequest(goal='真实目标',selected_knowledge={'knowledge_item_id':'knowledge-local','version':'v1'}),automation_scope=payload['source_scope'])
+        main._creation_plan_preflight_http_adapter().preflight(request,actor.workspace_id,CreationPlanPreviewRequest(goal='真实目标',selected_knowledge={'knowledge_item_id':'knowledge-local','version':'v1'}),automation_scope=payload['source_scope'])
     assert error.value.status_code==409
 
 
@@ -154,11 +157,11 @@ def test_scope_is_filtered_before_high_scoring_other_assets_truncate_result(auto
             segment.description=payload['goal']
             segment.system_tags=[payload['goal']]
         production._save_asset(other)
-    ordinary=production.search_material_segments(actor.workspace_id,query=payload['goal'],usage_roles=['b_roll'],limit=8,viewer_user_id=actor.member_id)
+    ordinary=production.material_search.search_material_segments(actor.workspace_id,query=payload['goal'],usage_roles=['b_roll'],limit=8,viewer_user_id=actor.member_id)
     assert ordinary and all(match.asset_ref!=f'asset:{selected.id}' for match in ordinary)
-    scoped=production.search_material_segments(actor.workspace_id,query=payload['goal'],usage_roles=['b_roll'],limit=8,asset_ids=[selected.id],viewer_user_id=actor.member_id)
+    scoped=production.material_search.search_material_segments(actor.workspace_id,query=payload['goal'],usage_roles=['b_roll'],limit=8,asset_ids=[selected.id],viewer_user_id=actor.member_id)
     assert scoped and all(match.asset_ref==f'asset:{selected.id}' for match in scoped)
-    assert production.search_material_segments(actor.workspace_id,usage_roles=['b_roll'],asset_ids=[],viewer_user_id=actor.member_id)==[]
+    assert production.material_search.search_material_segments(actor.workspace_id,usage_roles=['b_roll'],asset_ids=[],viewer_user_id=actor.member_id)==[]
     definition,run=create_and_due(client,actor,payload)
     preview=client.post(f"/api/automations/runs/{run['id']}/preview").json()
     assert preview['approved_asset_count']==1
@@ -212,11 +215,12 @@ def test_real_topic_script_and_make_routes_block_before_any_generation(automatio
     monkeypatch.setattr(main,'_creation_task_topic_generator_for',external)
     monkeypatch.setattr(main,'_creation_task_script_generator_for',external)
     for suffix in ['topics/generate','scripts/generate','execution/resume']:
-        response=client.post(f'/api/creation-tasks/{task_id}/{suffix}',json={})
+        response=client.post(f'/api/creation-tasks/{task_id}/{suffix}',
+            json={'request_id': str(uuid4())} if suffix == 'scripts/generate' else {})
         assert response.status_code==409,response.text
         assert response.json()['detail']['error']==('automation_paused' if restriction=='paused' else 'outside_window')
     external.assert_not_called()
-    assert production.list_job_runs(actor.workspace_id,task_id)==[]
+    assert production.job_records.list_job_runs(actor.workspace_id,task_id)==[]
     assert main._automation_runtime().service.get_run(actor,run['id'])['state']=='blocked'
 
 
@@ -234,7 +238,7 @@ def test_publishing_guard_preserves_read_history_and_checks_original_run_member(
     runtime=main._automation_runtime()
     current_actor=[actor]
     external=Mock(side_effect=AssertionError('must not access platform browser'))
-    original=build_platform_publish_router(production,workspace_for=lambda request:actor.workspace_id,content_reader=lambda request,ws:(current_actor[0].member_id,False),actor_for=lambda request,ws:current_actor[0],auth_service=SimpleNamespace(sessions=SimpleNamespace(invoke=external)),task_for_user=lambda ws,id,user:production.get_creation_task(ws,id),publishable_output_for=external,runtime_for=lambda:None)
+    original=build_platform_publish_router(production,workspace_for=lambda request:actor.workspace_id,content_reader=lambda request,ws:(current_actor[0].member_id,False),actor_for=lambda request,ws:current_actor[0],auth_service=SimpleNamespace(sessions=SimpleNamespace(invoke=external)),task_for_user=lambda ws,id,user:production.task_records.get_creation_task(ws,id),publishable_output_for=external,runtime_for=lambda:None)
     app=FastAPI()
     app.include_router(build_automation_guarded_publish_router(original,guard=lambda request,id:guard_automation_task(runtime,actor.workspace_id,id,lambda:current_actor[0])))
     publishing=TestClient(app)
@@ -247,17 +251,17 @@ def test_publishing_guard_preserves_read_history_and_checks_original_run_member(
     current_actor[0]=CreationExecutionActor(actor.workspace_id,other.member_id)
     assert publishing.post(f'/api/publishing/tasks/{task_id}/publish',json=body).status_code==403
     external.assert_not_called()
-    assert production.list_job_runs(actor.workspace_id,task_id)==[]
+    assert production.job_records.list_job_runs(actor.workspace_id,task_id)==[]
 
 
 def test_publish_projection_distinguishes_queue_pause_and_actual_claim(automation_state):
-    from app.production import JobRun
+    from app.creation.contracts import JobRun
     production,_,client,actor,payload=automation_state
     definition,run=create_and_due(client,actor,payload)
     fp=client.post(f"/api/automations/runs/{run['id']}/preview").json()['preflight_fingerprint']
     result=client.post(f"/api/automations/runs/{run['id']}/confirm",json={'preflight_fingerprint':fp})
     task_id=result.json()['creation_task']['id']
-    job=production.create_job_run(JobRun(id='queued-publish',workspace_id=actor.workspace_id,task_id=task_id,kind='platform_publish',idempotency_key='explicit-test-publish',input_digest='a'*64))
+    job=production.job_records.create_job_run(JobRun(id='queued-publish',workspace_id=actor.workspace_id,task_id=task_id,kind='platform_publish',idempotency_key='explicit-test-publish',input_digest='a'*64))
     runtime=main._automation_runtime()
     bound=runtime.service.get_run(actor,run['id'])
     queued=runtime.project_state(actor,bound)
@@ -266,7 +270,7 @@ def test_publish_projection_distinguishes_queue_pause_and_actual_claim(automatio
     paused=runtime.project_state(actor,bound)
     assert paused['state']=='blocked' and paused['reason_code']=='automation_paused'
     # Persist a canonical claim fact; this checks projection only, never platform execution.
-    production.claim_job_run(actor.workspace_id,job.id)
+    production.job_records.claim_job_run(actor.workspace_id,job.id)
     running=runtime.project_state(actor,bound)
     assert running['state']=='running' and running['job_id']==job.id
 
@@ -283,13 +287,13 @@ def test_metadata_plan_binding_one_transaction_replay_and_fresh_read(tmp_path, m
 
     from app.automation_runtime import AutomationRuntime
     from app.automation_service import AutomationBlocked, AutomationCreate
-    from app.production import CreationPlan
+    from app.creation.plan_contracts import CreationPlan
 
     database = tmp_path / 'binding.sqlite3'
     production = ProductionRepository(database, tmp_path / 'media')
     sources = SourceRepository(database)
     actor = CreationExecutionActor('metadata-workspace', 'metadata-member')
-    template = production.save_video_template(VideoTemplate(
+    template = production.video_templates.save_video_template(VideoTemplate(
         id='template-metadata-binding', workspace_id=actor.workspace_id, version=1,
         name='声明的元数据模板', origin='user', settings={'language': 'zh-CN'}),
         verified_owner_user_id=actor.member_id)
@@ -312,7 +316,7 @@ def test_metadata_plan_binding_one_transaction_replay_and_fresh_read(tmp_path, m
     def runtime_for(repository, source_repository):
         return AutomationRuntime(repository, source_repository,
             verify_identity=lambda value: 'ready' if value == actor else 'forbidden',
-            list_templates=lambda value: repository.list_video_templates(
+            list_templates=lambda value: repository.video_templates.list_video_templates(
                 value.workspace_id, viewer_user_id=value.member_id),
             preflight=preflight, preview_response=asdict,
             plan_response=lambda plan, task: {'plan': asdict(plan), 'task': asdict(task)},
@@ -344,14 +348,14 @@ def test_metadata_plan_binding_one_transaction_replay_and_fresh_read(tmp_path, m
         connection.set_trace_callback(item['sql'].append)
         return connection
 
-    prepare = production.prepare_confirmed_creation_plan
+    prepare = production.plan_confirmation.prepare_confirmed_creation_plan
     def observe_prepare(*args, **kwargs):
         value = prepare(*args, **kwargs)
         ordering.append('prepared_before_bind')
         return value
 
     monkeypatch.setattr(sqlite3, 'connect', observe_connect)
-    monkeypatch.setattr(production, 'prepare_confirmed_creation_plan', observe_prepare)
+    monkeypatch.setattr(production.plan_confirmation, 'prepare_confirmed_creation_plan', observe_prepare)
     result = runtime.confirm(None, actor, run['id'], fingerprint)
     bound = runtime.service.get_run(actor, run['id'])
     plan_id = 'plan_' + hashlib.sha256(run['id'].encode()).hexdigest()[:24]

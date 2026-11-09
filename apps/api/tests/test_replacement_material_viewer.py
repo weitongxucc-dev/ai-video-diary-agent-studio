@@ -14,12 +14,12 @@ def test_replacement_search_keeps_private_candidate_for_owner_only(tmp_path):
     media = library / "replacement.mp4"
     media.write_bytes(b"fixture")
     workspace_id = "workspace-one"
-    repo.bind_material_ingestion(workspace_id, expected_directory=str(library))
-    repo.confirm_material_copy_complete(
+    repo.material_source_files.bind_material_ingestion(workspace_id, expected_directory=str(library))
+    repo.material_source_files.confirm_material_copy_complete(
         workspace_id, relative_path=media.name,
-        expected_revision=repo.material_copy_revision(media.stat()), confirmation_source="manual",
+        expected_revision=repo.material_source_files.material_copy_revision(media.stat()), confirmation_source="manual",
     )
-    repo.scan_library(workspace_id)
+    repo.material_intake.scan_library(workspace_id)
     asset = next(item for item in repo.list_assets(workspace_id) if item.file_name == media.name)
     asset = repo.analyze_asset(workspace_id, asset.id)
     asset = repo.update_asset_review(workspace_id, asset.id, review_status="approved", usage_role="b_roll")
@@ -33,7 +33,7 @@ def test_replacement_search_keeps_private_candidate_for_owner_only(tmp_path):
     repo._save_asset(replace(asset, visibility="private", owner_user_id="member-owner"))
 
     def search(viewer: str | None):
-        return repo.search_material_segments(
+        return repo.material_search.search_material_segments(
             workspace_id, query="户外画面", usage_roles=["a_roll", "b_roll"],
             min_duration_seconds=5, limit=24, viewer_user_id=viewer,
             local_diagnostic=False,

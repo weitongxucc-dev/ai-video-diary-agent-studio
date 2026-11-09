@@ -44,12 +44,17 @@ const server = http.createServer((request, response) => {
     response.end('fixture-png');
     return;
   }
-  if (request.url === '/api/creation-tasks/task_missing/output') {
+  if (request.url === '/api/creation-tasks/task_missing/output?expected_version_id=version_fixture') {
     response.writeHead(404, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ detail: 'creation task output not found' }));
     return;
   }
-  if (/^\\/api\\/creation-tasks\\/task_[a-zA-Z0-9_-]+\\/output$/.test(request.url)) {
+  if (/^\\/api\\/creation-tasks\\/task_[a-zA-Z0-9_-]+\\/output$/.test(new URL(request.url, 'http://fixture').pathname)) {
+    if (new URL(request.url, 'http://fixture').searchParams.get('expected_version_id') !== 'version_fixture') {
+      response.writeHead(409, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ detail: '作品版本已变化，请刷新当前任务后重新下载。' }));
+      return;
+    }
     response.writeHead(200, { 'content-type': 'video/mp4' });
     response.end('fixture-mp4');
     return;
@@ -701,12 +706,12 @@ async function assertNativeRenderedVideoSaveBoundary() {
     assert.equal(invalid.saved, false, 'renderer paths must not be accepted as task ids');
 
     test.runtime.setSaveDialogResult({ canceled: true });
-    const canceled = await handler(event, 'task_fixture');
+    const canceled = await handler(event, 'task_fixture', 'version_fixture');
     assert.deepEqual(canceled, { saved: false, canceled: true }, 'canceling the native dialog must be a normal result');
 
     const missingDestination = path.join(test.resources, 'missing-output.mp4');
     test.runtime.setSaveDialogResult({ canceled: false, filePath: missingDestination });
-    const missing = await handler(event, 'task_missing');
+    const missing = await handler(event, 'task_missing', 'version_fixture');
     assert.deepEqual(missing, {
       saved: false,
       error: '本地服务没有返回可保存的 MP4（HTTP 404）。',
@@ -720,7 +725,7 @@ async function assertNativeRenderedVideoSaveBoundary() {
 
     const destination = path.join(test.resources, 'chosen-output.mp4');
     test.runtime.setSaveDialogResult({ canceled: false, filePath: destination });
-    const saved = await handler(event, 'task_fixture');
+    const saved = await handler(event, 'task_fixture', 'version_fixture');
     assert.deepEqual(saved, { saved: true, fileName: 'chosen-output.mp4' });
     assert.equal(fs.readFileSync(destination, 'utf8'), 'fixture-mp4');
 

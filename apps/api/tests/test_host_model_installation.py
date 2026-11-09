@@ -5,7 +5,6 @@ import json
 import os
 import tempfile
 import threading
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,8 +16,38 @@ from app.model_runtime import CHINESE_CLIP_VIT_B16
 from app.runtime_health import model_catalog_from_settings
 
 
+def metadata_device_components(root, *, repository):
+    """Construct the real idle driver on isolated storage;no native work is licensed."""
+    from app.quality_inspection import QualityCheckRepository
+    from app.creation.quality_inspection_use_case import QualityInspectionUseCase
+    from app.device_runtime import build_device_runtime
+    from app.creation.quality_execution import quality_check_registration
+    from app.member_permits import creation_job_registration
+    from test_quality_resource_owner import (
+        MetadataAccess, MetadataResources, MetadataProcesses, fixture_budget,
+    )
+    def forbidden_worker(*args, **kwargs):
+        pytest.fail("lifecycle fixture must not execute media or quality work")
+    service = QualityInspectionUseCase(repository, QualityCheckRepository(repository.database_path),
+        main._output_observation_use_case(repository), budget=fixture_budget(),
+        verify_identity=main._verify_creation_identity, temporary_root=root / "quality-worker")
+    creation = creation_job_registration(repository, render_action=forbidden_worker,
+        render_is_valid=forbidden_worker, verify_identity=main._verify_creation_identity)
+    segments = main._segment_production_use_case(repository)
+    creation.owner.segments = creation.executor.segments = segments
+    runtime = build_device_runtime(database_path=repository.database_path,
+        device_lock_path=root / "device.lock", device_access=MetadataAccess(),
+        registrations={"quality_check": quality_check_registration(service, worker=forbidden_worker),
+                       "creation_job": creation},
+        resources=MetadataResources(), processes=MetadataProcesses(), poll_interval_seconds=.01)
+    return runtime, None
+
+
 @pytest.fixture
-def isolated_host(tmp_path,monkeypatch):
+def isolated_host(tmp_path,monkeypatch, request):
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    isolate_assistant_turn_control(monkeypatch, request)
+    monkeypatch.setattr(main, "_goal_continuation_service", None)
     for function in (main._publish_runtime_dependencies, main._activate_runtime_reload, main._publish_runtime_routes):
         for node in ast.walk(ast.parse(inspect.getsource(function))):
             if isinstance(node,ast.Global):
@@ -26,12 +55,14 @@ def isolated_host(tmp_path,monkeypatch):
                     monkeypatch.setattr(main,name,getattr(main,name))
     monkeypatch.setattr(main.app.router, "routes", list(main.app.router.routes))
     monkeypatch.setattr(main.app, "openapi_schema", main.app.openapi_schema)
-    for name in ("execution_worker", "material_ingestion", "device_runtime", "automation_runtime", "assistant_continuation_driver"):
+    for name in ("material_ingestion", "device_runtime", "automation_runtime", "assistant_continuation_driver"):
         monkeypatch.setattr(main, name, None)
     monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
     monkeypatch.setenv("TMPDIR", os.environ["TMPDIR"])
     monkeypatch.setattr(main,'creation_execution_mode','legacy')
     monkeypatch.setattr(main,'material_execution_mode','legacy')
+    monkeypatch.setattr(main, "_build_device_components",
+        lambda **kwargs: metadata_device_components(tmp_path, **kwargs))
     env_path=tmp_path/'accepted.env'
     env_path.write_text('')
     monkeypatch.setenv('AI_VIDEO_DIARY_DOTENV',str(env_path))
@@ -71,11 +102,13 @@ def isolated_host(tmp_path,monkeypatch):
             assert not installer._active_thread.is_alive()
         main._stop_device_runtime()
         main._stop_material_ingestion()
-        main._stop_execution_worker()
         if main.automation_runtime is not None:
             main.automation_runtime.stop()
         if main.assistant_continuation_driver is not None:
             main.assistant_continuation_driver.stop()
+        if main._goal_continuation_service is not None:
+            import time
+            assert main._goal_continuation_service.stop(deadline_monotonic=time.monotonic() + 5)
 
 
 def test_startup_recovers_once_but_reload_never_recovers_or_replaces_installer(isolated_host,monkeypatch):
@@ -115,7 +148,7 @@ def test_live_path_change_refuses_before_any_device_or_workspace_write(isolated_
     assert entered.wait(2)
     before=env_path.read_bytes()
     def forbidden(*args):raise AssertionError('blocked catalog change must not write workspace settings')
-    monkeypatch.setattr(main,'apply_workspace_runtime_settings_update',forbidden)
+    monkeypatch.setattr(main,'apply_runtime_settings_save',forbidden)
     client=TestClient(main.app,client=('127.0.0.1',50000))
     response=client.post('/api/settings/runtime',json={'model_root_path':str(tmp_path/'other'), 'llm_model':'blocked-model'})
     assert response.status_code==409,response.text
@@ -126,7 +159,7 @@ def test_scheduled_reload_refuses_before_any_settings_write(isolated_host,monkey
     installer,_,_,env_path,_=isolated_host
     monkeypatch.setattr(main,'creation_execution_mode','scheduled')
     def forbidden(*args):raise AssertionError('scheduled refusal must happen before persistence')
-    monkeypatch.setattr(main,'apply_workspace_runtime_settings_update',forbidden)
+    monkeypatch.setattr(main,'apply_runtime_settings_save',forbidden)
     before=env_path.read_bytes()
     response=TestClient(main.app,client=('127.0.0.1',50000)).post('/api/settings/runtime',json={'llm_model':'blocked'})
     assert response.status_code==503,response.text
@@ -164,7 +197,8 @@ def test_prospective_and_from_env_use_exact_same_six_path_resolution(monkeypatch
             if name != "MODEL_ROOT_PATH":
                 monkeypatch.delenv(name, raising=False)
                 del values[name]
-    for name,value in values.items():monkeypatch.setenv(name,value)
+    for name,value in values.items():
+        monkeypatch.setenv(name,value)
     parsed=Settings.from_env()
     expected=model_catalog_configuration(values)
     assert {name:getattr(parsed,name) for name in expected}==expected

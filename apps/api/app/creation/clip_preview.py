@@ -3,13 +3,14 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
-from app.creation.editing.clips import ClipPreviewCommand, ClipPreviewConflict, prepare_clip_edit, needs_full_visual_preview
+from app.creation.editing.clips import ClipPreviewCommand as ClipPreviewCommand, ClipPreviewConflict, prepare_clip_edit, needs_full_visual_preview
 from app.canvas import preview_size
 from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload
-from app.production import (content_readable, material_allows_footage, material_segment_eligible, effective_segment_usage_role)
+from app.source_policy import knowledge_item_readable as content_readable
+from app.production import material_allows_footage, material_segment_eligible, effective_segment_usage_role
 from app.creation.contracts import (EditIntent, EditProposal, EditCommand)
-from app.visual_effects import VisualEffects, with_visual_effects, fade_filters, clip_playback_rate
+from app.visual_effects import VisualEffects
 
 
 class ClipPreviewUnavailable(ValueError):
@@ -25,12 +26,12 @@ class ClipPreviewUseCase:
         self.budget = budget
 
     def prepare(self, actor, command):
-        task = self.repository.get_creation_task(actor.workspace_id, command.task_id)
+        task = self.repository.task_records.get_creation_task(actor.workspace_id, command.task_id)
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError("当前成员不能修改此任务")
         if task.current_timeline_version_id != command.base_version_id:
             raise ClipPreviewConflict("时间线已经变化，请刷新后重新预览")
-        version = self.repository.get_timeline_version(actor.workspace_id, command.base_version_id)
+        version = self.repository.timeline_records.get_timeline_version(actor.workspace_id, command.base_version_id)
         if version.task_id != task.id:
             raise ClipPreviewConflict("基础时间线不属于当前任务")
         if command.source is not None and (command.source["workspace_id"], command.source["task_id"],
@@ -71,7 +72,7 @@ class ClipPreviewUseCase:
         """Read-only retirement boundary. An old declaration never authorizes new execution."""
         if job.status != "succeeded":
             return False
-        task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+        task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
         facts = event["input_facts"]
         if task.current_timeline_version_id != facts["base_version_id"]:
             return False
@@ -174,4 +175,4 @@ class ClipPreviewUseCase:
             operation={"operation_type":command.operation_type, "payload":values}, invalidated_refs=invalidated,
             external_effects=["已在本地生成开头最多5秒的静音画面对比；声音、字幕和任务版本尚未改变。"] if records else [],
             preview=previews, created_at=now, updated_at=now)
-        return self.repository.save_clip_preview_proposal(intent, proposal, expected_version_id=base.id)
+        return self.repository.edit_adoption.save_clip_preview_proposal(intent, proposal, expected_version_id=base.id)

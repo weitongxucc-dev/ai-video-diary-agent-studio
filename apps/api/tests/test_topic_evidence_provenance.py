@@ -1,14 +1,17 @@
 from dataclasses import replace
 
 import pytest
-from fastapi import HTTPException
 
 import app.main as main
-from app.production import (
-    CreationPlan, CreationPlanKnowledgeReference, CreationPlanSourceReference, CreationTask,
-    CreationTaskScript, CreationTaskScriptSection, ProductionRepository, ScriptGenerationRun,
-    TopicCandidate, TopicEvidenceReference, TopicGenerationRun,
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanKnowledgeReference, CreationPlanSourceReference
+from app.creation.topic_contracts import (
+    TopicCandidate,
+    TopicEvidenceReference,
+    TopicGenerationRun,
 )
+from app.creation.contracts import CreationTask
+from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection, ScriptGenerationRun
 from app.source_repository import SourceRepository
 from app.sources import KnowledgeItem, SourceConnector, SourceItem
 
@@ -47,20 +50,20 @@ def evidence_context(tmp_path, monkeypatch):
     )
     task = CreationTask(id="task", workspace_id="qa", plan_id=plan.id, name=plan.name,
                         scenario="knowledge_explanation")
-    plan, task = production.confirm_creation_plan(plan, task, verified_owner_user_id="owner")
+    plan, task = production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="owner")
     return sources, production, plan, task
 
 
 def start_topic(context):
     _, production, plan, task = context
-    texts, inputs, evidence = main._creation_task_topic_inputs("qa", task, plan, cloud_egress=True)
+    texts, inputs, evidence = main._source_inputs_use_case().prepare("qa", task, plan, cloud_egress=True)
     assert texts[0].text == "第一版事实正文。"
     run = TopicGenerationRun(
         id="topic-run", workspace_id="qa", task_id=task.id, plan_id=plan.id,
         status="running", route_snapshot={"provider": "controlled"},
         prompt_schema_version="fixture", input_references=inputs,
     )
-    production.start_topic_generation(run)
+    production.topic_records.start_topic_generation(run)
     candidate = TopicCandidate(
         id="candidate", workspace_id="qa", task_id=task.id, run_id=run.id,
         title="介绍事实", angle="说明事实", audience="创作者", outline=["事实"], score=90,
@@ -77,23 +80,23 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
     sources, production, plan, task = evidence_context
     run, candidate, references = start_topic(evidence_context)
     assert references[0].authorization_or_license == ""
-    _, completed, _, persisted = production.complete_topic_generation(run.id, [candidate], references)
+    _, completed, _, persisted = production.topic_records.complete_topic_generation(run.id, [candidate], references)
     assert completed.status == "succeeded"
     assert [(item.version_or_identity, item.authorization_or_license) for item in persisted] == [
         ("1", ""), (plan.source_references[0].identity, "unknown"),
     ]
-    production.confirm_topic_candidate("qa", task.id, candidate.id)
+    production.topic_records.confirm_topic_candidate("qa", task.id, candidate.id)
     sources.set_knowledge_item_use_state("qa", "knowledge", "excluded")
-    with pytest.raises(HTTPException) as blocked:
-        main._assistant_script_inputs("qa", task.id)
+    with pytest.raises(main.ScriptDraftRejected) as blocked:
+        main._script_context_use_case().read_inputs("qa", task.id)
     assert blocked.value.status_code == 409 and blocked.value.detail["reason"] == "knowledge_reference_missing"
     sources.set_knowledge_item_use_state("qa", "knowledge", "available")
-    task, _, _, _, inputs = main._assistant_script_inputs("qa", task.id)
+    task, _, _, _, inputs = main._script_context_use_case().read_inputs("qa", task.id)
     script_run = ScriptGenerationRun(
         id="script-run", workspace_id="qa", task_id=task.id, plan_id=plan.id, topic_id=candidate.id,
         status="running", route_snapshot={}, prompt_schema_version="fixture", input_references=inputs,
     )
-    production.start_script_generation(script_run)
+    production.script_records.start_script_generation(script_run)
     script = CreationTaskScript(
         id="script", workspace_id="qa", task_id=task.id, run_id=script_run.id, topic_id=candidate.id,
         title="真实事实", language="zh-CN", sections=[CreationTaskScriptSection(
@@ -102,15 +105,15 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
         )],
     )
     with pytest.raises(ValueError, match="本次模型输入之外"):
-        production.complete_script_generation(script_run.id, replace(script, sections=[
+        production.script_records.complete_script_generation(script_run.id, replace(script, sections=[
             replace(script.sections[0], evidence_reference_ids=["knowledge:knowledge:2"]),
         ]))
-    _, finished, saved = production.complete_script_generation(script_run.id, script)
+    _, finished, saved = production.script_records.complete_script_generation(script_run.id, script)
     assert finished.status == "succeeded" and saved.sections[0].evidence_reference_ids == [
         "knowledge:knowledge:1", "source:manual-source",
     ]
     # Reference reading remains available after confirmation, independently of script editing gates.
-    task, saved = production.confirm_creation_task_script('qa',task.id,saved.id,
+    task, saved = production.script_records.confirm_creation_task_script('qa',task.id,saved.id,
         title=saved.title,sections=saved.sections,expected_updated_at=saved.updated_at,verified_owner_user_id='owner')
     from app.creation.segment_production_use_case import SegmentProductionUseCase
     from app.creation_execution import CreationExecutionActor
@@ -124,7 +127,11 @@ def test_empty_knowledge_provenance_survives_topic_and_script_persistence(eviden
     sources.save_source_items('qa',[replace(sources.get_source_item('qa','manual-source'),body='同ID后来替换的正文')])
     changed = case.sources('qa',task.id,'section',actor,offset=1,limit=1)
     assert changed['items'][0]['status']=='changed' and 'text' not in changed['items'][0]
-    unknown = case.source_bindings(replace(saved,run_id='missing-historical-run'),saved.sections[0])
+    with production.execution_inputs.creation_execution_read() as conn:
+        header, metadata = production.script_records.read_execution_script_metadata(conn,'qa',saved.id)
+        section = production.section_inputs.read_creation_section_input(task,header,'section',connection=conn)['section']
+        unknown = case.source_bindings({**metadata,'run_id':'missing-historical-run'},section,connection=conn)
+    assert len(unknown) == 2
     assert all(item['binding_status']=='unknown' and item['version_or_identity'] is None for item in unknown)
 
 
@@ -140,7 +147,7 @@ def test_empty_provenance_does_not_bypass_reference_preflight(evidence_context, 
     else:
         task = replace(task, owner_user_id="another-member")
     with pytest.raises(main._CreationTaskTopicPreflightError):
-        main._creation_task_topic_inputs("qa", task, plan, cloud_egress=True)
+        main._source_inputs_use_case().prepare("qa", task, plan, cloud_egress=True)
 
 
 @pytest.mark.parametrize("change", [
@@ -151,13 +158,75 @@ def test_empty_provenance_keeps_evidence_identity_and_association_checks(evidenc
     _, production, _, _ = evidence_context
     run, candidate, references = start_topic(evidence_context)
     with pytest.raises(ValueError, match="选题证据"):
-        production.complete_topic_generation(run.id, [candidate], [replace(references[0], **change), references[1]])
-    assert production.list_topic_candidates("qa", "task") == []
+        production.topic_records.complete_topic_generation(run.id, [candidate], [replace(references[0], **change), references[1]])
+    assert production.topic_records.list_topic_candidates("qa", "task") == []
 
 
 def test_empty_provenance_keeps_topic_score_hard_limit(evidence_context):
     _, production, _, _ = evidence_context
     run, candidate, references = start_topic(evidence_context)
     with pytest.raises(ValueError, match="选题候选"):
-        production.complete_topic_generation(run.id, [replace(candidate, score=101)], references)
-    assert production.list_topic_candidates("qa", "task") == []
+        production.topic_records.complete_topic_generation(run.id, [replace(candidate, score=101)], references)
+    assert production.topic_records.list_topic_candidates("qa", "task") == []
+
+
+def test_source_inputs_keep_owner_reads_separate_from_current_reader_authority(evidence_context):
+    from app.creation.source_inputs_use_case import CreationSourceInputs
+    from app.creation.source_errors import SourcePreflightError
+
+    sources, _, plan, task = evidence_context
+    case = CreationSourceInputs(sources)
+    prepared, references, evidence = case.prepare('qa', task, plan, cloud_egress=True)
+    assert prepared[0].text == "第一版事实正文。"
+    assert evidence['knowledge:knowledge:1']['version_or_identity'] == '1'
+    assert case.validate_current('qa', plan, references, 'owner') == ('owner', False)
+    with pytest.raises(SourcePreflightError) as rejected:
+        case.validate_current('qa', plan, references, 'another-member')
+    assert rejected.value.reason == 'assistant_reply_source_changed'
+    # The task owner's readable snapshot does not grant the caller access.
+    assert task.owner_user_id == 'owner'
+
+
+def test_topic_record_owner_rolls_back_event_refusal_and_guards_confirmed_reentry(evidence_context):
+    import sqlite3
+    from app.creation.topic_records import TopicRecordStore
+
+    _, production, _, task = evidence_context
+    assert isinstance(production.topic_records, TopicRecordStore)
+    run, candidate, references = start_topic(evidence_context)
+    production.topic_records.complete_topic_generation(run.id, [candidate], references)
+    guards = []
+
+    def guard(connection):
+        assert connection.in_transaction
+        guards.append(connection)
+
+    with production._connect() as connection:
+        connection.execute("""CREATE TRIGGER refuse_topic_event BEFORE INSERT ON task_events
+            WHEN NEW.event_type = 'topic_adopted'
+            BEGIN SELECT RAISE(ABORT, 'isolated topic event refusal'); END""")
+    with pytest.raises(ValueError, match="任务事件 ID 已存在") as refused:
+        production.topic_records.confirm_topic_candidate(
+            "qa", task.id, candidate.id, verified_owner_user_id="owner", write_guard=guard,
+        )
+    assert isinstance(refused.value.__cause__, sqlite3.IntegrityError)
+    assert str(refused.value.__cause__) == "isolated topic event refusal"
+    assert production.task_records.get_creation_task("qa", task.id).selected_topic_id is None
+    assert production.topic_records.get_topic_candidate("qa", task.id, candidate.id).selection_status == "unselected"
+    assert not [event for event in production.execution_records.list_task_events("qa", task.id) if event.event_type == "topic_adopted"]
+    with production._connect() as connection:
+        connection.execute("DROP TRIGGER refuse_topic_event")
+    production.topic_records.confirm_topic_candidate(
+        "qa", task.id, candidate.id, verified_owner_user_id="owner", write_guard=guard,
+    )
+
+    def revoked(connection):
+        assert connection.in_transaction
+        raise ValueError("original owner revoked")
+
+    with pytest.raises(ValueError, match="original owner revoked"):
+        production.topic_records.confirm_topic_candidate(
+            "qa", task.id, candidate.id, verified_owner_user_id="owner", write_guard=revoked,
+        )
+    assert len(guards) == 2
+    assert len([event for event in production.execution_records.list_task_events("qa", task.id) if event.event_type == "topic_adopted"]) == 1

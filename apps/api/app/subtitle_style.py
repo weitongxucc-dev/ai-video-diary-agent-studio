@@ -64,32 +64,32 @@ def publish_subtitle_style_preview(repository, store, temporary_root, workspace_
     from uuid import uuid4
     from app.montage import _write_subtitle_image
     from app.models import utc_now
-    from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun
+    from app.creation.contracts import ArtifactRecord, DependencyEdge, JobRun, TransformRun
     parameters = {**asdict(caption),"canvas":size}
     identity = uuid4().hex
     digest = hashlib.sha256(json.dumps(parameters, sort_keys=True).encode()).hexdigest()
-    job = repository.create_job_run(JobRun(id=f"job_{identity}", workspace_id=workspace_id, task_id=task_id,
+    job = repository.job_records.create_job_run(JobRun(id=f"job_{identity}", workspace_id=workspace_id, task_id=task_id,
         kind="subtitle_style_preview", idempotency_key=f"subtitle_style_preview:{identity}", input_digest=digest))
-    running = repository.claim_job_run(workspace_id, job.id)
+    running = repository.job_records.claim_job_run(workspace_id, job.id)
     try:
         temporary_root.mkdir(parents=True, exist_ok=True)
         with TemporaryDirectory(prefix="subtitle-style-", dir=temporary_root) as folder:
             image = Path(folder) / "preview.png"
             _write_subtitle_image(caption, image, size=size)
             publication = store.publish_file(f"artifacts/{task_id}/{job.id}/preview.png", image)
-        record = repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
+        record = repository.execution_records.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
             task_id=task_id,kind="subtitle_style_preview",logical_ref=publication.logical_ref,sha256=publication.sha256,
             size_bytes=publication.size_bytes,producer_job_id=job.id,input_refs=input_refs))
-        transform = repository.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,
+        transform = repository.lineage_records.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,
             task_id=task_id,job_id=job.id,transform_type="subtitle_style_preview",input_digest=digest,input_refs=input_refs,
             output_refs=[record.logical_ref],engine="local-subtitle-style-v1",parameters=parameters,status="succeeded",
             started_at=running.started_at,finished_at=utc_now()))
         for index, reference in enumerate(input_refs):
-            repository.create_dependency_edge(DependencyEdge(id=f"edge_{identity}_{index}", workspace_id=workspace_id,
+            repository.lineage_records.create_dependency_edge(DependencyEdge(id=f"edge_{identity}_{index}", workspace_id=workspace_id,
                 task_id=task_id,upstream_ref=reference,downstream_ref=record.logical_ref,created_by_transform_id=transform.id))
-        repository.finish_job_run(workspace_id,job.id,status="succeeded",output_refs=[record.logical_ref])
+        repository.job_records.finish_job_run(workspace_id,job.id,status="succeeded",output_refs=[record.logical_ref])
         return record
     except Exception as exc:
-        repository.finish_job_run(workspace_id,job.id,status="failed",failure_reason=type(exc).__name__,
+        repository.job_records.finish_job_run(workspace_id,job.id,status="failed",failure_reason=type(exc).__name__,
             impact="字幕和成片没有改变",repair_action="检查本机字体与外接盘后重试")
         raise

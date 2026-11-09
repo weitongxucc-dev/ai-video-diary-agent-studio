@@ -29,7 +29,9 @@ from app.host_resource_probes import HostBudget,HostProcessProbe,HostResourcePro
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess,creation_job_registration
 from app.montage import CreationTaskMontagePlan,MontageClip,NarrationCue,creation_task_montage_plan_to_payload
-from app.production import CreationPlanPersonReference,CreationPlanVoiceReference,NarrationArtifactRecord,NarrationSegment,PersonRender
+from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference, NarrationSegment
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.creation.person_renders import PersonRender
 from app.video_jobs import VideoJobRunner
 from test_creation_execution import _seed
 from _media_preview_test_fixtures import register_synthetic_profiles,synthetic_wav_bytes,write_synthetic_video
@@ -48,7 +50,8 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
 
 
 def _file_fact(path):
-    path=Path(path);stat=path.stat()
+    path=Path(path)
+    stat=path.stat()
     return {'path':str(path),'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'size':stat.st_size,
         'mtime_ns':stat.st_mtime_ns,'ctime_ns':stat.st_ctime_ns,'inode':stat.st_ino}
 
@@ -73,9 +76,9 @@ def test_person_edit_checkpoint_keeps_identity_checks_outside_writer(tmp_path, m
         expression='neutral', base_version_id=state.base.id,
         expected_audio_reference=state.segments[0].audio_reference,
         source_start_seconds=0, source_end_seconds=4)
-    intent = state.repo.create_edit_intent(EditIntent('person-intent', 'ws', state.task.id,
+    intent = state.repo.edit_records.create_edit_intent(EditIntent('person-intent', 'ws', state.task.id,
         '换人物', 'montage', [], None, 'person', {}, {}, 1, 'interpreted'))
-    proposal = state.repo.create_edit_proposal(EditProposal('person-proposal', 'ws', state.task.id,
+    proposal = state.repo.edit_records.create_edit_proposal(EditProposal('person-proposal', 'ws', state.task.id,
         intent.id, '换人物', ['clip:clip'], {'operation_type':'ChangePersonSegment', 'payload':payload},
         [], {}, []))
 
@@ -108,13 +111,14 @@ def test_person_edit_checkpoint_keeps_identity_checks_outside_writer(tmp_path, m
     elif change == 'revoked':
         owners.revoked = True
     before = editorial_rows(state.repo)
-    complete = lambda: scheduler.complete_unit(grant, checkpoint_database_path=state.repo.database_path,
+    def complete():
+        return scheduler.complete_unit(grant, checkpoint_database_path=state.repo.database_path,
         checkpoint_write=lambda conn, current: commit(conn).id)
     if change == 'none':
         complete()
         current = state.repo.get_creation_task_montage_plan('ws', state.task.id)
         assert current['clips'][0]['person_render_id'] == render.id
-        assert state.repo.get_edit_proposal('ws', proposal.id).status == 'confirmed'
+        assert state.repo.edit_records.get_edit_proposal('ws', proposal.id).status == 'confirmed'
     else:
         expected = {'timeline':PersonStageRejected, 'cancel':GrantedCommandCancelled, 'revoked':PermissionError}[change]
         with pytest.raises(expected):
@@ -131,47 +135,57 @@ def person_application(tmp_path,monkeypatch):
     member,token=members.join(members.create_invite_code(),'人物 normal 合成成员')
     runtime_root=tmp_path/'runtime'
     for name in ('scripts/inference.py','models/musetalkV15/unet.pth'):
-        marker=runtime_root/name;marker.parent.mkdir(parents=True,exist_ok=True);marker.write_text('synthetic fixture marker; no model')
-    worker=tmp_path/'synthetic_person_worker.py';worker.write_text(SYNTHETIC_PERSON_WORKER)
+        marker=runtime_root/name
+        marker.parent.mkdir(parents=True,exist_ok=True)
+        marker.write_text('synthetic fixture marker; no model')
+    worker=tmp_path/'synthetic_person_worker.py'
+    worker.write_text(SYNTHETIC_PERSON_WORKER)
     synthetic_video=write_synthetic_video(tmp_path/'synthetic-person.mp4',seconds=2)
     provider=SubprocessAvatarAndLipSyncProvider(runtime_path=sys.executable,worker_path=worker,runtime_root=runtime_root,
         model_id='synthetic-fast-person-protocol',supported_languages=('zh','en'))
     person,voice,*_=register_synthetic_profiles(repo,workspace_id='local',member_id=member.member_id,
         person_id='person_1',voice_id='voice_1',person_version='v1',voice_version='v1',language='zh',model_id='synthetic-recorded-narration',
         person_authorization_id='person_auth_1',voice_authorization_id='voice_auth_1')
-    plan=repo.get_creation_plan('local','plan_local');plan.presenter_share_target=100;plan.lipsync_quality='fast'
+    plan=repo.plan_records.get_creation_plan('local','plan_local')
+    plan.presenter_share_target=100
+    plan.lipsync_quality='fast'
     plan.selected_person=CreationPlanPersonReference(person.id,person.version)
     plan.selected_voice=CreationPlanVoiceReference(voice.id,voice.version,person.id,person.version,person.authorization.id,
         person.authorization.version,voice.authorization.id,voice.authorization.version,'zh-CN',voice.model_id)
     plan.owner_user_id=member.member_id
-    task=repo.get_creation_task('local',task_id);task.owner_user_id=member.member_id
+    task=repo.task_records.get_creation_task('local',task_id)
+    task.owner_user_id=member.member_id
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?',(json.dumps(asdict(plan),default=str),plan.id))
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(task),default=str),task.id))
         payload=json.loads(conn.execute('SELECT payload FROM creation_task_scripts WHERE id=?',(script_id,)).fetchone()[0])
         conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?',(json.dumps(payload),script_id))
-    script=repo.get_creation_task_script('local',script_id);repo.start_creation_task_narration('local',task_id)
+    script=repo.script_records.get_creation_task_script('local',script_id)
+    repo.start_creation_task_narration('local',task_id)
     sections=[]
     for index,section in enumerate(script.sections):
-        audio=tmp_path/f'declared-narration-{index}.wav';audio.write_bytes(synthetic_wav_bytes(2))
+        audio=tmp_path/f'declared-narration-{index}.wav'
+        audio.write_bytes(synthetic_wav_bytes(2))
         cache=hashlib.sha256(f'declared-person-narration-{index}'.encode()).hexdigest()
-        record=repo.save_narration_artifact(NarrationArtifactRecord(id='narration-'+str(index),workspace_id='local',task_id=task_id,
+        record=repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(id='narration-'+str(index),workspace_id='local',task_id=task_id,
             script_id=script_id,voice_profile_id=voice.id,cache_key=cache,audio_path=str(audio),duration_seconds=2,sample_rate=8000,
             model_id='declared-synthetic-narration',language='zh',pronunciation_version='fixture-rules'))
         sections.append(NarrationSegment(id='normal-person-narration-'+str(index),workspace_id='local',task_id=task_id,
-            script_id=script_id,source_section_id=section.id,text=section.content,audio_reference=repo.narration_artifact_reference(cache),
+            script_id=script_id,source_section_id=section.id,text=section.content,audio_reference=repo.narration_artifacts.narration_artifact_reference(cache),
             duration_seconds=2,sample_rate=8000,model_id=record.model_id,voice_profile_id=voice.id,voice_version=voice.version,
             language='zh',pronunciation_version=record.pronunciation_version,status='ready'))
-    combined=tmp_path/'declared-combined.wav';combined.write_bytes(synthetic_wav_bytes(2))
+    combined=tmp_path/'declared-combined.wav'
+    combined.write_bytes(synthetic_wav_bytes(2))
     combined_record=NarrationArtifactRecord(id='normal-person-combined',workspace_id='local',task_id=task_id,script_id=script_id,
         voice_profile_id=voice.id,cache_key=hashlib.sha256(b'declared-person-combined').hexdigest(),audio_path=str(combined),
         duration_seconds=2,sample_rate=8000,model_id='declared-synthetic-narration',language='zh',pronunciation_version='fixture-rules')
-    repo.complete_creation_task_narration(combined_record,segments=sections)
+    repo.narration_completion.complete_creation_task_narration(combined_record,segments=sections)
     monkeypatch.setattr(main,'auth_context',SimpleNamespace(enabled=False))
-    monkeypatch.setattr(main,'local_members_service',members);monkeypatch.setattr(main,'production_repo',repo)
+    monkeypatch.setattr(main,'local_members_service',members)
+    monkeypatch.setattr(main,'production_repo',repo)
     monkeypatch.setattr(main,'avatar_lipsync_provider',provider)
     monkeypatch.setattr(main,'artifact_store',ArtifactStore(tmp_path/'artifacts'))
-    monkeypatch.setattr(main,'video_job_runner',VideoJobRunner(repo))
+    monkeypatch.setattr(main,'video_job_runner',VideoJobRunner(repo.job_records))
     monkeypatch.setattr(main,'settings',replace(main.settings,video_output_path=str(tmp_path/'outputs'),video_inbox_path=str(tmp_path/'library'),
         temporary_root_path=str(tmp_path/'temporary'),native_portrait_worker_path=None,hermes_radar_path=None,obsidian_vault_path=None))
     monkeypatch.setattr(main,'creation_execution',main._new_creation_execution(repo))
@@ -181,7 +195,9 @@ def person_application(tmp_path,monkeypatch):
     montage_budget=MontageBudget(10,20,1_000_000,1_000_000,30,1_000_000)
     render=CpuRenderBudget(300,400_000_000,1920,1920,10_000_000,20,0,8_000_000,1,90,512*1024**2,64*1024**2,16)
     host_budget=HostBudget(91,gib,16*gib,gib,10**9,128*1024**2,presenter=budget,presenter_cpu_render=render,cpu_render=render,montage=montage_budget)
-    swap=psutil.swap_memory();disk=psutil.disk_io_counters();devices=psutil.disk_io_counters(perdisk=True)
+    swap=psutil.swap_memory()
+    disk=psutil.disk_io_counters()
+    devices=psutil.disk_io_counters(perdisk=True)
     monkeypatch.setattr(psutil,'cpu_percent',lambda *args,**kwargs:0.0)
     monkeypatch.setattr(psutil,'swap_memory',lambda:swap._replace(used=0))
     monkeypatch.setattr(psutil,'disk_io_counters',lambda **kwargs:devices if kwargs.get('perdisk') else disk)
@@ -210,74 +226,89 @@ def person_application(tmp_path,monkeypatch):
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None,reason='native media tools unavailable')
 def test_full_person_segment_then_selected_regeneration_preserves_early_child(person_application):
-    s=person_application;repo=s.repo;url='/api/creation-tasks/'+s.task_id
-    narration_before=[asdict(item) for item in repo.list_narration_segments('local',s.task_id,s.script_id)]
-    narration_files={item.id:_file_fact(repo.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in s.sections}
-    request={'script_id':s.script_id,'input_digest':revision_digest(repo.get_creation_task_script('local',s.script_id),s.plan),'requirements_confirmed':True}
-    first=s.client.post(url+'/execution/start',json=request);assert first.status_code==202,first.text
+    s=person_application
+    repo=s.repo
+    url='/api/creation-tasks/'+s.task_id
+    narration_before=[asdict(item) for item in repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)]
+    narration_files={item.id:_file_fact(repo.narration_artifacts.resolve_authorized_narration_audio_reference('local',item.audio_reference)) for item in s.sections}
+    request={'script_id':s.script_id,'input_digest':revision_digest(repo.script_records.get_creation_task_script('local',s.script_id),s.plan),'requirements_confirmed':True}
+    first=s.client.post(url+'/execution/start',json=request)
+    assert first.status_code==202,first.text
     assert first.json()['current_stage']=='person_render'
     assert s.client.post(url+'/execution/start',json=request).json()['job']['id']==first.json()['job']['id']
-    full_job=first.json()['job']['id'];deadline=time.monotonic()+4
+    full_job=first.json()['job']['id']
+    deadline=time.monotonic()+4
     while not s.runtime.run_once():
         assert time.monotonic()<deadline,s.runtime.last_error
         time.sleep(.1)
-    renders=repo.list_person_renders('local',s.task_id)
+    renders=repo.person_renders.list_person_renders('local',s.task_id)
     assert len(renders)==1 and all(r.status=='ready' and r.artifact_ref and r.alignment_evidence for r in renders)
     by_segment={r.narration_segment_id:r for r in renders}
     initial_files={r.id:_file_fact(s.case.metadata.picture_renderer.person_path(r)) for r in renders}
-    initial_child_jobs=[job for job in repo.list_job_runs('local',s.task_id) if job.kind=='person_render']
+    initial_child_jobs=[job for job in repo.job_records.list_job_runs('local',s.task_id) if job.kind=='person_render']
     assert len(initial_child_jobs)==1 and all(job.status=='succeeded' for job in initial_child_jobs)
-    event=repo.get_task_event('local',f'event_{full_job}_person_render_queued')
+    event=repo.execution_records.get_task_event('local',f'event_{full_job}_person_render_queued')
     assert set(event.payload['output'].split(','))=={r.id for r in renders}
-    stopped=s.client.post(url+'/execution/cancel');assert stopped.status_code==200,stopped.text
+    stopped=s.client.post(url+'/execution/cancel')
+    assert stopped.status_code==200,stopped.text
     cues=[NarrationCue('cue-'+item.id,item.source_section_id,item.text,2,item.id) for item in s.sections]
-    cue=cues[0];original=by_segment[cue.narration_segment_id]
+    cue=cues[0]
+    original=by_segment[cue.narration_segment_id]
     clips=[MontageClip('clip-person-'+str(i),cue.id,'person:'+original.id,cue.narration_segment_id,
         'person-render://'+original.id,float(i),float(i+1),float(i),float(i+1),1,['合成人物 normal'],False,
         person_render_id=original.id,role='a_roll') for i in range(2)]
     montage=CreationTaskMontagePlan('normal-person-montage','local',s.task_id,s.script_id,'合成 normal','ready',cues,clips,2,0,
-        narration_audio_path=repo.narration_artifact_reference(s.combined.cache_key))
-    payload=creation_task_montage_plan_to_payload(montage);repo.save_creation_task_montage_plan('local',s.task_id,montage.id,payload)
-    base=main._ensure_montage_base_version('local',repo.get_creation_task('local',s.task_id),montage)
+        narration_audio_path=repo.narration_artifacts.narration_artifact_reference(s.combined.cache_key))
+    payload=creation_task_montage_plan_to_payload(montage)
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local',s.task_id,montage.id,payload)
+    base=main._ensure_montage_base_version('local',repo.task_records.get_creation_task('local',s.task_id),montage)
     # Actual queued render is the existing rendered-only preview prerequisite, not a fixture status rewrite.
-    render_queued=s.client.post(url+'/execution/resume');assert render_queued.status_code==202,render_queued.text
+    render_queued=s.client.post(url+'/execution/resume')
+    assert render_queued.status_code==202,render_queued.text
     assert render_queued.json()['current_stage']=='render',render_queued.text
     assert s.runtime.run_once(),s.runtime.last_error
-    rendered_job=repo.get_job_run('local',render_queued.json()['job']['id'])
+    rendered_job=repo.job_records.get_job_run('local',render_queued.json()['job']['id'])
     assert rendered_job.status=='succeeded',asdict(rendered_job)
-    rendered_task=repo.get_creation_task('local',s.task_id)
+    rendered_task=repo.task_records.get_creation_task('local',s.task_id)
     payload=repo.get_creation_task_montage_plan('local',s.task_id)
     assert payload['status']=='rendered' and payload['output_path']
     rendered_file=_file_fact(main.artifact_store.resolve_file(payload['output_path']))
-    base=repo.get_timeline_version('local',rendered_task.current_timeline_version_id)
+    base=repo.timeline_records.get_timeline_version('local',rendered_task.current_timeline_version_id)
     preview=s.client.post(url+'/edits/preview',json={'raw_command':'这里只重做口型，其他都不要动','context_stage':'review',
         'selected_object_refs':['clip:'+clips[0].id],'playhead_ms':500})
     assert preview.status_code==200,preview.text
-    proposal=preview.json()['proposal'];assert proposal['operation']['operation_type']=='RegeneratePersonRender'
+    proposal=preview.json()['proposal']
+    assert proposal['operation']['operation_type']=='RegeneratePersonRender'
     confirm_url=url+'/edits/'+proposal['id']+'/confirm'
-    queued=s.client.post(confirm_url,json={});assert queued.status_code==202,queued.text
+    queued=s.client.post(confirm_url,json={})
+    assert queued.status_code==202,queued.text
     assert s.client.post(confirm_url,json={}).json()==queued.json()
     assert s.runtime.run_once(),s.runtime.last_error
-    job=repo.get_job_run('local',queued.json()['job_id']);assert job.status=='succeeded',asdict(job)
-    current=repo.get_creation_task('local',s.task_id);assert current.current_timeline_version_id!=base.id
+    job=repo.job_records.get_job_run('local',queued.json()['job_id'])
+    assert job.status=='succeeded',asdict(job)
+    current=repo.task_records.get_creation_task('local',s.task_id)
+    assert current.current_timeline_version_id!=base.id
     changed=repo.get_creation_task_montage_plan('local',s.task_id)
     assert changed['clips'][0]['person_render_id']!=clips[0].person_render_id
     assert changed['clips'][1]==payload['clips'][1] and changed['cues']==payload['cues']
-    assert [asdict(item) for item in repo.list_narration_segments('local',s.task_id,s.script_id)]==narration_before
+    assert [asdict(item) for item in repo.narration_records.list_narration_segments('local',s.task_id,s.script_id)]==narration_before
     assert all(_file_fact(fact['path'])==fact for fact in [*initial_files.values(),*narration_files.values()])
     assert _file_fact(rendered_file['path'])==rendered_file
-    final_renders=repo.list_person_renders('local',s.task_id);assert len(final_renders)==2
-    replacement=repo.get_person_render('local',s.task_id,changed['clips'][0]['person_render_id'])
+    final_renders=repo.person_renders.list_person_renders('local',s.task_id)
+    assert len(final_renders)==2
+    replacement=repo.person_renders.get_person_render('local',s.task_id,changed['clips'][0]['person_render_id'])
     assert replacement.status=='ready' and replacement.cache_key!=by_segment[s.sections[0].id].cache_key
-    child_jobs=[j for j in repo.list_job_runs('local',s.task_id) if j.kind=='person_render']
+    child_jobs=[j for j in repo.job_records.list_job_runs('local',s.task_id) if j.kind=='person_render']
     assert len(child_jobs)==2 and all(j.status=='succeeded' for j in child_jobs)
     replay_started=time.monotonic()
     assert s.client.post(confirm_url,json={}).status_code==409
-    render_query=s.client.get(url+'/person-renders');assert render_query.status_code==200,render_query.text
+    render_query=s.client.get(url+'/person-renders')
+    assert render_query.status_code==200,render_query.text
     assert render_query.json()['total_count']==2
     local_job_query=s.client.get(url+'/execution',params={'job_id':job.id})
     assert local_job_query.status_code==409,local_job_query.text
-    task_query=s.client.get(url);assert task_query.status_code==200,task_query.text
+    task_query=s.client.get(url)
+    assert task_query.status_code==200,task_query.text
     assert task_query.json()['task']['current_timeline_version_id']==current.current_timeline_version_id
     assert not s.runtime.run_once()
     with repo._connect() as conn:
@@ -303,4 +334,5 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
         'external_fixture':'fast original SubprocessAvatar provider with isolated synthetic worker and marker files; finite valid MP4 copy, no actual model/lipsync quality claim',
         'production_auth_GUI_calibration_high_model_full_inflight_PGID':'UNVERIFIED'}
     destination=os.environ.get('PERSON_STAGE_EVIDENCE_DIR')
-    if destination:(Path(destination)/'NORMAL_FLOW.json').write_text(json.dumps(flow,ensure_ascii=False,indent=2,default=str)+'\n')
+    if destination:
+        (Path(destination)/'NORMAL_FLOW.json').write_text(json.dumps(flow,ensure_ascii=False,indent=2,default=str)+'\n')

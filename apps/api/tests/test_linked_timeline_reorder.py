@@ -14,10 +14,9 @@ import wave
 import pytest
 
 import app.audio_timeline as audio_timeline
-import app.main as main_module
 from app.audio_timeline import AudioTimeline, build_audio_mix_command, render_audio_mix
 from app.montage import MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.production import SubtitleCue, SubtitleTrack
+from app.creation.contracts import SubtitleCue, SubtitleTrack
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state
 
 
@@ -92,13 +91,18 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
         linked = replace(linked, clips=[clips["b"], clips["a"]])
     a_start = 0 if not swapped else 4
     order = sorted(("a", "b"), key=lambda key: a_start if key == "a" else 4 - a_start)
-    state.production.save_creation_task_montage_plan(
+    state.production.montage_plan_adoption.save_creation_task_montage_plan(
         state.workspace_id, state.task.id, linked.id, creation_task_montage_plan_to_payload(linked))
-    version = main_module._ensure_montage_base_version(
-        state.workspace_id, state.production.get_creation_task(state.workspace_id, state.task.id), linked)
+    current_task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
+    original = state.production.timeline_records.get_timeline_version(
+        state.workspace_id, current_task.current_timeline_version_id)
+    version = state.production.timeline_records.create_timeline_version(replace(original,
+        id="linked-reorder-base", parent_version_id=original.id, sequence=original.sequence + 1,
+        snapshot={**original.snapshot, "montage": creation_task_montage_plan_to_payload(linked)}))
+    state.task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     start_of = {"a": a_start, "b": 4 - a_start}
     text_of = {"a": "第一句。", "b": "第二句。"}
-    state.production.create_subtitle_track(SubtitleTrack(
+    state.production.subtitle_records.create_subtitle_track(SubtitleTrack(
         id="link-zh", workspace_id=state.workspace_id, task_id=state.task.id,
         timeline_version_id=version.id, language="zh-CN", source_language=None,
         style={"font_size": 40},
@@ -108,7 +112,7 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
         generation_method="timeline", model_id=None,
         artifact_ref="artifacts/link-zh.srt", transform_id="link-zh-transform", status="valid"))
     english = {"a": "First.", "b": "Second."}
-    state.production.create_subtitle_track(SubtitleTrack(
+    state.production.subtitle_records.create_subtitle_track(SubtitleTrack(
         id="link-en", workspace_id=state.workspace_id, task_id=state.task.id,
         timeline_version_id=version.id, language="en-US", source_language="zh-CN",
         style={"font_size": 40},
@@ -163,14 +167,14 @@ def test_person_clip_reorder_moves_narration_and_subtitles_as_one_source_group(l
     assert next(track for track in after["subtitle_tracks"] if track["language"] == "zh-CN")["artifact_ref"] != (
         "artifacts/link-zh.srt")
 
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_person_clip_reorder_moves_narration_and_subtitles_as_one_source_group:undo:166'}).status_code == 200
     restored = state.client.get(base).json()
     assert _plan(restored)["clips"] == _plan(before)["clips"]
     assert _plan(restored)["audio_timeline"] == _plan(before)["audio_timeline"]
     assert _cues(restored, "zh-CN") == _cues(before, "zh-CN")
     assert _cues(restored, "en-US") == _cues(before, "en-US")
 
-    assert state.client.post(base + "/timeline/redo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/redo", json={'request_id': 'test_person_clip_reorder_moves_narration_and_subtitles_as_one_source_group:redo:173'}).status_code == 200
     redone = state.client.get(base).json()
     assert _plan(redone)["audio_timeline"] == _plan(after)["audio_timeline"]
     assert _cues(redone, "zh-CN") == _cues(after, "zh-CN")
@@ -199,7 +203,7 @@ def test_material_clip_reorder_leaves_narration_and_subtitles_untouched(person_r
     assert _cues(after, "zh-CN") == _cues(before, "zh-CN")
     assert _cues(after, "en-US") == _cues(before, "en-US")
 
-    assert state.client.post(base + "/timeline/undo", json={}).status_code == 200
+    assert state.client.post(base + "/timeline/undo", json={'request_id': 'test_material_clip_reorder_leaves_narration_and_subtitles_untouched:undo:202'}).status_code == 200
     restored = state.client.get(base).json()
     assert [clip["id"] for clip in _plan(restored)["clips"]] == ["clip-link-a", "clip-link-b"]
     assert _plan(restored)["audio_timeline"] == _plan(before)["audio_timeline"]

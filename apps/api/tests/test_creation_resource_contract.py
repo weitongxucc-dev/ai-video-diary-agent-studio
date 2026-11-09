@@ -19,6 +19,7 @@ render must say so.
 """
 
 from __future__ import annotations
+from test_host_resource_probes import render_metadata_host as render_metadata_host
 
 import json
 from dataclasses import asdict
@@ -33,7 +34,8 @@ from app.host_resource_probes import (CpuRenderBudget, HostBudget, HostCapacity,
                                       admit_resource)
 from app.montage import (CreationTaskMontagePlan, MontageClip, NarrationCue,
                          creation_task_montage_plan_to_payload)
-from app.production import MaterialAsset, MaterialSegment, NarrationArtifactRecord
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import MaterialAsset, MaterialSegment
 
 from test_creation_execution import _seed
 
@@ -62,6 +64,8 @@ def _render_budget(**overrides) -> CpuRenderBudget:
 
 
 def _probe(tmp_path, **render_overrides) -> HostResourceProbe:
+    from app.host_resource_probes import RuntimeCpuPolicy
+    render_overrides.setdefault("running_cpu_policy", RuntimeCpuPolicy("darwin_nice", "synthetic-resource-metadata", nice=5))
     budget = HostBudget(100, 0, 2 ** 63, 0, 2 ** 63, 2 ** 53, 0.02,
                         cpu_render=_render_budget(**render_overrides))
     return HostResourceProbe(tmp_path / "probe.sqlite3", disk_paths=(tmp_path,), budget=budget)
@@ -87,7 +91,7 @@ def test_short_preview_profile_is_independent_complete_and_has_no_guessed_defaul
     assert clip_preview_budget_from_env(profile) == _render_budget()
 
 
-def test_short_preview_admission_and_child_limits_consume_the_same_profile(tmp_path):
+def test_short_preview_admission_and_child_limits_consume_the_same_profile(tmp_path, render_metadata_host):
     from dataclasses import replace
     from app.device_scheduler import RecoveryBlocked
     profile = _render_budget(max_pixel_seconds=200)
@@ -133,12 +137,12 @@ def _render_ready_state(tmp_path, *, aspect_ratio: str = "9:16", clips: int = 1,
         segments=[MaterialSegment(id="segment_1", asset_id="asset_1", start_seconds=0,
                                   end_seconds=1, description="蓝色画面", review_status="approved")],
     ))
-    repo.save_narration_artifact(NarrationArtifactRecord(
+    repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="narration_cache_1", workspace_id="workspace_a", task_id=task_id,
         script_id=script_id, voice_profile_id="voice_1", cache_key="cache_1",
         audio_path=str(audio), duration_seconds=1, sample_rate=44100, model_id="test",
     ))
-    task = repo.get_creation_task("workspace_a", task_id)
+    task = repo.task_records.get_creation_task("workspace_a", task_id)
     task.narration_cache_key = "cache_1"
     task.montage_plan_id = "montage_1"
     task.stage = "montage"
@@ -160,7 +164,7 @@ def _render_ready_state(tmp_path, *, aspect_ratio: str = "9:16", clips: int = 1,
                      (montage.id, task.workspace_id, task_id,
                       json.dumps(creation_task_montage_plan_to_payload(montage)),
                       datetime.now(timezone.utc).isoformat()))
-    plan = repo.get_creation_plan("workspace_a", "plan_workspace_a")
+    plan = repo.plan_records.get_creation_plan("workspace_a", "plan_workspace_a")
     return repo, task, plan, CpuRenderLimits(8_000_000, threads, 90)
 
 
@@ -194,12 +198,10 @@ def test_produced_facts_match_the_real_output_canvas_and_sources(tmp_path):
 
 # --- the probe can decide the facts ----------------------------------------
 
-def test_legal_facts_are_decidable_by_the_probe(tmp_path):
+def test_legal_facts_are_decidable_by_the_probe(tmp_path, render_metadata_host):
     repo, task, plan, limits = _render_ready_state(tmp_path)
     _key, resources = _produce(repo, task, plan, limits)
-    # Whether the roomy budget is met also depends on the live host, which this
-    # test does not claim to measure. The contract under test is that the facts
-    # are decidable at all: no more "unknown", which blocks every render.
+    # A finite declared host makes the facts decidable without native calibration.
     assert _verdict(_probe(tmp_path), resources) is not None
 
 
@@ -216,7 +218,7 @@ _FLOAT_BUDGET_FIELDS = {"max_duration_seconds", "max_pixel_seconds", "max_timeou
     ("threads", "max_threads"),
     ("timeout_seconds", "max_timeout_seconds"),
 ])
-def test_over_budget_facts_are_reported_as_over_budget_not_as_unknown(tmp_path, fact, budget_field):
+def test_over_budget_facts_are_reported_as_over_budget_not_as_unknown(tmp_path, fact, budget_field, render_metadata_host):
     # Two clips and two threads so every field admits a legal budget strictly
     # below the produced fact. A zero budget is itself not a legal budget, so
     # the float ceilings are halved rather than decremented.
@@ -227,7 +229,7 @@ def test_over_budget_facts_are_reported_as_over_budget_not_as_unknown(tmp_path, 
     assert _verdict(probe, resources) is False
 
 
-def test_pixel_seconds_budget_is_enforced(tmp_path):
+def test_pixel_seconds_budget_is_enforced(tmp_path, render_metadata_host):
     repo, task, plan, limits = _render_ready_state(tmp_path)
     _key, resources = _produce(repo, task, plan, limits)
     pixels = resources["width_px"] * resources["height_px"] * resources["duration_seconds"]
@@ -235,7 +237,7 @@ def test_pixel_seconds_budget_is_enforced(tmp_path):
 
 
 @pytest.mark.parametrize("missing", sorted(_RENDER_FACT_KEYS - {"kind", "execution_mode"}))
-def test_any_missing_fact_blocks_instead_of_being_guessed(tmp_path, missing):
+def test_any_missing_fact_blocks_instead_of_being_guessed(tmp_path, missing, render_metadata_host):
     repo, task, plan, limits = _render_ready_state(tmp_path)
     _key, resources = _produce(repo, task, plan, limits)
     resources.pop(missing)
@@ -301,3 +303,17 @@ def test_clip_input_change_rejects_the_previous_request(tmp_path):
     assert second_resources["input_bytes"] == first_resources["input_bytes"] + 64
     assert first_key != second_key
     assert first_resources != second_resources
+
+
+@pytest.mark.parametrize("boundary,reason", [("missing_policy", "cpu_policy_unavailable"),
+    ("non_darwin", "cpu_policy_platform_unsupported")])
+def test_declared_policy_keeps_unavailable_platform_boundaries(tmp_path, monkeypatch, render_metadata_host, boundary, reason):
+    from types import SimpleNamespace
+    import app.host_resource_probes as probes
+    repo, task, plan, limits = _render_ready_state(tmp_path)
+    _, resources = _produce(repo, task, plan, limits)
+    probe = _probe(tmp_path, **({'running_cpu_policy': None} if boundary == 'missing_policy' else {}))
+    if boundary == 'non_darwin':
+        monkeypatch.setattr(probes, 'sys', SimpleNamespace(platform='linux'))
+    decision = probe._sample(resources)
+    assert decision.verdict is None and decision.reason == reason

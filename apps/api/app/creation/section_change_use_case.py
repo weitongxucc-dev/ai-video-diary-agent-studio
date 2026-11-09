@@ -1,8 +1,7 @@
 """Compose one section on the current timeline and publish its real subtitle files."""
 from copy import deepcopy
-from dataclasses import asdict, replace
+from dataclasses import replace
 import hashlib
-import json
 
 from app.creation.contracts import ArtifactRecord, TransformRun, DependencyEdge
 from app.creation.editing.metadata_use_case import execution_subtitle_track
@@ -53,30 +52,29 @@ class SectionTimelineChange:
             selected.append(replace(track,cues=relevant))
         return local,selected
 
-    def compute(self,task,snapshot,section_id,local,segments,version_id,connection=None,*,desired_version=None):
+    def compute(self,task,snapshot,section_id,local,segment,version_id,connection=None,*,desired_version=None):
+        if connection is None:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
+                return self.compute(task,snapshot,section_id,local,segment,version_id,conn,desired_version=desired_version)
+        inputs = self.repository.section_inputs.read_section_change_inputs(task,segment,connection=connection)
         snapshot = dict(snapshot)
-        snapshot['narration_segments'] = json.loads(json.dumps([asdict(row) for row in segments], default=str))
+        snapshot['narration_segments'] = inputs['narration_snapshot']
         snapshot['narration_cache_key'] = None
         for key in ('rendered_video_ref','rendered_artifact_id','creation_render_request_id','output_refs','cover_asset_id'):
             snapshot.pop(key,None)
         current = snapshot.get('montage')
         if not isinstance(current,dict):
             return snapshot,[],set()
-        script = self.repository.effective_creation_script(task.workspace_id,task.id,connection=connection)
-        by_section = {row.source_section_id:row for row in segments}
-        audio = []
-        for section in script.sections:
-            row = by_section[section.id]
-            if row.status!='ready' or not row.audio_reference or not row.duration_seconds:
-                raise ValueError('完整时间线的分段配音尚未就绪，原成果保留')
-            audio.append({'section_id':section.id,'narration_segment_id':row.id,
-                'audio_reference':row.audio_reference,'duration_seconds':row.duration_seconds})
-        tracks = self.repository.list_subtitle_tracks(task.workspace_id,task.id,
+        script = inputs['script_header']
+        audio = inputs['audio']
+        if any(row['status']!='ready' or not row['audio_reference'] or not row['duration_seconds'] for row in audio):
+            raise ValueError('完整时间线的分段配音尚未就绪，原成果保留')
+        tracks = self.repository.subtitle_records.list_subtitle_tracks(task.workspace_id,task.id,
             timeline_version_id=task.current_timeline_version_id,connection=connection)
         restore = desired_version is not None and isinstance(desired_version.snapshot.get('montage'),dict)
         old_tracks = []
         if restore:
-            old_tracks = self.repository.list_subtitle_tracks(task.workspace_id,task.id,
+            old_tracks = self.repository.subtitle_records.list_subtitle_tracks(task.workspace_id,task.id,
                 timeline_version_id=desired_version.id,connection=connection)
             local,old_tracks = self.local_state(desired_version.snapshot['montage'],old_tracks,section_id)
         snapshot['montage'] = replace_section_montage(current,section_id,local,section_audio=audio,
@@ -113,9 +111,7 @@ class SectionTimelineChange:
             return render_srt(execution_subtitle_track(track)).encode('utf-8')
         return None
 
-    def prepare(self,task,snapshot,section_id,local,segments,job,*,desired_version=None):
-        _snapshot,tracks,languages = self.compute(task,snapshot,section_id,local,segments,'section-preparation',
-            desired_version=desired_version)
+    def prepare_tracks(self,task,tracks,languages,job):
         for track in tracks:
             content = self.content(track,languages)
             if content is None:
@@ -129,20 +125,21 @@ class SectionTimelineChange:
                 self.published_bytes += len(content)
 
     def prepare_current(self,workspace_id,task_id,section_id,local,segment,job,*,desired_version=None):
-        task = self.repository.get_creation_task(workspace_id,task_id)
-        version = self.repository.get_timeline_version(workspace_id,task.current_timeline_version_id)
-        segments = self.repository.list_narration_segments(workspace_id,task_id,task.confirmed_script_id)
-        segments = [segment if row.source_section_id==section_id else row for row in segments]
-        self.prepare(task,version.snapshot,section_id,local,segments,job,desired_version=desired_version)
+        with self.repository.execution_inputs.creation_execution_read() as conn:
+            task = self.repository.task_records.get_creation_task(workspace_id,task_id,connection=conn)
+            version = self.repository.timeline_records.get_timeline_version(workspace_id,task.current_timeline_version_id,connection=conn)
+            _snapshot,tracks,languages = self.compute(task,version.snapshot,section_id,local,segment,
+                'section-preparation',conn,desired_version=desired_version)
+        self.prepare_tracks(task,tracks,languages,job)
 
-    def restore(self,task,snapshot,section_id,local,segments,version_id,job,connection,*,source_version,desired_version):
-        return self.apply(task,snapshot,section_id,local,segments,version_id,job,connection,desired_version=desired_version)
+    def restore(self,task,snapshot,section_id,local,segment,version_id,job,connection,*,source_version,desired_version):
+        return self.apply(task,snapshot,section_id,local,segment,version_id,job,connection,desired_version=desired_version)
 
-    def __call__(self,task,snapshot,section_id,local,segments,version_id,job,connection):
-        return self.apply(task,snapshot,section_id,local,segments,version_id,job,connection)
+    def __call__(self,task,snapshot,section_id,local,segment,version_id,job,connection):
+        return self.apply(task,snapshot,section_id,local,segment,version_id,job,connection)
 
-    def apply(self,task,snapshot,section_id,local,segments,version_id,job,connection,*,desired_version=None):
-        snapshot,changed,languages = self.compute(task,snapshot,section_id,local,segments,version_id,connection,
+    def apply(self,task,snapshot,section_id,local,segment,version_id,job,connection,*,desired_version=None):
+        snapshot,changed,languages = self.compute(task,snapshot,section_id,local,segment,version_id,connection,
             desired_version=desired_version)
         result = []
         for track in changed:
@@ -153,19 +150,19 @@ class SectionTimelineChange:
                 publication = self.prepared.get(key)
                 if publication is None:
                     raise SectionPreparationStale('当前有效字幕内容已变化，需在事务外重新准备真实文件')
-                inputs = [f'timeline:{task.current_timeline_version_id}', *[row.audio_reference for row in segments if row.audio_reference]]
+                inputs = [f'timeline:{task.current_timeline_version_id}', *[row['audio_reference'] for row in snapshot['narration_segments'] if row['audio_reference']]]
                 artifact = ArtifactRecord(id=f'artifact_{version_id}_{track.language}', workspace_id=task.workspace_id,
                     task_id=task.id, kind='subtitle_track', logical_ref=publication.logical_ref,
                     sha256=publication.sha256, size_bytes=publication.size_bytes, producer_job_id=job.id, input_refs=inputs)
-                self.repository.create_artifact_record(artifact, connection=connection)
+                self.repository.execution_records.create_artifact_record(artifact, connection=connection)
                 transform = TransformRun(id=f'transform_{artifact.id}', workspace_id=task.workspace_id, task_id=task.id,
                     job_id=job.id, transform_type='subtitle_section_retime', input_digest=key, input_refs=inputs,
                     output_refs=[publication.logical_ref], engine='subtitle-srt/v1', parameters={'section_id': section_id,
                     'timeline_version_id': version_id, 'language': track.language}, status='succeeded',
                     started_at=utc_now(), finished_at=utc_now())
-                self.repository.create_transform_run(transform, connection=connection)
+                self.repository.lineage_records.create_transform_run(transform, connection=connection)
                 for index, upstream in enumerate(inputs):
-                    self.repository.create_dependency_edge(DependencyEdge(id=f'edge_{artifact.id}_{index}',
+                    self.repository.lineage_records.create_dependency_edge(DependencyEdge(id=f'edge_{artifact.id}_{index}',
                         workspace_id=task.workspace_id, task_id=task.id, upstream_ref=upstream,
                         downstream_ref=publication.logical_ref, created_by_transform_id=transform.id), connection=connection)
                 track = replace(track, artifact_ref=publication.logical_ref, transform_id=transform.id, status='valid',

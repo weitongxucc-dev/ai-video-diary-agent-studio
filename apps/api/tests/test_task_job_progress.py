@@ -6,18 +6,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.production import (
-    CreationPlan,
-    CreationPlanVoiceReference,
-    CreationTask,
-    JobRun,
-    ProductionRepository,
-)
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import CreationPlanVoiceReference, CreationTask, JobRun
 
 WORKSPACE = "workspace-job"
 
@@ -33,7 +30,7 @@ def make_repo(tmp_path: Path) -> ProductionRepository:
     )
 
 
-def seed_task(repo: ProductionRepository, workspace_id: str, task_id: str) -> None:
+def seed_task(repo: ProductionRepository, workspace_id: str, task_id: str, *, owner_user_id: str) -> None:
     plan = CreationPlan(
         id=f"plan-{task_id}", workspace_id=workspace_id, goal="测试进度", name="进度任务",
         target_count=1, language="zh-CN", aspect_ratio="9:16", duration_target_seconds=30,
@@ -49,34 +46,42 @@ def seed_task(repo: ProductionRepository, workspace_id: str, task_id: str) -> No
     )
     task = CreationTask(
         id=task_id, workspace_id=workspace_id, plan_id=plan.id, name=plan.name,
-        scenario="knowledge_explanation", stage="montage",
+        scenario="knowledge_explanation", stage="montage", owner_user_id=owner_user_id,
     )
-    repo.confirm_creation_plan(plan, task)
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner_user_id)
+    assert repo.task_records.get_creation_task(workspace_id, task_id).owner_user_id == owner_user_id
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     repo = make_repo(tmp_path)
+    from app.local_members import LocalMemberService
+    members = LocalMemberService(repo.database_path)
+    member, token = members.join(members.create_invite_code(), '进度HTTP隔离成员')
+    monkeypatch.setattr(main_module, 'auth_context', SimpleNamespace(enabled=False))
+    monkeypatch.setattr(main_module, 'local_members_service', members)
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(
         main_module,
         "current_workspace_id",
         lambda request: request.headers.get("x-test-workspace", WORKSPACE),
     )
-    client = TestClient(main_module.app)
+    monkeypatch.setattr(main_module, '_creation_runtime', lambda: pytest.fail('job progress must not start runtime'))
+    client = TestClient(main_module.app, headers={'X-Local-Member-Token':token})
+    client.member_id = member.member_id
     client.repo = repo  # type: ignore[attr-defined]
     return client
 
 
 def test_a_running_job_reports_real_progress_elapsed_and_updated_time(client):
     repo = client.repo
-    seed_task(repo, WORKSPACE, "task-job-1")
-    repo.create_job_run(JobRun(
+    seed_task(repo, WORKSPACE, "task-job-1", owner_user_id=client.member_id)
+    repo.job_records.create_job_run(JobRun(
         id="job-running", workspace_id=WORKSPACE, task_id="task-job-1",
         kind="creation_task_montage_render", idempotency_key="render:1", input_digest="d1",
     ))
-    repo.claim_job_run(WORKSPACE, "job-running")
-    repo.update_job_run_progress(WORKSPACE, "job-running", 40)
+    repo.job_records.claim_job_run(WORKSPACE, "job-running")
+    repo.job_records.update_job_run_progress(WORKSPACE, "job-running", 40)
 
     response = client.get("/api/creation-tasks/task-job-1/job-runs")
 
@@ -98,13 +103,13 @@ def test_a_running_job_reports_real_progress_elapsed_and_updated_time(client):
 
 def test_a_finished_failed_job_keeps_its_failure_reason_across_reopen(client):
     repo = client.repo
-    seed_task(repo, WORKSPACE, "task-job-2")
-    repo.create_job_run(JobRun(
+    seed_task(repo, WORKSPACE, "task-job-2", owner_user_id=client.member_id)
+    repo.job_records.create_job_run(JobRun(
         id="job-failed", workspace_id=WORKSPACE, task_id="task-job-2",
         kind="creation_task_montage_render", idempotency_key="render:2", input_digest="d2",
     ))
-    repo.claim_job_run(WORKSPACE, "job-failed")
-    repo.finish_job_run(
+    repo.job_records.claim_job_run(WORKSPACE, "job-failed")
+    repo.job_records.finish_job_run(
         WORKSPACE, "job-failed", status="failed",
         failure_reason="输出磁盘写入失败", impact="本次没有成片", repair_action="检查磁盘空间后重新生成",
     )
@@ -129,13 +134,13 @@ def test_a_finished_failed_job_keeps_its_failure_reason_across_reopen(client):
     assert again["id"] == "job-failed"
     assert again["failure_reason"] == "输出磁盘写入失败"
     assert again["elapsed_seconds"] == first["current"]["elapsed_seconds"]
-    assert reopened.list_job_runs(WORKSPACE, "task-job-2")[0].failure_reason == "输出磁盘写入失败"
+    assert reopened.job_records.list_job_runs(WORKSPACE, "task-job-2")[0].failure_reason == "输出磁盘写入失败"
 
 
 def test_job_progress_does_not_cross_workspaces(client):
     repo = client.repo
-    seed_task(repo, WORKSPACE, "task-job-3")
-    repo.create_job_run(JobRun(
+    seed_task(repo, WORKSPACE, "task-job-3", owner_user_id=client.member_id)
+    repo.job_records.create_job_run(JobRun(
         id="job-private", workspace_id=WORKSPACE, task_id="task-job-3",
         kind="creation_task_montage_render", idempotency_key="render:3", input_digest="d3",
     ))
@@ -152,7 +157,7 @@ def test_job_progress_does_not_cross_workspaces(client):
 
 def test_a_task_without_jobs_reports_unknown_rather_than_a_fake_progress(client):
     client.repo  # 任务存在但还没有任何作业
-    seed_task(client.repo, WORKSPACE, "task-job-4")
+    seed_task(client.repo, WORKSPACE, "task-job-4", owner_user_id=client.member_id)
 
     response = client.get("/api/creation-tasks/task-job-4/job-runs")
 
@@ -164,21 +169,21 @@ def test_a_task_without_jobs_reports_unknown_rather_than_a_fake_progress(client)
 
 def test_an_old_interrupted_job_does_not_hide_the_later_result(client):
     repo = client.repo
-    seed_task(repo, WORKSPACE, "task-job-5")
+    seed_task(repo, WORKSPACE, "task-job-5", owner_user_id=client.member_id)
     # 一次被中断的旧作业，后面重试成功。
-    repo.create_job_run(JobRun(
+    repo.job_records.create_job_run(JobRun(
         id="job-old", workspace_id=WORKSPACE, task_id="task-job-5",
         kind="creation_task_montage_render", idempotency_key="render:old", input_digest="d-old",
     ))
-    repo.claim_job_run(WORKSPACE, "job-old")
-    repo.finish_job_run(WORKSPACE, "job-old", status="interrupted",
+    repo.job_records.claim_job_run(WORKSPACE, "job-old")
+    repo.job_records.finish_job_run(WORKSPACE, "job-old", status="interrupted",
                         failure_reason="应用退出时中断", impact="本次没有成片", repair_action="重新生成")
-    repo.create_job_run(JobRun(
+    repo.job_records.create_job_run(JobRun(
         id="job-new", workspace_id=WORKSPACE, task_id="task-job-5",
         kind="creation_task_montage_render", idempotency_key="render:new", input_digest="d-new",
     ))
-    repo.claim_job_run(WORKSPACE, "job-new")
-    repo.finish_job_run(WORKSPACE, "job-new", status="succeeded")
+    repo.job_records.claim_job_run(WORKSPACE, "job-new")
+    repo.job_records.finish_job_run(WORKSPACE, "job-new", status="succeeded")
 
     body = client.get("/api/creation-tasks/task-job-5/job-runs").json()
 

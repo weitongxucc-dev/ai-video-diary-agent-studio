@@ -177,7 +177,7 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
     from tempfile import TemporaryDirectory
     from uuid import uuid4
     from app.models import utc_now
-    from app.production import ArtifactRecord, DependencyEdge, JobRun, TransformRun
+    from app.creation.contracts import ArtifactRecord, DependencyEdge, JobRun, TransformRun
     width,height=preview_size(aspect_ratio)
     parameters={"clip":asdict(clip),"width":width,"height":height,"max_seconds":max_seconds}
     effects=VisualEffects.model_validate(clip.visual_effects)
@@ -187,27 +187,27 @@ def publish_color_preview(repository, artifact_store, temporary_root: Path, work
         parameters["portrait_runtime_fingerprint"]=portrait.fingerprint()
     digest=hashlib.sha256(json.dumps(parameters,sort_keys=True).encode()).hexdigest()
     identity=uuid4().hex
-    job=repository.create_job_run(JobRun(id=f"job_{identity}",workspace_id=workspace_id,task_id=task_id,
+    job=repository.job_records.create_job_run(JobRun(id=f"job_{identity}",workspace_id=workspace_id,task_id=task_id,
         kind=kind,idempotency_key=f"{kind}:{identity}",input_digest=digest))
-    running=repository.claim_job_run(workspace_id,job.id)
+    running=repository.job_records.claim_job_run(workspace_id,job.id)
     try:
         temporary_root.mkdir(parents=True,exist_ok=True)
         with TemporaryDirectory(prefix="color-preview-",dir=temporary_root) as directory:
             output=render_color_preview(clip,source,Path(directory)/"preview.mp4",portrait,aspect_ratio=aspect_ratio,max_seconds=max_seconds)
             publication=artifact_store.publish_file(f"artifacts/{task_id}/{job.id}/preview.mp4",output)
-        record=repository.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
+        record=repository.execution_records.create_artifact_record(ArtifactRecord(id=f"artifact_{identity}",workspace_id=workspace_id,
             task_id=task_id,kind=kind,logical_ref=publication.logical_ref,sha256=publication.sha256,
             size_bytes=publication.size_bytes,producer_job_id=job.id,input_refs=[clip.source_path]))
-        transform=repository.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,
+        transform=repository.lineage_records.create_transform_run(TransformRun(id=f"transform_{identity}",workspace_id=workspace_id,
             task_id=task_id,job_id=job.id,transform_type=kind,input_digest=digest,input_refs=[clip.source_path],
             output_refs=[record.logical_ref],engine="local-visual-v3",parameters=parameters,status="succeeded",
             started_at=running.started_at,finished_at=utc_now()))
-        repository.create_dependency_edge(DependencyEdge(id=f"edge_{identity}",workspace_id=workspace_id,task_id=task_id,
+        repository.lineage_records.create_dependency_edge(DependencyEdge(id=f"edge_{identity}",workspace_id=workspace_id,task_id=task_id,
             upstream_ref=clip.source_path,downstream_ref=record.logical_ref,created_by_transform_id=transform.id))
-        repository.finish_job_run(workspace_id,job.id,status="succeeded",output_refs=[record.logical_ref])
+        repository.job_records.finish_job_run(workspace_id,job.id,status="succeeded",output_refs=[record.logical_ref])
         return record
     except Exception as exc:
-        repository.finish_job_run(workspace_id,job.id,status="failed",failure_reason=type(exc).__name__,
+        repository.job_records.finish_job_run(workspace_id,job.id,status="failed",failure_reason=type(exc).__name__,
             impact="没有改变当前镜头或成片。",repair_action="检查源素材、FFmpeg 和外接盘后重试。")
         raise
 

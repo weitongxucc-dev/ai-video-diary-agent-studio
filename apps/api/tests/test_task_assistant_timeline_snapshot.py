@@ -10,18 +10,29 @@ import app.main as main
 from app.assistant_pi import AssistantUnavailable
 from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
-from app.production import CreationPlan, CreationTask, ProductionRepository, TimelineVersion
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import CreationTask, TimelineVersion
 
 
 @pytest.fixture
-def task_client(tmp_path, monkeypatch):
-    members = LocalMemberService(tmp_path / "members.sqlite3")
+def task_client(tmp_path, monkeypatch, request):
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    isolate_assistant_turn_control(monkeypatch, request)
+    from test_production_foundation import edit_adoption_no_execution
+    forbidden = edit_adoption_no_execution(monkeypatch)
+    monkeypatch.setattr(main, "_creation_task_script_generator_for", forbidden)
+    members = LocalMemberService(tmp_path / "conversation.sqlite3")
     member, token = members.join(members.create_invite_code(), "任务成员")
-    production = ProductionRepository(tmp_path / "production.sqlite3", tmp_path / "library")
+    production = ProductionRepository(tmp_path / "conversation.sqlite3", tmp_path / "library")
     conversations = ConversationRepository(tmp_path / "conversation.sqlite3")
     monkeypatch.setattr(main, "production_repo", production)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     monkeypatch.setattr(main, "local_members_service", members)
+    # Real local identity, Task, Conversation and authorization owners share this
+    # isolated store; no actor/verifier or business permission gate is mocked.
+    monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "qa")
+    monkeypatch.setattr(main, "settings", replace(main.settings, database_path=str(production.database_path)))
     monkeypatch.setattr(main, "current_workspace_id", lambda _: "qa")
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
         effective_llm_provider="controlled", effective_llm_model="fixture", effective_llm_api_key=None,
@@ -47,9 +58,9 @@ def task_client(tmp_path, monkeypatch):
                             name=plan.name, scenario="knowledge_explanation",
                             stage="narration" if sequence else "topic",
                             confirmed_script_id="script" if sequence else None)
-        production.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
+        production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
         for number in range(1, sequence + 1):
-            production.create_timeline_version(TimelineVersion(
+            production.timeline_records.create_timeline_version(TimelineVersion(
                 id=f"timeline-{number}", workspace_id="qa", task_id=task.id,
                 parent_version_id=f"timeline-{number - 1}" if number > 1 else None,
                 sequence=number, snapshot={}, created_by_operation_id=None,
@@ -106,16 +117,16 @@ def test_unavailable_or_unrelated_persisted_timeline_is_rejected(task_client, ta
     create, production, conversations, calls, member_id = task_client
     client, headers, payload = create(2)
     if target == "another-task":
-        other_plan = replace(production.get_creation_plan("qa", "plan"), id="other-plan")
+        other_plan = replace(production.plan_records.get_creation_plan("qa", "plan"), id="other-plan")
         other_task = CreationTask(id="other-task", workspace_id="qa", plan_id=other_plan.id,
                                   name="其他任务", scenario="knowledge_explanation")
-        production.confirm_creation_plan(other_plan, other_task, verified_owner_user_id=member_id)
-        production.create_timeline_version(TimelineVersion(
+        production.plan_confirmation.confirm_creation_plan(other_plan, other_task, verified_owner_user_id=member_id)
+        production.timeline_records.create_timeline_version(TimelineVersion(
             id=target, workspace_id="qa", task_id=other_task.id, parent_version_id=None,
             sequence=1, snapshot={}, created_by_operation_id=None,
         ))
     # A corrupt persisted pointer must not authorize a different task's timeline.
-    task = production.get_creation_task("qa", "task")
+    task = production.task_records.get_creation_task("qa", "task")
     task.current_timeline_version_id = target
     with production._connect() as connection:
         connection.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
@@ -149,3 +160,33 @@ def test_task_failure_stream_persists_original_message_and_fixed_zero_sequence(t
     assert context["target_snapshot"]["timeline_sequence"] == 0
     replay = client.post("/api/creation-tasks/task/assistant/turn", headers=headers, json=payload)
     assert replay.status_code == 503 and len(calls) == 1
+
+
+def test_turn_control_scope_preserves_shutdown_and_restores_original_owner(monkeypatch, request):
+    import time
+    import subprocess
+    import app.assistant_pi as pi
+    from app.assistant.turn_control import AssistantStopped
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    def forbidden(*args, **kwargs):
+        pytest.fail("control scope metadata cannot launch or terminate processes")
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(pi, "_terminate_process_group", forbidden)
+    original, view = pi._turn_control, pi._turn_stop_events
+    with monkeypatch.context() as scoped:
+        closed = isolate_assistant_turn_control(scoped, request)
+        pi.register_turn_control("first-owner")
+        assert "first-owner" in pi._turn_stop_events and "first-owner" not in view
+        closed.stop_all(deadline_monotonic=time.monotonic()+1)
+        with pytest.raises(AssistantStopped):
+            pi.register_turn_control("cannot-reopen")
+    assert pi._turn_control is original and pi._turn_stop_events is view
+    with monkeypatch.context() as scoped:
+        fresh = isolate_assistant_turn_control(scoped, request)
+        assert fresh is not closed
+        pi.register_turn_control("second-owner")
+        pi.forget_turn_control("second-owner")
+        assert "second-owner" not in pi._turn_stop_events
+        with pytest.raises(AssistantStopped):
+            closed.register("old-stays-closed")
+    assert pi._turn_control is original and pi._turn_stop_events is view

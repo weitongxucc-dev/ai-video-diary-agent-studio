@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.production import JobRun
+from app.creation.contracts import JobRun
 
 # 作业正在占用设备的哪种状态：这些要分开说，忙碌不是错误。
 # 作业正在占用设备的哪种状态：只有这两种还活着。interrupted 表示这次执行已经

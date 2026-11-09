@@ -14,7 +14,7 @@ from app.auth import AuthPrincipal
 from app.companion.identity import CompanionIdentity
 from app.companion.pairing import CompanionPairingService
 from app.device_accounts import DeviceAccountError, DeviceAccountService, DeviceCredential
-from test_companion_identity_http import linked, USER, OTHER, WORKSPACE, DEVICE, PROOF
+from test_companion_identity_http import linked as linked, USER, OTHER, WORKSPACE, DEVICE, PROOF
 
 
 def create(linked):

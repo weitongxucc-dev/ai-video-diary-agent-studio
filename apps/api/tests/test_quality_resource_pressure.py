@@ -11,7 +11,9 @@ from app.creation.quality_inspection_use_case import QualityInspectionUseCase
 from app.creation.output_observation_use_case import OutputObservationUseCase
 from app.creation_execution import CreationExecutionActor
 from app.host_resource_probes import HostResourceDecision, HostResourceRefusal
-from app.production import CreationPlan, CreationTask, ProductionRepository
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import CreationTask
 from app.quality_inspection import QualityCheckRepository
 from app.task_audio import TaskAudio
 from test_quality_resource_owner import MetadataResources, build_metadata_runtime, fixture_budget, seed_source
@@ -24,7 +26,7 @@ def test_quality_pressure_defers_to_future_without_terminal_result(tmp_path):
         pronunciation_references=[], approved_asset_count=0, approved_clip_count=0, material_rule_summary="", model_snapshot=[],
         confirmation_points=[], blockers=[], preflight_fingerprint="isolated")
     task = CreationTask(id="task", workspace_id="local", plan_id="plan", name="质检", scenario="knowledge_explanation", stage="review")
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id="original-owner")
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="original-owner")
     actor = CreationExecutionActor("local", "original-owner")
     store = ArtifactStore(tmp_path / "artifacts")
     checks = QualityCheckRepository(repository.database_path)
@@ -59,11 +61,11 @@ def test_quality_pressure_defers_to_future_without_terminal_result(tmp_path):
         assert request["state"] == "blocked" and request["wait_reason"] == "resource_pressure"
         assert before + timedelta(seconds=30) <= retry_at <= after + timedelta(seconds=30)
         assert permit["state"] == "free" and permit["request_id"] is None
-        assert repository.get_job_run("local", job_id).status == "interrupted"
+        assert repository.job_records.get_job_run("local", job_id).status == "interrupted"
         assert checks.get("local", "task")["check_state"] == "checking"
         assert service.projection("local", "task")["result_status"] is None
         with pytest.raises(KeyError):
-            repository.get_task_event("local", f"event_{job_id}_quality_terminal")
+            repository.execution_records.get_task_event("local", f"event_{job_id}_quality_terminal")
         assert service.source_metadata("local", "task")[2] == source_before
         assert calls == [check_id] and runtime.last_error is None
         admissions = len(resources.admissions)

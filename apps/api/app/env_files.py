@@ -118,7 +118,8 @@ def _dotenv_file_state(path: Path) -> tuple | None:
         raise RuntimeError("dotenv target is not a regular file")
     payload = path.read_bytes()
     after = path.lstat()
-    identity = lambda value: (value.st_dev, value.st_ino, stat.S_IMODE(value.st_mode), value.st_mtime_ns, value.st_size)
+    def identity(value):
+        return (value.st_dev, value.st_ino, stat.S_IMODE(value.st_mode), value.st_mtime_ns, value.st_size)
     if identity(before) != identity(after):
         raise RuntimeError("dotenv target changed while reading")
     return (*identity(after), payload)

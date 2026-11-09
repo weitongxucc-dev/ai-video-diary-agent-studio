@@ -11,7 +11,8 @@ from app.creation.intent_use_case import CreationIntentUseCase
 from app.production import ProductionRepository
 from test_creation_requests import OWNER, WORKSPACE, entries
 from test_creation_task_script_grounding import (
-    FACT, agent_payload, api_state, draft, reviewed, set_agent_reviewer, set_api_provider,
+    FACT, agent_payload, api_state as api_state, draft, reviewed, set_agent_reviewer,
+    generate_current_http_draft,
 )
 
 
@@ -30,7 +31,7 @@ def adopted(tmp_path):
         intent = CreationIntentUseCase.receive_intent({"kind": kind, "topic_title": "脱壳机介绍",
             **({"final_script": {"title": "确认稿", "text": body}} if kind == "final_script" else {})},
             source=source, target_count=count, original_message=goal)
-        saved = repository.create_creation_request(WORKSPACE, request_key="original-request-key",
+        saved = repository.creation_requests.create_creation_request(WORKSPACE, request_key="original-request-key",
             input_fingerprint="human-input-digest", goal=goal, target_count=3 if count == 2 else 1,
             output_relation="variants" if count == 2 else "single",
             requirements={"creation_intent": intent, "language": "zh-CN", "duration_target_seconds": 30},
@@ -38,15 +39,15 @@ def adopted(tmp_path):
         proposed = [(replace(plan, goal="Agent自拟旁白：田间收好的玉米棒……；片尾静态署名。",
                             language="zh-CN" if index == 0 else "en-US", aspect_ratio="16:9"), task)
                     for index, (plan, task) in enumerate(entries(count=count))]
-        saved = repository.save_creation_request_window(WORKSPACE, saved["id"],
+        saved = repository.creation_requests.save_creation_request_window(WORKSPACE, saved["id"],
             expected_revision=saved["revision"], input_fingerprint="adopted-window-input", entries=proposed,
             verified_owner_user_id=OWNER)
         window = saved["current_window"]
-        confirmed = repository.confirm_creation_request_window(WORKSPACE, saved["id"], window["id"],
+        confirmed = repository.creation_request_adoption.confirm_creation_request_window(WORKSPACE, saved["id"], window["id"],
             expected_revision=saved["revision"], input_fingerprint=window["input_fingerprint"],
             verified_owner_user_id=OWNER, adoption_kind=adoption_kind)
-        pairs = [(repository.get_creation_plan(WORKSPACE, item["plan_id"]),
-                  repository.get_creation_task(WORKSPACE, item["task_id"]))
+        pairs = [(repository.plan_records.get_creation_plan(WORKSPACE, item["plan_id"]),
+                  repository.task_records.get_creation_task(WORKSPACE, item["task_id"]))
                  for item in confirmed["current_window"]["entries"]]
         return SimpleNamespace(repository=repository, request=confirmed, pairs=pairs, goal=goal, fixed_body=body)
     return create
@@ -120,7 +121,7 @@ def test_request_window_and_task_binding_cannot_be_substituted(adopted, change):
 
 def test_another_real_request_cannot_supply_this_tasks_goal(adopted):
     state = adopted()
-    other = state.repository.create_creation_request(WORKSPACE, request_key="other-human-input",
+    other = state.repository.creation_requests.create_creation_request(WORKSPACE, request_key="other-human-input",
         input_fingerprint="other-input-digest", goal="另一条用户目标", target_count=1, output_relation="single",
         requirements={}, material_scope={"mode": "workspace"}, clarification_questions=[], verified_owner_user_id=OWNER)
     plan, task = copy.deepcopy(state.pairs[0])
@@ -131,12 +132,12 @@ def test_another_real_request_cannot_supply_this_tasks_goal(adopted):
 
 def test_new_planning_window_does_not_invalidate_an_earlier_adopted_task(adopted, monkeypatch):
     state = adopted()
-    saved = state.repository.save_creation_request_window(WORKSPACE, state.request["id"],
+    saved = state.repository.creation_requests.save_creation_request_window(WORKSPACE, state.request["id"],
         expected_revision=state.request["revision"], input_fingerprint="next-window", entries=entries(start=3, count=1),
         verified_owner_user_id=OWNER)
     assert saved["current_window"]["status"] == "proposed"
     assert saved["current_window"]["id"] != state.pairs[0][0].adoption["window_id"]
-    monkeypatch.setattr(state.repository, "list_creation_request_items",
+    monkeypatch.setattr(state.repository.creation_requests, "list_creation_request_items",
         lambda *_a, **_kw: pytest.fail("文案目标解析不能扫描历史作品"))
     assert CreationIntentUseCase.script_goal(state.repository, *state.pairs[0], viewer_user_id=OWNER) == state.goal
     # Pointing an old task at that unadopted window is not a valid association.
@@ -159,7 +160,7 @@ def test_manual_and_fixed_copy_keep_existing_goal_and_locked_body_rules(adopted,
     assert CreationIntentUseCase.script_goal(state.repository, plan, task, viewer_user_id=None) == plan.goal
     assert (asdict(plan), asdict(task)) == before
     if kind == "final_script":
-        script = state.repository.get_creation_task_script(WORKSPACE, task.confirmed_script_id)
+        script = state.repository.script_records.get_creation_task_script(WORKSPACE, task.confirmed_script_id)
         assert script.sections[0].content == state.fixed_body
         assert script.locked_body_digest == hashlib.sha256(state.fixed_body.encode()).hexdigest()
         assert CreationIntentUseCase.adopted_for_execution(plan, script)
@@ -178,7 +179,7 @@ def consumer_state(api_state, monkeypatch):
     """Keep real HTTP adapters, permissions, sources and request/window storage."""
     import app.main as main
     from app.conversation_repository import ConversationRepository
-    from app.production import CreationTask
+    from app.creation.contracts import CreationTask
 
     def create(*, failure=None, kind="goal_delegation", adoption_kind="delegated_system"):
         state = api_state
@@ -194,23 +195,23 @@ def consumer_state(api_state, monkeypatch):
         intent = CreationIntentUseCase.receive_intent({"kind": kind, "topic_title": "本机工作区导览",
             **({"final_script": {"title": "确认稿", "text": fixed_body}} if kind == "final_script" else {})},
             source=source, target_count=1, original_message=goal)
-        saved = state.repository.create_creation_request("local", request_key="http-human-input",
+        saved = state.repository.creation_requests.create_creation_request("local", request_key="http-human-input",
             input_fingerprint="http-input", goal=goal, target_count=1, output_relation="single",
             requirements={"creation_intent": intent}, material_scope={"mode": "workspace"},
             clarification_questions=[], verified_owner_user_id=owner)
         plan = replace(state.plan, id="derived-plan", creation_task_id=None, goal="Agent自拟完整旁白，不得更改。",
             duration_target_seconds=30)
         task = CreationTask("derived-task", "local", plan.id, plan.name, goal)
-        saved = state.repository.save_creation_request_window("local", saved["id"],
+        saved = state.repository.creation_requests.save_creation_request_window("local", saved["id"],
             expected_revision=saved["revision"], input_fingerprint="http-window", entries=[(plan, task)],
             verified_owner_user_id=owner)
-        state.repository.confirm_creation_request_window("local", saved["id"], saved["current_window"]["id"],
+        state.repository.creation_request_adoption.confirm_creation_request_window("local", saved["id"], saved["current_window"]["id"],
             expected_revision=saved["revision"], input_fingerprint="http-window",
             verified_owner_user_id=owner, adoption_kind=adoption_kind)
         if failure == "private_request":
-            state.repository.set_creation_task_visibility("local", task.id, "shared")
+            state.repository.task_records.set_creation_task_visibility("local", task.id, "shared")
             state.repository.set_creation_plan_visibility("local", plan.id, "shared")
-        task = state.repository.get_creation_task("local", task.id)
+        task = state.repository.task_records.get_creation_task("local", task.id)
         conversations = ConversationRepository(state.repository.database_path)
         monkeypatch.setattr(main, "conversation_repo", conversations)
         instruction = "正文讲得简洁一些，资料不支持的细节可以删掉。"
@@ -232,21 +233,30 @@ def test_real_main_script_consumers_send_original_user_goal_to_model(consumer_st
         set_agent_reviewer(monkeypatch, reviewed(document), calls)
         payload = {**agent_payload(state, content=FACT), "assistant_turn_id": state.turn_id}
     else:
-        set_api_provider(monkeypatch, document, reviewed(document), calls)
+        set_agent_reviewer(monkeypatch, reviewed(document), calls)
         payload = {}
     context_response = state.client.get(f"/api/creation-tasks/{state.task.id}/assistant/script-context")
     assert context_response.status_code == 200, context_response.text
     context = context_response.json()
-    plan = state.repository.get_creation_plan("local", state.task.plan_id)
+    plan = state.repository.plan_records.get_creation_plan("local", state.task.plan_id)
     assert context["goal"] == state.goal
     assert context["creative_proposal"] == plan.goal and context["creative_proposal"] != context["goal"]
     assert "可修订" in context["creative_proposal_role"] and "不是用户已定稿正文" in context["creative_proposal_role"]
     assert context["creation_intent"] == plan.creation_intent
     assert (context["language"], context["duration_target_seconds"], context["presenter_share_target"]) == ("zh-CN", 30, 0)
     assert calls == []
-    response = state.client.post(f"/api/creation-tasks/{state.task.id}/{endpoint}", json=payload)
-    assert response.status_code == 200, response.text
-    bodies = calls if endpoint == "assistant/script-draft" else [body for _, body in calls]
+    if endpoint == "assistant/script-draft":
+        response = state.client.post(f"/api/creation-tasks/{state.task.id}/{endpoint}", json=payload)
+        assert response.status_code == 200, response.text
+    else:
+        import app.main as main
+        main.conversation_repo.finish_turn(state.turn_id, "completed", assistant_text="已完成原任务输入轮次")
+        generate_current_http_draft(state, monkeypatch, calls, task_id=state.task.id)
+        assert len(calls) == 3
+        original = calls[0]["generation_input"]
+        assert original["goal"] == context["goal"] == state.goal and "Agent自拟" not in original["goal"]
+        assert original["requirements"]["duration_target_seconds"] == 30
+    bodies = calls if endpoint == "assistant/script-draft" else calls[1:]
     assert len(bodies) == (1 if endpoint == "assistant/script-draft" else 2)
     for body in bodies:
         model_input = json.loads(body["messages"][1]["content"])
@@ -263,12 +273,20 @@ def test_main_rejects_unreadable_or_mismatched_goal_before_model_and_script_run(
     state = consumer_state(failure=failure)
     monkeypatch.setattr(main, "_creation_task_script_generator_for",
         lambda *_: pytest.fail("来源拒绝必须发生在模型调用前"))
-    payload = {**agent_payload(state), "assistant_turn_id": state.turn_id} if endpoint == "assistant/script-draft" else {}
+    payload = ({**agent_payload(state), "assistant_turn_id": state.turn_id} if endpoint == "assistant/script-draft"
+               else {"request_id": str(uuid4())} if endpoint == "scripts/generate" else {})
     path = f"/api/creation-tasks/{state.task.id}/{endpoint}"
     response = state.client.get(path) if endpoint == "assistant/script-context" else state.client.post(path, json=payload)
-    assert response.status_code == 409, response.text
-    assert response.json()["detail"]["error"] == "script_goal_source_changed"
-    assert state.repository.list_creation_task_scripts("local", state.task.id) == []
+    if endpoint == "scripts/generate":
+        expected_status = 403 if failure == "private_request" else 422
+        assert response.status_code == expected_status, response.text
+        expected_detail = ("生成请求的原成员或任务归属已失效" if failure == "private_request"
+                           else "文案目标与原始用户输入摘要不一致，没有沿用方案中的自拟文案。")
+        assert response.json()["detail"] == expected_detail
+    else:
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["error"] == "script_goal_source_changed"
+    assert state.repository.script_records.list_creation_task_scripts("local", state.task.id) == []
     with state.repository._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM script_generation_runs WHERE task_id=?", (state.task.id,)).fetchone()[0] == 0
 
@@ -279,7 +297,7 @@ def test_script_context_does_not_invent_proposal_or_authority_for_manual_or_fixe
     state = consumer_state(kind=kind, adoption_kind=adoption_kind)
     monkeypatch.setattr(main, "_creation_task_script_generator_for",
         lambda *_: pytest.fail("读取文案上下文不能调用模型"))
-    plan = state.repository.get_creation_plan("local", state.task.plan_id)
+    plan = state.repository.plan_records.get_creation_plan("local", state.task.plan_id)
     response = state.client.get(f"/api/creation-tasks/{state.task.id}/assistant/script-context")
     assert "creative_proposal" not in response.json() and "creative_proposal_role" not in response.json()
     if kind == "goal_delegation":
@@ -289,7 +307,55 @@ def test_script_context_does_not_invent_proposal_or_authority_for_manual_or_fixe
         assert plan.adoption["kind"] == "manual"
     else:
         assert response.status_code == 409 and "锁定" in response.json()["detail"]
-        script = state.repository.get_creation_task_script("local", state.task.confirmed_script_id)
+        script = state.repository.script_records.get_creation_task_script("local", state.task.confirmed_script_id)
         assert script.sections[0].content == state.fixed_body
         assert script.locked_body_digest == hashlib.sha256(state.fixed_body.encode()).hexdigest()
-    assert state.repository.get_creation_plan("local", plan.id).creation_intent == plan.creation_intent
+    assert state.repository.plan_records.get_creation_plan("local", plan.id).creation_intent == plan.creation_intent
+
+
+@pytest.mark.parametrize('entry', ['http', 'task_business'])
+def test_script_context_denies_private_task_to_another_current_member(api_state, monkeypatch, entry):
+    import app.main as main
+    from fastapi import HTTPException
+    from app.creation.script_draft_use_case import ScriptDraftRejected
+
+    state = api_state
+    reader, token = main.local_members_service.join(main.local_members_service.create_invite_code(), 'Other reader')
+    state.sources.set_knowledge_item_visibility('local', 'fixture', 'shared')
+    monkeypatch.setattr(main, '_creation_task_script_generator_for',
+        lambda *_: pytest.fail('context reads must not call a model'))
+    if entry == 'http':
+        response = state.client.get('/api/creation-tasks/task/assistant/script-context',
+            headers={'X-Local-Member-Token': token})
+        assert response.status_code == 404, response.text
+        assert 'sources' not in response.json()
+    else:
+        with pytest.raises((HTTPException, ScriptDraftRejected)) as denied:
+            main._task_business().script_context('local', 'task', reader.member_id)
+        assert denied.value.status_code == 404
+    assert state.client.get('/api/creation-tasks/task/assistant/script-context').status_code == 200
+
+
+@pytest.mark.parametrize('entry', ['http', 'task_business'])
+def test_script_context_denies_owner_private_sources_in_shared_task(api_state, monkeypatch, entry):
+    import app.main as main
+    from fastapi import HTTPException
+    from app.creation.script_draft_use_case import ScriptDraftRejected
+
+    state = api_state
+    reader, token = main.local_members_service.join(main.local_members_service.create_invite_code(), 'Other reader')
+    state.repository.task_records.set_creation_task_visibility('local', 'task', 'shared')
+    monkeypatch.setattr(main, '_creation_task_script_generator_for',
+        lambda *_: pytest.fail('context reads must not call a model'))
+    if entry == 'http':
+        response = state.client.get('/api/creation-tasks/task/assistant/script-context',
+            headers={'X-Local-Member-Token': token})
+        assert response.status_code == 409, response.text
+        assert response.json()['detail']['error'] == 'assistant_reply_source_changed'
+        assert 'sources' not in response.json()
+    else:
+        with pytest.raises((HTTPException, ScriptDraftRejected)) as denied:
+            main._task_business().script_context('local', 'task', reader.member_id)
+        assert denied.value.status_code == 409
+        assert denied.value.detail['error'] == 'assistant_reply_source_changed'
+    assert state.client.get('/api/creation-tasks/task/assistant/script-context').status_code == 200

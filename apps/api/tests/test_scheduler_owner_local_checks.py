@@ -9,7 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.creation_execution import CreationExecutionActor, CreationJobOwnerVerifier
-from app.production import JobRun, MaterialAsset, ProductionRepository, TaskEvent
+from app.creation.contracts import JobRun, TaskEvent
+from app.production import MaterialAsset, ProductionRepository
 from tests.test_creation_execution import _seed
 
 
@@ -41,9 +42,9 @@ def _asset(repo, workspace, name):
 
 def test_creation_owner_ignores_unrelated_task_text_but_refuses_changed_source_revision(tmp_path, monkeypatch):
     repo, task_id, script_id, digest = _seed(tmp_path, voice=False)
-    job = repo.create_job_run(JobRun(id="job", workspace_id="workspace_a", task_id=task_id,
+    job = repo.job_records.create_job_run(JobRun(id="job", workspace_id="workspace_a", task_id=task_id,
         kind="creation_task_narration", idempotency_key="job", input_digest=digest))
-    repo.append_task_event(TaskEvent(id="event_job_start", workspace_id=job.workspace_id,
+    repo.execution_records.append_task_event(TaskEvent(id="event_job_start", workspace_id=job.workspace_id,
         task_id=task_id, job_id=job.id, event_type="creation_execution_started",
         payload={"script_id": script_id, "member_id": "member"}))
     asset = _asset(repo, job.workspace_id, "source.mp4")
@@ -102,7 +103,7 @@ def test_task_media_local_check_fences_its_sources_and_leaves_unrelated_assets_o
 def test_task_media_retry_reopens_owner_and_device_attempt_in_one_transaction(tmp_path, monkeypatch, rollback):
     from app.task_audio import TaskMediaJobs
     from app.device_runtime import OwnerRegistration, OwnerRouter
-    from app.device_scheduler import DeviceScheduler, SubmissionIntent, SchedulePolicy
+    from app.device_scheduler import DeviceScheduler
     from tests.test_device_scheduler import Resources, Processes
     repo, task_id, _, _ = _seed(tmp_path, voice=False)
     actor = CreationExecutionActor("workspace_a", "member")
@@ -129,7 +130,7 @@ def test_task_media_retry_reopens_owner_and_device_attempt_in_one_transaction(tm
             scheduler.retry_existing(grant.request_id, actor, reason="failed")
     else:
         scheduler.retry_existing(grant.request_id, actor, reason="failed")
-    assert repo.get_job_run("workspace_a", job.id).status == ("failed" if rollback else "interrupted")
+    assert repo.job_records.get_job_run("workspace_a", job.id).status == ("failed" if rollback else "interrupted")
     request = scheduler._get(grant.request_id)
     assert (request.state, request.attempt_number) == (("failed", 1) if rollback else ("waiting", 2))
     scheduler.close()
@@ -196,10 +197,10 @@ def test_publish_local_check_never_reopens_output_and_refuses_account_change(tmp
 def test_quality_local_check_keeps_fixed_history_but_refuses_task_access_change(tmp_path, monkeypatch):
     from app.artifact_store import ArtifactStore
     from app.creation.quality_inspection_use_case import QualityInspectionUseCase, QUALITY_KIND
-    from app.creation.quality_execution import QualityCheckOwnerVerifier
     from app.creation.output_observation_use_case import OutputObservationUseCase
     from app.quality_inspection import QualityCheckRepository
-    from app.production import CreationPlan, CreationTask
+    from app.creation.plan_contracts import CreationPlan
+    from app.creation.contracts import CreationTask
     from app.task_audio import TaskAudio
     from tests.test_quality_resource_owner import fixture_budget, seed_source, build_metadata_runtime
     repo = ProductionRepository(tmp_path / "quality.sqlite", tmp_path / "library")
@@ -207,7 +208,7 @@ def test_quality_local_check_keeps_fixed_history_but_refuses_task_access_change(
         language="zh", aspect_ratio="16:9", duration_target_seconds=2, knowledge_references=[],
         source_references=[], selected_voice=None, pronunciation_references=[], approved_asset_count=0,
         approved_clip_count=0, material_rule_summary="", model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
-    repo.confirm_creation_plan(plan, CreationTask(id="task", workspace_id="local", plan_id="plan", name="fixture", scenario="fixture", stage="review"), verified_owner_user_id="member")
+    repo.plan_confirmation.confirm_creation_plan(plan, CreationTask(id="task", workspace_id="local", plan_id="plan", name="fixture", scenario="fixture", stage="review"), verified_owner_user_id="member")
     store = ArtifactStore(tmp_path / "artifacts")
     outputs = OutputObservationUseCase(repo, store, TaskAudio(repo, store, tmp_path), tmp_path, None)
     service = QualityInspectionUseCase(repo, QualityCheckRepository(repo.database_path), outputs,
@@ -234,7 +235,7 @@ def test_quality_local_check_keeps_fixed_history_but_refuses_task_access_change(
 def test_cover_local_check_uses_original_binding_without_reading_source_or_receipt(tmp_path, monkeypatch):
     from app.artifact_store import ArtifactStore
     from app.creation.cover_use_case import CoverCommand, CoverUseCase, COVER_JOB_KIND, COVER_OPERATION, file_identity
-    from app.production import ArtifactRecord, EditIntent, EditProposal, TimelineVersion
+    from app.creation.contracts import ArtifactRecord, EditIntent, EditProposal, TimelineVersion
     from app.host_resource_probes import CoverBudget
     repo, task_id, _, _ = _seed(tmp_path, voice=False)
     workspace = "workspace_a"
@@ -248,22 +249,22 @@ def test_cover_local_check_uses_original_binding_without_reading_source_or_recei
         json.dumps(actor.identity_payload(), ensure_ascii=False, sort_keys=True),
         json.dumps(operation, ensure_ascii=False, sort_keys=True), published.sha256,
         published.size_bytes, file_identity(store.resolve_file(ref)))
-    job = repo.create_job_run(JobRun(id="cover-job", workspace_id=workspace, task_id=task_id,
+    job = repo.job_records.create_job_run(JobRun(id="cover-job", workspace_id=workspace, task_id=task_id,
         kind=COVER_JOB_KIND, idempotency_key=command.idempotency_key, input_digest=command.input_digest))
-    repo.create_artifact_record(ArtifactRecord("source-artifact", workspace, task_id, "rendered_video",
+    repo.execution_records.create_artifact_record(ArtifactRecord("source-artifact", workspace, task_id, "rendered_video",
         ref, published.sha256, published.size_bytes, job.id, []))
-    repo.create_timeline_version(TimelineVersion("base", workspace, task_id, None, 1,
+    repo.timeline_records.create_timeline_version(TimelineVersion("base", workspace, task_id, None, 1,
         {"output_refs": [ref]}, None))
-    repo.create_edit_intent(EditIntent("intent", workspace, task_id, "cover", "review", [], None,
+    repo.edit_records.create_edit_intent(EditIntent("intent", workspace, task_id, "cover", "review", [], None,
         "cover", {}, {}, 1., "proposed"))
-    repo.create_edit_proposal(EditProposal("proposal", workspace, task_id, "intent", "cover",
+    repo.edit_records.create_edit_proposal(EditProposal("proposal", workspace, task_id, "intent", "cover",
         ["timeline:base"], {"operation_type": COVER_OPERATION, "payload": operation}, [], {}, []))
     owner = CoverUseCase(repo, store, None, verify_identity=lambda actor: "ready", output_root=tmp_path,
         budget=CoverBudget(1024, 4096, 32768, 1024, 1024, 1, 10., 1048576, 4, .01, 1048576, 65536))
     resources = owner.resources(command)
     payload = {"command": asdict(command), "resources": resources, **actor.identity_payload(),
                "deadline_utc": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()}
-    repo.append_task_event(TaskEvent(id="event_cover-job_cover_start", workspace_id=workspace,
+    repo.execution_records.append_task_event(TaskEvent(id="event_cover-job_cover_start", workspace_id=workspace,
         task_id=task_id, event_type="cover_generation_submitted", payload=payload, job_id=job.id))
     request = SimpleNamespace(workspace_id=workspace, owner_id=job.id, owner_type="creation_job",
         member_id=actor.member_id, input_digest=command.input_digest, unit_key=command.unit_key,

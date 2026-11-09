@@ -1,5 +1,7 @@
 """The finite exact-edit preview application, with explicit source and execution."""
 from collections import Counter
+import json
+from app.assistant_goal_continuation import GoalResultProjection
 from dataclasses import asdict, dataclass, replace
 from contextlib import nullcontext
 from uuid import uuid4
@@ -11,8 +13,7 @@ from app.creation.editing.audio_edit_use_case import AudioEditRejected
 from app.creation.execution_control import ExecutionControlRejected
 from app.media.picture_preview import PicturePreviewRejected
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS
-from app.creation.editing.metadata_use_case import (EditPreviewRejected, edit_preview_failure,
-    metadata_edit_command, effective_audio_timeline, logical_montage_output_refs, MetadataEditReplay)
+from app.creation.editing.metadata_use_case import (EditPreviewRejected, metadata_edit_command, effective_audio_timeline, logical_montage_output_refs)
 from app.creation.editing.subtitle_use_case import subtitle_values
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.linked_timeline_use_case import LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError
@@ -20,7 +21,12 @@ from app.media.clip_preview import ClipPreviewExecutor
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.models import utc_now
 from app.production import TimelineVersionConflict
-from app.schemas import CreationTaskExactEditRequest, CreationTaskEditPreviewResponse
+from app.source_policy import knowledge_item_readable as content_readable
+from app.schemas import (
+    CreationTaskExactEditRequest, CreationTaskEditPreviewResponse,
+    CreationTaskObservationRequest, MediaScriptToolPreviewRequest,
+    MediaScriptPreviewRequest, CreationTaskEditApplyRequest,
+)
 from app.task_audio import media_digest
 from app.visual_effects import VisualEditRequest
 import subprocess
@@ -80,6 +86,23 @@ def validate_edit_origin(conversations, source, actor, *, connection=None):
 
 
 
+def project_submitted_edit_input(phase, inputs):
+    """Project the original request fields without exposing unbounded private input."""
+    if phase in {"preview", "script", "observation"} or (phase == "apply" and "operation_type" in inputs):
+        fields = (CreationTaskExactEditRequest.model_fields if phase in {"preview", "apply"} else
+                  CreationTaskObservationRequest.model_fields if phase == "observation" else
+                  MediaScriptToolPreviewRequest.model_fields if "tool_id" in inputs else MediaScriptPreviewRequest.model_fields)
+        submitted_input = {key: value for key, value in inputs.items() if key in fields}
+        if phase == "script" and "tool_id" in inputs:
+            submitted_input["tool_id"] = inputs["tool_id"]
+    else:
+        submitted_input = {key: inputs[key] for key in ("proposal_id", "base_version_id", "input_digest")}
+        submitted_input["request"] = {key: value for key, value in inputs["request"].items() if key in CreationTaskEditApplyRequest.model_fields}
+    if len(json.dumps(submitted_input, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
+        raise EditPreviewRejected(409, "原请求字段超过有界查询范围，不能省略字段或换绑新版重放")
+    return submitted_input
+
+
 class ExactPreviewUseCase:
     def __init__(self, repository, metadata, subtitles, linked, audio_edit, visual, clip_preview, conversations, settings, *, edit_result=None, preview_result=None, person_preview=None, narration_preview=None, person_stage=None, execution_control=None, runtime_for=None):
         self.repository, self.metadata, self.subtitles, self.linked = repository, metadata, subtitles, linked
@@ -91,16 +114,40 @@ class ExactPreviewUseCase:
 
     def claim_request(self, task, member_id, request_id, phase, inputs):
         try:
-            return self.repository.claim_edit_request(task, member_id, request_id, phase, inputs, write_guard=self.metadata.write_guard)
+            return self.repository.execution_records.claim_edit_request(task, member_id, request_id, phase, inputs, write_guard=self.metadata.write_guard)
         except ValueError as exc:
             raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
 
     def read_request_result(self, task, event_id):
-        return self.repository.read_edit_request_result(task, event_id)
+        return self.repository.execution_records.read_edit_request_result(task, event_id)
+
+    def read_request_receipt(self, task, member_id, request_id, phase):
+        """The bounded canonical receipt, shared by HTTP and execution provenance."""
+        # The former self-HTTP read performed a fresh write-access check here,
+        # after successor lineage checks. Preserve it for every plain reader too.
+        try:
+            task = self.repository.task_records.get_creation_task(task.workspace_id, task.id)
+        except KeyError as exc:
+            raise EditPreviewRejected(404, "creation task not found") from exc
+        if not content_readable(user_id=member_id, local_diagnostic=False,
+                visibility=task.visibility, owner_user_id=task.owner_user_id):
+            raise EditPreviewRejected(404, "creation task not found")
+        if task.owner_user_id and task.owner_user_id != member_id:
+            raise EditPreviewRejected(403, "当前成员不能修改此任务")
+        event_id, event = GoalResultProjection(self.repository, self.conversations).request_claim(
+            task, member_id, str(request_id), phase)
+        inputs = event.payload["inputs"]
+        submitted_input = project_submitted_edit_input(phase, inputs)
+        result = self.read_request_result(task, event_id)
+        return {"request_id": str(request_id), "phase": phase, "input_digest": event.payload["input_digest"],
+                "task_id": task.id, "status": "recorded" if result is not None else "unknown",
+                "submitted_input": submitted_input,
+                "result_status_code": result["status_code"] if result is not None else None,
+                "result": result["response"] if result is not None else None}
 
     def record_request_result(self, task, event_id, *, status_code, response):
         if event_id is not None:
-            return self.repository.save_edit_request_result(task, event_id, status_code=status_code, response=response)
+            return self.repository.execution_records.save_edit_request_result(task, event_id, status_code=status_code, response=response)
 
     def _request_origin(self, task, payload, identity, actor, origin, expected_input_id):
         source={'workspace_id':task.workspace_id,'task_id':task.id,'member_id':identity['member_id'],
@@ -124,21 +171,21 @@ class ExactPreviewUseCase:
             conn.execute('BEGIN IMMEDIATE')
             if self.metadata.write_guard is not None:
                 self.metadata.write_guard(conn)
-            claim=self.repository.get_task_event(task.workspace_id,event_id,connection=conn)
+            claim=self.repository.execution_records.get_task_event(task.workspace_id,event_id,connection=conn)
             self.validate_origin(source,actor,connection=conn)
             if source.get('assistant_turn_id'):
                 self.conversations._task_turn_source(conn,source['assistant_turn_id'],task.workspace_id,
                     source['member_id'],task.id)
             value={'request_event_id':event_id,'input_digest':claim.payload['input_digest'],'source':source}
-            self.repository.append_task_event(TaskEvent(event_id+'_source',task.workspace_id,task.id,None,
+            self.repository.execution_records.append_task_event(TaskEvent(event_id+'_source',task.workspace_id,task.id,None,
                 'edit_request_source',value),connection=conn)
 
     def read_request_source(self, task, event_id, actor):
-        claim=self.repository.get_task_event(task.workspace_id,event_id)
+        claim=self.repository.execution_records.get_task_event(task.workspace_id,event_id)
         if claim.task_id != task.id or claim.payload.get('phase') not in {'apply','preview'}:
             raise EditPreviewRejected(409,'该来源读回只适用于原 exact apply/preview 请求')
         try:
-            anchor=self.repository.get_task_event(task.workspace_id,event_id+'_source')
+            anchor=self.repository.execution_records.get_task_event(task.workspace_id,event_id+'_source')
         except KeyError as exc:
             raise EditPreviewRejected(409,{'error':'edit_request_source_unavailable',
                 'reason':'原请求已存在，但缺少可信来源锚点，不能推定未提交或自动重试',
@@ -167,7 +214,7 @@ class ExactPreviewUseCase:
             raise EditPreviewRejected(403,'原请求不能归入另一轮次或输入')
 
     def typed_source(self, task, payload, member_id):
-        version = self.repository.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        version = self.repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
         if not {'expected_timeline_version_id', 'expected_timeline_sequence'} <= payload.model_fields_set:
             raise EditPreviewRejected(status_code=422, detail='类型化请求须绑定期望时间线版本和序号')
         if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
@@ -206,7 +253,7 @@ class ExactPreviewUseCase:
             return []
         replacement = (payload.asset_id, payload.segment_id) if payload.asset_id is not None and payload.segment_id is not None else None
         try:
-            return self.repository.clip_edit_source_facts(task.workspace_id, task.id, clip_ids=ids, replacement=replacement, user_id=identity['member_id'], local_diagnostic=identity['local_diagnostic'])
+            return self.repository.clip_sources.facts(task.workspace_id, task.id, clip_ids=ids, replacement=replacement, user_id=identity['member_id'], local_diagnostic=identity['local_diagnostic'])
         except PermissionError as exc:
             raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
         except (KeyError, ValueError, OSError) as exc:
@@ -308,7 +355,7 @@ class ExactPreviewUseCase:
             raise ClipPreviewConflict('当前故事板没有基础版本，请先保留当前故事板并建立版本')
         if task.current_timeline_version_id != command.base_version_id:
             raise ClipPreviewConflict('时间线已经变化，请刷新后重新预览')
-        base = self.repository.get_timeline_version(workspace_id, command.base_version_id)
+        base = self.repository.timeline_records.get_timeline_version(workspace_id, command.base_version_id)
         source = command.source
         if source is None and original_command is not None:
             action = CreationTaskExactEditRequest(operation_type=command.operation_type, **{'clip_ids': command.clip_ids, 'effects': command.values} if command.operation_type == 'AdjustVisualEffects' else {'clip_id': command.clip_ids[0], **command.values})
@@ -322,7 +369,7 @@ class ExactPreviewUseCase:
         self.clip_preview.seal(actor, command)
         return command
     def submit_clip(self, runtime, media, actor, command, *, operation):
-        workspace_id, task_id = (actor.workspace_id, command.task_id)
+        _unused_workspace_id, task_id = (actor.workspace_id, command.task_id)
         source = command.source
         media.clip_preview = ClipPreviewExecutor(self.clip_preview, self.metadata.audio_service)
         arguments = {'_media_kind': 'clip_preview', '_draft': False, '_clip_preview': asdict(command)}
@@ -404,24 +451,24 @@ class ExactPreviewUseCase:
         except KeyError as exc:
             raise EditPreviewRejected(status_code=404, detail='creation task montage plan not found') from exc
         base_version = self.metadata.ensure_montage_base(workspace_id, task, montage, source=source)
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         tracks = self.metadata.current_subtitle_tracks(workspace_id, task, current_version=base_version, montage=montage)
         now = utc_now()
         if payload.operation_type == 'GenerateCoverFromFrame':
             summary, target_refs, operation_payload, preview, effects = self.metadata.cover_description(montage, base_version, payload)
         else:
             summary, target_refs, operation_payload, preview, effects = self.subtitles.legacy_description(task, montage, base_version, tracks, payload, self.settings)
-        intent = self.repository.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=f'精确操作：{summary}', context_stage='review' if task.stage == 'review' else 'montage', selected_object_refs=target_refs, playhead_ms=round((payload.frame_time_seconds or 0) * 1000) if payload.operation_type == 'GenerateCoverFromFrame' else None, intent_type='exact_subtitle_cover_edit', scope={'kind': payload.operation_type}, constraints={'preserve_narration': True, 'preserve_clips': True}, confidence=1.0, status='interpreted', created_at=now), source=source)
-        proposal = self.repository.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=target_refs, operation={'operation_type': payload.operation_type, 'payload': operation_payload}, invalidated_refs=logical_montage_output_refs(montage) if payload.operation_type != 'GenerateCoverFromFrame' else [], preview=preview, external_effects=effects, created_at=now, updated_at=now))
+        intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=f'精确操作：{summary}', context_stage='review' if task.stage == 'review' else 'montage', selected_object_refs=target_refs, playhead_ms=round((payload.frame_time_seconds or 0) * 1000) if payload.operation_type == 'GenerateCoverFromFrame' else None, intent_type='exact_subtitle_cover_edit', scope={'kind': payload.operation_type}, constraints={'preserve_narration': True, 'preserve_clips': True}, confidence=1.0, status='interpreted', created_at=now), source=source)
+        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=target_refs, operation={'operation_type': payload.operation_type, 'payload': operation_payload}, invalidated_refs=logical_montage_output_refs(montage) if payload.operation_type != 'GenerateCoverFromFrame' else [], preview=preview, external_effects=effects, created_at=now, updated_at=now))
         return (intent, proposal)
 
     def prepare_source(self, workspace_id, task_id, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         plan_payload = self.repository.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None
@@ -459,12 +506,15 @@ class ExactPreviewUseCase:
                 path = service.source(workspace_id,task_id,reference,actor=actor)
                 stat = path.stat()
                 fact = [reference,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns]
-                if fact not in files:files.append(fact)
+                if fact not in files:
+                    files.append(fact)
                 values = service.source_metadata(workspace_id,task_id,reference)
                 audio_inputs.append({'reference':reference,'path':str(path.resolve()),'size_bytes':stat.st_size,'uses':uses.get(reference,1),**values})
-        facts = {'base_version_id':task.current_timeline_version_id,'script_id':task.confirmed_script_id,'script_digest':self.repository.confirmed_creation_task_script_digest(workspace_id,task_id,task.confirmed_script_id) if task.confirmed_script_id else None,'plan_id':task.plan_id,'plan_digest':media_digest(asdict(self.repository.get_creation_plan(workspace_id,task.plan_id))),'montage':snapshot,'files':files,'narration_cache_key':task.narration_cache_key}
-        if visual_scope is not None:facts['visual_preview']=visual_scope
-        if graphics:facts['graphic_sources']=graphics
+        facts = {'base_version_id':task.current_timeline_version_id,'script_id':task.confirmed_script_id,'script_digest':self.repository.script_records.confirmed_creation_task_script_digest(workspace_id,task_id,task.confirmed_script_id) if task.confirmed_script_id else None,'plan_id':task.plan_id,'plan_digest':media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),'montage':snapshot,'files':files,'narration_cache_key':task.narration_cache_key}
+        if visual_scope is not None:
+            facts['visual_preview']=visual_scope
+        if graphics:
+            facts['graphic_sources']=graphics
         return task,plan,payload,picture_candidates,facts,audio_inputs
 
     def picture_resources(self,prepared,budget):
@@ -483,7 +533,8 @@ class ExactPreviewUseCase:
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
             raise EditPreviewRejected(status_code=403,detail='当前成员不能安排此任务的媒体处理')
         values={'_media_kind':media_kind,'_draft':draft_only}
-        if source is not None:values['_typed_source']=source
+        if source is not None:
+            values['_typed_source']=source
         values['payload']=payload.model_dump(mode='json',exclude_unset=True)
         if 'base_version_id' in values['payload'] and values['payload']['base_version_id'] is None:
             values['payload']['base_version_id']=task.current_timeline_version_id
@@ -496,7 +547,8 @@ class ExactPreviewUseCase:
                 raise PermissionError('媒体处理身份失效或无法复核')
             montage=creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(task.workspace_id,task.id))
             base=self.metadata.ensure_montage_base(task.workspace_id,task,montage,source=values.get('_typed_source'))
-            if 'base_version_id' in values['payload']:values['payload']['base_version_id']=base.id
+            if 'base_version_id' in values['payload']:
+                values['payload']['base_version_id']=base.id
         return media.submit(runtime,actor,task.id,'exact_edit_preview',values,'edit_preview',write_guard=write_guard)
 
     def validate_origin(self, source, actor, *, connection=None):
@@ -625,7 +677,6 @@ class ExactPreviewUseCase:
         return self._record(task, event_id, result)
 
     def submit_preview(self, runtime_for, actor, task, payload, *, identity, project_media, origin=None, expected_input_id=None, draft_only=False):
-        from app.task_audio import TaskMediaRequired
         event_id = None
         inputs = {**payload.model_dump(mode='json', exclude_unset=True), '_draft':draft_only}
         if payload.request_id is not None:

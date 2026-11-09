@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from app.creation.contracts import JobRun, TaskEvent
+from app.creation.contracts import JobRun
 from app.creation.execution_budget_scope import BudgetScopeConflict, BudgetScopeExhausted, ExecutionBudgetScopes
 from app.creation_execution import CreationExecutionActor
 from test_creation_execution import _seed
@@ -18,11 +18,11 @@ def scope_case(tmp_path):
     actor = CreationExecutionActor('local', 'scope-owner')
     with repo._connect() as conn:
         for task_id in (first, second):
-            task = repo.get_creation_task('local', task_id)
+            task = repo.task_records.get_creation_task('local', task_id)
             task.owner_user_id = actor.member_id
             conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
                 (json.dumps(asdict(task), default=str), 'local', task_id))
-    jobs = [repo.create_job_run(JobRun(id=f'job_scope_{i}', workspace_id='local', task_id=task_id,
+    jobs = [repo.job_records.create_job_run(JobRun(id=f'job_scope_{i}', workspace_id='local', task_id=task_id,
         kind='creation_task_execution', idempotency_key=f'scope-test-{i}', input_digest=str(i) * 64))
         for i, task_id in enumerate((first, second), 1)]
     command = dict(scope_id='shared-goal', expected_revision=-1, request_id='approved-original',
@@ -101,7 +101,7 @@ def test_unknown_survives_revision_and_late_receipt_is_counted_once(scope_case):
     assert measured['execution_seconds'] == 5 and measured['generated_bytes'] == 30
     assert measured['reserved_seconds'] == 0 and measured['reserved_bytes'] == 60
     assert settle(repo, jobs[1], 'second', 3, 30) == measured
-    assert repo.get_task_event('local', second.id).payload['revision'] == 1
+    assert repo.execution_records.get_task_event('local', second.id).payload['revision'] == 1
     with pytest.raises(BudgetScopeConflict):
         settle(repo, jobs[1], 'second', 4, 30)
 
@@ -121,7 +121,7 @@ def test_scope_identity_input_revision_and_finite_unit_are_not_self_authorized(s
         reserve(repo, CreationExecutionActor('local', 'other-member'), jobs[0], 'wrong-actor')
     with pytest.raises(BudgetScopeConflict):
         reserve(repo, actor, jobs[0], 'stale-revision', revision=3)
-    with pytest.raises(ValueError, match='有限正数'):
+    with pytest.raises(ValueError, match='单元最大占用须有限且为正'):
         reserve(repo, actor, jobs[0], 'infinite', maximum={'execution_seconds': float('inf'), 'generated_bytes': 1})
     with pytest.raises(PermissionError):
         repo.authorize_execution_budget_scope('local', origin, actor, **{**command, 'authorization_guard': None})
@@ -197,7 +197,7 @@ def test_task_budget_mixed_scopes_do_not_claim_whole_task_exhausted(scope_case):
     settle(repo, jobs[0], 'old-scope-work', 10, 100)
     repo.authorize_execution_budget_scope('local', origin, actor, **{**command,
         'scope_id': 'additional-goal', 'request_id': 'additional-authorization'})
-    job = repo.create_job_run(JobRun(id='job_new_scope', workspace_id='local', task_id=origin,
+    job = repo.job_records.create_job_run(JobRun(id='job_new_scope', workspace_id='local', task_id=origin,
         kind='creation_task_execution', idempotency_key='new-scope-job', input_digest='c' * 64))
     repo.bind_execution_budget_scope('local', job.id, actor, scope_id='additional-goal', expected_revision=0)
     response = TaskBudgetUseCase(repo).read('local', origin, actor)

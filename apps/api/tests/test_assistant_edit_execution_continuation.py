@@ -13,7 +13,7 @@ import app.main as main
 from app.conversation_repository import ConversationRepository
 from app.assistant.result_projection import project_business_result, read_sdk_result
 from app.assistant.failures import AssistantUnavailable, FAILURE_OVERLOADED
-from test_typed_assistant_edits_api import metadata_http_state  # noqa: F401
+from test_typed_assistant_edits_api import metadata_http_state as metadata_http_state  # noqa: F401
 
 
 def source_turn(state, conversations):
@@ -29,23 +29,25 @@ def source_turn(state, conversations):
 @pytest.mark.parametrize("case", ["own", "other_turn", "unknown", "foreign_version", "other_input"])
 def test_execution_accepts_only_this_inputs_committed_successor(metadata_http_state, tmp_path, monkeypatch, case):
     state = metadata_http_state
-    conversations = ConversationRepository(tmp_path / "conversation.sqlite")
+    conversations = ConversationRepository(state.repo.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     turn = source_turn(state, conversations)
-    from app.creation_execution import CreationExecutionActor
-    monkeypatch.setattr(main, "_require_permit_actor", lambda *_args: CreationExecutionActor("ws", state.member.member_id))
+    # The isolated local roster belongs to this workspace; use the real identity reader.
+    monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "ws")
     writer = source_turn(state, conversations) if case == "other_turn" else turn
     response = state.client.post(state.url + "/edits/exact", json={"operation_type": "UpdateSubtitleCue",
         "cue_id": "cue", "text": "已保存的新字幕", "request_id": str(uuid4()), "assistant_turn_id": writer["id"],
         "expected_timeline_version_id": state.base.id, "expected_timeline_sequence": state.base.sequence})
     assert response.status_code == 200, response.text
-    edited = state.repo.get_creation_task("ws", state.task.id)
+    edited = state.repo.task_records.get_creation_task("ws", state.task.id)
     if case == "unknown":
-        original = main.get_exact_edit_request_result
-        monkeypatch.setattr(main, "get_exact_edit_request_result", lambda *args: {**original(*args), "status": "unknown"})
+        from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
+        original = ExactPreviewUseCase.read_request_receipt
+        monkeypatch.setattr(ExactPreviewUseCase, "read_request_receipt",
+            lambda self, *args, **kwargs: {**original(self, *args, **kwargs), "status": "unknown"})
     elif case == "foreign_version":
-        version = state.repo.get_timeline_version("ws", edited.current_timeline_version_id)
-        state.repo.create_timeline_version(replace(version, id="foreign-version", parent_version_id=version.id, sequence=version.sequence+1))
+        version = state.repo.timeline_records.get_timeline_version("ws", edited.current_timeline_version_id)
+        state.repo.timeline_records.create_timeline_version(replace(version, id="foreign-version", parent_version_id=version.id, sequence=version.sequence+1))
     if case == "other_input":
         conversations.append_event(turn["id"], {"type": "assistant_input", "status": "consumed", "input_id": str(uuid4()),
             "target_turn_id": turn["id"], "message": "追加输入", "mode": "steer", "request_context": {
@@ -158,7 +160,7 @@ def test_tool_only_continues_after_verified_direct_edit(tmp_path, case):
 def test_host_keeps_v3_edit_receipt_when_render_has_already_reached_v4(metadata_http_state, tmp_path, monkeypatch, kind):
     from types import SimpleNamespace
     state = metadata_http_state
-    conversations = ConversationRepository(tmp_path / "chat.sqlite")
+    conversations = ConversationRepository(state.repo.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     monkeypatch.setattr(main, "_goal_service", lambda: SimpleNamespace(register_turn=lambda *_: None))
     monkeypatch.setattr(main, "_wake_assistant_continuations", lambda: None)
@@ -169,13 +171,13 @@ def test_host_keeps_v3_edit_receipt_when_render_has_already_reached_v4(metadata_
         "expected_timeline_version_id": state.base.id, "expected_timeline_sequence": state.base.sequence})
     assert response.status_code == 200, response.text
     edit_id = response.json()["operation"]["result_version_id"]
-    edit_version = state.repo.get_timeline_version("ws", edit_id)
-    state.repo.create_timeline_version(replace(edit_version, id="rendered-v4", parent_version_id=edit_id, sequence=edit_version.sequence+1))
+    edit_version = state.repo.timeline_records.get_timeline_version("ws", edit_id)
+    state.repo.timeline_records.create_timeline_version(replace(edit_version, id="rendered-v4", parent_version_id=edit_id, sequence=edit_version.sequence+1))
     status = {"task_id": state.task.id, "job": {"id": "render", "status": "succeeded"}, "video_ready": True}
     def bound(*_args):
         if kind in {"refused", "read_refused"}:
             raise main.HTTPException(status_code=409, detail="制作来源不一致")
-        assert state.repo.get_creation_task("ws", state.task.id).current_timeline_version_id == "rendered-v4"
+        assert state.repo.task_records.get_creation_task("ws", state.task.id).current_timeline_version_id == "rendered-v4"
         return status
     monkeypatch.setattr(main, "_bind_assistant_execution_result", bound)
     monkeypatch.setattr(main, "_read_bound_execution_result", bound)
@@ -185,7 +187,7 @@ def test_host_keeps_v3_edit_receipt_when_render_has_already_reached_v4(metadata_
         "status": status, "applied_edit": {"kind": "edit_applied", "task_id": state.task.id, "request_id": request_id,
         "phase": "apply", "query_url": state.url+"/assistant/edit-requests/"+request_id+"?phase=apply"}}
     request = Request({"type": "http", "headers": [(b"x-local-member-token", state.token.encode())]})
-    result = main._finish_task_assistant_turn(state.task.id, request, payload, turn["id"], "真实回执", details, "montage")
+    result = main._task_turn_http_adapter().finish(state.task.id, request, payload, turn["id"], "真实回执", details, "montage")
     assert result.timeline_action == "apply" and str(result.edit_request.request_id) == request_id
     assert result.edit_request.result["operation"]["result_version_id"] == edit_id
     assert conversations.get_turn(turn["id"])["status"] == "completed"

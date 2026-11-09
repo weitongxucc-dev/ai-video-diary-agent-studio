@@ -23,7 +23,9 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     from fastapi.encoders import jsonable_encoder
     from app.assistant_goal_continuation import GoalResultProjection
     from app.creation.contracts import JobRun, TaskEvent, TimelineVersion
-    from app.production import CreationPlan, CreationTask, ProductionRepository
+    from app.production import ProductionRepository
+    from app.creation.plan_contracts import CreationPlan
+    from app.creation.contracts import CreationTask
 
     import subprocess
     cold=subprocess.run([sys.executable,"-B","-c",
@@ -36,16 +38,16 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     plan = CreationPlan("plan", "workspace", "制作并检查输出", "goal", 1, "zh-CN", "9:16", 15,
         [], [], None, [], 0, 0, "declared metadata fixture", [], [], [], "fixture")
     task = CreationTask("task", "workspace", plan.id, plan.name, "declared-goal-fixture")
-    production.confirm_creation_plan(plan, task, verified_owner_user_id="member")
-    base = production.create_timeline_version(TimelineVersion(
+    production.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    base = production.timeline_records.create_timeline_version(TimelineVersion(
         "version:one", "workspace", task.id, None, 1, {}, None))
-    job = production.create_job_run(JobRun("execution:one", "workspace", task.id,
+    job = production.job_records.create_job_run(JobRun("execution:one", "workspace", task.id,
         "creation_task_execution", "execution:one", "declared-input"))
-    production.claim_job_run("workspace", job.id)
-    production.finish_job_run("workspace", job.id, status="succeeded")
-    rendered = production.create_timeline_version(TimelineVersion("version:render", "workspace", task.id,
+    production.job_records.claim_job_run("workspace", job.id)
+    production.job_records.finish_job_run("workspace", job.id, status="succeeded")
+    rendered = production.timeline_records.create_timeline_version(TimelineVersion("version:render", "workspace", task.id,
         base.id, 2, {"render_input_timeline_version_id": base.id, "creation_render_request_id": "render:one"}, None))
-    production.create_timeline_version(TimelineVersion("version:other", "workspace", task.id, base.id, 3, {}, None))
+    production.timeline_records.create_timeline_version(TimelineVersion("version:other", "workspace", task.id, base.id, 3, {}, None))
     assert rendered.parent_version_id == base.id and rendered.snapshot["render_input_timeline_version_id"] == base.id
 
     chat = conversations.create("workspace", "member", "task", task.id)
@@ -63,17 +65,17 @@ def test_goal_projection_keeps_successful_execution_stale_after_unrelated_versio
     source = {"workspace_id": "workspace", "task_id": task.id, "member_id": "member",
         "conversation_id": chat["id"], "assistant_turn_id": turn["id"],
         "expected_timeline_version_id": base.id, "expected_timeline_sequence": 1}
-    production.append_task_event(TaskEvent("located:one", "workspace", task.id, job.id,
+    production.execution_records.append_task_event(TaskEvent("located:one", "workspace", task.id, job.id,
         "assistant_execution_located", {"source": source, "job_id": job.id, "input_digest": job.input_digest}))
     owner = GoalResultProjection(production, conversations)
-    rows = production.assistant_execution_projection_rows()
+    rows = production.execution_records.assistant_execution_projection_rows()
     assert len(rows) == 1
     context = owner.execution_candidate(rows[0])
-    actual = jsonable_encoder({"task_id": task.id, "job": asdict(production.get_job_run("workspace", job.id)),
-              "video_ready": production.get_creation_task("workspace", task.id).output_ready})
+    actual = jsonable_encoder({"task_id": task.id, "job": asdict(production.job_records.get_job_run("workspace", job.id)),
+              "video_ready": production.task_records.get_creation_task("workspace", task.id).output_ready})
     event = owner.project_execution(context, actual)
     assert event["status"] == "stale" and event["actionable"] is False and event["result_version_id"] is None
-    assert not production.assistant_execution_projection_rows()
+    assert not production.execution_records.assistant_execution_projection_rows()
     assert conversations.project_business_result(turn["id"], "workspace", "member", event,
         response_patch={"execution_status": actual}, message="duplicate is ignored")
     stored = conversations.get_turn(turn["id"])
@@ -827,7 +829,9 @@ def test_host_pending_proposal_gate_can_stop_a_goal_still_waiting_for_preview_re
 
 
 def _adopted_groups_for_resume(tmp_path, *, groups=1):
-    from app.production import CreationPlan,CreationTask,ProductionRepository
+    from app.production import ProductionRepository
+    from app.creation.plan_contracts import CreationPlan
+    from app.creation.contracts import CreationTask
     from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.creation_execution import CreationExecutionActor
     production=ProductionRepository(tmp_path/'resume.sqlite3',tmp_path/'library')
@@ -847,7 +851,7 @@ def _adopted_groups_for_resume(tmp_path, *, groups=1):
         source={'kind':'conversation_input','turn_id':turn['id'],'conversation_id':chat['id'],'member_id':'member',
             'message_digest':hashlib.sha256(turn['user_message'].encode()).hexdigest()}
         intent={'kind':'goal_delegation','source':source}
-        saved=production.create_creation_request('workspace',request_key=turn['id'],input_fingerprint=source['message_digest'],
+        saved=production.creation_requests.create_creation_request('workspace',request_key=turn['id'],input_fingerprint=source['message_digest'],
             goal=turn['user_message'],target_count=2,output_relation='variants',requirements={'creation_intent':intent},
             material_scope={'kind':'workspace_library'},clarification_questions=[],verified_owner_user_id='member')
         entries=[]
@@ -857,10 +861,10 @@ def _adopted_groups_for_resume(tmp_path, *, groups=1):
                 [],[],None,[],0,0,'metadata fixture',[],[],[],'fingerprint-'+identity)
             task=CreationTask('task-'+identity,'workspace',plan.id,plan.name,'knowledge_explanation')
             entries.append((plan,task))
-        saved=production.save_creation_request_window('workspace',saved['id'],expected_revision=saved['revision'],
+        saved=production.creation_requests.save_creation_request_window('workspace',saved['id'],expected_revision=saved['revision'],
             input_fingerprint='window-'+str(group),entries=entries,verified_owner_user_id='member')
         window=saved['current_window']
-        saved=production.confirm_creation_request_window('workspace',saved['id'],window['id'],expected_revision=saved['revision'],
+        saved=production.creation_request_adoption.confirm_creation_request_window('workspace',saved['id'],window['id'],expected_revision=saved['revision'],
             input_fingerprint=window['input_fingerprint'],verified_owner_user_id='member',adoption_kind='delegated_system')
         for item in saved['current_window']['entries']:
             item['task']['timeline_sequence']=0  # No timeline exists in this metadata-only case.
@@ -869,7 +873,7 @@ def _adopted_groups_for_resume(tmp_path, *, groups=1):
         assert len(roots)==2
         for root_id in roots:
             goal=conversations.get_task_goal(root_id)
-            authorizations.bind_business_context(production.get_creation_task('workspace',goal['task_id']),
+            authorizations.bind_business_context(production.task_records.get_creation_task('workspace',goal['task_id']),
                 CreationExecutionActor('workspace','member'),goal,memory={'revision':1})
         adopted.append((saved,roots))
     return SimpleNamespace(production=production,conversations=conversations,authorizations=authorizations,
@@ -882,7 +886,7 @@ def test_home_resume_reuses_adopted_cn_en_roots_and_is_atomic_idempotent(tmp_pat
     case=_adopted_groups_for_resume(tmp_path)
     saved,roots=case.adopted[0]
     original=[case.conversations.get_task_goal(root) for root in roots]
-    expires={goal['task_id']:case.production.get_task_authorization('workspace',goal['task_id']).expires_at for goal in original}
+    expires={goal['task_id']:case.production.task_authorization_records.get_task_authorization('workspace',goal['task_id']).expires_at for goal in original}
     turn=case.human('继续刚才已经采用的中英文两条')
     input_id=None
     if additional_input:
@@ -900,13 +904,13 @@ def test_home_resume_reuses_adopted_cn_en_roots_and_is_atomic_idempotent(tmp_pat
     monkeypatch.setattr(main,'_assistant_conversation_for_request',lambda *_:('workspace','member',case.chat))
     monkeypatch.setattr(main,'_wake_assistant_continuations',lambda:None)
     request=SimpleNamespace(headers={'x-assistant-input-id':input_id} if input_id else {})
-    response=main.resume_assistant_creation_request(request,turn['id'],None)
+    response=next(route.endpoint for route in main.app.routes if route.name == "resume_assistant_creation_request")(request,turn['id'],None)
     assert response['status']=='resumed' and response['request_id']==saved['id']
     assert {item['task_id'] for item in response['tasks']}=={goal['task_id'] for goal in original}
     current=[case.conversations.get_task_goal(root) for root in roots]
     assert all(goal['revision']==1 and goal['creation_resume']['source']['turn_id']==turn['id'] for goal in current)
     assert all(goal['creation_adoption']==before['creation_adoption'] for goal,before in zip(current,original))
-    duplicate=main.resume_assistant_creation_request(request,turn['id'],saved['id'])
+    duplicate=next(route.endpoint for route in main.app.routes if route.name == "resume_assistant_creation_request")(request,turn['id'],saved['id'])
     assert duplicate['status']=='already_running'
     assert all(case.conversations.get_task_goal(root)['revision']==1 for root in roots)
     assert case.conversations.get_turn(turn['id'])['user_message']=='继续刚才已经采用的中英文两条'
@@ -921,8 +925,8 @@ def test_home_resume_reuses_adopted_cn_en_roots_and_is_atomic_idempotent(tmp_pat
             claims.append(claim)
             case.conversations.finish_turn(claim['turn_id'],'completed','已读取当前任务')
     assert {claim['goal']['task_id'] for claim in claims}=={goal['task_id'] for goal in original}
-    assert all(case.production.get_task_authorization('workspace',task).expires_at==expiry for task,expiry in expires.items())
-    assert len(case.production.list_creation_tasks('workspace',viewer_user_id='member'))==2
+    assert all(case.production.task_authorization_records.get_task_authorization('workspace',task).expires_at==expiry for task,expiry in expires.items())
+    assert len(case.production.task_records.list_creation_tasks('workspace',viewer_user_id='member'))==2
 
 
 def test_home_resume_selection_and_original_authorization_are_required(tmp_path):
@@ -941,8 +945,8 @@ def test_home_resume_selection_and_original_authorization_are_required(tmp_path)
     saved,roots=case.adopted[0]
     for root in roots:
         goal=case.conversations.get_task_goal(root)
-        authority=case.production.get_task_authorization('workspace',goal['task_id'])
-        case.production.save_task_authorization(replace(authority,revision=authority.revision+1,
+        authority=case.production.task_authorization_records.get_task_authorization('workspace',goal['task_id'])
+        case.production.task_authorization_records.save_task_authorization(replace(authority,revision=authority.revision+1,
             revoked_at=datetime.now(timezone.utc)),expected_revision=authority.revision)
     denied=case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)
     assert denied['status']=='blocked' and all(item['status']=='blocked' for item in denied['tasks'])
@@ -958,8 +962,10 @@ def test_home_resume_selection_and_original_authorization_are_required(tmp_path)
 
 def test_home_resume_rolls_back_all_roots_when_scope_inheritance_fails(tmp_path,monkeypatch):
     case=_adopted_groups_for_resume(tmp_path)
-    saved,roots=case.adopted[0];turn=case.human('继续原任务')
-    inherit=case.authorizations.inherit_business_context;calls=[]
+    saved,roots=case.adopted[0]
+    turn=case.human('继续原任务')
+    inherit=case.authorizations.inherit_business_context
+    calls=[]
     def fail_second(*args,**kwargs):
         calls.append(True)
         inherit(*args,**kwargs)
@@ -973,16 +979,18 @@ def test_home_resume_rolls_back_all_roots_when_scope_inheritance_fails(tmp_path,
     for root in roots:
         goal=case.conversations.get_task_goal(root)
         with pytest.raises(KeyError):
-            case.production.get_task_event('workspace',case.authorizations.business_context_id({**goal,'revision':1}))
+            case.production.execution_records.get_task_event('workspace',case.authorizations.business_context_id({**goal,'revision':1}))
 
 
 def test_home_resume_reconciles_unknown_original_request_before_any_new_business(tmp_path):
     from app.creation_execution import CreationExecutionActor
     case=_adopted_groups_for_resume(tmp_path)
-    saved,roots=case.adopted[0];root=roots[0]
-    goal=case.conversations.get_task_goal(root);task=case.production.get_creation_task('workspace',goal['task_id'])
+    saved,roots=case.adopted[0]
+    root=roots[0]
+    goal=case.conversations.get_task_goal(root)
+    task=case.production.task_records.get_creation_task('workspace',goal['task_id'])
     request_id=str(uuid4())
-    case.production.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
+    case.production.execution_records.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
     candidate=next(item for item in case.conversations.goal_event_candidates() if item['root']['id']==root)
     claim=case.conversations.claim_goal_event(candidate,{'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
     case.conversations.append_event(claim['turn_id'],{'type':'tool_end','failure':{'submission_effect':'unknown',
@@ -994,7 +1002,7 @@ def test_home_resume_reconciles_unknown_original_request_before_any_new_business
     current=case.conversations.get_task_goal(root)
     def read_request(task,actor,identity,phase):
         event_id,event=GoalResultProjection(case.production,case.conversations).request_claim(task,'member',identity,phase)
-        original=case.production.read_edit_request_result(task,event_id)
+        original=case.production.execution_records.read_edit_request_result(task,event_id)
         return {'status':'unknown' if original is None else 'recorded','result':original}
     def forbidden(*args,**kwargs): raise AssertionError('must not submit or select new work before reconciliation')
     outcome=case.service.verify_resume_business(current,task,CreationExecutionActor('workspace','member'),
@@ -1009,12 +1017,12 @@ def test_home_resume_explicit_stop_does_not_change_goals_events_or_authority(tmp
     turn=case.human('不要继续，先停下')
     before=[case.conversations.get_turn(root) for root in roots]
     before_turn=case.conversations.get_turn(turn['id'])
-    authorities=[case.production.get_task_authorization('workspace',case.conversations.get_task_goal(root)['task_id']) for root in roots]
+    authorities=[case.production.task_authorization_records.get_task_authorization('workspace',case.conversations.get_task_goal(root)['task_id']) for root in roots]
     with pytest.raises(ValueError,match='停止'):
         case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)
     assert [case.conversations.get_turn(root) for root in roots]==before
     assert case.conversations.get_turn(turn['id'])==before_turn
-    assert [case.production.get_task_authorization('workspace',case.conversations.get_task_goal(root)['task_id']) for root in roots]==authorities
+    assert [case.production.task_authorization_records.get_task_authorization('workspace',case.conversations.get_task_goal(root)['task_id']) for root in roots]==authorities
     case.conversations.finish_turn(turn['id'],'completed','已保留停止要求')
     continued=case.human('继续刚才暂停的任务')
     resumed=case.service.resume_creation_request('workspace','member',continued['id'],None,saved['id'],case.authorizations)
@@ -1028,42 +1036,48 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
     from app.creation_execution import CreationExecutionActor
     from app.task_audio import TASK_MEDIA_KIND
     case=_adopted_groups_for_resume(tmp_path)
-    saved,roots=case.adopted[0];root=roots[0]
-    goal=case.conversations.get_task_goal(root);task=case.production.get_creation_task('workspace',goal['task_id'])
-    actor=CreationExecutionActor('workspace','member');owner=GoalResultProjection(case.production,case.conversations)
+    saved,roots=case.adopted[0]
+    root=roots[0]
+    goal=case.conversations.get_task_goal(root)
+    task=case.production.task_records.get_creation_task('workspace',goal['task_id'])
+    actor=CreationExecutionActor('workspace','member')
+    owner=GoalResultProjection(case.production,case.conversations)
     request_id=str(uuid4())
-    event_id,_=case.production.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
+    event_id,_=case.production.execution_records.claim_edit_request(task,'member',request_id,'observation',{'original':'fixed'})
     candidate=next(item for item in case.conversations.goal_event_candidates() if item['root']['id']==root)
     claim=case.conversations.claim_goal_event(candidate,{'timeline_version_id':None,'timeline_sequence':0},max_rounds=6)
     case.conversations.append_event(claim['turn_id'],{'type':'tool_end','failure':{'submission_effect':'unknown',
         'request_id':request_id,'query_tool':'read_task_observation_request'}})
     case.conversations.finish_turn(claim['turn_id'],'failed',result={'reason':'goal_runner_interrupted'})
     case.conversations.settle_goal_round(claim)
-    receipt={};code=202;job=None
+    receipt={}
+    code=202
+    job=None
     if recorded_state in {'queued','running'}:
-        job=case.production.create_job_run(JobRun('original-request-job','workspace',task.id,TASK_MEDIA_KIND,
+        job=case.production.job_records.create_job_run(JobRun('original-request-job','workspace',task.id,TASK_MEDIA_KIND,
             'original-request-job','a'*64))
-        case.production.append_task_event(TaskEvent('event_'+job.id+'_start','workspace',task.id,job.id,
+        case.production.execution_records.append_task_event(TaskEvent('event_'+job.id+'_start','workspace',task.id,job.id,
             'task_media_submitted',{**actor.identity_payload(),'arguments':{'_typed_source':{
                 'assistant_turn_id':claim['turn_id'],'request_id':request_id,'conversation_id':case.chat['id']}}}))
         receipt={'job_id':job.id,'status':'queued','input_digest':job.input_digest,'result_kind':'observation'}
         if recorded_state=='running':
-            case.production.claim_job_run('workspace',job.id)
+            case.production.job_records.claim_job_run('workspace',job.id)
     elif recorded_state=='rejected':
-        code=409;receipt={'detail':{'error':'original_refusal','reason':'原观察输入被拒绝'}}
-    case.production.save_edit_request_result(task,event_id,status_code=code,response=receipt)
+        code=409
+        receipt={'detail':{'error':'original_refusal','reason':'原观察输入被拒绝'}}
+    case.production.execution_records.save_edit_request_result(task,event_id,status_code=code,response=receipt)
     assert not (case.conversations.get_turn(claim['turn_id'])['result'].get('response') or {}).get('media_job')
     turn=case.human('继续原任务，先核对原回执')
     assert case.service.resume_creation_request('workspace','member',turn['id'],None,saved['id'],case.authorizations)['status']=='resumed'
     reads=[]
     def read_request(task,actor,identity,phase):
         key,event=owner.request_claim(task,'member',identity,phase)
-        recorded=case.production.read_edit_request_result(task,key)
+        recorded=case.production.execution_records.read_edit_request_result(task,key)
         return {'status':'recorded','result_status_code':recorded['status_code'],'result':recorded['response']}
     def read_media(task,actor,job_id):
         reads.append(job_id)
-        current=case.production.get_job_run('workspace',job_id)
-        source=case.production.get_task_event('workspace','event_'+job_id+'_start')
+        current=case.production.job_records.get_job_run('workspace',job_id)
+        source=case.production.execution_records.get_task_event('workspace','event_'+job_id+'_start')
         owner.require_media_task(task.id,current)
         assert CreationExecutionActor.from_event('workspace',source.payload)==actor
         return {'job_id':current.id,'status':current.status}
@@ -1072,7 +1086,7 @@ def test_home_resume_recorded_request_reconciles_its_job_before_ready(tmp_path,r
         SimpleNamespace(execution_sources=forbidden),owner,read_request=read_request,read_media=read_media)
     if job:
         assert outcome['status']=='waiting_result' and outcome['original_job']['status']==recorded_state
-        assert reads==[job.id] and len(case.production.list_job_runs('workspace',task.id))==1
+        assert reads==[job.id] and len(case.production.job_records.list_job_runs('workspace',task.id))==1
     elif recorded_state=='missing_job':
         assert outcome['status']=='waiting_unknown' and outcome['reason']=='original_request_job_not_located' and reads==[]
     else:
@@ -1098,7 +1112,8 @@ def test_slow_pending_input_does_not_block_other_goal_receipt_reconciliation(rep
     svc=GoalContinuationService(repo,verify_current_goal=lambda *_:{'status':'ready','business':business},run_goal_turn=run)
     svc.start()
     try:
-        svc.tick();assert entered.wait(1)
+        svc.tick()
+        assert entered.wait(1)
         same_goal_event=emit(repo,turn,status='queued',result_kind='edit_preview')
         event=emit(repo,later,status='queued',result_kind='edit_preview')
         svc.tick()
@@ -1112,8 +1127,10 @@ def test_slow_pending_input_does_not_block_other_goal_receipt_reconciliation(rep
         assert same_goal_event['event_id'] not in current_goal['handled_event_ids']
         assert repo.task_turn_source(current_goal['current_turn_id'],'workspace','member','task')['raw_command']=='只查进度'
         assert svc.stop(deadline_monotonic=time.monotonic()) is False
-        release.set();assert svc.stop(deadline_monotonic=time.monotonic()+1)
+        release.set()
+        assert svc.stop(deadline_monotonic=time.monotonic()+1)
         assert repo.list_inputs(chat['id'],'workspace','member')[0]['status']=='completed'
         assert repo.get_task_goal(turn['id'])['original_instruction']==turn['user_message']
     finally:
-        release.set();svc.stop(deadline_monotonic=time.monotonic()+1)
+        release.set()
+        svc.stop(deadline_monotonic=time.monotonic()+1)

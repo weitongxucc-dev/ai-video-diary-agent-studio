@@ -1,3 +1,4 @@
+from app.materials.library_routes import MaterialLibraryHTTPAdapter
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -36,7 +37,7 @@ def test_rejected_material_result_fails_turn_and_allows_a_new_draft(
         effective_llm_model="controlled-model",
         effective_llm_api_key=None,
     ))
-    monkeypatch.setattr(main_module, "get_production_material", lambda _asset_id, _request: SimpleNamespace(
+    monkeypatch.setattr(MaterialLibraryHTTPAdapter, "get_production_material", lambda _adapter, _asset_id, _request: SimpleNamespace(
         id=asset_id, updated_at=datetime(2026,10,10,tzinfo=timezone.utc),
         segments=[SimpleNamespace(id=segment_id, asset_id=asset_id, updated_at=datetime(2026,10,10,tzinfo=timezone.utc), start_seconds=0.0, end_seconds=2.0)],
     ))

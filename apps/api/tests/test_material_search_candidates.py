@@ -37,13 +37,13 @@ def _approved_asset(
 ) -> MaterialAsset:
     """建一条已分析的素材，并把每个片段写成给定的描述/标签/转录。"""
     (production.video_library_path / file_name).write_bytes(b"fixture")
-    production.bind_material_ingestion(workspace_id, expected_directory=str(production.video_library_path))
-    production.confirm_material_copy_complete(
+    production.material_source_files.bind_material_ingestion(workspace_id, expected_directory=str(production.video_library_path))
+    production.material_source_files.confirm_material_copy_complete(
         workspace_id, relative_path=file_name,
-        expected_revision=production.material_copy_revision((production.video_library_path / file_name).stat()),
+        expected_revision=production.material_source_files.material_copy_revision((production.video_library_path / file_name).stat()),
         confirmation_source="manual",
     )
-    production.scan_library(workspace_id)
+    production.material_intake.scan_library(workspace_id)
     asset = next(
         item
         for item in production.list_assets(workspace_id)
@@ -133,7 +133,7 @@ def test_abstract_longer_query_returns_candidates_instead_of_empty(tmp_path):
     longest = max(asset.segments, key=lambda item: item.end_seconds - item.start_seconds)
 
     # 用户原话「增加 20%」→ agent 把它翻译成 min_duration_seconds。
-    results = production.search_material_segments(
+    results = production.material_search.search_material_segments(
         "workspace_a",
         query="更长一点的",
         usage_roles=["b_roll"],
@@ -147,7 +147,7 @@ def test_abstract_longer_query_returns_candidates_instead_of_empty(tmp_path):
 
 def test_abstract_query_with_structured_conditions_still_returns(tmp_path):
     production, _asset = _three_segment_workspace(tmp_path)
-    results = production.search_material_segments(
+    results = production.material_search.search_material_segments(
         "workspace_a",
         query="不那么吵的",
         usage_roles=["b_roll"],
@@ -160,7 +160,7 @@ def test_abstract_query_with_structured_conditions_still_returns(tmp_path):
 def test_partial_overlap_query_is_not_rejected(tmp_path):
     """字面不等但有实质重合：换词、插词之后仍应能被找到。"""
     production, _asset = _three_segment_workspace(tmp_path)
-    night = production.search_material_segments(
+    night = production.material_search.search_material_segments(
         "workspace_a", query="灯光夜景"
     )
     assert night, "词序不同但字符重合的查询应能命中"
@@ -180,7 +180,7 @@ def test_exact_query_still_ranks_the_exact_segment_first(tmp_path):
     production, asset = _three_segment_workspace(tmp_path)
     typing = next(item for item in asset.segments if item.description == "电脑打字演示")
 
-    results = production.search_material_segments("workspace_a", query="电脑打字演示")
+    results = production.material_search.search_material_segments("workspace_a", query="电脑打字演示")
 
     assert results[0].segment_ref == f"segment:{typing.id}"
     assert results[0].match_tier == "text"
@@ -193,13 +193,13 @@ def test_text_only_query_with_no_overlap_still_returns_nothing(tmp_path):
     这条对应 test_material_speech 里「旧转录词不得复活」的断言。
     """
     production, _asset = _three_segment_workspace(tmp_path)
-    assert production.search_material_segments("workspace_a", query="USB") == []
-    assert production.search_material_segments("workspace_a", query="季度财报") == []
+    assert production.material_search.search_material_segments("workspace_a", query="USB") == []
+    assert production.material_search.search_material_segments("workspace_a", query="季度财报") == []
 
 
 def test_query_units_strip_function_chars_before_bigrams():
     """切分规则本身就是「依据」的一部分，规则变了依据就说不清了。"""
-    from app.production import _material_query_units
+    from app.materials.segment_search_use_case import _material_query_units
 
     # 「的」是虚字，不该切出「点的」；「更」「长」是实字，必须留下。
     assert _material_query_units("更长一点的") == ["更长", "长一", "一点"]
@@ -260,7 +260,7 @@ def test_cross_workspace_material_is_never_returned(tmp_path):
         {"usage_roles": ["b_roll"]},
     ]
     for probe in probes:
-        found = production.search_material_segments("workspace_a", **probe)  # type: ignore[arg-type]
+        found = production.material_search.search_material_segments("workspace_a", **probe)  # type: ignore[arg-type]
         assert found, f"对照：workspace_a 自己的素材应当能被检索到 {probe}"
         assert all(
             not match.asset_ref.startswith(f"asset:{asset_id}")
@@ -307,7 +307,7 @@ def test_unapproved_material_is_never_returned(tmp_path):
         {"query": "", "usage_roles": ["b_roll"]},
         {"query": "", "limit": 100},
     ):
-        found = production.search_material_segments("workspace_a", **probe)  # type: ignore[arg-type]
+        found = production.material_search.search_material_segments("workspace_a", **probe)  # type: ignore[arg-type]
         assert found, f"对照：已审核素材应当能被检索到 {probe}"
         assert all(
             match.asset_ref != f"asset:{rejected.id}" for match in found
@@ -334,12 +334,12 @@ def test_unpersisted_material_is_never_returned(tmp_path):
 
     # 只扫描、未分析：正常流程下不会有片段，但手工塞一段进去也不该被搜到。
     (production.video_library_path / "pending.mp4").write_bytes(b"fixture")
-    production.confirm_material_copy_complete(
+    production.material_source_files.confirm_material_copy_complete(
         "workspace_a", relative_path="pending.mp4",
-        expected_revision=production.material_copy_revision((production.video_library_path / "pending.mp4").stat()),
+        expected_revision=production.material_source_files.material_copy_revision((production.video_library_path / "pending.mp4").stat()),
         confirmation_source="manual",
     )
-    production.scan_library("workspace_a")
+    production.material_intake.scan_library("workspace_a")
     pending = next(
         item
         for item in production.list_assets("workspace_a")
@@ -371,7 +371,7 @@ def test_unpersisted_material_is_never_returned(tmp_path):
         {"query": "", "usage_roles": ["b_roll"]},
         {"query": "", "limit": 100},
     ):
-        found = production.search_material_segments("workspace_a", **probe)  # type: ignore[arg-type]
+        found = production.material_search.search_material_segments("workspace_a", **probe)  # type: ignore[arg-type]
         assert found, f"对照：已持久化素材应当能被检索到 {probe}"
         assert all(
             match.asset_ref != f"asset:{pending.id}" for match in found
@@ -386,12 +386,12 @@ def test_excluded_use_state_material_is_never_returned(tmp_path):
     production, asset = _three_segment_workspace(tmp_path)
     for use_state in ("reference_only", "excluded"):
         production.update_asset_use_state("workspace_a", asset.id, use_state)
-        found = production.search_material_segments(
+        found = production.material_search.search_material_segments(
             "workspace_a", query="更长一点的", usage_roles=["b_roll"], min_duration_seconds=0.1
         )
         assert not found, f"{use_state} 的素材不该被检索出来"
     production.update_asset_use_state("workspace_a", asset.id, "available")
-    assert production.search_material_segments(
+    assert production.material_search.search_material_segments(
         "workspace_a", query="更长一点的", usage_roles=["b_roll"], min_duration_seconds=0.1
     )
 
@@ -403,7 +403,7 @@ def test_excluded_use_state_material_is_never_returned(tmp_path):
 
 def test_every_candidate_carries_checkable_evidence(tmp_path):
     production, asset = _three_segment_workspace(tmp_path)
-    results = production.search_material_segments(
+    results = production.material_search.search_material_segments(
         "workspace_a",
         query="更长一点的",
         usage_roles=["b_roll"],
@@ -439,7 +439,7 @@ def test_every_candidate_carries_checkable_evidence(tmp_path):
 
 def test_structural_fallback_says_why_text_did_not_match(tmp_path):
     production, _asset = _three_segment_workspace(tmp_path)
-    results = production.search_material_segments(
+    results = production.material_search.search_material_segments(
         "workspace_a",
         query="不那么吵的",
         usage_roles=["b_roll"],
@@ -456,7 +456,7 @@ def test_structural_fallback_says_why_text_did_not_match(tmp_path):
 def test_serialized_match_shape_keeps_existing_fields(tmp_path):
     """响应形状的既有字段不能消失（schemas.py 与 main.py 不在本包可写范围）。"""
     production, _asset = _three_segment_workspace(tmp_path)
-    match = production.search_material_segments("workspace_a", query="电脑打字演示")[0]
+    match = production.material_search.search_material_segments("workspace_a", query="电脑打字演示")[0]
     payload = asdict(match)
     for field in ("asset_ref", "segment_ref", "score", "reasons"):
         assert field in payload

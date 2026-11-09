@@ -1,6 +1,7 @@
 """Shared authorization scopes reference original execution receipts, never copy usage."""
 from __future__ import annotations
 
+from app.creation.task_input_reads import require_creation_task
 import hashlib
 import json
 import math
@@ -34,7 +35,7 @@ class ExecutionBudgetScopes:
             raise ValueError('预算授权、绑定和预留必须在所属写事务中执行')
 
     def _owner(self, connection, workspace_id, task_id, actor):
-        task = self.repository._require_creation_task(connection, workspace_id, task_id)
+        task = require_creation_task(connection, workspace_id, task_id)
         if actor.workspace_id != workspace_id or task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError('累计授权范围不属于当前成员')
         return task
@@ -46,9 +47,9 @@ class ExecutionBudgetScopes:
 
     def _append(self, connection, event_id, workspace_id, task_id, job_id, event_type, payload):
         try:
-            existing = self.repository.get_task_event(workspace_id, event_id, connection=connection)
+            existing = self.repository.execution_records.get_task_event(workspace_id, event_id, connection=connection)
         except KeyError:
-            return self.repository.append_task_event(TaskEvent(event_id, workspace_id, task_id, job_id,
+            return self.repository.execution_records.append_task_event(TaskEvent(event_id, workspace_id, task_id, job_id,
                 event_type, payload), connection=connection)
         if (existing.task_id, existing.job_id, existing.event_type, existing.payload) != (task_id, job_id, event_type, payload):
             raise BudgetScopeConflict('原累计授权请求已绑定不同内容')
@@ -61,7 +62,7 @@ class ExecutionBudgetScopes:
             (workspace_id, scope_id)).fetchone()
         if row is None:
             raise KeyError(scope_id)
-        return self.repository._task_event_from_row(row)
+        return self.repository.execution_records.task_event_from_row(row)
 
     def authorize(self, connection, workspace_id, origin_task_id, actor, *, scope_id, expected_revision,
                   request_id, source_ref, target_task_ids, limits, policy_kind, authorization_guard, revoked=False):
@@ -92,7 +93,7 @@ class ExecutionBudgetScopes:
             'request_id': request_id, 'actor': actor.identity_payload(), 'target_task_ids': targets,
             'limits': limits, 'policy_kind': policy_kind, 'revoked': revoked}
         try:
-            existing = self.repository.get_task_event(workspace_id, event_id, connection=connection)
+            existing = self.repository.execution_records.get_task_event(workspace_id, event_id, connection=connection)
         except KeyError:
             existing = None
         if existing is not None:
@@ -113,11 +114,11 @@ class ExecutionBudgetScopes:
 
     def bind(self, connection, workspace_id, job_id, actor, *, scope_id, expected_revision):
         self._transaction(connection)
-        job = self.repository.get_job_run(workspace_id, job_id, connection=connection)
+        job = self.repository.job_records.get_job_run(workspace_id, job_id, connection=connection)
         self._owner(connection, workspace_id, job.task_id, actor)
         event_id = self._id('binding', workspace_id, job_id)
         try:
-            existing = self.repository.get_task_event(workspace_id, event_id, connection=connection)
+            existing = self.repository.execution_records.get_task_event(workspace_id, event_id, connection=connection)
         except KeyError:
             existing = None
         if existing is not None:
@@ -150,14 +151,14 @@ class ExecutionBudgetScopes:
         if job.input_digest == binding.payload['input_digest']:
             return
         try:
-            effective = self.repository.creation_execution_input(job.workspace_id, job.id, connection=connection)
+            effective = self.repository.creation_execution_jobs.creation_execution_input(job.workspace_id, job.id, connection=connection)
         except KeyError as exc:
             raise PermissionError('原执行输入已变化且缺少原绑定版本回执') from exc
         if effective['input_digest'] != job.input_digest:
             raise PermissionError('原执行输入已变化，须先核验原绑定版本')
 
     def binding(self, connection, workspace_id, job_id):
-        return self.repository.get_task_event(workspace_id, self._id('binding', workspace_id, job_id), connection=connection)
+        return self.repository.execution_records.get_task_event(workspace_id, self._id('binding', workspace_id, job_id), connection=connection)
 
     def for_task(self, connection, workspace_id, task_id, actor):
         self._owner(connection, workspace_id, task_id, actor)
@@ -199,7 +200,7 @@ class ExecutionBudgetScopes:
     def reserve(self, connection, workspace_id, job_id, actor, *, request_id, permit_generation,
                 started_event_id, receipt_id, maximum, authorization_revision):
         self._transaction(connection)
-        job = self.repository.get_job_run(workspace_id, job_id, connection=connection)
+        job = self.repository.job_records.get_job_run(workspace_id, job_id, connection=connection)
         self._owner(connection, workspace_id, job.task_id, actor)
         binding = self.binding(connection, workspace_id, job_id)
         current = self.current(connection, workspace_id, binding.payload['scope_id'])
@@ -210,11 +211,21 @@ class ExecutionBudgetScopes:
             raise PermissionError('当前作业累计授权已撤销或范围已变化')
         if set(maximum) != {'execution_seconds', 'generated_bytes'}:
             raise ValueError('累计占用需要本次有限执行上界')
+        zero_media = False
+        if maximum.get('generated_bytes') == 0:
+            row = connection.execute("SELECT resources_json,unit_key FROM device_work_requests "
+                "WHERE workspace_id=? AND owner_type='creation_job' AND owner_id=? AND id=?",
+                (workspace_id, job_id, request_id)).fetchone()
+            declared = json.loads(row['resources_json']) if row is not None else {}
+            zero_media = (row is not None and row['unit_key'].startswith('render:delivery-adopt:v1:')
+                and declared.get('kind') == 'creation_delivery_adoption'
+                and declared.get('max_output_bytes') == 0 and declared.get('read_mode') == 'stream')
         for key, value in maximum.items():
             if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
-                    or value <= 0 or key == 'generated_bytes' and not isinstance(value, int)):
-                raise ValueError('单元最大占用必须为有限正数，不能预留无限余额')
-        started = self.repository.get_task_event(workspace_id, started_event_id, connection=connection)
+                    or value < 0 or value == 0 and not (key == 'generated_bytes' and zero_media)
+                    or key == 'generated_bytes' and not isinstance(value, int)):
+                raise ValueError('单元最大占用须有限且为正，仅原许可的只读采用可声明零生成')
+        started = self.repository.execution_records.get_task_event(workspace_id, started_event_id, connection=connection)
         usage_id = f'{request_id}:{permit_generation}'
         if (started.job_id != job_id or started.payload.get('usage_id') != usage_id
                 or started.event_type not in {'creation_narration_unit_started', 'task_execution_unit_started'}):
@@ -225,7 +236,7 @@ class ExecutionBudgetScopes:
             'authorization_ref': current.id, 'binding_ref': binding.id, 'usage_id': usage_id,
             'started_event_id': started_event_id, 'receipt_id': receipt_id, 'maximum': maximum}
         try:
-            existing = self.repository.get_task_event(workspace_id, event_id, connection=connection)
+            existing = self.repository.execution_records.get_task_event(workspace_id, event_id, connection=connection)
         except KeyError:
             existing = None
         if existing is not None:
@@ -248,9 +259,9 @@ class ExecutionBudgetScopes:
     def settle(self, connection, workspace_id, job_id, *, request_id, permit_generation, receipt_id):
         self._transaction(connection)
         usage_id = f'{request_id}:{permit_generation}'
-        reservation = self.repository.get_task_event(workspace_id,
+        reservation = self.repository.execution_records.get_task_event(workspace_id,
             self._id('reservation', workspace_id, usage_id), connection=connection)
-        receipt = self.repository.get_task_event(workspace_id, receipt_id, connection=connection)
+        receipt = self.repository.execution_records.get_task_event(workspace_id, receipt_id, connection=connection)
         if (reservation.job_id != job_id or reservation.payload['receipt_id'] != receipt_id or receipt.job_id != job_id
                 or receipt.payload.get('usage_id') != usage_id
                 or receipt.event_type not in {'creation_narration_unit_settled', 'task_execution_unit_settled'}):

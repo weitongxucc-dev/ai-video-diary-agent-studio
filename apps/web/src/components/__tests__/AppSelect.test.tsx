@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { expect, it, vi } from "vitest";
@@ -22,7 +22,9 @@ it("keeps empty choices, disabled items and disabled form fields truthful", asyn
  expect(new FormData(container.querySelector("form")!).has("disabled")).toBe(false);
  const user=userEvent.setup();await user.click(screen.getByRole("combobox",{name:"版本"}));
  expect(await screen.findByRole("option",{name:"不可用的版本"})).toHaveAttribute("aria-disabled","true");
- await user.click(screen.getByRole("option",{name:"不可用的版本"}));expect(onValueChange).not.toHaveBeenCalled();
+ const disabledOption=screen.getByRole("option",{name:"不可用的版本"});
+ expect(disabledOption).toHaveStyle({pointerEvents:"none"});
+ fireEvent.click(disabledOption);expect(onValueChange).not.toHaveBeenCalled();
  await user.click(screen.getByRole("option",{name:"版本一"}));expect(onValueChange).toHaveBeenCalledWith("v1");
 });
 it("uses mature arrow, Home/End, typeahead and Escape focus handling",async()=>{

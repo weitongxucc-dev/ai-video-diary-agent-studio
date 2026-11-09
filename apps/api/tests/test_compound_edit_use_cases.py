@@ -8,7 +8,7 @@ from app.creation.contracts import EditCommand, SubtitleCue, SubtitleTrack
 from app.creation.editing.compound import calculate_compound_edit, apply_compound_proposal
 from app.creation.editing.picture import EditConflict
 from app.montage import CreationTaskMontagePlan, MontageClip
-from app.production import CreationTask
+from app.creation.contracts import CreationTask
 from test_linked_edit_use_cases import linked_state as linked_state
 
 
@@ -146,10 +146,10 @@ def test_real_compound_adoption_rechecks_all_original_sources_at_commit(linked_s
     })
     assert result.status_code == 200, result.text
     proposal = result.json()["proposal"]
-    frozen = repo.get_edit_intent("local", proposal["intent_id"]).constraints["affected_source_scope"]
+    frozen = repo.edit_records.get_edit_intent("local", proposal["intent_id"]).constraints["affected_source_scope"]
     assert frozen["clip_ids"] == ["clip_2"]
     assert frozen["input_source_facts"][0]["reference"] == plan.audio_timeline.tracks[0].clips[0].source_ref
-    commit = repo.confirm_edit_proposal
+    commit = repo.edit_adoption.confirm
 
     def revoke(*args, **kwargs):
         assert kwargs["verify_sources"] is not None
@@ -158,12 +158,12 @@ def test_real_compound_adoption_rechecks_all_original_sources_at_commit(linked_s
             visibility="private", owner_user_id="another-member"))
         return commit(*args, **kwargs)
 
-    monkeypatch.setattr(repo, "confirm_edit_proposal", revoke)
+    monkeypatch.setattr(repo.edit_adoption, "confirm", revoke)
     rejected = client.post(f"/api/creation-tasks/task/edits/{proposal['id']}/confirm")
     assert rejected.status_code == 403, rejected.text
-    assert repo.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
-    assert repo.get_edit_proposal("local", proposal["id"]).status == "proposed"
-    assert repo.list_edit_operations("local", "task") == []
+    assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
+    assert repo.edit_records.get_edit_proposal("local", proposal["id"]).status == "proposed"
+    assert repo.edit_records.list_edit_operations("local", "task") == []
     assert repo.get_creation_task_montage_plan("local", "task")["audio_timeline"] == plan.audio_timeline.model_dump()
 
 
@@ -197,17 +197,17 @@ def test_injected_wrong_empty_source_scope_cannot_adopt_actual_picture_change(li
         "selected_object_refs": ["clip:clip_2"],
     })
     assert ready.status_code == 200, ready.text
-    original = repo.get_edit_proposal("local", ready.json()["proposal"]["id"])
-    intent = repo.get_edit_intent("local", original.intent_id)
+    original = repo.edit_records.get_edit_proposal("local", ready.json()["proposal"]["id"])
+    intent = repo.edit_records.get_edit_intent("local", original.intent_id)
     sealed = {**intent.constraints["affected_source_scope"], "clip_ids": [], "source_facts": [], "clip_facts": []}
-    bad_intent = repo.create_edit_intent(replace(intent, id="wrong-empty-intent",
+    bad_intent = repo.edit_records.create_edit_intent(replace(intent, id="wrong-empty-intent",
         constraints={**intent.constraints, "affected_source_scope": sealed}), source=None)
-    bad_proposal = repo.create_edit_proposal(replace(original, id="wrong-empty-proposal", intent_id=bad_intent.id))
+    bad_proposal = repo.edit_records.create_edit_proposal(replace(original, id="wrong-empty-proposal", intent_id=bad_intent.id))
     repo._save_asset(replace(repo.get_asset("local", "neighbour"), owner_user_id="another-member", visibility="private"))
     rejected = client.post(f"/api/creation-tasks/task/edits/{bad_proposal.id}/confirm")
     assert rejected.status_code == 409, rejected.text
     assert "实际影响的镜头不一致" in rejected.text
-    assert repo.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
-    assert repo.get_edit_proposal("local", bad_proposal.id).status == "proposed"
-    assert repo.list_edit_operations("local", "task") == []
+    assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "linked-base"
+    assert repo.edit_records.get_edit_proposal("local", bad_proposal.id).status == "proposed"
+    assert repo.edit_records.list_edit_operations("local", "task") == []
     assert repo.get_creation_task_montage_plan("local", "task")["clips"] == [asdict(clip) for clip in plan.clips]

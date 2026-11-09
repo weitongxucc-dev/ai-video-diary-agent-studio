@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.production import SubtitleCue, SubtitleTrack
+from app.creation.contracts import SubtitleCue, SubtitleTrack
 from app.subtitle_schedule import new_subtitle_gap_intervals, narration_schedule, schedule_srt, subtitle_schedule
 
 

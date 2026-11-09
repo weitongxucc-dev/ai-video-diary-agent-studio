@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
-const [design, globals, overrides, shell, home, homeWorkspace, composer, api, library, production, people, templates, publishing, knowledge, sources, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot] = await Promise.all([
+const [design, globals, overrides, shell, home, homeWorkspace, composer, api, library, production, people, templates, publishing, knowledge, sources, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot, intakeHook, intakePanel, desktopWindow, materialResults, materialPreview] = await Promise.all([
   read("../../DESIGN.md"),
   read("src/app/globals.css"),
   read("src/app/modern-overrides.css"),
@@ -25,6 +25,11 @@ const [design, globals, overrides, shell, home, homeWorkspace, composer, api, li
   read("src/app/signin/page.tsx"),
   read("src/components/PixelIcon.tsx"),
   read("src/components/PixelMascot.tsx"),
+  read("src/components/material-library/useMaterialIntake.ts"),
+  read("src/components/material-library/MaterialIntakePanel.tsx"),
+  read("../desktop/runtime/desktop-window.js"),
+  read("src/components/material-library/MaterialResults.tsx"),
+  read("src/components/material-library/MaterialAssetPreview.tsx"),
 ]);
 
 const failures = [];
@@ -137,13 +142,24 @@ for (const required of [
   "复制完成，开始接收",
   "confirmMaterialCopyComplete",
   "立即检查",
-  "/media",
 ]) {
-  if (!library.includes(required)) failures.push(`material library is missing: ${required}`);
+  if (!`${library}\n${intakeHook}\n${intakePanel}`.includes(required)) failures.push(`material library is missing: ${required}`);
+}
+
+for (const required of ["useMaterialIntake()", "<MaterialIntakePanel", "<MaterialResults", "<MaterialAssetPreview"]) {
+  if (!library.includes(required)) failures.push(`material library intake owner is disconnected: ${required}`);
+}
+for (const [name, source] of [["results", materialResults], ["preview", materialPreview]]) {
+  if (!source.includes("/api/production/materials/${encodeURIComponent(asset.id)}/media")) {
+    failures.push(`material ${name} must use the authorized media endpoint`);
+  }
+}
+if (!desktop.includes("require('./runtime/desktop-window')") || !desktop.includes("createDesktopWindow(")) {
+  failures.push("Electron must use the desktop window owner");
 }
 
 for (const required of ["titleBarStyle: 'hiddenInset'", "minWidth: 1024", "minHeight: 700", "backgroundColor: '#f7f7f5'"]) {
-  if (!desktop.includes(required)) failures.push(`Electron chrome is missing: ${required}`);
+  if (!desktopWindow.includes(required)) failures.push(`Electron chrome is missing: ${required}`);
 }
 
 if (!apiSpec.includes("console=False") || apiSpec.includes("console=True")) {
@@ -167,7 +183,7 @@ if (!signin.includes('pattern="[A-Za-z0-9._-]{3,32}"')) {
   failures.push("sign-in must reject email-shaped identifiers and enforce account names");
 }
 
-if (!design.includes("# 曜核1.0桌面客户端设计规范") || !design.includes("status: user-approved-design-baseline") || design.includes('visual_direction: "A precise local AI content production workstation: Windows')) {
+if (!design.includes("# 曜核1.0桌面客户端设计规范") || !design.includes("status: approved-requirements-visual-implementation-pending") || design.includes('visual_direction: "A precise local AI content production workstation: Windows')) {
   failures.push("DESIGN.md is not the modern desktop source of truth");
 }
 

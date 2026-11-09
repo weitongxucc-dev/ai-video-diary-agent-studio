@@ -15,10 +15,10 @@ from app import main as main_module
 from app.local_members import LocalMemberService
 from app.artifact_store import ArtifactStore
 from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.production import (
-    CreationPlan, CreationTask, MaterialAsset, MaterialSegment,
-    MaterialSegmentMatch, NarrationArtifactRecord, ProductionRepository,
-)
+from app.creation.narration_artifacts import NarrationArtifactRecord
+from app.production import MaterialAsset, MaterialSegment, MaterialSegmentMatch, ProductionRepository
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import CreationTask
 
 
 @pytest.mark.skipif(
@@ -76,8 +76,8 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         status="waiting_for_user", progress=70, recovery_point="montage",
         owner_user_id=creator_id,
     )
-    repository.confirm_creation_plan(plan, task)
-    repository.save_narration_artifact(NarrationArtifactRecord(
+    repository.plan_confirmation.confirm_creation_plan(plan, task)
+    repository.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="voice-trim", workspace_id=workspace_id, script_id="script-trim", voice_profile_id=None,
         cache_key="voice-trim", audio_path=str(voice), duration_seconds=1, sample_rate=44100,
         model_id="test-sine", task_id=task_id,
@@ -95,7 +95,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         duration_seconds=1, low_confidence_clip_count=0,
         narration_audio_path="narration://artifact/voice-trim",
     )
-    repository.save_creation_task_montage_plan(
+    repository.montage_plan_adoption.save_creation_task_montage_plan(
         workspace_id, task_id, montage.id, creation_task_montage_plan_to_payload(montage),
     )
     monkeypatch.setattr(main_module, "production_repo", repository)
@@ -107,7 +107,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(
-        repository, "resolve_authorized_narration_audio_reference", lambda _workspace_id, _reference: voice,
+        repository.narration_artifacts, "resolve_authorized_narration_audio_reference", lambda _workspace_id, _reference: voice,
     )
 
     client = TestClient(main_module.app)
@@ -117,14 +117,14 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     }, headers=member_headers)
     assert initial.status_code == 409
     assert initial.json()["detail"]["error"] == "timeline_version_required"
-    assert repository.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
-    assert repository.list_edit_proposals(workspace_id, task_id) == []
-    assert repository.list_job_runs(workspace_id, task_id) == []
+    assert repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
+    assert repository.edit_records.list_edit_proposals(workspace_id, task_id) == []
+    assert repository.job_records.list_job_runs(workspace_id, task_id) == []
     initialized = client.post(f"/api/creation-tasks/{task_id}/timeline/initialize", headers=member_headers)
     assert initialized.status_code == 200, initialized.text
-    assert initialized.json()["version_id"] == repository.get_creation_task(workspace_id, task_id).current_timeline_version_id
+    assert initialized.json()["version_id"] == repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id
     assert repository.get_creation_task_montage_plan(workspace_id, task_id)["clips"][0]["source_start_seconds"] == 0
-    assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
+    assert len(repository.timeline_records.list_timeline_versions(workspace_id, task_id)) == 1
 
     original_resolve = repository.resolve_clip_media_reference
     resolve_calls = 0
@@ -142,8 +142,8 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
             "operation_type": "TrimClip", "clip_id": "clip-trim", "source_start_seconds": 1.2,
         }, headers=member_headers)
     assert incomplete.status_code == 422, incomplete.text
-    assert repository.list_edit_proposals(workspace_id, task_id) == []
-    assert repository.list_job_runs(workspace_id, task_id) == []
+    assert repository.edit_records.list_edit_proposals(workspace_id, task_id) == []
+    assert repository.job_records.list_job_runs(workspace_id, task_id) == []
 
     with monkeypatch.context() as no_media_work:
         no_media_work.setattr(
@@ -155,7 +155,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         }, headers=member_headers)
     assert preview.status_code == 200, preview.text
     assert "原视频画面和原声" in preview.json()["proposal"]["external_effects"][0]
-    version_after_preview = repository.get_creation_task(workspace_id, task_id).current_timeline_version_id
+    version_after_preview = repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id
     assert version_after_preview is not None
     for side, dominant, start, end in (("before", "red", 0, 1), ("after", "blue", 1.2, 2.2)):
         url = preview.json()["proposal"]["preview"][side]["video_url"]
@@ -180,10 +180,10 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
             red, _, blue = image.convert("RGB").getpixel((image.width // 2, image.height // 2))
         assert (red > blue) if dominant == "red" else (blue > red)
 
-    assert repository.get_creation_task(workspace_id, task_id).current_timeline_version_id == version_after_preview
-    assert repository.list_edit_operations(workspace_id, task_id) == []
-    assert repository.list_job_runs(workspace_id, task_id) == []
-    assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
+    assert repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id == version_after_preview
+    assert repository.edit_records.list_edit_operations(workspace_id, task_id) == []
+    assert repository.job_records.list_job_runs(workspace_id, task_id) == []
+    assert len(repository.timeline_records.list_timeline_versions(workspace_id, task_id)) == 1
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "another-workspace")
     assert client.get(preview.json()["proposal"]["preview"]["after"]["video_url"].split("#")[0]).status_code == 404
 
@@ -195,7 +195,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     )
     changed_montage.clips[0].fit_mode = "fit"
     changed_payload = creation_task_montage_plan_to_payload(changed_montage)
-    repository.save_creation_task_montage_plan(workspace_id, task_id, montage.id, changed_payload)
+    repository.montage_plan_adoption.save_creation_task_montage_plan(workspace_id, task_id, montage.id, changed_payload)
     saved_payload = repository.get_creation_task_montage_plan(workspace_id, task_id)
     with repository._connect() as conn:
         row = conn.execute("SELECT payload FROM creation_tasks WHERE id = ?", (task_id,)).fetchone()
@@ -205,6 +205,6 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     conflict = client.post(f"/api/creation-tasks/{task_id}/timeline/initialize")
     assert conflict.status_code == 409, conflict.text
     assert conflict.json()["detail"]["error"] == "timeline_version_conflict"
-    assert repository.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
+    assert repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id is None
     assert repository.get_creation_task_montage_plan(workspace_id, task_id) == saved_payload
-    assert len(repository.list_timeline_versions(workspace_id, task_id)) == 1
+    assert len(repository.timeline_records.list_timeline_versions(workspace_id, task_id)) == 1

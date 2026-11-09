@@ -1,13 +1,11 @@
 """Visual preview preparation, original full-tail comparison and explicit execution."""
 from dataclasses import asdict, replace
 from collections import Counter
-from pathlib import Path
 import subprocess
 from uuid import uuid4
 from app.creation.contracts import EditIntent, EditProposal
 from app.creation.editing.clips import ClipPreviewCommand, ClipPreviewConflict, prepare_clip_edit
 from app.creation.editing.metadata_use_case import effective_audio_timeline, logical_montage_output_refs
-from app.graphic_sources import graphic_source_facts
 from app.linked_timeline import remove_time_ranges
 from app.media.picture_preview import PicturePreviewRejected
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
@@ -81,7 +79,7 @@ class VisualPreviewUseCase:
         def resolve_target(target):
             preview_target=replace(target)
             if target.person_render_id:
-                person=self.repository.get_person_render(workspace_id,task_id,target.person_render_id)
+                person=self.repository.person_renders.get_person_render(workspace_id,task_id,target.person_render_id)
                 source=self.renderer.person_path(person)
                 cue=next(cue for cue in plan.cues if cue.id==target.cue_id)
                 if source is None or person.narration_segment_id != cue.narration_segment_id:
@@ -104,18 +102,18 @@ class VisualPreviewUseCase:
                     for side, (candidate, scoped_tracks) in zip(("before", "after"), projected, strict=True)]
         except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
             raise PicturePreviewRejected(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
-        if self.repository.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
+        if self.repository.task_records.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
             raise PicturePreviewRejected(status_code=409,detail="预览期间时间线发生变化，请重新预览")
         base=self.metadata.ensure_montage_base(workspace_id,task,plan,source=source)
         refs=[f"clip:{clip.id}" for clip in clips]
-        intent=self.repository.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        intent=self.repository.edit_records.create_edit_intent(EditIntent(id=f"intent_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
             raw_command=payload.raw_command,context_stage="montage",selected_object_refs=refs,playhead_ms=round(clip.timeline_start_seconds*1000),intent_type="visual_adjustment",
             scope={"kind":"clips","clip_ids":[clip.id for clip in clips]},constraints={"preserve_timing":True,"preserve_audio":True,"preserve_face_geometry":True},confidence=1,status="interpreted"), source=source)
         labels = {"exposure": "曝光", "contrast": "对比度", "saturation": "饱和度", "temperature": "冷暖",
             "beauty_strength": "磨皮", "skin_exposure": "肤色曝光", "zoom": "缩放", "rotation": "旋转",
             "offset_x": "水平位置", "offset_y": "垂直位置", "fade_in_seconds": "黑场淡入秒", "fade_out_seconds": "黑场淡出秒"}
         detail = "只调整 " + " · ".join(f"{labels[key]} {value:g}" for key, value in patch.items())
-        proposal=self.repository.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
+        proposal=self.repository.edit_records.create_edit_proposal(EditProposal(id=f"proposal_{uuid4().hex}",workspace_id=workspace_id,task_id=task_id,
             intent_id=intent.id,summary=f"调整 {len(clips)} 个镜头的画面效果",target_refs=refs,
             operation={"operation_type":"AdjustVisualEffects","payload":{"base_version_id":base.id,
                 "effects":patch,"expected_clips":{clip.id:asdict(clip) for clip in clips}}},
@@ -132,12 +130,12 @@ class VisualPreviewUseCase:
             kind=kind,parameters=parameters,execution=execution)
 
     def prepare_source(self, workspace_id, task_id, arguments, actor):
-        task = self.repository.get_creation_task(workspace_id, task_id)
+        task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         if arguments.get('_media_kind') == 'clip_preview':
             raise ValueError('历史短预览没有独立的封存执行输入，请查询原记录并为当前版本重新预览')
         source = arguments.get('_typed_source')
         if source is not None:
-            version = self.repository.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+            version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
             if (source['workspace_id'], source['task_id'], source['member_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (workspace_id, task_id, actor.user_id or actor.member_id, task.current_timeline_version_id, version.sequence if version else 0):
                 raise ValueError('封存的类型化编辑输入或成员已失效')
         plan_payload = self.repository.get_creation_task_montage_plan(workspace_id, task_id) if task.montage_plan_id else None
@@ -175,8 +173,8 @@ class VisualPreviewUseCase:
                 audio_inputs.append({'reference': reference, 'path': str(path.resolve()), 'size_bytes': stat.st_size,
                     'uses': uses.get(reference, 1), **self.audio.source_metadata(workspace_id, task_id, reference)})
         facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id,
-            'script_digest': self.repository.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None,
-            'plan_id': task.plan_id, 'plan_digest': media_digest(asdict(self.repository.get_creation_plan(workspace_id, task.plan_id))),
+            'script_digest': self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None,
+            'plan_id': task.plan_id, 'plan_digest': media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))),
             'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
         if visual_scope is not None:
             facts['visual_preview'] = visual_scope
@@ -215,7 +213,7 @@ class VisualPreviewUseCase:
 
     def execute(self, job, event, actor, context):
         try:
-            task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+            task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
         except KeyError as exc:
             raise PicturePreviewRejected(status_code=404, detail='制作任务不存在') from exc
         payload = VisualEditRequest.model_validate(event['arguments']['payload'])

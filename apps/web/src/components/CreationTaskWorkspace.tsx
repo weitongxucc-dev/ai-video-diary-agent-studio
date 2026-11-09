@@ -10,11 +10,16 @@ import { saveTaskVideo, saveTaskCover, saveTaskSubtitles, type SaveFeedback } fr
 import { ReviewOutputView } from "./creation-task/ReviewOutputView";
 import { NarrationPreparation } from "./creation-task/NarrationPreparation";
 import { ScriptWindowStart } from "./creation-task/ScriptWindowEditor";
+import { useScriptGenerationRequest } from "./creation-task/useScriptGenerationRequest";
 import { TopicSelection } from "./creation-task/TopicSelection";
 import { useCreationExecution } from "./creation-task/useCreationExecution";
 import type { TaskMediaJob, TaskMediaResultMap, CreationTaskNarrationVoiceSelectionRequest } from "@/lib/types";
 import { getCreationTaskNarrationVoiceSelection } from "@/lib/api/creation-tasks";
 import { readCreationTaskTimelineRestore } from '@/lib/api';
+import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
+import { isLocalAuthMode } from "@/lib/auth/routing";
+import { ensureLocalMemberIdentity } from "@/lib/local-member-auth";
+import { createClient } from "@/lib/supabase/client";
 import { CreationPlanApiError } from "@/lib/api";
 import { Tabs, TabsContent } from "./ui/tabs";
 import { Button } from "./ui/button";
@@ -33,8 +38,8 @@ import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMate
 import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AppShell } from "@/components/AppShell";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
-import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskScript, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, getCreationTaskAssistantHistory, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
-import type { CreationTask, AssistantConversationTurn, CreationTaskQualityCheck, CreationTaskExactEditInput, CreationTaskEditPreviewResponse, CreationTaskAssistantTurnResponse, CreationTaskRecording, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState, CreationExecutionStatus, MontageClipCandidate } from "@/lib/types";
+import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, getCreationTaskAssistantHistory, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, getCreationTaskEditRequest, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
+import type { CreationTask, AssistantConversationTurn, CreationTaskQualityCheck, CreationTaskExactEditInput, CreationTaskClipMetadataInput, CreationTaskMetadataSaveInput, CreationTaskEditPreviewResponse, CreationTaskAssistantTurnResponse, CreationTaskRecording, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState, CreationExecutionStatus, MontageClipCandidate } from "@/lib/types";
 import styles from "./CreationTaskWorkspace.module.css";
 import { AudioTimelineTracks, AudioTimelineInspector } from "./AudioTimelineEditor";
 import { previewCreationTaskAudio, previewCreationTaskVisual, saveCreationTaskRecording } from "@/lib/api";
@@ -53,7 +58,7 @@ import { assistantHistoryTurns } from './creation-task/assistant-history';
 import { TaskIssue } from './creation-task/TaskIssue';
 import { Inspector, SubtitleCoverInspector } from './creation-task/TaskInspector';
 import { ConfirmedTopicView } from './creation-task/TopicStage';
-import { ReadonlyScriptsView, ConfirmedScriptView, ScriptLibrarySave, PlanReplyDraftAction, ScriptEditor } from './creation-task/ScriptStage';
+import { ReadonlyScriptsView, ConfirmedScriptView, ScriptGenerationStatus, ScriptLibrarySave, PlanReplyDraftAction, ScriptEditor } from './creation-task/ScriptStage';
 import { NarrationResultView, SegmentProductionPanel } from './creation-task/NarrationStage';
 import { PersonStageView } from './creation-task/PersonStage';
 import { CreationExecutionPanel } from './creation-task/CreationExecutionPanel';
@@ -69,6 +74,42 @@ export type Props = {
   initialTopics: CreationTaskTopicsResponse | null;
   initialTasks: CreationTask[];
 };
+
+type MetadataEditInput = CreationTaskClipMetadataInput | Extract<CreationTaskExactEditInput, { operation_type: "UpdateSubtitleCue" }>;
+
+function isMetadataSaveInput(input: CreationTaskExactEditInput): input is MetadataEditInput {
+  return ["UpdateSubtitleCue", "ChangeCrop", "ChangeClipSpeed", "SetClipLock", "ConfirmClip", "ReplaceClip", "TrimClip", "SplitClip", "ReorderClip"].includes(input.operation_type);
+}
+
+type PendingMetadataSave = {
+  memberId: string;
+  taskId: string;
+  workspaceId: string;
+  input: CreationTaskMetadataSaveInput;
+  submissionError?: ReturnType<typeof errorDetails>;
+};
+
+type PendingTimelineRestore = {
+  memberId: string;
+  taskId: string;
+  workspaceId: string;
+  action: "undo" | "redo";
+  input: Parameters<typeof undoCreationTaskTimeline>[1];
+  submissionError?: ReturnType<typeof errorDetails>;
+};
+
+// This identity scopes the local pending request; the API still performs authorization.
+async function editRequestMemberId() {
+  if (isLocalAuthMode()) return (await ensureLocalMemberIdentity()).member_id;
+  const { data, error } = await createClient().auth.getSession();
+  if (error || !data.session) throw new Error("请先登录原保存请求所属的账号。");
+  return data.session.user.id;
+}
+
+function metadataInputKey(value: unknown): string {
+  return JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item)
+    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+}
 
 export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initialTasks }: Props) {
   const [savingTemplate, setSavingTemplate] = useState(false);
@@ -86,6 +127,83 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   currentBusy.current = busy;
   const [error, setError] = useState<ReturnType<typeof errorDetails> | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [pendingMetadataSave, setPendingMetadataSave] = useState<PendingMetadataSave | null>(null);
+  const pendingMetadataSaveRef = useRef<PendingMetadataSave | null>(null);
+  const [pendingTimelineRestore, setPendingTimelineRestore] = useState<PendingTimelineRestore | null>(null);
+  const pendingTimelineRestoreRef = useRef<PendingTimelineRestore | null>(null);
+  const editRequestScope = useRef<string | null>(null);
+  const restoredIdentityScope = useRef<string | undefined>(undefined);
+  const [editRequestRecoveryReady, setEditRequestRecoveryReady] = useState(false);
+  const editRequestRecoveryError = useRef<ReturnType<typeof errorDetails> | null>(null);
+  const editRequestOperation = useRef<{ taskId: string; memberId: string | null } | null>(null);
+  const editRequestIdentity = useLocalMemberIdentity();
+  const subtitleStoragePrefix = `subtitle-save:${workspace.task.workspace_id}:${workspace.task.id}:`;
+  useEffect(() => {
+    let active = true;
+    let identityRevision = 0;
+    setEditRequestRecoveryReady(false);
+    const restore = (memberId: string | null) => {
+      if (!active) return;
+      const nextScope = memberId ? `${subtitleStoragePrefix}${memberId}` : null;
+      if (editRequestScope.current === nextScope && editRequestOperation.current) return;
+      setEditRequestRecoveryReady(false);
+      editRequestRecoveryError.current = null;
+      const previousScope = editRequestScope.current;
+      editRequestScope.current = nextScope;
+      const restoredScope = JSON.stringify([subtitleStoragePrefix, memberId]);
+      if (restoredIdentityScope.current !== undefined && restoredIdentityScope.current !== restoredScope) {
+        setError(null); setNotice(null);
+      }
+      restoredIdentityScope.current = restoredScope;
+      const operation = editRequestOperation.current;
+      if (operation && ((previousScope !== null && previousScope !== nextScope)
+        || (operation.memberId !== null && (operation.memberId !== memberId || operation.taskId !== workspace.task.id)))) {
+        editRequestOperation.current = null;
+        setBusy(null);
+      }
+      pendingMetadataSaveRef.current = null;
+      setPendingMetadataSave(null);
+      pendingTimelineRestoreRef.current = null;
+      setPendingTimelineRestore(null);
+      if (!memberId) { setEditRequestRecoveryReady(true); return; }
+      try {
+        const stored = sessionStorage.getItem(`${subtitleStoragePrefix}${memberId}`);
+        const pending: PendingMetadataSave | null = stored ? JSON.parse(stored) : null;
+        if (pending && (pending.taskId !== workspace.task.id || pending.workspaceId !== workspace.task.workspace_id
+          || pending.memberId !== memberId || !pending.input.request_id
+          || !isMetadataSaveInput(pending.input))) throw new Error("原保存请求无法读取，请保留此页面并核对原结果。");
+        pendingMetadataSaveRef.current = pending;
+        setPendingMetadataSave(pending);
+        if (pending?.submissionError) setError(pending.submissionError);
+      } catch (cause) { editRequestRecoveryError.current = errorDetails(cause); setError(editRequestRecoveryError.current); }
+      try {
+        const stored = sessionStorage.getItem(`timeline-restore:${workspace.task.workspace_id}:${workspace.task.id}:${memberId}`);
+        const pending: PendingTimelineRestore | null = stored ? JSON.parse(stored) : null;
+        if (pending && (pending.taskId !== workspace.task.id || pending.workspaceId !== workspace.task.workspace_id
+          || pending.memberId !== memberId || !pending.input.request_id || !["undo", "redo"].includes(pending.action)))
+          throw new Error("原撤销重做请求无法读取，请保留现场核对。");
+        pendingTimelineRestoreRef.current = pending;
+        setPendingTimelineRestore(pending);
+        if (pending?.submissionError) setError(pending.submissionError);
+      } catch (cause) { editRequestRecoveryError.current = errorDetails(cause); setError(editRequestRecoveryError.current); }
+      setEditRequestRecoveryReady(editRequestRecoveryError.current === null);
+    };
+    void editRequestMemberId().then(memberId => { if (identityRevision === 0) restore(memberId); })
+      .catch(cause => { if (active && identityRevision === 0) setError(errorDetails(cause)); });
+    // Local identity changes already notify the existing hook; formal sessions
+    // notify here without starting another auth or task lifecycle.
+    let unsubscribe: (() => void) | undefined;
+    try {
+      if (!isLocalAuthMode()) {
+        const { data } = createClient().auth.onAuthStateChange((_event, session) => {
+          identityRevision += 1;
+          restore(session?.user.id ?? null);
+        });
+        unsubscribe = () => data.subscription.unsubscribe();
+      }
+    } catch (cause) { setError(errorDetails(cause)); }
+    return () => { active = false; unsubscribe?.(); };
+  }, [subtitleStoragePrefix, workspace.task.id, workspace.task.workspace_id, editRequestIdentity.token]);
   const [pendingLocalEdit, setPendingLocalEdit] = useState<PendingLocalEdit | null>(null);
   const pendingLocalEditRef = useRef(pendingLocalEdit);
   pendingLocalEditRef.current = pendingLocalEdit;
@@ -138,8 +256,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       ?? null,
   );
   const [pendingVoiceSelection, setPendingVoiceSelection] = useWorkspaceViewState<CreationTaskNarrationVoiceSelectionRequest | null>(`task:${workspace.task.id}.voiceSelectionRequest`, null);
-  const [pendingTimelineRestore, setPendingTimelineRestore] = useWorkspaceViewState<{taskId:string;requestId:string}|null>(`task:${workspace.task.id}.timelineRestoreRequest`,null);
-  const restoreReadSequence=useRef(0);
   const [voiceSelectionNotFound, setVoiceSelectionNotFound] = useState<string | null>(null);
   const [replacementClipId, setReplacementClipId] = useState<string | null>(null);
   const [replacementCandidates, setReplacementCandidates] = useState<MontageClipCandidate[]>([]);
@@ -238,6 +354,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     draftInput.current = { taskId: task.id, conversationId: assistantConversation.conversation?.id, text: editCommand };
   }
   function setEditCommand(text: string) {
+    generationReadOwner.current = null;
     draftInput.current = { taskId: task.id, conversationId: assistantConversation.conversation?.id, text };
     assistantConversation.setDraftText(text);
   }
@@ -286,6 +403,26 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }, [task.id]);
   const latestScript = workspace.scripts[0] ?? null;
   const [manualScriptOpen, setManualScriptOpen] = useWorkspaceViewState("manual-script-open", false);
+  const manualForGeneration = useRef(manualScriptOpen); manualForGeneration.current = manualScriptOpen;
+  const generationReadOwner = useRef<{ workspace: WorkspaceState; navigation: number; revision: number } | null>(null);
+  const scriptGeneration = useScriptGenerationRequest({
+    taskId: task.id, visible: activeView === "script",
+    onStart: () => {
+      navigationReadRevision.current += 1; pendingNavigationRead.current = null;
+      generationReadOwner.current = { workspace: currentWorkspace.current, navigation: navigationReadRevision.current, revision: editContextRevision.current };
+    },
+    getContextKey: () => {
+      const owner = generationReadOwner.current;
+      return owner && owner.workspace === currentWorkspace.current
+        && owner.navigation === navigationReadRevision.current && owner.revision === editContextRevision.current
+        && !manualForGeneration.current && !currentEditorDraft.current ? owner : null;
+    },
+    onDraftReady: async (receipt, stillCurrent) => {
+      await refresh(true, next => stillCurrent() && next.task.id === receipt.task_id && next.scripts.some(script =>
+        script.id === receipt.script_id && script.run_id === receipt.run_id
+        && script.updated_at.replace(/\+00:00$/, "Z") === receipt.script_updated_at?.replace(/\+00:00$/, "Z")));
+    },
+  });
   const windowScript = latestScript?.selection_status === "draft" && (!latestScript.draft_complete || latestScript.sections_total_count > 20);
   const runnableVoices = workspace.available_voices.filter((voice) => voice.runnable);
   const zhSubtitleValid = workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid");
@@ -633,13 +770,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       if (currentTaskId.current === task.id) { setError(result.error); setNotice(result.notice); }
     } finally { if (currentTaskId.current === task.id) setBusy(null); }
   }
-  function saveVideo() { return saveOutput(() => saveTaskVideo(task.id)); }
+  function saveVideo() { return saveOutput(() => saveTaskVideo(task.id, task.current_timeline_version_id)); }
   function saveCover() { const coverId = workspace.cover_asset?.id; if (coverId) return saveOutput(() => saveTaskCover(task.id, coverId)); }
   function saveSubtitle(mode: "zh" | "en" | "zh-en") { return saveOutput(() => saveTaskSubtitles(task.id, mode, task.current_timeline_version_id, workspace.subtitle_tracks, activeSubtitleTrack)); }
 
   // 插入用与「换素材」同一对既有端点取候选，不新开端点。InsertClip 的锚点就是
-  // 当前选中镜头（clip_id），落点是「插在它之后」；后端 _preview_exact_montage_edit
-  // 对每个操作都要求 clip_id，缺了直接 409。
+  // 当前选中镜头（clip_id），落点是「插在它之后」；ExactPreviewUseCase
+  // 将 InsertClip 分派给 linked 用例，由该用例校验锚点。
   async function showInsertCandidates(clipId: string) {
     setBusy("clip");
     setError(null);
@@ -1224,7 +1361,125 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     finally { if (ownsRequest()) setBusy(null); }
   }
 
+  async function readMetadataSave(pending: PendingMetadataSave, owns: () => boolean) {
+    const memberId = await editRequestMemberId();
+    if (!owns()) return false;
+    if (memberId !== pending.memberId) throw new Error("请切回原成员账号查询这次保存，未重新提交。");
+    const receipt = await getCreationTaskEditRequest(pending.taskId, pending.input.request_id).catch(cause => {
+      if (pending.submissionError) throw new Error(`${pending.submissionError.message}；原请求查询：${errorDetails(cause).message}`);
+      throw cause;
+    });
+    if (!owns()) return false;
+    if (receipt.task_id !== pending.taskId || receipt.request_id !== pending.input.request_id || receipt.phase !== "apply"
+      || metadataInputKey(receipt.submitted_input) !== metadataInputKey(pending.input)) {
+      throw new Error("原保存回执与封存输入不一致，请保留原请求核对。");
+    }
+    if (receipt.status !== "recorded" || receipt.result_status_code === null) {
+      setNotice("保存结果尚未核实，请查询原保存结果，不要重新提交。");
+      if (pending.submissionError) setError(pending.submissionError);
+      return false;
+    }
+    if (receipt.result_status_code < 200 || receipt.result_status_code >= 300 || !receipt.result || !("operation" in receipt.result)) {
+      const target = pending.input.operation_type === "UpdateSubtitleCue" ? "字幕" : "镜头";
+      setNotice(`原${target}保存返回 ${receipt.result_status_code}，可能已有写入。请保留原请求，核对版本和${target}；未自动重试。`);
+      await refresh(true, () => owns());
+      return false;
+    }
+    await refresh(true, () => owns());
+    if (!owns()) return false;
+    sessionStorage.removeItem(`subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`);
+    pendingMetadataSaveRef.current = null;
+    setPendingMetadataSave(null);
+    if (pending.input.operation_type !== "UpdateSubtitleCue") {
+      const draftKey = `${pending.taskId}:${pending.input.clip_id}`;
+      setClipDrafts(current => { const next = { ...current }; delete next[draftKey]; return next; });
+    }
+    setNotice((pending.input.operation_type === "UpdateSubtitleCue" ? "字幕修改" : "镜头修改") + "已保存，可撤销。" + (editExecutionReadinessMessage(receipt.result.execution_readiness) ?? ""));
+    return true;
+  }
+
+  async function queryMetadataSave() {
+    const pending = pendingMetadataSaveRef.current;
+    if (!pending || editRequestOperation.current || busy !== null) return;
+    const operation = { taskId: pending.taskId, memberId: pending.memberId };
+    editRequestOperation.current = operation;
+    const owns = () => currentTaskId.current === pending.taskId && editRequestOperation.current === operation
+      && editRequestScope.current === `subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`;
+    setBusy("edit-confirm"); setError(null);
+    try { await readMetadataSave(pending, owns); }
+    catch (cause) { if (owns()) setError(errorDetails(cause)); }
+    finally {
+      // Release only this operation's busy slot; an old response cannot clear a successor's slot.
+      if (editRequestOperation.current === operation) {
+        editRequestOperation.current = null;
+        if (currentTaskId.current === operation.taskId) setBusy(null);
+      }
+    }
+  }
+
+  async function saveMetadataEdit(input: MetadataEditInput) {
+    if (editRequestOperation.current || pendingMetadataSaveRef.current || busy !== null) return false;
+    if (editRequestRecoveryError.current) return false;
+    const taskSnapshot = currentWorkspace.current.task;
+    // Do not create a request locator for a command known to lack its required base.
+    // Existing pending requests above still require their original receipt.
+    if (taskSnapshot.current_timeline_version_id === null) {
+      setError({ message: "当前故事板还没有可撤销的初始版本。", code: "timeline_version_required",
+        impact: "修改没有提交，当前草稿已保留。", repairAction: "保留当前故事板并建立版本，再保存修改。" });
+      return false;
+    }
+    const operation: { taskId: string; memberId: string | null } = { taskId: taskSnapshot.id, memberId: null };
+    editRequestOperation.current = operation;
+    const owns = () => currentTaskId.current === taskSnapshot.id && editRequestOperation.current === operation
+      && (operation.memberId === null || editRequestScope.current === `subtitle-save:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${operation.memberId}`);
+    setBusy("edit-confirm"); setError(null); setNotice(null); invalidateEditPreview();
+    try {
+      const memberId = await editRequestMemberId();
+      operation.memberId = memberId;
+      if (!owns()) return false;
+      const subtitleStorageKey = `subtitle-save:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${memberId}`;
+      const stored = sessionStorage.getItem(subtitleStorageKey);
+      if (stored) {
+        const original: PendingMetadataSave = JSON.parse(stored);
+        if (original.taskId !== taskSnapshot.id || original.workspaceId !== taskSnapshot.workspace_id || original.memberId !== memberId)
+          throw new Error("原保存请求与当前任务或成员不一致，没有提交。");
+        pendingMetadataSaveRef.current = original;
+        setPendingMetadataSave(original);
+        setNotice("这次保存已有原请求，请先查询原保存结果。");
+        return false;
+      }
+      const pending: PendingMetadataSave = { memberId, taskId: taskSnapshot.id, workspaceId: taskSnapshot.workspace_id,
+        input: JSON.parse(JSON.stringify({ ...input, request_id: crypto.randomUUID(),
+          expected_timeline_version_id: taskSnapshot.current_timeline_version_id,
+          expected_timeline_sequence: taskSnapshot.timeline_sequence })) };
+      const serialized = JSON.stringify(pending);
+      sessionStorage.setItem(subtitleStorageKey, serialized);
+      if (sessionStorage.getItem(subtitleStorageKey) !== serialized) throw new Error("无法保留原保存请求，本次没有提交。");
+      pendingMetadataSaveRef.current = pending;
+      setPendingMetadataSave(pending);
+      // A failed POST response is not evidence that the write did not happen.
+      try { await applyCreationTaskExactEdit(pending.taskId, pending.input); }
+      catch (cause) {
+        const stored = sessionStorage.getItem(subtitleStorageKey);
+        if (!stored || (JSON.parse(stored) as PendingMetadataSave).input.request_id !== pending.input.request_id) return false;
+        pending.submissionError = errorDetails(cause);
+        sessionStorage.setItem(subtitleStorageKey, JSON.stringify(pending));
+        if (!owns()) return false;
+        setPendingMetadataSave({ ...pending }); setError(pending.submissionError);
+      }
+      return await readMetadataSave(pending, owns);
+    } catch (cause) { if (owns()) setError(errorDetails(cause)); return false; }
+    finally {
+      // Release only this operation's busy slot; an old response cannot clear a successor's slot.
+      if (editRequestOperation.current === operation) {
+        editRequestOperation.current = null;
+        if (currentTaskId.current === operation.taskId) setBusy(null);
+      }
+    }
+  }
+
   async function previewExactEdit(input: CreationTaskExactEditInput) {
+    if (isMetadataSaveInput(input)) return saveMetadataEdit(input);
     if (busy !== null) return false;
     setBusy("edit-confirm"); setError(null); setNotice(null); invalidateEditPreview();
     const revision = editContextRevision.current;
@@ -1264,61 +1519,105 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     return saved;
   }
 
-  async function queryTimelineRestore() {
-    const pending=pendingTimelineRestore;
-    if (!pending || pending.taskId!==task.id) return;
-    const sequence=++restoreReadSequence.current;
-    const owns=()=>currentTaskId.current===pending.taskId && sequence===restoreReadSequence.current;
-    setBusy('undo');setError(null);
-    try {
-      const receipt=await readCreationTaskTimelineRestore(pending.taskId,pending.requestId);
-      if (!owns()) return;
-      if (receipt.task_id!==pending.taskId || receipt.request_id!==pending.requestId) throw new Error('撤销重做回执身份不一致');
-      if (receipt.status==='applied' || receipt.status==='refused') setPendingTimelineRestore(null);
-      setNotice(receipt.status==='applied'?'原修改的撤销或重做已保存。'+(editExecutionReadinessMessage(receipt.execution_readiness) ?? ''):receipt.status==='refused'?(receipt.failure?.reason ?? '原操作因冲突被拒绝。'):'原结果尚未核实，请继续查询原请求。');
-      await refresh(true);
-    } catch(cause) {if (owns()) setError(errorDetails(cause));}
-    finally {if (owns()) setBusy(null);}
+  function clearTimelineRestore(pending: PendingTimelineRestore, owns: () => boolean) {
+    sessionStorage.removeItem(`timeline-restore:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`);
+    if (owns()) { pendingTimelineRestoreRef.current = null; setPendingTimelineRestore(null); }
   }
-  async function undoTimeline(redo = false, targetOperationId?: string) {
-    if (pendingTimelineRestore) {setNotice('原撤销重做请求等待核对，请先查询原结果。');return;}
-    const taskId=task.id,requestId=crypto.randomUUID(),sequence=++restoreReadSequence.current;
-    const owns=()=>currentTaskId.current===taskId && sequence===restoreReadSequence.current;
-    setPendingTimelineRestore({taskId,requestId});
-    setBusy("undo");
-    setError(null);
-    setNotice(null);
-    invalidateEditPreview();
-    let writeReturned=false;
-    try {
-      await (redo ? redoCreationTaskTimeline : undoCreationTaskTimeline)(task.id, {
-        request_id: requestId,
-        ...(targetOperationId?{target_operation_id:targetOperationId}:{}),
-        expected_timeline_version_id: task.current_timeline_version_id,
-        expected_timeline_sequence: task.timeline_sequence,
-      });
-      writeReturned=true;
-      const receipt=await readCreationTaskTimelineRestore(taskId,requestId);
-      if (!owns()) return;
-      if (receipt.task_id!==taskId || receipt.request_id!==requestId) throw new Error('撤销重做回执身份不一致');
-      if (receipt.status==='applied' || receipt.status==='refused') setPendingTimelineRestore(null);
-      if (receipt.status!=='applied') {
-        setNotice(receipt.failure?.reason ?? '原操作结果尚未核实，请查询原请求。');
-        await refresh(true);return;
+
+  async function readTimelineRestore(pending: PendingTimelineRestore, owns: () => boolean) {
+    if (await editRequestMemberId() !== pending.memberId) throw new Error("请切回原成员账号查询撤销重做结果。");
+    const receipt = await readCreationTaskTimelineRestore(pending.taskId, pending.input.request_id);
+    if (!owns()) return;
+    if (receipt.task_id !== pending.taskId || receipt.request_id !== pending.input.request_id || receipt.action !== pending.action
+      || (pending.input.target_operation_id !== undefined && receipt.target_operation_id !== pending.input.target_operation_id))
+      throw new Error("撤销重做回执与原请求不一致");
+    await refresh(true, () => owns());
+    if (!owns()) return;
+    if (receipt.status === "applied" || receipt.status === "refused") clearTimelineRestore(pending, owns);
+    if (receipt.status === "applied") {
+      setClipDrafts({}); setSelectedCueId(null); setSelectedNarrationSegmentId(null); setSelectedCover(false);
+      setNotice("原修改的撤销或重做已保存。" + (editExecutionReadinessMessage(receipt.execution_readiness) ?? ""));
+    } else {
+      setNotice(receipt.failure?.reason ?? (receipt.status === "refused" ? "原操作因冲突被拒绝。" : "原结果尚未核实，请继续查询原请求。"));
+    }
+  }
+
+  async function queryTimelineRestore() {
+    const pending = pendingTimelineRestoreRef.current;
+    if (!pending || pending.taskId !== task.id || editRequestOperation.current || busy !== null) return;
+    const operation = { taskId: pending.taskId, memberId: pending.memberId };
+    editRequestOperation.current = operation;
+    const owns = () => currentTaskId.current === pending.taskId && editRequestOperation.current === operation
+      && editRequestScope.current === `subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`;
+    setBusy("undo"); setError(null);
+    try { await readTimelineRestore(pending, owns); }
+    catch (cause) { if (owns()) setError(errorDetails(cause)); }
+    finally {
+      if (editRequestOperation.current === operation) {
+        editRequestOperation.current = null;
+        if (currentTaskId.current === pending.taskId) setBusy(null);
       }
-      setClipDrafts({});
-      setNotice('原修改的撤销或重做已保存。' + (editExecutionReadinessMessage(receipt.execution_readiness) ?? ''));
-      setSelectedCueId(null);
-      setSelectedNarrationSegmentId(null);
-      setSelectedCover(false);
-      await refresh(true);
+    }
+  }
+
+  async function undoTimeline(redo = false, targetOperationId?: string) {
+    if (editRequestOperation.current || busy !== null) return;
+    if (pendingTimelineRestoreRef.current) { setNotice("原撤销重做请求等待核对，请先查询原结果。"); return; }
+    const taskSnapshot = currentWorkspace.current.task;
+    const operation: { taskId: string; memberId: string | null } = { taskId: taskSnapshot.id, memberId: null };
+    editRequestOperation.current = operation;
+    const owns = () => currentTaskId.current === taskSnapshot.id && editRequestOperation.current === operation
+      && (operation.memberId === null || editRequestScope.current === `subtitle-save:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${operation.memberId}`);
+    setBusy("undo"); setError(null); setNotice(null); invalidateEditPreview();
+    let writeReturned = false;
+    let postStarted = false;
+    let pending: PendingTimelineRestore | null = null;
+    try {
+      const memberId = await editRequestMemberId();
+      operation.memberId = memberId;
+      if (!owns()) return;
+      const key = `timeline-restore:${taskSnapshot.workspace_id}:${taskSnapshot.id}:${memberId}`;
+      const stored = sessionStorage.getItem(key);
+      if (stored) {
+        const original: PendingTimelineRestore = JSON.parse(stored);
+        if (original.taskId !== taskSnapshot.id || original.workspaceId !== taskSnapshot.workspace_id || original.memberId !== memberId)
+          throw new Error("原撤销重做请求与当前任务或成员不一致，没有提交。");
+        pendingTimelineRestoreRef.current = original; setPendingTimelineRestore(original);
+        setNotice("原撤销重做请求等待核对，请先查询原结果。"); return;
+      }
+      pending = { taskId: taskSnapshot.id, workspaceId: taskSnapshot.workspace_id, memberId, action: redo ? "redo" : "undo",
+        input: { request_id: crypto.randomUUID(), ...(targetOperationId ? { target_operation_id: targetOperationId } : {}),
+          expected_timeline_version_id: taskSnapshot.current_timeline_version_id, expected_timeline_sequence: taskSnapshot.timeline_sequence } };
+      const serialized = JSON.stringify(pending);
+      sessionStorage.setItem(key, serialized);
+      if (sessionStorage.getItem(key) !== serialized) throw new Error("无法保留撤销重做原请求，本次没有提交。");
+      pendingTimelineRestoreRef.current = pending; setPendingTimelineRestore(pending);
+      postStarted = true;
+      await (redo ? redoCreationTaskTimeline : undoCreationTaskTimeline)(pending.taskId, pending.input);
+      writeReturned = true;
+      await readTimelineRestore(pending, owns);
     } catch (cause) {
+      let reported = cause;
+      if (pending && postStarted && !writeReturned) {
+        try {
+          if (cause instanceof CreationPlanApiError && ["not_submitted", "rejected"].includes(cause.submissionEffect ?? "")) {
+            clearTimelineRestore(pending, owns);
+          } else {
+            pending.submissionError = errorDetails(cause);
+            sessionStorage.setItem(`timeline-restore:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`, JSON.stringify(pending));
+          }
+        } catch (storageCause) { reported = storageCause; }
+      }
       if (owns()) {
-        if (!writeReturned && cause instanceof CreationPlanApiError && ['not_submitted','rejected'].includes(cause.submissionEffect ?? '')) setPendingTimelineRestore(null);
-        setError(errorDetails(cause));await refresh(true).catch(() => undefined);
+        const details = errorDetails(reported);
+        setError(!postStarted ? { ...details, message: `本次撤销重做没有提交：${details.message}` } : details);
+        await refresh(true, () => owns()).catch(() => undefined);
       }
     } finally {
-      if (owns()) setBusy(null);
+      if (editRequestOperation.current === operation) {
+        editRequestOperation.current = null;
+        if (currentTaskId.current === taskSnapshot.id) setBusy(null);
+      }
     }
   }
 
@@ -1417,7 +1716,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     || (activeView === "subtitle_cover" && activeSubtitleTrack)
   );
   const conversation = hasContextConversation
-    ? <><button type="button" aria-pressed={addReferences} onClick={()=>setAddReferences(value=>!value)}>{addReferences ? "多选引用中" : "多选引用"}</button><ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { assistantRequestSequence.current += 1; previewRequestSequence.current += 1; invalidateEditPreview(); setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} onClearReference={() => setDetachedReference(selectedEditContext?.ref ?? null)} materialContextLabel={selectedTaskReference ? null : selectedMaterialReference?.label ?? null} selectedContextLabel={!selectedTaskReference ? null : isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedTaskReference ? "说说怎么改" : selectedMaterialReference ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} /></>
+    ? <><button type="button" aria-pressed={addReferences} onClick={()=>setAddReferences(value=>!value)}>{addReferences ? "多选引用中" : "多选引用"}</button><ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { generationReadOwner.current = null; assistantRequestSequence.current += 1; previewRequestSequence.current += 1; invalidateEditPreview(); setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} onClearReference={() => setDetachedReference(selectedEditContext?.ref ?? null)} materialContextLabel={selectedTaskReference ? null : selectedMaterialReference?.label ?? null} selectedContextLabel={!selectedTaskReference ? null : isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedTaskReference ? "说说怎么改" : selectedMaterialReference ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} /></>
     : <HomeCommandComposer task={task} onTaskUpdated={() => { void refresh(true); }} />;
 
   return (
@@ -1446,9 +1745,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         <HomeCardDialog kind="detail" title="历史时间线版本" open={historyOpen} onClose={() => setHistoryOpen(false)} footer={<button type="button" onClick={() => setHistoryOpen(false)}>收起历史版本</button>}>
           <TimelineVersionHistory taskId={task.id} open={historyOpen} currentVersionId={task.current_timeline_version_id} restoreBusy={busy!==null || Boolean(pendingTimelineRestore)} onRestore={(operationId,redo)=>void undoTimeline(redo,operationId)} />
         </HomeCardDialog>
-        {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status"><CheckCircle2 size={17} />{notice}</div> : null}
+        {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">{!pendingMetadataSave ? <CheckCircle2 size={17} /> : null}{notice}</div> : null}
+        {pendingMetadataSave?.taskId === task.id ? <div role="status">保存结果待核对。原输入已保留，不会重复提交。<Button variant="outline" disabled={busy !== null} onClick={() => void queryMetadataSave()}>查询原保存结果</Button><details><summary>保存请求详情</summary><p>原请求：{pendingMetadataSave.input.request_id}</p></details></div> : null}
         {pendingTimelineRestore?.taskId===task.id ? <p role="status">撤销或重做请求等待核对。<Button variant="outline" disabled={busy!==null} onClick={()=>void queryTimelineRestore()}>查询原撤销重做结果</Button></p> : null}
-        {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={busy !== null} onClick={() => void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。") } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
+        {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={!editRequestRecoveryReady || busy !== null || pendingMetadataSave !== null || pendingTimelineRestore !== null} onClick={() => { if (!editRequestRecoveryReady || editRequestOperation.current || pendingMetadataSaveRef.current || pendingTimelineRestoreRef.current) return; void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。"); } } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
         {executionError ? <TaskIssue stage={task.stage} reason={executionError.code === "device_budget_unavailable" ? "这台设备还没有完成制作资源标定，暂时不能开始制作。" : executionError.message} impact={executionError.impact} repair={executionError.repairAction} code={executionError.code}>{executionError.code === "device_budget_unavailable" ? <><Link href="/health">检查运行情况</Link><details className={styles.traceDetails}><summary>制作资源诊断</summary><p>{executionError.message}</p></details></> : null}{task.confirmed_script_id ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(executionController.recheckRequirements)} type="button">重新核对文案和制作要求</button> : null}</TaskIssue> : null}
         {!error && !executionError && task.stage_status === "failed" && activeView === task.stage && (task.stage_reason || task.stage_impact) ? <TaskIssue stage={task.stage} reason={task.stage_reason} impact={task.stage_impact} repair={task.stage_repair_action} label={`${stageLabels[activeView]}失败`} /> : null}
         <NativeOperationsPanel key={`native-${task.id}`} taskId={task.id}
@@ -1466,7 +1766,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           canSubmit: executionController.storyboard.canSubmit && storyboardInput !== null }}
           onRegenerateStoryboard={() => void changeStoryboard()} onReadStoryboard={() => void changeStoryboard(true)} visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}
           visualError={executionController.visualError} visualReadRequired={executionController.visualReadRequired} onReadVisualDecision={executionController.readVisualDecision}
-          onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact={activeView !== "review"} preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}{activeView === "review" && !executionPreview && !execution?.job ? <p className={styles.notice}>还没有制作安排。可以先查看文案、配音与剪辑。</p> : null}
+          onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact={activeView !== "review"} preview={executionPreview} execution={execution} busy={busy !== null} onRefreshPreview={() => void changeExecution(executionController.recheckRequirements)} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}{activeView === "review" && !executionPreview && !execution?.job ? <p className={styles.notice}>还没有制作安排。可以先查看文案、配音与剪辑。</p> : null}
         </div>
 
         {activeView === "topic" && task.stage === "topic" ? <TopicSelection topics={topics} selectedTopicId={selectedTopicId} topicTitleDraft={topicTitleDraft} knowledgeCount={workspace.plan.knowledge_references.length} sourceCount={workspace.plan.source_references.length} busy={busy}
@@ -1479,15 +1779,19 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           }); }} /> : null}
         {activeView === "topic" && task.stage !== "topic" ? <ConfirmedTopicView topic={workspace.selected_topic} evidence={workspace.topic_evidence} /> : null}
 
+        {activeView === "script" && scriptGeneration.input ? <section className={styles.workSection}><ScriptGenerationStatus key={scriptGeneration.input.requestId}
+          requestId={scriptGeneration.input.requestId} receipt={scriptGeneration.receipt} working={scriptGeneration.working}
+          stopping={scriptGeneration.stopping} error={scriptGeneration.error} onRead={() => void scriptGeneration.query()} onStop={() => void scriptGeneration.stop()}/></section> : null}
+        {activeView === "script" && !scriptGeneration.input && scriptGeneration.error ? <p role="alert">{scriptGeneration.error}</p> : null}
         {activeView === "script" && task.stage === "script" && !latestScript ? manualScriptOpen ? <ScriptWindowStart taskId={task.id} onSaved={async () => { await refresh(true); setManualScriptOpen(false); }}/> : <>
           <PlanReplyDraftAction busy={busy !== null} task={task} onComplete={async () => { await refresh(true); setNotice("已保存对话回复为待确认文案草稿；请补充当前资料引用和画面建议。"); }} />
-          <section className={styles.workSection}><div className={styles.emptyAction}><FileText size={28} /><h2>生成文案</h2><p>使用已确认选题与固定资料。</p><button className="modern-primary-button" disabled={busy !== null} onClick={() => run("script", () => generateCreationTaskScript(task.id), "文案已生成，等待检查。") } type="button">{busy === "script" ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成文案</button></div></section>
+          <section className={styles.workSection}><div className={styles.emptyAction}><FileText size={28} /><h2>生成文案</h2><p>使用已确认选题与固定资料。</p><button className="modern-primary-button" disabled={busy !== null || scriptGeneration.blocked} onClick={() => void scriptGeneration.generate()} type="button">{scriptGeneration.working ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成文案</button></div></section>
           <Button variant="outline" disabled={busy !== null} onClick={() => setManualScriptOpen(true)}>手动编写文案</Button>
         </> : null}
         {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript ? <ScriptEditor taskId={task.id} busy={busy !== null} key={windowScript ? `${task.id}:${latestScript.id}` : `${task.id}:${latestScript.id}:${latestScript.updated_at}`} onWindowSaved={async () => { await refresh(true); }} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
         {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ReadonlyScriptsView scripts={workspace.scripts} confirmedScriptId={task.confirmed_script_id} /> : null}
 
-        {activeView === "script" && latestScript?.selection_status === "confirmed" ? <ScriptLibrarySave key={latestScript.id} script={latestScript} /> : null}
+        {activeView === "script" && latestScript?.selection_status === "confirmed" ? <ScriptLibrarySave key={latestScript.id} script={latestScript} onReloadSource={async () => { await refresh(true); }} /> : null}
 
         {pendingVoiceSelection ? <p role="status">声音采用请求等待核对。<Button variant="outline" type="button" disabled={busy !== null} onClick={() => void handleNarrationVoice("query")}>查询声音采用结果</Button>{voiceSelectionNotFound === pendingVoiceSelection.request_id ? <Button variant="outline" type="button" disabled={busy !== null} onClick={() => void handleNarrationVoice("replay")}>继续原声音采用请求</Button> : null}</p> : null}
         {activeView === "narration" && task.stage === "narration" && !workspace.narration ? (
@@ -1499,7 +1803,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>准备视频剪辑</h2><p>在上方核对文案与要求后继续制作。</p></div></section> : null}
 
-        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleWorkspace onSeekPreview={positionAudioListen} activeTrack={activeSubtitleTrack} busy={busy !== null} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} onRedo={() => void undoTimeline(true)} selectedCover={selectedCover} selectedCueId={selectedCueId} taskId={task.id} versionId={task.current_timeline_version_id} canUndo={task.can_undo} canRedo={task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} /> : null}
+        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleWorkspace onSeekPreview={positionAudioListen} activeTrack={activeSubtitleTrack} busy={busy !== null || Boolean(pendingMetadataSave)} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} onRedo={() => void undoTimeline(true)} selectedCover={selectedCover} selectedCueId={selectedCueId} taskId={task.id} versionId={task.current_timeline_version_id} canUndo={task.can_undo} canRedo={task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} /> : null}
 
         <div className={activeView === "review" ? styles.reviewPane : styles.flowContents} role={activeView === "review" ? "tabpanel" : undefined} id={`review-panel-result-${task.id}`} aria-labelledby={activeView === "review" ? `review-result-${task.id}` : undefined} hidden={activeView === "review" && reviewPane !== "result"}>
         {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <ReviewOutputView subtitleSummary={subtitleSummary} coverValid={workspace.cover_asset?.status === "valid"} canEditSubtitle={Boolean(activeSubtitleTrack)} reviewChecks={reviewChecks} busy={busy} onEditMontage={() => openView("montage")} onRecord={() => setRecordingOpen(true)} onEditSubtitles={() => openView("subtitle_cover")} onSave={() => void saveVideo()} /> : null}
@@ -1513,7 +1817,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           canSubmit: executionController.storyboard.canSubmit && storyboardInput !== null }}
           onRegenerateStoryboard={() => void changeStoryboard()} onReadStoryboard={() => void changeStoryboard(true)} visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}
           visualError={executionController.visualError} visualReadRequired={executionController.visualReadRequired} onReadVisualDecision={executionController.readVisualDecision}
-          onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact preview={executionPreview} execution={execution} busy={busy !== null} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
+          onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact preview={executionPreview} execution={execution} busy={busy !== null} onRefreshPreview={() => void changeExecution(executionController.recheckRequirements)} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
         {recordingOpen ? <HomeCardDialog title="电脑录音" onClose={() => setRecordingOpen(false)}>{workspace.scripts.filter(script => script.id === task.confirmed_script_id).map(script => <div key={script.id}><p>录音提词：以下按页显示已确认文案，不是全文载入。</p><ConfirmedScriptView script={script}/></div>)}<DesktopVoiceRecorder onRecorded={submitRecordedVoice} onCancel={() => setRecordingOpen(false)} /></HomeCardDialog> : null}
         </TabsContent>
       </Tabs>

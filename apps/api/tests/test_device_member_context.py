@@ -1,7 +1,7 @@
 """Apply migrations only to a disposable local PostgreSQL, never the cloud."""
 from uuid import uuid4
 
-from test_device_accounts import pg, _users_and_device, _target, _invite, _accept, _last, PROOF, OTHER_PROOF
+from test_device_accounts import pg as pg, _users_and_device, _target, _invite, _accept, _last, PROOF, OTHER_PROOF
 
 
 def call(pg, device, workspace, actor, proof=PROOF):

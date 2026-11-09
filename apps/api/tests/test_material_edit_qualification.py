@@ -42,7 +42,7 @@ def _preview(state, operation):
 
 
 def _current(state):
-    task = state.production.get_creation_task(state.workspace_id, state.task.id)
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
     montage = creation_task_montage_plan_from_payload(
         state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
     )
@@ -57,14 +57,14 @@ def test_private_other_member_known_id_is_rejected_before_proposal(material_edit
     state.production._save_asset(state.asset)
     state.production.set_asset_visibility(state.workspace_id, state.asset.id, "private")
     before = _current(state)
-    proposals = state.production.list_edit_proposals(state.workspace_id, state.task.id)
+    proposals = state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id)
     candidates = state.client.get(f"{state.base_url}/montage/clips/{state.clip.id}/candidates")
     assert candidates.status_code == 200
     assert state.asset.id not in {item["asset_id"] for item in candidates.json()}
     response = _preview(state, operation)
     assert response.status_code == 403, response.text
     assert _current(state) == before
-    assert state.production.list_edit_proposals(state.workspace_id, state.task.id) == proposals
+    assert state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id) == proposals
 
 
 @pytest.mark.parametrize("operation", ["ReplaceClip", "InsertClip"])
@@ -81,7 +81,7 @@ def test_private_permission_changed_after_preview_cannot_be_confirmed(material_e
     response = state.client.post(f"{state.base_url}/edits/{proposal_id}/confirm", json={})
     assert response.status_code == 403, response.text
     assert _current(state) == before
-    assert state.production.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
+    assert state.production.edit_records.get_edit_proposal(state.workspace_id, proposal_id).status == "proposed"
 
 
 @pytest.mark.parametrize("operation", ["ReplaceClip", "InsertClip"])

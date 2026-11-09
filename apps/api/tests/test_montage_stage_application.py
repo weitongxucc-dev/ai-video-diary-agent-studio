@@ -20,7 +20,8 @@ from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceP
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess, creation_job_registration
 from app.montage import MontagePlanner
-from app.production import CreationPlanVoiceReference, NarrationArtifactRecord, NarrationSegment
+from app.creation.contracts import CreationPlanVoiceReference, NarrationSegment
+from app.creation.narration_artifacts import NarrationArtifactRecord
 from app.visual_effects import reusable_color_settings
 from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes
 from test_creation_execution import _seed
@@ -35,19 +36,19 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh',
         model_id='declared-synthetic-narration', person_authorization_id='person_auth_1', voice_authorization_id='voice_auth_1',
         voice_usage_scopes=('narration',))
-    plan = repo.get_creation_plan('local', 'plan_local')
+    plan = repo.plan_records.get_creation_plan('local', 'plan_local')
     plan.presenter_share_target = 0
     plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
         person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version, 'zh-CN', voice.model_id)
     plan.owner_user_id = member.member_id
     plan.aspect_ratio = '16:9'
     plan.template_settings = {'fit_mode': 'fit', 'color_style': {'exposure': 0.1}, 'subtitle_style': {'font_size': 42}}
-    task = repo.get_creation_task('local', task_id)
+    task = repo.task_records.get_creation_task('local', task_id)
     task.owner_user_id = member.member_id
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
-    script = repo.get_creation_task_script('local', script_id)
+    script = repo.script_records.get_creation_task_script('local', script_id)
     repo.start_creation_task_narration('local', task_id)
     audio = tmp_path / 'declared-narration.wav'
     audio.write_bytes(synthetic_wav_bytes(2))
@@ -57,10 +58,10 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         sample_rate=8000, model_id=voice.model_id, language='zh', pronunciation_version='fixture-rules')
     segment = NarrationSegment(id='declared-montage-section', workspace_id='local', task_id=task_id,
         script_id=script_id, source_section_id=script.sections[0].id, text=script.sections[0].content,
-        audio_reference=repo.narration_artifact_reference(cache), duration_seconds=2, sample_rate=8000,
+        audio_reference=repo.narration_artifacts.narration_artifact_reference(cache), duration_seconds=2, sample_rate=8000,
         model_id=voice.model_id, voice_profile_id=voice.id, voice_version=voice.version, language='zh',
         pronunciation_version='fixture-rules', status='ready')
-    repo.complete_creation_task_narration(record, segments=[segment])
+    repo.narration_completion.complete_creation_task_narration(record, segments=[segment])
     # This actual ffmpeg command creates input data, before the metadata execution window.
     asset, material_ref = register_synthetic_video_asset(repo, workspace_id='local', member_id=member.member_id,
         path=tmp_path / 'library/source.mp4', asset_id='declared-montage-broll', seconds=6)
@@ -86,7 +87,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
     assert case.repository is case.metadata.repository is case.person_stage.repository is repo
     assert case.metadata is case.person_stage.metadata and case.montage_planner is main.montage_planner
     calls = []
-    original_build, original_save, original_base = MontagePlanner.build_for_creation_task, repo.save_creation_task_montage_plan, case.metadata.ensure_montage_base
+    original_build, original_save, original_base = MontagePlanner.build_for_creation_inputs, repo.montage_plan_adoption.save_creation_task_montage_plan, case.metadata.ensure_montage_base
 
     def observe_build(planner, *args, **kwargs):
         result = original_build(planner, *args, **kwargs)
@@ -103,8 +104,8 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         calls.append({'port': 'ensure_base', 'version_id': result.id})
         return result
 
-    monkeypatch.setattr(MontagePlanner, 'build_for_creation_task', observe_build)
-    monkeypatch.setattr(repo, 'save_creation_task_montage_plan', observe_save)
+    monkeypatch.setattr(MontagePlanner, 'build_for_creation_inputs', observe_build)
+    monkeypatch.setattr(repo.montage_plan_adoption, 'save_creation_task_montage_plan', observe_save)
     monkeypatch.setattr(case.metadata, 'ensure_montage_base', observe_base)
     registration = creation_job_registration(repo, render_action=main._render_creation_stage_with_grant,
         render_is_valid=main._creation_stage_valid_with_grant, verify_identity=main._verify_creation_identity,
@@ -131,9 +132,9 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         while not runtime.run_once():
             assert time.monotonic() < deadline, runtime.last_error
             time.sleep(.1)
-        task = repo.get_creation_task('local', task_id)
+        task = repo.task_records.get_creation_task('local', task_id)
         montage = repo.get_creation_task_montage_plan('local', task_id)
-        versions = repo.list_timeline_versions('local', task_id)
+        versions = repo.timeline_records.list_timeline_versions('local', task_id)
         assert montage['status'] == task.stage_status == task.status == 'waiting_for_user'
         assert task.stage == 'montage' and not task.output_ready
         assert len(montage['clips']) == len(montage['cues']) == montage['low_confidence_clip_count'] == 1
@@ -149,9 +150,9 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         assert len(versions) == 1 and versions[0].id == task.current_timeline_version_id
         assert versions[0].snapshot['montage']['id'] == montage['id'] == task.montage_plan_id
         assert versions[0].snapshot['narration_segments'][0]['id'] == segment.id
-        event = repo.get_task_event('local', f'event_{job_id}_montage_plan_queued')
+        event = repo.execution_records.get_task_event('local', f'event_{job_id}_montage_plan_queued')
         assert event.payload == {'stage': 'montage_plan', 'status': 'completed', 'output': montage['id'], 'reason': 'waiting_for_user'}
-        assert repo.get_job_run('local', job_id).status == 'queued'
+        assert repo.job_records.get_job_run('local', job_id).status == 'queued'
         assert [call['port'] for call in calls] == ['planner', 'save_montage', 'save_montage', 'ensure_base']
         assert calls[0]['configured_global'] is False and calls[1]['connection_supplied'] is False and calls[2]['connection_supplied'] is True
         before_queries = list(calls)
@@ -160,9 +161,9 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         assert public.status_code == montage_public.status_code == 200, (public.text, montage_public.text)
         assert montage_public.json()['montage']['id'] == montage['id'] and montage_public.json()['montage']['status'] == 'waiting_for_user'
         assert not runtime.run_once()
-        assert calls == before_queries and len(repo.list_timeline_versions('local', task_id)) == 1
-        assert not repo.list_person_renders('local', task_id) and not repo.list_transform_runs('local', task_id)
-        assert not repo.list_artifact_records('local', task_id)
+        assert calls == before_queries and len(repo.timeline_records.list_timeline_versions('local', task_id)) == 1
+        assert not repo.person_renders.list_person_renders('local', task_id) and not repo.lineage_records.list_transform_runs('local', task_id)
+        assert not repo.execution_records.list_artifact_records('local', task_id)
         stopped = client.post(url + '/execution/cancel')
         assert stopped.status_code == 200, stopped.text
         assert calls == before_queries and repo.get_creation_task_montage_plan('local', task_id)['id'] == montage['id']
@@ -180,3 +181,162 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         if evidence_dir:
             Path(evidence_dir, 'METADATA_WINDOW_END').write_text(str(time.monotonic()))
         assert runtime.stop(1)
+
+
+def _montage_stream_case(tmp_path, monkeypatch):
+    """Paid metadata-only inputs for the real initial and replacement owners."""
+    from datetime import datetime, timedelta, timezone
+    from app.materials.contracts import MaterialAsset, MaterialSegment
+    from app.creation.script_contracts import CreationTaskScriptSection
+    from app.creation.montage_stage_use_case import MontageStageUseCase
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase
+    from app.creation.execution_control import CreationExecutionControl
+    from app.creation_execution import CreationExecution, CreationExecutionActor, CreationJobOwnerVerifier, CreationJobUnitExecutor
+    from app.device_scheduler import DeviceScheduler
+    from app.artifact_store import ArtifactStore
+    from test_device_scheduler import Resources, Processes
+    repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local', duration_seconds=4)
+    task = repo.task_records.get_creation_task('local', task_id)
+    script = repo.script_records.get_creation_task_script('local', script_id)
+    script.sections = [replace(script.sections[0], content='中文 "quoted" café 😺。'),
+        CreationTaskScriptSection('second', '尾段', '实际尾段。', '素材画面', [])]
+    with repo._connect() as conn:
+        conn.execute('BEGIN')
+        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?', (repo.script_records._script_payload(conn, script), script.id))
+    actor = CreationExecutionActor('local', 'stream-member')
+    path = tmp_path/'paid.wav'
+    path.write_bytes(b'paid source metadata; no decode')
+    record = NarrationArtifactRecord(id='paid', workspace_id='local', task_id=task.id, script_id=script.id,
+        voice_profile_id='voice_1', cache_key='paid', audio_path=str(path), duration_seconds=4,
+        sample_rate=24000, model_id='fixture', language='zh', pronunciation_version='v1')
+    repo.narration_artifacts.save_narration_artifact(record)
+    rows = [NarrationSegment('audio-'+section.id, 'local', task.id, script.id, section.id, section.content,
+        repo.narration_artifacts.narration_artifact_reference('paid'), 2, 24000, 'fixture', 'voice_1', 'v1', 'zh', 'v1', 'ready',
+        created_at=script.created_at-timedelta(seconds=i)) for i, section in enumerate(script.sections)]
+    repo.narration_records.save_narration_segments('local', task.id, script.id, rows)
+    task.narration_cache_key = 'paid'
+    task.stage = 'montage'
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+    source = tmp_path/'library'/'metadata.mp4'
+    source.write_bytes(b'fixed metadata-only asset')
+    stat = source.stat()
+    asset = MaterialAsset('stream-asset', 'local', source.name, str(source), stat.st_size,
+        datetime.fromtimestamp(stat.st_mtime, timezone.utc), duration_seconds=8, analysis_status='ready', review_status='approved',
+        usage_role='b_roll', owner_user_id=actor.member_id,
+        segments=[MaterialSegment('stream-shot', 'stream-asset', 0, 8, usage_role='b_roll', review_status='approved')])
+    repo._save_asset(asset)
+    with repo._connect() as conn:
+        repo._claim_workspace_media_reference(conn, workspace_id='local',
+            reference=repo.workspace_media_reference_for_asset('local', asset.id))
+    from app.task_audio import TaskAudio
+    from app.media.picture_preview import PicturePreviewRenderer
+    store = ArtifactStore(tmp_path/'outputs')
+    audio = TaskAudio(repo, store, tmp_path/'temporary')
+    metadata = MetadataEditUseCase(repo, store, output_root=tmp_path/'outputs', audio_service=audio)
+    metadata.picture_renderer = PicturePreviewRenderer(repo, store, audio, metadata, None,
+        verify_identity=lambda _: 'ready', presenter_model_ids=lambda: {}, output_root=tmp_path/'outputs',
+        portrait_worker_path=None, temporary_root=tmp_path/'temporary')
+    stage = MontageStageUseCase(repo, metadata, SimpleNamespace(presenter_model_ids=lambda: {}), MontagePlanner())
+    owner = CreationJobOwnerVerifier(repo, montage_budget=MontageBudget(20, 20, 1_000_000, 1_000_000, 30, 1_000_000),
+        verify_identity=lambda _: 'ready')
+    def forbidden(*args, **kwargs):
+        pytest.fail('whole montage stream must not hydrate input DTOs or execute media/models')
+    execution = CreationExecution(repo, run_montage_plan=forbidden, run_render=forbidden, render_is_valid=lambda *_: False)
+    scheduler = DeviceScheduler(repo.database_path, tmp_path/'permit.lock', owners=owner, resources=Resources(), processes=Processes())
+    executor = CreationJobUnitExecutor(repo, render_action=forbidden, render_is_valid=lambda *_: False, montage_stage=stage)
+    runtime = SimpleNamespace(scheduler=scheduler, wake=lambda: None,
+        registrations={'creation_job': SimpleNamespace(owner=owner, executor=executor)})
+    control = CreationExecutionControl(repo, execution, SimpleNamespace(valid=lambda *args, **kwargs: False), lambda _: 'ready')
+    plan = repo.plan_records.get_creation_plan('local', task.plan_id)
+    from app.creation_execution import revision_digest
+    digest = revision_digest(script, plan)
+    return SimpleNamespace(repo=repo, task=task, script=script, plan=plan, rows=rows, record=record, asset=asset,
+        actor=actor, stage=stage, owner=owner, scheduler=scheduler, executor=executor, runtime=runtime,
+        control=control, digest=digest, forbidden=forbidden)
+
+
+@pytest.mark.parametrize('outcome', ['normal', 'save_base_gap', 'tail', 'revoked', 'checkpoint_revoked', 'save_base_gap_changed_audio'])
+def test_whole_montage_stream_initial_owner_and_save_gap(tmp_path, monkeypatch, outcome):
+    case = _montage_stream_case(tmp_path, monkeypatch)
+    builds = []
+    build = MontagePlanner._build_creation_plan
+    def observed(*args, **kwargs):
+        builds.append(True)
+        return build(*args, **kwargs)
+    monkeypatch.setattr(MontagePlanner, '_build_creation_plan', observed)
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload',
+                 'effective_creation_script', 'list_narration_segments'):
+        monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else (case.repo.section_inputs if name in ('effective_creation_script',) else case.repo), name, case.forbidden)
+    monkeypatch.setattr(case.repo.narration_records, '_decode_script', case.forbidden)
+    monkeypatch.setattr('app.granted_subprocess.run_granted_command', case.forbidden)
+    try:
+        case.control.start('local', case.task.id, case.script.id, case.digest, case.actor,
+            case.runtime, verify_media=False)
+        grant = case.scheduler.pick_and_grant()
+        assert grant is not None
+        if outcome in {'save_base_gap', 'save_base_gap_changed_audio'}:
+            original = case.stage.metadata.ensure_montage_base
+            def interrupted(*args, **kwargs):
+                raise KeyboardInterrupt('process exits after saved montage before base')
+            monkeypatch.setattr(case.stage.metadata, 'ensure_montage_base', interrupted)
+            with pytest.raises(KeyboardInterrupt):
+                case.executor.execute(grant, case.scheduler)
+            assert case.repo.task_records.get_creation_task('local', case.task.id).montage_plan_id
+            assert not case.repo.timeline_records.list_timeline_versions('local', case.task.id)
+            monkeypatch.setattr(case.stage.metadata, 'ensure_montage_base', original)
+            if outcome == 'save_base_gap_changed_audio':
+                with case.repo._connect() as conn:
+                    conn.execute('UPDATE narration_segments SET duration_seconds=3 WHERE id=?', (case.rows[-1].id,))
+                # The original raw stage key/aggregate permit cannot detect this change.
+                with case.repo.execution_inputs.creation_execution_read() as conn:
+                    assert case.owner.check_current(case.scheduler._get(grant.request_id), conn) == 'ready'
+        elif outcome in {'tail', 'revoked'}:
+            injected = []
+            original = case.repo.montage_plan_adoption.save_creation_task_montage_plan
+            def changed(*args, **kwargs):
+                verify = kwargs['verify_inputs']
+                def inject(conn, task):
+                    injected.append(True)
+                    if outcome == 'tail':
+                        conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content','changed tail') WHERE script_id=? AND section_id='second'", (case.script.id,))
+                    else:
+                        monkeypatch.setattr(case.owner, 'verify_identity', lambda _: 'unauthorized')
+                    verify(conn, task)
+                kwargs['verify_inputs'] = inject
+                return original(*args, **kwargs)
+            monkeypatch.setattr(case.repo.montage_plan_adoption, 'save_creation_task_montage_plan', changed)
+        if outcome == 'checkpoint_revoked':
+            released = case.scheduler._released_for_commit
+            def revoked(conn, current):
+                result = released(conn, current)
+                monkeypatch.setattr(case.owner, 'verify_identity', lambda _: 'unauthorized')
+                return result
+            monkeypatch.setattr(case.scheduler, '_released_for_commit', revoked)
+        case.executor.execute(grant, case.scheduler)
+        current = case.repo.task_records.get_creation_task('local', case.task.id)
+        assert len(builds) == 1
+        if outcome in {'tail', 'revoked'}:
+            assert injected
+            assert current.montage_plan_id is None
+            assert not case.repo.timeline_records.list_timeline_versions('local', case.task.id)
+        elif outcome == 'save_base_gap_changed_audio':
+            assert current.montage_plan_id
+            assert not case.repo.timeline_records.list_timeline_versions('local', case.task.id)
+            assert case.scheduler._get(grant.request_id).state != 'done'
+        elif outcome == 'checkpoint_revoked':
+            assert current.montage_plan_id
+            assert len(case.repo.timeline_records.list_timeline_versions('local', case.task.id)) == 1
+            assert case.repo.job_records.get_job_run('local', grant.owner_id).status == 'interrupted'
+            assert case.scheduler._get(grant.request_id).state != 'done'
+        else:
+            assert current.stage_status == 'waiting_for_user', (current.stage_repair_action, case.repo.job_records.get_job_run('local', grant.owner_id).failure_reason)
+            versions = case.repo.timeline_records.list_timeline_versions('local', case.task.id)
+            assert len(versions) == 1
+            assert [row['id'] for row in versions[0].snapshot['narration_segments']] == [row.id for row in reversed(case.rows)]
+            assert case.repo.job_records.get_job_run('local', grant.owner_id).status == 'queued'
+            case.control.start('local', case.task.id, case.script.id, case.digest, case.actor,
+                case.runtime, verify_media=False)
+            assert len(builds) == 1 and len(case.repo.timeline_records.list_timeline_versions('local', case.task.id)) == 1
+    finally:
+        case.scheduler.close()

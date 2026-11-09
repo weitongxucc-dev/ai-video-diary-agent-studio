@@ -1,4 +1,5 @@
 """Metadata boundary check; material/model facts below are declared, not executed."""
+from app.content_identity_http import ContentIdentityHttpAdapter
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
@@ -10,10 +11,12 @@ from fastapi import HTTPException, Request
 import pytest
 
 from app import main
+from app.creation.video_template_routes import VideoTemplateHTTPAdapter
 from app.creation.plan_preflight_use_case import CreationPlanPreflightUseCase
 from app.source_types import source_item_identity
 from app.materials.contracts import MaterialSegmentMatch
-from app.production import ProductionRepository, VideoTemplate
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
 from app.schemas import CreationPlanConfirmRequest, CreationPlanPreviewRequest
 from app.source_repository import SourceRepository
 from app.source_types import KnowledgeItem, SourceConnector, SourceItem
@@ -43,7 +46,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     current = sources.edit_knowledge_item(workspace, "knowledge-fixed", expected_version="1",
         title="当前新版本", body="新版本正文", verified_user_id=reader)
     assert current.version != "1"
-    template = production.save_video_template(VideoTemplate(id="template-fixed", workspace_id=workspace,
+    template = production.video_templates.save_video_template(VideoTemplate(id="template-fixed", workspace_id=workspace,
         version=1, name="metadata template", origin="user", settings={"language": "zh-CN",
             "aspect_ratio": "16:9", "duration_target_seconds": 30, "presenter_share_target": 0}),
         verified_owner_user_id=reader)
@@ -94,11 +97,11 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
         assert ws == workspace
         return reader, False
 
-    resolver = main._video_template_or_404
+    resolver = VideoTemplateHTTPAdapter.read_template
 
-    def observe_resolver(*args):
+    def observe_resolver(adapter, *args):
         trace.append("template")
-        return resolver(*args)
+        return resolver(adapter, *args)
 
     prepare = CreationPlanPreflightUseCase.prepare
 
@@ -122,21 +125,21 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     monkeypatch.setattr(main, "source_repository", sources)
     monkeypatch.setattr(main, "model_catalog", CatalogFacts())
     monkeypatch.setattr(main, "_lipsync_provider", lazy_provider)
-    monkeypatch.setattr(main, "_content_reader", trusted_reader)
-    monkeypatch.setattr(main, "_video_template_or_404", observe_resolver)
+    monkeypatch.setattr(ContentIdentityHttpAdapter, 'reader', lambda adapter, *args, **kwargs: trusted_reader(*args, **kwargs))
+    monkeypatch.setattr(VideoTemplateHTTPAdapter, "read_template", observe_resolver)
     monkeypatch.setattr(CreationPlanPreflightUseCase, "prepare", observe_prepare)
     monkeypatch.setattr(production, "automatic_material_segments", material_facts)
-    monkeypatch.setattr(production, "search_material_segments", search_facts)
+    monkeypatch.setattr(production.material_search, "search_material_segments", search_facts)
     for obj, name, label in [(sources, "list_knowledge_items_for_use", "knowledge.list"),
         (sources, "get_knowledge_reference_readable_by", "knowledge.pin"),
         (sources, "list_source_items_for_use", "sources"),
-        (production, "get_versioned_voice_profile", "voice.pin"),
+        (production.profile_records, "get_versioned_voice_profile", "voice.pin"),
         (production, "creation_plan_person_reference", "person.pin"),
         (production, "get_default_versioned_voice", "voice.default")]:
         observe_read(obj, name, label)
     request = Request({"type": "http", "method": "POST", "path": "/metadata", "headers": []})
     with pytest.raises(HTTPException) as rejected:
-        main._creation_plan_preflight(request, workspace,
+        main._creation_plan_preflight_http_adapter().preflight(request, workspace,
             CreationPlanPreviewRequest(goal="核对事实", template_id=template.id))
     assert rejected.value.status_code == 422 and rejected.value.detail == "请选择明确的模板版本。"
     assert trace == [] and inputs == []
@@ -147,7 +150,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
         "selected_voice": {"profile_id": "absent-voice", "version": "v7"},
         "selected_person": {"profile_id": "absent-person", "version": "v8"}}
     omitted = CreationPlanPreviewRequest(**payload)
-    zero = main._creation_plan_preflight(request, workspace, omitted, automation_scope=scope)
+    zero = main._creation_plan_preflight_http_adapter().preflight(request, workspace, omitted, automation_scope=scope)
     zero_trace = ["template", "reader", "reader", "prepare", "knowledge.list", "knowledge.pin",
         "sources", "materials", "search", "voice.pin", "person.pin", "catalog"]
     assert trace == zero_trace
@@ -168,7 +171,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     trace.clear()
     explicit = CreationPlanConfirmRequest(**payload, presenter_share_target=20, lipsync_quality="high",
         preflight_fingerprint=zero.preflight_fingerprint)
-    positive = main._creation_plan_preflight(request, workspace, explicit, automation_scope=scope)
+    positive = main._creation_plan_preflight_http_adapter().preflight(request, workspace, explicit, automation_scope=scope)
     assert trace == zero_trace + ["provider:high", "provider.ready", "provider.ready", "provider.ready"]
     assert positive.presenter_share_target == 20 and positive.lipsync_quality == "high"
     assert inputs[1].provided_fields == explicit.model_fields_set | {"language", "aspect_ratio", "duration_target_seconds"}
@@ -222,9 +225,11 @@ def selected_dependencies():
         if not state.voice_allowed:
             raise PermissionError("profile_excluded")
         return SimpleNamespace(profile_id="voice", version="v1", model_id="voice-model")
-    production = SimpleNamespace(automatic_material_segments=materials, search_material_segments=search,
-        get_versioned_voice_profile=lambda *_:SimpleNamespace(id="voice", version="v1", language="zh-en", person_profile_id=""),
-        creation_plan_voice_reference=voice_reference, list_applicable_pronunciation_entries=lambda **_:[])
+    production = SimpleNamespace(automatic_material_segments=materials, material_search=SimpleNamespace(search_material_segments=search),
+        profile_records=SimpleNamespace(
+            get_versioned_voice_profile=lambda *_:SimpleNamespace(id="voice", version="v1", language="zh-en", person_profile_id=""),
+            list_applicable_pronunciation_entries=lambda **_:[]),
+        creation_plan_voice_reference=voice_reference)
     sources = SimpleNamespace(list_knowledge_items_for_use=lambda *_, **__: [knowledge] + ([SimpleNamespace(
         **{**vars(knowledge), "id":"other-knowledge"})] if state.extra else []),
         get_knowledge_reference_readable_by=knowledge_pin, list_source_items_for_use=lambda *_, **__:[])

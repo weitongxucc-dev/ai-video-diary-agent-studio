@@ -1,96 +1,30 @@
 from __future__ import annotations
 
 import json
-import re
-from datetime import datetime
-from uuid import UUID
-from app.assistant.projection import _business_event_lines, _safe_business_failure
+from app.assistant.projection import _business_event_lines
+from app.assistant.business_failure import _safe_business_failure
+from app.assistant.catalogue import SCRIPT_WINDOW_TOOL_OPERATIONS
+from app.assistant.script_window_receipts import project_script_window_request, script_window_message
 from app.assistant.failures import _fail, _classify_output, FAILURE_UNKNOWN, FAILURE_TOOL_FAILED
 
 
 
-def _script_window_result(details, *, expected_operation=None, is_error=False):
-    """Whitelist request facts; original candidate bodies stay behind receipt lookup."""
-    if not isinstance(details,dict) or details.get('kind')!='script_window_request':
-        return None
-    operation=details.get('operation')
-    if operation not in {'start','patch','confirm'} or expected_operation is not None and operation!=expected_operation:
-        return None
-    request_id=details.get('request_id')
-    try:
-        request_id=str(UUID(request_id))
-    except (ValueError,TypeError,AttributeError):
-        return None
-    identifier=lambda value: value if isinstance(value,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}',value) else None
-    task_id=identifier(details.get('task_id'))
-    if task_id is None:
-        return None
-    result={'kind':'script_window_request','operation':operation,'task_id':task_id,'request_id':request_id}
-    script_id=identifier(details.get('script_id'))
-    if operation!='start' and script_id is None: return None
-    if script_id is not None: result['script_id']=script_id
-    for key in ('input_id','input_turn_id'):
-        value=identifier(details.get(key))
-        if value is not None: result[key]=value
-    failure=_safe_business_failure(details.get('failure'))
-    receipt=details.get('receipt') if 'receipt' in details else details
-    if not isinstance(receipt,dict): receipt={}
-    matching=(receipt.get('task_id')==task_id and receipt.get('request_id')==request_id
-              and (script_id is None or receipt.get('script_id')==script_id))
-    status=receipt.get('status') if matching else None
-    if matching and receipt.get('error_detail') is not None:
-        error=receipt['error_detail']
-        failure={**failure,**_safe_business_failure(error if isinstance(error,dict) else {'reason':error})}
-    expected_status='confirmed' if operation=='confirm' else 'saved'
-    if matching and not is_error and status==expected_status and identifier(receipt.get('script_id')):
-        revision=receipt.get('updated_at')
-        try:
-            valid_revision=isinstance(revision,str) and len(revision)<=80 and datetime.fromisoformat(revision).tzinfo is not None
-        except ValueError:
-            valid_revision=False
-        if valid_revision:
-            result.update(status=status,script_id=receipt['script_id'],updated_at=revision)
-            count=receipt.get('total_count')
-            if type(count) is int and count>=0: result['total_count']=count
-            ids=receipt.get('affected_section_ids')
-            if isinstance(ids,list) and len(ids)<=20 and all(identifier(value) is not None for value in ids):
-                result['affected_section_ids']=ids
-        else: result.update(status='unknown',submission_effect='unknown')
-    elif matching and status in {'unknown','failed'}:
-        result.update(status=status,submission_effect='unknown')
-    else:
-        effect=failure.get('submission_effect')
-        result.update(status=effect if effect in {'not_submitted','rejected'} else 'unknown')
-        result['submission_effect']=effect if effect in {'not_submitted','rejected'} else 'unknown'
-    if failure and result['status'] not in {'saved','confirmed'}:
-        if result['status'] in {'unknown','failed'}: failure['submission_effect']='unknown'
-        result['failure']=failure
-    return result
+def quality_continuation_message(value: dict) -> str:
+    return {'recorded': '已回读原质检续作回执；请读取实际质检结果，回执不表示检查通过。',
+        'rejected': '原质检续作被拒绝；原失败阶段保留，请处理具体原因。',
+        'not_submitted': '原质检续作未提交；请核对阻断原因。'}.get(value.get('status'),
+        '原质检续作结果尚未知；只查询原Job和失败前驱，不重复提交或另建检查。')
 
 
-def script_window_message(value: dict) -> str:
-    return {
-        'saved':'原文案窗口保存回执已核对；不代表完整稿已采用。',
-        'confirmed':'原请求的完整文案采用回执已核对；不代表成片已完成。',
-        'not_submitted':'文案窗口请求明确未提交；原请求定位和拒绝原因已保留。',
-        'rejected':'文案窗口请求已被拒绝；原请求定位和拒绝原因已保留。',
-        'unknown':'文案原请求结果尚未完整核清；先查询原请求，不重复提交。',
-        'failed':'文案原请求有失败记录但没有完整成功回执；保留原请求，不换键重提。',
-    }[value['status']]
-
-
-def resolve_script_window_request(value: dict, *, task_id: str, read_original) -> dict:
-    """Reconcile one original request through the caller's authorized reader."""
-    current=_script_window_result(value)
-    if current is None or current['task_id']!=task_id:
-        raise ValueError('文案原请求定位与当前任务不一致')
-    try:
-        receipt=read_original(current['request_id'],current['operation'],current.get('script_id'))
-    except KeyError:
-        # Absence of a receipt does not prove that a previous write was never submitted.
-        return current if current.get('submission_effect') in {'not_submitted','rejected'} else {
-            **current,'status':'unknown','submission_effect':'unknown'}
-    return _script_window_result({**current,'receipt':receipt})
+def resolve_quality_continuation(details: dict, *, task_id: str, invocation_input_id: str, read_original) -> dict:
+    if (details.get('kind') != 'quality_continuation' or details.get('task_id') != task_id
+            or details.get('invocation_input_id') != invocation_input_id):
+        raise ValueError('质检回执不属于当前任务输入')
+    pair = [details.get(key) for key in ('job_id', 'failed_request_id')]
+    if any(not isinstance(value, str) or not value for value in pair):
+        raise ValueError('质检回执缺少原Job或失败前驱')
+    # Only locators are consumed; status and successor come from the owner.
+    return read_original(*pair)
 
 
 def storyboard_regeneration_message(value: dict) -> str:
@@ -255,6 +189,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     }
     orchestration_failed = False
     unresolved_syntax_error = False
+    quality_continuation = None
     edit_request_status = None
     edit_applied = None
     script_tool_result = None
@@ -275,12 +210,18 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if (latest_input is not None and event.get("type") == "tool_execution_end"
                 and ("invocation_input_id" not in details or details["invocation_input_id"] != latest_input["invocation_input_id"])):
             continue  # History remains in the SDK log; only this input owns the reply.
-        if event.get('type')=='tool_execution_end' and event.get('toolName') in {
-                'start_script_window','patch_script_sections','confirm_saved_script','read_script_window_request'}:
+        if event.get('type') == 'tool_execution_end' and event.get('toolName') in {
+                'continue_task_quality_check', 'read_task_quality_continuation'}:
+            details = (event.get('result') or {}).get('details') or {}
+            if (details.get('kind') == 'quality_continuation' and details.get('job_id')
+                    and details.get('failed_request_id')):
+                quality_continuation = details
+        if event.get('type')=='tool_execution_end' and event.get('toolName') in SCRIPT_WINDOW_TOOL_OPERATIONS:
             script_window_attempted=True
-            operation={'start_script_window':'start','patch_script_sections':'patch','confirm_saved_script':'confirm'}.get(event['toolName'])
-            projected=_script_window_result(details,expected_operation=operation,is_error=bool(event.get('isError')))
-            if projected is not None: script_window_result=projected
+            operation=SCRIPT_WINDOW_TOOL_OPERATIONS[event['toolName']]
+            projected=project_script_window_request(details,expected_operation=operation,is_error=bool(event.get('isError')))
+            if projected is not None:
+                script_window_result=projected
         if (event.get('type') == 'tool_execution_end'
                 and event.get('toolName') in {'revise_narration_segment', 'read_narration_revision', 'resume_narration_revision'}
                 and details.get('kind') == 'segment_revision'):
@@ -466,6 +407,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         return message, script_tool_result
     if segment_result is not None:
         return segment_revision_message(segment_result), segment_result
+    if quality_continuation is not None:
+        return quality_continuation_message(quality_continuation), quality_continuation
     if edit_request_status is not None and preview is None:
         if media_job is not None:
             edit_request_status = {**edit_request_status, "related_media_job": media_job}

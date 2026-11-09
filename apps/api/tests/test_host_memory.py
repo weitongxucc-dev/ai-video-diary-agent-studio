@@ -12,7 +12,7 @@ import pytest
 
 from app import host_memory as memory
 from app.granted_subprocess import GrantedCommandMemoryPressure, GrantedCommandResourceUnavailable, run_granted_command
-from app.host_memory import HostMemoryMonitor, MemoryDecision, MemoryPolicy, MemorySample, validate_observation_cadence
+from app.host_memory import HostMemoryMonitor, MemoryPolicy, MemorySample, validate_observation_cadence
 from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceProbe, HostResourceRefusal, SceneRuntimeLimits
 from app.member_permits import build_host_probes, host_budget_from_env, memory_policy_from_env, HostBudgetUncalibrated
 from tests.test_member_permits import _HOST_ENV

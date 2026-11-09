@@ -674,7 +674,9 @@ def test_script_generation_prompt_is_compact_without_overriding_template_section
 
 
 @pytest.mark.parametrize("override,expected", [(None, 120.0), (7.5, 7.5)])
-def test_script_report_deadline_is_120_seconds_by_default_and_honors_explicit_override(override, expected):
+def test_script_report_deadline_is_120_seconds_by_default_and_honors_explicit_override(override, expected, monkeypatch):
+    ticks = iter((100.0, 100.5))
+    monkeypatch.setattr("app.topics.monotonic", lambda: next(ticks))
     requests = []
     def respond(request):
         payload = json.loads(request.content)
@@ -688,12 +690,14 @@ def test_script_report_deadline_is_120_seconds_by_default_and_honors_explicit_ov
         transport=httpx.MockTransport(respond), **options)
     generator.generate(_script_input())
     assert len(requests) == 2
-    for request in requests:
-        assert request.extensions["timeout"] == {key: expected for key in ("connect", "read", "write", "pool")}
+    # Review preparation consumes the same absolute deadline, not a fresh timeout.
+    for request, remaining in zip(requests, (expected, expected - 0.5), strict=True):
+        assert request.extensions["timeout"] == {key: remaining for key in ("connect", "read", "write", "pool")}
 
 
 @pytest.mark.parametrize("model", ["MiniMax-M3", "MiniMax-M3.1-Flash-Preview", "MiniMax-M2.5", "same-model", "minimax-m3"])
-def test_only_exact_m3_disables_thinking_for_script_generation_and_review(model):
+def test_only_exact_m3_disables_thinking_for_script_generation_and_review(model, monkeypatch):
+    monkeypatch.setattr("app.topics.monotonic", lambda: 100.0)
     calls = []
     def respond(request):
         payload = json.loads(request.content)

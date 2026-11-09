@@ -11,7 +11,8 @@ from app.artifact_store import ArtifactStore
 from app.creation_execution import CreationExecutionActor
 from app.media_script import PngOutputContract, _name
 from app.models import utc_now
-from app.production import ArtifactRecord, JobRun, ProductionRepository, TransformRun
+from app.creation.contracts import ArtifactRecord, JobRun, TransformRun
+from app.production import ProductionRepository
 from app.task_audio import TASK_MEDIA_KIND
 
 
@@ -152,7 +153,7 @@ class MediaScriptTools:
             raise PermissionError("current recipe identity is unavailable or unauthorized")
         return actor.user_id or actor.member_id
 
-    def _creation_identity(self, actor, request_id):
+    def registration_identity(self, actor, request_id):
         if self.task_id is not None:
             raise PermissionError("任务授权不能创建通用配方")
         owner = self._identity(actor)
@@ -187,20 +188,20 @@ class MediaScriptTools:
 
     def _definition(self, actor, job_id):
         owner = self._identity(actor)
-        job = self.repository.get_job_run(actor.workspace_id, job_id)
-        task = self.repository.get_creation_task(actor.workspace_id, job.task_id)
+        job = self.repository.job_records.get_job_run(actor.workspace_id, job_id)
+        task = self.repository.task_records.get_creation_task(actor.workspace_id, job.task_id)
         if self.authorize_task_write(actor, task) is False:
             raise PermissionError("current creator cannot write the producer task")
         if job.kind != TASK_MEDIA_KIND or job.status != "succeeded":
             raise ScriptToolError("source must be a successful canonical script job")
-        transforms = [run for run in self.repository.list_transform_runs(actor.workspace_id, task.id)
+        transforms = [run for run in self.repository.lineage_records.list_transform_runs(actor.workspace_id, task.id)
                       if run.job_id == job.id and run.transform_type == "media_script" and run.status == "succeeded"]
         if len(transforms) != 1:
             raise ScriptToolError("successful job has no unique script definition transform")
         run = transforms[0]
         if run.parameters.get("owner_member_id") != owner:
             raise PermissionError("script producer does not belong to the current creator")
-        records = [record for record in self.repository.list_artifact_records(actor.workspace_id, task.id)
+        records = [record for record in self.repository.execution_records.list_artifact_records(actor.workspace_id, task.id)
                    if record.kind == "media_script_definition" and record.producer_job_id == job.id
                    and record.logical_ref == run.parameters.get("definition_ref")]
         if (len(records) != 1 or records[0].logical_ref not in run.output_refs
@@ -253,11 +254,9 @@ class MediaScriptTools:
         owner = self._identity(actor)
         if self.task_id is not None and tool_id is None:
             raise PermissionError("任务授权不能浏览通用配方库")
-        rows = conn.execute("""SELECT * FROM transform_runs
-            WHERE workspace_id=? AND transform_type='media_script_tool_recipe'
-              AND json_extract(parameters_json,'$.owner_member_id')=?
-              AND (? IS NULL OR json_extract(parameters_json,'$.tool_id')=?)""", (actor.workspace_id, owner, tool_id, tool_id)).fetchall()
-        runs = [self.repository._transform_run_from_row(row) for row in rows]
+        runs = self.repository.lineage_records.list_recipe_runs(
+            conn, actor.workspace_id, owner, tool_id,
+        )
         return [run for run in runs if tool_id is None or run.parameters["tool_id"] == tool_id]
 
     def _head(self, conn, actor, tool_id):
@@ -272,8 +271,8 @@ class MediaScriptTools:
             if self.task_authorizations.verdict(actor,self.task_id,"task_media",
                     references=[metadata["definition_ref"]]) != "ready":
                 raise PermissionError("配方来源不在原任务授权范围内")
-        record = self.repository.get_artifact_record(actor.workspace_id, metadata["recipe_artifact_id"])
-        job = self.repository.get_job_run(actor.workspace_id, run.job_id)
+        record = self.repository.execution_records.get_artifact_record(actor.workspace_id, metadata["recipe_artifact_id"])
+        job = self.repository.job_records.get_job_run(actor.workspace_id, run.job_id)
         if (job.kind != "media_script_tool_registration" or job.status != "succeeded" or run.status != "succeeded"
                 or record.kind != "media_script_tool_recipe" or record.producer_job_id != job.id
                 or record.task_id != run.task_id or record.logical_ref not in run.output_refs
@@ -284,7 +283,7 @@ class MediaScriptTools:
         if (value["tool_id"],value["version"],value["owner_member_id"]) != (
                 metadata["tool_id"],metadata["version"],self._identity(actor)):
             raise ScriptToolError("recipe metadata does not match its immutable version")
-        source = self.repository.get_artifact_record(actor.workspace_id, value["definition_artifact_id"])
+        source = self.repository.execution_records.get_artifact_record(actor.workspace_id, value["definition_artifact_id"])
         if (source.kind != "media_script_definition" or source.task_id != run.task_id
                 or source.logical_ref != value["definition_ref"] or source.producer_job_id != value["source_job_id"]):
             raise ScriptToolError("recipe definition provenance changed")
@@ -314,7 +313,7 @@ class MediaScriptTools:
         if len(content) > 65536:
             raise ScriptToolError("recipe exceeds bounded metadata size")
         input_digest = hashlib.sha256(content).hexdigest()
-        previous = self.repository.get_job_run_by_idempotency_key(actor.workspace_id,idempotency_key)
+        previous = self.repository.job_records.get_job_run_by_idempotency_key(actor.workspace_id,idempotency_key)
         if previous is not None:
             if (previous.id != registration_id or previous.kind != "media_script_tool_registration"
                     or previous.input_digest != input_digest):
@@ -322,30 +321,30 @@ class MediaScriptTools:
             if previous.status != "succeeded":
                 raise ScriptToolUnknown("original registration result is unknown; query without recreating")
             return tool_id
-        registration = self.repository.create_job_run(JobRun(id=registration_id, workspace_id=actor.workspace_id,
+        registration = self.repository.job_records.create_job_run(JobRun(id=registration_id, workspace_id=actor.workspace_id,
             task_id=job.task_id, kind="media_script_tool_registration", idempotency_key=idempotency_key,
             input_digest=input_digest), connection=conn)
-        registration = self.repository.claim_job_run(actor.workspace_id, registration.id, connection=conn)
+        registration = self.repository.job_records.claim_job_run(actor.workspace_id, registration.id, connection=conn)
         published = self.store.publish_bytes(f"script-tools/{tool_id}/{version}-{registration.id}.json", content)
         if self.store.describe(published.logical_ref) != published:
             raise ScriptToolError("recipe publication cannot be verified")
-        artifact = self.repository.create_artifact_record(ArtifactRecord(id="artifact_"+registration.id,
+        artifact = self.repository.execution_records.create_artifact_record(ArtifactRecord(id="artifact_"+registration.id,
             workspace_id=actor.workspace_id, task_id=job.task_id, kind="media_script_tool_recipe",
             logical_ref=published.logical_ref, sha256=published.sha256, size_bytes=published.size_bytes,
             producer_job_id=registration.id, input_refs=[record.logical_ref]), connection=conn)
         now = utc_now()
-        self.repository.create_transform_run(TransformRun(id="transform_"+registration.id,
+        self.repository.lineage_records.create_transform_run(TransformRun(id="transform_"+registration.id,
             workspace_id=actor.workspace_id, task_id=job.task_id, job_id=registration.id,
             transform_type="media_script_tool_recipe", input_digest=registration.input_digest,
             input_refs=[record.logical_ref], output_refs=[artifact.logical_ref], engine="trusted-recipe-metadata",
             parameters={**value,"active":True,"recipe_artifact_id":artifact.id}, status="succeeded",
             started_at=registration.started_at, finished_at=now), connection=conn)
-        self.repository.finish_job_run(actor.workspace_id, registration.id, status="succeeded",
+        self.repository.job_records.finish_job_run(actor.workspace_id, registration.id, status="succeeded",
             output_refs=[artifact.logical_ref], connection=conn)
         return tool_id
 
     def create_from_job(self, actor, job_id, *, request_id, name, description, parameter_schema):
-        tool_id, registration_id, key = self._creation_identity(actor,request_id)
+        tool_id, registration_id, key = self.registration_identity(actor,request_id)
         with self.repository._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._save(conn, actor, tool_id, 1, job_id, name, description, parameter_schema,
@@ -353,8 +352,8 @@ class MediaScriptTools:
         return self.get(actor, tool_id,version=1)
 
     def get_created_for_request(self, actor, request_id):
-        tool_id, registration_id, key = self._creation_identity(actor,request_id)
-        job = self.repository.get_job_run_by_idempotency_key(actor.workspace_id,key)
+        tool_id, registration_id, key = self.registration_identity(actor,request_id)
+        job = self.repository.job_records.get_job_run_by_idempotency_key(actor.workspace_id,key)
         if job is None:
             raise KeyError(str(request_id))
         if job.id != registration_id or job.kind != "media_script_tool_registration" or job.status != "succeeded":
@@ -399,8 +398,7 @@ class MediaScriptTools:
             head = self._head(conn,actor,tool_id)
             if type(expected_version) is not int or head.parameters["version"] != expected_version:
                 raise ScriptToolConflict("recipe current version changed")
-            conn.execute("UPDATE transform_runs SET parameters_json=? WHERE workspace_id=? AND id=?",
-                         (_json({**head.parameters,"active":False}),actor.workspace_id,head.id))
+            self.repository.lineage_records.deactivate_recipe_run(conn, actor.workspace_id, head)
         return self.get(actor,tool_id)
 
     def instantiate_request(self, actor, tool_id, *, version, parameters):

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.production import JobRun
+from app.creation.contracts import JobRun
 from app.task_runtime import JobStateStore, JobWork, TaskRuntime
 
 

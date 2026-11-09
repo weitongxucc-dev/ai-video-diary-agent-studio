@@ -76,7 +76,7 @@ def _task_plan(assets: list[MaterialAsset]):
 
 
 def _script():
-    from app.production import CreationTaskScript, CreationTaskScriptSection
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 
     return CreationTaskScript(
         id="script-gate",
@@ -180,7 +180,7 @@ def test_manual_search_still_finds_material_the_machine_may_not_pick(gate_repo) 
     """人工检索照旧能搜到：这是「人工可用」与「自动不用」的分界线。"""
     repo, asset = gate_repo
 
-    matches = repo.search_material_segments(WORKSPACE, usage_roles=["a_roll", "b_roll"])
+    matches = repo.material_search.search_material_segments(WORKSPACE, usage_roles=["a_roll", "b_roll"])
 
     assert {match.asset_ref for match in matches} == {f"asset:{asset.id}"}
 
@@ -239,7 +239,7 @@ def test_the_use_state_api_persists_and_the_gate_follows_it(tmp_path: Path, monk
     stored = repo.get_asset(WORKSPACE, asset.id)
     assert material_allows_automation(stored) is False
     assert material_allows_footage(stored) is True
-    assert {match.asset_ref for match in repo.search_material_segments(WORKSPACE, usage_roles=["a_roll", "b_roll"])} == {f"asset:{asset.id}"}
+    assert {match.asset_ref for match in repo.material_search.search_material_segments(WORKSPACE, usage_roles=["a_roll", "b_roll"])} == {f"asset:{asset.id}"}
 
     restored = client.put(base + "/use-state", json={"use_state": "available"})
     assert restored.status_code == 200, restored.text

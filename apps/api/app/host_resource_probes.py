@@ -28,10 +28,14 @@ import psutil
 
 from app.device_scheduler import Grant, ProcessIdentity, RecoveryBlocked, RecoveryState, WorkRequest
 from app.platform_browser.base import PUBLISH_OPERATION_TIMEOUT_SECONDS
-from app.quality_worker_runtime import QualityBudget, budget_identity
+from app.quality_worker_runtime import (QualityBudget, QUALITY_PHASES, QUALITY_STREAM_PROTOCOL,
+    budget_identity, quality_request_byte_limit)
 from app.model_runtime import CHINESE_CLIP_VIT_B16
 from app.visual_semantics import VisualQueryExecutionLimits, visual_feature_version
 from app.host_memory import HostMemoryMonitor, MemoryPolicy
+from app.audio_delivery_policy import (AudioEncodeBudget, FinalMuxBudget, DELIVERY_KINDS, audio_delivery_refusal)
+from app.packet_copy_policy import (PacketCopyBudget, PACKET_COPY_UNIT_PREFIX,
+    packet_copy_refusal, packet_copy_remaining_allocations)
 
 
 logger = logging.getLogger(__name__)
@@ -213,11 +217,19 @@ class NarrationBudget:
     running_cpu_policy: RuntimeCpuPolicy | None = None
     # Legacy aggregate caps are not evidence for a single model invocation.
     input_scope: str = "legacy_stage"
+    preparation_backend_identity: str | None = None
+    preparation_shape_digest: str | None = None
+    preparation_receipt_sha256: str | None = None
 
     def __post_init__(self) -> None:
         for name, value in vars(self).items():
+            if name.startswith('preparation_'):
+                if value is not None and (not isinstance(value, str) or len(value) != 64
+                        or any(char not in '0123456789abcdef' for char in value)):
+                    raise ValueError('Narration preparation binding must be a SHA256 identity')
+                continue
             if name == "input_scope":
-                if value not in {"legacy_stage", "single_call_experiment_v1"}:
+                if value not in {"legacy_stage", "single_call_experiment_v1", "single_call_preparation_v1", "single_call_prepared_v1"}:
                     raise ValueError("配音输入范围须为原阶段或明确的单次受控实验")
                 continue
             if name == "running_cpu_policy":
@@ -234,6 +246,35 @@ class NarrationBudget:
         if (self.additional_memory_bytes < self.max_process_rss_bytes
                 or self.runtime_sample_seconds > 0.25):
             raise ValueError("Narration monitor needs reserved process memory and a bounded sample interval")
+        if self.input_scope == 'single_call_prepared_v1' and any(getattr(self, name) is None for name in (
+                'preparation_backend_identity', 'preparation_shape_digest', 'preparation_receipt_sha256')):
+            raise ValueError('Prepared narration requires its backend, input shape and original receipt')
+
+
+def narration_scope_basis(scope):
+    return {'legacy_stage': 'legacy_stage',
+        'single_call_experiment_v1': 'controlled_experiment_unverified_legacy_cap',
+        'single_call_preparation_v1': 'bounded_model_preparation',
+        'single_call_prepared_v1': 'recorded_model_preparation'}[scope]
+
+
+def narration_write_volumes_valid(resources, budget):
+    facts = resources.get('write_volumes')
+    if not isinstance(facts, dict) or set(facts) != {'paths', 'reservations'}:
+        return False
+    paths, reservations = facts['paths'], facts['reservations']
+    if (not isinstance(paths, dict) or not isinstance(reservations, dict)
+            or set(paths) not in ({'database', 'temporary', 'model_cache'},
+                                  {'database', 'temporary', 'model_cache', 'output'})
+            or set(paths) != set(reservations)
+            or any(not isinstance(path, str) or not Path(path).is_absolute() for path in paths.values())
+            or any(type(value) is not int or value < 0 for value in reservations.values())):
+        return False
+    output = resources.get('max_output_bytes')
+    return (type(output) is int and output > 0
+        and reservations['temporary'] >= budget.additional_disk_bytes + (0 if 'output' in paths else output)
+        and reservations.get('output', output) >= output
+        and reservations['model_cache'] >= budget.additional_disk_bytes)
 
 
 @dataclass(frozen=True)
@@ -478,7 +519,7 @@ class HostBudget:
     min_available_memory_bytes: int
     max_swap_used_bytes: int | None  # Legacy configuration retained only for historical diagnostics.
     min_free_disk_bytes: int
-    max_disk_io_bytes_per_second: int
+    max_disk_io_bytes_per_second: int | None
     max_unit_input_bytes: int
     sample_seconds: float = 0.1
     cpu_render: CpuRenderBudget | None = None
@@ -496,18 +537,30 @@ class HostBudget:
     cover: CoverBudget | None = None
     material_visual_query: MaterialVisualQueryBudget | None = None
     memory_policy: MemoryPolicy | None = None
+    packet_copy: PacketCopyBudget | None = None
+    audio_encode: AudioEncodeBudget | None = None
+    final_mux: FinalMuxBudget | None = None
 
     def __post_init__(self) -> None:
         if not (0 < self.max_cpu_percent <= 100 and self.sample_seconds > 0):
             raise ValueError("CPU budget and sample interval must be positive")
         if any(value < 0 for value in (
             self.min_available_memory_bytes,
-            self.min_free_disk_bytes, self.max_disk_io_bytes_per_second,
-            self.max_unit_input_bytes,
+            self.min_free_disk_bytes, self.max_unit_input_bytes,
         )):
             raise ValueError("Host budget cannot contain negative limits")
+        if self.max_disk_io_bytes_per_second is not None and (type(self.max_disk_io_bytes_per_second) is not int or self.max_disk_io_bytes_per_second < 0):
+            raise ValueError("Disk IO threshold must be nonnegative bytes per second or explicitly observation-only")
         if (self.cpu_render is not None or self.presenter_cpu_render is not None or self.clip_preview is not None) and self.sample_seconds > .25:
             raise ValueError("CPU render needs a bounded process sampling interval")
+        for name, kind in (('audio_encode', AudioEncodeBudget), ('final_mux', FinalMuxBudget)):
+            operation = getattr(self, name)
+            if operation is not None and (type(operation) is not kind
+                    or self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0):
+                raise ValueError('Audio delivery requires its own process policy and host headroom')
+        if self.packet_copy is not None and (not isinstance(self.packet_copy, PacketCopyBudget)
+                or self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0):
+            raise ValueError("Packet copy requires an explicit process policy and host headroom")
         if self.scene_window is not None and (
             self.min_available_memory_bytes == 0 or self.min_free_disk_bytes == 0
         ):
@@ -960,18 +1013,60 @@ def audio_resource_refusal(resources, audio):
     return None
 
 
+def _quality_stream_fields_valid(resources, budget):
+    """Validate sealed streaming facts; the quality owner binds the actual artifact."""
+    source_bytes = resources.get("source_bytes")
+    digest = resources.get("artifact_digest")
+    provenance = resources.get("workload_provenance")
+    if (resources.get("phase") not in QUALITY_PHASES or type(source_bytes) is not int or source_bytes <= 0
+            or type(resources.get("input_bytes")) is not int or type(resources.get("size_bytes")) is not int
+            or resources["input_bytes"] != source_bytes or resources["size_bytes"] != source_bytes
+            or not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or not isinstance(provenance, dict)):
+        return False
+    required = {"mode", "deadline_source", "deadline_seconds", "coverage"}
+    if (not required <= set(provenance) or set(provenance) - required - {"decoded_audio"}
+            or provenance["mode"] != "bounded_preparation"
+            or provenance["deadline_source"] != "sealed_quality_preparation_budget"
+            or provenance["coverage"] != "complete_stream_required"
+            or type(provenance["deadline_seconds"]) not in {int, float}
+            or provenance["deadline_seconds"] != budget.max_timeout_seconds
+            or provenance["deadline_seconds"] != resources.get("timeout_seconds")):
+        return False
+    audio = provenance.get("decoded_audio")
+    if audio is not None:
+        if resources["phase"] != "clipping" or not isinstance(audio, dict):
+            return False
+        count = audio.get("sample_count")
+        if (audio.get("source") != "ffprobe_complete_frame_scan"
+                or count is not None and (type(count) is not int or count < 0)
+                or type(audio.get("sample_rate")) is not int or audio["sample_rate"] <= 0
+                or type(audio.get("output_channels")) is not int or audio["output_channels"] != 1
+                or audio.get("sample_format") != "s16le"
+                or audio.get("mapping_verification") != "pending_pcm_eof"
+                or (audio.get("expected_pcm_bytes_per_pass") is not None if count is None else
+                    type(audio.get("expected_pcm_bytes_per_pass")) is not int or audio["expected_pcm_bytes_per_pass"] != count * 2)):
+            return False
+    return True
+
+
 class HostResourceProbe:
     """Admit measured material work and explicitly bounded CPU render only."""
 
     _SUPPORTED_KINDS = frozenset({"material_hash", "material_probe_meta", "platform_publish"})
 
-    def __init__(self, database_path: str | Path, *, disk_paths: tuple[str | Path, ...],
+    def __init__(self, database_path: str | Path, *, disk_paths: tuple[str | Path, ...] | Mapping[str, str | Path],
                  budget: HostBudget, io_paths: Mapping[str, str | Path] | None = None,
                  memory_monitor: HostMemoryMonitor | None = None) -> None:
         if not disk_paths:
             raise ValueError("At least one material/output disk path is required")
         self.database_path = Path(database_path).expanduser().resolve()
-        self.disk_paths = tuple(Path(path).expanduser().resolve() for path in disk_paths)
+        self.disk_roles = ({name: Path(path).expanduser().resolve() for name, path in disk_paths.items()}
+                           if isinstance(disk_paths, Mapping) else None)
+        if self.disk_roles is not None and set(self.disk_roles) != {"database", "output", "temporary"}:
+            raise ValueError("Host write paths need database, output and temporary roles")
+        self.disk_paths = tuple(self.disk_roles.values()) if self.disk_roles is not None else tuple(
+            Path(path).expanduser().resolve() for path in disk_paths)
         self.budget = budget
         self.memory_monitor = memory_monitor or HostMemoryMonitor(budget.memory_policy)
         # Measurement history only; permissions and readiness are always fresh.
@@ -1116,7 +1211,8 @@ class HostResourceProbe:
         if delta < 0:
             history.clear()
             return None, "disk_io_counters_regressed"
-        byte_budget = self.budget.max_disk_io_bytes_per_second * max(self.io_window_seconds, elapsed)
+        byte_budget = (None if self.budget.max_disk_io_bytes_per_second is None else
+                       self.budget.max_disk_io_bytes_per_second * max(self.io_window_seconds, elapsed))
         mappings = {}
         try:
             partitions = psutil.disk_partitions(all=True)
@@ -1131,7 +1227,8 @@ class HostResourceProbe:
         except (OSError, psutil.Error) as exc:
             mappings = {"status": "UNAVAILABLE", "reason": type(exc).__name__}
         return {"actual": delta / elapsed, "maximum": self.budget.max_disk_io_bytes_per_second,
-                "passed": delta <= byte_budget, "delta_bytes": delta,
+                "passed": byte_budget is None or delta <= byte_budget, "delta_bytes": delta,
+                **({"diagnostic_only": True} if byte_budget is None else {}),
                 "window_seconds": elapsed, "required_window_seconds": self.io_window_seconds,
                 "window_complete": elapsed >= self.io_window_seconds,
                 "finite_byte_budget": byte_budget, "sample_started_monotonic": start,
@@ -1203,7 +1300,29 @@ class HostResourceProbe:
         render = (self.budget.presenter_cpu_render if kind == "creation_presenter_render"
                   else self.budget.cpu_render if kind == "creation_render"
                   else self.budget.clip_preview if kind == "task_clip_preview" else None)
-        if kind == "material_visual_query":
+        if kind in DELIVERY_KINDS:
+            delivery = getattr(self.budget, DELIVERY_KINDS[kind][0])
+            refusal = audio_delivery_refusal(resources, delivery)
+            if refusal is not None:
+                return decision(None if delivery is None or refusal == 'audio_delivery_filesystem_unavailable' else False, refusal)
+            if kind == 'creation_delivery_adoption' and resources['database_path'] != str(self.database_path):
+                return decision(False, 'delivery_adoption_database_mismatch')
+            checks['audio_delivery_policy'] = {'limits': asdict(delivery),
+                'throughput_verification': 'unknown', 'source_bytes': resources['source_bytes'],
+                'input_count': resources['input_count'], 'resident_allocation': False}
+            required_memory = self.budget.min_available_memory_bytes + (0 if running_io else delivery.additional_memory_bytes)
+            required_disk = self.budget.min_free_disk_bytes
+        elif kind == 'creation_packet_copy':
+            copy = self.budget.packet_copy
+            refusal = packet_copy_refusal(resources, copy)
+            if refusal is not None:
+                return decision(None if copy is None or refusal == 'packet_copy_filesystem_unavailable' else False, refusal)
+            checks['packet_copy_policy'] = {'limits': asdict(copy),
+                'throughput_verification': 'unknown', 'source_bytes': resources['source_bytes'],
+                'input_count': resources['input_count'], 'resident_allocation': False}
+            required_memory = self.budget.min_available_memory_bytes + (0 if running_io else copy.additional_memory_bytes)
+            required_disk = self.budget.min_free_disk_bytes
+        elif kind == "material_visual_query":
             query = self.budget.material_visual_query
             if query is not None:
                 checks["material_visual_query_budget"] = {"limits": asdict(query)}
@@ -1242,22 +1361,37 @@ class HostResourceProbe:
                 return decision(None, "quality_budget_or_execution_mode_unavailable")
             if resources.get("budget_digest") != budget_identity(quality):
                 return decision(False, "quality_profile_changed")
-            bounds = {"input_bytes": quality.max_input_bytes, "timeout_seconds": quality.max_timeout_seconds,
-                      "threads": quality.decoder_threads, "max_output_bytes": quality.max_report_bytes,
-                      "max_pcm_bytes": quality.max_pcm_bytes, "max_frame_json_bytes": quality.max_frame_json_bytes,
-                      "max_stderr_bytes": quality.max_stderr_bytes}
+            streaming = resources.get("read_mode") == "stream"
+            if streaming and not _quality_stream_fields_valid(resources, quality):
+                return decision(None, "quality_stream_contract_invalid")
+            if resources.get("read_mode") not in {None, "bulk", "stream"}:
+                return decision(None, "quality_read_mode_invalid")
+            bounds = {"timeout_seconds": quality.max_timeout_seconds, "threads": quality.decoder_threads,
+                      "max_output_bytes": quality.max_report_bytes, "max_stderr_bytes": quality.max_stderr_bytes}
+            if not streaming:
+                # Original sealed bulk requests retain their original finite caps.
+                bounds.update(input_bytes=quality.max_input_bytes, max_pcm_bytes=quality.max_pcm_bytes,
+                              max_frame_json_bytes=quality.max_frame_json_bytes)
             for name, cap in bounds.items():
                 value = resources.get(name)
                 if type(value) not in ({int, float} if name == "timeout_seconds" else {int}) or not math.isfinite(value) or value <= 0:
                     return decision(None, "quality_resource_fields_invalid")
                 if value > cap:
                     return decision(False, "declared_resources_exceed_budget")
-            if resources["input_bytes"] > self.budget.max_unit_input_bytes:
+            if not streaming and resources["input_bytes"] > self.budget.max_unit_input_bytes:
                 return decision(False, "declared_resources_exceed_budget")
+            if streaming:
+                checks["source_stream"] = {"source_bytes": resources["source_bytes"],
+                    "phase": resources["phase"], "resident_allocation": False,
+                    "deadline_mode": resources["workload_provenance"]["mode"]}
             checks["quality_budget"] = {"max_process_rss_bytes": quality.max_process_rss_bytes,
                                         "max_process_threads": quality.max_process_threads}
             required_memory = self.budget.min_available_memory_bytes + (0 if running_io else quality.additional_memory_bytes)
             required_disk = self.budget.min_free_disk_bytes + quality.additional_disk_bytes
+            if streaming:
+                request_bytes = quality_request_byte_limit({"protocol": QUALITY_STREAM_PROTOCOL, "budget": asdict(quality)})
+                checks["quality_budget"]["sealed_request_bytes"] = request_bytes
+                required_disk += request_bytes
         elif kind in {"creation_render", "creation_presenter_render", "task_clip_preview"}:
             if render is None or resources.get("execution_mode") != "cpu_ffmpeg":
                 return decision(None, "render_budget_or_execution_mode_unavailable")
@@ -1392,11 +1526,18 @@ class HostResourceProbe:
             if stage is None:
                 return decision(None, "stage_budget_unavailable")
             if kind == "creation_narration" and resources.get("input_scope") is not None:
-                if (stage.input_scope != "single_call_experiment_v1"
+                if (stage.input_scope not in {'single_call_experiment_v1', 'single_call_preparation_v1', 'single_call_prepared_v1'}
                         or resources.get("input_scope") != stage.input_scope
-                        or resources.get("budget_basis") != "controlled_experiment_unverified_legacy_cap"
+                        or resources.get("budget_basis") != narration_scope_basis(stage.input_scope)
                         or resources.get("section_count") != 1):
                     return decision(None, "narration_single_call_scope_unavailable")
+                if stage.input_scope == 'single_call_prepared_v1' and any(resources.get(name) != getattr(stage, name)
+                        for name in ('preparation_backend_identity', 'preparation_shape_digest', 'preparation_receipt_sha256')):
+                    return decision(None, 'narration_preparation_binding_changed')
+                if stage.input_scope in {'single_call_preparation_v1', 'single_call_prepared_v1'} and not narration_write_volumes_valid(resources, stage):
+                    return decision(None, 'narration_write_volumes_unavailable')
+            elif kind == 'creation_narration' and stage.input_scope in {'single_call_preparation_v1', 'single_call_prepared_v1'}:
+                return decision(None, 'narration_single_call_scope_unavailable')
             bounds = ({"text_chars": stage.max_text_chars, "section_count": stage.max_section_count,
                        "reference_bytes": stage.max_reference_bytes, "duration_seconds": stage.max_duration_seconds,
                        "max_output_bytes": stage.max_output_bytes, "threads": stage.max_threads,
@@ -1505,11 +1646,19 @@ class HostResourceProbe:
         sampling = "disk_io_before"
         duration = None
         try:
-            sustained = kind in {"creation_narration", "creation_person_render", "media_script", "native_command", "quality_check", "cover_generation", "material_visual_query"}
+            observation_only_io = self.budget.max_disk_io_bytes_per_second is None
+            sustained = not observation_only_io and kind in {"creation_narration", "creation_person_render", "media_script", "native_command", "quality_check", "cover_generation", "material_visual_query", "creation_packet_copy", "creation_audio_encode", "creation_final_mux", "creation_delivery_adoption"}
+            def io_counters():
+                try:
+                    return psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
+                except (OSError, psutil.Error):
+                    if not observation_only_io:
+                        raise
+                    return None
             with self._io_lock:
                 history = self._running_io if running_io else self._admission_io
-                before = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
-                if before is None or (sustained and not before):
+                before = io_counters()
+                if not observation_only_io and (before is None or (sustained and not before)):
                     if sustained:
                         history.clear()
                     return decision(None, "disk_io_before_unavailable")
@@ -1525,10 +1674,10 @@ class HostResourceProbe:
                     checks["cpu_percent"] = {"actual": cpu, "maximum": self.budget.max_cpu_percent,
                                              "passed": cpu_passed}
                 sampling = "disk_io_after"
-                after = psutil.disk_io_counters(perdisk=True) if sustained else psutil.disk_io_counters()
+                after = io_counters()
                 end = time.monotonic()
                 duration = end - start
-                if after is None or (sustained and not after):
+                if not observation_only_io and (after is None or (sustained and not after)):
                     if sustained:
                         history.clear()
                     return decision(None, "disk_io_after_unavailable", duration)
@@ -1542,16 +1691,22 @@ class HostResourceProbe:
                         return decision(None, unavailable, duration)
                     checks["disk_io_bytes_per_second"] = evidence
                 else:
-                    io_bytes = (after.read_bytes - before.read_bytes + after.write_bytes - before.write_bytes)
-                    if io_bytes < 0:
-                        checks["disk_io_bytes"] = {"actual": io_bytes, "before_read_bytes": before.read_bytes,
-                            "before_write_bytes": before.write_bytes, "after_read_bytes": after.read_bytes,
-                            "after_write_bytes": after.write_bytes}
-                        return decision(None, "disk_io_counters_regressed", duration)
+                    io_bytes = (None if before is None or after is None else
+                        after.read_bytes - before.read_bytes + after.write_bytes - before.write_bytes)
+                    if io_bytes is not None and io_bytes < 0:
+                        if not observation_only_io:
+                            checks["disk_io_bytes"] = {"actual": io_bytes, "before_read_bytes": before.read_bytes,
+                                "before_write_bytes": before.write_bytes, "after_read_bytes": after.read_bytes,
+                                "after_write_bytes": after.write_bytes}
+                            return decision(None, "disk_io_counters_regressed", duration)
+                        io_bytes = None
                     checks["disk_io_bytes_per_second"] = {
-                        "actual": io_bytes / duration, "maximum": self.budget.max_disk_io_bytes_per_second,
-                        "passed": io_bytes / duration <= self.budget.max_disk_io_bytes_per_second,
+                        "actual": None if io_bytes is None else io_bytes / duration,
+                        "maximum": self.budget.max_disk_io_bytes_per_second,
+                        "passed": observation_only_io or io_bytes / duration <= self.budget.max_disk_io_bytes_per_second,
                         "delta_bytes": io_bytes,
+                        **({"diagnostic_only": True, "state": "unknown" if io_bytes is None else "observed"}
+                           if observation_only_io else {}),
                     }
             sampling = "available_memory_bytes"
             memory_decision = self.memory_monitor.check(system_reserve_bytes=self.budget.min_available_memory_bytes,
@@ -1570,26 +1725,77 @@ class HostResourceProbe:
                     else memory.commit_headroom_bytes >= memory_decision.required_commit_headroom_bytes}
             checks["swap_used_bytes"] = {**memory.facts.get("swap_used_bytes", {"value": None}),
                 "diagnostic_only": True, "legacy_configured_limit": self.budget.max_swap_used_bytes}
-            disks = []
-            for path in self.disk_paths:
-                sampling = f"disk_free_bytes:{path}"
-                disk = psutil.disk_usage(str(path))
-                disks.append(disk)
-                checks[sampling] = {"actual": disk.free, "minimum": required_disk,
-                                    "passed": disk.free >= required_disk}
+            disk_passed = True
+            if kind == 'creation_delivery_adoption':
+                from app.device_resource_volumes import sample_write_volumes
+                sampling = 'delivery_adoption_database_volume'
+                checks['write_volumes'] = sample_write_volumes(resources['write_paths'], resources['write_allocations'],
+                    reserve_bytes=self.budget.min_free_disk_bytes)
+                disk_passed = all(item['passed'] for item in checks['write_volumes'].values())
+            elif kind == 'creation_packet_copy' or kind in DELIVERY_KINDS:
+                from app.device_resource_volumes import sample_write_volumes
+                sampling = 'audio_delivery_write_volumes' if kind in DELIVERY_KINDS else 'packet_copy_write_volumes'
+                allocations = packet_copy_remaining_allocations(resources, running=memory_running)
+                checks['write_volumes'] = sample_write_volumes(resources['write_paths'], allocations,
+                    reserve_bytes=self.budget.min_free_disk_bytes)
+                disk_passed = all(item['passed'] for item in checks['write_volumes'].values())
+            elif kind == 'creation_narration' and resources.get('input_scope') in {'single_call_preparation_v1', 'single_call_prepared_v1'}:
+                from app.device_resource_volumes import sample_write_volumes
+                sampling = 'write_volumes'
+                facts = resources['write_volumes']
+                checks['write_volumes'] = sample_write_volumes(facts['paths'], facts['reservations'],
+                    reserve_bytes=self.budget.min_free_disk_bytes)
+                disk_passed = all(item['passed'] for item in checks['write_volumes'].values())
+            elif self.disk_roles is not None and (kind in {
+                    "creation_render", "creation_presenter_render", "task_clip_preview", "task_audio"}
+                    or kind == "quality_check" and resources.get("read_mode") == "stream"):
+                from app.device_resource_volumes import sample_write_volumes
+                sampling = "write_volumes"
+                # The staged file and published copy may coexist. Workspace bytes
+                # belong to the actual temporary volume; a DB on another volume
+                # does not need to reserve the media workspace a second time.
+                # Quality returns stdout; its sealed package is temporary only.
+                allocations = {"database": 0,
+                    "output": 0 if kind == "quality_check" else resources["max_output_bytes"],
+                    "temporary": max(0, required_disk - self.budget.min_free_disk_bytes)}
+                disks = sample_write_volumes(self.disk_roles, allocations,
+                    reserve_bytes=self.budget.min_free_disk_bytes)
+                for role, facts in disks.items():
+                    checks[f"disk_free_bytes:{self.disk_roles[role]}"] = facts
+                disk_passed = all(item["passed"] for item in disks.values())
+            else:
+                # Other execution families retain their existing conservative
+                # reservation until their actual write lifecycle is modeled.
+                for path in self.disk_paths:
+                    sampling = f"disk_free_bytes:{path}"
+                    disk = psutil.disk_usage(str(path))
+                    checks[sampling] = {"actual": disk.free, "minimum": required_disk,
+                                        "passed": disk.free >= required_disk}
+                    disk_passed = disk_passed and disk.free >= required_disk
         except (OSError, psutil.Error, ValueError) as exc:
             return decision(None, f"{sampling}: {type(exc).__name__}: {exc}", duration)
         if memory_decision.verdict is not True:
             return decision(memory_decision.verdict, memory_decision.reason, duration)
         # Runtime scheduling is verified in the grant exec broker.
         passed = (cpu_passed
-                        and all(disk.free >= required_disk for disk in disks)
+                        and disk_passed
                         and checks["disk_io_bytes_per_second"]["passed"])
         if sustained and passed and not running_io and not evidence["window_complete"]:
             return decision(None, "io_window_incomplete", duration)
         return decision(passed, interval=duration)
 
     def admit(self, request: WorkRequest) -> HostResourceDecision:
+        if (request.resources.get('kind') in DELIVERY_KINDS
+                and (request.owner_type != 'creation_job' or request.unit_key !=
+                     DELIVERY_KINDS[request.resources['kind']][1] + str(request.resources.get('unit_id')))):
+            return HostResourceDecision(False, dict(request.resources), {}, 'audio_delivery_owner_invalid')
+        if (request.resources.get('kind') == 'creation_packet_copy'
+                and (request.owner_type != 'creation_job'
+                     or request.unit_key != PACKET_COPY_UNIT_PREFIX + str(request.resources.get('unit_id')))):
+            return HostResourceDecision(False, dict(request.resources), {}, 'packet_copy_owner_invalid')
+        if (request.resources.get('input_scope') == 'single_call_preparation_v1'
+                and (request.owner_type != 'device_preparation' or request.unit_key != 'narration-prepare:v1')):
+            return HostResourceDecision(False, dict(request.resources), {}, 'narration_preparation_owner_invalid')
         decision = self._sample(request.resources)
         if decision.verdict is not True:
             logger.warning("Device resource admission: %s", json.dumps({
@@ -1625,14 +1831,30 @@ class HostResourceProbe:
                      grant.unit_key, grant.input_digest, grant.attempt_number, grant.generation),
                 ).fetchone()
             resources = json.loads(row[0]) if row else None
+            if (isinstance(resources, dict) and resources.get('input_scope') == 'single_call_preparation_v1'
+                    and (grant.owner_type != 'device_preparation' or grant.unit_key != 'narration-prepare:v1')):
+                return None
+            if (isinstance(resources, dict) and resources.get('kind') in DELIVERY_KINDS
+                    and (grant.owner_type != 'creation_job' or grant.unit_key !=
+                         DELIVERY_KINDS[resources['kind']][1] + str(resources.get('unit_id')))):
+                return None
+            if (isinstance(resources, dict) and resources.get('kind') == 'creation_delivery_adoption'
+                    and resources.get('database_path') != str(self.database_path)):
+                return None
+            if (isinstance(resources, dict) and resources.get('kind') == 'creation_packet_copy'
+                    and (grant.owner_type != 'creation_job'
+                         or grant.unit_key != PACKET_COPY_UNIT_PREFIX + str(resources.get('unit_id')))):
+                return None
             return resources if isinstance(resources, dict) else None
         except (OSError, sqlite3.Error, ValueError, TypeError):
             return None
 
     def continue_unit(self, grant: Grant) -> bool | None:
         resources = self._grant_resources(grant)
-        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check", "cover_generation", "material_visual_query"}
-                and (self.budget.material_visual_query if resources["kind"] == "material_visual_query" else
+        if (resources is not None and resources.get("kind") in {"creation_narration", "creation_person_render", "quality_check", "cover_generation", "material_visual_query", "creation_packet_copy", "creation_audio_encode", "creation_final_mux", "creation_delivery_adoption"}
+                and (getattr(self.budget, DELIVERY_KINDS[resources["kind"]][0]) if resources["kind"] in DELIVERY_KINDS else
+                     self.budget.packet_copy if resources["kind"] == "creation_packet_copy" else
+                     self.budget.material_visual_query if resources["kind"] == "material_visual_query" else
                      self.budget.cover if resources["kind"] == "cover_generation" else
                      self.budget.quality if resources["kind"] == "quality_check" else
                      self.budget.presenter if resources["kind"] == "creation_person_render" else self.budget.narration) is not None):
@@ -1665,6 +1887,22 @@ class HostResourceProbe:
             if resources.get("kind") == "creation_render" and self.budget.cpu_render is not None else None)
         if resources.get("kind") == "creation_render" and cpu_policy is None:
             raise RecoveryBlocked("成片CPU调度策略尚未准备")
+        if resources.get('kind') in DELIVERY_KINDS:
+            operation = DELIVERY_KINDS[resources['kind']][0]
+            delivery = getattr(self.budget, operation)
+            expected_purpose = 'delivery_adoption' if resources['kind'] == 'creation_delivery_adoption' else operation
+            if purpose not in {None, expected_purpose} or audio_delivery_refusal(resources, delivery) is not None:
+                raise RecoveryBlocked('音频交付许可、原单元或过程策略不一致')
+            return SceneRuntimeLimits(delivery.max_process_rss_bytes, delivery.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes,
+                delivery.runtime_sample_seconds, self.memory_monitor)
+        if resources.get('kind') == 'creation_packet_copy':
+            copy = self.budget.packet_copy
+            if purpose not in {None, 'packet_copy'} or packet_copy_refusal(resources, copy) is not None:
+                raise RecoveryBlocked('封装拼接许可、原单元或过程策略不一致')
+            return SceneRuntimeLimits(copy.max_process_rss_bytes, copy.max_process_threads,
+                self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes,
+                copy.runtime_sample_seconds, self.memory_monitor)
         if resources.get("kind") == "material_visual_query" or purpose == "material_visual_query":
             query = self.budget.material_visual_query
             if (grant.owner_type != "material_retrieval" or not grant.unit_key.startswith("visual-query:v1:")
@@ -1768,6 +2006,8 @@ class HostResourceProbe:
             if grant.owner_type != "material_retrieval" or not grant.unit_key.startswith("visual-query:v1:"):
                 return None
             return True  # The scheduler independently proves the encoder's registered group exited.
+        if resources.get('kind') == 'creation_packet_copy' or resources.get('kind') in DELIVERY_KINDS:
+            return True  # The scheduler separately proves every registered child group exited.
         if resources.get("kind") in {"quality_check", "cover_generation"}:
             return True  # Scheduler separately proves the registered Python/native group exited.
         if resources.get("kind") in self._SUPPORTED_KINDS:

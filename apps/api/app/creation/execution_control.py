@@ -1,7 +1,7 @@
 """Creation execution control, original queue reconciliation and status projection."""
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from contextlib import ExitStack, nullcontext
 from datetime import datetime
 import logging
@@ -17,7 +17,8 @@ from app.creation.render_stage_use_case import RenderRejected
 from app.creation.contracts import TaskEvent, JobRun
 from app.creation.task_authorization import TaskAuthorizationDenied
 from app.device_scheduler import SubmissionIntent, SchedulePolicy, RecoveryBlocked
-from app.production import CreationPlan, CreationTask
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import CreationTask
 from app.repository import LEGACY_WORKSPACE_ID
 from app.task_audio import TASK_MEDIA_KIND
 
@@ -118,18 +119,17 @@ class CreationExecutionControl:
         self.segments = segments
 
     def preview(self, workspace_id: str, task_id: str) -> dict[str, object]:
-        task = self.task_or_missing(workspace_id, task_id)
-        if not task.confirmed_script_id:
-            raise ExecutionControlRejected(status_code=409, detail="请先确认实际文案")
-        script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
-        plan = self.plan_for_task_or_missing(workspace_id, task)
-        digest = revision_digest(script, plan)
+        from app.creation.execution_input import validate_execution_relationships
         try:
-            self.execution.validate_input(workspace_id, task, script.id, digest)
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id)
+            task, plan, script = snapshot.task, snapshot.plan, snapshot.script_header
+            validate_execution_relationships(task, script, plan)
+        except KeyError as exc:
+            raise ExecutionControlRejected(status_code=404, detail="创作任务或确认对象不存在") from exc
         except ValueError as exc:
             raise ExecutionControlRejected(status_code=409, detail=str(exc)) from exc
         narration_artifact = (
-            self.repository.get_narration_artifact(workspace_id, task.narration_cache_key)
+            self.repository.narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key)
             if task.narration_cache_key
             else None
         )
@@ -158,7 +158,9 @@ class CreationExecutionControl:
             "task_id": task.id,
             "script_id": script.id,
             "script_title": script.title,
-            "script_sections": [{"title": section.title, "content": section.content} for section in script.sections],
+            "script_updated_at": script.updated_at.isoformat(),
+            "script_sections_total_count": script.sections_total_count,
+            "script_sections_loaded": False,
             "plan_id": plan.id,
             "narration_source": ({
                 "source_kind": narration_artifact.source_kind,
@@ -175,12 +177,17 @@ class CreationExecutionControl:
                 "continuation_blocker": continuation_blocker,
                 "template_settings": plan.template_settings,
             },
-            "input_digest": digest,
+            "input_digest": snapshot.input_digest,
         }
 
-    def status(self, workspace_id: str, task_id: str, *, verify_media: bool, actor=None, job_id=None) -> dict[str, object]:
+    def status_summary(self, workspace_id: str, task_id: str, *, actor=None, job_id=None) -> dict[str, object]:
+        """Read persisted execution facts without probing or assembling media."""
         task = self.task_or_missing(workspace_id, task_id)
-        job = self.execution.latest(workspace_id, task_id) if job_id is None else self.repository.get_job_run(workspace_id,job_id)
+        return self._status_summary(task, actor=actor, job_id=job_id)
+
+    def _status_summary(self, task, *, actor, job_id):
+        workspace_id, task_id = task.workspace_id, task.id
+        job = self.execution.latest(workspace_id, task_id) if job_id is None else self.repository.job_records.get_job_run(workspace_id,job_id)
         if actor is not None and job_id is None and task.owner_user_id==(actor.user_id or actor.member_id):
             with self.repository._connect() as conn:
                 row=conn.execute("SELECT j.* FROM job_runs j JOIN task_events e ON e.workspace_id=j.workspace_id "
@@ -188,12 +195,12 @@ class CreationExecutionControl:
                     "AND j.kind='creation_task_segment_revision' AND json_extract(e.payload_json,'$.member_id')=? "
                     "ORDER BY j.created_at DESC,j.id DESC LIMIT 1",(workspace_id,task_id,actor.member_id)).fetchone()
             if row is not None:
-                revision=self.repository._job_run_from_row(row)
-                start=self.repository.get_task_event(workspace_id,f'event_{revision.id}_start').payload
+                revision=self.repository.job_records.job_run_from_row(row)
+                start=self.repository.execution_records.get_task_event(workspace_id,f'event_{revision.id}_start').payload
                 if CreationExecutionActor.from_event(workspace_id,start)==actor and (job is None or revision.created_at>job.created_at):
                     job=revision
 
-        task_events=self.repository.list_task_events(workspace_id,task_id) if job else []
+        task_events=self.repository.execution_records.list_task_events(workspace_id,task_id) if job else []
         events = (
             [
                 {"stage": event.payload.get("stage"), "status": event.payload.get("status"),
@@ -204,10 +211,6 @@ class CreationExecutionControl:
             ]
             if job else []
         )
-        covers = (
-            self.repository.list_cover_assets(workspace_id, task_id, timeline_version_id=task.current_timeline_version_id)
-            if task.current_timeline_version_id else []
-        )
         current_stage = None
         if job and events:
             latest_stage_event = events[-1]
@@ -217,10 +220,10 @@ class CreationExecutionControl:
         waiting_reason = None
         status_updated_at = job.updated_at.isoformat() if job else None
         if job and job.status in {"queued", "interrupted"}:
-            start_event = self.repository.get_task_event(workspace_id, f"event_{job.id}_start")
+            start_event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
             queued_member_id = start_event.payload.get("member_id")
             if queued_member_id:
-                row = self.repository.creation_execution_wait_row(workspace_id, queued_member_id, job.id, job.input_digest)
+                row = self.repository.job_records.creation_execution_wait_row(workspace_id, queued_member_id, job.id, job.input_digest)
                 if row is not None:
                     queued_stage = row["unit_key"].split(":", 1)[0]
                     if queued_stage in {"narration", "person_render", "montage_plan", "render"}:
@@ -231,14 +234,7 @@ class CreationExecutionControl:
         if job and job.status == "queued" and montage_waiting_for_confirmation(self.repository, task):
             current_stage = "montage_plan"
             waiting_reason = "故事板仍有镜头等待确认；确认后点击继续制作。"
-        decisions=self.segments.visual_decision_locators(workspace_id,task_id,actor,job_id=job.id if job else None) if (
-            self.segments is not None and actor is not None and task.owner_user_id==(actor.user_id or actor.member_id)) else {'items':[],'total_count':0,'truncated':False}
-        if decisions['items']:
-            waiting_reason=('画面采用已保存，原作业排队状态待回查。' if all(item['adopted'] for item in decisions['items'])
-                else '段落配音已保存，画面候选需要用户明确确认。')
-            current_stage='segment_video'
         return {
-            "visual_decisions":decisions,
             "task_id": task_id,
             "job": asdict(job) if job else None,
             "stages": events,
@@ -246,19 +242,36 @@ class CreationExecutionControl:
             "waiting_reason": waiting_reason,
             "status_updated_at": status_updated_at,
             "input_rejection":creation_input_rejection(task_events,job.id) if job else None,
-            "narration_usage": self.repository.creation_narration_usage(workspace_id, job.id) if job else None,
-            "video_ready": self.render_valid(
-                workspace_id, task_id, verify_media=verify_media),
+            "narration_usage": self.repository.narration_units.creation_narration_usage(workspace_id, job.id) if job else None,
+        }
+
+    def status(self, workspace_id: str, task_id: str, *, verify_media: bool, actor=None, job_id=None) -> dict[str, object]:
+        task = self.task_or_missing(workspace_id, task_id)
+        result = self._status_summary(task, actor=actor, job_id=job_id)
+        job = result["job"]
+        decisions=self.segments.visual_decision_locators(workspace_id,task_id,actor,job_id=job["id"] if job else None) if (
+            self.segments is not None and actor is not None and task.owner_user_id==(actor.user_id or actor.member_id)) else {'items':[],'total_count':0,'truncated':False}
+        if decisions['items']:
+            result['waiting_reason']=('画面采用已保存，原作业排队状态待回查。' if all(item['adopted'] for item in decisions['items'])
+                else '段落配音已保存，画面候选需要用户明确确认。')
+            result['current_stage']='segment_video'
+        covers = (
+            self.repository.cover_records.list_cover_assets(workspace_id, task_id, timeline_version_id=task.current_timeline_version_id)
+            if task.current_timeline_version_id else []
+        )
+        result.update({
+            "visual_decisions": decisions,
+            "video_ready": self.render_valid(workspace_id, task_id, verify_media=verify_media),
             "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
             "cover_message": None if any(cover.status == "valid" for cover in covers) else "尚未生成封面，请单独制作或选择封面。",
-        }
+        })
+        return result
 
     def start(self, workspace_id, task_id, script_id, digest, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:
             owner = runtime.registrations["creation_job"].owner
             if owner.task_authorizations is not None:
-                task = self.repository.get_creation_task(workspace_id, task_id)
-                self.execution.validate_input(workspace_id, task, script_id, digest)
+                task = self.execution.validate_input_snapshot(workspace_id, task_id, script_id, digest).task
                 owner.task_authorizations.ensure(task, actor, interactive=write_guard is None)
             job = self.execution.start(workspace_id, task_id, script_id, digest,
                                            actor=actor,write_guard=write_guard,execution_source=execution_source)
@@ -276,19 +289,29 @@ class CreationExecutionControl:
     def resume(self, workspace_id, task_id, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:
             latest = self.execution.latest(workspace_id, task_id)
+            owner = runtime.registrations['creation_job'].owner
+            delivery = owner.audio_delivery
+            recovered = (delivery.adoption_recovery.continue_adoption(runtime.scheduler, latest, actor,
+                owner=owner, write_guard=write_guard) if latest is not None and delivery is not None else None)
+            if recovered is not None:
+                if execution_source is not None:
+                    self.repository.creation_execution_jobs.bind_creation_execution_source(
+                        self.repository.job_records.get_job_run(workspace_id, latest.id), execution_source, write_guard=write_guard)
+                runtime.wake()
+                return self.status(workspace_id, task_id, verify_media=verify_media)
             if latest is not None and self.execution.rerender_current(latest,actor,runtime.scheduler,write_guard=write_guard):
-                job = self.repository.get_job_run(workspace_id,latest.id)
+                job = self.repository.job_records.get_job_run(workspace_id,latest.id)
             else:
                 migrated = (migrate_creation_narration_request(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard)
                     if latest is not None else None)
                 resumed = (resume_original_narration(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard,
                     executor=runtime.registrations['creation_job'].executor)
                     if latest is not None and migrated is None else False)
-                job = (self.repository.get_job_run(workspace_id, latest.id) if migrated is not None or resumed else
+                job = (self.repository.job_records.get_job_run(workspace_id, latest.id) if migrated is not None or resumed else
                     self.execution.retry(workspace_id, task_id, member_id=actor.member_id,write_guard=write_guard,execution_source=execution_source,
                         admission_recheck=lambda rejection:runtime.registrations['creation_job'].owner.admission_basis_changed(rejection)))
             if execution_source is not None:
-                self.repository.bind_creation_execution_source(job,execution_source,write_guard=write_guard)
+                self.repository.creation_execution_jobs.bind_creation_execution_source(job,execution_source,write_guard=write_guard)
             submit_creation_stage(self.execution, runtime.scheduler, job, actor)
         except CreationInputRejected as exc:
             raise ExecutionControlRejected(status_code=409,detail=exc.detail) from exc
@@ -310,7 +333,7 @@ class CreationExecutionControl:
         except ValueError as exc:
             raise ExecutionControlRejected(status_code=409, detail=str(exc)) from exc
         if runtime is not None:
-            rows = self.repository.active_creation_request_ids(workspace_id, job.id)
+            rows = self.repository.job_records.active_creation_request_ids(workspace_id, job.id)
             for row in rows:
                 runtime.scheduler.cancel(row["id"], actor)
                 registration = runtime.registrations.get("creation_job")
@@ -331,7 +354,8 @@ class CreationExecutionControl:
             if hasattr(owner, "registrations"):
                 owner = owner.registrations["creation_job"].owner
             job, fresh = self.execution.regenerate_storyboard(workspace_id, task_id, inputs, actor,
-                stage_facts=lambda current, script, plan: owner.stage_facts(current, script, plan, "montage_plan")[0])
+                stage_facts=lambda current, script, plan, *, connection=None: owner.stage_facts(
+                    current, script, plan, "montage_plan", connection=connection)[0])
             if fresh:
                 submit_creation_stage(self.execution, runtime.scheduler, job, actor)
                 runtime.wake()
@@ -367,7 +391,7 @@ class CreationExecutionControl:
         if runtime is None or "creation_job" not in runtime.registrations:
             # 没有整机许可通道就不派发。退回旧的本机线程等于绕开身份和主机门禁，
             # 那正是这张许可要挡住的事；作业停在待处理状态，等许可就绪或人明确处理。
-            pending = self.repository.list_pending_creation_executions()
+            pending = self.repository.job_records.list_pending_creation_executions()
             if pending:
                 logger.warning(
                     "整机许可通道尚未就绪，%s 件制作作业留在待处理状态等待人工处理",
@@ -377,22 +401,22 @@ class CreationExecutionControl:
         generation = runtime.scheduler.reconcile_released()
         registration=runtime.registrations['creation_job']
         owner,executor=registration.owner,registration.executor
-        for job in self.repository.list_pending_task_media_jobs(NARRATION_EDIT_KIND):
+        for job in self.repository.job_records.list_pending_task_media_jobs(NARRATION_EDIT_KIND):
             if job.status=='cancelled':
                 continue
             try:
-                start=self.repository.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
+                start=self.repository.execution_records.get_task_event(job.workspace_id,f'event_{job.id}_start').payload
                 original=CreationExecutionActor.from_event(job.workspace_id,start)
-                task=self.repository.get_creation_task(job.workspace_id,job.task_id)
+                task=self.repository.task_records.get_creation_task(job.workspace_id,job.task_id)
                 if owner.task_authorizations is not None:
                     owner.task_authorizations.ensure(task,original)
                 elif self.verify_identity(original)!='ready':
                     continue
                 executor.recover_pcm_unit(job,original,runtime.scheduler)
-                job=self.repository.get_job_run(job.workspace_id,job.id)
+                job=self.repository.job_records.get_job_run(job.workspace_id,job.id)
                 if job.status=='succeeded':
                     continue
-                plan=self.repository.get_creation_plan(job.workspace_id,task.plan_id)
+                plan=self.repository.plan_records.get_creation_plan(job.workspace_id,task.plan_id)
                 key,_=owner.narration_edit_facts(job,task,start,plan)
                 runtime.scheduler.submit(SubmissionIntent(job.workspace_id,'creation_job',job.id,
                     job.input_digest,key,SchedulePolicy()),original)
@@ -400,9 +424,9 @@ class CreationExecutionControl:
                 logger.warning('局部配音原作业 %s 尚不能恢复，保留原请求：%s',job.id,exc)
         media = runtime.registrations["creation_job"].owner.task_media
         if media is not None:
-            pending_media = self.repository.list_pending_task_media_jobs(TASK_MEDIA_KIND)
+            pending_media = self.repository.job_records.list_pending_task_media_jobs(TASK_MEDIA_KIND)
             for job in pending_media:
-                request_rows = self.repository.list_creation_job_request_states(job.workspace_id, job.id)
+                request_rows = self.repository.job_records.list_creation_job_request_states(job.workspace_id, job.id)
                 _, event = media.read(job.workspace_id, job.id)
                 original = CreationExecutionActor.from_event(job.workspace_id, event)
                 if job.status == "cancelled":
@@ -412,7 +436,7 @@ class CreationExecutionControl:
                     continue
                 if media.task_authorizations is not None:
                     try:
-                        media.task_authorizations.ensure(self.repository.get_creation_task(job.workspace_id, job.task_id), original)
+                        media.task_authorizations.ensure(self.repository.task_records.get_creation_task(job.workspace_id, job.task_id), original)
                     except TaskAuthorizationDenied as exc:
                         logger.warning("任务媒体作业 %s 的原任务授权不可用，保留待处理：%s",job.id,exc)
                         continue
@@ -424,9 +448,9 @@ class CreationExecutionControl:
                 # Existing grants are reconciled by DeviceScheduler before any dispatch.
         # A crash may land after the JobRun cancellation commits but before
         # its device request is cancelled. Reconcile from both durable rows.
-        cancelled_requests = self.repository.list_cancelled_creation_execution_requests()
+        cancelled_requests = self.repository.job_records.list_cancelled_creation_execution_requests()
         for row in cancelled_requests:
-            event = self.repository.get_task_event(row["workspace_id"], f"event_{row['owner_id']}_start")
+            event = self.repository.execution_records.get_task_event(row["workspace_id"], f"event_{row['owner_id']}_start")
             # 撤销方向不需要重新核成员：即使成员已被移除，撤销也必须能落下去。
             try:
                 original = CreationExecutionActor.from_event(row["workspace_id"], event.payload)
@@ -437,27 +461,27 @@ class CreationExecutionControl:
                     or (original.device_id is None and row["workspace_id"] != LEGACY_WORKSPACE_ID)):
                 raise RuntimeError("已停止制作请求的持久身份无法复核，不能自动取消设备许可")
             runtime.scheduler.cancel(row["id"], original)
-        for job in self.repository.list_pending_creation_executions():
-            event = self.repository.get_task_event(job.workspace_id, f"event_{job.id}_start")
+        for job in self.repository.job_records.list_pending_creation_executions():
+            event = self.repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start")
             try:
                 original = CreationExecutionActor.from_event(job.workspace_id, event.payload)
             except (ValueError, KeyError, TypeError, AttributeError):
                 logger.warning("制作作业 %s 缺少可复核的持久身份，保留待处理", job.id)
                 continue
-            if self.repository.creation_narration_usage(job.workspace_id,job.id)['unsettled']:
+            if self.repository.narration_units.creation_narration_usage(job.workspace_id,job.id)['unsettled']:
                 try:
                     if not executor.recover_pcm_unit(job,original,runtime.scheduler):
                         continue
-                    job=self.repository.get_job_run(job.workspace_id,job.id)
+                    job=self.repository.job_records.get_job_run(job.workspace_id,job.id)
                 except (PermissionError,ValueError,KeyError,RecoveryBlocked,OSError) as exc:
                     logger.warning('原PCM作业 %s 结果尚不可核实，保留原请求：%s',job.id,exc)
                     continue
             if job.status == "interrupted":
-                task = self.repository.get_creation_task(job.workspace_id, job.task_id)
-                request = self.repository.creation_execution_wait_row(
+                task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
+                request = self.repository.job_records.creation_execution_wait_row(
                     job.workspace_id, original.member_id, job.id, job.input_digest)
                 stage = request["unit_key"].split(":", 1)[0] if request is not None else task.stage
-                self.repository.interrupt_creation_execution(TaskEvent(
+                self.repository.creation_execution_jobs.interrupt_creation_execution(TaskEvent(
                     id=f"event_{job.id}_recovery_{job.attempt}", workspace_id=job.workspace_id,
                     task_id=job.task_id, job_id=job.id, event_type="creation_execution_stage",
                     payload={"stage": stage, "status": "interrupted",
@@ -470,7 +494,7 @@ class CreationExecutionControl:
                     expected_free_permit_generation=generation)
             owner = runtime.registrations["creation_job"].owner
             if owner.task_authorizations is not None:
-                task = self.repository.get_creation_task(job.workspace_id, job.task_id)
+                task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
                 try:
                     owner.task_authorizations.ensure(task, original)
                 except TaskAuthorizationDenied as exc:
@@ -492,7 +516,7 @@ class CreationExecutionControl:
         if source is not None:
             return source
         base_id=proposal.operation['payload']['base_version_id']
-        base=self.repository.get_timeline_version(task.workspace_id,base_id)
+        base=self.repository.timeline_records.get_timeline_version(task.workspace_id,base_id)
         return {'source_kind':'interactive','workspace_id':task.workspace_id,'task_id':task.id,
             'member_id':actor.user_id or actor.member_id,'actor_identity':actor.identity_payload(),
             'proposal_id':proposal.id,'expected_timeline_version_id':base.id,'expected_timeline_sequence':base.sequence}
@@ -500,8 +524,8 @@ class CreationExecutionControl:
     def submit_person_edit(self, workspace_id, task, proposal, actor, runtime, *, source=None, write_guard=None):
         operation=proposal.operation
         source=self._edit_source(task,proposal,actor,source)
-        script=self.repository.get_creation_task_script(workspace_id,task.confirmed_script_id)
-        plan=self.repository.get_creation_plan(workspace_id,task.plan_id)
+        script=self.repository.script_records.get_creation_task_script(workspace_id,task.confirmed_script_id)
+        plan=self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id)
         digest=person_edit_digest(operation)
         payload={**actor.identity_payload(),'script_id':script.id,'plan_id':plan.id,
             'revision_digest':revision_digest(script,plan),'input_digest':digest,'edit_proposal_id':proposal.id,'source':source}
@@ -526,14 +550,14 @@ class CreationExecutionControl:
                     "AND json_extract(e.payload_json,'$.member_id')=? ORDER BY j.created_at DESC LIMIT 1",
                     (workspace_id,task.id,PERSON_EDIT_KIND,digest,actor.member_id)).fetchone()
                 if active is not None:
-                    job=self.repository._job_run_from_row(active)
-                    saved=self.repository.get_task_event(workspace_id,f'event_{job.id}_start',connection=conn).payload
+                    job=self.repository.job_records.job_run_from_row(active)
+                    saved=self.repository.execution_records.get_task_event(workspace_id,f'event_{job.id}_start',connection=conn).payload
                     if saved.get('source')!=source:
                         raise ValueError('原人物编辑属于另一输入，请查询原请求')
                 else:
-                    job=self.repository.create_job_run(candidate,connection=conn)
+                    job=self.repository.job_records.create_job_run(candidate,connection=conn)
                     created=True
-                    self.repository.append_task_event(TaskEvent(f'event_{job.id}_start',workspace_id,task.id,job.id,
+                    self.repository.execution_records.append_task_event(TaskEvent(f'event_{job.id}_start',workspace_id,task.id,job.id,
                         'person_edit_requested',payload,created_at=job.created_at),connection=conn)
                 owner.verify_submission(SubmissionIntent(workspace_id,'creation_job',job.id,digest,key,SchedulePolicy()),
                     actor,connection=conn)
@@ -552,15 +576,16 @@ class CreationExecutionControl:
     def submit_narration_edit(self, workspace_id, task, proposal, actor, runtime, *, source=None, write_guard=None):
         """One original edit Job, source adoption, then its existing bounded queue."""
         owner = runtime.registrations['creation_job'].owner
-        script = self.repository.get_creation_task_script(workspace_id, task.confirmed_script_id)
-        plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+        with self.repository.execution_inputs.creation_execution_read() as reader:
+            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task.id, connection=reader)
+        task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
         digest = narration_edit_digest(proposal.operation)
         candidate = JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id,
             kind=NARRATION_EDIT_KIND, input_digest=digest,
             idempotency_key=f'narration-edit:{task.id}:{actor.member_id}:{digest}:{proposal.id}')
         source=self._edit_source(task,proposal,actor,source)
         payload = {**actor.identity_payload(), 'script_id': script.id, 'plan_id': plan.id, 'source':source,
-            'revision_digest': revision_digest(script, plan), 'input_digest': digest, 'edit_proposal_id': proposal.id}
+            'revision_digest': snapshot.input_digest, 'input_digest': digest, 'edit_proposal_id': proposal.id}
         def existing(conn):
             prior = conn.execute('SELECT * FROM job_runs WHERE workspace_id=? AND idempotency_key=?',
                 (workspace_id, candidate.idempotency_key)).fetchone()
@@ -583,22 +608,22 @@ class CreationExecutionControl:
                     write_guard(conn)
                 active = existing(conn)
                 if active is not None:
-                    job = self.repository._job_run_from_row(active)
-                    saved=self.repository.get_task_event(workspace_id,f'event_{job.id}_start',connection=conn).payload
+                    job = self.repository.job_records.job_run_from_row(active)
+                    saved=self.repository.execution_records.get_task_event(workspace_id,f'event_{job.id}_start',connection=conn).payload
                     if saved.get('source')!=source:
                         raise ValueError('原配音编辑属于另一输入，请查询原请求')
                 else:
                     if prepared is None:
                         raise ValueError('原配音编辑状态已变化，请查询原请求')
-                    job = self.repository.create_job_run(candidate, connection=conn)
+                    job = self.repository.job_records.create_job_run(candidate, connection=conn)
                     source_id = self.repository.seal_creation_narration_source(job, prepared,
                         input_digest=digest, origin_event_id=f'event_{job.id}_start', connection=conn)
-                    self.repository.append_task_event(TaskEvent(f'event_{job.id}_start', workspace_id, task.id, job.id,
+                    self.repository.execution_records.append_task_event(TaskEvent(f'event_{job.id}_start', workspace_id, task.id, job.id,
                         'narration_edit_requested', {**payload, 'source_binding_event_id': source_id}), connection=conn)
                     owner.verify_submission(SubmissionIntent(workspace_id, 'creation_job', job.id, digest,
                         owner.narration_edit_facts(job, task, payload, plan, connection=conn, pcm_preparation=preparation)[0],
                         SchedulePolicy()), actor, connection=conn, pcm_preparation=preparation)
-            usage = self.repository.creation_narration_usage(workspace_id, job.id)
+            usage = self.repository.narration_units.creation_narration_usage(workspace_id, job.id)
             if usage['unsettled']:
                 queued = runtime.scheduler._get(usage['unsettled'][0]['request_id'])
                 if (queued.workspace_id, queued.owner_id, queued.member_id) != (workspace_id, job.id, actor.member_id):
@@ -606,27 +631,30 @@ class CreationExecutionControl:
             else:
                 queued = migrate_creation_narration_request(self.repository, runtime.scheduler, job, actor)
                 if queued is None:
-                    original = self.repository.creation_execution_input(workspace_id, job.id)
+                    original = self.repository.creation_execution_jobs.creation_execution_input(workspace_id, job.id)
                     key, _ = owner.narration_edit_facts(job, task, original, plan)
                     queued = runtime.scheduler.submit(SubmissionIntent(workspace_id, 'creation_job', job.id,
                         digest, key, SchedulePolicy()), actor)
         runtime.wake()
         return job, queued
 
-    def select_narration_voice(self, *, runtime, actor=None, write_guard=None, **inputs):
+    def select_narration_voice(self, *, runtime=None, runtime_for=None, actor=None, write_guard=None, **inputs):
         with ExitStack() as stack:
-            return self._select_narration_voice(runtime=runtime, stack=stack, actor=actor, write_guard=write_guard, **inputs)
+            return self._select_narration_voice(runtime=runtime, runtime_for=runtime_for, stack=stack, actor=actor, write_guard=write_guard, **inputs)
 
-    def _select_narration_voice(self, *, runtime, stack, actor, write_guard=None, **inputs):
+    def _select_narration_voice(self, *, runtime, runtime_for, stack, actor, write_guard=None, **inputs):
         try:
-            self.repository.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
+            self.repository.narration_voice_selection.get_creation_task_narration_voice_selection(inputs['workspace_id'], inputs['task_id'],
                 inputs['request_id'], member_id=inputs['member_id'])
         except KeyError:
             pass
         else:
             # The repository verifies the original input fingerprint before
             # returning its receipt; replay never prepares/rebinds execution.
-            return self.repository.select_creation_task_narration_voice(**inputs)
+            return self.repository.narration_voice_selection.select_creation_task_narration_voice(**inputs)
+
+        if runtime_for is not None:
+            runtime = runtime_for()
 
         def require_same_actor(original):
             if (not isinstance(actor, CreationExecutionActor) or original != actor
@@ -651,7 +679,7 @@ class CreationExecutionControl:
                 inputs['voice_profile_id'], inputs['voice_version'], viewer_user_id=inputs['member_id'])
             from app.creation.narration_pcm import prepare_narration_source
             source_preparation = stack.enter_context(prepare_narration_source(self.repository, task,
-                replace(plan, selected_voice=selected_voice), actor))
+                plan, actor, selected_voice=selected_voice))
             source_preparation['selected_voice'] = selected_voice
             if owner.task_authorizations is not None:
                 voice_authorization = owner.task_authorizations.prepare_voice_selection(task, actor,
@@ -690,7 +718,7 @@ class CreationExecutionControl:
 
             runtime.scheduler.replace_unstarted_narration_voice(job, connection=conn, replacement_write=replace_input)
 
-        receipt = self.repository.select_creation_task_narration_voice(**inputs, queued_job_rebind=rebind,
+        receipt = self.repository.narration_voice_selection.select_creation_task_narration_voice(**inputs, queued_job_rebind=rebind,
             voice_source_preparation=source_preparation, write_guard=write_guard)
         if runtime is not None:
             runtime.wake()
@@ -720,11 +748,11 @@ class CreationExecutionControl:
             'execution':self.read_bound(workspace_id,task_id,job_id,actor,verify_media=False)}
 
     def read_bound(self, workspace_id, task_id, job_id, actor, *, verify_media: bool):
-        job=self.repository.get_job_run(workspace_id,job_id)
+        job=self.repository.job_records.get_job_run(workspace_id,job_id)
         if job.kind=='creation_task_segment_revision':
-            start=self.repository.get_task_event(workspace_id,f'event_{job.id}_start').payload
+            start=self.repository.execution_records.get_task_event(workspace_id,f'event_{job.id}_start').payload
         else:
-            start=self.repository.creation_execution_input(workspace_id,job.id)
+            start=self.repository.creation_execution_jobs.creation_execution_input(workspace_id,job.id)
             latest=self.execution.latest(workspace_id,task_id)
             if latest is None or latest.id!=job.id:
                 raise ValueError('原制作作业已被新的制作请求替代')
@@ -735,14 +763,14 @@ class CreationExecutionControl:
 
     def job_for_request(self, workspace_id: str, request_id: str):
         """这条设备许可背后是不是一个制作作业；不是就返回 ``None``。"""
-        row = self.repository.creation_job_for_device_request_row(workspace_id, request_id)
+        row = self.repository.job_records.creation_job_for_device_request_row(workspace_id, request_id)
         if row is None:
             return None
-        return self.repository.get_job_run(workspace_id, row["owner_id"])
+        return self.repository.job_records.get_job_run(workspace_id, row["owner_id"])
 
     def task_or_missing(self, workspace_id: str, task_id: str) -> CreationTask:
         try:
-            return self.repository.get_creation_task(workspace_id, task_id)
+            return self.repository.task_records.get_creation_task(workspace_id, task_id)
         except KeyError as exc:
             raise ExecutionControlRejected(status_code=404, detail="creation task not found") from exc
 
@@ -752,7 +780,7 @@ class CreationExecutionControl:
         task: CreationTask,
     ) -> CreationPlan:
         try:
-            plan = self.repository.get_creation_plan(workspace_id, task.plan_id)
+            plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         except KeyError as exc:
             raise ExecutionControlRejected(status_code=404, detail="creation task not found") from exc
         if plan.creation_task_id != task.id:

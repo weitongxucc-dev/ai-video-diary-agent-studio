@@ -6,6 +6,7 @@
 """
 
 from __future__ import annotations
+from script_seed_fixtures import script_seed_payload
 
 import pytest
 
@@ -266,7 +267,8 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
     )
     from app.device_scheduler import DeviceScheduler
     from app.host_resource_probes import NarrationBudget
-    from app.production import CreationPlan, CreationPlanPersonReference, CreationPlanVoiceReference, CreationTask
+    from app.creation.plan_contracts import CreationPlan
+    from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference, CreationTask
     from _media_preview_test_fixtures import register_synthetic_profiles
 
     repository = _repository(tmp_path)
@@ -290,31 +292,49 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
         approved_asset_count=0, approved_clip_count=0, material_rule_summary="测试", model_snapshot=[],
         confirmation_points=[], blockers=[], preflight_fingerprint="fixture")
     task = CreationTask("task", WORKSPACE, plan.id, "测试", "knowledge_explanation", owner_user_id=joined.member_id)
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id=joined.member_id)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=joined.member_id)
     now = datetime.now(timezone.utc).isoformat()
     payload = dict(id="script", workspace_id=WORKSPACE, task_id=task.id, run_id="run", topic_id="topic",
         title="已确认文案", language="zh-CN", sections=[dict(id="section", title="正文", content="测试",
             visual_prompt="", evidence_reference_ids=[])], selection_status="confirmed",
         created_at=now, updated_at=now, confirmed_at=now)
     with repository._connect() as conn:
+        conn.execute("BEGIN")
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
-            ("script", WORKSPACE, task.id, "run", json.dumps(payload), now))
+            ("script", WORKSPACE, task.id, "run", script_seed_payload(repository, conn, payload), now))
         task.confirmed_script_id = "script"
         task.stage = "narration"
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?",
             (json.dumps(asdict(task), default=str), task.id))
-    script = repository.get_creation_task_script(WORKSPACE, "script")
-    plan = repository.get_creation_plan(WORKSPACE, plan.id)
-    budget = NarrationBudget(80, 1, 1024, 15, 1024, 1, 10, 1024, 8, 0.1, 1024, 1024)
-    owner = CreationJobOwnerVerifier(repository, narration_budget=budget, verify_identity=access.verify_identity)
+    import _media_preview_test_fixtures as profile_fixtures
+    from unittest.mock import patch
+    from app.creation.contracts import CreationPlanVoiceReference
+    full_wav = profile_fixtures.synthetic_wav_bytes
+    with patch.object(profile_fixtures, 'synthetic_wav_bytes', lambda: full_wav(.01)):
+        person, voice, *_ = profile_fixtures.register_synthetic_profiles(repository,
+            workspace_id=WORKSPACE, member_id=joined.member_id,
+            person_id='roster-person', voice_id='roster-voice', person_version='v1', voice_version='v1', language='zh')
+    plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
+        person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version,
+        'zh-CN', voice.model_id)
+    with repository._connect() as conn:
+        conn.execute('UPDATE creation_plans SET payload=? WHERE id=?',
+            (json.dumps(asdict(plan), default=str), plan.id))
+    script = repository.script_records.get_creation_task_script(WORKSPACE, "script")
+    plan = repository.plan_records.get_creation_plan(WORKSPACE, plan.id)
+    from app.host_resource_probes import HostResourceDecision, CpuAudioBudget
+    budget = NarrationBudget(80, 1, 1024, 15, 1024, 1, 10, 1024, 8, 0.1, 1024, 1024, input_scope="single_call_experiment_v1")
+    audio_budget = CpuAudioBudget(1, 1024, 15, 15, 8000, 1, 1024, 1, 10, 1024, 8, .1, 1024, 1024)
+    owner = CreationJobOwnerVerifier(repository, narration_budget=budget, narration_audio_budget=audio_budget,
+        verify_identity=access.verify_identity)
     # No model is executed; this fixture only permits the real scheduler's admission.
-    resources = SimpleNamespace(admit=lambda request: True, continue_unit=lambda grant: True,
+    resources = SimpleNamespace(admit=lambda request: HostResourceDecision(True,dict(request.resources),{}), continue_unit=lambda grant: True,
         released=lambda grant: True)
     scheduler = DeviceScheduler(repository.database_path, tmp_path / "device.lock", owners=owner,
         resources=resources, processes=HostProcessProbe())
     def forbidden(*args):
         pytest.fail("grant-only roster test must never execute a model or media stage")
-    execution = CreationExecution(repository, run_narration=forbidden, run_montage_plan=forbidden,
+    execution = CreationExecution(repository, run_montage_plan=forbidden,
         run_render=forbidden, render_is_valid=forbidden)
     job = execution.start(WORKSPACE, task.id, script.id, revision_digest(script, plan), actor=actor)
     request_id = submit_creation_stage(execution, scheduler, job, actor)
@@ -344,6 +364,20 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
 
 @pytest.fixture
 def presenter_permit_case(tmp_path, monkeypatch):
+    yield from _presenter_permit_case(tmp_path, monkeypatch, metadata_only=False)
+
+
+@pytest.fixture
+def presenter_input_stream_case(tmp_path, monkeypatch):
+    yield from _presenter_permit_case(tmp_path, monkeypatch, metadata_only=True)
+
+
+@pytest.fixture
+def presenter_key_stream_case(tmp_path, monkeypatch):
+    yield from _presenter_permit_case(tmp_path, monkeypatch, metadata_only=True, section_count=2)
+
+
+def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_count=1):
     """Persistent lawful inputs; resource availability and media bytes are fixtures."""
     import json
     from dataclasses import asdict
@@ -352,9 +386,10 @@ def presenter_permit_case(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from app.creation_execution import CreationExecution, revision_digest
     from app.host_resource_probes import MontageBudget, PresenterBudget
-    from app.production import (CreationPlan, CreationPlanVoiceReference, CreationTask,
-                                NarrationArtifactRecord, NarrationSegment)
-    from app.production import CreationPlanPersonReference
+    from app.creation.narration_artifacts import NarrationArtifactRecord
+    from app.creation.plan_contracts import CreationPlan
+    from app.creation.contracts import CreationPlanVoiceReference, CreationTask, NarrationSegment
+    from app.creation.contracts import CreationPlanPersonReference
     from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes
 
     import psutil
@@ -372,8 +407,22 @@ def presenter_permit_case(tmp_path, monkeypatch):
         person_authorization_id="person-auth", voice_authorization_id="voice-auth",
     )
     person_auth = person.authorization
-    register_synthetic_video_asset(repo, workspace_id=WORKSPACE, member_id=member.member_id,
-        path=tmp_path / "library" / "person.mp4", asset_id="person-video", seconds=1)
+    if metadata_only:
+        from app.materials.contracts import MaterialAsset, MaterialSegment
+        path = tmp_path / 'library' / 'person.mp4'
+        path.write_bytes(b'paid metadata-only person source; no codec')
+        asset = MaterialAsset('person-video', WORKSPACE, path.name, str(path), path.stat().st_size,
+            datetime.fromtimestamp(path.stat().st_mtime, timezone.utc), duration_seconds=1,
+            usage_role='b_roll', review_status='approved', analysis_status='ready', owner_user_id=member.member_id,
+            segments=[MaterialSegment('person-video-segment-0', 'person-video', 0, 1,
+                usage_role='b_roll', review_status='approved')])
+        repo._save_asset(asset)
+        with repo._connect() as conn:
+            repo._claim_workspace_media_reference(conn, workspace_id=WORKSPACE,
+                reference=repo.workspace_media_reference_for_asset(WORKSPACE, asset.id))
+    else:
+        register_synthetic_video_asset(repo, workspace_id=WORKSPACE, member_id=member.member_id,
+            path=tmp_path / "library" / "person.mp4", asset_id="person-video", seconds=1)
     plan = CreationPlan(id="plan", workspace_id=WORKSPACE, goal="测试", name="测试", target_count=1,
         language="zh-CN", aspect_ratio="9:16", duration_target_seconds=15,
         knowledge_references=[], source_references=[], selected_voice=CreationPlanVoiceReference(
@@ -385,34 +434,45 @@ def presenter_permit_case(tmp_path, monkeypatch):
         presenter_share_target=20)
     assert plan.presenter_share_target == 20
     task = CreationTask("task", WORKSPACE, plan.id, "测试", "knowledge_explanation", owner_user_id=member.member_id)
-    repo.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=member.member_id)
     payload = dict(id="script", workspace_id=WORKSPACE, task_id=task.id, run_id="run", topic_id="topic",
         title="已确认文案", language="zh-CN", sections=[dict(id="section", title="正文", content="合成文案",
             visual_prompt="", evidence_reference_ids=[])], selection_status="confirmed",
         created_at=now.isoformat(), updated_at=now.isoformat(), confirmed_at=now.isoformat())
+    if section_count == 2:
+        payload['sections'].append(dict(id='tail', title='尾段', content='中文 "quoted"\n café 😺',
+            visual_prompt='', evidence_reference_ids=[]))
     audio = tmp_path / "spoken.wav"
     audio.write_bytes(synthetic_wav_bytes())
-    repo.save_narration_artifact(NarrationArtifactRecord(id="narration", workspace_id=WORKSPACE,
+    repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(id="narration", workspace_id=WORKSPACE,
         task_id=task.id, script_id="script", voice_profile_id="voice", cache_key="narration",
         audio_path=str(audio), duration_seconds=1, sample_rate=16000, model_id="fixture"))
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    seeded = CreationTaskScript(**{key: value for key, value in payload.items()
+        if key not in {'sections', 'created_at', 'updated_at', 'confirmed_at'}},
+        sections=[CreationTaskScriptSection(**item) for item in payload['sections']],
+        created_at=now, updated_at=now, confirmed_at=now)
     with repo._connect() as conn:
+        conn.execute('BEGIN')
+        encoded = repo.script_records._script_payload(conn, seeded)
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
-            ("script", WORKSPACE, task.id, "run", json.dumps(payload), now.isoformat()))
+            ("script", WORKSPACE, task.id, "run", encoded, now.isoformat()))
         task.confirmed_script_id = "script"
         task.narration_cache_key = "narration"
         task.stage = "montage"
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
-    repo.save_narration_segments(WORKSPACE, task.id, "script", [NarrationSegment("segment", WORKSPACE,
-        task.id, "script", "section", "合成文案", "narration://artifact/narration", 1, 16000,
-        "fixture", "voice", "v1", "zh", "v1", "ready")])
+    repo.narration_records.save_narration_segments(WORKSPACE, task.id, "script", [NarrationSegment(
+        'segment' if index == 0 else 'tail-segment', WORKSPACE, task.id, "script", section['id'], section['content'],
+        "narration://artifact/narration", 1, 16000, "fixture", "voice", "v1", "zh", "v1", "ready")
+        for index, section in enumerate(payload['sections'])])
     budget = PresenterBudget(1, 1024, 15, 4096, 1, 5, 1024**2*64, 32, .1, 1024**2*64, 4096)
     cpu = cpu_render_budget_from_env(_CPU_RENDER_ENV)
     def forbidden(*args):
         pytest.fail("no ungranted stage or real media work")
-    execution = CreationExecution(repo, run_narration=forbidden, run_montage_plan=forbidden,
+    execution = CreationExecution(repo, run_montage_plan=forbidden,
         run_render=forbidden, render_is_valid=forbidden)
-    script = repo.get_creation_task_script(WORKSPACE, "script")
-    persisted = repo.get_creation_plan(WORKSPACE, plan.id)
+    script = repo.script_records.get_creation_task_script(WORKSPACE, "script")
+    persisted = repo.plan_records.get_creation_plan(WORKSPACE, plan.id)
     job = execution.start(WORKSPACE, task.id, script.id, revision_digest(script, persisted), actor=actor)
     registration = creation_job_registration(repo, render_action=forbidden, render_is_valid=forbidden,
         cpu_render_budget=cpu, presenter_cpu_render_budget=cpu, presenter_budget=budget,
@@ -493,7 +553,7 @@ def test_default_presenter_budget_required_before_queueing(presenter_permit_case
             submit_creation_stage(case.execution, scheduler, case.job, case.actor)
         with case.repo._connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM device_work_requests").fetchone()[0] == 0
-        rejected = case.repo.get_job_run(WORKSPACE, case.job.id)
+        rejected = case.repo.job_records.get_job_run(WORKSPACE, case.job.id)
         assert rejected.status == "failed" and "专属预算尚未标定" in rejected.failure_reason
         assert rejected.finished_at is not None and rejected.output_refs == []
     finally:
@@ -547,17 +607,18 @@ def _complete_presenter_fixture(case, context=None):
     from datetime import datetime, timezone
     from app.avatar_lipsync import avatar_lipsync_cache_key
     from app.creation_execution import presenter_inputs, presenter_input_facts
-    from app.production import ArtifactRecord, JobRun, PersonRender, TransformRun
+    from app.creation.contracts import ArtifactRecord, JobRun, TransformRun
+    from app.creation.person_renders import PersonRender
     from app.task_runtime import TaskRuntime, JobResult
-    task = case.repo.get_creation_task(WORKSPACE, case.task.id)
-    script = case.repo.get_creation_task_script(WORKSPACE, task.confirmed_script_id)
-    plan = case.repo.get_creation_plan(WORKSPACE, task.plan_id)
+    task = case.repo.task_records.get_creation_task(WORKSPACE, case.task.id)
+    script = case.repo.script_records.get_creation_task_script(WORKSPACE, task.confirmed_script_id)
+    plan = case.repo.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     segment, request = presenter_inputs(case.repo, task, script, plan, {"fast": "fixture-avatar"})[0]
     input_facts = presenter_input_facts(request)
     cache = avatar_lipsync_cache_key(request, input_facts=input_facts)
-    render = case.repo.create_person_render(PersonRender("person-render", WORKSPACE, task.id, "person", "v1",
+    render = case.repo.person_renders.create_person_render(PersonRender("person-render", WORKSPACE, task.id, "person", "v1",
         "voice", "v1", segment.id, "workspace://person.mp4", "fixture-avatar", "natural", "neutral", cache, "pending"))
-    case.repo.claim_person_render(WORKSPACE, task.id, render.id)
+    case.repo.person_renders.claim_person_render(WORKSPACE, task.id, render.id)
     output = case.tmp_path / "synthetic-person.mp4"
     if context is not None:
         context.run([sys.executable, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b'synthetic-provider-output')",
@@ -567,26 +628,29 @@ def _complete_presenter_fixture(case, context=None):
     logical_ref = "artifacts/task/person-job/person-render.mp4"
     inner = JobRun("person-job", WORKSPACE, task.id, "person_render", "person-job", cache)
     def work(job_context):
-        case.repo.create_artifact_record(ArtifactRecord("person-artifact", WORKSPACE, task.id, "person_render",
+        case.repo.execution_records.create_artifact_record(ArtifactRecord("person-artifact", WORKSPACE, task.id, "person_render",
             logical_ref, hashlib.sha256(output.read_bytes()).hexdigest(), output.stat().st_size,
             job_context.job_id, [segment.audio_reference]))
-        case.repo.create_transform_run(TransformRun("person-transform", WORKSPACE, task.id, job_context.job_id,
+        case.repo.lineage_records.create_transform_run(TransformRun("person-transform", WORKSPACE, task.id, job_context.job_id,
             "person_render", cache, [segment.audio_reference], [logical_ref], "synthetic-provider",
             {"language": segment.language, "presenter_input_facts": input_facts}, "succeeded", datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc)))
         return JobResult((logical_ref,))
-    assert TaskRuntime(case.repo).run(inner, work).status == "succeeded"
-    case.repo.finish_person_render(WORKSPACE, task.id, render.id, status="ready", output_path=str(output),
+    assert TaskRuntime(case.repo.job_records).run(inner, work).status == "succeeded"
+    case.repo.person_renders.finish_person_render(WORKSPACE, task.id, render.id, status="ready", output_path=str(output),
         duration_seconds=1, alignment_evidence="synthetic timing; no media decoding")
-    case.repo.bind_person_render_artifact(WORKSPACE, task.id, render.id, logical_ref)
-    return case.repo.get_person_render(WORKSPACE, task.id, render.id)
+    case.repo.person_renders.bind_person_render_artifact(WORKSPACE, task.id, render.id, logical_ref)
+    return case.repo.person_renders.get_person_render(WORKSPACE, task.id, render.id)
 
 
-def test_presenter_unit_executes_with_registered_child_and_queues_metadata_after_release(presenter_permit_case):
+def test_presenter_unit_executes_with_registered_child_and_queues_metadata_after_release(presenter_permit_case, monkeypatch):
     import json
     from app.creation_execution import submit_creation_stage
     case = presenter_permit_case
     scheduler = _presenter_scheduler(case)
-    case.registration.executor.stage_actions["person_render"] = lambda _w, _t, context: _complete_presenter_fixture(case, context)
+    import app.main as main
+    case.registration.executor.person_stage = main._person_stage_use_case(case.repo)
+    monkeypatch.setattr(case.registration.executor.person_stage, 'generate_stage',
+        lambda _w, _t, context: _complete_presenter_fixture(case, context))
     try:
         request_id = submit_creation_stage(case.execution, scheduler, case.job, case.actor)
         grant = scheduler.pick_and_grant()
@@ -594,8 +658,8 @@ def test_presenter_unit_executes_with_registered_child_and_queues_metadata_after
         case.registration.executor.execute(grant, scheduler)
         scheduler.assert_released(grant)
         assert scheduler._get(request_id).state == "done"
-        assert case.repo.get_job_run(WORKSPACE, case.job.id).status == "queued"
-        task = case.repo.get_creation_task(WORKSPACE, case.task.id)
+        assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == "queued"
+        task = case.repo.task_records.get_creation_task(WORKSPACE, case.task.id)
         assert task.narration_cache_key == "narration" and task.confirmed_script_id == "script"
         with case.repo._connect() as conn:
             rows = conn.execute("SELECT unit_key,state FROM device_work_requests ORDER BY created_at").fetchall()
@@ -658,7 +722,7 @@ def _presenter_montage_fixture(case, render):
     from dataclasses import asdict
     from datetime import datetime, timezone
     from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
-    task = case.repo.get_creation_task(WORKSPACE, case.task.id)
+    task = case.repo.task_records.get_creation_task(WORKSPACE, case.task.id)
     task.montage_plan_id = "montage"
     cue = NarrationCue("cue", "section", "合成文案", 1, narration_segment_id="segment")
     clip = MontageClip("clip", "cue", f"person:{render.id}", "segment", f"person-render://{render.id}",
@@ -677,7 +741,7 @@ def test_presenter_composition_accounts_for_actual_person_media_and_uses_its_own
     from app.creation_execution import CpuRenderLimits, cpu_render_facts, submit_creation_stage
     case = presenter_permit_case
     task = _presenter_montage_fixture(case, _complete_presenter_fixture(case))
-    plan = case.repo.get_creation_plan(WORKSPACE, task.plan_id)
+    plan = case.repo.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     with case.repo._connect() as conn:
         with pytest.raises(ValueError, match="人物组合.*专属预算"):
             cpu_render_facts(case.repo, conn, task, plan, CpuRenderLimits(99999999, 8, 999))
@@ -705,23 +769,14 @@ def test_presenter_composition_accounts_for_actual_person_media_and_uses_its_own
         scheduler.close()
 
 
-def test_existing_main_person_consumer_publishes_under_same_grant_without_importing_main(presenter_permit_case):
-    import ast
-    import hashlib
-    import json
+def test_actual_person_stage_consumer_publishes_under_same_grant(presenter_permit_case, monkeypatch):
     import sys
-    from dataclasses import asdict
-    from datetime import datetime
     from pathlib import Path
     from types import SimpleNamespace
-    from uuid import uuid4
-    from fastapi import HTTPException
     from app.artifact_store import ArtifactStore
-    from app.avatar_lipsync import AvatarAndLipSyncResult, avatar_lipsync_cache_key
-    from app.creation_execution import CreationStageGrantContext, presenter_inputs, presenter_input_facts, current_presenter_render, montage_waiting_for_confirmation, submit_creation_stage
-    from app.production import ArtifactRecord, DependencyEdge, JobRun, PersonRender, TransformRun, MediaAuthorityError, utc_now
+    from app.avatar_lipsync import AvatarAndLipSyncResult
+    from app.creation_execution import submit_creation_stage
     from app.schemas import CreationTaskPersonRenderRequest
-    from app.task_runtime import JobFailure, JobResult
     from app.video_jobs import VideoJobRunner
     case = presenter_permit_case
     store = ArtifactStore(case.tmp_path / "output")
@@ -729,7 +784,7 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
         def __init__(self, root, provider):
             self.root = Path(root)
         def render(self, request, *, output_cache_key, grant_context, **_kwargs):
-            assert namespace["_creation_execution_status"](WORKSPACE, case.task.id)["current_stage"] == "person_render"
+            assert current_status()["current_stage"] == "person_render"
             output = self.root / "synthetic-provider.mp4"
             grant_context.run([sys.executable, "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b'synthetic-person')",
                                str(output)], output_paths=(output,))
@@ -737,50 +792,48 @@ def test_existing_main_person_consumer_publishes_under_same_grant_without_import
                 "synthetic timing; no decoding", None, None, None)
     def unexpected(**details):
         pytest.fail(f"unexpected consumer failure: {details}")
-    namespace = dict(asdict=asdict, datetime=datetime, Path=Path, hashlib=hashlib, json=json, uuid4=uuid4, utc_now=utc_now,
-        HTTPException=HTTPException, production_repo=case.repo, artifact_store=store,
-        settings=SimpleNamespace(video_output_path=case.tmp_path / "output"),
-        _creation_task_or_404=lambda workspace, task: case.repo.get_creation_task(workspace, task),
-        _lipsync_provider=lambda quality: SimpleNamespace(ready=True, model_id="fixture-avatar"),
-        _capability_unavailable=unexpected, _topic_failure_response=unexpected,
-        CreationStageGrantContext=CreationStageGrantContext, CreationTaskPersonRenderRequest=CreationTaskPersonRenderRequest,
-        PersonRender=PersonRender, ArtifactRecord=ArtifactRecord, TransformRun=TransformRun, DependencyEdge=DependencyEdge,
-        JobRun=JobRun, JobFailure=JobFailure, JobResult=JobResult, MediaAuthorityError=MediaAuthorityError,
-        AvatarAndLipSyncService=SyntheticService, avatar_lipsync_cache_key=avatar_lipsync_cache_key,
-        presenter_inputs=presenter_inputs, presenter_input_facts=presenter_input_facts, current_presenter_render=current_presenter_render,
-        video_job_runner=VideoJobRunner(case.repo), creation_execution=case.execution,
-        montage_waiting_for_confirmation=montage_waiting_for_confirmation,
-        device_runtime=SimpleNamespace(), _creation_render_is_valid=lambda *args, **kwargs: False,
-        _EXECUTION_WAITING_TEXT={})
-    names = {"_generate_creation_task_person_render_record", "_person_stage_with_grant", "_person_render_media_path",
-             "_presenter_model_ids", "_creation_execution_status"}
-    module = ast.parse((Path(__file__).parents[1] / "app/main.py").read_text())
-    selected = ast.Module(body=[node for node in module.body if isinstance(node, ast.FunctionDef) and node.name in names], type_ignores=[])
-    assert len(selected.body) == len(names)
-    exec(compile(selected, "main-person-consumers", "exec"), namespace)
-    case.registration.owner.resolve_presenter_output = namespace["_person_render_media_path"]
-    case.registration.executor.stage_actions["person_render"] = namespace["_person_stage_with_grant"]
+    import app.main as main
+    import app.creation.person_stage_use_case as person_module
+    from dataclasses import replace
+    from app.creation.person_stage_use_case import PersonStageRejected
+    from app.creation.execution_control import CreationExecutionControl
+    monkeypatch.setattr(main, 'local_members_service', case.members)
+    monkeypatch.setattr(main, 'artifact_store', store)
+    monkeypatch.setattr(main, 'settings', replace(main.settings,
+        video_output_path=str(case.tmp_path / 'output'), temporary_root_path=str(case.tmp_path / 'temporary')))
+    provider = SimpleNamespace(ready=True, model_id='fixture-avatar')
+    monkeypatch.setattr(main, 'latentsync_provider', provider)
+    monkeypatch.setattr(main, 'avatar_lipsync_provider', provider)
+    monkeypatch.setattr(main, 'video_job_runner', VideoJobRunner(case.repo.job_records))
+    monkeypatch.setattr(person_module, 'AvatarAndLipSyncService', SyntheticService)
+    stage = main._person_stage_use_case(case.repo)
+    control = CreationExecutionControl(case.repo, case.execution, main._render_stage_use_case(case.repo),
+        case.registration.owner.verify_identity)
+    def current_status():
+        return control.status_summary(WORKSPACE, case.task.id)
+    case.registration.owner.resolve_presenter_output = stage.metadata.picture_renderer.person_path
+    case.registration.executor.person_stage = stage
     scheduler = _presenter_scheduler(case)
     try:
         # No-Grant direct product consumer rejects before any job/person row is created.
-        with pytest.raises(HTTPException) as retired:
-            namespace["_generate_creation_task_person_render_record"](WORKSPACE, case.task.id,
+        with pytest.raises(PersonStageRejected) as retired:
+            stage.generate_record(WORKSPACE, case.task.id,
                 CreationTaskPersonRenderRequest(narration_segment_id="segment", person_profile_id="person", person_version="v1"))
         assert retired.value.status_code == 409
-        assert case.repo.list_person_renders(WORKSPACE, case.task.id) == []
+        assert case.repo.person_renders.list_person_renders(WORKSPACE, case.task.id) == []
         request_id = submit_creation_stage(case.execution, scheduler, case.job, case.actor)
-        assert namespace["_creation_execution_status"](WORKSPACE, case.task.id)["current_stage"] == "person_render"
+        assert current_status()["current_stage"] == "person_render"
         grant = scheduler.pick_and_grant()
         assert grant is not None
         case.registration.executor.execute(grant, scheduler)
         scheduler.assert_released(grant)
         assert scheduler._get(request_id).state == "done"
-        assert namespace["_creation_execution_status"](WORKSPACE, case.task.id)["current_stage"] == "montage_plan"
-        rendered = case.repo.list_person_renders(WORKSPACE, case.task.id)
+        assert current_status()["current_stage"] == "montage_plan"
+        rendered = case.repo.person_renders.list_person_renders(WORKSPACE, case.task.id)
         assert len(rendered) == 1 and rendered[0].status == "ready"
         assert store.resolve_file(rendered[0].artifact_ref).read_bytes() == b"synthetic-person"
-        assert case.repo.get_job_run(WORKSPACE, case.job.id).status == "queued"
-        events = case.repo.list_task_events(WORKSPACE, case.task.id)
+        assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == "queued"
+        events = case.repo.execution_records.list_task_events(WORKSPACE, case.task.id)
         assert any(event.payload.get("stage") == "person_render" and event.payload.get("status") == "running" for event in events)
     finally:
         scheduler.close()
@@ -791,7 +844,7 @@ def test_ready_presenter_cache_rejects_changed_audio_or_visual_under_same_refere
     case = presenter_permit_case
     import os
     task = _presenter_montage_fixture(case, _complete_presenter_fixture(case))
-    plan = case.repo.get_creation_plan(WORKSPACE, task.plan_id)
+    plan = case.repo.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
     assert case.registration.owner.person_valid(task)
     with case.repo._connect() as conn:
         case.registration.owner.render_facts(conn, task, plan)
@@ -812,4 +865,195 @@ def test_ready_presenter_cache_rejects_changed_audio_or_visual_under_same_refere
         os.utime(original, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     assert not case.registration.owner.person_valid(task)
     with case.repo._connect() as conn, pytest.raises(ValueError, match="人物镜头版本、授权或输出已失效"):
+        case.registration.owner.render_facts(conn, task, plan)
+
+
+def test_presenter_row_admission_preserves_original_json_key_and_resources(presenter_key_stream_case, monkeypatch):
+    import hashlib
+    import json
+    from dataclasses import asdict, replace
+    from app.creation_execution import presenter_inputs, presenter_input_facts, presenter_stage_facts
+    case = presenter_key_stream_case
+    repo = case.repo
+    script = repo.script_records.get_creation_task_script(WORKSPACE, 'script')
+    plan = replace(repo.plan_records.get_creation_plan(WORKSPACE, case.task.plan_id), presenter_share_target=100)
+    inputs = presenter_inputs(repo, case.task, script, plan, {'fast': 'fixture-avatar'})
+    files = {fact['path']: fact for _, request in inputs for fact in presenter_input_facts(request)}
+    facts = [files[path] for path in sorted(files)]
+    resources = {'kind': 'creation_person_render', 'execution_mode': 'isolated_avatar_lipsync',
+        'section_count': len(inputs), 'input_bytes': sum(item['size_bytes'] for item in facts),
+        'duration_seconds': sum(segment.duration_seconds for segment, _ in inputs),
+        'max_output_bytes': case.budget.max_output_bytes, 'threads': case.budget.max_threads,
+        'timeout_seconds': case.budget.max_timeout_seconds}
+    original = {'inputs': [[asdict(segment), asdict(request)] for segment, request in inputs],
+        'files': facts, 'resources': resources}
+    expected = 'person_render:' + hashlib.sha256(json.dumps(original, sort_keys=True, default=str).encode()).hexdigest()
+    def forbidden(*args, **kwargs):
+        pytest.fail('person admission must not hydrate whole script/segment inputs')
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
+        monkeypatch.setattr(repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else repo.narration_records if name in ('list_narration_segments',) else repo, name, forbidden)
+    monkeypatch.setattr(repo.narration_records, '_decode_script', forbidden)
+    with repo.execution_inputs.creation_execution_read() as conn:
+        snapshot = repo.execution_inputs.read_creation_execution_snapshot(WORKSPACE, case.task.id, connection=conn)
+        actual, measured = presenter_stage_facts(repo, snapshot.task, snapshot.script_header, plan,
+            case.budget, {'fast': 'fixture-avatar'}, connection=conn)
+        assert actual == expected and measured == resources and conn.in_transaction
+        assert measured['section_count'] == 2
+
+
+def _stream_person_executor(case, monkeypatch, boundary):
+    from contextlib import contextmanager
+    from pathlib import Path
+    from types import SimpleNamespace
+    from app.artifact_store import ArtifactStore
+    from app.avatar_lipsync import AvatarAndLipSyncResult
+    from app.creation.person_stage_use_case import PersonStageUseCase
+    from app.creation_execution import CreationJobUnitExecutor
+    from app.video_jobs import VideoJobRunner
+    import app.creation.person_stage_use_case as module
+    active = {}
+    read = case.repo.execution_inputs.creation_execution_read
+    @contextmanager
+    def tracked(connection=None):
+        with read(connection) as conn:
+            active[id(conn)] = active.get(id(conn), 0) + 1
+            try:
+                yield conn
+            finally:
+                active[id(conn)] -= 1
+                if not active[id(conn)]:
+                    del active[id(conn)]
+    monkeypatch.setattr(case.repo.execution_inputs, 'creation_execution_read', tracked)
+    store = ArtifactStore(case.tmp_path/'stream-output')
+    metadata = SimpleNamespace(artifact_store=store, picture_renderer=SimpleNamespace(
+        person_path=lambda render: Path(render.output_path) if render.output_path and Path(render.output_path).is_file() else None))
+    provider = SimpleNamespace(ready=True, model_id='fixture-avatar')
+    class PaidProvider:
+        def __init__(self, root, provider):
+            self.root = Path(root)
+        def render(self, request, *, output_cache_key, grant_context, **kwargs):
+            assert not active, 'source read transaction must exit before the provider boundary'
+            grant_context.check()
+            boundary.append(grant_context.grant.request_id)
+            output = self.root/'paid-person.mp4'
+            output.write_bytes(b'paid synthetic person output; no model or codec')
+            return AvatarAndLipSyncResult('succeeded', output_cache_key, str(output), 1,
+                'fixture alignment; no model or decoding', None, None, None)
+    monkeypatch.setattr(module, 'AvatarAndLipSyncService', PaidProvider)
+    root = case.tmp_path/'stream-output'
+    root.mkdir(exist_ok=True)
+    stage = PersonStageUseCase(case.repo, metadata, SimpleNamespace(provider=lambda quality: provider),
+        VideoJobRunner(case.repo.job_records), SimpleNamespace(video_output_path=root))
+    def forbidden(*args, **kwargs):
+        pytest.fail('person stream must not hydrate whole input DTOs or execute a worker')
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
+        monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, forbidden)
+    monkeypatch.setattr(case.repo.narration_records, '_decode_script', forbidden)
+    monkeypatch.setattr('app.granted_subprocess.run_granted_command', forbidden)
+    return CreationJobUnitExecutor(case.repo, render_action=forbidden, render_is_valid=lambda *args: False,
+        person_stage=stage)
+
+
+def test_presenter_row_owner_executes_after_reader_release_and_reuses_original_request(presenter_input_stream_case, monkeypatch):
+    from app.creation_execution import submit_creation_stage
+    case = presenter_input_stream_case
+    boundary = []
+    executor = _stream_person_executor(case, monkeypatch, boundary)
+    scheduler = _presenter_scheduler(case)
+    grant = None
+    try:
+        request_id = submit_creation_stage(case.execution, scheduler, case.job, case.actor)
+        assert submit_creation_stage(case.execution, scheduler, case.job, case.actor) == request_id
+        original = scheduler._get(request_id)
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        executor.execute(grant, scheduler)
+        assert boundary == [request_id]
+        assert scheduler._get(request_id).resources == original.resources
+        assert scheduler._get(request_id).state == 'done'
+        assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == 'queued'
+        assert len(case.repo.person_renders.list_person_renders(WORKSPACE, case.task.id)) == 1
+        scheduler.assert_released(grant)
+    finally:
+        if grant is not None and scheduler._get(grant.request_id).state in {'granted', 'yield_requested'}:
+            scheduler.fail_unit(grant, reason='fixture_finished', failure_write=lambda conn, current: 'fixture_finished')
+        scheduler.close()
+
+
+@pytest.mark.parametrize('change', ['authorization', 'tail'])
+def test_presenter_no_next_owner_rechecks_original_request_before_checkpoint(presenter_input_stream_case, monkeypatch, change):
+    import json
+    from types import SimpleNamespace
+    import app.creation_execution as module
+    case = presenter_input_stream_case
+    boundary = []
+    executor = _stream_person_executor(case, monkeypatch, boundary)
+    scheduler = _presenter_scheduler(case)
+    grant = None
+    try:
+        request_id = module.submit_creation_stage(case.execution, scheduler, case.job, case.actor)
+        grant = scheduler.pick_and_grant()
+        assert grant is not None
+        # A preexisting review gate makes the real next-unit selection return None.
+        _presenter_montage_fixture(case, SimpleNamespace(id='pending-review-person'))
+        with case.repo._connect() as conn:
+            row = conn.execute('SELECT payload FROM creation_task_montage_plans WHERE id=?', ('montage',)).fetchone()
+            pending = json.loads(row['payload'])
+            pending['status'] = 'waiting_for_user'
+            pending['clips'][0]['needs_confirmation'] = True
+            conn.execute('UPDATE creation_task_montage_plans SET payload=? WHERE id=?', (json.dumps(pending), 'montage'))
+        next_units = []
+        select_next = module.next_creation_intent
+        def observed(*args, **kwargs):
+            result = select_next(*args, **kwargs)
+            next_units.append(result)
+            return result
+        monkeypatch.setattr(module, 'next_creation_intent', observed)
+        released = scheduler._released_for_commit
+        injected = []
+        def changed(conn, current):
+            result = released(conn, current)
+            if not injected:
+                injected.append(True)
+                if change == 'authorization':
+                    monkeypatch.setattr(case.registration.owner, 'verify_identity', lambda _: 'unauthorized')
+                else:
+                    conn.execute("UPDATE creation_task_script_sections SET section_json=json_set(section_json,'$.content','changed tail') WHERE script_id='script' AND section_id='section'")
+            return result
+        monkeypatch.setattr(scheduler, '_released_for_commit', changed)
+        executor.execute(grant, scheduler)
+        assert next_units == [None] and injected and boundary == [request_id]
+        assert scheduler._get(request_id).state != 'done'
+        assert case.repo.job_records.get_job_run(WORKSPACE, case.job.id).status == 'interrupted'
+        rendered = case.repo.person_renders.list_person_renders(WORKSPACE, case.task.id)
+        assert len(rendered) == 1 and rendered[0].status == 'ready'
+        assert not [event for event in case.repo.execution_records.list_task_events(WORKSPACE, case.task.id)
+            if event.job_id == case.job.id and event.event_type == 'creation_execution_stage'
+            and event.payload.get('stage') == 'person_render' and event.payload.get('status') == 'completed']
+    finally:
+        if grant is not None and scheduler._get(grant.request_id).state in {'granted', 'yield_requested'}:
+            scheduler.fail_unit(grant, reason='fixture_finished', failure_write=lambda conn, current: 'fixture_finished')
+        scheduler.close()
+
+
+def test_presenter_cpu_row_inputs_keep_actual_source_accounting_and_cache_revalidation(presenter_input_stream_case, monkeypatch):
+    case = presenter_input_stream_case
+    render = _complete_presenter_fixture(case)
+    task = _presenter_montage_fixture(case, render)
+    plan = case.repo.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
+    def forbidden(*args, **kwargs):
+        pytest.fail('person CPU admission must not load full input DTOs')
+    for name in ('get_creation_task_script', '_creation_task_script_from_payload', 'list_narration_segments'):
+        monkeypatch.setattr(case.repo.script_records if name in ('get_creation_task_script', '_creation_task_script_from_payload') else case.repo.narration_records if name in ('list_narration_segments',) else case.repo, name, forbidden)
+    monkeypatch.setattr(case.repo.narration_records, '_decode_script', forbidden)
+    with case.repo._connect() as idle:
+        assert not idle.in_transaction
+        key, resources = case.registration.owner.render_facts(idle, task, plan)
+        assert key.startswith('render:') and resources['kind'] == 'creation_presenter_render'
+        assert resources['input_bytes'] == (case.tmp_path/'spoken.wav').stat().st_size + (case.tmp_path/'synthetic-person.mp4').stat().st_size
+        assert resources['threads'] == case.cpu.max_threads
+        assert not idle.in_transaction and idle.execute('SELECT 1').fetchone()[0] == 1
+    source = case.tmp_path/'spoken.wav'
+    source.write_bytes(source.read_bytes()+b'changed')
+    with case.repo.execution_inputs.creation_execution_read() as conn, pytest.raises(ValueError, match='失效'):
         case.registration.owner.render_facts(conn, task, plan)

@@ -346,13 +346,35 @@ test('explicit execution start can return a new job with the supplied digest aft
 });
 
 test('execution wait is finite and a valid original completed result is the only success',async t=>{
-  let status='queued';
-  const f=await fixture(t,(call,res)=>send(res,200,executionStatus(status,'execution_original',status==='succeeded')));
-  const started=Date.now();
-  const pending=await f.cli('execution','wait',TASK,'execution_original','--timeout-seconds','0.03');
-  assert.equal(pending.code,3);assert.ok(Date.now()-started<1000);
-  status='succeeded';assert.equal((await f.cli('execution','wait',TASK,'execution_original','--timeout-seconds','0.03')).code,0);
-  assert.ok(f.calls.every(call=>call.method==='GET'&&call.url===executionLocator));
+  const {executionCommand}=await import('./yaohe/execution-commands.mjs');
+  const originalNow=Date.now;
+  let now=0;
+  const reads=[];
+  try {
+    Date.now=()=>now;
+    const pending=await executionCommand(async(path,options)=>{
+      reads.push({path,options});
+      now=30;
+      return executionStatus('queued');
+    },{positional:['execution','wait',TASK,'execution_original'],flags:{'timeout-seconds':'0.03'}});
+    const detail=JSON.stringify(pending);
+    assert.equal(pending.code,3,detail);
+    assert.equal(pending.state,'pending',detail);
+    assert.equal(pending.job_id,'execution_original',detail);
+    assert.equal(pending.data.task_id,TASK,detail);
+    assert.equal(pending.execution_locator,executionLocator,detail);
+    assert.equal(now,30);
+    assert.deepEqual(reads,[{path:executionLocator,options:{timeout:30}}],JSON.stringify(reads));
+  } finally {
+    Date.now=originalNow;
+  }
+  const f=await fixture(t,(call,res)=>send(res,200,executionStatus('succeeded','execution_original',true)));
+  const completed=await f.cli('execution','wait',TASK,'execution_original','--timeout-seconds','2');
+  assert.equal(completed.code,0,completed.output);
+  assert.equal(completed.json.job_id,'execution_original',completed.output);
+  assert.equal(completed.json.execution_locator,executionLocator,completed.output);
+  assert.equal(f.calls.length,1,JSON.stringify(f.calls));
+  assert.ok(f.calls.every(call=>call.method==='GET'&&call.url===executionLocator),JSON.stringify(f.calls));
 });
 
 test('execution wait cannot drift to a newer succeeded job after observing the original pending job',async t=>{

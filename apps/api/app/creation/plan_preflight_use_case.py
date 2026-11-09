@@ -10,11 +10,12 @@ from typing import Literal
 from app.avatar_lipsync import AvatarAndLipSyncProvider
 from app.materials.contracts import effective_segment_usage_role
 from app.model_runtime import ModelCatalog
-from app.production import (CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference,
-    CreationPlanPronunciationReference, CreationPlanSourceReference, ProductionRepository, VideoTemplate)
+from app.creation.video_template_records import VideoTemplate
+from app.production import ProductionRepository
+from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
 from app.source_policy import content_allows_use
 from app.source_repository import SourceRepository
-from app.source_types import SourceItem, source_item_identity
+from app.source_types import source_item_identity
 
 
 @dataclass(frozen=True)
@@ -154,7 +155,7 @@ class CreationPlanPreflightUseCase:
         approved_clips = [segment for asset, segment in usable if effective_segment_usage_role(asset, segment) == "b_roll"]
         eligible_material_pairs = {(asset.id, segment.id) for asset, segment in usable}
         eligible_material_ids = sorted({asset_id for asset_id, _ in eligible_material_pairs})
-        material_matches = self.production.search_material_segments(
+        material_matches = self.production.material_search.search_material_segments(
             workspace_id,
             query=payload.goal,
             asset_ids=eligible_material_ids,
@@ -166,7 +167,7 @@ class CreationPlanPreflightUseCase:
         ) if eligible_material_ids else []
         material_matches = [match for match in material_matches if (match.asset_ref.removeprefix("asset:"), match.segment_ref.removeprefix("segment:")) in eligible_material_pairs]
         if not material_matches and template is None:
-            material_matches = self.production.search_material_segments(
+            material_matches = self.production.material_search.search_material_segments(
                 workspace_id,
                 asset_ids=eligible_material_ids,
             eligible_segment_refs=eligible_material_pairs,
@@ -190,8 +191,8 @@ class CreationPlanPreflightUseCase:
         default_voice = self.production.get_default_versioned_voice(workspace_id) if explicit is None and required_voice is None else None
         voice_media_failure = None
         try:
-            voices = ([self.production.get_versioned_voice_profile(workspace_id, explicit[0], explicit[1])] if explicit else
-                      [self.production.get_versioned_voice_profile(workspace_id, required_voice["profile_id"], required_voice["version"])] if required_voice else
+            voices = ([self.production.profile_records.get_versioned_voice_profile(workspace_id, explicit[0], explicit[1])] if explicit else
+                      [self.production.profile_records.get_versioned_voice_profile(workspace_id, required_voice["profile_id"], required_voice["version"])] if required_voice else
                       [default_voice] if default_voice else [])
         except KeyError:
             voices = []
@@ -210,7 +211,7 @@ class CreationPlanPreflightUseCase:
                 active_voices.append(voice)
                 pronunciation_references = [CreationPlanPronunciationReference(id=entry.id, version=entry.version,
                     scope=entry.scope, scope_reference=entry.scope_reference, language=entry.language)
-                    for entry in self.production.list_applicable_pronunciation_entries(workspace_id=workspace_id,
+                    for entry in self.production.profile_records.list_applicable_pronunciation_entries(workspace_id=workspace_id,
                         person_profile_id=voice.person_profile_id, episode_id="")]
             except (PermissionError, ValueError, OSError, KeyError) as exc:
                 voice_media_failure = str(exc)

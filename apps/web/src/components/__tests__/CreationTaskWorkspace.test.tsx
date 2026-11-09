@@ -1,14 +1,17 @@
 import { Children, isValidElement, useState, type ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
-import { chooseSelectValue } from "./select-interaction";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { chooseSelectValue, inspectSelectOptions } from "./select-interaction";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { CreationTaskWorkspace as ActualCreationTaskWorkspace, FinalVideoQualityCheck, PreviewVideo } from "../CreationTaskWorkspace";
 import type { CreationExecutionPreview, CreationExecutionStatus, CreationTask, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
-import { confirmCreationTaskTopic, generateCreationTaskTopics, generateCreationTaskScript, setCreationTaskVisibility, getCreationTaskGraphicSources, getAssistantConversation } from "@/lib/api";
+import { CreationPlanApiError, getCreationTaskScriptGenerationRequest, stopAssistantConversationTurn, confirmCreationTaskTopic, generateCreationTaskTopics, generateCreationTaskScript, setCreationTaskVisibility, getCreationTaskGraphicSources, getAssistantConversation } from "@/lib/api";
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { referenceAssistantMaterial } from "@/lib/assistant-reference";
+import { WorkspacePageContext, type WorkspacePageSlot } from "../workbench/context";
 import { ScriptEditor, ConfirmedScriptView } from "../creation-task/ScriptStage";
+import * as creationTaskApi from "@/lib/api/creation-tasks";
+const previewReadRestores: (() => void)[] = [];
 vi.mock("@/lib/api/creation-tasks", async importOriginal => ({
   ...await importOriginal<typeof import("@/lib/api/creation-tasks")>(),
   getCreationTaskNarrationVoiceSelection: (...args: unknown[]) => mocks.getVoiceSelection(...args),
@@ -55,6 +58,9 @@ const mocks = vi.hoisted(() => {
     saveScriptDraft: vi.fn(),
     saveLibrary: vi.fn(),
     exactEdit: vi.fn(),
+    readEditRequest: vi.fn(),
+    memberId: "member-1",
+    authChange: null as null | ((event: string, session: { user: { id: string } } | null) => void),
     exactPreview: vi.fn(),
     createMontage: vi.fn(),
     generateNarration: vi.fn(),
@@ -67,6 +73,7 @@ const mocks = vi.hoisted(() => {
     initializeTimeline: vi.fn(),
     getAssistantHistory: vi.fn().mockResolvedValue({ items: [] }),
     getAssistantScriptContext: vi.fn().mockResolvedValue({ reply_origin: null, sources: [] }),
+    getScriptEditSources: vi.fn().mockResolvedValue({ sources: [] }),
     getTopics: vi.fn(),
     getExecution: vi.fn().mockResolvedValue({ task_id: "task-1", job: null, stages: [], video_ready: false, cover_status: "pending", cover_message: null }),
     getRuntimeSettings: vi.fn().mockResolvedValue({ status: { llm: { configured: true, provider: "minimax", model: "MiniMax-M3" } } }),
@@ -122,7 +129,11 @@ vi.mock("@/components/AppShell", async (importOriginal) => {
   } };
 });
 vi.mock("next/navigation", () => ({ usePathname: () => "/tasks/task-1", useRouter: () => ({ push: vi.fn(), back: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
-vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ role: "owner" }) }));
+vi.mock("@/lib/supabase/client", () => ({ createClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: mocks.memberId } }, error: null }), getSession: async () => ({ data: { session: { user: { id: mocks.memberId } } }, error: null }), onAuthStateChange: (callback: typeof mocks.authChange) => { mocks.authChange = callback; return {data:{subscription:{unsubscribe:vi.fn()}}}; } } }) }));
+vi.mock("@/lib/local-member-auth", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/local-member-auth")>(),
+  ensureLocalMemberIdentity: async () => ({ member_id: mocks.memberId, role: "owner", member_token: "fixture-token" }),
+}));
+vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ role: "owner", token: mocks.memberId, ready: true }) }));
 vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
 vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
 
@@ -197,6 +208,7 @@ vi.mock("@/lib/api", async importOriginal => ({ ...(await importOriginal<typeof 
   apiUrl: (path: string) => path,
   getCreationTaskGraphicSources: vi.fn().mockResolvedValue([]),
   applyCreationTaskExactEdit: mocks.exactEdit,
+  getCreationTaskEditRequest: mocks.readEditRequest,
   CreationPlanApiError: mocks.MockCreationPlanApiError,
   confirmCreationTaskEdit: mocks.confirmEdit,
   confirmCreationTaskScript: mocks.confirmScript,
@@ -206,6 +218,7 @@ vi.mock("@/lib/api", async importOriginal => ({ ...(await importOriginal<typeof 
   generateCreationTaskNarration: mocks.generateNarration,
   generateCreationTaskPersonRender: mocks.generatePersonRender,
   generateCreationTaskScript: vi.fn(),
+  getCreationTaskScriptGenerationRequest: vi.fn(),
   generateCreationTaskTopics: vi.fn(),
   getCreationTaskMontageClipCandidates: mocks.getCandidates,
   getCreationTaskTopics: mocks.getTopics,
@@ -215,6 +228,8 @@ vi.mock("@/lib/api", async importOriginal => ({ ...(await importOriginal<typeof 
   checkCreationTaskQuality: mocks.checkQuality,
   getCreationPlan: mocks.getCreationPlan,
   getAssistantScriptContext: mocks.getAssistantScriptContext,
+  getProductionFoundation: vi.fn().mockResolvedValue({ profile: { workspace_id: "local" } }),
+  getCreationTaskScriptEditSources: mocks.getScriptEditSources,
   saveAssistantScriptDraft: mocks.saveScriptDraft,
   saveScriptLibraryEntry: mocks.saveLibrary,
   setCreationTaskVisibility: mocks.setCreationTaskVisibility,
@@ -443,7 +458,7 @@ describe("persisted final video quality checks", () => {
 function queuePreview(): CreationExecutionPreview {
   return {
     task_id: "task-1", script_id: "script-1", script_title: "真实文案",
-    script_sections: [{ title: "开场", content: "这段就是实际要读的内容" }],
+    script_updated_at: "2026-10-26T00:00:00Z", script_sections_total_count: 1, script_sections_loaded: false,
     plan_id: "plan-1", input_digest: "a".repeat(64),
     narration_source: null,
     requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
@@ -619,7 +634,19 @@ function workspaceWithCover() {
   return initial;
 }
 
+beforeEach(() => {
+  sessionStorage.clear();
+  mocks.memberId = "member-1";
+  mocks.authChange = null;
+  mocks.readEditRequest.mockReset().mockImplementation(async (taskId: string, requestId: string) => ({
+    task_id: taskId, request_id: requestId, phase: "apply", input_digest: "fixture-digest", status: "recorded",
+    submitted_input: mocks.exactEdit.mock.calls.find(([, input]) => input.request_id === requestId)?.[1],
+    result_status_code: 200, result: { operation: { id: "operation-subtitle" } },
+  }));
+});
+
 afterEach(() => {
+  previewReadRestores.splice(0).forEach(restore => restore());
   vi.unstubAllGlobals();
   mocks.realMediaJobReads = false;
   mocks.withReferenceProvider = false;
@@ -638,6 +665,7 @@ afterEach(() => {
   mocks.previewSelection.mockReset();
   vi.clearAllMocks();
   mocks.getTopics.mockReset();
+  mocks.getScriptEditSources.mockReset().mockResolvedValue({ sources: [] });
   mocks.getQualityCheck.mockReset().mockResolvedValue({ check_state: "none", result_status: null,
     stale: false, timeline_version_id: null, findings: [], unavailable: [] });
   mocks.checkQuality.mockReset();
@@ -784,13 +812,14 @@ describe("CreationTaskWorkspace", () => {
       fireEvent.click(screen.getByRole("button", { name: "发送" }));
       await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledTimes(2));
     } else {
-      vi.mocked(generateCreationTaskScript).mockReturnValueOnce(new Promise(resolve => { finishB = () => resolve({ task, scripts: [], latest_run: null, route_preflight: { provider_kind:"minimax", execution_location:"cloud", model_id:"MiniMax-M3", endpoint_identity:"ep", connection_version:"1", availability:"succeeded", checked_at:task.created_at } }); }));
+      vi.mocked(generateCreationTaskScript).mockReturnValueOnce(new Promise(resolve => { finishB = () => resolve(generationReceipt(vi.mocked(generateCreationTaskScript).mock.calls[0][1].request_id)); }));
       fireEvent.click(screen.getByRole("button", { name: "生成文案" }));
       await waitFor(() => expect(generateCreationTaskScript).toHaveBeenCalledTimes(1));
     }
     await act(async () => finishReadA({ ...initial, scripts: [draft] }));
     expect(screen.queryByText("旧A回读正文", { exact: false })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "新对话" })).toBeDisabled();
+    if (action === "assistant") expect(screen.getByRole("button", { name: "新对话" })).toBeDisabled();
+    else expect(screen.getByRole("button", { name: "新对话" })).toBeEnabled();
     expect(screen.getByRole("button", { name: /生成文案/ })).toBeDisabled();
     await act(async () => finishB());
     await waitFor(() => expect(screen.getByRole("button", { name: "新对话" })).toBeEnabled());
@@ -941,7 +970,7 @@ describe("CreationTaskWorkspace", () => {
     const initial = workspace(task);
     initial.scripts = [draft];
     const source = { reference_id: "knowledge:current:v3", title: "当前知识资料", text: "仅供当前任务核对。" };
-    mocks.getAssistantScriptContext.mockResolvedValue({ reply_origin: null, sources: [source] });
+    mocks.getScriptEditSources.mockResolvedValue({ sources: [source] });
     const updated = { ...draft, updated_at: "2026-10-09T00:00:01Z", sections: [{
       ...draft.sections[0], visual_prompt: "展示资料中的实际功能。", evidence_reference_ids: [source.reference_id],
     }] };
@@ -955,6 +984,7 @@ describe("CreationTaskWorkspace", () => {
 
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     expect(await screen.findByText(/当前内容是待确认草稿/)).toBeInTheDocument();
+    await waitFor(() => expect(mocks.getScriptEditSources).toHaveBeenCalledWith(task.id, draft.id));
     expect(screen.getByRole("button", { name: "确认文案" })).toBeDisabled();
     fireEvent.click(await screen.findByRole("checkbox", { name: "当前知识资料" }));
     fireEvent.change(screen.getByRole("textbox", { name: "第 1 段画面建议" }), {
@@ -984,7 +1014,7 @@ describe("CreationTaskWorkspace", () => {
         visual_prompt: "淡入标题。", evidence_reference_ids: [] }],
     };
     const initial = { ...workspace(task), scripts: [draft] };
-    mocks.getAssistantScriptContext.mockResolvedValue({ reply_origin: null, sources: [] });
+    mocks.getScriptEditSources.mockResolvedValue({ sources: [] });
     mocks.getWorkspace.mockResolvedValue(initial);
     if (rejected) mocks.confirmScript.mockRejectedValue(new mocks.MockCreationPlanApiError(
       422, "unsupported_fact", "正文包含尚无依据的事实，请修订。"));
@@ -1038,7 +1068,7 @@ describe("CreationTaskWorkspace", () => {
     };
     const initial = workspace(task);
     initial.scripts = [draft];
-    mocks.getAssistantScriptContext.mockResolvedValue({ reply_origin: null, sources: [
+    mocks.getScriptEditSources.mockResolvedValue({ sources: [
       { reference_id: "source:one", title: "资料一", text: "第一份资料" },
       { reference_id: "source:two", title: "资料二", text: "第二份资料" },
     ] });
@@ -1141,7 +1171,7 @@ describe("CreationTaskWorkspace", () => {
     const initial = workspace({ ...baseTask, stage: "narration", stage_status: "not_started", status: "running" });
     const preview = {
       task_id: "task-1", script_id: "script-1", script_title: "真实文案",
-      script_sections: [{ title: "开场", content: "这段就是实际要读的内容" }],
+      script_updated_at: "2026-10-26T00:00:00Z", script_sections_total_count: 1, script_sections_loaded: false,
       plan_id: "plan-1", input_digest: "a".repeat(64),
       narration_source: null,
       requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
@@ -1161,13 +1191,45 @@ describe("CreationTaskWorkspace", () => {
       video_ready: false, cover_status: "pending", cover_message: null }).mockResolvedValue(queuedExecution);
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     await productionPanel();
-    await waitFor(() => expect(screen.getByText(/这段就是实际要读的内容/)).toBeInTheDocument());
+    await openProductionScript(screen.getByRole("region", { name: "连续制作" }));
+    expect(screen.getByText(/这段就是实际要读的内容/)).toBeInTheDocument();
     expect(screen.getByText(/露脸目标 20%/)).toBeInTheDocument();
     expect(mocks.startExecution).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" }));
     await waitFor(() => expect(mocks.startExecution).toHaveBeenCalledWith("task-1", preview));
     expect(await screen.findByLabelText("制作安排状态")).toHaveTextContent("设备资源正在处理其他工作。");
     expect(mocks.generateNarration).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a stale bounded preview through the workspace and starts with the newly read digest", async () => {
+    const initial = workspace({ ...baseTask, stage: "narration", stage_status: "not_started", status: "running" });
+    const oldPreview = queuePreview();
+    const freshPreview = { ...oldPreview, input_digest: "b".repeat(64), script_updated_at: "2026-10-26T00:00:01Z" };
+    mocks.previewExecution.mockResolvedValue(oldPreview);
+    mocks.getExecution.mockResolvedValue(queueStatus(null));
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.startExecution.mockResolvedValue(queueStatus("queued"));
+    const read = vi.spyOn(creationTaskApi, "getCreationTaskScriptSections")
+      .mockRejectedValueOnce(new mocks.MockCreationPlanApiError(409, null, "文案版本冲突"))
+      .mockResolvedValue({ task_id: "task-1", script_id: "script-1", updated_at: freshPreview.script_updated_at,
+        title: "真实文案", language: "zh-CN", selection_status: "confirmed", total_count: 1,
+        next_after_ordinal: null, truncated: false, items: [{ ordinal: 1, digest: "d", section: {
+          id: "section-1", title: "更新段落", content: "刷新后的实际正文", visual_prompt: "画面", evidence_reference_ids: [] } }] });
+    previewReadRestores.push(() => read.mockRestore());
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+    const panel = await productionPanel();
+    fireEvent.click(within(panel).getByText(/这次使用的文案/));
+    await screen.findByText(/文案版本已变化，旧页已清除/);
+    expect(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeDisabled();
+    mocks.previewExecution.mockResolvedValue(freshPreview);
+    fireEvent.click(screen.getByRole("button", { name: "重新核对文案和制作要求" }));
+    await waitFor(() => expect(screen.queryByText(/制作前览已过期/)).not.toBeInTheDocument());
+    fireEvent.click(within(panel).getByText(/这次使用的文案/));
+    await screen.findByText(/刷新后的实际正文/);
+    expect(read).toHaveBeenLastCalledWith("task-1", "script-1", { after_ordinal: 0, expected_updated_at: freshPreview.script_updated_at });
+    expect(mocks.startExecution).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" }));
+    await waitFor(() => expect(mocks.startExecution).toHaveBeenCalledWith("task-1", freshPreview));
   });
 
   it("keeps the editor player and draft mounted while reviewing production details without starting", async () => {
@@ -1190,6 +1252,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.change(await readyInput("局部修改要求"), { target: { value: "未发送的剪辑草稿" } });
     fireEvent.click(entry);
     const panel = await productionPanel();
+    await openProductionScript(panel);
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(panel).toHaveTextContent("画幅 9:16 · 目标时长 30 秒 · 露脸目标 20%");
     expect(within(panel).getByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeEnabled();
@@ -1224,6 +1287,7 @@ describe("CreationTaskWorkspace", () => {
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     await productionPanel();
     const panel = await productionPanel();
+    await openProductionScript(panel);
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(within(panel).getByRole("region", { name:"这次制作要求" })).toHaveTextContent("目标时长");
     expect(panel).toHaveTextContent("露脸目标 20%");
@@ -1270,6 +1334,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByRole("region", { name: "制作状态" })).toHaveTextContent("人物口型");
     fireEvent.click(screen.getByRole("button", { name: /查看制作详情|核对制作要求/ }));
     const panel = await productionPanel();
+    await openProductionScript(panel);
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(panel).toHaveTextContent("输出磁盘写入失败");
     expect(panel).toHaveTextContent("检查输出目录的可用空间后继续制作。");
@@ -1358,7 +1423,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValue(initial);
     mocks.previewExecution.mockResolvedValue({
       task_id: "task-1", script_id: "script-1", script_title: "已确认文案",
-      script_sections: [{ title: "正文", content: "实际内容" }],
+      script_updated_at: "2026-10-26T00:00:00Z", script_sections_total_count: 1, script_sections_loaded: false,
       plan_id: "plan-1", input_digest: "b".repeat(64),
       narration_source: null,
       requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
@@ -1650,6 +1715,91 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.undoTimeline).toHaveBeenCalledTimes(1);
   });
 
+  it("persists redo across fresh page maps and isolates an in-flight member switch", async () => {
+    const initial = workspaceWithCover();
+    initial.task = { ...initial.task, can_redo: true };
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.redoTimeline.mockReset(); mocks.undoTimeline.mockReset(); mocks.readTimelineRestore.mockReset();
+    const page = (slot: WorkspacePageSlot, value = initial) => <WorkspacePageContext.Provider value={slot}>
+      <CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={value} />
+    </WorkspacePageContext.Provider>;
+    const mount = (value = initial) => {
+      const slot: WorkspacePageSlot = { id: "/tasks/task-1", href: "/tasks/task-1", active: true, updateShell: vi.fn(), viewState: new Map() };
+      const view = render(page(slot, value));
+      fireEvent.click(getWorkspaceViewControl("字幕与封面：已完成"));
+      return { ...view, slot };
+    };
+    const first = mount();
+    const originalSet = Storage.prototype.setItem;
+    const storageGuard = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key, value) {
+      if (key.startsWith("timeline-restore:")) throw new DOMException("session quota", "QuotaExceededError");
+      originalSet.call(this, key, value);
+    });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "重做" }));
+      await waitFor(() => expect(storageGuard.mock.calls.filter(([key]) => key.startsWith("timeline-restore:"))).toHaveLength(1));
+      await screen.findAllByText(/^本次撤销重做没有提交：/);
+      expect(mocks.redoTimeline).not.toHaveBeenCalled();
+      expect(mocks.readTimelineRestore).not.toHaveBeenCalled();
+    } finally { storageGuard.mockRestore(); }
+    let rejectPost!: (cause: Error) => void;
+    mocks.redoTimeline.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectPost = reject; }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "重做" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "重做" }));
+    await waitFor(() => expect(mocks.redoTimeline).toHaveBeenCalledOnce());
+    const original = mocks.redoTimeline.mock.calls[0][1];
+    const key = `timeline-restore:${initial.task.workspace_id}:${initial.task.id}:member-1`;
+    expect(original).toEqual({ request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      expected_timeline_version_id: initial.task.current_timeline_version_id, expected_timeline_sequence: initial.task.timeline_sequence });
+    expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({ action: "redo", memberId: "member-1", taskId: initial.task.id, input: original });
+    mocks.memberId = "member-other";
+    first.rerender(page(first.slot));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "查询原撤销重做结果" })).not.toBeInTheDocument());
+    await act(async () => { rejectPost(new Error("redo response lost")); });
+    expect(screen.queryByText(/redo response lost/)).not.toBeInTheDocument();
+    expect(mocks.readTimelineRestore).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "重做" })).toBeEnabled();
+    expect(sessionStorage.getItem(key)).not.toBeNull();
+    first.unmount();
+    const foreign = mount();
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "查询原撤销重做结果" })).not.toBeInTheDocument();
+    foreign.unmount();
+    mocks.memberId = "member-1";
+    const reopened = mount();
+    expect(reopened.slot.viewState).not.toBe(first.slot.viewState);
+    await screen.findByRole("button", { name: "查询原撤销重做结果" });
+    fireEvent.click(screen.getByRole("button", { name: "重做" }));
+    expect(mocks.redoTimeline).toHaveBeenCalledOnce();
+    mocks.readTimelineRestore.mockResolvedValue({ task_id: initial.task.id, request_id: original.request_id, action: "redo",
+      target_operation_id: "resolved-original-operation", status: "result_unknown", operation_id: null, result_version_id: null, failure: null });
+    fireEvent.click(screen.getByRole("button", { name: "查询原撤销重做结果" }));
+    await screen.findByText("原结果尚未核实，请继续查询原请求。");
+    await waitFor(() => expect(screen.getByRole("button", { name: "查询原撤销重做结果" })).toBeEnabled());
+    mocks.readTimelineRestore.mockRejectedValueOnce(new CreationPlanApiError(404, null, "原重做回执未取得"));
+    fireEvent.click(screen.getByRole("button", { name: "查询原撤销重做结果" }));
+    await screen.findByText("原重做回执未取得");
+    expect(sessionStorage.getItem(key)).not.toBeNull();
+    const restored = structuredClone(initial);
+    restored.task = { ...restored.task, current_timeline_version_id: "redo-version", timeline_sequence: initial.task.timeline_sequence + 1, can_redo: false, output_ready: false };
+    restored.montage = { ...restored.montage!, output_url: null };
+    restored.subtitle_tracks = [{ ...restored.subtitle_tracks[0], timeline_version_id: "redo-version",
+      cues: [{ ...restored.subtitle_tracks[0].cues[0], text: "重做后持久字幕" }] }];
+    mocks.getWorkspace.mockResolvedValue(restored);
+    mocks.readTimelineRestore.mockResolvedValue({ task_id: initial.task.id, request_id: original.request_id, action: "redo",
+      target_operation_id: "resolved-original-operation", status: "applied", operation_id: "redo-operation", result_version_id: "redo-version", failure: null });
+    await waitFor(() => expect(screen.getByRole("button", { name: "查询原撤销重做结果" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "查询原撤销重做结果" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "查询原撤销重做结果" })).not.toBeInTheDocument());
+    expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("重做后持久字幕");
+    expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
+    expect(mocks.readTimelineRestore).toHaveBeenCalledTimes(3);
+    for (const call of mocks.readTimelineRestore.mock.calls) expect(call).toEqual([initial.task.id, original.request_id]);
+    expect(mocks.redoTimeline).toHaveBeenCalledOnce(); expect(mocks.undoTimeline).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(key)).toBeNull();
+    reopened.unmount();
+  });
+
   it("uses persisted cues when switching tracks and selecting another cue", async () => {
     const initial = subtitleCoverWorkspace();
     const chinese = initial.subtitle_tracks[0];
@@ -1696,6 +1846,28 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存封面" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("请在桌面客户端中保存封面");
     expect(screen.queryByText(/封面已保存/)).not.toBeInTheDocument();
+  });
+
+  it("preserves feedback on identity refresh but clears it across logout and a new login", async () => {
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={workspaceWithCover()} />);
+    await act(async () => {});
+    expect(mocks.authChange).not.toBeNull();
+    const showFeedback = async () => {
+      fireEvent.click(getWorkspaceViewControl("字幕与封面：已完成"));
+      fireEvent.click(screen.getByRole("tab", { name: "封面" }));
+      fireEvent.click(screen.getByRole("button", { name: "保存封面" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("请在桌面客户端中保存封面");
+    };
+    await showFeedback();
+    await act(async () => { mocks.authChange!("TOKEN_REFRESHED", { user: { id: "member-1" } }); });
+    expect(screen.getByRole("alert")).toHaveTextContent("请在桌面客户端中保存封面");
+    await act(async () => { mocks.authChange!("SIGNED_OUT", null); });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await showFeedback();
+    await act(async () => { mocks.authChange!("SIGNED_IN", { user: { id: "member-other" } }); });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
+    expect(mocks.readEditRequest).not.toHaveBeenCalled();
   });
 
   it("seeks the subtitle preview to the selected cue", async () => {
@@ -1862,7 +2034,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValueOnce(initial).mockResolvedValue(selected);
     const preview = {
       task_id: "task-1", script_id: "script-1", script_title: "已确认文案",
-      script_sections: [{ title: "正文", content: "实际内容" }],
+      script_updated_at: "2026-10-26T00:00:00Z", script_sections_total_count: 1, script_sections_loaded: false,
       plan_id: "plan-1", input_digest: "c".repeat(64),
       narration_source: null,
       requirements: { aspect_ratio: "9:16", duration_target_seconds: 30,
@@ -1926,7 +2098,11 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByText("还没有可用于生成配音的授权声音")).not.toBeInTheDocument();
     expect(screen.queryByText(reason)).not.toBeInTheDocument();
     expect(screen.getByRole("link", {name:"检查声音参考"})).toHaveAttribute("href", "/profiles?view=voices&task=task-1");
-    await chooseSelectValue(screen.getByRole("combobox", {name:"用于生成配音的声音"}), "voice-unavailable");
+    await inspectSelectOptions(screen.getByRole("combobox", {name:"用于生成配音的声音"}), () => {
+      const option = screen.getByRole("option", {name:/已登记声音/});
+      expect(option).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(option);
+    });
     expect(mocks.selectVoice).not.toHaveBeenCalled();
     expect(mocks.generateNarration).not.toHaveBeenCalled();
   });
@@ -1934,7 +2110,7 @@ describe("CreationTaskWorkspace", () => {
   it.each(["populated", "empty", "failed"])("shows source loading before a real %s response without changing frozen references", async outcome => {
     let resolve!: (value: unknown) => void;
     let reject!: (cause: Error) => void;
-    mocks.getAssistantScriptContext.mockImplementationOnce(() => new Promise((done, fail) => { resolve = done; reject = fail; }));
+    mocks.getScriptEditSources.mockImplementationOnce(() => new Promise((done, fail) => { resolve = done; reject = fail; }));
     const script: WorkspaceState["scripts"][number] = {
       id:"script-source-read", task_id:"task-1", run_id:"run", topic_id:"topic", title:"已有文案", language:"zh-CN",
       selection_status:"confirmed", created_at:baseTask.created_at, updated_at:baseTask.updated_at, confirmed_at:baseTask.updated_at,
@@ -1980,8 +2156,8 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByRole("button", {name:"查询声音采用结果"})).not.toBeInTheDocument();
   });
 
-  it("sends only the task id to the native save boundary", async () => {
-    const task = { ...baseTask, stage: "review" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 90, output_ready: true };
+  it("binds the displayed timeline version to the native save boundary", async () => {
+    const task = { ...baseTask, stage: "review" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 90, output_ready: true, current_timeline_version_id: "timeline-version-save" };
     const initial = workspace(task, {
       id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "成片",
       status: "rendered", cues: [], clips: [], duration_seconds: 12,
@@ -2003,7 +2179,7 @@ describe("CreationTaskWorkspace", () => {
     expect(getWorkspaceViewControl("检查与输出：待上一步")).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "保存到本地" }));
 
-    await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1"));
+    await waitFor(() => expect(saveRenderedVideo).toHaveBeenCalledWith("task-1", "timeline-version-save"));
     expect(saveRenderedVideo).toHaveBeenCalledTimes(1);
     expect(await screen.findByText("已保存：成片.mp4")).toHaveAttribute("role", "status");
     fireEvent.click(screen.getByRole("button", { name: "调整成片" }));
@@ -2235,6 +2411,7 @@ describe("CreationTaskWorkspace", () => {
         emphasis: ["真实运行"],
       }],
     }];
+    mocks.exactEdit.mockResolvedValue({ operation: { id: "operation-subtitle" } });
     mocks.exactPreview.mockResolvedValue(exactPreview(initial.task, "UpdateSubtitleCue"));
     mocks.confirmEdit.mockResolvedValue({ operation: { id: "operation-subtitle" }, montage: initial.montage });
     mocks.getWorkspace.mockResolvedValue(refreshed);
@@ -2268,7 +2445,9 @@ describe("CreationTaskWorkspace", () => {
       end_seconds: 2.8,
       line_breaks: [4],
       emphasis: ["真实运行"],
-
+      request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      expected_timeline_version_id: "timeline-version-6",
+      expected_timeline_sequence: 6,
     }));
     expect(mocks.exactPreview).not.toHaveBeenCalled();
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
@@ -2290,6 +2469,127 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(await screen.findByRole("button", {name:"应用到草稿"}));
     await waitFor(()=>expect(mocks.confirmEdit).toHaveBeenCalledOnce());
     expect(mocks.confirmEdit).toHaveBeenCalledWith("task-1","proposal-natural");
+  });
+
+  it.each(["pending", "malformed", "foreign"])("does not initialize a missing timeline with a %s original save", async state => {
+    const initial = subtitleCoverWorkspace();
+    initial.task.current_timeline_version_id = null;
+    initial.task.timeline_sequence = 0;
+    const original = {
+      memberId: "member-1", workspaceId: initial.task.workspace_id, taskId: initial.task.id,
+      input: { operation_type: "UpdateSubtitleCue", track_id: "subtitle-track-zh", cue_id: "subtitle-cue-1", text: "原字幕",
+        request_id: "11111111-1111-4111-8111-111111111111", expected_timeline_version_id: "timeline-version-6", expected_timeline_sequence: 6 },
+      submissionError: { message: "原版本待核对", code: "timeline_version_required", impact: null, repairAction: null },
+    };
+    const storageKey = `subtitle-save:${initial.task.workspace_id}:${initial.task.id}:member-1`;
+    const stored = state === "malformed" ? "{unfinished" : JSON.stringify(state === "foreign" ? { ...original, taskId: "other-task" } : original);
+    sessionStorage.setItem(storageKey, stored);
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    if (state === "pending") {
+      const initialize = await screen.findByRole("button", { name: "保留当前故事板并建立版本" });
+      expect(initialize).toBeDisabled();
+      expect(screen.getByRole("button", { name: "查询原保存结果" })).toBeEnabled();
+      fireEvent.click(initialize);
+    } else {
+      const originalError = (await screen.findByRole("alert")).textContent;
+      fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "仍需保留的新草稿" } });
+      fireEvent.blur(screen.getByLabelText("字幕 1 文本"));
+      fireEvent.click(screen.getByRole("button", { name: "保存字幕草稿" }));
+      await act(async () => {});
+      expect(screen.getByRole("alert").textContent).toBe(originalError);
+      expect(screen.queryByRole("button", { name: "保留当前故事板并建立版本" })).not.toBeInTheDocument();
+      expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("仍需保留的新草稿");
+    }
+    expect(mocks.initializeTimeline).not.toHaveBeenCalled();
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
+    expect(mocks.readEditRequest).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(storageKey)).toBe(stored);
+  });
+
+  it("retains a lost subtitle write across reopening and only queries its original request", async () => {
+    const initial = subtitleCoverWorkspace();
+    let rejectPost!: (cause: Error) => void;
+    mocks.exactEdit.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectPost = reject; }));
+    mocks.readEditRequest.mockImplementation(async (taskId: string, requestId: string) => ({
+      task_id: taskId, request_id: requestId, phase: "apply", input_digest: "fixture", status: "unknown",
+      submitted_input: mocks.exactEdit.mock.calls[0][1], result_status_code: null, result: null,
+    }));
+    const first = renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"), { target: { value: "原请求字幕" } });
+    fireEvent.blur(screen.getByLabelText("字幕 1 文本"));
+    fireEvent.click(screen.getByRole("button", { name: "保存字幕草稿" }));
+    await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledOnce());
+    const original = mocks.exactEdit.mock.calls[0][1];
+    expect(original).toMatchObject({ text: "原请求字幕", track_id: "subtitle-track-zh",
+      expected_timeline_version_id: "timeline-version-6", expected_timeline_sequence: 6 });
+    expect(JSON.parse(sessionStorage.getItem(`subtitle-save:${initial.task.workspace_id}:task-1:member-1`)!)).toMatchObject({memberId:"member-1",input:original});
+    mocks.memberId = "member-other";
+    first.rerender(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument());
+    await act(async () => { rejectPost(new Error("response lost")); });
+    expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/response lost/)).not.toBeInTheDocument();
+    expect(JSON.parse(sessionStorage.getItem(`subtitle-save:${initial.task.workspace_id}:task-1:member-1`)!).submissionError.message).toBe("response lost");
+    expect(mocks.readEditRequest).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("字幕 1 文本")).toBeEnabled();
+    first.unmount();
+    const other = subtitleCoverWorkspace(); other.task = { ...other.task, id: "task-other" };
+    const second = renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={other} />);
+    expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument();
+    second.unmount();
+    mocks.memberId = "member-other";
+    const foreign = renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("字幕 1 文本")).toBeEnabled();
+    expect(sessionStorage.getItem(`subtitle-save:${initial.task.workspace_id}:task-1:member-1`)).not.toBeNull();
+    foreign.unmount();
+    mocks.memberId = "member-1";
+    const reopened = renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    await waitFor(() => expect(screen.getByLabelText("字幕 1 文本")).toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    await waitFor(() => expect(mocks.readEditRequest).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole("button", { name: "查询原保存结果" })).toBeEnabled());
+    mocks.readEditRequest.mockRejectedValueOnce(new CreationPlanApiError(404, null, "receipt not found"));
+    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    await screen.findAllByText(/response lost；原请求查询：receipt not found/);
+    expect(screen.getByLabelText("字幕 1 文本")).toBeDisabled();
+    const saved = subtitleCoverWorkspace();
+    saved.task = { ...saved.task, current_timeline_version_id: "timeline-version-7", timeline_sequence: 7 };
+    saved.subtitle_tracks = [{...saved.subtitle_tracks[0],timeline_version_id:"timeline-version-7",
+      cues:[{...saved.subtitle_tracks[0].cues[0],text:"原请求字幕"}]}];
+    mocks.getWorkspace.mockResolvedValue(saved);
+    mocks.readEditRequest.mockResolvedValue({ task_id:"task-1",request_id:original.request_id,phase:"apply",status:"recorded",
+      input_digest:"fixture",submitted_input:original,result_status_code:200,result:{operation:{id:"saved-subtitle"}} });
+    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument());
+    expect(mocks.readEditRequest).toHaveBeenLastCalledWith("task-1",original.request_id);
+    expect(mocks.exactEdit).toHaveBeenCalledOnce();
+    expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("原请求字幕");
+    expect(sessionStorage.getItem(`subtitle-save:${initial.task.workspace_id}:task-1:member-1`)).toBeNull();
+    reopened.unmount();
+  });
+
+  it("keeps a recorded subtitle conflict on its original CAS without resubmitting", async () => {
+    const initial = subtitleCoverWorkspace();
+    mocks.exactEdit.mockRejectedValue(new CreationPlanApiError(409,null,"version conflict"));
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.readEditRequest.mockImplementation(async (taskId: string, requestId: string) => ({
+      task_id:taskId,request_id:requestId,phase:"apply",input_digest:"fixture",status:"recorded",
+      submitted_input:mocks.exactEdit.mock.calls[0][1],result_status_code:409,result:{detail:"version conflict"},
+    }));
+    mocks.readEditRequest.mockRejectedValueOnce(new CreationPlanApiError(404,null,"receipt not found"));
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.change(screen.getByLabelText("字幕 1 文本"),{target:{value:"冲突草稿"}});
+    fireEvent.click(screen.getByRole("button",{name:"保存字幕草稿"}));
+    await screen.findAllByText(/version conflict；原请求查询：receipt not found/);
+    expect(screen.getByLabelText("字幕 1 文本")).toBeDisabled();
+    fireEvent.blur(screen.getByLabelText("字幕 1 文本"));
+    fireEvent.click(screen.getByRole("button",{name:"查询原保存结果"}));
+    await waitFor(() => expect(mocks.readEditRequest).toHaveBeenCalledTimes(2));
+    await screen.findByText(/原字幕保存返回 409/);
+    expect(mocks.exactEdit).toHaveBeenCalledOnce();
+    expect(mocks.exactEdit.mock.calls[0][1]).toMatchObject({expected_timeline_version_id:"timeline-version-6",expected_timeline_sequence:6});
   });
 
   // WIL-180 专项：字幕确认后服务端把任务退回 montage 并作废旧成片
@@ -2746,6 +3046,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.keyDown(trimField, { key: "Enter" });
 
     await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledWith("task-1", {
+      request_id: expect.any(String), expected_timeline_version_id: "timeline-version-2", expected_timeline_sequence: 2,
       operation_type: "TrimClip",
       clip_id: "clip-1",
       source_start_seconds: 1.5,
@@ -2759,6 +3060,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.change(screen.getByLabelText("镜头分割位置"), { target: { value: "1.2" } });
     fireEvent.click(screen.getByRole("button", { name: "切开镜头" }));
     await waitFor(() => expect(mocks.exactEdit).toHaveBeenLastCalledWith("task-1", {
+      request_id: expect.any(String), expected_timeline_version_id: "timeline-version-3", expected_timeline_sequence: 3,
       operation_type: "SplitClip", clip_id: "clip-1", split_time_seconds: 1.2,
     }));
     expect(mocks.exactPreview).not.toHaveBeenCalled();
@@ -2770,6 +3072,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.change(screen.getByLabelText("画面倍速"), { target: { value: "1.5" } });
     fireEvent.blur(screen.getByLabelText("画面倍速"));
     await waitFor(() => expect(mocks.exactEdit).toHaveBeenLastCalledWith("task-1", {
+      request_id: expect.any(String), expected_timeline_version_id: "timeline-version-3", expected_timeline_sequence: 3,
       operation_type: "ChangeClipSpeed", clip_id: "clip-1", playback_rate: 1.5,
     }));
     fireEvent.change(screen.getByLabelText("关联倍速"), { target: { value: "2" } });
@@ -2777,6 +3080,152 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.exactEdit).toHaveBeenLastCalledWith("task-1", {
       operation_type: "ChangeLinkedSpeed", clip_id: "clip-1", playback_rate: 2,
     }));
+  });
+
+  it("recovers a lost clip metadata request across fresh page maps and isolates late identity responses", async () => {
+    const task = {
+      ...baseTask,
+      stage: "montage" as const,
+      stage_status: "waiting_for_user" as const,
+      status: "waiting_for_user" as const,
+      progress: 70,
+      current_timeline_version_id: "timeline-version-2",
+      timeline_sequence: 2,
+      can_undo: true,
+    };
+    const montage = {
+      id: "montage-1", task_id: task.id, script_id: "script-1", script_title: "故事板",
+      status: "ready" as const,
+      cues: [{ id: "cue-1", source_section_id: "section-1", narration_segment_id: "narration-segment-1", text: "第一段旁白", duration_seconds: 3 }],
+      clips: [{ id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1", source_reference: "workspace://clip.mp4", source_start_seconds: 1, source_end_seconds: 4, timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9, match_reasons: ["已审核"], needs_confirmation: false, role: "b_roll" as const, locked: false, manually_selected: false }],
+      duration_seconds: 3, low_confidence_clip_count: 0,
+      narration_reference: "narration://artifact/audio-1", output_url: null, subtitle_url: null,
+      message: "可以渲染", created_at: task.created_at, updated_at: task.updated_at,
+    };
+    const initial = workspace(task, montage);
+    mocks.getWorkspace.mockResolvedValue(initial);
+    const page = (slot: WorkspacePageSlot, value = initial) => <WorkspacePageContext.Provider value={slot}>
+      <CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={value} />
+    </WorkspacePageContext.Provider>;
+    const mount = (value = initial, viewState = new Map<string, unknown>()) => {
+      const slot: WorkspacePageSlot = { id: `/tasks/${value.task.id}`, href: `/tasks/${value.task.id}`, active: true, updateShell: vi.fn(), viewState };
+      return { ...render(page(slot, value)), slot };
+    };
+    const trim = () => {
+      fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
+      const field = screen.getByLabelText("镜头 1 裁剪起点");
+      fireEvent.change(field, { target: { value: "1.5" } });
+      fireEvent.keyDown(field, { key: "Enter" });
+    };
+    const first = mount();
+    const originalSet = Storage.prototype.setItem;
+    const storageGuard = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key, value) {
+      if (key.startsWith("subtitle-save:")) throw new DOMException("session quota", "QuotaExceededError");
+      originalSet.call(this, key, value);
+    });
+    try {
+      trim();
+      await waitFor(() => expect(storageGuard.mock.calls.filter(([key]) => key.startsWith("subtitle-save:"))).toHaveLength(1));
+      await screen.findAllByText("操作没有完成。");
+      expect(mocks.exactEdit).not.toHaveBeenCalled();
+    } finally { storageGuard.mockRestore(); }
+    let rejectPost!: (cause: Error) => void;
+    mocks.exactEdit.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectPost = reject; }));
+    fireEvent.keyDown(screen.getByLabelText("镜头 1 裁剪起点"), { key: "Enter" });
+    await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledOnce());
+    const original = mocks.exactEdit.mock.calls[0][1];
+    expect(original).toEqual({ operation_type: "TrimClip", clip_id: "clip-1", source_start_seconds: 1.5,
+      request_id: expect.any(String), expected_timeline_version_id: "timeline-version-2", expected_timeline_sequence: 2 });
+    expect(original.request_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    const key = `subtitle-save:${task.workspace_id}:${task.id}:member-1`;
+    expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({ memberId: "member-1", taskId: task.id, input: original });
+    mocks.memberId = "member-other";
+    first.rerender(page(first.slot));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument());
+    await act(async () => { rejectPost(new Error("clip response lost")); });
+    expect(screen.queryByText(/clip response lost/)).not.toBeInTheDocument();
+    expect(mocks.readEditRequest).not.toHaveBeenCalled();
+    first.unmount();
+    const foreign = mount();
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument();
+    foreign.unmount();
+    mocks.memberId = "member-1";
+    const other = { ...initial, task: { ...task, id: "task-other" } };
+    const foreignTask = mount(other);
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument();
+    foreignTask.unmount();
+    const reopened = mount();
+    await screen.findByRole("button", { name: "查询原保存结果" });
+    mocks.readEditRequest.mockResolvedValue({ task_id: task.id, request_id: original.request_id, phase: "apply",
+      submitted_input: original, status: "unknown", result_status_code: null, result: null });
+    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    await screen.findByText(/保存结果尚未核实/);
+    expect(mocks.readEditRequest).toHaveBeenLastCalledWith(task.id, original.request_id);
+    mocks.readEditRequest.mockRejectedValueOnce(new CreationPlanApiError(404, null, "clip receipt not found"));
+    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    await screen.findByText("clip response lost；原请求查询：clip receipt not found");
+    expect(JSON.parse(sessionStorage.getItem(key)!).input).toEqual(original);
+    let resolveReceipt!: (receipt: unknown) => void;
+    mocks.readEditRequest.mockImplementationOnce(() => new Promise(resolve => { resolveReceipt = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    await waitFor(() => expect(mocks.readEditRequest).toHaveBeenCalledTimes(3));
+    const recorded = { task_id: task.id, request_id: original.request_id, phase: "apply", submitted_input: original,
+      status: "recorded", result_status_code: 200, result: { operation: { id: "clip-saved" } } };
+    mocks.memberId = "member-other";
+    reopened.rerender(page(reopened.slot));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument());
+    const readsBeforeLate = mocks.getWorkspace.mock.calls.length;
+    await act(async () => { resolveReceipt(recorded); });
+    expect(mocks.getWorkspace).toHaveBeenCalledTimes(readsBeforeLate);
+    expect(screen.queryByText("镜头修改已保存，可撤销。")).not.toBeInTheDocument();
+    expect(sessionStorage.getItem(key)).not.toBeNull();
+    reopened.unmount();
+    mocks.memberId = "member-1";
+    const otherDraft = { start: 2, mode: "fit", x: .5, y: .5 };
+    const draftsKey = "task:timeline-version-2.clipDrafts";
+    const last = mount(initial, new Map([[draftsKey, {
+      "task-1:clip-1": { start: 1.5, mode: "fill", x: .5, y: .5 }, "task-1:clip-other": otherDraft,
+    }]]));
+    await screen.findByRole("button", { name: "查询原保存结果" });
+    mocks.readEditRequest.mockResolvedValue(recorded);
+    const saved = { ...initial, task: { ...task, current_timeline_version_id: "timeline-version-3", timeline_sequence: 3 },
+      montage: { ...montage, clips: [{ ...montage.clips[0], source_start_seconds: 1.5 }] } };
+    mocks.getWorkspace.mockResolvedValue(saved);
+    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    await screen.findByText("镜头修改已保存，可撤销。");
+    expect(sessionStorage.getItem(key)).toBeNull();
+    expect(last.slot.viewState.get(draftsKey)).toEqual({ "task-1:clip-other": otherDraft });
+    expect(mocks.readEditRequest).toHaveBeenLastCalledWith(task.id, original.request_id);
+    expect(mocks.exactEdit).toHaveBeenCalledOnce();
+    await expectTaskVersion(/版本 3$/);
+    last.unmount();
+    for (const state of ["cleared", "replaced"] as const) {
+      mocks.getWorkspace.mockResolvedValue(initial);
+      let rejectLate!: (cause: Error) => void;
+      mocks.exactEdit.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectLate = reject; }));
+      const stale = mount();
+      const postsBefore = mocks.exactEdit.mock.calls.length;
+      trim();
+      await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledTimes(postsBefore + 1));
+      const stored = JSON.parse(sessionStorage.getItem(key)!);
+      mocks.memberId = "member-other";
+      stale.rerender(page(stale.slot));
+      await waitFor(() => expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument());
+      const replacement = state === "cleared" ? null : JSON.stringify({ ...stored,
+        input: { ...stored.input, request_id: crypto.randomUUID() } });
+      if (replacement === null) sessionStorage.removeItem(key);
+      else sessionStorage.setItem(key, replacement);
+      const readsBefore = mocks.readEditRequest.mock.calls.length;
+      await act(async () => { rejectLate(new Error("obsolete response lost")); });
+      expect(sessionStorage.getItem(key)).toBe(replacement);
+      expect(mocks.readEditRequest).toHaveBeenCalledTimes(readsBefore);
+      expect(screen.queryByText(/obsolete response lost/)).not.toBeInTheDocument();
+      stale.unmount();
+      sessionStorage.removeItem(key);
+      mocks.memberId = "member-1";
+    }
   });
 
   it("applies one recorded narration replacement and refreshes its version", async () => {
@@ -2920,6 +3369,11 @@ describe("CreationTaskWorkspace", () => {
     const initial = workspace(task, montage);
     mocks.getWorkspace.mockResolvedValue(initial);
     mocks.exactEdit.mockRejectedValue(new Error("草稿暂不可用"));
+    mocks.readEditRequest.mockImplementation(async (taskId, requestId) => ({
+      task_id: taskId, request_id: requestId, phase: "apply", input_digest: "fixture-digest", status: "unknown",
+      submitted_input: mocks.exactEdit.mock.calls.find(([, input]) => input.request_id === requestId)?.[1],
+      result_status_code: null, result: null,
+    }));
 
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
@@ -2931,6 +3385,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.blur(quickStart);
     await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledWith(task.id, {
       operation_type: "TrimClip", clip_id: "clip-1", source_start_seconds: 1.5,
+      request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i), expected_timeline_version_id: task.current_timeline_version_id, expected_timeline_sequence: 2,
     }));
     expect(mocks.exactPreview).not.toHaveBeenCalled();
     expect(await screen.findByRole("alert")).toHaveTextContent("草稿暂不可用");
@@ -2972,9 +3427,7 @@ describe("CreationTaskWorkspace", () => {
     };
     const initial = workspace(task, montage);
     mocks.getWorkspace.mockResolvedValue(initial);
-    mocks.exactEdit.mockRejectedValueOnce(new mocks.MockCreationPlanApiError(
-      409, "timeline_version_required", "当前故事板还没有可撤销的初始版本。",
-    )).mockResolvedValue({ operation: { id: "trim-after-init" } });
+    mocks.exactEdit.mockResolvedValue({ operation: { id: "trim-after-init" } });
     mocks.initializeTimeline.mockResolvedValue({ version_id: "timeline-version-1" });
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
@@ -2983,6 +3436,9 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.keyDown(trimField, { key: "Enter" });
     const initialize = await screen.findByRole("button", { name: "保留当前故事板并建立版本" });
     expect(mocks.initializeTimeline).not.toHaveBeenCalled();
+    expect(mocks.exactEdit).not.toHaveBeenCalled();
+    expect(mocks.readEditRequest).not.toHaveBeenCalled();
+    expect(Object.keys(sessionStorage).filter(key => key.startsWith("subtitle-save:"))).toEqual([]);
     mocks.getWorkspace.mockResolvedValue(workspace(
       { ...task, current_timeline_version_id: "timeline-version-1", timeline_sequence: 1 }, montage,
     ));
@@ -2993,6 +3449,8 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.keyDown(screen.getByLabelText("镜头 1 裁剪起点"), { key: "Enter" });
     await waitFor(() => expect(mocks.exactEdit).toHaveBeenLastCalledWith(task.id, {
       operation_type: "TrimClip", clip_id: "clip-1", source_start_seconds: 1.5,
+      request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+      expected_timeline_version_id: "timeline-version-1", expected_timeline_sequence: 1,
     }));
   });
 
@@ -3047,7 +3505,7 @@ describe("CreationTaskWorkspace", () => {
       ["确认镜头", { operation_type: "ConfirmClip", clip_id: "clip-1" }],
     ] as const) {
       fireEvent.click(screen.getByRole("button", { name: label }));
-      await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledWith("task-1", operation));
+      await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledWith("task-1", { ...operation, request_id: expect.any(String), expected_timeline_version_id: task.current_timeline_version_id, expected_timeline_sequence: task.timeline_sequence }));
       expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
     }
 
@@ -3055,6 +3513,7 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(() => expect(mocks.getCandidates).toHaveBeenCalledWith("task-1", "clip-1"));
     await chooseSelectValue(await screen.findByLabelText("替换为已审核镜头"), "asset-3:segment-3");
     await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledWith("task-1", {
+      request_id: expect.any(String), expected_timeline_version_id: task.current_timeline_version_id, expected_timeline_sequence: task.timeline_sequence,
       operation_type: "ReplaceClip", clip_id: "clip-1", asset_id: "asset-3", segment_id: "segment-3", source_start_seconds: 5,
     }));
     expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
@@ -3086,6 +3545,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
     await chooseSelectValue(screen.getAllByLabelText("画面显示方式")[0], "fit");
     await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledWith("task-1", {
+      request_id: expect.any(String), expected_timeline_version_id: task.current_timeline_version_id, expected_timeline_sequence: task.timeline_sequence,
       operation_type: "ChangeCrop", clip_id: "clip-1", fit_mode: "fit", crop_x: .5, crop_y: .5,
     }));
     expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
@@ -3856,6 +4316,7 @@ describe("CreationTaskWorkspace", () => {
 
     let panel = screen.getByRole("region", { name: "连续制作" });
     expect(panel).toHaveTextContent("重新输出当前时间线");
+    await openProductionScript(panel);
     expect(panel).toHaveTextContent("这段就是实际要读的内容");
     expect(panel).not.toHaveTextContent("当前暂不支持已编辑时间线重新输出");
     expect(mocks.resumeExecution).not.toHaveBeenCalled();
@@ -4378,6 +4839,19 @@ it("opens production preparation when the reviewed output no longer matches the 
   });
 
 });
+
+async function openProductionScript(panel: HTMLElement) {
+  const read = vi.spyOn(creationTaskApi, "getCreationTaskScriptSections").mockResolvedValue({
+    task_id: "task-1", script_id: "script-1", updated_at: "2026-10-26T00:00:00Z", title: "真实文案",
+    language: "zh-CN", selection_status: "confirmed", total_count: 1, next_after_ordinal: null, truncated: false,
+    items: [{ ordinal: 1, digest: "section-digest", section: { id: "section-1", title: "开场",
+      content: "这段就是实际要读的内容", visual_prompt: "画面", evidence_reference_ids: [] } }],
+  });
+  previewReadRestores.push(() => read.mockRestore());
+  fireEvent.click(within(panel).getByText(/这次使用的文案/));
+  await within(panel).findByText(/这段就是实际要读的内容/);
+  expect(read).toHaveBeenCalledWith("task-1", "script-1", { after_ordinal: 0, expected_updated_at: "2026-10-26T00:00:00Z" });
+}
 
 async function productionPanel() {
   const target = await waitFor(() => { const panel=screen.queryByRole("region",{name:"连续制作"}); if(panel) return panel; const entry=screen.queryByRole("button",{name:/查看制作详情|核对制作要求/}); expect(entry).not.toBeNull(); return entry!; });
@@ -5079,28 +5553,36 @@ it('shows complete black-frame totals separately from samples and keeps delivery
 });
 
 it.each([false,true])('does not equate all stored sections with a complete draft when sections_loaded=%s',async(loaded)=>{
-  const stored=sectionReaderScript();
-  const partial:import('@/lib/types').CreationTaskScript=loaded
-    ? {...stored,selection_status:'draft',draft_complete:false}
-    : {...stored,selection_status:'draft',draft_complete:false,sections_loaded:false,sections:null};
-  const complete={...partial,draft_complete:true,updated_at:'2026-10-24T00:08:00Z'};
-  vi.stubGlobal('fetch',vi.fn(async(url:string)=>{
-    const version=new URL(url,'http://local').searchParams.get('expected_updated_at')??partial.updated_at;
-    const page=sectionReaderPage(partial,0,version);
-    return new Response(JSON.stringify({...page,items:page.items.slice(0,1),total_count:1,next_after_ordinal:null,truncated:false}));
-  }));
-  const confirm=vi.fn();
-  const view=render(<ScriptEditor taskId={partial.task_id} script={partial} busy={false} repairing={false} onConfirm={confirm}/>);
-  await screen.findByText('窗口正文 reader-script 1');
-  expect(screen.getByText(/当前为部分稿，已存 1 段不代表目标已完整/)).toBeInTheDocument();
-  expect(screen.queryByRole('button',{name:'保存草稿'})).not.toBeInTheDocument();
-  expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
-  expect(screen.getByLabelText('第 1 段正文')).toBeEnabled();
-  expect(confirm).not.toHaveBeenCalled();
-  view.rerender(<ScriptEditor taskId={complete.task_id} script={complete} busy={false} repairing={false} onConfirm={confirm}/>);
-  await screen.findByLabelText('第 1 段正文');
-  expect(screen.queryByText(/当前为部分稿/)).not.toBeInTheDocument();
-  expect(screen.getByRole('button',{name:'确认文案'})).toBeEnabled();
+  const scopeSpy=vi.spyOn(await import('@/lib/preflight-draft'),'readPreflightDraftScope').mockResolvedValue({memberId:mocks.memberId,workspaceId:baseTask.workspace_id});
+  try {
+    const stored=sectionReaderScript();
+    const partial:import('@/lib/types').CreationTaskScript=loaded
+      ? {...stored,selection_status:'draft',draft_complete:false}
+      : {...stored,selection_status:'draft',draft_complete:false,sections_loaded:false,sections:null};
+    const complete={...partial,draft_complete:true,updated_at:'2026-10-24T00:08:00Z'};
+    vi.stubGlobal('fetch',vi.fn(async(url:string)=>{
+      const pathname=new URL(url,'http://local').pathname;
+      if(pathname.endsWith(`/scripts/${partial.id}/sources`)) return new Response(JSON.stringify({task_id:partial.task_id,script_id:partial.id,sources:[]}));
+      if(!pathname.endsWith(`/scripts/${partial.id}/sections`)) throw new Error(`未预期的文案读取：${pathname}`);
+      const version=new URL(url,'http://local').searchParams.get('expected_updated_at')??partial.updated_at;
+      const page=sectionReaderPage(partial,0,version);
+      return new Response(JSON.stringify({...page,items:page.items.slice(0,1),total_count:1,next_after_ordinal:null,truncated:false}));
+    }));
+    const confirm=vi.fn();
+    const view=render(<ScriptEditor taskId={partial.task_id} script={partial} busy={false} repairing={false} onConfirm={confirm}/>);
+    await screen.findByText('窗口正文 reader-script 1');
+    expect(screen.getByText(/当前为部分稿，已存 1 段不代表目标已完整/)).toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'保存草稿'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('第 1 段正文')).toBeEnabled());
+    expect(confirm).not.toHaveBeenCalled();
+    view.rerender(<ScriptEditor taskId={complete.task_id} script={complete} busy={false} repairing={false} onConfirm={confirm}/>);
+    await screen.findByLabelText('第 1 段正文');
+    expect(screen.queryByText(/当前为部分稿/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button',{name:'确认文案'})).toBeEnabled());
+  } finally {
+    scopeSpy.mockRestore();
+  }
 });
 
 it('opens manual first-window writing from the existing script workspace and continues the same partial draft',async()=>{
@@ -5132,9 +5614,335 @@ it('opens manual first-window writing from the existing script workspace and con
   fireEvent.change(screen.getByLabelText('第 1 段正文'),{target:{value:'手动首段正文'}});
   fireEvent.change(screen.getByLabelText('第 1 段画面建议'),{target:{value:'手动画面'}});
   mocks.getWorkspace.mockResolvedValue({...initial,scripts:[script]});
-  fireEvent.click(screen.getByRole('button',{name:'保存首窗'}));
+  const saveFirstWindow = screen.getByRole('button',{name:'保存首窗'});
+  await waitFor(() => expect(saveFirstWindow).toBeEnabled());
+  fireEvent.click(saveFirstWindow);
   await screen.findByRole('region',{name:'分窗编辑文案'});
   expect(await screen.findByLabelText('第 1 段正文')).toHaveValue('手动首段正文');
   expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
   expect(mocks.confirmScript).not.toHaveBeenCalled();
+});
+
+function generationReceipt(requestId: string, overrides: Partial<import('@/lib/types/creation-tasks').CreationTaskScriptGenerationReceipt> = {}): import('@/lib/types/creation-tasks').CreationTaskScriptGenerationReceipt {
+  return {request_id:requestId,task_id:'task-1',conversation_id:'generation-conversation',turn_id:'generation-turn',
+    turn_status:'running',run_id:'generation-run',run_status:'running',script_id:null,script_updated_at:null,
+    requested_effect:'draft',status:'running',result_stale:false,stop_requested:false,...overrides};
+}
+
+it('keeps generation turn, run and incomplete status distinct and only queries or stops on explicit actions',async()=>{
+  const {ScriptGenerationStatus}=await import('@/components/creation-task/ScriptStage');
+  const receipt=generationReceipt('original-request',{turn_status:'completed',run_status:'succeeded',status:'incomplete'});
+  const read=vi.fn(),stop=vi.fn();
+  const props={requestId:receipt.request_id,receipt,working:null,stopping:false,error:null,onRead:read,onStop:stop};
+  const view=render(<ScriptGenerationStatus {...props}/>);
+  expect(screen.getByText(/目标文案尚未完整；回合已结束；文案运行已结束/)).toBeInTheDocument();
+  expect(screen.getByText('此按钮只生成草稿，不会自动确认或执行。')).toBeInTheDocument();
+  expect(read).not.toHaveBeenCalled();expect(stop).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button',{name:'停止本次生成'})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'查询原生成结果'}));expect(read).toHaveBeenCalled();
+  view.rerender(<ScriptGenerationStatus {...props} receipt={{...receipt,turn_status:'running'}}/>);
+  fireEvent.click(screen.getByRole('button',{name:'停止本次生成'}));expect(stop).toHaveBeenCalled();
+  view.rerender(<ScriptGenerationStatus {...props} receipt={{...receipt,turn_status:'running'}} stopping/>);
+  expect(screen.getByRole('button',{name:'停止本次生成'})).toBeDisabled();
+  expect(screen.getByText('已请求停止，等待原回合回执。')).toBeInTheDocument();
+  expect(screen.getByText(/回合运行中；文案运行已结束/)).toBeInTheDocument();
+});
+
+async function generationReadyInput() { const input = screen.getByLabelText('文案要求'); await waitFor(() => expect(input).toBeEnabled()); return input; }
+
+function generationWorkspace() {
+  return workspace({...baseTask,stage:'script',stage_status:'waiting_for_user',status:'waiting_for_user',confirmed_script_id:null});
+}
+function generatedScript() : import('@/lib/types').CreationTaskScript {
+  return {id:'generated-script',task_id:'task-1',run_id:'generation-run',topic_id:'topic-1',title:'真实生成稿',language:'zh-CN',
+    selection_status:'draft',draft_complete:true,sections_loaded:true,sections_total_count:1,
+    created_at:'2026-10-25T00:00:00Z',updated_at:'2026-10-25T00:00:01.000001Z',confirmed_at:null,
+    sections:[{id:'generated-section',title:'首段',content:'真实生成稿正文',visual_prompt:'画面',evidence_reference_ids:[]}]};
+}
+function readyGeneration(requestId:string,extra:Partial<import('@/lib/types/creation-tasks').CreationTaskScriptGenerationReceipt>={}) {
+  const script=generatedScript();
+  return generationReceipt(requestId,{status:'draft_ready',turn_status:'completed',run_status:'succeeded',script_id:script.id,script_updated_at:script.updated_at.replace(/Z$/, '+00:00'),...extra});
+}
+
+it('submits the real generation button with only its UUID, polls that original request and reads the exact draft without adopting or consuming chat input',async()=>{
+  const initial=generationWorkspace(),script=generatedScript();
+  mocks.getWorkspace.mockResolvedValue(initial);
+  vi.mocked(generateCreationTaskScript).mockReset().mockImplementation(async(_task,input)=>generationReceipt(input.request_id));
+  vi.mocked(getCreationTaskScriptGenerationRequest).mockReset().mockImplementation(async(_task,id)=>readyGeneration(id));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  const input=await generationReadyInput();
+  fireEvent.change(input,{target:{value:'未发送的新要求保留'}});
+  mocks.getWorkspace.mockResolvedValue({...initial,scripts:[script]});
+  fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  await screen.findByText(/生成进行中；回合运行中/);
+  const request=vi.mocked(generateCreationTaskScript).mock.calls[0][1];
+  expect(Object.keys(request)).toEqual(['request_id']);
+  expect(request.request_id).toMatch(/^[0-9a-f-]{36}$/);
+  expect(screen.getByRole('button',{name:'新对话'})).toBeEnabled();
+  await screen.findByText('真实生成稿正文',{}, {timeout:4000});
+  expect(getCreationTaskScriptGenerationRequest).toHaveBeenCalledWith(initial.task.id,request.request_id);
+  expect(input).toHaveValue('未发送的新要求保留');
+  expect(mocks.askAssistant).not.toHaveBeenCalled();
+  expect(mocks.confirmScript).not.toHaveBeenCalled();expect(mocks.startExecution).not.toHaveBeenCalled();
+});
+
+it('retains the original generation UUID after unknown and 404 while preserving new chat and manual text, and reads only the original version in bounded pages',async()=>{
+  const initial=generationWorkspace(),script=generatedScript();
+  mocks.getWorkspace.mockResolvedValue(initial);
+  vi.mocked(generateCreationTaskScript).mockReset().mockRejectedValueOnce(new Error('原生成回包未知'));
+  vi.mocked(getCreationTaskScriptGenerationRequest).mockReset().mockRejectedValueOnce(new CreationPlanApiError(404,null,'原请求尚未可见'));
+  const versions:string[]=[];
+  vi.stubGlobal('fetch',vi.fn(async(url:string)=>{
+    const query=new URL(url,'http://local').searchParams;
+    const after=Number(query.get('after_ordinal')??0);versions.push(query.get('expected_updated_at')!);
+    return new Response(JSON.stringify({task_id:initial.task.id,script_id:script.id,updated_at:script.updated_at.replace(/Z$/, '+00:00'),title:'原请求稿件',language:'zh-CN',selection_status:'draft',
+      total_count:45,items:Array.from({length:Math.min(20,45-after)},(_,i)=>({ordinal:after+i+1,digest:'digest',section:{id:`section-${after+i+1}`,title:`原段${after+i+1}`,content:`原请求正文${after+i+1}`,visual_prompt:'画面',evidence_reference_ids:[]}})),
+      next_after_ordinal:after+20<45?after+20:null,truncated:after+20<45}));
+  }));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  await generationReadyInput();
+  fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  await screen.findByText('原生成回包未知');
+  const request=vi.mocked(generateCreationTaskScript).mock.calls[0][1];
+  expect(screen.getByRole('button',{name:'生成文案'})).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('文案要求'),{target:{value:'当前尚未发送要求'}});
+  fireEvent.click(screen.getByRole('button',{name:'手动编写文案'}));
+  fireEvent.change(await screen.findByLabelText('新文案标题'),{target:{value:'当前手写标题'}});
+  fireEvent.change(screen.getByLabelText('第 1 段正文'),{target:{value:'当前手写正文'}});
+  fireEvent.click(screen.getByRole('button',{name:'查询原生成结果'}));
+  await screen.findByText(/尚未查到原生成回执，不代表未提交/);
+  expect(getCreationTaskScriptGenerationRequest).toHaveBeenCalledWith(initial.task.id,request.request_id);
+  vi.mocked(getCreationTaskScriptGenerationRequest).mockResolvedValue(readyGeneration(request.request_id));
+  const reads=mocks.getWorkspace.mock.calls.length;
+  fireEvent.click(screen.getByRole('button',{name:'查询原生成结果'}));
+  await screen.findByText(/草稿已保存，待用户检查和采用/);
+  expect(mocks.getWorkspace).toHaveBeenCalledTimes(reads);
+  expect(screen.getByLabelText('新文案标题')).toHaveValue('当前手写标题');
+  expect(screen.getByLabelText('第 1 段正文')).toHaveValue('当前手写正文');
+  expect(screen.getByLabelText('文案要求')).toHaveValue('当前尚未发送要求');
+  expect(generateCreationTaskScript).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button',{name:'只读查看原请求稿件'}));
+  await screen.findByText('原请求正文1');
+  expect(screen.getByText('共 45 段 · 第 1–20 段')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:'下一页文案'}));
+  await screen.findByText('原请求正文21');
+  expect(screen.queryByText('原请求正文1')).not.toBeInTheDocument();
+  expect(versions).toEqual([script.updated_at.replace(/Z$/, '+00:00'),script.updated_at.replace(/Z$/, '+00:00')]);
+  expect(screen.getByLabelText('第 1 段正文')).toHaveValue('当前手写正文');
+  expect(mocks.confirmScript).not.toHaveBeenCalled();
+});
+
+it('stops only the actual generation conversation turn and waits for its original GET before showing stopped',async()=>{
+  const initial=generationWorkspace();mocks.getWorkspace.mockResolvedValue(initial);
+  vi.mocked(generateCreationTaskScript).mockReset().mockImplementation(async(_task,input)=>generationReceipt(input.request_id));
+  vi.mocked(stopAssistantConversationTurn).mockReset().mockImplementation(async(_conversation,turn)=>({turn_id:turn,status:'stopping'}));
+  vi.mocked(getCreationTaskScriptGenerationRequest).mockReset().mockImplementation(async(_task,id)=>generationReceipt(id,{status:'stopped',turn_status:'stopped',run_status:'failed',stop_requested:true}));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  await generationReadyInput();fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  fireEvent.click(await screen.findByRole('button',{name:'停止本次生成'}));
+  await screen.findByText('已请求停止，等待原回合回执。');
+  expect(stopAssistantConversationTurn).toHaveBeenCalledWith('generation-conversation','generation-turn');
+  expect(screen.getByRole('button',{name:'停止本次生成'})).toBeDisabled();
+  fireEvent.click(screen.getByRole('button',{name:'查询原生成结果'}));
+  await screen.findByText(/已停止；回合已停止；文案运行失败/);
+  expect(screen.queryByRole('button',{name:'停止本次生成'})).not.toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'生成文案'})).toBeEnabled();
+  expect(generateCreationTaskScript).toHaveBeenCalledTimes(1);
+});
+
+it.each(['unknown','stale'] as const)('does not turn a server %s generation receipt into a current draft or automatic replay',async kind=>{
+  const initial=generationWorkspace();mocks.getWorkspace.mockResolvedValue(initial);
+  vi.mocked(generateCreationTaskScript).mockReset().mockImplementation(async(_task,input)=>kind==='unknown'?generationReceipt(input.request_id,{status:'unknown'}):readyGeneration(input.request_id,{result_stale:true}));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  await generationReadyInput();const reads=mocks.getWorkspace.mock.calls.length;
+  fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  await screen.findByText(kind==='unknown'?/原结果尚未核实/:/原结果与当前来源或版本不一致/);
+  expect(mocks.getWorkspace).toHaveBeenCalledTimes(reads);
+  if(kind==='unknown')expect(screen.getByRole('button',{name:'生成文案'})).toBeDisabled();
+  expect(generateCreationTaskScript).toHaveBeenCalledTimes(1);
+  expect(mocks.confirmScript).not.toHaveBeenCalled();
+});
+
+it('refuses a generation response for a different original request without releasing the pending UUID',async()=>{
+  const initial=generationWorkspace();mocks.getWorkspace.mockResolvedValue(initial);
+  vi.mocked(generateCreationTaskScript).mockReset().mockResolvedValue(generationReceipt('other-request'));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  await generationReadyInput();fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  await screen.findByText('原生成回执与请求或目标身份不符，当前草稿和原 UUID 保留。');
+  expect(screen.getByRole('button',{name:'生成文案'})).toBeDisabled();
+  expect(screen.getByRole('button',{name:'查询原生成结果'})).toBeEnabled();
+  expect(generateCreationTaskScript).toHaveBeenCalledTimes(1);
+});
+
+it('serializes the formal generation UUID-only POST and read-only original-request GET without chat payload',async()=>{
+  const api=await vi.importActual<typeof import('@/lib/api/creation-tasks')>('@/lib/api/creation-tasks');
+  const fetch=vi.fn(async()=>new Response(JSON.stringify({})));vi.stubGlobal('fetch',fetch);
+  const input={request_id:'original/request'};
+  await api.generateCreationTaskScript('task/id',input);await api.getCreationTaskScriptGenerationRequest('task/id',input.request_id);
+  const calls=fetch.mock.calls as unknown as [string,RequestInit?][];
+  expect(calls[0][0]).toBe('/api/creation-tasks/task%2Fid/scripts/generate');
+  expect(JSON.parse(calls[0][1]!.body as string)).toEqual(input);
+  expect(calls[1][0]).toBe('/api/creation-tasks/task%2Fid/scripts/generation-requests/original%2Frequest');
+  expect(calls[1][1]?.body).toBeUndefined();expect(calls[1][1]?.method).not.toBe('POST');
+});
+
+it('does not let a late generation POST read over newer unsent requirements even before a manual draft exists',async()=>{
+  const initial=generationWorkspace();mocks.getWorkspace.mockResolvedValue(initial);
+  let resolve!:(receipt:import('@/lib/types/creation-tasks').CreationTaskScriptGenerationReceipt)=>void;
+  vi.mocked(generateCreationTaskScript).mockReset().mockReturnValue(new Promise(done=>{resolve=done;}));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  const input=await generationReadyInput();fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  const request=vi.mocked(generateCreationTaskScript).mock.calls[0][1],reads=mocks.getWorkspace.mock.calls.length;
+  fireEvent.change(input,{target:{value:'提交后重新写的新要求'}});
+  await act(async()=>{resolve(readyGeneration(request.request_id));});
+  expect(input).toHaveValue('提交后重新写的新要求');
+  expect(mocks.getWorkspace).toHaveBeenCalledTimes(reads);
+  expect(screen.getByRole('button',{name:'只读查看原请求稿件'})).toBeEnabled();
+  expect(mocks.confirmScript).not.toHaveBeenCalled();
+});
+
+it('keeps the receipt version pinned when a read-only original generation page fails and is explicitly re-read',async()=>{
+  const {ScriptGenerationStatus}=await import('@/components/creation-task/ScriptStage');
+  const receipt=readyGeneration('pinned-original'),versions:(string|null)[]=[];
+  const fetch=vi.fn(async(url:string)=>{
+    versions.push(new URL(url,'http://local').searchParams.get('expected_updated_at'));
+    return new Response(JSON.stringify({detail:'原请求稿件版本已变化'}),{status:409});
+  });
+  vi.stubGlobal('fetch',fetch);
+  render(<ScriptGenerationStatus requestId={receipt.request_id} receipt={receipt} working={null} stopping={false} error={null} onRead={()=>{}} onStop={()=>{}}/>);
+  fireEvent.click(screen.getByRole('button',{name:'只读查看原请求稿件'}));
+  await screen.findByText('原请求稿件版本已变化');
+  fireEvent.click(screen.getByRole('button',{name:'重新读取文案'}));
+  await waitFor(()=>expect(fetch).toHaveBeenCalledTimes(2));
+  expect(versions).toEqual([receipt.script_updated_at,receipt.script_updated_at]);
+  expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
+});
+
+it('does not accept a newer draft version within the same millisecond as the original generation receipt',async()=>{
+  const initial=generationWorkspace();mocks.getWorkspace.mockResolvedValue(initial);
+  vi.mocked(generateCreationTaskScript).mockReset().mockImplementation(async(_task,input)=>readyGeneration(input.request_id));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  await generationReadyInput();
+  mocks.getWorkspace.mockResolvedValue({...initial,scripts:[{...generatedScript(),updated_at:'2026-10-25T00:00:01.000002Z'}]});
+  fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  await screen.findByText(/草稿已保存，待用户检查和采用/);
+  expect(screen.queryByText('真实生成稿正文')).not.toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'只读查看原请求稿件'})).toBeEnabled();
+});
+
+it('can explicitly retry only the same stop target after an unknown stop is reconciled as not yet recorded',async()=>{
+  const initial=generationWorkspace();mocks.getWorkspace.mockResolvedValue(initial);
+  vi.mocked(generateCreationTaskScript).mockReset().mockImplementation(async(_task,input)=>generationReceipt(input.request_id));
+  vi.mocked(stopAssistantConversationTurn).mockReset().mockRejectedValueOnce(new Error('停止回包未知')).mockImplementation(async(_conversation,turn)=>({turn_id:turn,status:'stopping'}));
+  vi.mocked(getCreationTaskScriptGenerationRequest).mockReset().mockImplementation(async(_task,id)=>generationReceipt(id));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  await generationReadyInput();fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  fireEvent.click(await screen.findByRole('button',{name:'停止本次生成'}));
+  await screen.findByText('停止结果待核对。停止回包未知');
+  expect(screen.getByRole('button',{name:'停止本次生成'})).toBeDisabled();
+  fireEvent.click(screen.getByRole('button',{name:'查询原生成结果'}));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'停止本次生成'})).toBeEnabled());
+  expect(stopAssistantConversationTurn).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button',{name:'停止本次生成'}));
+  await waitFor(()=>expect(stopAssistantConversationTurn).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(stopAssistantConversationTurn).mock.calls).toEqual([['generation-conversation','generation-turn'],['generation-conversation','generation-turn']]);
+  expect(generateCreationTaskScript).toHaveBeenCalledTimes(1);
+});
+
+it('does not replace the workspace when generation starts without a local edit-context capability',async()=>{
+  const {useScriptGenerationRequest}=await import('@/components/creation-task/useScriptGenerationRequest');
+  vi.mocked(generateCreationTaskScript).mockReset().mockImplementation(async(_task,input)=>readyGeneration(input.request_id));
+  const apply=vi.fn();
+  const {result}=renderHook(()=>useScriptGenerationRequest({taskId:'task-1',visible:true,getContextKey:()=>null,onDraftReady:apply,onStart:()=>{}}));
+  await act(async()=>{await result.current.generate();});
+  expect(result.current.receipt?.status).toBe('draft_ready');
+  expect(apply).not.toHaveBeenCalled();
+});
+
+it('keeps new input after a definite generation rejection and retries only on an explicit new UUID request',async()=>{
+  const initial=generationWorkspace();mocks.getWorkspace.mockResolvedValue(initial);
+  vi.mocked(generateCreationTaskScript).mockReset().mockRejectedValueOnce(new CreationPlanApiError(409,null,'来源版本已变化')).mockImplementation(async(_task,input)=>generationReceipt(input.request_id));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  const input=await generationReadyInput();fireEvent.change(input,{target:{value:'保留的新要求'}});
+  fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  await screen.findByText('来源版本已变化');
+  expect(screen.getByRole('button',{name:'生成文案'})).toBeEnabled();
+  expect(input).toHaveValue('保留的新要求');
+  expect(generateCreationTaskScript).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  await screen.findByText(/生成进行中/);
+  expect(vi.mocked(generateCreationTaskScript).mock.calls[1][1].request_id).not.toBe(vi.mocked(generateCreationTaskScript).mock.calls[0][1].request_id);
+});
+
+it('recovers only the cached original generation input after remount without replaying POST or replacing a new workspace',async()=>{
+  const {useScriptGenerationRequest}=await import('@/components/creation-task/useScriptGenerationRequest');
+  const {WorkspacePageContext}=await import('@/components/workbench/context');
+  const slot={id:'task-page',href:'/tasks/task-1',active:true,updateShell:()=>{},viewState:new Map<string,unknown>()};
+  const wrapper=({children}:{children:import('react').ReactNode})=><WorkspacePageContext.Provider value={slot}>{children}</WorkspacePageContext.Provider>;
+  const owner={},apply=vi.fn();
+  vi.mocked(generateCreationTaskScript).mockReset().mockRejectedValueOnce(new Error('生成结果未知'));
+  vi.mocked(getCreationTaskScriptGenerationRequest).mockReset().mockImplementation(async(_task,id)=>readyGeneration(id));
+  const options={taskId:'task-1',visible:true,getContextKey:()=>owner,onDraftReady:apply,onStart:()=>{}};
+  const first=renderHook(()=>useScriptGenerationRequest(options),{wrapper});
+  await act(async()=>{await first.result.current.generate();});
+  const requestId=first.result.current.input!.requestId;first.unmount();
+  const next=renderHook(()=>useScriptGenerationRequest(options),{wrapper});
+  expect(next.result.current.input?.requestId).toBe(requestId);
+  expect(next.result.current.blocked).toBe(true);
+  await act(async()=>{await next.result.current.query();});
+  expect(getCreationTaskScriptGenerationRequest).toHaveBeenCalledWith('task-1',requestId);
+  expect(next.result.current.receipt?.status).toBe('draft_ready');
+  expect(generateCreationTaskScript).toHaveBeenCalledTimes(1);expect(apply).not.toHaveBeenCalled();
+});
+
+it.each(['POST','workspace'] as const)('does not let an older generation %s completion invalidate a newer chat sent from existing text',async phase=>{
+  const initial=generationWorkspace(),oldScript=generatedScript();
+  const newScript={...oldScript,id:'new-chat-script',run_id:'new-chat-run',title:'新聊天稿',sections:[{...oldScript.sections![0],id:'new-chat-section',content:'较新聊天的真实正文'}]};
+  mocks.getWorkspace.mockResolvedValue(initial);
+  let finishGeneration!:(value:import('@/lib/types/creation-tasks').CreationTaskScriptGenerationReceipt)=>void;
+  let finishOldRead!:(value:WorkspaceState)=>void;
+  let finishChat!:(value:unknown)=>void;
+  vi.mocked(generateCreationTaskScript).mockReset().mockReturnValue(new Promise(done=>{finishGeneration=done;}));
+  mocks.askAssistant.mockReset().mockReturnValue(new Promise(done=>{finishChat=done;}));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  const input=await generationReadyInput();
+  fireEvent.change(input,{target:{value:'生成前已有且尚未发送的文字'}});
+  fireEvent.click(screen.getByRole('button',{name:'生成文案'}));
+  const request=vi.mocked(generateCreationTaskScript).mock.calls[0][1];
+  if(phase==='workspace'){
+    mocks.getWorkspace.mockReturnValueOnce(new Promise(done=>{finishOldRead=done;}));
+    await act(async()=>{finishGeneration(readyGeneration(request.request_id));});
+    await waitFor(()=>expect(mocks.getWorkspace).toHaveBeenCalledTimes(2));
+  }
+  fireEvent.click(screen.getByRole('button',{name:'发送'}));
+  await waitFor(()=>expect(mocks.askAssistant).toHaveBeenCalledTimes(1));
+  const reads=mocks.getWorkspace.mock.calls.length;
+  if(phase==='POST'){
+    mocks.getWorkspace.mockResolvedValue({...initial,scripts:[oldScript]});
+    await act(async()=>{finishGeneration(readyGeneration(request.request_id));});
+  }else await act(async()=>{finishOldRead({...initial,scripts:[oldScript]});});
+  await waitFor(()=>expect(screen.getByRole('button',{name:'查询原生成结果'})).toBeEnabled());
+  expect(mocks.getWorkspace).toHaveBeenCalledTimes(reads);
+  expect(screen.queryByText('真实生成稿正文')).not.toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'新对话'})).toBeDisabled();
+  mocks.getWorkspace.mockResolvedValue({...initial,scripts:[newScript]});
+  await act(async()=>{finishChat({reply:'新聊天已完成',provider:'test',model:'test',edit_preview:null,script_draft:newScript});});
+  expect(await screen.findByText('较新聊天的真实正文')).toBeInTheDocument();
+  expect(mocks.confirmScript).not.toHaveBeenCalled();
+});
+
+it('keeps polling and reserves the original generation until its draft-ready running turn actually finishes',async()=>{
+  const {useScriptGenerationRequest}=await import('@/components/creation-task/useScriptGenerationRequest');
+  vi.mocked(generateCreationTaskScript).mockReset().mockImplementation(async(_task,input)=>readyGeneration(input.request_id,{turn_status:'running'}));
+  vi.mocked(getCreationTaskScriptGenerationRequest).mockReset().mockImplementation(async(_task,id)=>readyGeneration(id));
+  const {result}=renderHook(()=>useScriptGenerationRequest({taskId:'task-1',visible:true,getContextKey:()=>null,onDraftReady:async()=>{},onStart:()=>{}}));
+  await act(async()=>{await result.current.generate();});
+  const id=result.current.input!.requestId;
+  expect(result.current.receipt?.status).toBe('draft_ready');
+  expect(result.current.blocked).toBe(true);
+  await act(async()=>{await result.current.generate();});
+  expect(generateCreationTaskScript).toHaveBeenCalledTimes(1);
+  await waitFor(()=>expect(result.current.receipt?.turn_status).toBe('completed'),{timeout:3500});
+  expect(getCreationTaskScriptGenerationRequest).toHaveBeenCalledWith('task-1',id);
+  expect(result.current.blocked).toBe(false);
 });

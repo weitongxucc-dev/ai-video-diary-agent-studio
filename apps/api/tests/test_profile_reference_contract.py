@@ -39,12 +39,8 @@ from app.host_resource_probes import (
     SceneRuntimeLimits,
 )
 from app.granted_subprocess import GrantedCommandCancelled
-from app.production import (
-    CreationPlan,
-    CreationPlanPersonReference,
-    CreationPlanVoiceReference,
-    CreationTask,
-)
+from app.creation.plan_contracts import CreationPlan
+from app.creation.contracts import CreationPlanPersonReference, CreationPlanVoiceReference, CreationTask
 from app.avatar_lipsync import AvatarAndLipSyncService, avatar_lipsync_cache_key
 from app.voice_clone import VoiceCloneError, VoiceCloneResult
 
@@ -146,9 +142,9 @@ def test_independent_wav_registration_restart_and_default_pins_version(repositor
         video_library_path=repository.video_library_path,
     )
     assert reopened.get_default_versioned_voice("ws") == saved
-    assert reopened.get_versioned_voice_profile("ws", saved.id) == v2
+    assert reopened.profile_records.get_versioned_voice_profile("ws", saved.id) == v2
     assert (
-        reopened.resolve_narration_inputs(
+        reopened.profile_inputs.resolve_narration_inputs(
             workspace_id="ws",
             episode_id="task",
             voice_profile_id=saved.id,
@@ -161,7 +157,7 @@ def test_independent_wav_registration_restart_and_default_pins_version(repositor
         == wav_bytes()
     )
     with pytest.raises(KeyError):
-        reopened.get_versioned_voice_profile("other", saved.id)
+        reopened.profile_records.get_versioned_voice_profile("other", saved.id)
     with pytest.raises(ValueError):
         reopened.set_default_versioned_voice(
             "ws", saved.id, "", viewer_user_id="member"
@@ -178,7 +174,7 @@ def test_immutable_version_and_owner_cannot_be_replaced(repository):
         repository.save_versioned_voice_profile(
             replace(saved, version="v2"), verified_owner_user_id="intruder"
         )
-    assert repository.get_versioned_voice_profile("ws", "voice", "v1") == saved
+    assert repository.profile_records.get_versioned_voice_profile("ws", "voice", "v1") == saved
 
 
 def test_person_reference_and_optional_person_pair(repository):
@@ -235,7 +231,7 @@ def test_invalid_reference_range_is_not_registered(repository, reference):
         repository.save_versioned_voice_profile(
             voice(repository, reference=reference), verified_owner_user_id="member"
         )
-    assert repository.list_versioned_voice_profiles("ws") == []
+    assert repository.profile_records.list_versioned_voice_profiles("ws") == []
 
 
 def test_person_segment_range_persists_without_a_model_and_never_uses_whole_file(
@@ -291,7 +287,7 @@ def test_person_segment_range_persists_without_a_model_and_never_uses_whole_file
         ),
     )
     saved = repository.save_person_profile(profile, verified_owner_user_id="member")
-    assert repository.get_person_profile("ws", "person", "v1") == saved
+    assert repository.profile_records.get_person_profile("ws", "person", "v1") == saved
     assert repository.resolve_profile_reference(
         saved, viewer_user_id="member", for_generation=False
     )[1:] == (0.25, 1.5)
@@ -320,7 +316,7 @@ def test_profile_and_source_restrictions_are_separate_and_reread(repository, sta
     asset.use_state = state
     repository._save_asset(asset)
     assert (
-        repository.get_versioned_voice_profile("ws", "voice").use_state == "available"
+        repository.profile_records.get_versioned_voice_profile("ws", "voice").use_state == "available"
     )
     with pytest.raises(ValueError, match="来源"):
         repository.resolve_voice_reference(saved, viewer_user_id="member")
@@ -350,7 +346,7 @@ def test_shared_source_revocation_foreign_owner_and_lost_file(repository):
     with pytest.raises(PermissionError):
         repository.resolve_voice_reference(saved, viewer_user_id="other")
     path.unlink()
-    assert repository.get_versioned_voice_profile("ws", "voice") == saved
+    assert repository.profile_records.get_versioned_voice_profile("ws", "voice") == saved
     with pytest.raises(ValueError, match="失联"):
         repository.resolve_voice_reference(saved, viewer_user_id="member")
 
@@ -402,7 +398,7 @@ def test_expired_or_revoked_authorization_never_upgrades_historical_reference(
         verified_owner_user_id="member",
     )
     repository.save_authorization(replace(auth, version="v2", status="active"))
-    resolved = repository.resolve_narration_inputs(
+    resolved = repository.profile_inputs.resolve_narration_inputs(
         workspace_id="ws",
         episode_id="task",
         voice_profile_id="voice",
@@ -456,7 +452,7 @@ def test_legacy_payload_is_read_without_write_or_assumed_private_owner(repositor
             raw.pop(key)
         before = json.dumps(raw, ensure_ascii=False)
         conn.execute("UPDATE versioned_voice_profiles SET payload=?", (before,))
-    old = repository.get_versioned_voice_profile("ws", "voice")
+    old = repository.profile_records.get_versioned_voice_profile("ws", "voice")
     assert old.reference is None and old.owner_user_id is None
     assert old.model_id == "" and old.person_profile_id == ""
     with pytest.raises(PermissionError):
@@ -492,7 +488,7 @@ class Provider:
     calls = 0
     fail = False
 
-    def generate(self, **kwargs):
+    def generate_granted(self, **kwargs):
         self.calls += 1
         if self.fail:
             raise VoiceCloneError("controlled provider failure")
@@ -500,6 +496,9 @@ class Provider:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(wav_bytes())
         return VoiceCloneResult(str(output), 2, 8000)
+
+    def generate(self, **kwargs):
+        return self.generate_granted(**kwargs)
 
 
 def test_independent_narration_provider_failure_and_cached_preview_rechecks_source(
@@ -562,7 +561,7 @@ def test_unconfigured_model_does_not_block_saved_reference_or_fake_preview(
         preview_text="合成文字",
         viewer_user_id="member",
     )
-    assert repository.get_versioned_voice_profile("ws", "voice") == saved
+    assert repository.profile_records.get_versioned_voice_profile("ws", "voice") == saved
     assert result.status == "unavailable" and result.reason == "capability_unavailable"
     assert result.output_path is None and provider.calls == 0
 
@@ -605,7 +604,7 @@ def test_editing_segment_text_preserves_recognition_and_brand_is_not_global_gate
         and actual.end_seconds == segment.end_seconds
     )
     assert "brand_profile_missing" not in {
-        item["code"] for item in repository.readiness("ws")["blockers"]
+        item["code"] for item in repository.foundation_readiness.readiness("ws")["blockers"]
     }
 
 
@@ -656,7 +655,7 @@ def test_unmapped_historical_authorization_remains_readable_but_not_runnable(
         payload.update(auth_link)
         before = json.dumps(payload)
         conn.execute("UPDATE versioned_voice_profiles SET payload=?", (before,))
-    read = repository.get_versioned_voice_profile("ws", "voice")
+    read = repository.profile_records.get_versioned_voice_profile("ws", "voice")
     assert (
         read.id == saved.id and read.reference_audio_path == saved.reference_audio_path
     )
@@ -690,7 +689,7 @@ def test_voice_reference_can_be_registered_before_transcript_but_not_generated(
     repository, tmp_path
 ):
     saved = save_voice(repository, reference_text="")
-    assert repository.get_versioned_voice_profile("ws", "voice") == saved
+    assert repository.profile_records.get_versioned_voice_profile("ws", "voice") == saved
     provider = Provider()
     result = VoicePreviewService(tmp_path / "output", provider).request(
         repository=repository,
@@ -711,7 +710,7 @@ def test_new_registration_cannot_use_legacy_proof_shape_to_skip_reference_valida
         repository.save_versioned_voice_profile(
             replace(value, reference=None), verified_owner_user_id="member"
         )
-    assert repository.list_versioned_voice_profiles("ws") == []
+    assert repository.profile_records.list_versioned_voice_profiles("ws") == []
 
 
 def test_readiness_does_not_count_a_lost_reference_as_usable(repository):
@@ -719,7 +718,7 @@ def test_readiness_does_not_count_a_lost_reference_as_usable(repository):
     repository.resolve_workspace_media_reference(
         "ws", saved.reference_audio_path
     ).unlink()
-    blockers = repository.readiness("ws", viewer_user_id="member")["blockers"]
+    blockers = repository.foundation_readiness.readiness("ws", viewer_user_id="member")["blockers"]
     assert any(
         item["code"] == "voice_reference_unavailable" and "失联" in item["message"]
         for item in blockers
@@ -890,22 +889,22 @@ def test_range_selected_person_persists_independent_fixed_version_and_legacy_rea
     task = CreationTask(
         id="task", workspace_id="ws", plan_id=plan.id, name="test", scenario="test"
     )
-    repository.confirm_creation_plan(plan, task, verified_owner_user_id="member")
-    assert repository.get_creation_plan("ws", "plan").selected_person == explicit
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    assert repository.plan_records.get_creation_plan("ws", "plan").selected_person == explicit
     payload = json.loads(json.dumps(asdict(plan), default=str))
     assert (
-        repository._creation_plan_from_payload(dict(payload)).selected_person
+        repository.plan_records.creation_plan_from_payload(dict(payload)).selected_person
         == explicit
     )
     payload.pop("selected_person")
-    legacy = repository._creation_plan_from_payload(dict(payload))
+    legacy = repository.plan_records.creation_plan_from_payload(dict(payload))
     assert legacy.selected_person == CreationPlanPersonReference("legacy-person", "v3")
     payload["selected_person"] = None
-    assert repository._creation_plan_from_payload(dict(payload)).selected_person is None
+    assert repository.plan_records.creation_plan_from_payload(dict(payload)).selected_person is None
     payload.pop("selected_person")
     payload["selected_voice"]["person_version"] = ""
-    assert repository._creation_plan_from_payload(dict(payload)).selected_person is None
-    assert repository.get_creation_plan("ws", "plan").selected_person == explicit
+    assert repository.plan_records.creation_plan_from_payload(dict(payload)).selected_person is None
+    assert repository.plan_records.get_creation_plan("ws", "plan").selected_person == explicit
 
 
 @pytest.mark.parametrize("values", [("", "v1"), ("person", "")])
@@ -940,57 +939,62 @@ def test_range_selected_person_qualification_pins_original_version_without_a_mod
         )
 
 
-def test_range_presenter_consumes_explicit_person_not_voice_relationship():
-    observed = []
-    selected = CreationPlanPersonReference("explicit-person", "v7")
-    plan = range_plan(selected_person=selected, selected_voice=range_plan_voice())
+def test_range_presenter_consumes_explicit_person_not_voice_relationship(repository, monkeypatch):
+    from app.creation.contracts import NarrationSegment
+    from app.creation.narration_artifacts import NarrationArtifactRecord
+    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
+    from script_seed_fixtures import script_seed_payload
+
+    authorization = repository.save_authorization(Authorization(
+        id='explicit-person-auth', version='v1', rights_holder='合成测试成员',
+        content_types=('person_likeness', 'avatar_video', 'voice'),
+        usage_scopes=('narration', 'avatar_lipsync'), effective_from=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        expires_at=None, evidence_reference='fixture://explicit-person/authorization', status='active', workspace_id='ws'))
+    explicit = repository.save_person_profile(replace(person(repository, image_asset(repository)),
+        id='explicit-person', version='v7', authorization=authorization), verified_owner_user_id='member')
+    voice = save_voice(repository, authorization=authorization, model_id=Provider.model_id)
+    audio_path = repository.resolve_workspace_media_reference('ws', voice.reference_audio_path)
+    assert (voice.person_profile_id, voice.person_version) == ('', '')
+    selected = CreationPlanPersonReference(explicit.id, explicit.version)
+    selected_voice = replace(range_plan_voice(), person_profile_id='', person_version='',
+        authorization_id=authorization.id, authorization_version=authorization.version)
+    plan = range_plan(selected_person=selected, selected_voice=selected_voice)
     plan.presenter_share_target = 100
-    plan.lipsync_quality = "fast"
-    segment = SimpleNamespace(
-        id="audio-1",
-        source_section_id="s1",
-        status="ready",
-        duration_seconds=2,
-        voice_profile_id="voice",
-        voice_version="v1",
-        audio_reference="artifact.wav",
-        language="zh",
-    )
+    plan.lipsync_quality = 'fast'
+    task = CreationTask('task', 'ws', plan.id, 'test', 'knowledge_explanation',
+        confirmed_script_id='script', owner_user_id='member')
+    _, task = repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id='member')
+    script = CreationTaskScript('script', 'ws', task.id, 'run', 'topic', 'test', 'zh-CN',
+        [CreationTaskScriptSection('s1', 'test', 'test', '', [])], selection_status='confirmed')
+    with repository._connect() as conn:
+        conn.execute('BEGIN')
+        conn.execute('INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) '
+            'VALUES(?,?,?,?,?,?)', (script.id, 'ws', task.id, script.run_id,
+                script_seed_payload(repository, conn, script), script.updated_at.isoformat()))
+    repository.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
+        id='range-audio', workspace_id='ws', task_id=task.id, script_id=script.id,
+        voice_profile_id=voice.id, cache_key='range-audio', audio_path=str(audio_path),
+        duration_seconds=2, sample_rate=8000, model_id=voice.model_id))
+    segment = NarrationSegment('audio-1', 'ws', task.id, script.id, 's1', 'test',
+        'narration://artifact/range-audio', 2, 8000, voice.model_id, voice.id, voice.version, 'zh', '', 'ready')
+    repository.narration_records.save_narration_segments('ws', task.id, script.id, [segment])
+    observed = []
+    original = repository.profile_records.get_person_profile
 
-    class Repo:
-        def list_narration_segments(self, *args):
-            return [segment]
+    def read_person(ws, person_id, version=None):
+        observed.append((ws, person_id, version))
+        return original(ws, person_id, version)
 
-        def get_person_profile(self, ws, id, version):
-            observed.append((ws, id, version))
-            return SimpleNamespace(id=id, version=version, authorization=None)
-
-        def resolve_authorized_narration_audio_reference(self, *args):
-            return Path("artifact.wav")
-
-        def resolve_avatar_lipsync_request(self, **kwargs):
-            assert (
-                kwargs["person_id"] == "explicit-person"
-                and kwargs["person_version"] == "v7"
-            )
-            assert kwargs["viewer_user_id"] == "member"
-            return "controlled-request"
-
-    # The authorization boundary is tested by real profile tests; this case
-    # isolates the plan's version forwarding, not a media/model success.
-    from unittest.mock import patch
-
-    task = SimpleNamespace(workspace_id="ws", id="task", owner_user_id="member")
-    script = SimpleNamespace(id="script", sections=[SimpleNamespace(id="s1")])
-    with patch("app.creation_execution._authorization_failure", return_value=None):
-        assert (
-            presenter_inputs(Repo(), task, script, plan, {"fast": "test-model"})[0][0]
-            == segment
-        )
-        assert observed == [("ws", "explicit-person", "v7")]
-        plan.selected_person = None
-        with pytest.raises(ValueError, match="单独选择"):
-            presenter_inputs(Repo(), task, script, plan, {"fast": "test-model"})
+    monkeypatch.setattr(repository.profile_records, 'get_person_profile', read_person)
+    inputs = presenter_inputs(repository, task, script, plan, {'fast': 'test-model'})
+    assert inputs[0][0] == segment
+    request = inputs[0][1]
+    assert (request.person.id, request.person.version) == ('explicit-person', 'v7')
+    assert request.audio_path == str(audio_path) and request.voice == voice
+    assert observed == [('ws', 'explicit-person', 'v7')]
+    plan.selected_person = None
+    with pytest.raises(ValueError, match='单独选择'):
+        presenter_inputs(repository, task, script, plan, {'fast': 'test-model'})
 
 
 def test_range_wav_derivation_exact_samples_source_immutable_and_cache_revalidated(
@@ -1110,7 +1114,7 @@ def test_range_permission_failure_cancel_never_publish_cache_and_release_registe
         is True
     )
     assert (
-        repository.get_versioned_voice_profile("ws", value.id, value.version) == value
+        repository.profile_records.get_versioned_voice_profile("ws", value.id, value.version) == value
     )
 
 
@@ -1172,7 +1176,7 @@ def test_range_failed_real_ffmpeg_keeps_profile_without_success_output(
         is True
     )
     assert (
-        repository.get_versioned_voice_profile("ws", value.id, value.version) == value
+        repository.profile_records.get_versioned_voice_profile("ws", value.id, value.version) == value
     )
 
 
@@ -1352,7 +1356,7 @@ def test_range_video_audio_and_person_use_distinct_exact_derived_media(
         model_id=recorder.model_id,
         viewer_user_id="member",
     )
-    request = repository.resolve_avatar_lipsync_request(**request_args)
+    request = repository.profile_inputs.resolve_avatar_lipsync_request(**request_args)
     with pytest.raises(PermissionError, match="精确派生"):
         avatar.render(request, grant_context=context)
     assert not recorder.calls
@@ -1363,7 +1367,7 @@ def test_range_video_audio_and_person_use_distinct_exact_derived_media(
     assert Path(recorder.calls[0].visual_path) == person_input.path != source
     assert avatar_lipsync_cache_key(request) == result.cache_key
     assert (
-        repository.get_versioned_voice_profile("ws", audio.id, "v1").reference_text
+        repository.profile_records.get_versioned_voice_profile("ws", audio.id, "v1").reference_text
         == ""
     )
     assert hashlib.sha256(source.read_bytes()).hexdigest() == original_hash
@@ -1422,7 +1426,7 @@ def test_range_task_generation_hands_only_exact_reference_to_granted_provider(
         def __init__(self):
             pass
 
-        def generate(self, **kwargs):
+        def generate_granted(self, **kwargs):
             kwargs["grant_context"].check()
             self.calls.append(kwargs)
             output = kwargs["output_path"]
@@ -1530,3 +1534,87 @@ def test_range_historical_invalid_bounds_are_not_executed(
             invalid, viewer_user_id="member", grant_context=context
         )
     assert not context.scheduler.children
+
+
+def test_profile_input_resolver_keeps_historical_facts_current_access_and_readonly_privacy(repository, monkeypatch):
+    import socket
+    from app.profiles.contracts import PronunciationEntry
+    from app.profiles.input_resolution import VersionedNarrationInputs
+    from app.materials.contracts import MediaAuthorityError
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('profile metadata forbids media, network and generation')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    monkeypatch.setattr(wave, 'open', forbidden)
+    monkeypatch.setattr(Image, 'open', forbidden)
+    monkeypatch.setattr(Image, 'new', forbidden)
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    monkeypatch.setattr(socket, 'create_connection', forbidden)
+    monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    now = datetime.now(timezone.utc)
+    authorization = Authorization(id='original-consent', workspace_id='ws', version='v1', rights_holder='metadata',
+        content_types=('voice', 'person'), usage_scopes=('narration', 'avatar_lipsync'),
+        effective_from=now - timedelta(days=1), expires_at=None, evidence_reference='metadata', status='active')
+    alternate = replace(authorization, id='different-current-consent')
+    historical_revoked = replace(authorization, id='historical-consent', status='revoked')
+    for value in (authorization, alternate, historical_revoked, replace(historical_revoked, version='v2', status='active')):
+        repository._media_authorizations.save_authorization(value)
+    old_voice = VoiceProfile('metadata-voice', 'ws', 'v1', 'zh', '', 'fixed old text',
+        authorization=authorization, owner_user_id='member', visibility='private')
+    current_voice = replace(old_voice, version='v2', reference_text='different current text',
+        authorization=alternate, use_state='excluded', visibility='shared')
+    old_person = PersonProfile('metadata-person', 'ws', 'fixed old person', 'v1', '', (), (),
+        authorization=authorization, owner_user_id='member', visibility='private')
+    current_person = replace(old_person, version='v2', display_name='different current person', visibility='shared')
+    protected_voice = replace(old_voice, id='historically-blocked', use_state='excluded', authorization=historical_revoked)
+    with repository._connect() as conn:
+        for value in (old_voice, current_voice, protected_voice,
+                      replace(protected_voice, version='v2', use_state='available', authorization=alternate)):
+            repository.profile_records._save_versioned_voice_profile(conn, value)
+        for value in (old_person, current_person):
+            repository.profile_records._save_person_profile(conn, value)
+        conn.execute('INSERT INTO episode_voice_selections VALUES(?,?,?,?,?)',
+            ('ws', 'metadata-episode', old_voice.id, 'v1', now.isoformat()))
+    entry = PronunciationEntry('metadata-pronunciation', 'ws', 'term', 'zh', 'fixed pronunciation', 'workspace', None, 'v1')
+    repository.profile_records.save_pronunciation_entry(entry)
+    inputs = repository.profile_inputs.resolve_narration_inputs(workspace_id='ws', episode_id='metadata-episode',
+        voice_profile_id=old_voice.id, voice_version='v1')
+    assert isinstance(inputs, VersionedNarrationInputs)
+    assert inputs.voice.version == 'v1' and inputs.voice.reference_text == 'fixed old text'
+    assert inputs.voice.use_state == 'excluded' and inputs.voice.visibility == 'shared'
+    assert inputs.voice.authorization.id == authorization.id and inputs.pronunciation_entries == (entry,)
+    protected = repository.profile_inputs.resolve_narration_inputs(workspace_id='ws', episode_id='metadata-episode',
+        voice_profile_id=protected_voice.id, voice_version='v1')
+    assert protected.voice.use_state == 'excluded' and protected.voice.authorization == historical_revoked
+    assert repository.profile_inputs.selected_episode_versioned_voice_identity('ws', 'metadata-episode') == (old_voice.id, 'v1')
+    with pytest.raises(MediaAuthorityError) as episode_refusal:
+        repository.profile_inputs.resolve_episode_narration_inputs('ws', 'metadata-episode')
+    assert episode_refusal.value.reason == 'voice_authorization_profile_excluded'
+    reference_calls = []
+    def reference_forbidden(profile, **kwargs):
+        reference_calls.append(profile.id)
+        return forbidden()
+    monkeypatch.setattr(repository, 'profile_reference_input', reference_forbidden)
+    command = dict(workspace_id='ws', person_id=old_person.id, person_version='v1',
+        voice_profile_id=old_voice.id, voice_version='v1', audio_path='metadata-only.wav', audio_cache_key='metadata',
+        language='zh', motion='none', expression='none', authorization_id=authorization.id,
+        authorization_version='v1', model_id='metadata', viewer_user_id='other-member')
+    readonly = repository.profile_inputs.resolve_avatar_lipsync_request(**command, for_generation=False)
+    assert readonly.person.version == 'v1' and readonly.person.display_name == 'fixed old person'
+    assert readonly.voice.version == 'v1' and readonly.visual_path == '' and readonly.visual_reference_input is None
+    assert reference_calls == []
+    with pytest.raises(AssertionError, match='profile metadata forbids'):
+        repository.profile_inputs.resolve_avatar_lipsync_request(**command)
+    assert reference_calls == [old_voice.id]
+    with repository._connect() as conn:
+        repository.profile_records._save_person_profile(conn, replace(current_person, version='v3', visibility='private'))
+        repository.profile_records._save_versioned_voice_profile(conn, replace(current_voice, version='v3', visibility='private'))
+    with pytest.raises(PermissionError, match='已取消共享'):
+        repository.profile_inputs.resolve_avatar_lipsync_request(**command, for_generation=False)
+    assert reference_calls == [old_voice.id]
+    revoked = replace(authorization, version='v2', status='revoked')
+    repository._media_authorizations.save_authorization(revoked)
+    still_fixed = repository.profile_inputs.resolve_narration_inputs(workspace_id='ws', episode_id='metadata-episode',
+        voice_profile_id=old_voice.id, voice_version='v1')
+    assert still_fixed.voice.reference_text == 'fixed old text' and still_fixed.voice.authorization == revoked
+    assert still_fixed.voice.authorization.id != alternate.id

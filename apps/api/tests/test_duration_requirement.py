@@ -4,11 +4,27 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.creation.duration_requirement import DurationConflict, DurationRequirement, SectionWindow, measured_section_windows
+from app.creation.duration_requirement import DurationConflict, DurationRequirement, SectionTiming, SectionWindow, measured_section_windows
 from app.montage import MontagePlanner
-from app.production import CreationTaskScriptSection
+from app.creation.script_contracts import CreationTaskScriptSection
 from app.subtitle_schedule import narration_schedule
-from test_task_montage_duration_policy import task_inputs  # noqa: F401
+from test_task_montage_duration_policy import task_inputs as task_inputs  # noqa: F401
+
+
+def test_goal_duration_is_independent_of_execution_window():
+    from pydantic import ValidationError
+    from app.schemas import (CreationPlanDefaultsRequest, CreationRequestDeliveryRequirements,
+                             ScriptLibraryReuseRequest)
+
+    requests = [(CreationPlanDefaultsRequest, {"goal": "A long editing project"}),
+                (CreationRequestDeliveryRequirements, {}),
+                (ScriptLibraryReuseRequest, {"name": "Reuse", "requirements_confirmed": True})]
+    for schema, fields in requests:
+        for seconds in (1, 1800):
+            assert schema(**fields, duration_target_seconds=seconds).duration_target_seconds == seconds
+        for invalid in (0, -1, True, 1.5):
+            with pytest.raises(ValidationError):
+                schema(**fields, duration_target_seconds=invalid)
 
 
 @pytest.mark.parametrize('duration,result', [(30, 'met'), (Fraction(901, 30), 'met'),
@@ -29,15 +45,88 @@ def test_real_segment_overflow_replans_unadopted_budget_and_keeps_adoption_expli
     sections = [SimpleNamespace(id=str(i), content='正文一二三四五') for i in range(3)]
     real = {'0': 11.2, '1': 9.76, '2': 8.96}
     old = SectionWindow('0', 0, 12)
-    windows = measured_section_windows(DurationRequirement(30), sections, real, adopted=[old])
+    timings = [SectionTiming.from_text(s.id, s.content, real[s.id]) for s in sections]
+    windows = measured_section_windows(DurationRequirement(30), timings, adopted=[old])
     assert windows[-1].end_seconds == 30
     assert all(window.duration_seconds + 1e-9 >= real[window.section_id] for window in windows)
     assert windows[0] != old
     assert old.end_seconds == 12
-    stable = measured_section_windows(DurationRequirement(30), sections, real, adopted=[windows[0]])
+    stable = measured_section_windows(DurationRequirement(30), timings, adopted=[windows[0]])
     assert stable[0] == windows[0]
     with pytest.raises(DurationConflict, match='真实配音'):
-        measured_section_windows(DurationRequirement(30), sections, {'0': 31})
+        measured_section_windows(DurationRequirement(30),
+            [SectionTiming.from_text(s.id, s.content, 31 if s.id == '0' else 0) for s in sections])
+
+
+@pytest.mark.parametrize('adopted,ends', [
+    ([], [8.6, 22.366666666666667, 31.0]),
+    ([SectionWindow('0', 0, 5)], [5, 21.0, 31.0]),
+])
+def test_scalar_timing_keeps_original_mixed_language_frame_allocation(adopted, ends):
+    # Recorded from the original text-based allocator, including its last-frame
+    # remainder and adopted-window behavior; the new input is single-pass.
+    texts = ['中文开场', 'one two three four', '尾部事实']
+    measured = [2.4, 4.5, 6.1]
+    timings = (SectionTiming.from_text(str(i), text, measured[i]) for i, text in enumerate(texts))
+    windows = measured_section_windows(DurationRequirement(31), timings, adopted=adopted)
+    assert windows == [SectionWindow(str(i), 0 if i == 0 else ends[i-1], end)
+                       for i, end in enumerate(ends)]
+
+
+def test_delivery_window_override_changes_only_target_clock(task_inputs):
+    from app.creation.montage_stage_use_case import delivery_windows_for_task
+    texts = ['中文开场', 'one two three four', '尾部事实']
+    script = replace(task_inputs['script'], sections=[
+        CreationTaskScriptSection(str(i), str(i), text, '', []) for i, text in enumerate(texts)])
+    task = SimpleNamespace(workspace_id=script.workspace_id, id=script.task_id, plan_id='plan')
+    previous = {'0': SectionWindow('0', 0, 5), '1': SectionWindow('1', 5, 21)}
+    repository = SimpleNamespace(
+        plan_records=SimpleNamespace(get_creation_plan=lambda *_: SimpleNamespace(duration_target_seconds=31)),
+        section_inputs=SimpleNamespace(stage_segment_state=lambda _ws, _task, section: {
+            'montage': {'delivery_window': vars(previous[section])}} if section in previous else None))
+    segments = [SimpleNamespace(source_section_id=str(i), duration_seconds=seconds, status='ready')
+                for i, seconds in enumerate([2.4, 4.5, 6.1])]
+    segments.append(SimpleNamespace(source_section_id='2', duration_seconds=50, status='failed'))
+    requirement, windows = delivery_windows_for_task(repository, task, script, segments,
+        exclude_section='1', measured_override={'1': 8.1},
+        text_override=('1', 'replacement words with a longer pause'))
+    assert requirement == DurationRequirement(31)
+    assert windows == [SectionWindow('0', 0, 5), SectionWindow('1', 5, 23.333333333333332),
+                       SectionWindow('2', 23.333333333333332, 31)]
+    assert [section.content for section in script.sections] == texts
+    assert previous['1'] == SectionWindow('1', 5, 21)
+
+
+@pytest.mark.parametrize('section_index', [0, 1])
+def test_explicit_section_planner_matches_original_local_plan(task_inputs, section_index, monkeypatch):
+    from app.creation.execution_input import ExecutionScriptHeader
+    from app.montage import creation_task_montage_plan_to_payload
+    from uuid import UUID
+    monkeypatch.setattr('app.montage.uuid4', lambda: UUID(int=1))
+    script = task_inputs['script']
+    section = script.sections[section_index]
+    header = ExecutionScriptHeader(script.id, script.task_id, script.title, script.selection_status,
+        script.updated_at, len(script.sections), script.workspace_id, script.language)
+    window = SectionWindow(section.id, 0, 5)
+    planner = MontagePlanner()
+    common = {key: task_inputs[key] for key in ('workspace_id', 'task_id', 'profile', 'assets',
+        'media_reference_for_asset', 'narration_audio_path')}
+    expected = planner.build_for_creation_task(**common, script=replace(script, sections=[section]),
+        duration_target_seconds=5, narration_duration_seconds=2.4,
+        narration_segment_ids_by_section={section.id: 'original-audio'},
+        narration_segment_durations_by_section={section.id: 2.4}, delivery_windows=[window])
+    actual = planner.build_for_creation_section(**common, script_header=header, section=section,
+        duration_target_seconds=5, narration_duration_seconds=2.4,
+        narration_segment_id='original-audio', delivery_window=window)
+    # Candidate IDs/timestamps are assigned by section_plan; all planning facts,
+    # including cue/clip keys, clocks and confirmation reasons, stay identical.
+    actual = replace(actual, id=expected.id, created_at=expected.created_at, updated_at=expected.updated_at)
+    assert creation_task_montage_plan_to_payload(actual) == creation_task_montage_plan_to_payload(expected)
+    assert header.sections_total_count == 2 and not hasattr(header, 'sections')
+    with pytest.raises(ValueError, match='不属于'):
+        planner.build_for_creation_section(**common, script_header=replace(header, task_id='other-task'),
+            section=section, duration_target_seconds=5, narration_duration_seconds=2.4,
+            narration_segment_id='original-audio', delivery_window=window)
 
 
 @pytest.mark.parametrize('source_limited', [False, True])
@@ -48,7 +137,8 @@ def test_visual_delivery_30_keeps_all_real_voice_and_caption_durations(task_inpu
     sections = [CreationTaskScriptSection(str(i), str(i), text, '', []) for i, text in enumerate(texts)]
     script = replace(task_inputs['script'], sections=sections, language='zh-CN')
     measured = dict(zip([s.id for s in sections], durations))
-    windows = measured_section_windows(DurationRequirement(30), sections, measured)
+    windows = measured_section_windows(DurationRequirement(30),
+        (SectionTiming.from_text(s.id, s.content, measured[s.id]) for s in sections))
     assets = task_inputs['assets']
     if source_limited:
         asset = assets[0]
@@ -113,9 +203,8 @@ def test_replanned_english_caption_clock_keeps_real_segment_boundaries(task_inpu
                     for clip in plan.clips if clip.cue_id in ids])
             states[window.section_id] = {'narration_reference': segment.audio_reference,
                 'montage': montage.creation_task_montage_plan_to_payload(local)}
-        repository = SimpleNamespace(effective_creation_script=lambda *args: replace(task_inputs['script'], sections=sections),
-            list_narration_segments=lambda *args: audio, get_creation_plan=lambda *args: SimpleNamespace(duration_target_seconds=30),
-            stage_segment_state=lambda ws, task, section: states[section])
+        repository = SimpleNamespace(section_inputs=SimpleNamespace(effective_creation_script=lambda *args: replace(task_inputs['script'], sections=sections), stage_segment_state=lambda ws, task, section: states[section]),
+            narration_records=SimpleNamespace(list_narration_segments=lambda *args: audio), plan_records=SimpleNamespace(get_creation_plan=lambda *args: SimpleNamespace(duration_target_seconds=30)))
         task = SimpleNamespace(workspace_id='workspace', id='task', plan_id='plan')
         plan = MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=repository), task, plan)
     schedule = narration_schedule(plan.cues, plan.duration_seconds)
