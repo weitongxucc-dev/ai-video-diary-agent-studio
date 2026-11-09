@@ -112,7 +112,8 @@ def backend_identity(name, budget, *, settings, model_catalog=None):
                 if path is None:
                     return None
                 facts[tool] = _hash_file(path)
-            facts["resource_policy"] = _hash_file(audio_delivery_policy.__file__)
+            facts["resource_policy"] = _hash_file(
+                sys.executable if getattr(sys, "frozen", False) else audio_delivery_policy.__file__)
         elif name == "packet_copy":
             from app import montage, packet_copy_policy
             for tool in ("ffmpeg", "ffprobe"):
@@ -121,8 +122,11 @@ def backend_identity(name, budget, *, settings, model_catalog=None):
                     return None
                 facts[tool] = _hash_file(path)
             facts["fragment_contract"] = montage.PICTURE_FRAGMENT_CONTRACT
-            facts["implementation"] = _hash_file(montage.__file__)
-            facts["resource_policy"] = _hash_file(packet_copy_policy.__file__)
+            # Frozen modules live inside the executable, without loose .py files.
+            facts["implementation"] = _hash_file(
+                sys.executable if getattr(sys, "frozen", False) else montage.__file__)
+            facts["resource_policy"] = _hash_file(
+                sys.executable if getattr(sys, "frozen", False) else packet_copy_policy.__file__)
         elif name == "quality":
             from app import quality_worker, quality_checks, quality_worker_runtime
             for tool in ("ffmpeg", "ffprobe"):
