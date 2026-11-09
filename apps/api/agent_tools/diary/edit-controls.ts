@@ -12,6 +12,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
     can_undo: boolean; can_redo: boolean; proposals: ControlProposal[] };
   let editControls: ControlContext | null = null;
   const historicalOperations = new Set<string>();
+  const historyControls = new Set<string>();
   let historyRead = false;
   const restorePath = (id: string) => `/api/creation-tasks/${encodeURIComponent(taskId!)}/timeline/restore-requests/${encodeURIComponent(id)}`;
   const restoreResult = (action: 'undo' | 'redo' | 'query', requestId: string, receipt: any, error?: unknown) => {
@@ -34,10 +35,14 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
       if (params.before_sequence !== undefined) query.set('before_sequence', String(params.before_sequence));
       const details = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/versions?${query}`);
       if (details.task_id !== taskId || !Array.isArray(details.items)) throw new Error('历史版本不属于当前任务');
-      for (const item of details.items) if (typeof item.operation_id === 'string') historicalOperations.add(item.operation_id);
+      for (const item of details.items) if (typeof item.operation_id === 'string') {
+        if (['UndoTimelineVersion', 'RedoTimelineVersion'].includes(item.operation_type)) historyControls.add(item.operation_id);
+        else historicalOperations.add(item.operation_id);
+      }
       historyRead = true;
       markTaskRead();
-      return {content: [{type: 'text', text: JSON.stringify(details)}], details};
+      return {content: [{type: 'text', text: JSON.stringify({...details,
+        instruction: 'UndoTimelineVersion和RedoTimelineVersion是历史控制记录，不能作为target_operation_id。撤销最近修改请省略target_operation_id；指定较早修改只选择原编辑操作。'})}], details};
     }});
   pi.registerTool({name: 'read_timeline_restore_request', label: '查询原撤销重做请求',
     description: '仅按原UUID查询撤销或重做实际结果，不重发；404不能证明未提交，历史版本存在不代表当前恢复成功。execution_readiness只记录该次保存时的授权检查；null无记录，not_ready不撤销保存，authorization_ready不表示设备准入或产物完成。',
@@ -165,6 +170,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
       execute: async (callId: string, params: {target_operation_id?: string} = {}) => {
         const body = controlWriteContext();
         if (params.target_operation_id) {
+          if (historyControls.has(params.target_operation_id)) throw new Error('撤销或重做记录不是原编辑；撤销最近修改请省略target_operation_id，指定较早修改请选原编辑操作。本次未提交。');
           if (!historicalOperations.has(params.target_operation_id)) throw new Error('请从本次读取的真实修改历史选择原操作');
         } else if (!editControls && !historyRead) throw new Error('请先读取修改历史或当前编辑控制范围');
         else if (editControls && !(action === 'undo' ? editControls.can_undo : editControls.can_redo))

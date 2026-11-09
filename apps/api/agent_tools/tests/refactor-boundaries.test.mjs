@@ -160,6 +160,38 @@ test('targeted restore uses the original operation and UUID after an unknown wri
   assert.equal(calls.at(-1).args.request_id,originalRequest);
 });
 
+test('restore control records are rejected before consuming the write slot', async () => {
+  const tools = new Map(), writes = [];
+  const runtime = createDiaryTools({AI_VIDEO_DIARY_AGENT_TASK_ID:'task', AI_VIDEO_DIARY_AGENT_TURN_ID:'turn',
+    AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION:'撤销上一步修改',
+    AI_VIDEO_DIARY_AGENT_TASK_VERSION:JSON.stringify({timeline_version_id:'v3',timeline_sequence:3})},undefined,
+    async(operation,args)=>{
+      if (operation==='read_task_workspace') return {ok:true,value:{task:{id:'task',current_timeline_version_id:'v3',timeline_sequence:3}}};
+      if (operation==='read_timeline_history') return {ok:true,value:{task_id:'task',items:[
+        {operation_id:'redo-record',operation_type:'RedoTimelineVersion'},
+        {operation_id:'undo-record',operation_type:'UndoTimelineVersion'},
+        {operation_id:'lock-edit',operation_type:'SetClipLock'}]}};
+      if (operation==='restore_timeline') {
+        writes.push(args.payload);
+        return {ok:true,value:{restore_request:{task_id:'task',request_id:args.payload.request_id,status:'applied'}}};
+      }
+      throw new Error('unexpected operation '+operation);
+    });
+  await runtime.register({registerTool:tool=>tools.set(tool.name,tool)});
+  await tools.get('read_edit_history').execute('history',{});
+  for (const id of ['redo-record','undo-record']) {
+    const rejected = await tools.get('undo_last_edit').execute('wrong-'+id,{target_operation_id:id});
+    assert.equal(rejected.isError,true);
+    assert.match(JSON.stringify(rejected),/不是原编辑/);
+  }
+  assert.equal(writes.length,0);
+  const restored = await tools.get('undo_last_edit').execute('latest',{});
+  assert.equal(restored.isError,false,JSON.stringify(restored));
+  assert.equal(restored.details.receipt.status,'applied');
+  assert.equal(writes.length,1);
+  assert.equal(writes[0].target_operation_id,undefined);
+});
+
 for (const phase of ['write','read_not_submitted','read_rejected']) test(`restore ${phase} refusal does not confuse the original write effect`, async()=>{
   const tools=new Map();let writes=0,requestId;
   const notSubmitted={ok:false,failure:{status_code:phase==='read_rejected'?404:409,

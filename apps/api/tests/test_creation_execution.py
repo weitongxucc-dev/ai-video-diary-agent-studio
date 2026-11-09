@@ -1930,7 +1930,10 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
     scheduler.close()
 
 
-def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path, monkeypatch):
+def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path, monkeypatch, request):
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    # App shutdown closes its assistant owner permanently, not later test apps.
+    isolate_assistant_turn_control(monkeypatch, request)
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     scheduler, members, owner_member = _permit_scheduler(repo, tmp_path)
     digest = _qualify_start_voice(repo, task_id, owner_member.member_id)
@@ -2957,10 +2960,12 @@ def test_execution_projection_failure_reports_original_committed_job(tmp_path,mo
     assert result['failure']['query_tool']=='read_creation_execution'
 
 
-def test_background_safe_point_uses_host_binding_and_keeps_old_tool_origin(tmp_path):
+def test_background_safe_point_uses_host_binding_and_keeps_old_tool_origin(tmp_path, monkeypatch, request):
     import sys
     from uuid import uuid4
     from app import assistant_pi as pi
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    isolate_assistant_turn_control(monkeypatch, request)
     business,host,binding,claim,_,_=_seed_background_business(tmp_path)
     repo=business.conversations
     chat=repo.get(binding['conversation_id'],'local',binding['member_id'])

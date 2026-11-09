@@ -75,6 +75,14 @@ class TimelineOutputQualification:
     output_is_valid: bool
 
 
+@dataclass(frozen=True)
+class ClipLockRestoreScope:
+    clip_number: int
+    selected: bool
+    original_locked: bool
+    restored_locked: bool
+
+
 class TimelineRestoreUnavailable(EditConflict):
     def __init__(self, redo: bool):
         action_label = '重做' if redo else '撤销'
@@ -118,10 +126,12 @@ class TimelineRestoreUseCase:
         return MetadataEditResult(operation, plan, self.repository.task_records.get_creation_task(workspace_id, task_id), narration, receipt,
             receipt.get('execution_readiness'))
 
-    @staticmethod
-    def require_restore_instruction(message, *, redo):
+    @classmethod
+    def require_restore_instruction(cls, message, *, redo, lock_scope=None):
         if re.search('不要|不用|别|不(?:撤销|重做|取消|放弃)', message):
             raise EditConflict('当前要求没有授权这一动作，任务保持不变。')
+        if lock_scope is not None and cls.require_lock_restore_instruction(message, redo=redo, scope=lock_scope):
+            return
         prefix = '(?:请|麻烦|现在|先|帮我|请帮我|可以帮我|能不能帮我)?'
         scope = '(?:上一步(?:修改|编辑|操作)?|上一次(?:内容)?(?:修改|编辑|操作)?|刚才(?:撤销(?:的)?|的)?(?:那)?(?:一步|一次|修改|编辑|操作)?|最后一次(?:修改|编辑|操作)?)'
         verb = '重做|恢复' if redo else '撤销|回退'
@@ -129,6 +139,77 @@ class TimelineRestoreUseCase:
             raise EditConflict('不能用整项历史恢复代替局部修改，任务保持不变。')
         if not re.fullmatch(prefix + f'(?:整体)?(?:{verb})(?:一下)?{scope}?(?:一下|吧|吗|好吗)?[。！!？?]?', message.strip()):
             raise EditConflict('需要明确的撤销或重做原修改要求，任务保持不变。')
+
+    @staticmethod
+    def require_lock_restore_instruction(message, *, redo, scope):
+        """A lock undo may restate its exact result, never authorize a new edit."""
+        clauses = [part.strip() for part in re.split('[，,。；;！!\n]', message) if part.strip()]
+        if not clauses:
+            return False
+        verb = '重做|恢复' if redo else '撤销|回退'
+        past = '(?:刚才|上一步|上一次|最后一次)(?:撤销的|(?:这|那)?(?:次|一步|一次)?的?)'
+        action = re.fullmatch('(?:请|麻烦|现在|先|帮我|请帮我)?' + f'(?:{verb}){past}'
+            + '(锁定|解锁)(?:修改|操作|编辑)?', clauses[0])
+        if action is None:
+            return False
+        if (action[1] == '锁定') != scope.original_locked:
+            raise EditConflict('指令描述的锁定操作与指定原修改不一致')
+        for clause in clauses[1:]:
+            result = re.fullmatch(r'(?:恢复|回到)(?:第\s*([1-9]\d*)\s*个镜头|(当前|选中)的?镜头)'
+                + '(?:为|到)?(未锁定|已锁定|锁定|解锁)的?状态', clause)
+            if result is not None:
+                if (result[1] is not None and int(result[1]) != scope.clip_number
+                        or result[2] is not None and not scope.selected):
+                    raise EditConflict('指令中的镜头不属于指定原锁定修改')
+                if (result[3] in {'已锁定', '锁定'}) != scope.restored_locked:
+                    raise EditConflict('指令要求的锁定状态不是本次原修改的恢复结果')
+            elif not (re.fullmatch('(?:保留|保持)(?:原画面(?:和|与|及)原声|原画面|原声)(?:不变)?', clause)
+                    or re.fullmatch('(?:不|无需)(?:重新)?(?:制作|生成|渲染|输出)', clause)
+                    or re.fullmatch('(?:然后|并)?(?:结束|完成)本轮(?:对话)?', clause)):
+                raise EditConflict('锁定恢复只执行原修改的逆向结果，其他修改需要独立指令')
+        return True
+
+    def lock_restore_scope(self, task, operation_id, version_id, sequence, *, redo, context):
+        if operation_id is None or version_id is None or sequence is None:
+            return None
+        ws = task.workspace_id
+        original = self.repository.edit_records.get_edit_operation(ws, operation_id)
+        if original.operation_type != 'SetClipLock':
+            return None
+        seen = self.repository.timeline_records.get_timeline_version(ws, version_id)
+        if (original.task_id != task.id or seen.task_id != task.id or seen.sequence != sequence
+                or not self.repository.timeline_records.timeline_contains_version(ws, task.id, seen.id, original.result_version_id)):
+            raise EditConflict('锁定恢复所见版本不包含指定原修改')
+        before = self.repository.timeline_records.get_timeline_version(ws, original.base_version_id)
+        after = self.repository.timeline_records.get_timeline_version(ws, original.result_version_id)
+        old, changed = before.snapshot['montage'], after.snapshot['montage']
+        # The relaxed wording belongs to an actual single-field local restore,
+        # not merely an operation labelled SetClipLock in persisted history.
+        derived = {'id', 'created_at', 'updated_at', 'status', 'message', 'output_path', 'subtitle_path',
+            'low_confidence_clip_count', 'clips'}
+        if any(old.get(key) != changed.get(key) for key in (old.keys() | changed.keys()) - derived):
+            return None
+        if [clip['id'] for clip in old['clips']] != [clip['id'] for clip in changed['clips']]:
+            return None
+        affected = []
+        for left, right in zip(old['clips'], changed['clips']):
+            if left == right:
+                continue
+            if ({key: value for key, value in left.items() if key != 'locked'} !=
+                    {key: value for key, value in right.items() if key != 'locked'}):
+                return None
+            affected.append((left, right))
+        if len(affected) != 1 or affected[0][0]['id'] != original.payload['clip_id']:
+            return None
+        left, right = affected[0]
+        if right['locked'] != original.payload['locked']:
+            return None
+        order = [clip['id'] for clip in seen.snapshot['montage']['clips']]
+        if left['id'] not in order:
+            raise EditConflict('指定原锁定镜头已不在所见版本中')
+        return ClipLockRestoreScope(order.index(left['id']) + 1,
+            context.get('selected_object_refs', []) == [f'clip:{left["id"]}'], right['locked'],
+            right['locked'] if redo else left['locked'])
 
     def execute(self, command, *, actor, request_id, target_operation_id=None,
                 expected_timeline_version_id=None, expected_timeline_sequence=None, write_guard=None, source=None):
@@ -152,7 +233,10 @@ class TimelineRestoreUseCase:
             if source_input.get('input_id') != source['input_id']:
                 raise PermissionError('恢复动作不属于原已消费输入')
             CreationIntentUseCase.reject_discussion_only_input(source_input['raw_command'])
-            self.require_restore_instruction(source_input['raw_command'], redo=command.redo)
+            lock_scope = self.lock_restore_scope(task, target_operation_id,
+                expected_timeline_version_id, expected_timeline_sequence, redo=command.redo,
+                context=source_input['context'])
+            self.require_restore_instruction(source_input['raw_command'], redo=command.redo, lock_scope=lock_scope)
         def guarded(connection):
             self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection), actor)
             if source_input is not None:

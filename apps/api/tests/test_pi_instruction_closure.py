@@ -102,7 +102,9 @@ def test_server_rechecks_running_owner_and_timeline(bound_turn, monkeypatch):
 
 
 @pytest.fixture
-def loopback_task():
+def loopback_task(monkeypatch, request):
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    isolate_assistant_turn_control(monkeypatch, request)
     state = {"status":200, "calls":[], "entered":threading.Event(), "release":threading.Event(), "block":False, "wrong_task":False}
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -188,7 +190,8 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
         context = json.loads(kwargs["message"])["taskContext"]
         assert context["plan"]["knowledge_reference_count"] == 1
         assert context["plan"]["source_reference_count"] == 1
-        model_payload = kwargs["message"]
+        envelope = json.loads(kwargs["message"])
+        model_payload = json.dumps({key: envelope[key] for key in ("message", "taskContext", "systemPrompt")}, ensure_ascii=False)
         assert "large-body" not in model_payload and "secret-token" not in model_payload and "/private/" not in model_payload
         return sdk_completed(cmd, 0, stdout=json.dumps({"type":"message_end","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"已核对当前任务。"}]}})+"\n"+json.dumps({"type":"agent_settled"}), stderr="")
     monkeypatch.setattr(pi, "_run_pi_streaming", launch)

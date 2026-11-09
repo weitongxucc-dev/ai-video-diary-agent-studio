@@ -994,6 +994,8 @@ def _granted_domain_preview_adapter(state, monkeypatch, capture=None, *, facts_o
                 return HostResourceDecision(True, dict(declared), {
                     'synthetic_ambient': {'source': 'explicit-media-clock-fixture', 'passed': True}})
             resources._sample = media_ambient
+        from test_creation_execution import _isolate_linux_cpu_policy
+        _isolate_linux_cpu_policy(monkeypatch, resources)
     runtime=build_device_runtime(database_path=state.production.database_path,
         device_lock_path=state.production.database_path.with_name('domain-preview.lock'),device_access=access,
         registrations={'creation_job':OwnerRegistration(CreationJobOwnerVerifier(state.production,
