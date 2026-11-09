@@ -197,7 +197,7 @@ class AudioDeliveryAssembly:
         with self.repository._connect() if connection is None else nullcontext(connection) as conn:
             receipt = conn.execute("SELECT r.state,r.resources_json FROM device_work_requests r WHERE r.workspace_id=? "
                 "AND r.id=? AND r.owner_id=? AND r.owner_type='creation_job' AND r.input_digest=? "
-                "AND r.last_grant_generation=? AND (r.state='done' OR (r.state='granted' AND EXISTS "
+                "AND r.last_grant_generation=? AND (r.state='done' OR (r.state IN ('granted','failed') AND EXISTS "
                 "(SELECT 1 FROM task_events e WHERE e.workspace_id=r.workspace_id AND e.job_id=r.owner_id "
                 "AND e.event_type='task_execution_unit_settled' AND json_extract(e.payload_json,'$.usage_id')=r.id||':'||r.last_grant_generation)))",
                 (job.workspace_id, facts['producer_request_id'], job.id, job.input_digest, facts['producer_generation'])).fetchone()

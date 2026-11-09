@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 from app.artifact_store import ArtifactStore
-from app.creation.contracts import ArtifactRecord, TransformRun
+from app.creation.contracts import ArtifactRecord, TaskEvent, TransformRun
 from app.creation.packet_copy_assembly import PacketCopyAssembly
 from app.creation_execution import CpuRenderGrantContext, CpuRenderLimits, CreationJobOwnerVerifier, CreationJobUnitExecutor
 from app.device_scheduler import DeviceScheduler, SchedulePolicy, SubmissionIntent
@@ -202,6 +202,44 @@ def test_packet_publication_unknown_keeps_original_reservation_and_receipt(tmp_p
     assert event.payload['consumption_known'] is False and event.payload['output_bytes'] is None
     with pytest.raises(KeyError):
         case.repo.execution_records.get_artifact_record('local', plan['units'][0]['artifact_id'])
+    case.scheduler.close()
+
+
+def test_successor_preparation_failure_keeps_completed_packet_and_settled_usage(tmp_path, monkeypatch):
+    case, service, budget, store, plan, original_next = _packet_case(tmp_path, monkeypatch)
+    intent = original_next(case.repo, case.scheduler, case.job)
+    case.scheduler.submit(intent, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    original = service.next_unit
+    def refuse_successor(job, **kwargs):
+        if kwargs.get('prepare'):
+            case.repo.execution_records.append_task_event(TaskEvent('partial-successor', 'local',
+                case.task_id, case.job.id, 'partial_successor_preparation', {}), connection=kwargs['connection'])
+            raise ValueError('next audio clock is outside preparation')
+        return original(job, **kwargs)
+    monkeypatch.setattr(service, 'next_unit', refuse_successor)
+    case.executor.execute(grant, case.scheduler)
+    assert case.scheduler._get(grant.request_id).state == 'done'
+    job = case.repo.job_records.get_job_run('local', case.job.id)
+    assert job.status == 'failed' and job.failure_reason == 'next audio clock is outside preparation'
+    with pytest.raises(KeyError):
+        case.repo.execution_records.get_task_event('local', 'partial-successor')
+    artifact = plan['units'][0]['artifact_id']
+    record, path, _facts = service._parent(job, artifact, plan['recipe_digest'])
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == record.sha256
+    usage = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
+    assert usage['unknown_unit_count'] == 0 and usage['reserved_bytes'] == 0
+    # Older builds marked the already-published producer failed when its successor
+    # preparation raised. Only its successful transform plus exact settlement may
+    # recover that immutable output; failed state alone never proves completion.
+    with case.repo._connect() as conn:
+        conn.execute("UPDATE device_work_requests SET state='failed' WHERE id=?", (grant.request_id,))
+    assert service._parent(job, artifact, plan['recipe_digest'])[0] == record
+    with case.repo._connect() as conn:
+        conn.execute("DELETE FROM task_events WHERE job_id=? AND event_type='task_execution_unit_settled' "
+            "AND json_extract(payload_json,'$.usage_id')=?", (job.id, f'{grant.request_id}:{grant.generation}'))
+    with pytest.raises(ValueError, match='完成回执'):
+        service._parent(job, artifact, plan['recipe_digest'])
     case.scheduler.close()
 
 

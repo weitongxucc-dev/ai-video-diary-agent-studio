@@ -65,7 +65,7 @@ class PacketCopyAssembly:
                 (job.workspace_id, job.id, f"{facts.get('producer_request_id')}:{facts.get('producer_generation')}")).fetchone()
         if (row is None or row['owner_type'] != 'creation_job' or row['owner_id'] != job.id
                 or row['input_digest'] != job.input_digest
-                or not (row['state'] == 'done' or row['state'] == 'granted' and settled is not None)
+                or not (row['state'] == 'done' or row['state'] in {'granted', 'failed'} and settled is not None)
                 or row['last_grant_generation'] != facts.get('producer_generation')):
             raise ValueError('画面父产物没有原请求、原generation的完成回执')
         resources = json.loads(row['resources_json'])

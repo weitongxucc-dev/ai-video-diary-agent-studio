@@ -3409,6 +3409,7 @@ class CreationJobUnitExecutor:
             else:
                 intent = next_creation_intent(self.repository, scheduler, latest, connection=conn)
             return (intent, owner.verify_submission(intent, actor, connection=conn)) if intent is not None else None
+        prepared_next = [None]
         try:
             context.check()
             if adoption:
@@ -3441,9 +3442,19 @@ class CreationJobUnitExecutor:
                         picture_fragments=self.picture_fragments)
                     return self._checkpoint(conn, current, status='succeeded', output=f'{version.id}:{record.logical_ref}',
                         final_output_refs=version.snapshot['output_refs'])
+                # The published unit and its settled usage remain complete when
+                # preparing its successor fails. Roll back only successor facts.
+                conn.execute('SAVEPOINT media_successor')
+                try:
+                    prepared_next[0] = next_unit(conn, current)
+                except ValueError as error:
+                    conn.execute('ROLLBACK TO media_successor')
+                    return self._checkpoint(conn, current, status='failed', output=record.logical_ref, reason=str(error))
+                finally:
+                    conn.execute('RELEASE media_successor')
                 return self._checkpoint(conn, current, status='queued', output=record.logical_ref)
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
-                checkpoint_write=commit, next_unit_write=next_unit)
+                checkpoint_write=commit, next_unit_write=lambda conn, current: prepared_next[0])
             if (adoption or delivery and resources['kind'] == 'creation_final_mux') and self.picture_fragments is not None:
                 self._notify_render_completed(job)
         except Exception as exc:

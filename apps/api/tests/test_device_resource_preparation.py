@@ -246,22 +246,25 @@ def test_published_audio_budget_covers_measured_container_and_known_source_bytes
 
 
 @pytest.mark.parametrize('apply_master', [True, False])
-def test_prepared_audio_envelope_admits_the_requested_mix_with_its_container_allowance(tmp_path, monkeypatch, apply_master):
+@pytest.mark.parametrize('duration', [9.167, 42.827])
+def test_prepared_audio_envelope_admits_the_requested_mix_with_its_container_allowance(tmp_path, monkeypatch, apply_master, duration):
     from app.audio_timeline import AudioTimeline
     from app.task_audio import audio_mix_resources
     repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
-    duration = 9.167
     plan_id, _ = service.prepare(CpuPreparationShape(64, 64, 30, duration, 1, 1, 48000, 2),
         actor, request_id=str(uuid4()))
     plan, receipt = _synthetic_publication(service, plan_id)
     # A short measured WAV has a smaller header than the declared mix envelope.
     receipt['media']['audio']['bytes'] = round(48000 * 2 * 4 * plan['probe_seconds']) + 114
     result = service._publish(plan, receipt, plan['backends'])
-    resources = audio_mix_resources([], [AudioTimeline()], duration,
+    sample_count = round(duration * 30) * 1600
+    master = {'reference': 'prepared-master', 'uses': 1, 'size_bytes': sample_count * 4,
+        'duration_seconds': sample_count / 48000, 'sample_rate': 48000, 'channels': 2}
+    resources = audio_mix_resources([master], [AudioTimeline()], duration,
         normalize_voice_sources=False, budget=result.budget.cpu_audio,
-        apply_master=apply_master, output_sample_count=440000)
+        apply_master=apply_master, output_sample_count=sample_count)
     assert resources['max_output_bytes'] <= result.budget.cpu_audio.max_output_bytes
-    assert resources['output_sample_count'] == 440000
+    assert resources['output_sample_count'] == round(duration * 30) * 1600
     assert result.budget.cpu_audio.additional_disk_bytes >= resources['temporary_output_bytes']
 
 
