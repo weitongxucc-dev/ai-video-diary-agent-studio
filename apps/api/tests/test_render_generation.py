@@ -63,6 +63,9 @@ def test_generation_rollback_and_currentness_use_real_original_identity(render_c
     assert generation['input_timeline_version_id'] == head.id
     assert render_namespace('legacy-manifest', None) == 'legacy-manifest'
     assert render_namespace('legacy-manifest', generation) != 'legacy-manifest'
+    names = [render_namespace(prefix+'x'*180, generation) for prefix in ('timeline_delivery_', 'subtitle_delivery_')]
+    assert all(len(name) <= 120 for name in names)
+    assert render_namespace('same-prefix'*20+'a', generation) != render_namespace('same-prefix'*20+'b', generation)
     assert render_generation_fields(generation)['render_input_timeline_version_id'] == head.id
     advance_head(case, 'later-head')
     with pytest.raises(ValueError, match='范围已变化'):

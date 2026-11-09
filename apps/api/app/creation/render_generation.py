@@ -61,7 +61,12 @@ def read_render_generation(conn, job, execution_records, *, require_current_head
 
 
 def render_namespace(base_id, generation):
-    return base_id if generation is None else f'{base_id}_render_{generation["render_generation_id"]}'
+    if generation is None:
+        return base_id
+    # Timeline and subtitle identities cross the existing 120-character save
+    # and edit contracts. Hash the complete pair, retaining a readable prefix.
+    identity = hashlib.sha256(json.dumps([base_id, generation['render_generation_id']]).encode()).hexdigest()
+    return f'{base_id[:48]}_render_{identity}'
 
 
 def render_generation_fields(generation):
