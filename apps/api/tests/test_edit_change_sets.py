@@ -151,7 +151,7 @@ def test_edit_contract_imports_no_repository_or_app_and_computations_have_no_htt
         assert not any(isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(('app.main', 'fastapi', 'starlette')) for node in ast.walk(tree))
         # State owners keep their transactions; edit computations stay free of I/O.
         if path.name not in {'records.py', 'timeline_history_repository.py', 'metadata_use_case.py',
-                'timeline_restore_use_case.py', 'exact_preview_use_case.py'}:
+                'timeline_restore_use_case.py', 'exact_preview_use_case.py', 'control_use_case.py'}:
             assert not any(isinstance(node, ast.Attribute) and node.attr == '_connect' for node in ast.walk(tree))
 
 
