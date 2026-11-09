@@ -9,7 +9,7 @@ import stat
 import struct
 import wave
 from contextlib import contextmanager, ExitStack
-import fcntl
+from app.platform_files import lock_file
 from dataclasses import asdict, replace
 
 from app.device_scheduler import RecoveryBlocked
@@ -137,7 +137,7 @@ def prepare_narration_source(repository, task, plan, actor, *, binding=None, sel
     inputs, reference, qualified = narration_reference_facts(repository, task, plan)
     fd = os.open(reference.source_path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
-        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        lock_file(fd, shared=True)
         before = os.fstat(fd)
         if (not stat.S_ISREG(before.st_mode) or _source_stat(before) != (
                 reference.device, reference.inode, reference.size_bytes, reference.mtime_ns, reference.ctime_ns)):
@@ -429,7 +429,7 @@ def prepared_receipt(path, **arguments):
         for name in dict.fromkeys(paths):
             fd=os.open(name,os.O_RDONLY|os.O_NOFOLLOW)
             stack.callback(os.close,fd)
-            fcntl.flock(fd,fcntl.LOCK_SH|fcntl.LOCK_NB)
+            lock_file(fd, shared=True)
             opened.append((name,fd,metadata(os.fstat(fd))))
         receipt=read_receipt(path,**arguments)
         def verify():

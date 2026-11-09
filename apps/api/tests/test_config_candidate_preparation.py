@@ -127,11 +127,21 @@ def test_prepare_directory_then_publish_changes_process_state_only_at_publicatio
     prepared = prepare_process_temporary_directory(settings)
     assert prepared == root.resolve() and root.is_dir()
     assert dict(os.environ) == before_env and tempfile.tempdir == before_cache
-    monkeypatch.setenv("TMPDIR", os.environ.get("TMPDIR", ""))
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(key, os.environ.get(key, ""))
     monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
     assert publish_process_temporary_directory(prepared) == prepared
     assert os.environ["TMPDIR"] == str(prepared) and tempfile.tempdir == str(prepared)
     assert configure_process_temporary_directory(settings) == prepared
+    if os.name == "nt":
+        assert os.environ["TEMP"] == os.environ["TMP"] == str(prepared)
+    import subprocess
+    import sys
+
+    child_directory = subprocess.check_output(
+        [sys.executable, "-c", "import tempfile; print(tempfile.gettempdir())"], text=True,
+    ).strip()
+    assert Path(child_directory) == prepared
 
 
 def test_regular_file_tmp_refuses_during_preparation_before_any_process_publication(tmp_path):

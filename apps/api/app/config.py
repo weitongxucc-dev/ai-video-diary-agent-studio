@@ -69,6 +69,10 @@ def publish_process_temporary_directory(root: Path | None) -> Path:
     if root is None:
         return Path(tempfile.gettempdir())
     os.environ["TMPDIR"] = str(root)
+    if os.name == "nt":
+        # Windows tools commonly consult TEMP/TMP instead of TMPDIR.
+        os.environ["TEMP"] = str(root)
+        os.environ["TMP"] = str(root)
     tempfile.tempdir = str(root)
     return root
 

@@ -7,7 +7,7 @@ permission for one bounded local unit, never for an entire CreationTask.
 
 from __future__ import annotations
 
-import fcntl
+from app.platform_files import durable_replace, lock_file, unlock_file
 import hashlib
 import json
 import logging
@@ -766,7 +766,7 @@ class DeviceScheduler(DeviceRequestReadAccess):
         existed = self.lock_path.exists()
         fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_file(fd)
         except BlockingIOError:
             os.close(fd)
             return None, existed
@@ -774,7 +774,7 @@ class DeviceScheduler(DeviceRequestReadAccess):
 
     @staticmethod
     def _unlock(fd: int) -> None:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        unlock_file(fd)
         os.close(fd)
 
     def _read_ledger(self, existed: bool) -> dict[str, object]:
@@ -799,12 +799,7 @@ class DeviceScheduler(DeviceRequestReadAccess):
                 json.dump(data, output, sort_keys=True)
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary, self.ledger_path)
-            directory = os.open(self.ledger_path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            durable_replace(temporary, self.ledger_path)
         finally:
             temporary.unlink(missing_ok=True)
 

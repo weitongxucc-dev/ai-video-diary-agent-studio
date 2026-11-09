@@ -5,7 +5,7 @@ import base64
 import codecs
 from contextlib import contextmanager, ExitStack
 from dataclasses import asdict
-import fcntl
+from app.platform_files import lock_file, unlock_file
 import hashlib
 import json
 import os
@@ -124,13 +124,13 @@ class NativeTaskOperations:
     def lock(self,root):
         with (root/'control'/'files.lock').open('a+b') as handle:
             try:
-                fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                lock_file(handle.fileno())
             except BlockingIOError:
                 raise ValueError('该任务仍有原生命令或文件修改执行中，请查询原执行') from None
             try:
                 yield
             finally:
-                fcntl.flock(handle,fcntl.LOCK_UN)
+                unlock_file(handle.fileno())
 
     def dispatch(self,operation,arguments,*,actor,origin,write_guard,runtime=None,call_id=None,cancel_event=None,deadline_monotonic=None):
         from app.schemas import (NativeWorkingContextRequest,NativeFileRequest,NativeCommandRequest,
