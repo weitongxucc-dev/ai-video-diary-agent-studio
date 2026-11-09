@@ -32,6 +32,8 @@ export type DevicePreparationReceipt = {
   plan_id: string;
   state: string;
   wait_reason: string | null;
+  failure_reason?: string;
+  repair_action?: string;
 };
 
 export type DevicePreparationFinalization = DevicePreparationReceipt & {

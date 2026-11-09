@@ -136,6 +136,35 @@ def test_prepare_critical_pressure_does_not_start_work_or_publish_profile(tmp_pa
         assert connection.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 0
 
 
+def test_incomplete_resource_sample_records_an_actionable_failure_without_publishing(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import app.device_resource_preparation as module
+    from _media_preview_test_fixtures import ControlledResources, ControlledProcesses
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
+    plan_id, _ = service.prepare(CpuPreparationShape(64, 64, 30, 42.827, 1, 1, 48000, 2),
+        actor, request_id=str(uuid4()))
+    runtime = build_device_runtime(database_path=repository.database_path,
+        device_lock_path=tmp_path / 'permit.lock', device_access=access,
+        registrations={'device_preparation': service.registration()},
+        resources=ControlledResources(), processes=ControlledProcesses())
+    monkeypatch.setattr(module, 'run_granted_command', lambda *args, **kwargs: SimpleNamespace(
+        returncode=0, observed_resources=SimpleNamespace(rss_sample_complete=True,
+            threads_sample_complete=False, peak_rss_bytes=1024**2, peak_threads=4)))
+    request = runtime.scheduler.submit(service.intent(plan_id, actor), actor)
+    try:
+        assert runtime.run_once()
+        result = service.status(database_path=repository.database_path, request_id=request.id, actor=actor)
+        assert result['state'] == 'failed' and result['wait_reason'] == 'device_preparation_sampling_incomplete'
+        assert '完整' in result['failure_reason'] and '相同规格' in result['repair_action']
+        assert not service.profile_path.exists()
+        with repository._connect() as connection:
+            assert connection.execute('SELECT state FROM device_permit WHERE id=1').fetchone()[0] == 'free'
+        with pytest.raises(DeviceProfileUnavailable, match='完成回执'):
+            service.finalize(database_path=repository.database_path, request_id=request.id, actor=actor)
+    finally:
+        runtime.stop(0)
+
+
 def test_held_legacy_lock_or_uncertain_receipt_prevents_lock_root_change(tmp_path):
     import fcntl
     from app.device_paths import require_legacy_locks_released

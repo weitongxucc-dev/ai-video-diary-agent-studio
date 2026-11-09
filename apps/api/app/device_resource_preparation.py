@@ -35,6 +35,10 @@ OWNER_TYPE = 'device_preparation'
 POLICY_ID = 'interactive-cpu-preparation/v1'
 
 
+class PreparationSamplingIncomplete(ValueError):
+    """The original run did not establish a complete resource observation."""
+
+
 @dataclass(frozen=True)
 class CpuPreparationShape:
     width_px: int
@@ -370,7 +374,7 @@ class DeviceResourcePreparation:
             observed = result.observed_resources
             if (observed is None or not observed.rss_sample_complete or not observed.threads_sample_complete
                     or observed.peak_rss_bytes is None or observed.peak_threads is None):
-                raise ValueError('CPU preparation resource observation is incomplete')
+                raise PreparationSamplingIncomplete('CPU preparation resource observation is incomplete')
             observations.append(asdict(observed))
             return result
         try:
@@ -422,10 +426,12 @@ class DeviceResourcePreparation:
                 digest = _atomic_json(receipt_path, receipt)
             scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
                 checkpoint_write=lambda conn, current: 'device-resource-preparation:' + digest)
-        except (GrantedCommandError, ValueError, OSError, KeyError, StopIteration):
+        except (GrantedCommandError, ValueError, OSError, KeyError, StopIteration) as exc:
             # The broker preserves unknown child release by raising RecoveryBlocked,
             # which is deliberately not caught here. No profile is published on failure.
-            scheduler.fail_unit(grant, reason='device_preparation_failed', failure_write=lambda conn, current: None)
+            reason = ('device_preparation_sampling_incomplete' if isinstance(exc, PreparationSamplingIncomplete)
+                else 'device_preparation_failed')
+            scheduler.fail_unit(grant, reason=reason, failure_write=lambda conn, current: None)
 
     def _request(self, *, database_path, request_id, actor):
         with sqlite3.connect(Path(database_path).resolve().as_uri() + '?mode=ro', uri=True) as connection:
@@ -443,7 +449,11 @@ class DeviceResourcePreparation:
 
     def status(self, *, database_path, request_id, actor):
         row, plan = self._request(database_path=database_path, request_id=request_id, actor=actor)
-        return {'id': row['id'], 'plan_id': plan['id'], 'state': row['state'], 'wait_reason': row['wait_reason']}
+        result = {'id': row['id'], 'plan_id': plan['id'], 'state': row['state'], 'wait_reason': row['wait_reason']}
+        if row['state'] == 'failed' and row['wait_reason'] == 'device_preparation_sampling_incomplete':
+            result.update(failure_reason='本次准备未取得完整的资源采样，未启用新的资源档。',
+                repair_action='先核验并收束原准备，确认资源释放后重新准备相同规格。原失败记录保留。')
+        return result
 
     def status_for_plan(self, *, database_path, plan_id, actor):
         if not self._can_access(self._plan(plan_id), actor):

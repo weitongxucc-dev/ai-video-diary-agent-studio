@@ -241,6 +241,10 @@ export function DeviceResourcePreparationPanel() {
     <p className={styles.secondary}>音频使用 48 kHz 立体声。准备结果只记录所选规格的条件，不代表整条视频制作已通过。</p>
     {attempt && !closed ? <p role="status">{attempt.inputRejected ? '输入尚未被接受，未开始准备。请修改规格后再提交。' : receipt ? receiptLabel(receipt) : '尚未取得原请求的队列回执，请沿原输入继续核对。'}</p> : null}
     {closed ? <p role="status">{receipt?.state === 'done' ? '已取得核验启用回执，已有作品没有自动开始制作。' : '原准备已收束，资源档是否可用以当前读取结果为准。'}</p> : null}
+    {receipt?.state === 'failed' && receipt.failure_reason ? <div role="alert">
+      <p className={styles.error}>{receipt.failure_reason}</p>
+      {receipt.repair_action ? <p>{receipt.repair_action}</p> : null}
+    </div> : null}
     <div className={styles.actions}>
       {attempt?.workId && receipt && terminal.has(receipt.state) && !closed ? <button type="button" disabled={busy} onClick={() => void finalize()}>{busy ? '正在核验…' : receipt.state === 'done' ? '核验并启用' : '收束原准备'}</button>
         : <button type="button" disabled={busy || !status?.cpu_preparation_supported || !status.preparation_configured || storageError} onClick={() => void (attempt?.inputRejected ? correctInput() : submit())}>
@@ -252,7 +256,7 @@ export function DeviceResourcePreparationPanel() {
     {attempt ? <details className={styles.details}><summary>本次准备记录</summary>
       <p>规格：{attempt.payload.shape.width_px} × {attempt.payload.shape.height_px} · {attempt.payload.shape.frame_rate} 帧/秒 · {attempt.payload.shape.duration_seconds} 秒 · {attempt.payload.shape.clip_count} 个镜头 · {attempt.payload.shape.audio_input_count} 路声音</p>
       <p>请求：{attempt.payload.request_id}{attempt.workId ? `；队列：${attempt.workId}` : ''}</p>
-      {receipt?.wait_reason ? <p>设备等待原因：{receipt.wait_reason}</p> : null}
+      {receipt?.wait_reason && !receipt.failure_reason ? <p>设备等待原因：{receipt.wait_reason}</p> : null}
     </details> : null}
   </section>;
 }

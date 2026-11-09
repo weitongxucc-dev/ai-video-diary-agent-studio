@@ -130,10 +130,13 @@ it('does not submit when the original input cannot be persisted', async () => {
 
 it('keeps failed preparation bound until it is explicitly finalized without starting new work', async () => {
   localStorage.setItem(key(), JSON.stringify({ scope, payload, workId: queued.id }));
-  const failed = { ...queued, state: 'failed', wait_reason: 'worker_failed' };
+  const failed = { ...queued, state: 'failed', wait_reason: 'device_preparation_sampling_incomplete',
+    failure_reason: '资源采样不完整，未启用新的资源档。', repair_action: '收束原准备后重新准备相同规格。' };
   api.read.mockResolvedValue(failed);
   api.finalize.mockResolvedValue({ ...failed, profile_published: false, normal_work_started: false });
   render(<DeviceResourcePreparationPanel/>);
+  expect(await screen.findByText(failed.failure_reason)).toBeVisible();
+  expect(screen.getByText(failed.repair_action)).toBeVisible();
   fireEvent.click(await screen.findByRole('button', { name: '收束原准备' }));
   await screen.findByText(/原准备已收束/);
   expect(api.prepare).not.toHaveBeenCalled();
