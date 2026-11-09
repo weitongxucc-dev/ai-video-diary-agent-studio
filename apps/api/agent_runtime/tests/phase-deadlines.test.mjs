@@ -159,6 +159,37 @@ test("parallel and nested scopes retain the actual outer SDK call; HTTP budget s
   } finally {captured.restore();AbortSignal.timeout=timeout;}
 });
 
+test('Pi 1.5 validates plain JSON Schema before invoking a product tool', async () => {
+  const options = await fixture();
+  const executed = [], completed = [];
+  let current;
+  try {
+    current = await openCreationSession({...options, tools:['schema_fixture'], customTools:[{
+      name:'schema_fixture', label:'参数验证', description:'仅验证参数，不执行媒体或网络操作',
+      parameters:{type:'object', properties:{limit:{type:'number'}, files:{type:'array', items:{type:'string'}}},
+        required:['limit','files'], additionalProperties:false},
+      execute:async (_id, params) => {
+        executed.push(params);
+        return {content:[{type:'text',text:'validated'}], details:params};
+      },
+    }]});
+    current.session.subscribe(event => {if (event.type === 'tool_execution_end') completed.push(event);});
+    let calls = 0;
+    current.session.agent.streamFunction = () => {
+      const stream = new AssistantMessageEventStream();
+      const answer = message(calls++ === 0 ? [
+        {type:'toolCall',id:'coerced',name:'schema_fixture',arguments:{limit:'2',files:'frame.png'}},
+        {type:'toolCall',id:'invalid',name:'schema_fixture',arguments:{limit:'invalid',files:[]}},
+      ] : [{type:'text',text:'done'}]);
+      queueMicrotask(() => {stream.push({type:'done',reason:answer.stopReason,message:answer});stream.end(answer);});
+      return stream;
+    };
+    await current.session.prompt('验证合法参数转换与非法参数拒绝。');
+    assert.deepEqual(executed,[{limit:2,files:['frame.png']}]);
+    assert.deepEqual(completed.map(event => [event.toolCallId,event.isError]).sort(),[['coerced',false],['invalid',true]]);
+  } finally {current?.session.dispose();await rm(options.cwd,{recursive:true,force:true});}
+});
+
 test("actual Pi 1.5 emits model/tool turn boundaries and compaction_start/end", async () => {
   const options = await fixture();
   const captured = captureRequests();
