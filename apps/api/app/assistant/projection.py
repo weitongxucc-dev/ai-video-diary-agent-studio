@@ -25,8 +25,13 @@ def _sdk_parameter_failure(tool_name: str, result: dict) -> dict | None:
             continue
         reasons = []
         for field, problem in errors[:8]:
-            if problem == "must be number":
+            expected_type = re.fullmatch(r"expected (number|string|integer|boolean|object|array), got [a-z]+", problem)
+            if problem == "must be number" or expected_type and expected_type[1] == "number":
                 reasons.append(f"{field} 必须使用数字")
+            elif problem == "missing":
+                reasons.append(f"{field} 为必填参数")
+            elif expected_type:
+                reasons.append(f"{field}: expected {expected_type[1]}")
             elif problem in {"must be string", "must be integer", "must be boolean", "must be object", "must be array"}:
                 reasons.append(f"{field}: {problem}")
             elif re.fullmatch(r"must have required properties [A-Za-z_][A-Za-z0-9_]{0,63}(?:, [A-Za-z_][A-Za-z0-9_]{0,63}){0,7}", problem):
