@@ -67,13 +67,8 @@ def bilingual_tracks(seconds, *, enabled=True):
     return [chinese, english]
 
 
-def capture_render(monkeypatch, tmp_path, plan, tracks):
+def capture_render(monkeypatch, tmp_path, plan, tracks, granted_media):
     captured = {}
-    # Structural grant/profile seam, not host-resource or media acceptance.
-    scheduler = SimpleNamespace(resources=SimpleNamespace(
-        _grant_resources=lambda _: {"kind":"creation_render"},
-        budget=SimpleNamespace(cpu_render=SimpleNamespace(additional_disk_bytes=64 * 1024**2))))
-    grant = object()
     audio = tmp_path / "voice.wav"
     audio.write_bytes(b"structural fixture only, not playable audio")
     monkeypatch.setattr(montage, "sample_host_capacity", lambda **kwargs: HostCapacity(
@@ -104,22 +99,25 @@ def capture_render(monkeypatch, tmp_path, plan, tracks):
     monkeypatch.setattr(montage, "_run_granted_media_command", run)
     monkeypatch.setattr(montage, "_validate_rendered_media", lambda *args, **kwargs: None)
     monkeypatch.setattr(montage, "probe_preview_video", lambda *args, **kwargs: None)
-    montage.MontageRenderer(tmp_path / "unused").render(
-        plan, audio, job_staging_path=tmp_path / "job", subtitle_tracks=tracks,
-        scheduler=scheduler, grant=grant, threads=1, max_output_bytes=32 * 1024**2,
-        deadline_monotonic=time.monotonic() + 90,
-    )
+    monkeypatch.setattr(montage, "_probe_serial_picture_input", lambda *args, **kwargs: None)
+    paths = [audio, *(Path(clip.source_path) for clip in plan.clips)]
+    with granted_media(paths, kind='creation_render') as context:
+        scheduler, grant = context.scheduler, context.grant
+        montage.MontageRenderer(tmp_path / 'unused').render(
+            plan, audio, job_staging_path=tmp_path / 'job', subtitle_tracks=tracks,
+            scheduler=scheduler, grant=grant, threads=1, max_output_bytes=context.max_output_bytes,
+            deadline_monotonic=context.deadline_monotonic)
     return captured
 
 
 @pytest.mark.parametrize("seconds", [20, 120])
-def test_real_creation_plan_uses_one_subtitle_input_at_both_durations(tmp_path, monkeypatch, seconds):
+def test_real_creation_plan_uses_one_subtitle_input_at_both_durations(tmp_path, monkeypatch, seconds, granted_media):
     tracks = bilingual_tracks(seconds)
     schedule = subtitle_schedule(tracks, seconds)
     assert len(schedule) == seconds // 4
     assert schedule[0].text == "合成字幕 0\nSynthetic caption 0"
     assert schedule[0].subtitle_style["primary_color"] == "#ABCDEF"
-    captured = capture_render(monkeypatch, tmp_path, plan_for(tmp_path, seconds), tracks)
+    captured = capture_render(monkeypatch, tmp_path, plan_for(tmp_path, seconds), tracks, granted_media)
     command = captured["command"]
     inputs = [i for i, value in enumerate(command) if value == "-i"]
     assert len(inputs) == 3  # source, authorized narration, one timed subtitle stream
@@ -146,16 +144,16 @@ def test_real_creation_plan_uses_one_subtitle_input_at_both_durations(tmp_path, 
     assert "合成字幕 0" in captured["sidecar"] and "Synthetic caption 0" in captured["sidecar"]
 
 
-def test_initial_two_shot_caption_uses_five_second_narration_but_explicit_track_keeps_its_end(tmp_path, monkeypatch):
+def test_initial_two_shot_caption_uses_five_second_narration_but_explicit_track_keeps_its_end(tmp_path, monkeypatch, granted_media):
     plan = plan_for(tmp_path, 5)
     first = replace(plan.clips[0], source_end_seconds=2.5, timeline_end_seconds=2.5)
     second = replace(first, id="clip-2", timeline_start_seconds=2.5, timeline_end_seconds=5.)
     plan.clips = [first, second]
-    initial = capture_render(monkeypatch, tmp_path, plan, None)
+    initial = capture_render(monkeypatch, tmp_path, plan, None, granted_media)
     assert "00:00:00,000 --> 00:00:05,000\n合成字幕" in initial["sidecar"]
     # Current authored tracks have their own clock, even when it is shorter than narration.
     explicit = replace(bilingual_tracks(5)[0], cues=[SubtitleCue("manual", None, "用户设置", 0., 2.5)])
-    rendered = capture_render(monkeypatch, tmp_path, replace(plan, status="ready"), [explicit])
+    rendered = capture_render(monkeypatch, tmp_path, replace(plan, status="ready"), [explicit], granted_media)
     assert "00:00:00,000 --> 00:00:02,500\n用户设置" in rendered["sidecar"]
     assert "00:00:05,000" not in rendered["sidecar"]
     assert any(high == 0 and duration is not None for (path, duration), (low, high)
@@ -235,14 +233,14 @@ def test_single_demuxer_emits_bounded_cadence_packets_until_the_exact_frame_end(
     assert round(sum(duration for path, duration in manifest_entries(manifest)[:-1]) * 30) == frames
 
 
-def test_graphics_keep_their_clock_below_subtitles_and_hidden_tracks_have_no_subtitle_input(tmp_path, monkeypatch):
+def test_graphics_keep_their_clock_below_subtitles_and_hidden_tracks_have_no_subtitle_input(tmp_path, monkeypatch, granted_media):
     plan = plan_for(tmp_path, 20)
     plan.graphic_overlays = [{"kind": "arrow", "name": "图形", "x": .5, "y": .5,
                              "start_seconds": 2, "end_seconds": 6}]
     # Graphic drawing is unchanged; only its existing input/order/clock is under review.
     monkeypatch.setattr(montage, "write_graphic_overlay",
                         lambda value, path, size: Image.new("RGBA", size).save(path))
-    visible = capture_render(monkeypatch, tmp_path, plan, bilingual_tracks(20))
+    visible = capture_render(monkeypatch, tmp_path, plan, bilingual_tracks(20), granted_media)
     command = visible["command"]
     inputs = [command[i + 1] for i, value in enumerate(command) if value == "-i"]
     assert len(inputs) == 4 and inputs[2].endswith("graphic-0.png") and inputs[3].endswith(".ffconcat")
@@ -251,7 +249,7 @@ def test_graphics_keep_their_clock_below_subtitles_and_hidden_tracks_have_no_sub
     assert "gte(t,2.000000)*lt(t,6.000000)" in graph
     assert "[vsub0][subtitleclock]overlay" in graph
     hidden = capture_render(monkeypatch, tmp_path, replace(plan, status="ready"),
-                            bilingual_tracks(20, enabled=False))
+                            bilingual_tracks(20, enabled=False), granted_media)
     assert sum(value == "-i" for value in hidden["command"]) == 3
     assert not hidden["entries"]
     assert "subtitleclock" not in hidden["command"][hidden["command"].index("-filter_complex") + 1]
@@ -368,7 +366,7 @@ def test_creation_output_endpoint_matches_absolute_picture_frames_and_audio_padd
     assert end == Decimal(f"{sum(frame_counts) / 30:.10f}")
     assert command[command.index("-af") + 1].endswith(f"apad=whole_dur={end}")
     assert "-shortest" not in output_options
-    assert command[command.index("-crf") + 1] == "23"
+    assert command[command.index("-crf") + 1] == "20"
     assert command[command.index("-preset") + 1] == "veryfast"
 
 
@@ -403,7 +401,7 @@ def test_individual_short_stream_is_rejected_even_when_container_duration_is_lon
 
 
 @pytest.mark.parametrize("failure", [None,"disk","late","source"])
-def test_serial_picture_commands_keep_clock_and_one_grant_with_cumulative_temp_cap(tmp_path,monkeypatch,failure):
+def test_serial_picture_commands_keep_clock_and_one_grant_with_cumulative_temp_cap(tmp_path,monkeypatch,failure,granted_media):
     plan=plan_for(tmp_path,2)
     first=replace(plan.clips[0],source_end_seconds=1,timeline_end_seconds=1,
         visual_effects={"exposure":.5,"fade_out_seconds":.2},fade_envelope_duration_frames=60,fade_envelope_offset_frames=0)
@@ -414,55 +412,62 @@ def test_serial_picture_commands_keep_clock_and_one_grant_with_cumulative_temp_c
     root.mkdir()
     output=root/"preview.mp4"
     (root/"timeline-mix.wav").write_bytes(b"a"*20)
-    grant=object()
-    deadline=time.monotonic()+30
     calls=[]
-    scheduler=SimpleNamespace(assert_grant=lambda current:None if current is grant else pytest.fail("foreign grant"))
-    def run(current_scheduler,current_grant,command,**kwargs):
-        assert current_scheduler is scheduler and current_grant is grant
-        assert kwargs["deadline_monotonic"]==deadline
-        assert kwargs["max_output_file_bytes"]==1000
-        assert root/"timeline-mix.wav" in kwargs["output_paths"]
-        calls.append(command)
-        Path(command[-1]).write_bytes(b"x"*(1001 if failure=="disk" else 30))
-        return SimpleNamespace(returncode=0,stdout=b"",stderr=b"")
-    monkeypatch.setattr(montage,"_run_granted_media_command",run)
-    monkeypatch.setattr(montage,"probe_preview_video",lambda path,ctx,**kwargs:
-        calls.append({"duration":kwargs["expected_duration_seconds"],"deadline":ctx.deadline_monotonic,"silent":kwargs["silent"]}))
-    if failure=="late":
-        deadline=time.monotonic()-1
-    if failure=="source":
-        first.source_path=str(tmp_path/'missing.mp4')
-    renderer=montage.MontageRenderer(tmp_path)
-    if failure in {"disk","source"}:
-        with pytest.raises(ValueError):
-            renderer._render_serial_picture_input(plan,root/'pieces',output,1000,
-                scheduler=scheduler,grant=grant,cancel_event=None,threads=1,deadline_monotonic=deadline)
-        return
-    if failure=="late":
-        # Deadline refusal belongs to the unchanged granted runner, not a new per-clip timer.
-        from app.granted_subprocess import GrantedCommandTimeout
-        monkeypatch.setattr(montage,"_run_granted_media_command",lambda *args,**kwargs:
-            (_ for _ in ()).throw(GrantedCommandTimeout("same deadline expired")))
-        with pytest.raises(GrantedCommandTimeout):
-            renderer._render_serial_picture_input(plan,root/'pieces',output,1000,
-                scheduler=scheduler,grant=grant,cancel_event=None,threads=1,deadline_monotonic=deadline)
-        return
-    manifest=renderer._render_serial_picture_input(plan,root/'pieces',output,1000,scheduler=scheduler,
-        grant=grant,cancel_event=None,threads=1,deadline_monotonic=deadline)
-    assert manifest.read_text().splitlines()==["ffconcat version 1.0","file clip-000.mp4","file clip-001.mp4"]
-    commands=[item for item in calls if isinstance(item,list)]
-    assert len(commands)==2 and all(command.count('-i')==1 for command in commands)
-    for clip,command in zip(plan.clips,commands,strict=True):
-        assert command[command.index('-crf')+1]=='0' and '-an' in command
-        assert command[command.index('-vf')+1]==montage.clip_video_filters(clip,width=1080,height=1920)
-        assert command[command.index('-frames:v')+1]=='30'
-    assert len([item for item in calls if isinstance(item,dict) and item['duration']==1 and item['silent']])==2
-    captions=root/'subtitles.ffconcat'
-    captions.write_text('synthetic')
-    command=renderer.build_command(plan,root/'timeline-mix.wav',output,[],subtitle_intervals=[],
-        subtitle_sequence=(captions,(0,0)),picture_sequence=manifest)
-    assert command.count('-i')==3
-    assert 'concat=n=2' not in command[command.index('-filter_complex')+1]
-    assert '[2:v]setpts=PTS-STARTPTS' in command[command.index('-filter_complex')+1]
-    assert command[command.index('-map',command.index('-map')+1)+1]=='1:a:0'
+    with granted_media([root/'timeline-mix.wav', *(Path(clip.source_path) for clip in plan.clips)], kind='creation_render') as context:
+        scheduler, grant = context.scheduler, context.grant
+        deadline = context.deadline_monotonic
+        def run(current_scheduler,current_grant,command,**kwargs):
+            assert current_scheduler is scheduler and current_grant is grant
+            assert kwargs["deadline_monotonic"]==deadline
+            if command[0] == 'ffprobe':
+                calls.append(command)
+                return SimpleNamespace(returncode=0, stdout=json.dumps({'format': {'format_name': 'nut'}, 'streams': [{
+                    'codec_type': 'video', 'codec_name': 'ffv1', 'pix_fmt': 'yuv420p', 'width': 1080,
+                    'height': 1920, 'r_frame_rate': '30/1', 'nb_read_frames': '30'}]}).encode())
+            assert kwargs["max_output_file_bytes"]==1000
+            assert root/"timeline-mix.wav" in kwargs["output_paths"]
+            calls.append(command)
+            Path(command[-1]).write_bytes(b"x"*(1001 if failure=="disk" else 30))
+            return SimpleNamespace(returncode=0,stdout=b"",stderr=b"")
+        monkeypatch.setattr(montage,"_run_granted_media_command",run)
+        if failure=="late":
+            deadline=time.monotonic()-1
+        if failure=="source":
+            first.source_path=str(tmp_path/'missing.mp4')
+        renderer=montage.MontageRenderer(tmp_path)
+        if failure in {"disk","source"}:
+            with pytest.raises(ValueError):
+                renderer._render_serial_picture_input(plan,root/'pieces',output,1000,
+                    scheduler=scheduler,grant=grant,cancel_event=None,threads=1,deadline_monotonic=deadline)
+            return
+        if failure=="late":
+            # Deadline refusal belongs to the unchanged granted runner, not a new per-clip timer.
+            from app.granted_subprocess import GrantedCommandTimeout
+            monkeypatch.setattr(montage,"_run_granted_media_command",lambda *args,**kwargs:
+                (_ for _ in ()).throw(GrantedCommandTimeout("same deadline expired")))
+            with pytest.raises(GrantedCommandTimeout):
+                renderer._render_serial_picture_input(plan,root/'pieces',output,1000,
+                    scheduler=scheduler,grant=grant,cancel_event=None,threads=1,deadline_monotonic=deadline)
+            return
+        manifest=renderer._render_serial_picture_input(plan,root/'pieces',output,1000,scheduler=scheduler,
+            grant=grant,cancel_event=None,threads=1,deadline_monotonic=deadline)
+        assert manifest.read_text().splitlines()==["ffconcat version 1.0","file clip-000.nut","duration 1.0000000000","file clip-001.nut","duration 1.0000000000"]
+        commands=[item for item in calls if isinstance(item,list) and item[0]=='ffmpeg']
+        assert len([item for item in calls if isinstance(item,list) and item[0]=='ffprobe']) == 2
+        assert len(commands)==2 and all(command.count('-i')==1 for command in commands)
+        for clip,command in zip(plan.clips,commands,strict=True):
+            assert command[command.index('-c:v')+1]=='ffv1' and '-an' in command
+            assert command[command.index('-f')+1]=='nut'
+            assert command[command.index('-g')+1]=='1'
+            assert command[command.index('-vf')+1]==montage.clip_video_filters(clip,width=1080,height=1920)
+            assert command[command.index('-frames:v')+1]=='30'
+        probes = [item for item in calls if isinstance(item,list) and item[0]=='ffprobe']
+        assert all('-count_frames' in command and 'codec_type,codec_name,width,height,pix_fmt,r_frame_rate,nb_read_frames' in command[command.index('-show_entries')+1] for command in probes)
+        captions=root/'subtitles.ffconcat'
+        captions.write_text('synthetic')
+        command=renderer.build_command(plan,root/'timeline-mix.wav',output,[],subtitle_intervals=[],
+            subtitle_sequence=(captions,(0,0)),picture_sequence=manifest)
+        assert command.count('-i')==3
+        assert 'concat=n=2' not in command[command.index('-filter_complex')+1]
+        assert '[2:v]setpts=PTS-STARTPTS' in command[command.index('-filter_complex')+1]
+        assert command[command.index('-map',command.index('-map')+1)+1]=='1:a:0'

@@ -1214,12 +1214,11 @@ class TaskMediaJobs:
         if expected[1] is None:
             return lambda current: "stale"
         def check(current):
-            if self.task_authorizations is not None:
-                from app.creation_execution import CreationExecutionActor
-                actor = CreationExecutionActor.from_event(job.workspace_id, event)
-                verdict = self.authorization_verdict(job, event, actor, connection=current, check_scope=False)
-                if verdict != "ready":
-                    return verdict
+            from app.creation_execution import CreationExecutionActor
+            actor = CreationExecutionActor.from_event(job.workspace_id, event)
+            verdict = self.authorization_verdict(job, event, actor, connection=current, check_scope=False)
+            if verdict != "ready":
+                return verdict
             actual = read(current)
             if actual[1] is None or actual[1][-2:] != expected[1][-2:]:
                 return "unauthorized"

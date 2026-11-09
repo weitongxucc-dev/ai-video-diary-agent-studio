@@ -491,6 +491,7 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
                  "timeout_seconds": budget.max_timeout_seconds}
     if budget.input_scope == 'single_call_prepared_v1':
         resources['duration_seconds'] = budget.max_duration_seconds
+    if budget.input_scope in {'single_call_experiment_v1', 'single_call_prepared_v1'}:
         resources.update(narration_scope_fields(budget, task=task, inputs=inputs, reference=reference,
             language=segment.language, max_output_bytes=resources['max_output_bytes'],
             runtime_facts=narration_runtime_facts, source_binding=source_binding))
@@ -759,7 +760,7 @@ def montage_manifest_chunks(assets, narration, script_fields, sections):
     yield b'}}'
 
 
-def creation_stage_facts(repository, task, script, plan, stage, narration_budget, montage_budget, *, connection=None, reference_preparation=None, comparison_reference=None):
+def creation_stage_facts(repository, task, script, plan, stage, narration_budget, montage_budget, *, connection=None, reference_preparation=None, comparison_reference=None, montage_authorized_asset_ids=None):
     """Derive measured inputs; stage caps never borrow the FFmpeg render budget."""
     if stage == "narration":
         if narration_budget is None:
@@ -782,7 +783,7 @@ def creation_stage_facts(repository, task, script, plan, stage, narration_budget
                     "voice": asdict(inputs.voice), "resources": resources}
     else:
         if montage_budget is None:
-            raise ValueError("故事板预算尚未标定，请配置 DEVICE_MONTAGE_* 标定值")
+            raise ValueError("当前任务尚未准备故事板能力，请通过设备准备入口准备当前任务后继续")
         if not task.narration_cache_key:
             raise ValueError("故事板缺少当前配音")
         with repository.execution_inputs.creation_execution_read(connection) as conn:
@@ -799,6 +800,14 @@ def creation_stage_facts(repository, task, script, plan, stage, narration_budget
             resources = {"kind": "creation_montage_plan", "execution_mode": "metadata_only",
                 "section_count": header.sections_total_count, "asset_count": len(assets), "input_bytes": input_bytes,
                 "max_output_bytes": montage_budget.max_output_bytes, "timeout_seconds": montage_budget.max_timeout_seconds}
+            if montage_budget.preparation_basis_digest is not None:
+                from app.creation.montage_stage_use_case import montage_dependency
+                from app.host_resource_probes import montage_scope_digest
+                if montage_authorized_asset_ids is None:
+                    raise ValueError('已准备故事板必须核对当前任务的授权素材范围')
+                dependency = montage_dependency(repository, task, connection=conn)[1]
+                resources['preparation_basis_digest'] = montage_scope_digest(task.id, dependency,
+                    checksum.hexdigest(), montage_authorized_asset_ids)
         return f"{stage}:{checksum.hexdigest()}", resources
     digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
     return f"{stage}:{digest}", resources
@@ -1012,8 +1021,13 @@ class CreationJobOwnerVerifier:
                 return self.stage_facts(task, script, plan, stage, connection=conn)
         if stage == "person_render":
             return presenter_stage_facts(self.repository, task, script, plan, self.presenter_budget, self.presenter_models, connection=connection)
+        prepared_assets = None
+        if stage == 'montage_plan' and self.montage_budget is not None and self.montage_budget.preparation_basis_digest is not None:
+            if self.task_authorizations is None:
+                raise ValueError('当前任务没有可核验的故事板授权素材范围')
+            prepared_assets = self.task_authorizations.material_asset_ids(task.workspace_id, task.id)
         key, resources = creation_stage_facts(self.repository, task, script, plan, stage,
-                                             self.narration_budget, self.montage_budget, connection=connection)
+            self.narration_budget, self.montage_budget, connection=connection, montage_authorized_asset_ids=prepared_assets)
         if stage == "montage_plan" and plan.presenter_share_target:
             manifest = []
             for segment, request in iter_presenter_inputs(self.repository, task, script, plan,
@@ -1198,7 +1212,12 @@ class CreationJobOwnerVerifier:
             'source_sample_rate_limit':audio.max_sample_rate,'source_channels_limit':audio.max_channels,
             'output_sample_rate_limit':24000,'output_channels_limit':1,
             'max_output_bytes':absolute,'threads':audio.max_threads,
-            'timeout_seconds':finite_unit_limit(audio.max_timeout_seconds, remaining_seconds)}
+            # Re-entry retains this request's sealed single-unit ceiling. The
+            # original parent remainder is freshly clamped at unit start; its
+            # settled elapsed time must not change the persisted unit identity.
+            'timeout_seconds':finite_unit_limit(audio.max_timeout_seconds,
+                request.resources['timeout_seconds'] if request is not None
+                    and request.resources.get('execution_mode') == 'cpu_pcm_wav_assembly' else remaining_seconds)}
         if (sum(item['duration_seconds'] for item in inputs)>plan.duration_target_seconds
                 or audio_resource_refusal(resources,audio) is not None):
             raise ValueError('原PCM追加超出已有CPU音频预算')
@@ -1863,11 +1882,10 @@ class CreationJobOwnerVerifier:
                             return 'stale'
                 except (OSError,RecoveryBlocked):
                     return 'stale'
-            if self.task_authorizations is not None:
-                actor = CreationExecutionActor.from_event(task.workspace_id, event)
-                verdict = self.authorization_verdict(task, actor, stage, connection=current, check_scope=False)
-                if verdict != "ready":
-                    return verdict
+            actor = CreationExecutionActor.from_event(task.workspace_id, event)
+            verdict = self.authorization_verdict(task, actor, stage, connection=current, check_scope=False)
+            if verdict != "ready":
+                return verdict
             return profiles(current)
 
         return check
@@ -1942,11 +1960,12 @@ def submit_creation_stage(execution: "CreationExecution", scheduler: DeviceSched
     return scheduler.submit(intent, actor).id if intent is not None else None
 
 
-def upstream_stage_valid(repository, task, stage):
+def upstream_stage_valid(repository, task, stage, *, connection=None):
     if stage == "narration":
         if not task.narration_cache_key:
             return False
-        artifact = repository.narration_artifacts.get_narration_artifact(task.workspace_id, task.narration_cache_key)
+        artifact = repository.narration_artifacts.get_narration_artifact(task.workspace_id, task.narration_cache_key,
+            connection=connection)
         return (artifact is not None and artifact.task_id == task.id
                 and artifact.script_id == task.confirmed_script_id
                 and Path(artifact.audio_path).is_file() and Path(artifact.audio_path).stat().st_size > 0)
@@ -2105,8 +2124,7 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         stage = "montage_plan"
     elif event.get("operation") == "render_current":
         stage = "render"
-    elif not (task.narration_cache_key and repository.narration_artifacts.get_narration_artifact(
-            task.workspace_id, task.narration_cache_key, connection=connection)):
+    elif not upstream_stage_valid(repository, task, "narration", connection=connection):
         stage = "narration"
     elif plan.presenter_share_target and not owner.person_valid(task):
         stage = "person_render"
@@ -2760,8 +2778,11 @@ class CreationJobUnitExecutor:
             quitting = self._application_quit.is_set() and not cancelled
             pressure = isinstance(exc, HostResourceRefusal) and exc.recoverable_pressure
             diagnostic = getattr(exc, 'command_diagnostics', None)
+            failure_reason = str(exc)
             if pressure and diagnostic and diagnostic.get('before_termination_returncode') not in {None, 0}:
                 pressure = False
+                failure_reason = (diagnostic['stderr'].decode('utf-8', errors='replace')[-4000:]
+                    or f"worker exit {diagnostic['before_termination_returncode']}")
             if quitting or pressure or isinstance(exc, PermissionError):
                 reason = 'application_quit' if quitting else 'resource_pressure' if pressure else 'task_authorization_unavailable'
                 def interrupted(conn, current, error=exc):
@@ -2778,9 +2799,9 @@ class CreationJobUnitExecutor:
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=stopped, cancelled=True)
             else:
-                def failed(conn, current, error=exc):
+                def failed(conn, current, reason=failure_reason):
                     settle(conn, current)
-                    return self._checkpoint(conn, current, status='failed', stage='narration', reason=str(error))
+                    return self._checkpoint(conn, current, status='failed', stage='narration', reason=reason)
                 scheduler.fail_unit(grant, reason='creation_narration_failed', failure_write=failed)
         finally:
             with self._cancellation_lock:
@@ -3085,6 +3106,7 @@ class CreationJobUnitExecutor:
             return self.repository.narration_units.settle_creation_narration_unit(current,
                 elapsed_seconds=max(0,time.monotonic()-started),output_bytes=measured,connection=conn)
         pcm_preparation=None
+        adoption_preparation_failed = False
         def next_unit(conn,current):
             current_job=self.repository.job_records.get_job_run(job.workspace_id,job.id,connection=conn)
             current_task=self.repository.task_records.get_creation_task(job.workspace_id,job.task_id,connection=conn)
@@ -3106,7 +3128,16 @@ class CreationJobUnitExecutor:
                 scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=checkpoint,next_unit_write=next_unit)
             else:
-                commit,receipt=self.narration_stage.prepare_edit(job.workspace_id,job.task_id,context,event['edit_proposal_id'],resources)
+                candidate = self.repository.narration_checkpoints.narration_edit_generated(job.workspace_id, job.id)
+                receipt = context.run_pcm_assembly(resources)
+                try:
+                    commit = self.narration_stage.prepare_edit_adoption(job.workspace_id, job.task_id,
+                        event['edit_proposal_id'], candidate, resources, receipt)
+                except Exception:
+                    # The media receipt is known and adoption has not entered a
+                    # transaction. A refusal here cannot make PCM use unknown.
+                    adoption_preparation_failed = True
+                    raise
                 pcm_preparation=owner.prepare_pcm_sources(job) if not receipt['finalized'] else None
                 def checkpoint(conn,current):
                     if receipt['finalized'] and owner.check_current(request, conn) != 'ready':
@@ -3124,7 +3155,7 @@ class CreationJobUnitExecutor:
                 context.narration_output_usage[0] is None or context.narration_output_usage[0]>0
                 or Path(resources['pcm_assembly']['receipt_path']+'.manifest.json').exists())
             cancelled=self.repository.job_records.get_job_run(job.workspace_id,job.id).status=='cancelled'
-            if context.narration_output_usage[0] is None or pcm_started:
+            if context.narration_output_usage[0] is None or (pcm_started and not adoption_preparation_failed):
                 context.narration_output_usage[0]=None
                 if cancelled:
                     scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,

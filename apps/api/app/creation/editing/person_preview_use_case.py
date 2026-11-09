@@ -39,13 +39,7 @@ class PersonPreviewUseCase:
             segment = self.repository.narration_records.get_narration_segment(workspace_id, task.id, cue.narration_segment_id)
             creation_plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
             person_provider = self.provider(creation_plan.lipsync_quality)
-            selected_person = creation_plan.selected_person
-            if selected_person is None:
-                raise ValueError('当前任务没有绑定人物声音版本')
-            person = self.repository.profile_records.get_person_profile(workspace_id, selected_person.profile_id, selected_person.version)
             current_render = self.repository.person_renders.get_person_render(workspace_id, task.id, clip.person_render_id) if clip.person_render_id else None
-            if current_render is not None:
-                person = self.repository.profile_records.get_person_profile(workspace_id, current_render.person_profile_id, current_render.person_version)
         except (KeyError, StopIteration) as exc:
             raise EditPreviewRejected(status_code=404, detail='creation task person edit target not found') from exc
         except ValueError as exc:
@@ -59,6 +53,18 @@ class PersonPreviewUseCase:
         regenerate_requested = person_operation == 'RegeneratePersonRender'
         if regenerate_requested and current_render is None:
             raise edit_preview_failure(status_code=409, error='person_render_required', reason='所选镜头还不是人物口型片段，当前没有可以重做的口型。', impact='当前镜头和成片保持不变。', repair_action='先输入“这一段换成当前人物出镜”。', retryable=True)
+        try:
+            if regenerate_requested:
+                person = self.repository.profile_records.get_person_profile(workspace_id, current_render.person_profile_id, current_render.person_version)
+            else:
+                selected_person = creation_plan.selected_person
+                if selected_person is None:
+                    raise ValueError('当前任务没有绑定人物声音版本')
+                person = self.repository.profile_records.get_person_profile(workspace_id, selected_person.profile_id, selected_person.version)
+        except KeyError as exc:
+            raise EditPreviewRejected(status_code=404, detail='creation task person edit target not found') from exc
+        except ValueError as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
         if not person_provider.ready:
             raise edit_preview_failure(status_code=503, error='capability_unavailable', reason=person_provider.message, impact='人物片段、时间线和成片保持不变。', repair_action='配置本地人物口型运行环境后重试。', retryable=True)
         if montage.status != 'rendered':

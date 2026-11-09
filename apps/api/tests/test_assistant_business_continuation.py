@@ -18,6 +18,7 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
     from assistant_turn_control_fixtures import isolate_assistant_turn_control
     isolate_assistant_turn_control(monkeypatch, request)
     state = material_edit_state
+    state.original_jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
     monkeypatch.setattr(main, "settings", replace(main.settings,
         video_inbox_path=str(state.production.video_library_path),
         tencentcloud_secret_id="", tencentcloud_secret_key=""))
@@ -166,7 +167,9 @@ def test_failure_is_projected_without_retry_or_fabricated_proposal(state, monkey
     assert after["result"]["continuation"]["status"] == "failed"
     assert not after["result"]["edit_preview"]
     assert after["result"]["response"]["media_job"]["status"] == "failed"
-    assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 1
+    jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
+    assert [job for job in jobs if job.id != queued.json()["job_id"]] == state.original_jobs
+    assert [job.id for job in jobs if job.id not in {original.id for original in state.original_jobs}] == [queued.json()["job_id"]]
 
 
 def test_locator_unknown_is_bound_then_late_rejection_is_read_without_post(state):
@@ -186,7 +189,7 @@ def test_locator_unknown_is_bound_then_late_rejection_is_read_without_post(state
     main._task_edit_receipt_http_adapter().save_edit_request_result(task, event_id, main.JSONResponse(status_code=409, content={"detail": "original turn ended"}))
     after = await_projection(state, lambda item: item["result"]["response"]["edit_request"]["status"] == "rejected")
     assert not after["result"]["edit_preview"]
-    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == state.original_jobs
     assert len(state.conversations.list_turns(state.conversation["id"])) == 1
 
 
@@ -222,7 +225,7 @@ def test_assistant_dispatch_persists_unknown_request_location_without_502(state,
     assert response.json()["edit_preview"] is None and response.json()["media_job"] is None
     saved = state.conversations.get_turn(response.json()["turn_id"])
     assert saved["result"]["response"]["edit_request"] == response.json()["edit_request"]
-    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == state.original_jobs
 
 
 def test_script_view_dispatches_real_typed_proposal_by_receipt_shape(state, monkeypatch):

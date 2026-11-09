@@ -359,10 +359,10 @@ class ExactPreviewUseCase:
         source = command.source
         if source is None and original_command is not None:
             action = CreationTaskExactEditRequest(operation_type=command.operation_type, **{'clip_ids': command.clip_ids, 'effects': command.values} if command.operation_type == 'AdjustVisualEffects' else {'clip_id': command.clip_ids[0], **command.values})
-            source = {'workspace_id': workspace_id, 'task_id': task_id, 'member_id': actor.user_id or actor.member_id, 'actor_identity': actor.identity_payload(), 'request_id': None, 'raw_command': original_command.raw_command, 'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence, 'action': action.model_dump(mode='json', exclude_unset=True), 'source_facts': self.source_facts(task, action, {'member_id': actor.user_id or actor.member_id, 'local_diagnostic': False}, actor)}
+            source = {'source_kind': 'interactive', 'workspace_id': workspace_id, 'task_id': task_id, 'member_id': actor.user_id or actor.member_id, 'actor_identity': actor.identity_payload(), 'request_id': None, 'raw_command': original_command.raw_command, 'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence, 'action': action.model_dump(mode='json', exclude_unset=True), 'source_facts': self.source_facts(task, action, {'member_id': actor.user_id or actor.member_id, 'local_diagnostic': False}, actor)}
             if original_command.assistant_turn_id is not None:
                 origin = self.conversations.task_turn_source(str(original_command.assistant_turn_id), workspace_id, actor.user_id or actor.member_id, task_id)
-                source.update(assistant_turn_id=str(original_command.assistant_turn_id), conversation_id=origin['conversation_id'],
+                source.update(source_kind='assistant', assistant_turn_id=str(original_command.assistant_turn_id), conversation_id=origin['conversation_id'],
                               **{key: origin[key] for key in ('input_id', 'input_turn_id') if key in origin})
             command = replace(command, source=source)
         self.clip_preview.prepare(actor, command)

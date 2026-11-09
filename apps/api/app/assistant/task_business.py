@@ -54,7 +54,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -76,6 +76,7 @@ class TaskBusiness:
         self.device_preparation=device_preparation
         self.generation_case,self.creator_memory=generation_case,creator_memory
         self.execution_status=execution_status
+        self.media_binding=media_binding
 
     def invoke_native(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic, invocation: TaskInvocation):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -380,9 +381,11 @@ class TaskBusiness:
             return self.finish(claim, reply, script_window_request=preview)
         if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
             return self.finish(claim, reply, quality_continuation=preview)
+        if isinstance(preview, dict) and preview.get('kind') == 'media_job':
+            return self.finish(claim, reply, reported_media=preview['media_job'])
         return self.finish(claim, reply)
 
-    def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None):
+    def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None, reported_media=None):
         """Project real host receipts; a model's proposed result is never adopted here."""
         goal=self.conversations.get_task_goal(claim['turn_id'])
         if (goal is None or goal['current_turn_id']!=claim['turn_id'] or goal['status']!='running'
@@ -438,6 +441,26 @@ class TaskBusiness:
             response['media_job']=self.media_result(task,actor,jobs[-1].job_id)
             proofs.append({'kind':'media_job','id':jobs[-1].job_id,
                 **({'input_id':goal['source_input_id']} if goal.get('source_input_id') else {})})
+        if reported_media is not None:
+            if self.media_binding is None:
+                raise TaskBusinessRejected('媒体来源核验尚未装配', kind='unavailable')
+            selection = self.media_binding.select_finish(claim['turn_id'], reported_media)
+            if selection.completed_slot is not None:
+                slot = selection.completed_slot
+                response['media_job'] = self.media_binding.completed_receipt(task, actor, claim['turn_id'], slot,
+                    contract=slot['requested_output'], input_refs=slot['input_refs'])
+        proposals, _ = self.production.execution_records.goal_pending_preview_rows(ws, task_id,
+            task.current_timeline_version_id, goal['conversation_id'], goal['member_id'])
+        for row in proposals:
+            source = json.loads(row['constraints_json'])['request_source']
+            if (source.get('assistant_turn_id') != claim['turn_id']
+                    or source.get('input_id') != goal.get('source_input_id')):
+                continue
+            proposal = self.production.edit_records.get_edit_proposal(ws, row['id'])
+            intent = self.production.edit_records.get_edit_intent(ws, proposal.intent_id)
+            response['edit_preview'] = {'intent': asdict(intent), 'proposal': asdict(proposal)}
+            proofs.append({'kind': 'edit_preview', 'id': proposal.id,
+                **({'input_id': goal['source_input_id']} if goal.get('source_input_id') else {})})
         from threading import Event
         binding={**{key:goal[key] for key in ('workspace_id','member_id','task_id','conversation_id')},
             'turn_id':claim['turn_id'],'goal_revision':str(goal.get('revision',0)),
@@ -571,6 +594,8 @@ class TaskBusiness:
                     shape=payload.shape.model_dump()
                     if payload.kind=='narration':
                         shape['task_id']=task.id
+                    if payload.kind=='montage' and shape['task_id'] != task.id:
+                        raise TaskBusinessRejected('故事板准备不能切换当前任务', kind='conflict')
                     result=self.device_preparation('prepare',kind=payload.kind,shape=shape,request_id=str(payload.request_id),actor=actor)
                 elif operation=='read_device_preparation':
                     result=self.device_preparation('status',request_id=args['request_id'],actor=actor)

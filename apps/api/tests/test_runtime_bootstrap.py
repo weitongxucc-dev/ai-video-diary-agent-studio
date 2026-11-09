@@ -151,7 +151,9 @@ def test_database_switch_moves_five_actual_service_writes_together(isolated_data
 def test_invalid_tmp_refuses_before_env_workspace_installer_and_driver_changes(isolated_host, tmp_path, monkeypatch):
     installer, _, _, env_path, _ = isolated_host
     main._reload_runtime_dependencies()
+    assert main._start_device_runtime()
     worker, ingestion, settings, catalog = main.device_runtime, main.material_ingestion, main.settings, main.model_catalog
+    assert_device_driver_usable(worker, ingestion)
     before = env_path.read_bytes(), dict(os.environ), tempfile.tempdir
     invalid = tmp_path / "ordinary-file"
     invalid.write_text("not a directory")
@@ -358,7 +360,7 @@ def test_device_persistence_error_resumes_all_original_loops(isolated_host, tmp_
     try:
         response = client().post("/api/settings/runtime", json={"model_root_path": str(tmp_path / "next-models")})
         assert response.status_code == 500, response.text
-        assert "IsADirectoryError" in response.text
+        assert response.json() == {"error": "RuntimeError", "detail": "dotenv target is not a regular file"}
         assert configuration_state(isolated_host[3]) == before
         for owner in (device, automatic, continuation):
             assert not owner._paused.is_set()
@@ -699,8 +701,7 @@ def test_explicit_factory_has_pure_import_and_complete_bindings(tmp_path):
         assert callback_calls == ['original_reload_callback']
         execution = main.creation_execution
         assert execution.repository is main.production_repo
-        assert execution.actions == {'narration': main._generate_creation_task_narration_for_workspace,
-            'montage_plan': main._create_creation_task_montage_plan_for_workspace,
+        assert execution.actions == {'montage_plan': main._create_creation_task_montage_plan_for_workspace,
             'render': main._render_creation_task_montage_for_workspace}
         assert execution.render_is_valid is main._creation_render_is_valid
         assert main.device_runtime is None

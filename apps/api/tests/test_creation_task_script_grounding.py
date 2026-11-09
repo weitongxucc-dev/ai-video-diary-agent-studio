@@ -1804,7 +1804,6 @@ def test_all_twelve_findings_are_returned_without_a_business_total_limit():
 
 @pytest.mark.parametrize('change,subtype,missing_keys,unknown_count', [
     ('issues_not_array', 'not_array', None, None),
-    ('issues_too_many', 'too_many', None, None),
     ('not_object', 'not_object', [], None),
     ('missing', 'missing_keys', ['reference_ids'], 0),
     ('extra', 'extra_keys', [], 1),
@@ -1832,8 +1831,6 @@ def test_issue_shape_diagnostic_reports_only_fixed_subtype_and_bounded_structure
         issue = review['sections'][0]['issues'][0]
         if change == 'issues_not_array':
             review['sections'][0]['issues'] = {'private-unknown-key': 'private-unknown-value'}
-        elif change == 'issues_too_many':
-            review['sections'][0]['issues'] = [copy.deepcopy(issue) for _ in range(4)]
         elif change == 'not_object':
             review['sections'][0]['issues'][0] = 'private-not-an-object'
         elif change in {'missing', 'missing_and_extra'}:
@@ -1867,10 +1864,8 @@ def test_issue_shape_diagnostic_reports_only_fixed_subtype_and_bounded_structure
     diagnostic = json.loads(text.removeprefix('creation_script_review_invalid '))
     shape = diagnostic['issue_shape_mismatch']
     assert shape['subtype'] == subtype
-    if change in {'issues_not_array', 'issues_too_many'}:
-        assert shape == {'subtype': subtype,
-            'issues_type': 'object' if change == 'issues_not_array' else 'array',
-            'issue_count': None if change == 'issues_not_array' else 4}
+    if change == 'issues_not_array':
+        assert shape == {'subtype': subtype, 'issues_type': 'object', 'issue_count': None}
     elif missing_keys is not None:
         assert shape['issue_index'] == 1
         assert shape['missing_keys'] == missing_keys and shape['unknown_key_count'] == unknown_count

@@ -175,7 +175,7 @@ from app.config import (
 )
 from app.content_templates import list_content_templates
 from app.creation_execution import (
-    presenter_inputs, presenter_input_facts as presenter_input_facts, current_presenter_render,
+    presenter_input_facts as presenter_input_facts,
     CpuRenderGrantContext, CreationStageGrantContext, CreationExecution, CreationExecutionActor,
     CreationJobUnitExecutor,
     revision_digest as revision_digest, submit_creation_stage as submit_creation_stage, PERSON_EDIT_KIND, NARRATION_EDIT_KIND,
@@ -345,6 +345,7 @@ from app.material_processing_routes import build_material_processing_router
 from app.legacy_montage_routes import LegacyMontageResponseAdapter, build_legacy_montage_router
 from app.knowledge_notes_routes import build_knowledge_notes_router
 from app.device_preparation_routes import build_device_preparation_router
+from app.device_resource_status import resource_preparation_status, preparation_actor_scope
 _clone_subtitle_track = _owner_app_creation_transactions.clone_subtitle_track
 LocalVisualUnderstanding = _owner_app_visual_understanding.LocalVisualUnderstanding
 PlatformAuthService = _owner_app_platform_auth_service.PlatformAuthService
@@ -2105,13 +2106,10 @@ def _clip_preview_use_case(repository=None):
         except HostBudgetUncalibrated as exc:
             raise ClipPreviewUnavailable(str(exc)) from exc
     def presenter_source(task, clip):
-        plan = repo.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
-        script = repo.script_records.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
-        matches = [current_presenter_render(repo, task, segment, request, _person_render_media_path)
-            for segment, request in presenter_inputs(repo, task, script, plan, _presenter_model_ids())]
-        if not any(item is not None and item.id == clip.person_render_id for item in matches):
-            raise PermissionError("当前人物/声音授权或片段版本已失效")
-        return _person_render_media_path(repo.person_renders.get_person_render(task.workspace_id, task.id, clip.person_render_id))
+        from app.creation.person_stage_use_case import adopted_person_render_source
+        plan = creation_task_montage_plan_from_payload(repo.get_creation_task_montage_plan(task.workspace_id, task.id))
+        cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
+        return adopted_person_render_source(repo, task, clip, cue, _person_render_media_path)
     return ClipPreviewUseCase(repo, resolve_presenter_source=presenter_source, budget=profile)
 
 
@@ -5675,6 +5673,10 @@ def _device_preparation_service(kind="cpu"):
         from app.narration_resource_preparation import NarrationResourcePreparation
         return NarrationResourcePreparation(repository=production_repo, model_catalog=model_catalog,
                                              provider=voice_clone_provider, **arguments)
+    if kind == "montage":
+        from app.montage_resource_preparation import MontageResourcePreparation
+        return MontageResourcePreparation(repository=production_repo,
+            montage_stage=_montage_stage_use_case(), task_authorizations=_task_authorizations_for_goal(), **arguments)
     raise ValueError("未知设备准备类型")
 
 
@@ -5687,6 +5689,7 @@ def _device_preparation_application(*, kind="cpu", request_id=None, actor=None):
     from app.device_preparation_application import DevicePreparationApplication
     from app.device_resource_preparation import OWNER_TYPE, CpuPreparationShape, request_kind
     from app.narration_resource_preparation import NarrationPreparationShape
+    from app.montage_resource_preparation import MontagePreparationShape
     if request_id is not None:
         kind = request_kind(database_path=production_repo.database_path, request_id=request_id, actor=actor)
     def bind(service, budget, scope):
@@ -5700,7 +5703,8 @@ def _device_preparation_application(*, kind="cpu", request_id=None, actor=None):
         service=_device_preparation_service(kind), database_path=production_repo.database_path,
         lifecycle_lock=_runtime_reload_lock, current_runtime=lambda: device_runtime,
         replace_runtime=_publish_device_runtime, stop_runtime=_stop_device_runtime, bind_runtime=bind,
-        shape_factory=CpuPreparationShape if kind == "cpu" else NarrationPreparationShape)
+        shape_factory={'cpu': CpuPreparationShape, 'narration': NarrationPreparationShape,
+                       'montage': MontagePreparationShape}[kind])
 
 
 def _dispatch_device_preparation(action, *, actor, request_id, shape=None, kind="cpu"):
@@ -5712,7 +5716,9 @@ def _dispatch_device_preparation(action, *, actor, request_id, shape=None, kind=
 
 app.include_router(build_device_preparation_router(
     authorized_actor=lambda request: _require_permit_actor(request, current_workspace_id(request)),
-    application=_device_preparation_application))
+    application=_device_preparation_application,
+    profile_status=lambda actor: resource_preparation_status(settings, os.environ, model_catalog, actor),
+    actor_scope=lambda actor: preparation_actor_scope(actor, os.environ)))
 
 
 def _build_device_components(*, repository: ProductionRepository):
@@ -6051,7 +6057,7 @@ def _task_business(*, generation_case=None):
         media_jobs_list=_list_goal_media_jobs,execution_capabilities=_task_execution_capability_facts,
         device_preparation=_dispatch_device_preparation, quality=_quality_application(),
         generation_case=generation_case, creator_memory=_creator_memory_facts,
-        execution_status=_creation_execution_summary,
+        execution_status=_creation_execution_summary, media_binding=_media_result_binding(),
         read_script_sections=lambda task, script_id, **values:
             production_repo.script_records.read_creation_task_script_sections(task.workspace_id, task.id, script_id, **values))
 
@@ -6303,7 +6309,8 @@ def _bind_assistant_execution_result(task_id, request, turn_id, candidate, *, so
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         workspace_id = current_workspace_id(request)
         member_id = _content_identity_http_adapter().assistant_member(request, workspace_id)
-        result = binding.record_result(workspace_id, task_id, member_id, turn_id, result, source=source)
+        result = binding.record_result(workspace_id, task_id, member_id, turn_id, result, source=source,
+            bind_goal_scope=lambda goal: _bind_goal_business_scope(request, goal))
     except ExecutionBindingRejected as exc:
         raise _execution_binding_http(exc) from exc
     _wake_assistant_continuations()

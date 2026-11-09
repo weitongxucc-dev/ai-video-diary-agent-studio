@@ -17,12 +17,13 @@ from app.conversation_repository import ConversationRepository
 from app.local_members import LocalMemberService
 
 
-def _assistant_task_session(tmp_path: Path, monkeypatch, task_id: str):
-    conversations = ConversationRepository(tmp_path / "assistant-conversations.sqlite3")
+def _assistant_task_session(tmp_path: Path, monkeypatch, task_id: str, *, database_path=None):
+    conversations = ConversationRepository(database_path or tmp_path / "assistant-conversations.sqlite3")
     members = LocalMemberService(tmp_path / "assistant-members.sqlite3")
     _member, token = members.join(members.create_invite_code(), "成员甲")
     member_id = members.resolve_member(token).member_id
     monkeypatch.setattr(main_module, "conversation_repo", conversations)
+    monkeypatch.setattr(main_module, "_goal_continuation_service", None)
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "local")
     conversation = conversations.current_or_create("local", member_id, "task", task_id)
@@ -118,12 +119,13 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     from starlette.requests import Request
     from app.creation.contracts import TimelineVersion
     from app.creation_execution import CreationExecution, CreationExecutionActor
-    from app.montage import MontageClip
+    from app.montage import MontageClip, CreationTaskMontagePlan, creation_task_montage_plan_to_payload
     from app.creation.contracts import JobRun, TaskEvent
     from app.production import MaterialAsset, MaterialSegment
 
-    conversations, member_id, token, conversation = _assistant_task_session(tmp_path, monkeypatch, "task-one")
     material_repo = _script_task(tmp_path)
+    conversations, member_id, token, conversation = _assistant_task_session(
+        tmp_path, monkeypatch, "task-one", database_path=material_repo.database_path)
     path = material_repo.video_library_path / "source.mp4"
     path.write_bytes(b"isolated-selection-metadata")
     material = material_repo._save_asset(MaterialAsset(
@@ -143,15 +145,16 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
                            scenario="选择范围验收", stage="review", confirmed_script_id="script-one",
                            narration_cache_key="narration-one", current_timeline_version_id="scope-timeline",
                            montage_plan_id="plan-one", visibility="shared", owner_user_id=None)
-    montage = SimpleNamespace(id="plan-one", task_id=task.id, script_id=task.confirmed_script_id,
-                              status="rendered", output_path="rendered-video", duration_seconds=30,
-                              clips=[clip], graphic_overlays=[])
+    montage = CreationTaskMontagePlan(id="plan-one", workspace_id="local", task_id=task.id,
+        script_id=task.confirmed_script_id, script_title="选择范围验收", status="rendered",
+        output_path="rendered-video", narration_audio_path="narration://artifact/narration-one",
+        duration_seconds=30, clips=[clip], cues=[], low_confidence_clip_count=0)
     with material_repo._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
     material_repo.timeline_records.create_timeline_version(TimelineVersion(
         id=task.current_timeline_version_id, workspace_id=task.workspace_id, task_id=task.id,
         parent_version_id=None, sequence=1, created_by_operation_id=None,
-        snapshot={"montage": {"clips": [asdict(clip)]}, "narration_segments": [
+        snapshot={"montage": creation_task_montage_plan_to_payload(montage), "narration_segments": [
             {"id": "segment-current", "workspace_id": task.workspace_id, "task_id": task.id}]}))
     task = material_repo.task_records.get_creation_task("local", task.id)
     monkeypatch.setattr(material_repo.narration_artifacts, "get_narration_artifact", lambda workspace_id, key: SimpleNamespace(
@@ -160,9 +163,9 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     monkeypatch.setattr(material_repo.narration_records, "list_narration_segments", lambda workspace_id, task_id, script_id: [
             SimpleNamespace(id="segment-current", status="ready"),
         ])
-    monkeypatch.setattr(material_repo, "get_creation_task_montage_plan", lambda workspace_id, task_id: {})
+    monkeypatch.setattr(material_repo, "get_creation_task_montage_plan",
+        lambda workspace_id, task_id: creation_task_montage_plan_to_payload(montage))
     monkeypatch.setattr(main_module, "production_repo", material_repo)
-    monkeypatch.setattr(main_module, "creation_task_montage_plan_from_payload", lambda payload: montage)
     monkeypatch.setattr(CreationTaskResponseAdapter, "effective_audio_timeline", lambda adapter, plan: SimpleNamespace(tracks=[]))
     def no_execution(*_):
         pytest.fail("this scope test must not run a media executor")
@@ -246,6 +249,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
     assert selection["expected_updated_at"] == material.updated_at.isoformat()
     assert selection["expected_segment_updated_at"] == material.segments[0].updated_at.isoformat()
     assert {item.event_type for item in material_repo.execution_records.list_task_events("local", task.id)} == {
+        "task_authorization", "task_business_scope",
         "creation_execution_started", "assistant_execution_located"}  # Actual binding facts; no legacy chat rows.
     saved_turns = conversations.list_turns(conversation["id"])
     assert [(item["user_message"], item["status"]) for item in saved_turns] == [

@@ -85,15 +85,21 @@ class NarrationPreparationShapeRequest(BaseModel):
     task_id: str | None = Field(default=None, min_length=1)
 
 
+class MontagePreparationShapeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    task_id: str = Field(min_length=1)
+
+
 class DevicePreparationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: UUID
-    kind: Literal["cpu", "narration"] = "cpu"
-    shape: DevicePreparationShapeRequest | NarrationPreparationShapeRequest
+    kind: Literal["cpu", "narration", "montage"] = "cpu"
+    shape: DevicePreparationShapeRequest | NarrationPreparationShapeRequest | MontagePreparationShapeRequest
 
     @model_validator(mode="after")
     def shape_matches_kind(self):
-        expected = DevicePreparationShapeRequest if self.kind == "cpu" else NarrationPreparationShapeRequest
+        expected = {'cpu': DevicePreparationShapeRequest, 'narration': NarrationPreparationShapeRequest,
+                    'montage': MontagePreparationShapeRequest}[self.kind]
         if not isinstance(self.shape, expected):
             raise ValueError("准备类型与输入形状不一致")
         return self

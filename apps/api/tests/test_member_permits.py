@@ -1,12 +1,13 @@
-"""WIL-159：真实本机成员 + 真实整机许可 + 真实探针。
+"""本机成员、整机许可和受许可执行边界。
 
-这一组只证明一件事——从「本机名册里的一行成员」到「整机队列上的一次心跳」，
-中间没有假探针、没有字符串身份、没有第二条锁。没有标定预算时，这里要求它
-明确报未标定，而不是悄悄放行。
+成员名册、设备队列与子进程身份使用真实实现；人物执行代表使用显式有限
+资源夹具和隔离的内存策略，不证明机器标定或原生压力恢复。缺少预算的代表
+仍须明确报未标定，不能静默放行。
 """
 
 from __future__ import annotations
 from script_seed_fixtures import script_seed_payload
+from tests.host_memory_boundary import IsolatedMemoryMonitor
 
 import pytest
 
@@ -41,7 +42,7 @@ def test_absent_creation_stage_budgets_do_not_block_calibrated_cpu_config():
     assert narration is None and montage is None
     from app.creation_execution import creation_stage_facts
     for stage in ("narration", "montage_plan"):
-        with pytest.raises(ValueError, match="预算尚未标定"):
+        with pytest.raises(ValueError, match="预算尚未标定" if stage == 'narration' else "尚未准备故事板能力"):
             creation_stage_facts(None, None, None, None, stage, narration, montage)
 
 
@@ -306,24 +307,11 @@ def test_real_roster_creation_grant_rechecks_removal_without_nested_writer(tmp_p
         task.stage = "narration"
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?",
             (json.dumps(asdict(task), default=str), task.id))
-    import _media_preview_test_fixtures as profile_fixtures
-    from unittest.mock import patch
-    from app.creation.contracts import CreationPlanVoiceReference
-    full_wav = profile_fixtures.synthetic_wav_bytes
-    with patch.object(profile_fixtures, 'synthetic_wav_bytes', lambda: full_wav(.01)):
-        person, voice, *_ = profile_fixtures.register_synthetic_profiles(repository,
-            workspace_id=WORKSPACE, member_id=joined.member_id,
-            person_id='roster-person', voice_id='roster-voice', person_version='v1', voice_version='v1', language='zh')
-    plan.selected_voice = CreationPlanVoiceReference(voice.id, voice.version, person.id, person.version,
-        person.authorization.id, person.authorization.version, voice.authorization.id, voice.authorization.version,
-        'zh-CN', voice.model_id)
-    with repository._connect() as conn:
-        conn.execute('UPDATE creation_plans SET payload=? WHERE id=?',
-            (json.dumps(asdict(plan), default=str), plan.id))
     script = repository.script_records.get_creation_task_script(WORKSPACE, "script")
     plan = repository.plan_records.get_creation_plan(WORKSPACE, plan.id)
     from app.host_resource_probes import HostResourceDecision, CpuAudioBudget
-    budget = NarrationBudget(80, 1, 1024, 15, 1024, 1, 10, 1024, 8, 0.1, 1024, 1024, input_scope="single_call_experiment_v1")
+    budget = NarrationBudget(80, 1, _voice_path.stat().st_size, 15, 1024, 1, 10, 1024, 8, 0.1, 1024, 1024,
+        input_scope="single_call_experiment_v1")
     audio_budget = CpuAudioBudget(1, 1024, 15, 15, 8000, 1, 1024, 1, 10, 1024, 8, .1, 1024, 1024)
     owner = CreationJobOwnerVerifier(repository, narration_budget=budget, narration_audio_budget=audio_budget,
         verify_identity=access.verify_identity)
@@ -527,8 +515,11 @@ def test_presenter_budget_absence_and_partial_configuration_do_not_borrow_cpu():
 def _presenter_scheduler(case):
     from app.device_scheduler import DeviceScheduler
     from app.host_resource_probes import HostBudget, HostResourceDecision
+    # These grant/child tests isolate memory policy; native pressure and recovery
+    # are verified by the dedicated host-memory tests, not this provider fixture.
     resources = HostResourceProbe(case.repo.database_path, disk_paths=(case.tmp_path,),
-        budget=HostBudget(75, 1, 1, 1, 1024, 1024, presenter=case.budget, presenter_cpu_render=case.cpu))
+        budget=HostBudget(75, 1, 1, 1, 1024, 1024, presenter=case.budget, presenter_cpu_render=case.cpu),
+        memory_monitor=IsolatedMemoryMonitor())
     resources._sample = lambda declared, **options: HostResourceDecision(True, declared, {"fixture": {}}, None)
     processes = HostProcessProbe()
     real_identity = processes.identity

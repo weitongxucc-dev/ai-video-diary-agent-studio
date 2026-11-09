@@ -287,6 +287,13 @@ class TaskAuthorizationUseCase:
             return "outside_scope"
         if authorization.revoked_at is not None:
             return "revoked"
+        # Local roster membership is a live local fact. The durable task grant
+        # must not keep a removed member active until the background refresh.
+        # Account identities keep their existing remote-observation lifecycle.
+        if workspace_id == 'local' and authorization.identity.get('device_id') is None:
+            verdict = self.verify_identity(authorization.identity)
+            if verdict != 'ready':
+                return 'unverified' if verdict == 'unknown' else 'revoked'
         if authorization.expires_at is None:
             return "unverified"
         if self.clock() >= authorization.expires_at:

@@ -19,6 +19,8 @@ DARWIN_FILES = frozenset({
     "tests/test_member_permits.py",
     "tests/test_material_probe.py",
     "tests/test_material_scene.py",
+    "tests/test_narration_stage_application.py",
+    "tests/test_device_resource_preparation.py",
 })
 IGNORED_DIRECTORIES = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "__pycache__")
 

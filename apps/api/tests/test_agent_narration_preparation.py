@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 from uuid import uuid4
+import pytest
 
 from app.assistant.task_business import TaskBusiness
 from app.creation_execution import CreationExecutionActor
+from app.assistant.task_business_errors import TaskBusinessRejected
 
 
 def test_task_preparation_forwards_real_kind_and_binds_narration_references_to_current_task():
@@ -28,3 +30,18 @@ def test_task_preparation_forwards_real_kind_and_binds_narration_references_to_c
         business.execute(operation,{'request_id':'work','kind':'cpu','actor':'forged'},actor,task,None,{},None,None)
     assert [action for action,_ in calls]==['prepare','status','finalize']
     assert all(values['actor'] is actor and 'kind' not in values for _,values in calls[1:])
+
+
+def test_storyboard_preparation_cannot_switch_the_bound_task():
+    actor = CreationExecutionActor('local', 'member')
+    task = SimpleNamespace(workspace_id='local', id='bound-task')
+    business = object.__new__(TaskBusiness)
+    calls = []
+    business.device_preparation = lambda action, **values: calls.append((action, values)) or {'id': 'work'}
+    payload = {'request_id': str(uuid4()), 'kind': 'montage', 'shape': {'task_id': task.id}}
+    business.execute('prepare_device_resources', {'payload': payload}, actor, task, None, {}, None, None)
+    assert calls[0][1]['shape'] == {'task_id': task.id} and calls[0][1]['actor'] is actor
+    payload['shape'] = {'task_id': 'other-task'}
+    with pytest.raises(TaskBusinessRejected, match='不能切换'):
+        business.execute('prepare_device_resources', {'payload': payload}, actor, task, None, {}, None, None)
+    assert len(calls) == 1

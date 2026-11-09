@@ -810,7 +810,12 @@ class MetadataEditUseCase:
             raise EditPreviewRejected(status_code=409, detail='画幅与适配方式没有变化')
         clip = montage.clips[0]
         try:
-            self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+            if clip.person_render_id:
+                from app.creation.person_stage_use_case import adopted_person_render_source
+                cue = next((item for item in montage.cues if item.id == clip.cue_id), None)
+                adopted_person_render_source(self.repository, task, clip, cue, self.picture_renderer.person_path)
+            else:
+                self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
             records = []
             if not draft_only:
                 from copy import deepcopy
@@ -819,6 +824,8 @@ class MetadataEditUseCase:
                 changed.clips = [replace(item, fit_mode=payload.fit_mode or item.fit_mode) for item in changed.clips]
                 tracks = self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)
                 records = [self.picture_renderer.publish_picture(workspace_id, task, base, candidate, tracks, kind='canvas_preview', parameters={'side': side, 'aspect_ratio': candidate.aspect_ratio}, execution=execution) for side, candidate in (('before', montage), ('after', changed))]
+        except PermissionError as exc:
+            raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             raise EditPreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else '画幅预览失败，请检查素材与本机FFmpeg') from exc
         if self.repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
@@ -964,17 +971,11 @@ class MetadataEditUseCase:
     def trim_clip_source_url(self, workspace_id, task_id, clip, cue):
         """Return an authorized source interval; browser playback does no media work."""
         if clip.person_render_id:
+            from app.creation.person_stage_use_case import adopted_person_render_source
+            task = self.task_or_missing(workspace_id, task_id)
             render = self.repository.person_renders.get_person_render(workspace_id, task_id, clip.person_render_id)
-            if render.narration_segment_id != cue.narration_segment_id:
-                raise ValueError('人物口型镜头与当前配音段落不匹配')
-            synthetic_source = clip.asset_id == f'person:{render.id}' and clip.source_path == f'person-render://{render.id}'
-            legacy_source = clip.source_path == render.visual_reference and (not clip.asset_id.startswith('person:'))
-            if legacy_source:
-                self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
-            if not (synthetic_source or legacy_source):
-                raise ValueError('人物口型镜头来源不匹配')
-            path = self.picture_renderer.person_path(render)
-            if path is None or clip.source_end_seconds > (render.duration_seconds or 0) + 0.001:
+            path = adopted_person_render_source(self.repository, task, clip, cue, self.picture_renderer.person_path)
+            if clip.source_end_seconds > (render.duration_seconds or 0) + 0.001:
                 raise ValueError('人物口型源片段不可用')
             route = f"/api/creation-tasks/{quote(task_id, safe='')}/person-renders/{quote(render.id, safe='')}/media"
         else:

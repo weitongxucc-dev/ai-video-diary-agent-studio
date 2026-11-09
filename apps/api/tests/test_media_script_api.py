@@ -32,6 +32,7 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
     from assistant_turn_control_fixtures import isolate_assistant_turn_control
     isolate_assistant_turn_control(monkeypatch, request)
     state = material_edit_state
+    state.original_jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
     # The API/owner tests already substitute preparation/execution. Isolate
     # only this adapter's platform inventory; do not mutate global sys or the
@@ -181,7 +182,7 @@ def test_unavailable_script_configuration_is_explicit_and_never_queues(state, mo
     assert capabilities.status_code == 200 and not capabilities.json()["available"]
     assert capabilities.json()["reason"]
     assert submit(state).status_code == 503
-    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == state.original_jobs
     assert state.calls == []
 
 
@@ -192,7 +193,7 @@ def test_unsupported_linux_platform_is_rejected_without_unrestricted_fallback(st
     assert "macOS" in capabilities.json()["reason"]
     assert submit(state).status_code == 503
     assert state.calls == []
-    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == state.original_jobs
 
 
 def test_script_current_png_input_is_frozen_and_source_change_refuses_commit(state):

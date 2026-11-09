@@ -16,10 +16,10 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
       return {content: [{type: 'text', text: JSON.stringify(details)}], details};
     };
     pi.registerTool({name: 'prepare_device_resources', label: '提交有界设备准备',
-      description: '按当前授权目标提交cpu媒体形状或narration真实声音版本的有界准备。narration须给实际有限样本文案、目标语言、输出单元时长及原词典id/version引用；当前任务由宿主绑定，不传词典正文。只提交既有准备owner，不运行旧作品或normal制作；不得传路径、env或许可阈值。首次请求键由宿主生成；回应未知只沿原键和原shape对账，不换ID重做。收到id后查询原队列；终态且finalize明确释放后，可因实际需要显式新键再次准备，默认重调仍只查原结果。',
+      description: '按当前授权目标提交cpu媒体形状、narration真实声音版本或montage故事板的有界准备。montage仅传空shape，由宿主绑定当前任务并读取真实文案与素材形状；narration须给实际有限样本文案、目标语言、输出单元时长及原词典id/version引用；当前任务由宿主绑定，不传词典正文。只提交既有准备owner，不运行旧作品或normal制作；不得传路径、env或许可阈值。首次请求键由宿主生成；回应未知只沿原键和原shape对账，不换ID重做。收到id后查询原队列；终态且finalize明确释放后，可因实际需要显式新键再次准备，默认重调仍只查原结果。',
       parameters: {type: 'object', properties: {
         request_id: {type: 'string',format: 'uuid',description: '用于已知原键恢复，或原队列终态经finalize释放后明确新一轮准备；未知或active不可换键。不是队列id。'},
-        kind: {type:'string',enum:['cpu','narration'],default:'cpu'},
+        kind: {type:'string',enum:['cpu','narration','montage'],default:'cpu'},
         shape: {oneOf: [{type: 'object',properties: {
           width_px: {type:'integer',minimum:2,multipleOf:2},height_px: {type:'integer',minimum:2,multipleOf:2},
           frame_rate: {type:'integer',minimum:1},duration_seconds: {type:'number',exclusiveMinimum:0},
@@ -33,15 +33,17 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
             output_duration_seconds:{type:'number',exclusiveMinimum:0},
             pronunciation_references:{type:'array',items:{type:'object',properties:{
               id:{type:'string',minLength:1},version:{type:'string',minLength:1}},required:['id','version'],additionalProperties:false}},
-          },required:['voice_profile_id','voice_version','text','language','output_duration_seconds'],additionalProperties:false}]},
+          },required:['voice_profile_id','voice_version','text','language','output_duration_seconds'],additionalProperties:false},
+          {type:'object',properties:{},additionalProperties:false}]},
       },required:['shape'],additionalProperties:false},
-      execute: async (callId: string,params: {request_id?:string;kind?:'cpu'|'narration';shape:Record<string,any>}) => {
+      execute: async (callId: string,params: {request_id?:string;kind?:'cpu'|'narration'|'montage';shape:Record<string,any>}) => {
         const kind=params.kind ?? 'cpu';
-        if (!['cpu','narration'].includes(kind)) throw new Error('未知设备准备类型，未提交请求');
+        if (!['cpu','narration','montage'].includes(kind)) throw new Error('未知设备准备类型，未提交请求');
         if (kind==='cpu' && (!Number.isSafeInteger(params.shape.width_px) || params.shape.width_px<=0 || params.shape.width_px%2
             || !Number.isSafeInteger(params.shape.height_px) || params.shape.height_px<=0 || params.shape.height_px%2))
           throw new Error('CPU准备需要明确的偶数YUV宽高；声音准备须明确kind=narration，未提交请求');
-        const shape=kind==='narration' ? {...params.shape,pronunciation_references:(params.shape.pronunciation_references ?? [])
+        if (kind==='montage' && Object.keys(params.shape).length) throw new Error('故事板准备由宿主读取当前任务，shape须为空');
+        const shape=kind==='montage' ? {task_id:taskId} : kind==='narration' ? {...params.shape,pronunciation_references:(params.shape.pronunciation_references ?? [])
           .map((ref:Record<string,string>)=>Object.fromEntries(Object.entries(ref).sort(([a],[b])=>a.localeCompare(b))))
           .sort((a:Record<string,string>,b:Record<string,string>)=>a.id.localeCompare(b.id)||a.version.localeCompare(b.version))} : params.shape;
         const source=readActionSource(),inputKey=source.inputId ?? source.turnId;

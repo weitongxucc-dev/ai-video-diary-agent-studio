@@ -52,9 +52,10 @@ def metadata_preparation(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform != 'darwin' or not shutil.which('ffmpeg') or not shutil.which('ffprobe'), reason='macOS CPU preparation backend unavailable')
-def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_without_rerun(tmp_path):
+@pytest.mark.parametrize('clip_count', [2, 6])
+def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_without_rerun(tmp_path, clip_count):
     repository, actor, access, service, paths = preparation(tmp_path)
-    shape = CpuPreparationShape(64, 64, 24, 1.0, 2, 2, 8000, 1)
+    shape = CpuPreparationShape(64, 64, 24, 1.0, clip_count, 2, 8000, 1)
     plan_id, budget = service.prepare(shape, actor, request_id=str(uuid4()))
     assert budget.max_disk_io_bytes_per_second is None
     assert not service.profile_path.exists()
@@ -77,7 +78,7 @@ def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_w
             time.sleep(.1)
         assert row['state'] == 'done', (dict(row), runtime.last_error)
         result = service.finalize(database_path=repository.database_path, request_id=request.id, actor=actor)
-        assert result.revision == 1 and result.budget.cpu_render.max_clip_count == 2
+        assert result.revision == 1 and result.budget.cpu_render.max_clip_count == clip_count
         assert result.budget.cpu_audio.max_input_count == 2
         assert result.budget.cpu_audio.max_output_bytes >= 32000
         assert result.budget.narration is None and result.budget.presenter is None
@@ -330,12 +331,14 @@ def test_request_kind_uses_original_unit_and_rejects_other_identity_without_writ
         connection.executemany('INSERT INTO device_work_requests VALUES (?,?,?,?,?)', [
             ('cpu', 'device_preparation', 'workspace', 'member', 'cpu-prepare:v1'),
             ('voice', 'device_preparation', 'workspace', 'member', 'narration-prepare:v1'),
+            ('storyboard', 'device_preparation', 'workspace', 'member', 'montage-prepare:v1'),
             ('unknown', 'device_preparation', 'workspace', 'member', 'unknown:v1'),
             ('other-owner', 'creation_job', 'workspace', 'member', 'cpu-prepare:v1')])
     before = path.read_bytes()
     actor = CreationExecutionActor('workspace', 'member')
     assert request_kind(database_path=path, request_id='cpu', actor=actor) == 'cpu'
     assert request_kind(database_path=path, request_id='voice', actor=actor) == 'narration'
+    assert request_kind(database_path=path, request_id='storyboard', actor=actor) == 'montage'
     with pytest.raises(ValueError, match='Unknown'):
         request_kind(database_path=path, request_id='unknown', actor=actor)
     with pytest.raises(KeyError):

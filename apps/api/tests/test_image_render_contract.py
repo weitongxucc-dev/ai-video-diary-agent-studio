@@ -67,8 +67,15 @@ def test_normal_image_render_stat_facts_deduplicate_bytes_and_real_probe_counts(
     assert resources['input_bytes'] == 512 + 4096 + png['size_bytes']
     assert _verdict(_probe(tmp_path, max_overlay_count=2), resources) is True
     assert _verdict(_probe(tmp_path, max_overlay_count=0), resources) is False
-    refs = main._creation_task_montage_render_input_refs(state.task, state.montage)
+    from app.creation.render_stage_use_case import render_input_refs
+    refs = render_input_refs(state.task, state.montage)
     assert refs.count(png['source_ref']) == 1
+    transform = state.repo.lineage_records.list_transform_runs(state.task.workspace_id, state.task.id)[0]
+    with state.repo._connect() as conn:
+        conn.execute('UPDATE transform_runs SET parameters_json=? WHERE id=?',
+            (json.dumps({**transform.parameters, 'width': 32}), transform.id))
+    changed_key, _ = facts(state)
+    assert changed_key != key  # Registered dimensions remain part of the sealed render identity.
 
 
 @pytest.mark.parametrize('invalid', ['no_actor', 'other_member', 'other_workspace', 'other_task', 'revision', 'failed', 'dimensions'])
@@ -136,47 +143,89 @@ def test_normal_render_keeps_unsupported_paths_blocked(state, unsupported):
         state.montage.audio_timeline = main.narration_audio_timeline(state.montage.narration_audio_path, state.montage.duration_seconds)
     state.repo.montage_plan_adoption.save_creation_task_montage_plan(state.task.workspace_id, state.task.id, state.montage.id,
         creation_task_montage_plan_to_payload(state.montage))
-    with pytest.raises(ValueError, match='仅支持|音轨组合'):
+    with pytest.raises(PermissionError if unsupported == 'audio' else ValueError,
+        match='已许可来源解析器' if unsupported == 'audio' else '仅支持|音轨组合'):
         facts(state)
 
 
-def test_grant_verifies_actual_png_digest_and_dimensions_before_renderer(state, monkeypatch):
-    checks = []
-    context = SimpleNamespace(check=lambda: checks.append(True), grant=SimpleNamespace(owner_id='current-render'))
-    monkeypatch.setattr(main, 'production_repo', state.repo)
-    monkeypatch.setattr(main, 'artifact_store', state.store)
-    original_event = state.repo.execution_records.get_task_event
-    monkeypatch.setattr(state.repo.execution_records, 'get_task_event', lambda workspace, identity:
-        SimpleNamespace(payload=state.actor.identity_payload()) if identity == 'event_current-render_start' else original_event(workspace, identity))
-    monkeypatch.setattr(main, '_verify_creation_identity', lambda actor: 'ready' if actor == state.actor else 'unauthorized')
-    with pytest.raises(ValueError, match='设备许可'):
-        main._granted_graphic_source_paths(state.task.workspace_id, state.task.id, state.montage.graphic_overlays, None)
-    paths = main._granted_graphic_source_paths(state.task.workspace_id, state.task.id, state.montage.graphic_overlays, context)
-    assert list(paths) == [state.source['source_ref']] and len(checks) >= 3
-    original_describe = state.store.describe
-    monkeypatch.setattr(state.store, 'describe', lambda ref: replace(original_describe(ref), sha256='0' * 64))
-    with pytest.raises(ValueError, match='内容摘要'):
-        main._granted_graphic_source_paths(state.task.workspace_id, state.task.id, state.montage.graphic_overlays, context)
-    monkeypatch.setattr(state.store, 'describe', original_describe)
-    before, _ = facts(state)
-    transform = state.repo.lineage_records.list_transform_runs(state.task.workspace_id, state.task.id)[0]
-    with state.repo._connect() as conn:
-        conn.execute('UPDATE transform_runs SET parameters_json=? WHERE id=?',
-            (json.dumps({**transform.parameters, 'width': 32}), transform.id))
-    after, _ = facts(state)
-    assert after != before  # Dimensions are part of the same sealed render identity.
-    with pytest.raises(ValueError, match='尺寸'):
-        main._granted_graphic_source_paths(state.task.workspace_id, state.task.id, state.montage.graphic_overlays, context)
+def test_grant_verifies_actual_png_digest_and_dimensions_before_renderer(tmp_path, monkeypatch):
+    import time
+    from test_task_media_grants import case
+    from app.creation_execution import CpuRenderGrantContext
+    repo, actor, _, _, build, media = case(tmp_path)
+    members = LocalMemberService(repo.database_path)
+    task = repo.task_records.get_creation_task('local', 'task')
+    task.owner_user_id = actor.member_id
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+    store = ArtifactStore(tmp_path/'png-artifacts')
+    content = io.BytesIO()
+    Image.new('RGBA', (16, 12), (255, 0, 0, 128)).save(content, format='PNG')
+    source = import_graphic_source(repo, store, tmp_path/'scratch', 'local', task.id,
+        SimpleNamespace(file=io.BytesIO(content.getvalue()), filename='qa.png'))
+    overlays = [ImageOverlay(id='png', name='qa.png', source_ref=source['source_ref'], start_seconds=0, end_seconds=1).model_dump()]
+    original_facts = media.facts
+    def facts(*args):
+        identity, resources = original_facts(*args)
+        path = store.resolve_file(source['source_ref'])
+        resources.update(kind='creation_render', input_count=1, input_bytes=path.stat().st_size,
+            inputs=[{'path': str(path), 'duration_seconds': None, 'sample_rate': None, 'channels': None}])
+        return identity, resources
+    media.facts = facts
+    runtime = build(media)
+    access = permits.MemberDeviceAccess(members)
+    monkeypatch.setattr(main, 'production_repo', repo)
+    monkeypatch.setattr(main, 'artifact_store', store)
+    monkeypatch.setattr(main, 'device_runtime', None)
+    monkeypatch.setattr(main, 'local_members_service', members)
+    monkeypatch.setattr(main, '_verify_creation_identity', access.verify_identity)
+    subject = main._render_stage_use_case(repo)
+    job = media.submit(runtime, actor, task.id, 'synthetic_media', {}, 'audio_listen')
+    grant = runtime.scheduler.pick_and_grant()
+    assert grant is not None and grant.owner_id == job.id
+    repo.job_records.claim_job_run('local', job.id)
+    context = CpuRenderGrantContext(runtime.scheduler, grant, time.monotonic()+30, 65536, 1)
+    try:
+        with pytest.raises(ValueError, match='设备许可'):
+            subject.graphic_source_paths('local', task.id, overlays, None)
+        paths = subject.graphic_source_paths('local', task.id, overlays, context)
+        assert list(paths) == [source['source_ref']]
+        runtime.scheduler.assert_grant(grant)
+        original_describe = store.describe
+        monkeypatch.setattr(store, 'describe', lambda ref: replace(original_describe(ref), sha256='0'*64))
+        with pytest.raises(ValueError, match='内容摘要'):
+            subject.graphic_source_paths('local', task.id, overlays, context)
+        monkeypatch.setattr(store, 'describe', original_describe)
+        before = graphic_source_facts(repo, store, 'local', task.id, source['source_ref'], actor=actor)
+        transform = repo.lineage_records.list_transform_runs('local', task.id)[0]
+        with repo._connect() as conn:
+            conn.execute('UPDATE transform_runs SET parameters_json=? WHERE id=?',
+                (json.dumps({**transform.parameters, 'width': 32}), transform.id))
+        after = graphic_source_facts(repo, store, 'local', task.id, source['source_ref'], actor=actor)
+        assert after['width'] != before['width']
+        with pytest.raises(ValueError, match='尺寸'):
+            subject.graphic_source_paths('local', task.id, overlays, context)
+    finally:
+        def finish(conn, current):
+            repo.job_records.finish_job_run('local', job.id, status='failed', failure_reason='fixture_complete',
+                impact='Synthetic PNG verification has ended.', repair_action='No product work to resume.', connection=conn)
+            return 'png-verification-fixture-complete'
+        runtime.scheduler.fail_unit(grant, reason='fixture_complete', failure_write=finish)
+        runtime.scheduler.assert_released(grant)
+        assert runtime.stop(1)
 
 
 def test_exact_image_preview_declares_union_and_candidate_peak(script_state, monkeypatch, tmp_path):  # noqa: F811
     state = script_state
+    from _media_preview_test_fixtures import configure_synthetic_media_budgets
     first = submit(state)
-    assert first.status_code == 202 and state.runtime.run_once()
+    assert first.status_code == 202, first.text
+    assert state.runtime.run_once()
     first_ref = state.client.get(first.json()['result_url']).json()['result']['source_ref']
     second = submit(state, request_id='cbe09c60-16a0-4ee8-9015-74576ba07a88')
     assert second.status_code == 202 and state.runtime.run_once()
     second_ref = state.client.get(second.json()['result_url']).json()['result']['source_ref']
+    configure_synthetic_media_budgets(monkeypatch, main)
     # This fixture starts with a deliberately obsolete presenter receipt. Use
     # the existing precise edit to select its registered material candidate.
     material = state.client.post(state.base_url + '/edits/exact', json={

@@ -4,7 +4,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
-from app.creation_execution import CreationExecutionActor
 from test_narration_edit_execution import _narration_edit_state, unchanged, run_edit_to_boundary, assert_original_pcm_unknown
 
 
@@ -40,7 +39,7 @@ def test_confirm_queues_once_and_publishes_only_after_real_grant(narration_api):
     assert request.work_class == "preview_dependency"
     state.resources.allowed = True
     assert run_edit_to_boundary(state)
-    assert len(state.calls) == 1
+    assert len(state.calls) == 1, state.repo.job_records.get_job_run("local", receipt["job_id"]).failure_reason
     assert len(state.committed) == 1
     assert state.committed[0].result_version_id != state.base.id
     assert state.repo.task_records.get_creation_task("local", state.task.id).current_timeline_version_id == state.committed[0].result_version_id
@@ -74,12 +73,11 @@ def test_confirm_rechecks_stale_audio_before_any_device_request(narration_api):
         assert connection.execute("SELECT count(*) FROM device_work_requests").fetchone()[0] == 0
 
 
-def test_other_member_cannot_acquire_local_narration_grant(narration_api, monkeypatch):
+def test_other_member_cannot_acquire_local_narration_grant(narration_api):
     state = narration_api
-    member = state.members.add_member("other synthetic member")
-    other = CreationExecutionActor("local", member.member_id)
-    monkeypatch.setattr(main_module, "_require_permit_actor", lambda *_: other)
-    response = state.client.post(state.confirm_url, json={})
+    _member, other_token = state.members.join(state.members.create_invite_code(), "other synthetic member")
+    response = state.client.post(state.confirm_url, json={},
+        headers={"X-Local-Member-Token": other_token})
     assert response.status_code == 403, response.text
     assert not state.calls
     unchanged(state)
@@ -89,14 +87,20 @@ def test_other_member_cannot_acquire_local_narration_grant(narration_api, monkey
 def generator_api(narration_api, tmp_path, monkeypatch):
     from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
     from app.creation.contracts import SubtitleTrack, TimelineVersion
-    from test_montage_pipeline import _asset
     from test_narration_edit_execution import wav_bytes
     from app.narration import NarrationArtifact
     state = narration_api
+    # This draft's four seconds leave room for a longer local take; final
+    # delivery duration is checked separately from this retiming contract.
+    state.plan.duration_target_seconds = 8
+    import json
+    from dataclasses import asdict
+    with state.repo._connect() as conn:
+        conn.execute('UPDATE creation_plans SET payload=? WHERE id=?',
+            (json.dumps(asdict(state.plan), default=str), state.plan.id))
     state.segments = [replace(item, language="zh") for item in state.segments]
     state.repo.narration_records.save_narration_segments("local", state.task.id, "script", state.segments)
-    asset = _asset(tmp_path / "library", workspace_id="local", owner_user_id=state.task.owner_user_id)
-    state.repo._save_asset(asset)
+    asset = state.asset
     montage = CreationTaskMontagePlan("full-montage", "local", state.task.id, "script", "合成", "ready",
         [NarrationCue(f"cue-{i}", f"section-{i}", f"第{i}段", 2, f"n-{i}") for i in (1, 2)],
         [MontageClip(f"clip-{i}", f"cue-{i}", asset.id, asset.segments[i-1].id,
@@ -116,7 +120,9 @@ def generator_api(narration_api, tmp_path, monkeypatch):
     state.original_track = SubtitleTrack("unavailable", "local", state.task.id, state.base.id, "en-US", "zh-CN",
         {}, [], "translation", None, None, None, "unavailable", "未翻译", "无英文输出", "选择模型后翻译")
     state.repo.subtitle_records.create_subtitle_track(state.original_track)
-    state.executor.narration_stage = main_module._narration_stage_use_case(state.repo, narration_budget=state.budget)
+    # Keep the actual scoped generator and PCM owner assembled by the shared fixture.
+    state.executor.narration_stage = state.stage
+    state.runtime.task_authorizations.ensure(state.task, state.actor, interactive=True)
     state.generated_calls = []
     state.generated_failure = None
     state.generated_oversize = False
@@ -137,10 +143,13 @@ def generator_api(narration_api, tmp_path, monkeypatch):
         unchanged_task = state.repo.task_records.get_creation_task("local", state.task.id)
         assert unchanged_task.current_timeline_version_id == state.base.id
         assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is None
+        from app.narration import _pronunciation_dictionary, _pronunciation_version
+        pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=kwargs['pronunciation_entries'],
+            workspace_id='local', person_profile_id=kwargs['voice_identity'].person_profile_id, task_id=state.task.id))
         return NarrationArtifact(task_id=state.task.id, script_id="script", audio_path=str(path), duration_seconds=state.generated_duration,
-            sample_rate=8000, model_id="synthetic-provider", voice_profile_id=state.plan.selected_voice.profile_id,
-            cache_key="1" * 64, language="zh", pronunciation_version="rules-v1")
-    monkeypatch.setattr(main_module.narration_generator, "generate_for_creation_task", generated)
+            sample_rate=24000, model_id="synthetic-provider", voice_profile_id=state.plan.selected_voice.profile_id,
+            cache_key="1" * 64, language="zh", pronunciation_version=pronunciation)
+    monkeypatch.setattr(state.stage.generator, "generate_for_creation_task", generated)
     monkeypatch.setattr(main_module, "_publish_subtitle_text", lambda **_: pytest.fail("不能在配音终态另写字幕产物"))
     actual_checkpoint = state.executor._narration_edit_checkpoint
     def checkpoint(*args, **kwargs):
@@ -232,7 +241,9 @@ def test_draft_narration_retime_still_rejects_insufficient_source_footage(genera
     current = state.repo.task_records.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id == state.base.id
     assert state.repo.narration_records.list_narration_segments("local", state.task.id, "script") == state.segments
-    assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is None
+    candidate = state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64)
+    assert candidate is not None and candidate.duration_seconds == state.generated_duration
+    assert current.narration_cache_key != candidate.cache_key
 
 
 def test_rendered_narration_preview_keeps_existing_comparison_contract(generator_api):
@@ -299,9 +310,10 @@ def test_actual_main_generator_callback_commits_audio_version_and_job_atomically
     assert completed_job.status == "succeeded", completed_job.failure_reason
     current = state.repo.task_records.get_creation_task("local", state.task.id)
     assert current.current_timeline_version_id != state.base.id
-    assert current.narration_cache_key == "2" * 64 and not current.output_ready
+    assert current.narration_cache_key not in {"old", "1" * 64} and not current.output_ready
     assert state.repo.narration_artifacts.get_narration_artifact("local", "1" * 64) is not None
-    assert state.repo.narration_artifacts.get_narration_artifact("local", "2" * 64) is not None
+    combined = state.repo.narration_artifacts.get_narration_artifact("local", current.narration_cache_key)
+    assert combined is not None and combined.duration_seconds == 4 and combined.sample_rate == 24000
     segments = state.repo.narration_records.list_narration_segments("local", state.task.id, "script")
     assert segments[0].audio_reference == "narration://artifact/" + "1" * 64
     assert segments[1] == state.segments[1]
@@ -383,12 +395,14 @@ def test_queue_seals_all_audio_and_montage_consumed_by_combination(generator_api
 
 def test_actual_generator_cancellation_retains_original_facts(generator_api, monkeypatch):
     state = generator_api
-    generate = main_module.narration_generator.generate_for_creation_task
+    generate = state.stage.generator.generate_for_creation_task
     def cancel(**kwargs):
         result = generate(**kwargs)
-        state.executor.request_cancel(kwargs["grant_context"].grant.request_id)
+        cancelled = state.client.post(
+            f"/api/device/queue/{kwargs['grant_context'].grant.request_id}/cancel", json={})
+        assert cancelled.status_code == 200, cancelled.text
         return result
-    monkeypatch.setattr(main_module.narration_generator, "generate_for_creation_task", cancel)
+    monkeypatch.setattr(state.stage.generator, "generate_for_creation_task", cancel)
     response = state.client.post(state.confirm_url, json={})
     assert response.status_code == 202, response.text
     state.resources.allowed = True

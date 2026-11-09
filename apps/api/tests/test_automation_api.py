@@ -152,8 +152,13 @@ def test_scope_is_filtered_before_high_scoring_other_assets_truncate_result(auto
         other.path=str(production.video_library_path/f'outside-{index}.mp4')
         other.file_name=f'outside-{index}.mp4'
         copyfile(selected.path,other.path)
+        from pathlib import Path
+        stat=Path(other.path).stat()
+        other.size_bytes=stat.st_size
+        other.modified_at=datetime.fromtimestamp(stat.st_mtime,timezone.utc)
         for segment in other.segments:
             segment.id=f'{other.id}-{segment.id}'
+            segment.asset_id=other.id
             segment.description=payload['goal']
             segment.system_tags=[payload['goal']]
         production._save_asset(other)

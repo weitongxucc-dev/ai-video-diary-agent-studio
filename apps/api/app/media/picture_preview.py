@@ -382,26 +382,16 @@ class PicturePreviewRenderer:
             if fact not in files:
                 files.append(fact)
         self.validate_material_use(workspace_id, plan)
-        person_ids = set()
-        if any((clip.person_render_id for clip in plan.clips)):
-            from app.creation_execution import presenter_inputs, current_presenter_render
-            creation_plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
-            script = self.repository.script_records.get_creation_task_script(workspace_id, task.confirmed_script_id)
-            for segment, person_request in presenter_inputs(self.repository, task, script, creation_plan, self.presenter_model_ids()):
-                current = current_presenter_render(self.repository, task, segment, person_request, self.person_path)
-                if current is not None:
-                    person_ids.add(current.id)
         for clip in plan.clips:
             if clip.person_render_id:
-                if clip.person_render_id not in person_ids:
-                    raise PermissionError('当前人物/声音授权或片段版本已失效')
+                from app.creation.person_stage_use_case import adopted_person_render_source
+                cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
+                path = adopted_person_render_source(self.repository, task, clip, cue, self.person_path)
             else:
                 asset = self.repository.get_asset(workspace_id, clip.asset_id)
                 if not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False, visibility=asset.visibility, owner_user_id=asset.owner_user_id):
                     raise PermissionError('当前成员不能读取镜头素材')
-            path = self.person_path(self.repository.person_renders.get_person_render(workspace_id, task_id, clip.person_render_id)) if clip.person_render_id else self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
-            if path is None:
-                raise ValueError('当前人物片段没有有效媒体')
+                path = self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
             remember(clip.source_path, path)
         for reference in dict.fromkeys((item['source_ref'] for candidate in picture_candidates for item in candidate.graphic_overlays if item.get('kind') == 'image')):
             item = graphic_source_facts(self.repository, self.store, workspace_id, task_id, reference, actor=actor)

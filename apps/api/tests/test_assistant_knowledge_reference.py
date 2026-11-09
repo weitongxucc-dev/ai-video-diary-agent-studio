@@ -121,7 +121,7 @@ def test_knowledge_reference_is_frozen_on_turn_and_passed_to_runtime(reference_c
         return "引用第一版资料。", None
     monkeypatch.setattr(main,"run_plan_turn",run)
     reference = {"knowledge_item_id":"knowledge-real","version":"1","locator":"第1段"}
-    payload = {"conversation_id":current["id"],"message":"核对这段资料", "client_request_id":str(uuid4()),"expected_draft_version":1,"selected_knowledge_reference":reference}
+    payload = {"conversation_id":current["id"],"message":"核对这段资料", "client_request_id":str(uuid4()),"expected_draft_version":1,"expected_reference_version":0,"selected_knowledge_reference":reference}
     assert client.patch(f"/api/assistant/conversations/{current['id']}",json={"draft_text":payload["message"],"expected_draft_version":0},headers=headers).status_code == 200
     invalid = {**payload, "selected_knowledge_reference":{**reference,"locator":"第2段"}}
     assert client.post("/api/assistant/plan/turn",json=invalid,headers=headers).status_code == 404

@@ -143,7 +143,7 @@ def request_kind(*, database_path, request_id, actor):
         raise KeyError(request_id)
     if row[:3] != (OWNER_TYPE, actor.workspace_id, actor.member_id):
         raise PermissionError('Preparation request belongs to another owner, workspace or member')
-    kinds = {'cpu-prepare:v1': 'cpu', 'narration-prepare:v1': 'narration'}
+    kinds = {'cpu-prepare:v1': 'cpu', 'narration-prepare:v1': 'narration', 'montage-prepare:v1': 'montage'}
     if row[3] not in kinds:
         raise ValueError('Unknown device preparation execution unit')
     return kinds[row[3]]
@@ -378,20 +378,20 @@ class DeviceResourcePreparation:
                 command = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-filter_complex_threads', '1']
                 total_frames = math.ceil(duration * shape.frame_rate)
                 frame_counts = [total_frames // count + (index < total_frames % count) for index in range(count)]
-                for frames in frame_counts:
-                    command += ['-threads', '1', '-f', 'lavfi', '-i',
-                        f'testsrc2=size={shape.width_px}x{shape.height_px}:rate={shape.frame_rate}:duration={frames / shape.frame_rate}']
-                graph = ''.join(f'[{i}:v]trim=end_frame={frames},setpts=PTS-STARTPTS[v{i}];'
+                # Each lavfi input creates its own automatic graph thread pool.
+                # Keep the synthetic sources in the explicitly bounded complex
+                # graph so preparation obeys the same declared thread policy.
+                graph = ''.join(f'testsrc2=size={shape.width_px}x{shape.height_px}:rate={shape.frame_rate}:'
+                    f'duration={frames / shape.frame_rate},trim=end_frame={frames},setpts=PTS-STARTPTS[v{i}];'
                     for i, frames in enumerate(frame_counts))
                 graph += ''.join(f'[v{i}]' for i in range(count)) + f'concat=n={count}:v=1:a=0[v]'
                 command += ['-filter_complex', graph, '-map', '[v]', '-t', str(duration), '-c:v', plan['policy']['encoder'],
                     '-threads', '1', '-preset', plan['policy']['encoder_preset'], '-crf', str(plan['policy']['encoder_crf']), '-pix_fmt', 'yuv420p', str(video)]
                 run(command, (video,))
                 command = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-filter_complex_threads', '1']
-                for index in range(shape.audio_input_count):
-                    command += ['-threads', '1', '-f', 'lavfi', '-i',
-                        f'sine=frequency={440 + index}:sample_rate={shape.sample_rate}:duration={duration}']
-                graph = ''.join(f'[{i}:a]' for i in range(shape.audio_input_count)) + f'amix=inputs={shape.audio_input_count}:normalize=0[a]'
+                graph = ''.join(f'sine=frequency={440 + index}:sample_rate={shape.sample_rate}:'
+                    f'duration={duration}[a{index}];' for index in range(shape.audio_input_count))
+                graph += ''.join(f'[a{i}]' for i in range(shape.audio_input_count)) + f'amix=inputs={shape.audio_input_count}:normalize=0[a]'
                 command += ['-filter_complex', graph, '-map', '[a]', '-t', str(duration), '-ar', str(shape.sample_rate),
                     '-ac', str(shape.channels), '-threads', '1', '-c:a', 'pcm_f32le', str(audio)]
                 run(command, (video, audio))

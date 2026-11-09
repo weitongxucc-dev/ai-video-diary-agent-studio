@@ -173,6 +173,9 @@ def backend_identity(name, budget, *, settings, model_catalog=None):
             source = ("creation/native_task_operations.py" if name == "native_command" else "montage.py")
             executable = Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__).parent / source
             facts["implementation"] = _hash_file(executable)
+            if name == 'montage' and not getattr(sys, 'frozen', False):
+                for source in ('creation/montage_stage_use_case.py', 'montage_resource_preparation.py'):
+                    facts[source] = _hash_file(Path(__file__).parent / source)
             if name == "native_command":
                 facts["python"] = _hash_file(settings.model_runtime_python_path)
         else:

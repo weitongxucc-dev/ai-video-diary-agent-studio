@@ -29,8 +29,8 @@ export function safeScriptCandidateLocation(value: any): ScriptCandidateLocation
   if (!["script_fact_unsupported", "script_goal_conflict"].includes(value?.error)) return undefined;
   const section = value.candidate_section_index, field = value.candidate_field;
   const fragment = value.candidate_fragment_index, digest = value.candidate_field_digest;
-  if (!Number.isInteger(value.section_index) || value.section_index < 1 || value.section_index > 20
-      || !Number.isInteger(section) || section < 0 || section > 20
+  if (!Number.isSafeInteger(value.section_index) || value.section_index < 1
+      || !Number.isSafeInteger(section) || section < 0
       || !["title", "content", "visual_prompt"].includes(field)
       || (section === 0 ? field !== "title" : section !== value.section_index)
       || !Number.isInteger(fragment) || fragment < 0
@@ -64,7 +64,7 @@ export function safeFailureText(value: unknown, secrets: string[] = []): string 
 export function safeScriptReviewIssues(value: any, secrets: string[] = []): ScriptReviewIssue[] | undefined {
   const issues = value?.review_issues;
   if (!["script_fact_unsupported", "script_goal_conflict"].includes(value?.error)
-      || !Array.isArray(issues) || issues.length < 1 || issues.length > 12) return undefined;
+      || !Array.isArray(issues) || issues.length < 1) return undefined;
   const safe: ScriptReviewIssue[] = [];
   for (const issue of issues) {
     const location = safeScriptCandidateLocation(issue);
@@ -105,7 +105,7 @@ export function safeBusinessFailure(value: any, secrets: string[] = []): Partial
     safe.query_url = value.query_url;
   // Existing script-review consumers use these exact fields.
   if (typeof value?.retryable === "boolean") safe.retryable = value.retryable;
-  if (value?.section_index === null || (Number.isInteger(value?.section_index) && value.section_index >= 1 && value.section_index <= 20))
+  if (value?.section_index === null || (Number.isSafeInteger(value?.section_index) && value.section_index >= 1))
     safe.section_index = value.section_index;
   Object.assign(safe, safeScriptCandidateLocation(value));
   const issues = safeScriptReviewIssues(value, secrets);
@@ -129,7 +129,7 @@ function scriptDraftFailure(detail: any, secrets: string[]): ScriptDraftFailure 
   return {error, reason_code: validReason ? reason : "unavailable",
     ...(safeFailureText(detail.reason, secrets) ? {reason: safeFailureText(detail.reason, secrets)} : {}),
     ...(safeFailureText(detail.repair_action, secrets) ? {repair_action: safeFailureText(detail.repair_action, secrets)} : {}),
-    section_index: Number.isInteger(detail.section_index) && detail.section_index >= 1 && detail.section_index <= 20
+    section_index: Number.isSafeInteger(detail.section_index) && detail.section_index >= 1
       ? detail.section_index : null,
     retryable: detail.retryable === true, ...safeScriptCandidateLocation(detail), ...(issues ? {review_issues: issues} : {})};
 }

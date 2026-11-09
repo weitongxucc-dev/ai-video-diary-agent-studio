@@ -601,7 +601,11 @@ class CreationExecutionControl:
         from app.creation.narration_pcm import prepare_narration_source
         with (prepare_narration_source(self.repository, task, plan, actor) if active is None else nullcontext(None)) as prepared:
             preparation = {'_narration_reference': prepared['narration_reference']} if prepared else None
-            owner.narration_edit_facts(candidate, task, payload, plan, pcm_preparation=preparation)
+            if prepared is not None:
+                owner.narration_edit_facts(candidate, task, payload, plan, pcm_preparation=preparation)
+            # Re-entry is revalidated below by the original request's source
+            # migration. A fresh candidate has no sealed reference and would
+            # decode the WAV inside its facts transaction before that migration.
             with self.repository._connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
                 if write_guard is not None:

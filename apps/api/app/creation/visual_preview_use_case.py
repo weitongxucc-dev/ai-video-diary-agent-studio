@@ -79,11 +79,9 @@ class VisualPreviewUseCase:
         def resolve_target(target):
             preview_target=replace(target)
             if target.person_render_id:
-                person=self.repository.person_renders.get_person_render(workspace_id,task_id,target.person_render_id)
-                source=self.renderer.person_path(person)
-                cue=next(cue for cue in plan.cues if cue.id==target.cue_id)
-                if source is None or person.narration_segment_id != cue.narration_segment_id:
-                    raise ValueError("当前人物口型产物已失效，请先重新生成")
+                from app.creation.person_stage_use_case import adopted_person_render_source
+                cue=next((cue for cue in plan.cues if cue.id==target.cue_id),None)
+                source=adopted_person_render_source(self.repository,task,target,cue,self.renderer.person_path)
             else:
                 source=self.repository.resolve_clip_media_reference(workspace_id,target.asset_id,target.source_path)
             return preview_target,source
@@ -100,6 +98,8 @@ class VisualPreviewUseCase:
                     kind="color_preview", parameters={"effects": patch, "side": side,
                         "representative_clip_id": before.id, "scope": "independent_clip"}, execution=execution)
                     for side, (candidate, scoped_tracks) in zip(("before", "after"), projected, strict=True)]
+        except PermissionError as exc:
+            raise PicturePreviewRejected(status_code=403,detail=str(exc)) from exc
         except (ValueError,OSError,subprocess.SubprocessError,StopIteration) as exc:
             raise PicturePreviewRejected(status_code=422,detail=str(exc) if isinstance(exc,ValueError) else "本地画面预览失败，请检查所选源素材和 FFmpeg") from exc
         if self.repository.task_records.get_creation_task(workspace_id,task_id).current_timeline_version_id != payload.base_version_id:
