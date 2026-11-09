@@ -8,6 +8,7 @@ from app.creation.contracts import TaskEvent, TimelineVersion, TransformRun
 from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.task_audio import media_digest
+from app.creation.render_generation import current_render_generation, render_namespace, render_generation_fields, stored_render_scope
 
 
 def adopt_delivery(delivery, conn, job, *, actor, grant, record, picture_fragments, recovery_plan=None):
@@ -44,6 +45,9 @@ def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, pict
     from app.subtitle_schedule import subtitle_schedule, narration_schedule
     repo = delivery.repository
     task = repo.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
+    generation = current_render_generation(repo, job, connection=conn)
+    if stored_render_scope(manifest) != (render_generation_fields(generation) or None):
+        raise ValueError('最终采用媒体不属于本次重新输出范围')
     leaf_manifest = picture_fragments.manifest(job, actor=actor, connection=conn)
     if leaf_manifest is None or task.current_timeline_version_id != leaf_manifest['head']:
         raise ValueError('最终采用期间当前HEAD已变化，原产物保留')
@@ -57,12 +61,13 @@ def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, pict
     input_payload = render_input_payload(plan, subtitles_visible=visible,
         subtitle_tracks=json.loads(json.dumps([asdict(track) for track in tracks or []], default=str)),
         timeline_version_id=task.current_timeline_version_id, bind_timeline_version=True)
-    version_id = f'timeline_delivery_{job.id}'
+    version_id = render_namespace(f'timeline_delivery_{job.id}', generation)
     output_refs = [record.logical_ref] + ([subtitle.logical_ref] if subtitle is not None else [])
-    transform = TransformRun(id=f'transform_delivery_adoption_{job.id}', workspace_id=job.workspace_id,
+    transform = TransformRun(id=render_namespace(f'transform_delivery_adoption_{job.id}', generation), workspace_id=job.workspace_id,
         task_id=job.task_id, job_id=job.id, transform_type='montage_delivery', input_digest=job.input_digest,
         input_refs=record.input_refs + ([subtitle.logical_ref] if subtitle is not None else []), output_refs=output_refs,
         engine='original-job-delivery/v1', parameters={'delivery_manifest_digest': manifest['digest'],
+            **render_generation_fields(generation),
             'render_input_digest': render_input_digest_for(input_payload),
             'final_mux_transform_id': completed['parent']['binding']['transform_id'],
             'final_mux_transform_digest': completed['parent']['binding']['transform_digest']},
@@ -77,8 +82,9 @@ def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, pict
         created_by_operation_id=None, snapshot={'montage': rendered,
             **picture_fragments.metadata.current_narration_snapshot(job.workspace_id, task),
             'output_refs': output_refs, 'transform_run_id': transform.id, 'audio_delivery': {
-                'manifest_digest': manifest['digest'], 'manifest_event_id': delivery.manifest_id(job),
-                'picture_fragment_manifest_event_id': picture_fragments.manifest_id(job),
+                **render_generation_fields(generation), 'origin_timeline_version_id':version_id,
+                'manifest_digest': manifest['digest'], 'manifest_event_id': delivery.manifest_id(job, connection=conn),
+                'picture_fragment_manifest_event_id': picture_fragments.manifest_id(job, connection=conn),
                 'job_id': job.id, 'request_id': grant.request_id, 'permit_generation': grant.generation,
                 'video_artifact_id': record.id, 'subtitle_artifact_id': subtitle.id if subtitle is not None else None,
                 'render_input': input_payload, 'render_input_digest': render_input_digest_for(input_payload),
@@ -90,7 +96,7 @@ def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, pict
             'original_generation': recovery_plan['original_generation']}
     from app.creation.transactions import clone_subtitle_track, clone_cover_asset
     cloned_tracks = [clone_subtitle_track(track, timeline_version_id=version.id,
-        track_id=f'subtitle_delivery_{job.id}_{index}', artifact_ref=subtitle.logical_ref if subtitle is not None else None,
+        track_id=render_namespace(f'subtitle_delivery_{job.id}_{index}', generation), artifact_ref=subtitle.logical_ref if subtitle is not None else None,
         transform_id=f'transform_{subtitle.id}' if subtitle is not None else None) for index, track in enumerate(tracks or [])]
     if tracks is None and subtitle is not None:
         initial = picture_fragments.metadata.subtitle_track_from_montage(job.workspace_id, task, version, plan)
@@ -102,8 +108,9 @@ def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, pict
     cloned_cover = clone_cover_asset(cover, timeline_version_id=version.id) if cover is not None else None
     if cloned_cover is not None:
         version.snapshot['cover_asset_id'] = cloned_cover.id
-    event = TaskEvent(f'event_{job.id}_delivery_adopted', job.workspace_id, job.task_id, job.id,
+    event = TaskEvent(render_namespace(f'event_{job.id}_delivery_adopted', generation), job.workspace_id, job.task_id, job.id,
         'render_succeeded', {'timeline_version_id': version.id, 'output_refs': output_refs,
+            **render_generation_fields(generation),
             'request_id': grant.request_id, 'permit_generation': grant.generation,
             'delivery_manifest_digest': manifest['digest']})
     return {'head': task.current_timeline_version_id, 'plan_id': plan.id, 'montage': rendered,
@@ -184,7 +191,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
     transform = repository.lineage_records.get_transform_run(task.workspace_id, version.snapshot['transform_run_id'])
     if (job.task_id != task.id or job.kind != 'creation_task_execution' or job.status != 'succeeded'
             or transform.transform_type != 'montage_delivery' or transform.job_id != job.id or transform.status != 'succeeded'
-            or job.output_refs != version.snapshot['output_refs'] or transform.output_refs != job.output_refs
+            or transform.output_refs != version.snapshot['output_refs']
             or transform.input_digest != job.input_digest or transform.engine != 'original-job-delivery/v1'):
         return False
     event = repository.execution_records.get_task_event(task.workspace_id, saved['manifest_event_id'])
@@ -195,7 +202,24 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
             or transform.parameters['delivery_manifest_digest'] != manifest['digest']):
         return False
     original_input = saved['render_input']
-    origin = repository.timeline_records.get_timeline_version(task.workspace_id, f'timeline_delivery_{job.id}')
+    scope = stored_render_scope(saved)
+    if stored_render_scope(manifest) != scope or stored_render_scope(transform.parameters) != scope:
+        return False
+    if scope is not None:
+        from dataclasses import replace
+        from app.creation.render_generation import render_generation_event
+        from app.creation_execution import CreationExecutionActor
+        start = repository.execution_records.get_task_event(task.workspace_id, f'event_{job.id}_start')
+        expected_scope = render_generation_event(job, replace(task,
+            current_timeline_version_id=scope['render_input_timeline_version_id']), start,
+            CreationExecutionActor.from_event(task.workspace_id, start.payload))
+        sealed_scope = repository.execution_records.get_task_event(task.workspace_id, expected_scope.id)
+        if ((sealed_scope.id, sealed_scope.task_id, sealed_scope.job_id, sealed_scope.event_type, sealed_scope.payload) != (
+                expected_scope.id, expected_scope.task_id, expected_scope.job_id, expected_scope.event_type, expected_scope.payload)
+                or scope['render_input_timeline_version_id'] != original_input['timeline_version_id']):
+            return False
+    origin = repository.timeline_records.get_timeline_version(task.workspace_id,
+        saved.get('origin_timeline_version_id', f'timeline_delivery_{job.id}'))
     if (origin.task_id != task.id or origin.parent_version_id != original_input['timeline_version_id']
             or origin.snapshot['audio_delivery'] != saved
             or origin.snapshot['transform_run_id'] != version.snapshot['transform_run_id']
@@ -227,6 +251,8 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
     if request is None or settled is None:
         return False
     resources = json.loads(request['resources_json'])
+    if stored_render_scope(resources) != scope or stored_render_scope(final_transform.parameters) != scope:
+        return False
     recovery = saved.get('adoption_recovery')
     if recovery is None:
         if (resources['kind'] != 'creation_final_mux' or resources['manifest_digest'] != manifest['digest']
@@ -282,7 +308,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
     leaf = leaf_event.payload
     if (leaf_event.event_type != 'picture_fragment_manifest' or leaf_event.job_id != job.id or leaf_event.task_id != task.id
             or leaf['digest'] != media_digest({key: value for key, value in leaf.items() if key != 'digest'})
-            or leaf['input_digest'] != job.input_digest):
+            or leaf['input_digest'] != job.input_digest or stored_render_scope(leaf) != scope):
         return False
     original = CreationExecutionActor.from_event(task.workspace_id,
         repository.execution_records.get_task_event(task.workspace_id, f'event_{job.id}_start').payload)

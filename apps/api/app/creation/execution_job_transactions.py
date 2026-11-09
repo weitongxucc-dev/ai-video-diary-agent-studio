@@ -193,6 +193,11 @@ class CreationExecutionJobTransactions:
                     raise ValueError('重新输出事实与原作业身份、输入或成片单元不一致')
                 payload = {**payload, 'operation': 'render_current', 'render_request_id': render['id'],
                     'render_unit_key': unit, 'render_input_timeline_version_id': head}
+            from app.creation.render_generation import read_render_generation, render_generation_fields
+            generation = read_render_generation(conn, job, self.execution_records,
+                require_current_head=False)
+            if generation is not None:
+                payload = {**payload, 'operation': 'render_current', **render_generation_fields(generation)}
             return payload
 
     def creation_narration_source_binding(self, workspace_id, job_id, *, connection=None):
@@ -240,6 +245,33 @@ class CreationExecutionJobTransactions:
         connection.execute("UPDATE job_runs SET status='queued',failure_reason=NULL,impact=NULL,repair_action=NULL,"
             "finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?", (utc_now().isoformat(), workspace_id, job_id))
 
+    def begin_creation_render_generation(self, run, event, *, expected_timeline_version_id, connection):
+        """Prepare one new output inside the caller's atomic reopen transaction."""
+        from app.creation.render_generation import render_generation_event
+        from app.creation_execution import CreationExecutionActor
+        if not connection.in_transaction:
+            raise ValueError('重新输出范围必须与原作业重新安排处于同一事务')
+        current = self.job_records.get_job_run(run.workspace_id, run.id, connection=connection)
+        task = require_creation_task(connection, run.workspace_id, run.task_id)
+        start = self.execution_records.get_task_event(run.workspace_id, f'event_{run.id}_start', connection=connection)
+        actor = CreationExecutionActor.from_event(run.workspace_id, start.payload)
+        expected = render_generation_event(run, task, start, actor)
+        if (current != run or run.status != 'succeeded' or run.kind != 'creation_task_execution'
+                or task.current_timeline_version_id != expected_timeline_version_id
+                or (event.id, event.workspace_id, event.task_id, event.job_id, event.event_type, event.payload) != (
+                    expected.id, expected.workspace_id, expected.task_id, expected.job_id, expected.event_type, expected.payload)):
+            raise PermissionError('原完成作业、时间线或本次输出范围已变化')
+        if connection.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
+                "AND owner_id=? AND state IN ('waiting','blocked','granted','yield_requested')",
+                (run.workspace_id, run.id)).fetchone():
+            from app.device_scheduler import RecoveryBlocked
+            raise RecoveryBlocked('原作业仍有未结清请求，不能重开输出')
+        self.execution_records.append_task_event(event, connection=connection)
+        connection.execute("UPDATE job_runs SET status='queued',progress=66,failure_reason=NULL,impact=NULL,repair_action=NULL,"
+            "finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?",
+            (event.created_at.isoformat(), run.workspace_id, run.id))
+        return self.job_records.get_job_run(run.workspace_id, run.id, connection=connection)
+
     def reopen_creation_execution_for_render(self, run, event, *, expected_timeline_version_id, connection):
         """Reopen this completed creation only for its current, fixed render input."""
         if not connection.in_transaction:
@@ -247,8 +279,14 @@ class CreationExecutionJobTransactions:
         row = connection.execute('SELECT * FROM job_runs WHERE workspace_id=? AND id=?',
             (run.workspace_id, run.id)).fetchone()
         task = require_creation_task(connection, run.workspace_id, run.task_id)
+        scoped = event.payload.get('render_generation_id') is not None
+        if scoped:
+            from app.creation.render_generation import read_render_generation, render_generation_fields
+            generation = read_render_generation(connection, run, self.execution_records)
+            if any(event.payload.get(key) != value for key, value in render_generation_fields(generation).items()) or generation is None:
+                raise PermissionError('重新输出不属于本事务的原输出范围')
         if (row is None or self.job_records.job_run_from_row(row) != run
-                or run.kind != 'creation_task_execution' or run.status != 'succeeded'
+                or run.kind != 'creation_task_execution' or run.status != ('queued' if scoped else 'succeeded')
                 or not expected_timeline_version_id or task.current_timeline_version_id != expected_timeline_version_id
                 or (event.workspace_id, event.task_id, event.job_id) != (run.workspace_id, run.task_id, run.id)
                 or event.event_type != 'creation_execution_stage' or event.payload.get('stage') != 'render'

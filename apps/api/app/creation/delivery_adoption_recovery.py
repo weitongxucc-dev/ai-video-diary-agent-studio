@@ -10,6 +10,7 @@ from app.creation.contracts import TaskEvent
 from app.creation_execution import CreationExecutionActor
 from app.device_scheduler import RecoveryBlocked, SubmissionIntent
 from app.task_audio import media_digest
+from app.creation.render_generation import current_render_generation, render_generation_fields, stored_render_scope
 
 PREFIX = 'render:delivery-adopt:v1:'
 
@@ -62,14 +63,15 @@ class DeliveryAdoptionRecovery:
                 or measured.payload.get('output_bytes') != receipt['output_bytes']):
             raise RecoveryBlocked('原最终媒体计量未知或不匹配，仅可查询')
         manifest = self.delivery.manifest(job, actor=actor, connection=conn)
-        if manifest is None or resources['manifest_digest'] != manifest['digest']:
+        if (manifest is None or resources['manifest_digest'] != manifest['digest']
+                or stored_render_scope(resources) != stored_render_scope(manifest)):
             raise ValueError('原封装与当前允许采用的manifest不一致')
         unit_id = self.delivery._unit(manifest, 'final_mux')
         if resources['unit_id'] != unit_id or original['unit_key'] != f'render:final-mux:v1:{unit_id}':
             raise ValueError('原封装单元身份不匹配')
         try:
-            record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_final_mux_{unit_id}')
-            transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
+            record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_final_mux_{unit_id}', connection=conn)
+            transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=conn)
         except KeyError as exc:
             raise RecoveryBlocked('原最终媒体登记未完成，仅可查询原回执，不能采用或重做') from exc
         facts = transform.parameters
@@ -78,6 +80,7 @@ class DeliveryAdoptionRecovery:
                 or transform.transform_type != 'final_mux' or transform.input_digest != unit_id
                 or transform.output_refs != [record.logical_ref] or transform.input_refs != record.input_refs
                 or facts['manifest_digest'] != manifest['digest'] or facts['phase'] != 'final_mux'
+                or stored_render_scope(facts) != stored_render_scope(manifest)
                 or facts['producer_request_id'] != original['id']
                 or facts['producer_generation'] != original['last_grant_generation']):
             raise ValueError('原最终媒体缺少同一许可已成功持久化的变换')
@@ -97,7 +100,7 @@ class DeliveryAdoptionRecovery:
         record = owner.picture_fragments.subtitle_artifact(job, actor=actor, connection=conn)
         if record is None:
             return None
-        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=conn)
         request = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? AND id=? AND owner_id=? "
             "AND owner_type='creation_job' AND state='done' AND last_grant_generation=?",
             (job.workspace_id, transform.parameters['producer_request_id'], job.id, transform.parameters['producer_generation'])).fetchone()
@@ -125,7 +128,7 @@ class DeliveryAdoptionRecovery:
             if plan['original_request_id'] != original['id']:
                 raise ValueError('原采用尝试不属于同一最终媒体来源')
         task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
-        payload = {'version': 1, 'job_id': job.id, 'input_digest': job.input_digest, 'head': task.current_timeline_version_id,
+        payload = {'version': 1, **(stored_render_scope(manifest) or {}), 'job_id': job.id, 'input_digest': job.input_digest, 'head': task.current_timeline_version_id,
             'manifest_digest': manifest['digest'], 'original_request_id': original['id'],
             'original_generation': original['last_grant_generation'], 'original_receipt_id': origin_receipt,
             'predecessor': {'request_id': predecessor['id'], 'generation': predecessor['last_grant_generation'],
@@ -136,14 +139,14 @@ class DeliveryAdoptionRecovery:
         current_plan = self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id, connection=conn)
         from app.montage import creation_task_montage_plan_from_payload
         montage = creation_task_montage_plan_from_payload(current_plan)
-        tracks = owner.picture_fragments.metadata.current_subtitle_tracks(job.workspace_id, task, montage=montage)
-        version = self.repository.timeline_records.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        tracks = owner.picture_fragments.metadata.current_subtitle_tracks(job.workspace_id, task, montage=montage, connection=conn)
+        version = self.repository.timeline_records.get_timeline_version(job.workspace_id, task.current_timeline_version_id, connection=conn) if task.current_timeline_version_id else None
         cover = owner.picture_fragments.metadata.cover_asset_for_version(job.workspace_id, job.task_id, version) if version is not None else None
         basis = json.loads(json.dumps({'montage': current_plan, 'subtitles': [asdict(track) for track in tracks or []],
             'narration': owner.picture_fragments.metadata.current_narration_snapshot(job.workspace_id, task),
             'cover': asdict(cover) if cover is not None else None}, default=str))
         if sealed is None:
-            record = self.repository.execution_records.get_artifact_record(job.workspace_id, video['parent']['binding']['artifact_id'])
+            record = self.repository.execution_records.get_artifact_record(job.workspace_id, video['parent']['binding']['artifact_id'], connection=conn)
             candidate = compile_delivery_adoption(self.delivery, conn, job, actor=actor,
                 grant=SimpleNamespace(request_id='0'*32, generation=9223372036854775807), record=record,
                 picture_fragments=owner.picture_fragments, manifest=manifest, completed=video,
@@ -164,6 +167,7 @@ class DeliveryAdoptionRecovery:
         plan = event.payload
         if (event.event_type != 'delivery_adoption_prepared' or event.job_id != job.id or event.task_id != job.task_id
                 or plan['unit_id'] != unit_id or plan['job_id'] != job.id or plan['input_digest'] != job.input_digest
+                or stored_render_scope(plan) != (render_generation_fields(current_render_generation(self.repository, job, connection=conn)) or None)
                 or media_digest({key: value for key, value in plan.items() if key not in {'unit_id', 'new_request_id', 'resources'}}) != unit_id):
             raise ValueError('原仅采用接续manifest身份不一致')
         return plan
@@ -172,13 +176,19 @@ class DeliveryAdoptionRecovery:
         from app.audio_delivery_policy import delivery_adoption_resources
         return delivery_adoption_resources(budget=self.delivery.mux_budget, manifest_digest=plan['manifest_digest'],
             unit_id=plan['unit_id'], predecessor=plan['predecessor'], video=plan['video'], subtitle=plan['subtitle'],
-            database_path=self.repository.database_path, metadata_bytes=plan['metadata_bytes'])
+            database_path=self.repository.database_path, metadata_bytes=plan['metadata_bytes'], render_scope=stored_render_scope(plan))
 
     def continue_adoption(self, scheduler, job, actor, *, owner, write_guard=None):
+        if job.status == 'succeeded':
+            return None
         with self.repository._connect() as conn:
+            scope = render_generation_fields(current_render_generation(self.repository, job, connection=conn))
             original = conn.execute("SELECT * FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
                 "AND owner_id=? AND input_digest=? AND json_extract(resources_json,'$.kind')='creation_final_mux' "
-                "ORDER BY created_at DESC,id DESC LIMIT 1", (job.workspace_id, job.id, job.input_digest)).fetchone()
+                "AND json_extract(resources_json,'$.render_generation_id') IS ? "
+                "AND json_extract(resources_json,'$.render_input_timeline_version_id') IS ? "
+                "ORDER BY created_at DESC,id DESC LIMIT 1", (job.workspace_id, job.id, job.input_digest,
+                    scope.get('render_generation_id'), scope.get('render_input_timeline_version_id'))).fetchone()
             if original is None:
                 return None
             links = conn.execute("SELECT * FROM task_events WHERE workspace_id=? AND job_id=? "
@@ -236,9 +246,13 @@ class DeliveryAdoptionRecovery:
             if request is not None and request.unit_key.startswith(PREFIX):
                 unit_id = request.unit_key.removeprefix(PREFIX)
             else:
+                scope = render_generation_fields(current_render_generation(self.repository, job, connection=conn))
                 rows = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND job_id=? "
-                    "AND event_type='delivery_adoption_prepared' ORDER BY created_at DESC,id DESC LIMIT 1",
-                    (job.workspace_id, job.id)).fetchone()
+                    "AND event_type='delivery_adoption_prepared' "
+                    "AND json_extract(payload_json,'$.render_generation_id') IS ? "
+                    "AND json_extract(payload_json,'$.render_input_timeline_version_id') IS ? "
+                    "ORDER BY created_at DESC,id DESC LIMIT 1",
+                    (job.workspace_id, job.id, scope.get('render_generation_id'), scope.get('render_input_timeline_version_id'))).fetchone()
                 if rows is None:
                     return None
                 unit_id = json.loads(rows[0])['unit_id']

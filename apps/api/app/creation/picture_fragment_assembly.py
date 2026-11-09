@@ -18,6 +18,7 @@ from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload, render_granted_picture_fragment
 from app.subtitle_schedule import TimedCaption, narration_schedule, subtitle_schedule, schedule_srt
 from app.task_audio import media_digest
+from app.creation.render_generation import current_render_generation, render_namespace, render_generation_fields, stored_render_scope
 
 
 def _identity(path):
@@ -36,9 +37,9 @@ class PictureFragmentAssembly:
         self.budget, self.packet = render_budget, packet_copy_assembly
         self.root = Path(temporary_root).expanduser().resolve() / 'picture-fragments'
 
-    @staticmethod
-    def manifest_id(job):
-        return f'event_{job.id}_picture_fragment_manifest'
+    def manifest_id(self, job, *, connection=None):
+        return render_namespace(f'event_{job.id}_picture_fragment_manifest',
+            current_render_generation(self.repository, job, connection=connection))
 
     def _inputs(self, job, actor, *, connection=None):
         from app.source_policy import knowledge_item_readable as content_readable
@@ -83,6 +84,7 @@ class PictureFragmentAssembly:
     def prepare(self, job, *, actor, write_guard, connection=None):
         if self.budget is None:
             raise ValueError('画面窗口缺少本机CPU编码预算')
+        scope = render_generation_fields(current_render_generation(self.repository, job, connection=connection))
         task, montage, captions, graphics, sources, images, files, subtitle_text = self._inputs(job, actor, connection=connection)
         width, height = canvas_size(montage.aspect_ratio)
         max_seconds = min(self.budget.max_duration_seconds, self.budget.max_pixel_seconds/(width*height))
@@ -125,7 +127,7 @@ class PictureFragmentAssembly:
         last['subtitle_bytes'] = sidecar_bytes
         last['id'] = media_digest([last['id'], last['subtitle_sha256'], 'subtitle-sidecar/v1'])
         last['artifact_id'] = f'artifact_picture_fragment_{last["id"]}'
-        payload = {'version': 'picture-fragment-assembly/v2', 'subtitle_text': subtitle_text, 'job_id': job.id, 'input_digest': job.input_digest,
+        payload = {'version': 'picture-fragment-assembly/v2', **scope, 'subtitle_text': subtitle_text, 'job_id': job.id, 'input_digest': job.input_digest,
             'task_id': task.id, 'head': task.current_timeline_version_id, 'subtitles': [asdict(cue) for cue in captions],
             'picture_recipe': self.packet.recipe(job, connection=connection), 'sources': sources, 'images': images,
             'qualified_files': files, 'units': units}
@@ -151,18 +153,19 @@ class PictureFragmentAssembly:
             if (current.current_timeline_version_id != payload['head']
                     or self.packet.recipe(job, connection=conn) != payload['picture_recipe']):
                 raise ValueError('原任务画面配方在manifest封存期间已变化')
-            self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job), job.workspace_id, job.task_id,
+            self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job, connection=conn), job.workspace_id, job.task_id,
                 job.id, 'picture_fragment_manifest', payload), connection=conn)
         return payload
 
     def manifest(self, job, *, actor, connection=None):
         try:
-            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job, connection=connection), connection=connection)
         except KeyError:
             return None
         payload = event.payload
         task, _montage, captions, _graphics, sources, images, files, subtitle_text = self._inputs(job, actor, connection=connection)
-        if (payload['digest'] != media_digest({key: value for key, value in payload.items() if key != 'digest'})
+        if (stored_render_scope(payload) != (render_generation_fields(current_render_generation(self.repository, job, connection=connection)) or None)
+                or payload['digest'] != media_digest({key: value for key, value in payload.items() if key != 'digest'})
                 or payload['job_id'] != job.id or payload['task_id'] != job.task_id or payload['input_digest'] != job.input_digest
                 or payload['head'] != task.current_timeline_version_id or payload['sources'] != sources
                 or payload['images'] != images or payload['qualified_files'] != json.loads(json.dumps(files))
@@ -188,6 +191,7 @@ class PictureFragmentAssembly:
             window = PictureAssemblyWindow(**unit['window'])
             width, height = canvas_size(window.aspect_ratio)
             resources = {'kind': 'creation_render', 'execution_mode': 'cpu_ffmpeg', 'picture_fragment_unit': unit['id'],
+                **(stored_render_scope(manifest) or {}),
                 'picture_recipe_digest': manifest['picture_recipe'], 'picture_fragment_recipe': unit['recipe'],
                 'picture_fragment': {'first_frame': window.timeline_start_frame,
                     'packet_count': window.frame_count, 'contract': 'h264-crf20-b0-fmp4/v1'},
@@ -283,7 +287,8 @@ class PictureFragmentAssembly:
             transform = TransformRun(id=f'transform_{record.id}', workspace_id=job.workspace_id, task_id=job.task_id,
                 job_id=job.id, transform_type='picture_fragment', input_digest=unit['id'], input_refs=record.input_refs,
                 output_refs=[logical], engine='h264-crf20-b0-fmp4/v1', parameters={'picture_fragment': facts,
-                    'picture_fragment_recipe': unit['recipe'], 'manifest_digest': manifest['digest']},
+                    'picture_fragment_recipe': unit['recipe'], 'manifest_digest': manifest['digest'],
+                    **(stored_render_scope(manifest) or {})},
                 status='succeeded', started_at=utc_now(), finished_at=utc_now())
             with self.repository._connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
@@ -301,6 +306,7 @@ class PictureFragmentAssembly:
                         workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
                         transform_type='subtitle_render', input_digest=unit['id'], input_refs=subtitle_record.input_refs,
                         output_refs=[subtitle_logical], engine='subtitle-sidecar/v1', parameters={
+                            **(stored_render_scope(manifest) or {}),
                             'manifest_digest': manifest['digest'], 'producer_request_id': context.grant.request_id,
                             'producer_generation': context.grant.generation, 'file_identity': _identity(self.store.resolve_file(subtitle_logical))},
                         status='succeeded', started_at=utc_now(), finished_at=utc_now()), connection=conn)

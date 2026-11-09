@@ -14,6 +14,7 @@ import stat
 import psutil
 
 from app.device_resource_volumes import existing_volume
+from app.creation.render_generation import render_resource_scope
 
 
 PACKET_COPY_POLICY = 'packet-copy-bounded-preparation/v1'
@@ -158,7 +159,7 @@ def packet_copy_output_allocation(*, write_paths, write_files, publication_mode,
 
 def packet_copy_resources(*, budget, manifest_digest, unit_id, parents, expected_total_packets,
                           write_paths, write_files, output_limit_bytes, manifest_bytes, publication_mode,
-                          published_target=None):
+                          published_target=None, render_scope=None):
     """Build facts from all actual parents; source bytes are stream work, not RSS."""
     if not isinstance(budget, PacketCopyBudget) or not _sha(manifest_digest) or not _sha(unit_id):
         raise ValueError('Packet copy needs a policy and original manifest/unit digests')
@@ -194,6 +195,7 @@ def packet_copy_resources(*, budget, manifest_digest, unit_id, parents, expected
         'publication_mode': publication_mode, 'write_paths': paths, 'write_files': files,
         'write_allocations': allocations, 'write_volume_ids': volumes,
         **publication_target_fields(paths, files, volumes, published_target),
+        **render_resource_scope(render_scope),
         'workload_provenance': {'mode': 'bounded_preparation', 'policy_id': budget.policy_id,
             'deadline_source': 'sealed_packet_copy_preparation_policy',
             'deadline_seconds': budget.preparation_timeout_seconds,
@@ -211,7 +213,9 @@ def packet_copy_refusal(resources, budget):
             'manifest_digest', 'unit_id', 'parents', 'expected_total_packets', 'write_paths', 'write_files',
             'manifest_bytes', 'publication_mode')},
             output_limit_bytes=resources['max_output_bytes'],
-            published_target=resources['publication_target']['path'] if 'publication_target' in resources else None)
+            published_target=resources['publication_target']['path'] if 'publication_target' in resources else None,
+            render_scope={key:resources[key] for key in ('render_generation_id','render_input_timeline_version_id')}
+                if 'render_generation_id' in resources else None)
         if json.dumps(resources, sort_keys=True, allow_nan=False) != json.dumps(expected, sort_keys=True, allow_nan=False):
             return 'packet_copy_resources_invalid'
     except OSError:

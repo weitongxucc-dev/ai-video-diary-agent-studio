@@ -304,6 +304,24 @@ class CreationExecutionControl:
         try:
             latest = self.execution.latest(workspace_id, task_id)
             owner = runtime.registrations['creation_job'].owner
+            if latest is not None and latest.status == 'succeeded' and self.render_valid(
+                    workspace_id, task_id, verify_media=False):
+                start = self.repository.execution_records.get_task_event(workspace_id, f'event_{latest.id}_start')
+                if actor != CreationExecutionActor.from_event(workspace_id, start.payload):
+                    raise PermissionError('不能读取其他身份的原完成作业')
+                with self.repository._connect() as conn:
+                    conn.execute('BEGIN IMMEDIATE')
+                    if write_guard is not None:
+                        write_guard(conn)
+                    current = self.repository.job_records.get_job_run(workspace_id, latest.id, connection=conn)
+                    task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=conn)
+                    if (current != latest or task.owner_user_id != (actor.user_id or actor.member_id)
+                            or owner.authorization_verdict(task, actor, 'render', connection=conn) != 'ready'):
+                        raise PermissionError('原完成作业或当前成员授权已变化')
+                    if execution_source is not None:
+                        self.repository.creation_execution_jobs.bind_creation_execution_source(
+                            current, execution_source, connection=conn)
+                return self.read_bound(workspace_id, task_id, latest.id, actor, verify_media=verify_media)
             delivery = owner.audio_delivery
             recovered = (delivery.adoption_recovery.continue_adoption(runtime.scheduler, latest, actor,
                 owner=owner, write_guard=write_guard) if latest is not None and delivery is not None else None)

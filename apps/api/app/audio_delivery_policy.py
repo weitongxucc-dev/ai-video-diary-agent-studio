@@ -6,6 +6,7 @@ This module validates resource declarations, never scans parents or grants work.
 from dataclasses import asdict, dataclass
 import json
 import math
+from app.creation.render_generation import render_resource_scope
 from pathlib import Path
 
 from app.packet_copy_policy import (
@@ -127,7 +128,7 @@ def _clock(value, *, encoded=False, picture=False):
 
 
 def _base(*, budget, manifest_digest, unit_id, parents, write_paths, write_files,
-          output_limit_bytes, manifest_bytes, publication_mode, published_target=None):
+          output_limit_bytes, manifest_bytes, publication_mode, published_target=None, render_scope=None):
     if (not _sha(manifest_digest) or not _sha(unit_id) or not _positive(output_limit_bytes)
             or not _positive(manifest_bytes) or manifest_bytes > budget.max_manifest_bytes):
         raise ValueError('Delivery needs finite storage and a bounded original manifest')
@@ -147,6 +148,7 @@ def _base(*, budget, manifest_digest, unit_id, parents, write_paths, write_files
         'manifest_bytes': manifest_bytes, 'timeout_seconds': budget.preparation_timeout_seconds,
         'publication_mode': publication_mode, 'write_paths': paths, 'write_files': files,
         **publication_target_fields(paths, files, volumes, published_target),
+        **render_resource_scope(render_scope),
         'write_volume_ids': volumes, 'write_allocations': {'manifest': manifest_bytes,
             'staging': output_limit_bytes, 'published': output_limit_bytes if publication_mode == 'copy' else 0},
         'workload_provenance': {'mode': 'bounded_first_use', 'policy_id': budget.policy_id,
@@ -157,7 +159,7 @@ def _base(*, budget, manifest_digest, unit_id, parents, write_paths, write_files
 
 def audio_encode_resources(*, budget, manifest_digest, unit_id, master, audio_recipe,
                           write_paths, write_files, output_limit_bytes, manifest_bytes, publication_mode,
-                          published_target=None):
+                          published_target=None, render_scope=None):
     if type(budget) is not AudioEncodeBudget:
         raise ValueError('AAC encoding needs its own process policy')
     _parent(master)
@@ -170,14 +172,14 @@ def audio_encode_resources(*, budget, manifest_digest, unit_id, master, audio_re
         raise ValueError('AAC recipe must bind the actual master format and sealed encoder parameters')
     result = _base(budget=budget, manifest_digest=manifest_digest, unit_id=unit_id, parents=[master],
         write_paths=write_paths, write_files=write_files, output_limit_bytes=output_limit_bytes,
-        manifest_bytes=manifest_bytes, publication_mode=publication_mode, published_target=published_target)
+        manifest_bytes=manifest_bytes, publication_mode=publication_mode, published_target=published_target, render_scope=render_scope)
     return {**result, 'kind': 'creation_audio_encode', 'execution_mode': 'ffmpeg_aac_encode',
         'role': 'master_audio_encode', 'audio_recipe': dict(audio_recipe)}
 
 
 def final_mux_resources(*, budget, manifest_digest, unit_id, picture, encoded_audio, mux_recipe,
                        write_paths, write_files, output_limit_bytes, manifest_bytes, publication_mode,
-                       published_target=None):
+                       published_target=None, render_scope=None):
     if type(budget) is not FinalMuxBudget:
         raise ValueError('Final mux needs its own process policy')
     for parent in (picture, encoded_audio):
@@ -192,13 +194,13 @@ def final_mux_resources(*, budget, manifest_digest, unit_id, picture, encoded_au
         raise ValueError('Final mux must copy both streams with compatible sealed MP4 parameters')
     result = _base(budget=budget, manifest_digest=manifest_digest, unit_id=unit_id, parents=[picture, encoded_audio],
         write_paths=write_paths, write_files=write_files, output_limit_bytes=output_limit_bytes,
-        manifest_bytes=manifest_bytes, publication_mode=publication_mode, published_target=published_target)
+        manifest_bytes=manifest_bytes, publication_mode=publication_mode, published_target=published_target, render_scope=render_scope)
     return {**result, 'kind': 'creation_final_mux', 'execution_mode': 'ffmpeg_stream_mux',
         'role': 'picture_audio_final_mux', 'mux_recipe': dict(mux_recipe)}
 
 
 def delivery_adoption_resources(*, budget, manifest_digest, unit_id, predecessor,
-                                video, subtitle, database_path, metadata_bytes):
+                                video, subtitle, database_path, metadata_bytes, render_scope=None):
     """Declare verification of existing files and the bounded adoption write set.
 
     The owner measures and binds serialized database metadata before admission.
@@ -252,6 +254,7 @@ def delivery_adoption_resources(*, budget, manifest_digest, unit_id, predecessor
     return {'kind': 'creation_delivery_adoption', 'execution_mode': 'verify_and_adopt',
         'role': 'final_delivery_adoption', 'read_mode': 'stream',
         'manifest_digest': manifest_digest, 'unit_id': unit_id, **sealed,
+        **render_resource_scope(render_scope),
         'parent_bindings_digest': _digest(sealed), 'input_count': len(inputs),
         'source_bytes': sum(binding['size_bytes'] for binding in bindings),
         'budget_digest': budget.digest, 'backend_identity': budget.backend_identity,
@@ -273,13 +276,16 @@ def audio_delivery_refusal(resources, budget):
     if resources.get('budget_digest') != budget.digest or resources.get('backend_identity') != budget.backend_identity:
         return 'audio_delivery_profile_changed'
     try:
+        scope = ({key:resources[key] for key in ('render_generation_id','render_input_timeline_version_id')}
+            if 'render_generation_id' in resources else None)
         if resources.get('kind') == 'creation_delivery_adoption':
             expected = delivery_adoption_resources(budget=budget, **{key: resources[key] for key in (
-                'manifest_digest', 'unit_id', 'predecessor', 'video', 'subtitle', 'database_path', 'metadata_bytes')})
+                'manifest_digest', 'unit_id', 'predecessor', 'video', 'subtitle', 'database_path', 'metadata_bytes')}, render_scope=scope)
         else:
             common = {key: resources[key] for key in ('manifest_digest', 'unit_id', 'write_paths', 'write_files',
                 'manifest_bytes', 'publication_mode')}
             common.update(budget=budget, output_limit_bytes=resources['max_output_bytes'])
+            common['render_scope'] = scope
             if 'publication_target' in resources:
                 common['published_target'] = resources['publication_target']['path']
             if resources.get('kind') == 'creation_audio_encode' and len(resources['parents']) == 1:

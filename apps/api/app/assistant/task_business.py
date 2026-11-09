@@ -54,7 +54,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None,edit_controls=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -77,6 +77,7 @@ class TaskBusiness:
         self.generation_case,self.creator_memory=generation_case,creator_memory
         self.execution_status=execution_status
         self.media_binding=media_binding
+        self.edit_controls=edit_controls
 
     def invoke_native(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic, invocation: TaskInvocation):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -516,6 +517,28 @@ class TaskBusiness:
             return self.execution.select_narration_voice(runtime_for=self.runtime,actor=actor,write_guard=guard,
                 workspace_id=ws,task_id=task_id,member_id=member,
                 **{**payload.model_dump(exclude={'assistant_turn_id'}),'request_id':str(payload.request_id)})
+        if operation in {'read_edit_control_context', 'preview_edit_selection', 'discard_edit_proposal'}:
+            if self.edit_controls is None:
+                raise TaskBusinessRejected('编辑控制业务用例尚未装配', kind='unavailable')
+            if operation == 'read_edit_control_context':
+                return self.edit_controls.read(task, actor=actor)
+            from pydantic import ValidationError
+            from app.schemas import CompoundEditSelectionRequest, CreationTaskTimelineUndoRequest
+            try:
+                payload = (CompoundEditSelectionRequest.model_validate(args['payload']) if operation == 'preview_edit_selection'
+                    else CreationTaskTimelineUndoRequest.model_validate({**args['payload'],
+                        'assistant_turn_id': origin['assistant_turn_id']}))
+            except ValidationError as exc:
+                raise TaskOperationRejected(str(exc), kind='invalid_input') from exc
+            if operation == 'preview_edit_selection':
+                if args.get('draft_only') is not True:
+                    raise TaskOperationRejected({'error': 'edit_selection_draft_required',
+                        'reason': '后台修改选择仅准备草稿参数；媒体预览须另行取得执行许可。',
+                        'submission_effect': 'not_submitted'}, kind='conflict')
+                return self.edit_controls.preview_selection(task, args['proposal_id'], payload, actor=actor,
+                    origin=origin, write_guard=guard, draft_only=True)
+            return self.edit_controls.discard(task, args['proposal_id'], payload, actor=actor,
+                origin=origin, write_guard=guard)
         if operation in {'read_timeline_history','read_timeline_restore_request','restore_timeline'}:
             if self.timeline_restores is None:
                 raise TaskBusinessRejected('原修改恢复用例尚未装配')

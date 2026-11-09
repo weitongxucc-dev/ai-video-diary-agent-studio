@@ -123,7 +123,7 @@ from app.creation.editing.metadata_use_case import (
     prepare_changed_montage as metadata_prepare_changed_montage,
     logical_montage_output_refs as metadata_logical_montage_output_refs,
 )
-from app.creation.editing.compound_use_case import (CompoundEditUseCase, CompoundSelectionCommand)
+from app.creation.editing.compound_use_case import CompoundEditUseCase
 from app.creation.editing.subtitle_use_case import (SubtitleEditUseCase, is_subtitle_edit, subtitle_values)
 from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase, validate_edit_origin, project_submitted_edit_input
 from app.creation.editing.command_preview_use_case import CommandPreviewUseCase
@@ -1581,6 +1581,7 @@ def _task_edit_receipt_http_adapter():
 
 def _task_edit_http_router(route_names):
     return build_task_edit_router(
+        edit_controls_for=lambda: _edit_control_use_case,
         audio_command_preview_for=lambda: AudioCommandPreview,
         audio_edit_rejected_for=lambda: AudioEditRejected,
         cover_operation_for=lambda: COVER_OPERATION,
@@ -1588,7 +1589,6 @@ def _task_edit_http_router(route_names):
         clip_preview_conflict_for=lambda: ClipPreviewConflict,
         clip_preview_unavailable_for=lambda: ClipPreviewUnavailable,
         command_parse_rejected_for=lambda: CommandParseRejected,
-        compound_selection_command_for=lambda: CompoundSelectionCommand,
         creation_execution_actor_for=lambda: CreationExecutionActor,
         creation_task_edit_preview_request_for=lambda: CreationTaskEditPreviewRequest,
         exact_edit_source_for=lambda: EXACT_EDIT_SOURCE,
@@ -1645,8 +1645,6 @@ def _task_edit_http_router(route_names):
         json_for=lambda: json,
         media_digest_for=lambda: media_digest,
         production_repo_for=lambda: production_repo,
-        project_task_summary_for=lambda: project_task_summary,
-        re_for=lambda: re,
         route_names=route_names,
     )
 
@@ -1885,6 +1883,9 @@ def _media_result_read_components():
         repository = production_repo
         authorizations = _task_authorizations_for_goal(repository)
         media = TaskMediaJobs(repository,
+            known_failure_secrets_for=lambda workspace_id: (
+                _workspace_settings_for(workspace_id).effective_llm_api_key,
+                settings.tencentcloud_secret_id, settings.tencentcloud_secret_key),
             facts=lambda *args: _task_media_facts(*args, task_authorizations=authorizations),
             verify_identity=_verify_creation_identity,
             clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
@@ -4241,6 +4242,13 @@ def _compound_edit_use_case(repository=None):
     return CompoundEditUseCase(repo, metadata, picture_renderer=renderer)
 
 
+def _edit_control_use_case(repository=None):
+    from app.creation.editing.control_use_case import EditControlUseCase
+    repo = repository if repository is not None else production_repo
+    return EditControlUseCase(repo, conversations=conversation_repo, compound=_compound_edit_use_case(repo),
+        preview_response=_edit_preview_response, wake=_wake_assistant_continuations)
+
+
 
 
 
@@ -5801,6 +5809,9 @@ def _build_device_components(*, repository: ProductionRepository):
     quality = _quality_inspection_use_case(repository, task_authorizations=task_authorizations, budget=budget.quality)
     cover = _cover_use_case(repository, budget=budget.cover)
     task_media = TaskMediaJobs(repository, facts=_task_media_facts,
+        known_failure_secrets_for=lambda workspace_id: (
+            _workspace_settings_for(workspace_id).effective_llm_api_key,
+            settings.tencentcloud_secret_id, settings.tencentcloud_secret_key),
         verify_identity=_verify_creation_identity, on_settled=_wake_assistant_continuations,
         audio_ingress=_audio_ingress_use_case(repository),
         audio_edit=_audio_edit_use_case(repository),
@@ -6096,6 +6107,7 @@ def _task_business(*, generation_case=None):
         segments=None if generation_case is not None else _segment_production_use_case(),
         native_case=None if generation_case is not None else _native_task_operations_case(),
         timeline_restores=None if generation_case is not None else _timeline_restore_use_case(),exact_case_for=_exact_preview_use_case,
+        edit_controls=None if generation_case is not None else _edit_control_use_case(),
         media_jobs_list=_list_goal_media_jobs,execution_capabilities=_task_execution_capability_facts,
         device_preparation=_dispatch_device_preparation, quality=_quality_application(),
         generation_case=generation_case, creator_memory=_creator_memory_facts,

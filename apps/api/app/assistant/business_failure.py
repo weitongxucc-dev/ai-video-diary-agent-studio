@@ -1,19 +1,7 @@
 """Finite public failure diagnostics shared by business and host projections."""
 import re
 from app.assistant.catalogue import _PI_TOOL_LABELS
-
-
-def _safe_failure_text(value: object, secrets=()) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value
-    for secret in secrets:
-        if secret:
-            text = text.replace(secret, "[已隐藏]")
-    text = re.sub(r"\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[已隐藏]", text, flags=re.I)
-    text = re.sub(r"\b(?:authorization|cookie|api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+", "[已隐藏]", text, flags=re.I)
-    text = re.sub(r"https?://[^\s）)；;]+|(?:[A-Za-z]:\\|/(?!api/)[A-Za-z0-9_.~-]+/)[^\s）)；;]+", "[已隐藏]", text)
-    return re.sub(r"[\x00-\x1f\x7f]", " ", text)[:500]
+from app.public_failure import safe_failure_text as _safe_failure_text
 
 
 def _safe_script_candidate_location(value: object) -> dict:

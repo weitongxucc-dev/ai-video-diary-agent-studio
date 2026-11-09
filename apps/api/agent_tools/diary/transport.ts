@@ -228,6 +228,7 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
       return result('read_task_quality_continuation', {...args,
         job_id: query.get('job_id'), failed_request_id: query.get('failed_request_id')});
     const reads: Record<string, string> = {
+      '/edit-controls': 'read_edit_control_context',
       '/execution/preview': 'read_creation_execution_preview',
       '/assistant/script-context': 'read_assistant_script_context',
       '/assistant/edit-capabilities': 'read_task_edit_capabilities',
@@ -267,7 +268,13 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
       {...args, assistant_turn_id: query.get('assistant_turn_id'), payload});
   if (suffix === '/edits/exact/preview' && only('draft') && (!query.has('draft') || ['true','false'].includes(query.get('draft')!)))
     return result('preview_task_edit', {...args,payload,...(query.has('draft') ? {draft_only:query.get('draft') === 'true'} : {})});
+  const selection = suffix.match(/^\/edits\/([^/]+)\/selection\/preview$/);
+  if (selection && only('draft') && (!query.has('draft') || ['true','false'].includes(query.get('draft')!)))
+    return result('preview_edit_selection', {...args, proposal_id:decodeURIComponent(selection[1]), payload,
+      draft_only:query.get('draft') === 'true'});
   if (search) return null;
+  const discard = suffix.match(/^\/edits\/([^/]+)\/reject$/);
+  if (discard) return result('discard_edit_proposal', {...args, proposal_id:decodeURIComponent(discard[1]), payload});
   if (suffix === '/timeline/undo' || suffix === '/timeline/redo') return result('restore_timeline',
     {...args, action: suffix.endsWith('/undo') ? 'undo' : 'redo', payload});
   const segmentResume = suffix.match(/^\/segment-requests\/([^/]+)\/resume$/);

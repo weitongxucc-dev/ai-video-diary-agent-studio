@@ -978,6 +978,17 @@ class CreationJobOwnerVerifier:
         return changed
 
     def render_facts(self, conn, task, plan, *, request=None, actor=None, job=None, prepare_assembly=False):
+        job = job or (self.repository.job_records.get_job_run(task.workspace_id, request.owner_id, connection=conn)
+            if request is not None else None)
+        key, resources = self._render_facts(conn, task, plan, request=request, actor=actor, job=job,
+            prepare_assembly=prepare_assembly)
+        if job is not None:
+            from app.creation.render_generation import current_render_generation, render_generation_fields
+            generation = current_render_generation(self.repository, job, connection=conn)
+            resources = {**resources, **render_generation_fields(generation)}
+        return key, resources
+
+    def _render_facts(self, conn, task, plan, *, request=None, actor=None, job=None, prepare_assembly=False):
         if self.packet_copy_assembly is not None and job is None and request is not None:
             job = self.repository.job_records.get_job_run(task.workspace_id, request.owner_id, connection=conn)
         if self.audio_delivery is not None and job is not None:
@@ -1538,7 +1549,8 @@ class CreationJobOwnerVerifier:
                 raise PermissionError("制作输入摘要不匹配")
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
             stage = intent.unit_key.split(":", 1)[0]
-            if event.get('operation') == 'render_current' and intent.unit_key != event['render_unit_key']:
+            if (event.get('operation') == 'render_current' and event.get('render_generation_id') is None
+                    and intent.unit_key != event['render_unit_key']):
                 raise PermissionError('重新输出必须沿本次明确绑定的原成片单元')
             verdict = self._check_facts(job, task, event, script, plan, stage, actor.member_id,
                 revision=snapshot.input_digest, connection=conn)
@@ -1625,6 +1637,9 @@ class CreationJobOwnerVerifier:
                 or plan.workspace_id != job.workspace_id
                 or script is not None and (script.workspace_id != job.workspace_id or script.task_id != job.task_id)):
             return "unauthorized"
+        if event.get('render_generation_id') is not None and (
+                stage != 'render' or task.current_timeline_version_id != event['render_input_timeline_version_id']):
+            return 'stale'
         if plan.source_media is not None:
             from app.creation.execution_input import validate_execution_relationships
             try:
@@ -1737,8 +1752,13 @@ class CreationJobOwnerVerifier:
         if request.input_digest != job.input_digest:
             return "stale"
         stage = request.unit_key.split(":", 1)[0]
-        if event.get('operation') == 'render_current' and request.unit_key != event['render_unit_key']:
-            return "stale"
+        if event.get('operation') == 'render_current':
+            if event.get('render_generation_id') is None:
+                if request.unit_key != event['render_unit_key']:
+                    return 'stale'
+            elif any(request.resources.get(key) != event[key] for key in (
+                    'render_generation_id', 'render_input_timeline_version_id')):
+                return 'stale'
         observed_job = (replace(job, status='interrupted')
             if self._resumable_montage_request(request, job, task, script, conn) else job)
         verdict = self._check_facts(observed_job, task, event, script, plan, stage, request.member_id,
@@ -3778,21 +3798,40 @@ class CreationExecution:
         version_id = task.current_timeline_version_id
         if not version_id:
             raise ValueError('当前作品尚不能仅重新输出；配音或剪辑仍未就绪')
-        with self.repository._connect() as reader:
-            key, _resources = owner.render_facts(reader, task, _plan, actor=actor)
-        intent = SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id, job.input_digest, key, SchedulePolicy())
-        identity = hashlib.sha256(json.dumps([version_id, intent.unit_key]).encode()).hexdigest()
-        event = TaskEvent(id=f'event_{job.id}_render_requested_{identity}', workspace_id=job.workspace_id,
-            task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage',
-            payload={'stage': 'render', 'status': 'pending', 'input_timeline_version_id': version_id,
-                'unit_key': intent.unit_key, 'input_digest': job.input_digest,
-                'execution_purpose': 'render_current', 'script_id': task.confirmed_script_id,
-                'start_event_id': f'event_{job.id}_start', **actor.identity_payload()})
+        progressive = owner.picture_fragments is not None and not _plan.presenter_share_target
+        if not progressive:
+            with self.repository._connect() as reader:
+                key, _resources = owner.render_facts(reader, task, _plan, actor=actor)
         with self.repository._connect() as conn:
             conn.execute('BEGIN IMMEDIATE')
             if write_guard is not None:
                 write_guard(conn)
-            self.repository.creation_execution_jobs.reopen_creation_execution_for_render(job, event,
+            generation = None
+            current = job
+            if progressive:
+                from app.creation.render_generation import render_generation_event
+                current, target, original, _script, current_plan = owner._facts(conn, job.workspace_id, job.id)
+                if current != job or target.current_timeline_version_id != version_id:
+                    raise PermissionError('原完成作业或重新输出的时间线已变化')
+                start_event = self.repository.execution_records.get_task_event(job.workspace_id,
+                    f'event_{job.id}_start', connection=conn)
+                scope = render_generation_event(job, target, start_event, actor)
+                current = self.repository.creation_execution_jobs.begin_creation_render_generation(job, scope,
+                    expected_timeline_version_id=version_id, connection=conn)
+                generation = scope.payload
+                key, _resources = owner.render_facts(conn, target, current_plan, actor=actor, job=current,
+                    prepare_assembly=True)
+            from app.creation.render_generation import render_generation_fields
+            intent = SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id, job.input_digest, key, SchedulePolicy())
+            identity = hashlib.sha256(json.dumps([version_id, intent.unit_key]).encode()).hexdigest()
+            event = TaskEvent(id=f'event_{job.id}_render_requested_{identity}', workspace_id=job.workspace_id,
+                task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage',
+                payload={'stage': 'render', 'status': 'pending', 'input_timeline_version_id': version_id,
+                    'unit_key': intent.unit_key, 'input_digest': job.input_digest,
+                    'execution_purpose': 'render_current', 'script_id': task.confirmed_script_id,
+                    'start_event_id': f'event_{job.id}_start', **actor.identity_payload(),
+                    **render_generation_fields(generation)})
+            self.repository.creation_execution_jobs.reopen_creation_execution_for_render(current, event,
                 expected_timeline_version_id=version_id, connection=conn)
             owner.verify_submission(intent, actor, connection=conn)
         return True
@@ -3827,12 +3866,31 @@ class CreationExecution:
         ]
         retry_number = len(same_input)
         resumed_payload=dict(self.repository.creation_execution_jobs.creation_execution_input(workspace_id, latest.id))
+        scoped_render = resumed_payload.get('render_generation_id') is not None
+        if scoped_render:
+            # A known failed attempt may get a new Job under the existing retry
+            # policy; its predecessor's output scope is never transferred.
+            for field in ('operation', 'render_generation_id', 'render_input_timeline_version_id',
+                    'render_request_id', 'render_unit_key'):
+                resumed_payload.pop(field, None)
         if resumed_payload.get("operation")=="regenerate_storyboard":
             resumed_payload={key:resumed_payload[key] for key in ("script_id","plan_id","input_digest","member_id","identity_kind","device_id","user_id") if key in resumed_payload}
         def verify_retry(conn):
             if write_guard is not None:
                 write_guard(conn)
             self.validate_input_snapshot(workspace_id, task_id, script_id, latest.input_digest, connection=conn)
+            if scoped_render:
+                original = self.repository.job_records.get_job_run(workspace_id, latest.id, connection=conn)
+                unknown = conn.execute("SELECT 1 FROM task_events s WHERE s.workspace_id=? AND s.job_id=? "
+                    "AND s.event_type='task_execution_unit_started' AND NOT EXISTS (SELECT 1 FROM task_events e "
+                    "WHERE e.workspace_id=s.workspace_id AND e.job_id=s.job_id AND e.event_type='task_execution_unit_settled' "
+                    "AND json_extract(e.payload_json,'$.usage_id')=json_extract(s.payload_json,'$.usage_id')) LIMIT 1",
+                    (workspace_id, latest.id)).fetchone()
+                pending = conn.execute("SELECT 1 FROM device_work_requests WHERE workspace_id=? "
+                    "AND owner_type='creation_job' AND owner_id=? AND state IN ('waiting','blocked','granted','yield_requested')",
+                    (workspace_id, latest.id)).fetchone()
+                if original != latest or latest.status != 'failed' or unknown is not None or pending is not None:
+                    raise RecoveryBlocked('原重新输出的消耗或请求仍未结清，仅可查询原请求')
         run = self.repository.creation_execution_jobs.create_creation_execution_job(
             JobRun(
                 id=f"job_{uuid4().hex}",
@@ -3843,7 +3901,8 @@ class CreationExecution:
                 input_digest=latest.input_digest,
             )
 , start_payload=resumed_payload,event_type="creation_execution_resumed",
-            write_guard=verify_retry,execution_source=execution_source)
+            write_guard=verify_retry,execution_source=execution_source,
+            budget_scope_actor=CreationExecutionActor.from_event(workspace_id, resumed_payload))
         if member_id is not None:
             resume_event = self.repository.execution_records.get_task_event(workspace_id, f"event_{run.id}_start")
             if resume_event.payload.get("member_id") != member_id:

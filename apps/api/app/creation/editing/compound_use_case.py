@@ -114,9 +114,9 @@ class CompoundEditUseCase:
             selection_command=control.selection_command, verifier=verifier, output_refs=logical_montage_output_refs(plan))
         return PreparedCompoundEdit(task, base, plan, tracks, calculated, command, intent, proposal)
 
-    def save_preview(self, prepared: PreparedCompoundEdit):
+    def save_preview(self, prepared: PreparedCompoundEdit, *, write_guard=None):
         return self.repository.edit_adoption.save_clip_preview_proposal(prepared.intent, prepared.proposal,
-            expected_version_id=prepared.base.id)
+            expected_version_id=prepared.base.id, write_guard=write_guard)
 
     def prepare_selection(self, control: CompoundSelectionCommand):
         task = self.repository.task_records.get_creation_task(control.workspace_id, control.task_id)
@@ -204,7 +204,7 @@ class CompoundEditUseCase:
             edited_subtitle_tracks=changed_tracks, proposal_source_command=command, proposal_source_verifier=verifier)
 
 
-    def preview(self, prepared, *, draft_only, execution):
+    def preview(self, prepared, *, draft_only, execution, write_guard=None):
         if prepared is None:
             return None
         task, base, plan, tracks = prepared.task, prepared.base, prepared.before, prepared.original_tracks
@@ -221,12 +221,13 @@ class CompoundEditUseCase:
                 "detail": "整片视听预览；全部修改确认后写入同一个版本，可一次撤销。",
                 "video_url": f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"}
             for side, record in zip(("before", "after"), records)}})
-        intent, proposal = self.save_preview(replace(prepared, proposal=proposal))
+        intent, proposal = self.save_preview(replace(prepared, proposal=proposal), write_guard=write_guard)
         return intent, proposal
 
-    def preview_selection(self, control, *, draft_only, execution):
+    def preview_selection(self, control, *, draft_only, execution, write_guard=None):
         try:
-            return self.preview(self.prepare_selection(control), draft_only=draft_only, execution=execution)
+            return self.preview(self.prepare_selection(control), draft_only=draft_only, execution=execution,
+                write_guard=write_guard)
         except CompoundProposalMissing as exc:
             raise PicturePreviewRejected(status_code=404, detail=exc.args[0]) from exc
         except CompoundSelectionInputError as exc:
