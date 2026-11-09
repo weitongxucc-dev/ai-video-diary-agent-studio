@@ -387,7 +387,7 @@ def test_stop_waits_for_inflight_launch_registration_and_blocks_later_launches()
 
 def test_unsupported_group_platform_refuses_before_popen(tmp_path, monkeypatch):
     import app.assistant.turn_control as control_module
-    monkeypatch.setattr(control_module.sys, "platform", "win32")
+    monkeypatch.setattr(control_module.sys, "platform", "unsupported-test-platform")
     monkeypatch.setattr(host.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("unsupported platform launched a child"))
     with pytest.raises(AssistantProcessReleaseError, match="未启动新的助手子进程"):
         host._run_pi_streaming(["synthetic"], message="", env={}, cwd=tmp_path,

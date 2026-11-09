@@ -2,6 +2,7 @@
 from tool_result_test_fixtures import TOOL_OUTCOME_JS
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 from pathlib import Path
 import subprocess
 from uuid import UUID
@@ -40,7 +41,7 @@ process.stdout.write(JSON.stringify({results,calls,parameters:tools.get('preview
 
 
 def invoke(tmp_path, response, *, status=202, failure=False, lost=False, params=None, instruction=ORIGINAL):
-    env = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ})
     env.update(
         AI_VIDEO_DIARY_AGENT_API_BASE="http://synthetic.invalid",
         AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="synthetic-member",

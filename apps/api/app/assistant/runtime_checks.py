@@ -5,10 +5,12 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from app.assistant.tool_sources import tool_sources_readable
 from app.assistant.failures import _FAILURES, FAILURE_RUNTIME_MISSING
+from app.subprocess_environment import subprocess_environment
 
 PI_SDK_VERSION = "1.5.0"
 
@@ -18,7 +20,27 @@ def sdk_module(pi_executable: str) -> Path | None:
         if parent.name == "pi-coding-agent" and parent.parent.name == "@earendil-works":
             module = parent / "dist" / "index.js"
             return module if module.is_file() else None
+    # npm on Windows installs command shims beside node_modules, not symlinks
+    # into the package. Resolve only the explicitly selected installation.
+    executable = Path(pi_executable).resolve()
+    if sys.platform == "win32" and executable.name.lower() in {"pi.cmd", "pi.ps1"}:
+        module = executable.parent / "node_modules/@earendil-works/pi-coding-agent/dist/index.js"
+        return module if module.is_file() else None
     return None
+
+
+def _version_command(pi: str, node: str) -> list[str]:
+    if sys.platform == "win32" and Path(pi).suffix.lower() in {".cmd", ".ps1"}:
+        module = sdk_module(pi)
+        if module is None:
+            raise FileNotFoundError("Selected Pi shim has no SDK installation")
+        package = module.parent.parent
+        metadata = json.loads((package / "package.json").read_text(encoding="utf-8"))
+        entry = (package / metadata["bin"]["pi"]).resolve()
+        if not entry.is_relative_to(package.resolve()) or not entry.is_file():
+            raise ValueError("Selected Pi package has an invalid CLI entry")
+        return [node, str(entry), "--version"]
+    return [str(pi), "--version"]
 
 
 def runtime_bundle(extension: Path) -> Path:
@@ -55,7 +77,7 @@ def runtime_checks(extension: Path, find_pi) -> list[dict]:
         try:
             result = subprocess.run(
                 [node, "--version"], capture_output=True, text=True, timeout=5,
-                check=False, env={"PATH": node_path},
+                check=False, env=subprocess_environment({"PATH": node_path}),
             )
         except (OSError, subprocess.TimeoutExpired):
             node_reason = "无法运行 Node.js 版本检查；对话程序还未启动。"
@@ -78,15 +100,24 @@ def runtime_checks(extension: Path, find_pi) -> list[dict]:
     pi_fix_command = f"npm install -g @earendil-works/pi-coding-agent@{PI_SDK_VERSION}"
     if pi_ready and node_ready:
         # --version exits before Pi loads settings/auth or starts a model session.
+        # The Windows bundled CLI took 7.6s on the validation machine; the
+        # previous 5s bound misclassified its successful startup as unavailable.
+        version_timeout = 15 if sys.platform == "win32" else 5
         try:
             with TemporaryDirectory(prefix="diary-pi-check-") as isolated_home:
                 result = subprocess.run(
-                    [str(pi), "--version"], capture_output=True, text=True, timeout=5,
-                    check=False, env={"PATH": node_path, "HOME": isolated_home,
-                                      "PI_CODING_AGENT_DIR": isolated_home, "PI_OFFLINE": "1"},
+                    _version_command(pi, node), capture_output=True, text=True, timeout=version_timeout,
+                    check=False, env=subprocess_environment({"PATH": node_path, "HOME": isolated_home,
+                                      "USERPROFILE": isolated_home, "TMPDIR": isolated_home,
+                                      "PI_CODING_AGENT_DIR": isolated_home, "PI_OFFLINE": "1"}),
                     cwd=isolated_home,
                 )
-        except (OSError, subprocess.TimeoutExpired):
+        except subprocess.TimeoutExpired:
+            pi_ready = False
+            pi_reason = f"Pi 版本检查在 {version_timeout} 秒内未完成，尚未验证对话启动。"
+            pi_repair_action = "保存工作并释放系统资源后重试；仍超时时检查所选 Pi 安装的启动情况。"
+            pi_fix_command = None
+        except (OSError, ValueError, KeyError, TypeError):
             pi_ready = False
             pi_reason = "无法运行隔离的 Pi 版本检查，请核对临时目录与程序启动权限；这不是密钥失败。"
             pi_repair_action = "确认系统临时目录可写、Pi 可执行，并在相同运行环境中执行 pi --version 后重试。"

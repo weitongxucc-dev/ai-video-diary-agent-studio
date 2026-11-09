@@ -12,6 +12,7 @@ from weakref import WeakKeyDictionary
 import psutil
 from app.device_scheduler import ProcessIdentity
 from app.host_resource_probes import HostProcessProbe
+from app.assistant.windows_process import WindowsJobProcess
 from types import MappingProxyType
 from typing import Callable
 
@@ -42,13 +43,20 @@ _groups_guard = threading.RLock()
 
 
 def _require_process_group_platform() -> None:
+    if os.name == "nt" and sys.platform == "win32":
+        return
     if os.name != "posix" or sys.platform not in {"darwin", "linux"}:
-        raise AssistantProcessReleaseError("当前平台无法核验助手进程组释放，未启动新的助手子进程；仅支持 macOS/Linux 的独占进程组。")
+        raise AssistantProcessReleaseError("当前平台无法核验助手进程组释放，未启动新的助手子进程；需要 macOS/Linux 进程组或 Windows Job Object。")
 
 
 def _capture_process_group(process: subprocess.Popen[str]) -> _OwnedGroup | None:
     """Capture the child before any parent wait/reap can lose its identity."""
     _require_process_group_platform()
+    if os.name == "nt":
+        if not isinstance(process, WindowsJobProcess):
+            raise AssistantProcessReleaseError("助手进程未登记到当前宿主拥有的 Windows Job Object，未发送停止信号。")
+        process.assert_owned()
+        return None
     with _groups_guard:
         existing = _groups.get(process)
         if existing is not None:
@@ -90,6 +98,11 @@ def _group_state(group: _OwnedGroup) -> bool:
 
 
 def _process_group_released(process: subprocess.Popen[str]) -> bool:
+    if isinstance(process, WindowsJobProcess):
+        try:
+            return process.group_released()
+        except Exception as error:
+            raise AssistantProcessReleaseError("Windows 助手进程组释放状态无法核验，未确认停止。") from error
     group = _capture_process_group(process)
     if group is None:
         return True
@@ -104,6 +117,12 @@ def _process_group_released(process: subprocess.Popen[str]) -> bool:
 
 def _terminate_process_group(process: subprocess.Popen[str], *, deadline_monotonic: float | None = None) -> None:
     total_deadline = time.monotonic() + 7 if deadline_monotonic is None else deadline_monotonic
+    if isinstance(process, WindowsJobProcess):
+        try:
+            process.terminate_group(total_deadline)
+        except Exception as error:
+            raise AssistantProcessReleaseError("Windows 助手进程组未能在截止前确认释放，停止标记保留。") from error
+        return
     group = _capture_process_group(process)
     if group is None:
         process.wait(timeout=max(0, min(3, total_deadline-time.monotonic())))

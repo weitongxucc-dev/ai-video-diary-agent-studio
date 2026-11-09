@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 from pathlib import Path
 import subprocess
 
@@ -105,7 +106,7 @@ def call(tmp_path, asset, *, scope="asset", selection="bound", tool=None, action
         data["tool"] = tool
     if operations is not None:
         data.update(operations=operations,externalBeforeOperation=external_before_operation,externalSegmentOnly=external_segment_only)
-    env = {key: os.environ[key] for key in ("PATH", "HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "TMPDIR") if key in os.environ})
     completed = subprocess.run(
         [NODE, "--experimental-strip-types", "--input-type=module", "-e", RUNNER, MODULE.as_uri()],
         input=json.dumps(data, ensure_ascii=False), capture_output=True, text=True,

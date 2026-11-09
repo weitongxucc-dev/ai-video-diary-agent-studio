@@ -4,6 +4,7 @@ from tool_result_test_fixtures import TOOL_OUTCOME_JS
 from assistant_sdk_fixtures import project_event_fixture
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 import re
 from pathlib import Path
 from uuid import UUID
@@ -175,7 +176,7 @@ def preview():
 
 
 def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, result=None, job=None, pi_module=None, lost_receipt=False, delay_ms=0, knowledge=None, script_context=None, stage="topic", failure_once=False, failure_status=422, observations=None, observation_job=None, execution=None, execution_before=None, references=(), reference_data=None):
-    env = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ})
     env.update(AI_VIDEO_DIARY_AGENT_API_BASE="https://fixture.invalid", AI_VIDEO_DIARY_AGENT_TASK_ID="task-current",
                AI_VIDEO_DIARY_AGENT_STAGE=stage, AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="fixture-member",
                AI_VIDEO_DIARY_AGENT_TASK_READ_READY="1", AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION="换第二镜头并保留旁白",

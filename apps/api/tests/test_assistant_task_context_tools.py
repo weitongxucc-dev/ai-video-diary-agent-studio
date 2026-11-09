@@ -1,6 +1,7 @@
 """Execute the actual TypeScript tool in Node against a controlled loopback HTTP response."""
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 from pathlib import Path
 import subprocess
 
@@ -33,7 +34,7 @@ finally{await new Promise(resolve=>server.close(resolve));}
 
 
 def run_tool(tmp_path, workspace, *, execution=None, execution_status=200, stage="topic", script_context=None):
-    env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ})
     env.update(AI_VIDEO_DIARY_AGENT_TASK_ID="task-real", AI_VIDEO_DIARY_AGENT_STAGE=stage,
                AI_VIDEO_DIARY_AGENT_SELECTED_REFS="[]", AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="controlled-member",
                AI_VIDEO_DIARY_AGENT_TASK_VERSION=json.dumps({"timeline_version_id":None,"timeline_sequence":0}))

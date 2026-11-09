@@ -4,6 +4,7 @@ from tool_result_test_fixtures import TOOL_OUTCOME_JS
 from assistant_sdk_fixtures import project_event_fixture
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 from pathlib import Path
 import subprocess
 from uuid import UUID
@@ -68,7 +69,7 @@ def invoke(tmp_path, steps=(), *, available=True, lost=False, pending=False, cod
              "reason": None if available else "工具链或专用预算缺档", "runtime": None, "limits": None}
     runner = tmp_path / "script-consumer.mjs"
     runner.write_text(RUNNER)
-    env = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ})
     env.update(AI_VIDEO_DIARY_AGENT_TASK_ID="task", AI_VIDEO_DIARY_AGENT_API_BASE="https://fixture.invalid",
                AI_VIDEO_DIARY_AGENT_STAGE="script", AI_VIDEO_DIARY_AGENT_TASK_READ_READY="1",
                AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="fixture-member", AI_VIDEO_DIARY_AGENT_TURN_ID="trusted-turn",

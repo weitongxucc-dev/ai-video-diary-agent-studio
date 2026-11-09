@@ -1,6 +1,7 @@
 """Execution-time frozen references with synthetic HTTP, without model calls."""
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 from pathlib import Path
 import subprocess
 
@@ -31,7 +32,7 @@ try {
 
 
 def run_tool(tmp_path, mode, *, selected=True):
-    env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ})
     env["AI_VIDEO_DIARY_AGENT_API_BASE"] = "http://synthetic.invalid"
     if mode == "task":
         env.update(AI_VIDEO_DIARY_AGENT_TASK_ID="task-real", AI_VIDEO_DIARY_AGENT_STAGE="topic",

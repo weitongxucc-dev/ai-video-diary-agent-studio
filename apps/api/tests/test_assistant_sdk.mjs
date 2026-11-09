@@ -1,18 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
-import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { execFileSync } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { openCreationSession } from "../agent_runtime/session.mjs";
 import { creationInputExtension } from "../agent_runtime/input-delivery.mjs";
+import { installedPiSdk } from './installed_pi_sdk.mjs';
 
 // Actual installed SDK, synthetic model responses and editing tool. No provider,
 // HTTP service, user media, production DB or device scheduler is used here.
-const piExecutable=execFileSync("which",["pi"],{encoding:"utf8"}).trim();
-const modulePath=join(dirname(dirname(realpathSync(piExecutable))),"index.js");
+const modulePath=installedPiSdk();
 const aiRoot = join(dirname(dirname(modulePath)), "node_modules/@earendil-works/pi-ai/dist");
 const { AssistantMessageEventStream } = await import(pathToFileURL(join(aiRoot, "utils/event-stream.js")));
 

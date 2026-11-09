@@ -6,6 +6,7 @@ from script_seed_fixtures import script_seed_payload
 import json
 import pytest
 import os
+from app.subprocess_environment import subprocess_environment
 import subprocess
 import threading
 import wave
@@ -189,7 +190,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         capabilities = state.client.get(state.url + "/assistant/edit-capabilities").json()
         assert "UpdateSubtitleCue" in [item["operation_type"] for item in capabilities["direct_apply"]["operations"]]
         version = kwargs["task_version"]
-        env = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
+        env = subprocess_environment({key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ})
         env.update(AI_VIDEO_DIARY_AGENT_API_BASE=f"http://127.0.0.1:{server.server_port}",
             AI_VIDEO_DIARY_AGENT_TASK_ID=state.task.id, AI_VIDEO_DIARY_AGENT_STAGE="montage",
             AI_VIDEO_DIARY_AGENT_TURN_ID=kwargs["turn_id"], AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION=kwargs["message"],

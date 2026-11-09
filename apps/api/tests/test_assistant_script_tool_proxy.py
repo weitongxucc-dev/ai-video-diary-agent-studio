@@ -4,6 +4,7 @@ from tool_result_test_fixtures import TOOL_OUTCOME_JS
 from assistant_sdk_fixtures import project_event_fixture
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 from pathlib import Path
 import subprocess
 from uuid import UUID
@@ -78,7 +79,7 @@ console.log(JSON.stringify({calls,results,parameters:tools.get('save_media_scrip
 
 
 def invoke(tmp_path, steps, *, lost=False, denied=False, code=None, tool=TOOL):
-    env = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ})
     env.update(AI_VIDEO_DIARY_AGENT_API_BASE="https://fixture.invalid", AI_VIDEO_DIARY_AGENT_TASK_ID="new-task",
                AI_VIDEO_DIARY_AGENT_STAGE="topic", AI_VIDEO_DIARY_AGENT_TASK_READ_READY="1",
                AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="fixture-member", AI_VIDEO_DIARY_AGENT_TURN_ID="trusted-turn",

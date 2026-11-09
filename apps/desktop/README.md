@@ -31,6 +31,34 @@ corepack pnpm --dir apps/desktop dev
 
 ## 本地构建
 
+### Windows 开发与后端实测
+
+Windows 适配在独立分支推进，与 Mac 功能分支通过 Git 合并；不互相复制 `.venv`、`node_modules`、模型运行环境或用户数据库。同步前先检查本地差异，保留未提交改动。当前安装包构建仍以 macOS 为准；API 健康响应不代表本地模型执行已可用。
+
+在仓库根目录的 PowerShell 中先执行以下环境脚本，再安装或启动服务。默认把下载缓存、Python 运行时和临时文件放在 E 盘；目录可通过 `-DataRoot` 指定，设置仅影响当前终端及其子进程。
+
+```powershell
+. .\scripts\windows-env.ps1
+corepack pnpm install --frozen-lockfile --store-dir E:\yaohe-dev\cache\pnpm-store
+uv sync --directory apps/api --locked --group dev --python 3.11
+```
+
+API、Web、Electron 的开发命令与上文相同，分别在加载过环境脚本的终端运行。应用中的模型、素材、输出与数据库目录仍须显式选择数据盘，缓存设置不替代应用数据配置。
+
+Windows 的 Pi 体检从所选 npm 安装目录解析 SDK 和声明的 CLI 入口，由 Node 直接执行版本检查。隔离体检子进程保留必要系统目录和数据盘临时目录，不继承未选入的密钥或 Node 启动选项。对话宿主使用独占 Windows Job Object 管理子孙进程，在分配完成前暂停执行，并核验整组退出后才确认停止；这不替代媒体执行器的设备许可与模型资源校准。
+
+单点后端实验可用 `scripts/windows_backend_probe.py` 包裹真实命令。它在恢复子进程执行前加入 Windows Job Object，限制整组进程的提交内存、CPU 亲和性和优先级，采样系统物理/提交余量，并在超时或余量不足时回收所有子孙进程。输出目录必须尚不存在，里面保存标准输出、错误及实测 JSON。
+
+```powershell
+apps\api\.venv\Scripts\python.exe scripts\windows_backend_probe.py `
+  --output E:\yaohe-dev\validation\sample --timeout 600 --memory-mib 5120 `
+  -- E:\path\to\backend.exe --help
+```
+
+这是有限实验入口，不替代正式设备许可、崩溃恢复和硬件校准。当前 MLX worker 与模型目录不能直接用于 Windows；须使用经过实测的独立后端及对应权重，再接入原有业务链。采样中的分页指标仍为 unknown，不据此推断系统没有分页。完整支持的验收边界仍遵循上方架构链接。
+
+### macOS 安装包
+
 ```bash
 corepack pnpm --dir apps/desktop build:mac
 ```

@@ -1,10 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {mkdtemp, writeFile, readFile, mkdir, rm} from "node:fs/promises";
-import {realpathSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {dirname, join} from "node:path";
-import {execFileSync, spawn} from "node:child_process";
+import {spawn} from "node:child_process";
 import {once} from "node:events";
 import {pathToFileURL, fileURLToPath} from "node:url";
 import {openCreationSession} from "../session.mjs";
@@ -12,8 +11,9 @@ import {createToolCallScope} from "../../agent_tools/diary/registration.ts";
 import {createBusinessRequest, BusinessResultUnknown} from "../../agent_tools/diary/transport.ts";
 import {registerPreviewJobReader} from "../../agent_tools/diary/preview-job-reader.ts";
 import {registerExecutionTools} from "../../agent_tools/diary/execution-tools.ts";
+import {installedPiSdk} from '../../tests/installed_pi_sdk.mjs';
 
-const modulePath = join(dirname(dirname(realpathSync(execFileSync("which", ["pi"], {encoding:"utf8"}).trim()))), "index.js");
+const modulePath = installedPiSdk();
 const streamModule = pathToFileURL(join(dirname(dirname(modulePath)), "node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js")).href;
 const {AssistantMessageEventStream} = await import(streamModule);
 const hostPath = fileURLToPath(new URL("../host.mjs", import.meta.url));

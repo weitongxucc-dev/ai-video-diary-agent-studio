@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 import subprocess
 from pathlib import Path
 
@@ -114,7 +115,7 @@ console.log(JSON.stringify(output));
 
 @pytest.fixture(scope="module")
 def tool_boundary():
-    env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ})
     completed = subprocess.run(
         [os.environ.get("MATERIAL_TOOLS_TEST_NODE", "node"), "--experimental-strip-types", "--input-type=module", "-e", RUNNER, Path(__file__).as_uri()],
         text=True, capture_output=True, check=True, timeout=15, env=env,

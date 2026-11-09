@@ -1,6 +1,7 @@
 """Member memory tools with synthetic fetch receipts; no server, Pi or user data."""
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 from pathlib import Path
 import subprocess
 
@@ -58,7 +59,7 @@ def call(tmp_path, memory, *, tool="update_preference_memory", action="remember"
     params = {"action": action, "key": key, "source_quote": quote, **extra}
     if value is not None:
         params["value"] = value
-    env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ})
     env.update(AI_VIDEO_DIARY_AGENT_API_BASE="http://synthetic.invalid",
                AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="synthetic-member-token")
     if turn is not None:

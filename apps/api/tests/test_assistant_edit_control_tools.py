@@ -1,6 +1,7 @@
 """Registered editing controls with synthetic HTTP receipts; no service or model."""
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 from pathlib import Path
 import subprocess
 from uuid import UUID
@@ -74,7 +75,7 @@ def context():
 
 
 def call(tmp_path, context, operations, *, failure=None, task=True, ready=True, version=True, turn=True, parent=None, parallel=False):
-    env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ})
     env.update(AI_VIDEO_DIARY_AGENT_API_BASE="http://synthetic.invalid",
                AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="synthetic-member",
                AI_VIDEO_DIARY_AGENT_STAGE="montage" if task else "",

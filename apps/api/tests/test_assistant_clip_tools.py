@@ -4,6 +4,7 @@ from tool_result_test_fixtures import TOOL_OUTCOME_JS
 from assistant_sdk_fixtures import project_event_fixture
 import json
 import os
+from app.subprocess_environment import subprocess_environment
 import subprocess
 from pathlib import Path
 
@@ -62,7 +63,7 @@ try{
 
 
 def invoke(tmp_path, steps, *, instruction="给当前镜头加上空镜头标签"):
-    env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
+    env = subprocess_environment({key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ})
     env.update(AI_VIDEO_DIARY_AGENT_TASK_ID="task-a", AI_VIDEO_DIARY_AGENT_STAGE="montage",
                AI_VIDEO_DIARY_AGENT_SELECTED_REFS='["clip:clip-a"]',
                AI_VIDEO_DIARY_AGENT_TASK_READ_READY="1", AI_VIDEO_DIARY_AGENT_TURN_ID=TURN_ID,
