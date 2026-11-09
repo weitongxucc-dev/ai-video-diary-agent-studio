@@ -87,9 +87,11 @@ def build_task_edit_router(*, audio_command_preview_for, audio_edit_rejected_for
             identity = {'member_id': assistant_member_id_for()(request, workspace_id), 'local_diagnostic': False}
         case = command_preview_use_case_for()()
         draft = request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact')
-        options = {'identity': identity, 'reader_identity': {'member_id': reader, 'local_diagnostic': diagnostic}, 'request_source': request_source, 'draft_only': draft, 'execution': None, 'actor': None}
+        actor = request_permit_actor_for()(request, workspace_id) if not diagnostic else None
+        options = {'identity': identity, 'reader_identity': {'member_id': reader, 'local_diagnostic': diagnostic}, 'request_source': request_source, 'draft_only': draft, 'execution': None, 'actor': actor}
         try:
-            outcome = case.preview(task, payload, base_version_id=base_version_id, **options)
+            outcome = case.preview(task, payload, base_version_id=base_version_id,
+                expected_input_id=request.headers.get('X-Assistant-Input-ID'), **options)
             outcome = case.resolve_action(task, outcome, **options)
             if isinstance(outcome, audio_command_preview_for()):
                 actor = request_permit_actor_for()(request, workspace_id)

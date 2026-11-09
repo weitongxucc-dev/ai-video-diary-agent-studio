@@ -565,8 +565,8 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     plan = CreationTaskMontagePlan('montage', 'local', 'task', 'script', 'scope fixture', 'ready',
         [NarrationCue(f'cue_{index}', f'section_{index}', '', clip.timeline_end_seconds-clip.timeline_start_seconds)
          for index, clip in enumerate(clips)], clips, at, 0, aspect_ratio='1:1', audio_timeline=graph, narration_audio_path=references[1],
-        graphic_overlays=[{'kind':'text', 'id':'in-window', 'text':'fixture', 'start_seconds':2, 'end_seconds':3},
-                          {'kind':'text', 'id':'outside', 'text':'outside', 'start_seconds':9, 'end_seconds':10}])
+        graphic_overlays=[{'kind':'text', 'id':'in-window', 'text':'fixture', 'start_seconds':2, 'end_seconds':3, 'font_family':'Arial'},
+                          {'kind':'text', 'id':'outside', 'text':'outside', 'start_seconds':9, 'end_seconds':10, 'font_family':'Arial'}])
     payload = creation_task_montage_plan_to_payload(plan)
     with repo._connect() as conn:
         task = repo.task_records.get_creation_task('local', 'task')

@@ -333,9 +333,23 @@ def test_real_metadata_planner_builds_candidate_only_after_permit_without_media_
     assert plan["audio_timeline"] == before[1]["audio_timeline"]
 
 
-def test_concurrent_same_UUID_claims_one_job_and_device_request(state):
+def test_concurrent_same_UUID_claims_one_job_and_device_request(state, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
+    from app.creation.storyboard_regeneration import narration_signature, material_signature
     payload = StoryboardRegenerationRequest.model_validate(inputs(state))
+    def no_nested_connection():
+        raise AssertionError("故事板来源核验必须复用原快照，不能在持有reader时等待另一连接")
+    # Make the lock-order regression deterministic before exercising the actual
+    # concurrent UUID claim. Source metadata and registration share one snapshot.
+    reference = state.repo.workspace_media_reference_for_asset('ws', state.asset.id)
+    with state.repo.execution_inputs.creation_execution_read() as conn:
+        current = state.repo.task_records.get_creation_task('ws', state.task.id, connection=conn)
+        with monkeypatch.context() as patch:
+            patch.setattr(state.repo, '_connect', no_nested_connection)
+            assert narration_signature(state.repo, current, connection=conn)
+            assert material_signature(state.repo, current, connection=conn)
+            assert state.repo.narration_artifacts.resolve_authorized_narration_audio_reference(
+                'ws', reference, connection=conn) == state.repo.video_library_path / 'source.mp4'
     def submit(_):
         return state.control.regenerate_storyboard("ws", state.task.id, payload, state.actor, state.runtime)
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -446,9 +460,9 @@ def test_completed_storyboard_can_request_only_current_render_without_replaying_
     service = TaskAudio(state.repo, state.case.artifact_store,
         state.case.output_root)
     state.owner.cpu_render_limits = CpuRenderLimits(8_000_000, 1, 30)
-    state.owner.audio_mix_facts = lambda workspace, target, plan, *, actor: service.mix_facts(workspace,
+    state.owner.audio_mix_facts = lambda workspace, target, plan, *, actor, connection=None: service.mix_facts(workspace,
         target, plan.audio_timeline, plan.duration_seconds, actor=actor, budget=audio_budget(),
-        normalize_voice_sources=plan.narration_linkage_created_audio_timeline)
+        normalize_voice_sources=plan.narration_linkage_created_audio_timeline, connection=connection)
     state.control.render_stage.valid = lambda *args, **kwargs: False
     state.control.resume('ws', task.id, state.actor, state.runtime, verify_media=False)
     requests = state.repo.job_records.list_creation_job_request_states('ws', job.id)

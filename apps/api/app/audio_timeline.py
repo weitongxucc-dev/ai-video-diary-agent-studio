@@ -509,11 +509,13 @@ def render_audio_mix(*args, **kwargs) -> Path:
         if (deadline_monotonic is None or max_output_bytes is None or max_output_bytes <= 0
                 or threads is None or threads <= 0):
             raise ValueError("受许可音轨渲染必须提供输出、线程和总时限")
-        kwargs["probe_duration"] = lambda path: probe_audio_source(
-            path, scheduler=scheduler, grant=grant, cancel_event=cancel_event,
-            deadline_monotonic=deadline_monotonic,
-            output=path.resolve() in produced_source_paths,
-        )
+        def source_metadata(path):
+            return probe_audio_metadata(path, scheduler=scheduler, grant=grant, cancel_event=cancel_event,
+                deadline_monotonic=deadline_monotonic, output=path.resolve() in produced_source_paths)
+        def source_clock(path):
+            measured = source_metadata(path)
+            return measured.get('source_duration_seconds', measured['duration_seconds'])
+        kwargs["probe_duration"] = source_clock
     staging = (TemporaryDirectory(prefix="narration-normalized-", dir=args[3].parent)
                if normalize_voice_sources else nullcontext(None))
     with staging as directory:
@@ -521,7 +523,7 @@ def render_audio_mix(*args, **kwargs) -> Path:
         try:
             if directory is not None:
                 kwargs["normalized_narration"] = _render_narration_normalizations(
-                    directory, args[0], args[2], kwargs.get("probe_duration") or probe_audio_source,
+                    directory, args[0], args[2], lambda path: source_metadata(path)['duration_seconds'],
                     scheduler=scheduler, grant=grant, cancel_event=cancel_event,
                     deadline_monotonic=deadline_monotonic, max_output_bytes=max_output_bytes,
                     threads=threads, solo_track_ids=kwargs.get("solo_track_ids"), output_paths=output_paths)
@@ -684,6 +686,14 @@ def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event
         cancel_event, deadline_monotonic = context.cancel_event, context.deadline_monotonic
     if scheduler is None:
         raise ValueError("受许可音频探测缺少调度器")
+    resources = _audio_grant_resources(scheduler, grant)
+    if resources.get("kind") in {"creation_render", "creation_presenter_render"}:
+        resources = resources["audio_mix"]
+    expected = None
+    if resources.get('kind') == 'task_audio' and not output:
+        expected = next((item for item in resources['inputs'] if Path(item['path']).resolve() == path.resolve()), None)
+        if expected is None:
+            raise PermissionError('音频源不在本次固定输入中')
     command = ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "a:0",
         "-show_entries", "stream=duration,sample_rate,channels:format=duration", "-of", "json", str(path)]
     stdout = _run_granted_audio_command(scheduler, grant, command, timeout_seconds=30,
@@ -692,15 +702,14 @@ def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event
     if not payload.get("streams"):
         raise ValueError("源文件没有可用音轨")
     stream = payload["streams"][0]
-    raw = stream.get("duration", payload.get("format", {}).get("duration"))
+    raw = stream.get("duration")
+    if raw is None and (expected is None or expected.get('media_type') != 'video'):
+        raw = payload.get("format", {}).get("duration")
     if raw is None:
         raise ValueError("源音频缺少时长信息")
     measured = {"duration_seconds": float(raw), "sample_rate": int(stream["sample_rate"]), "channels": int(stream["channels"])}
     if any(not math.isfinite(value) or value <= 0 for value in measured.values()):
         raise ValueError("源音频时长、采样率或声道无效")
-    resources = _audio_grant_resources(scheduler, grant)
-    if resources.get("kind") in {"creation_render", "creation_presenter_render"}:
-        resources = resources["audio_mix"]
     if resources.get("kind") == "task_audio":
         prefix = "output" if output else "source"
         limits = {"duration_seconds": resources[prefix + "_duration_limit_seconds"],
@@ -709,12 +718,31 @@ def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event
         if any(measured[name] > limit + (.025 if name == "duration_seconds" else 0) for name, limit in limits.items()):
             raise ValueError("实际音频规格超出本次许可声明，未进入解码或 DSP")
         if not output:
-            expected = next((item for item in resources["inputs"] if Path(item["path"]).resolve() == path.resolve()), None)
-            if expected is None:
-                raise PermissionError("音频源不在本次固定输入中")
+            if expected.get('media_type') == 'video':
+                # v2 DSP is unchanged. Only a video declaration sealed in this
+                # grant enables its source clock; old grants are never guessed.
+                video_command = ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "v:0",
+                    "-show_entries", "stream=duration:stream_disposition=attached_pic:format=duration", "-of", "json", str(path)]
+                video_payload = json.loads(_run_granted_audio_command(scheduler, grant, video_command, timeout_seconds=30,
+                    cancel_event=cancel_event, deadline_monotonic=deadline_monotonic).stdout)
+                videos = video_payload.get('streams')
+                if not videos or videos[0].get('disposition', {}).get('attached_pic') == 1:
+                    raise ValueError('已声明的视频源没有可用画面轨')
+                video_duration = videos[0].get('duration', video_payload.get('format', {}).get('duration'))
+                if video_duration is None:
+                    raise ValueError('视频源缺少画面时钟')
+                video_duration = float(video_duration)
+                if not math.isfinite(video_duration) or video_duration <= 0:
+                    raise ValueError('视频源画面时钟无效')
+                if video_duration > resources['source_duration_limit_seconds'] + .025:
+                    raise ValueError('实际视频源时钟超出本次许可声明，未进入解码或 DSP')
+                measured['source_duration_seconds'] = video_duration
             for name, actual in measured.items():
+                if name == 'source_duration_seconds':
+                    continue
                 saved = expected.get(name)
-                if saved is not None and abs(actual - saved) > (.25 if name == "duration_seconds" else 0):
+                compared = measured.get('source_duration_seconds', actual) if name == 'duration_seconds' else actual
+                if saved is not None and abs(compared - saved) > (.25 if name == "duration_seconds" else 0):
                     raise ValueError("实际音频规格与持久输入元数据不符，未进入 DSP")
     return measured
 

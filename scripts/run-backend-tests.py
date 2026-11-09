@@ -15,6 +15,7 @@ API = Path(__file__).resolve().parents[1] / "apps" / "api"
 DARWIN_FILES = frozenset({
     "tests/test_host_resource_probes.py",
     "tests/test_creation_audio_mix.py",
+    "tests/test_source_task_render.py",
     "tests/test_task_media_grants.py",
     "tests/test_member_permits.py",
     "tests/test_material_probe.py",

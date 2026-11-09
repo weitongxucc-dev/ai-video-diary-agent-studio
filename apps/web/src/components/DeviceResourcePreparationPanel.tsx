@@ -64,7 +64,7 @@ export function DeviceResourcePreparationPanel() {
   const [error, setError] = useState('');
   const [storageError, setStorageError] = useState(false);
   const [ratio, setRatio] = useState('9:16');
-  const [resolution, setResolution] = useState('720');
+  const [resolution, setResolution] = useState('1080');
   const [fps, setFps] = useState('30');
   const [duration, setDuration] = useState('30');
   const [clips, setClips] = useState('6');
@@ -229,7 +229,7 @@ export function DeviceResourcePreparationPanel() {
         <AppSelectOption value="9:16">竖屏 9:16</AppSelectOption><AppSelectOption value="16:9">横屏 16:9</AppSelectOption><AppSelectOption value="1:1">方形 1:1</AppSelectOption>
       </AppSelect></label>
       <label><span>分辨率</span><AppSelect aria-label="分辨率" value={resolution} onValueChange={setResolution}>
-        <AppSelectOption value="720">720p</AppSelectOption><AppSelectOption value="1080">1080p</AppSelectOption>
+        <AppSelectOption value="720">720p 预览</AppSelectOption><AppSelectOption value="1080">1080p 成片</AppSelectOption>
       </AppSelect></label>
       <label><span>帧率</span><AppSelect aria-label="帧率" value={fps} onValueChange={setFps}>
         <AppSelectOption value="24">24 帧/秒</AppSelectOption><AppSelectOption value="25">25 帧/秒</AppSelectOption><AppSelectOption value="30">30 帧/秒</AppSelectOption>

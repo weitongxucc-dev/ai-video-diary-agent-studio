@@ -1,4 +1,5 @@
 """Visual preview preparation, original full-tail comparison and explicit execution."""
+from app.creation.plan_contracts import creation_plan_payload
 from dataclasses import asdict, replace
 from collections import Counter
 import subprocess
@@ -174,7 +175,7 @@ class VisualPreviewUseCase:
                     'uses': uses.get(reference, 1), **self.audio.source_metadata(workspace_id, task_id, reference)})
         facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id,
             'script_digest': self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None,
-            'plan_id': task.plan_id, 'plan_digest': media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))),
+            'plan_id': task.plan_id, 'plan_digest': media_digest(creation_plan_payload(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))),
             'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
         if visual_scope is not None:
             facts['visual_preview'] = visual_scope

@@ -177,7 +177,7 @@ def test_prepared_scope_binds_actual_inputs_and_checks_separate_model_cache_volu
     plan_id, bootstrap = service.prepare(NarrationPreparationShape('voice', 'v1', '样本', 'zh', 2), actor, request_id='volumes')
     plan = service._plan(plan_id)
     prepared = replace(bootstrap.narration, input_scope='single_call_prepared_v1', preparation_receipt_sha256='a'*64,
-        running_cpu_policy=RuntimeCpuPolicy('darwin_nice', 'synthetic-narration-volume-metadata', nice=5))
+        running_cpu_policy=RuntimeCpuPolicy('darwin_background', 'synthetic-narration-volume-metadata'))
     resources = {**service._resources(plan), 'input_scope': prepared.input_scope,
         'budget_basis': narration_scope_basis(prepared.input_scope), 'preparation_receipt_sha256': 'a'*64}
     budget = replace(bootstrap, narration=prepared, max_disk_io_bytes_per_second=None)

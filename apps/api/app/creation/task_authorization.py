@@ -223,6 +223,56 @@ class TaskAuthorizationUseCase:
 
         return commit
 
+    def prepare_recipe_selection(self, task, actor, definition_ref, *, source, request_inputs, recipe_current):
+        """Bind only an interactively selected recipe definition to this task."""
+        identity = self.identity(actor)
+        current = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id)
+        if self.status(task.workspace_id, task.id, identity=identity, operation='task_media') != 'valid':
+            raise TaskAuthorizationDenied('原任务授权无效，不能选择配方来源')
+        if (source['workspace_id'], source['task_id'], source['member_id'], source['actor_identity'],
+                source['request_id'], source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (
+                task.workspace_id, task.id, actor.user_id or actor.member_id, actor.identity_payload(),
+                request_inputs['request_id'], request_inputs['expected_timeline_version_id'], request_inputs['expected_timeline_sequence']):
+            raise TaskAuthorizationDenied('配方选择与原任务请求或操作者不一致')
+        if self.verify_identity(identity) != 'ready':
+            raise TaskAuthorizationDenied('本次设备或账号权限尚未核实，配方选择未提交')
+
+        def request_current(connection):
+            target = self.repository.task_records.get_creation_task(task.workspace_id, task.id, connection=connection)
+            version = (self.repository.timeline_records.get_timeline_version(task.workspace_id,
+                target.current_timeline_version_id, connection=connection) if target.current_timeline_version_id else None)
+            if (target.current_timeline_version_id, version.sequence if version else 0) != (
+                    source['expected_timeline_version_id'], source['expected_timeline_sequence']):
+                raise TaskAuthorizationConflict('配方选择的原目标版本已变化')
+            rows = connection.execute("SELECT id,payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
+                "AND event_type='edit_request_claimed' AND json_extract(payload_json,'$.member_id')=? "
+                "AND json_extract(payload_json,'$.request_id')=? AND json_extract(payload_json,'$.phase')='script'",
+                (task.workspace_id, task.id, source['member_id'], source['request_id'])).fetchall()
+            if len(rows) != 1 or json.loads(rows[0]['payload_json'])['inputs'] != request_inputs:
+                raise TaskAuthorizationDenied('配方选择没有匹配的原请求输入')
+            return tuple(rows[0])
+
+        with self.repository._connect() as connection:
+            request = request_current(connection)
+
+        def commit(connection):
+            latest = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id, connection=connection)
+            if latest != current:
+                raise TaskAuthorizationConflict('配方核验期间原任务授权已变化')
+            if (request_current(connection) != request or recipe_current(connection) is not True
+                    or self.status(task.workspace_id, task.id, identity=identity,
+                        operation='task_media', connection=connection) != 'valid'):
+                raise TaskAuthorizationDenied('原请求、目标、成员或配方来源已变化，选择未提交')
+            references = set(current.resource_scope.get('references', []))
+            if definition_ref not in references:
+                references.add(definition_ref)
+                self.repository.task_authorization_records.save_task_authorization(replace(current,
+                    resource_scope={**current.resource_scope, 'references': sorted(references)},
+                    revision=current.revision + 1, last_checked_at=self.clock(), last_verdict='ready'),
+                    expected_revision=current.revision, connection=connection)
+
+        return commit
+
     def prepare_material_edit(self, task, editor_identity, asset_ids):
         """Prepare only newly used fixed materials; ordinary editing does not issue a task grant."""
         from app.source_policy import knowledge_item_readable as content_readable
@@ -291,9 +341,11 @@ class TaskAuthorizationUseCase:
         # must not keep a removed member active until the background refresh.
         # Account identities keep their existing remote-observation lifecycle.
         if workspace_id == 'local' and authorization.identity.get('device_id') is None:
-            verdict = self.verify_identity(authorization.identity)
-            if verdict != 'ready':
-                return 'unverified' if verdict == 'unknown' else 'revoked'
+            with (self.repository._connect() if connection is None else nullcontext(connection)) as conn:
+                member = conn.execute('SELECT 1 FROM local_members WHERE member_id=?',
+                    (authorization.identity['member_id'],)).fetchone()
+            if member is None:
+                return 'revoked'
         if authorization.expires_at is None:
             return "unverified"
         if self.clock() >= authorization.expires_at:

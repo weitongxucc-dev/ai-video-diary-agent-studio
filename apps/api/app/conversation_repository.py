@@ -1004,6 +1004,9 @@ class ConversationRepository:
         latest = conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
             "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (root["conversation_id"],)).fetchone()
         adoption = root["goal"].get("creation_adoption")
+        if adoption and adoption.get('kind') == 'source_task' and not ConversationRepository._source_task_adoption_current(
+                conn, adoption, root['goal']['workspace_id'], root['goal']['member_id'], root['goal']['task_id']):
+            return False
         origin_id = adoption["turn_id"] if adoption else root["id"]
         resume=root['goal'].get('creation_resume')
         if resume:
@@ -1023,7 +1026,9 @@ class ConversationRepository:
                     or (consumed['input_id'] if consumed else None)!=source['input_id']
                     or hashlib.sha256(instruction.encode()).hexdigest()!=source['message_digest']
                     or not any(item.get('type')=='creation_request_resumed' and item['source']==source
-                        and item['request_id']==resume['request_id'] and item['window_id']==resume['window_id']
+                        and item['request_id']==resume['request_id']
+                        and (item.get('source_task_event_id')==resume['source_task_event_id'] if resume.get('kind')=='source_task'
+                            else item['window_id']==resume['window_id'])
                         and {'root_id':root['id'],'revision':resume['adopted_revision']} in item['goals'] for item in current_events)):
                 return False
         elif latest is None or latest["id"] != origin_id:
@@ -1231,7 +1236,25 @@ class ConversationRepository:
             if request_id is not None:
                 query+=' AND r.id=?'
                 parameters.append(request_id)
-            groups=conn.execute(query+' GROUP BY r.id,w.id ORDER BY r.id LIMIT 21',parameters).fetchall()
+            groups=[dict(item) for item in conn.execute(query+' GROUP BY r.id,w.id ORDER BY r.id LIMIT 21',parameters)]
+            source_query="""SELECT t.id FROM assistant_conversation_turns t
+                JOIN assistant_conversation_request_receipts a ON a.turn_id=t.id
+                WHERE t.conversation_id=? AND a.workspace_id=? AND a.member_id=?
+                AND json_extract(t.result_json,'$.goal_continuation.creation_adoption.kind')='source_task'"""
+            source_parameters=[row['conversation_id'],workspace_id,member_id]
+            if request_id is not None:
+                source_query+=" AND json_extract(t.result_json,'$.goal_continuation.creation_adoption.request_id')=?"
+                source_parameters.append(request_id)
+            source_groups={}
+            for candidate in conn.execute(source_query+' ORDER BY t.id LIMIT 21',source_parameters):
+                root=self._goal_root(conn,candidate['id'])
+                goal=root['goal']
+                adoption=goal['creation_adoption']
+                if self._source_task_adoption_current(conn,adoption,workspace_id,member_id,goal['task_id']):
+                    source_groups[adoption['event_id']]={'kind':'source_task','id':adoption['request_id'],
+                        'event_id':adoption['event_id'],'task_id':goal['task_id'],'goal':goal['original_instruction'],
+                        'input_fingerprint':adoption['input_fingerprint'],'task_count':1}
+            groups.extend(source_groups.values())
             if not groups:
                 return {'status':'blocked','request_id':None,'tasks':[],'reason':'本对话没有可核实的已采用任务组'}
             if len(groups)!=1:
@@ -1240,13 +1263,25 @@ class ConversationRepository:
                     'reason':'同一对话存在多个已采用任务组，请明确选择；没有按最近或名称猜测'}
             group=groups[0]
             request_id=group['id']
-            root_rows=conn.execute("SELECT t.id FROM assistant_conversation_turns t WHERE t.conversation_id=? "
-                "AND json_extract(t.result_json,'$.goal_continuation.creation_adoption.request_id')=? "
-                "AND json_extract(t.result_json,'$.goal_continuation.creation_adoption.window_id')=? ORDER BY t.id LIMIT 9",
-                (row['conversation_id'],request_id,group['window_id'])).fetchall()
+            source_task=group.get('kind')=='source_task'
+            if source_task:
+                root_rows=conn.execute("SELECT t.id FROM assistant_conversation_turns t "
+                    "JOIN assistant_conversation_request_receipts a ON a.turn_id=t.id "
+                    "WHERE t.conversation_id=? AND a.workspace_id=? AND a.member_id=? "
+                    "AND json_extract(t.result_json,'$.goal_continuation.creation_adoption.kind')='source_task' "
+                    "AND json_extract(t.result_json,'$.goal_continuation.creation_adoption.event_id')=? ORDER BY t.id LIMIT 2",
+                    (row['conversation_id'],workspace_id,member_id,group['event_id'])).fetchall()
+                task_ids={group['task_id']}
+                resume_binding={'kind':'source_task','source_task_event_id':group['event_id']}
+            else:
+                root_rows=conn.execute("SELECT t.id FROM assistant_conversation_turns t WHERE t.conversation_id=? "
+                    "AND json_extract(t.result_json,'$.goal_continuation.creation_adoption.request_id')=? "
+                    "AND json_extract(t.result_json,'$.goal_continuation.creation_adoption.window_id')=? ORDER BY t.id LIMIT 9",
+                    (row['conversation_id'],request_id,group['window_id'])).fetchall()
+                task_ids={item['task_id'] for item in conn.execute('SELECT task_id FROM creation_request_items WHERE window_id=?',(group['window_id'],))}
+                resume_binding={'window_id':group['window_id']}
             roots=[self._goal_root(conn,item['id']) for item in root_rows]
-            task_ids={item['task_id'] for item in conn.execute('SELECT task_id FROM creation_request_items WHERE window_id=?',(group['window_id'],))}
-            if not 1<=len(roots)<=8 or {root['goal']['task_id'] for root in roots}!=task_ids:
+            if not 1<=len(roots)<=8 or (source_task and len(roots)!=1) or {root['goal']['task_id'] for root in roots}!=task_ids:
                 return {'status':'blocked','request_id':request_id,'tasks':[],'reason':'已采用窗口与持久目标集合不完整，未重建任务'}
             outcomes=[]
             proofs=[]
@@ -1270,17 +1305,18 @@ class ConversationRepository:
                 resumed={**goal,'revision':revision,'status':'waiting_result','waiting_reason':'reconcile_original_business_before_resume',
                     'original_instruction':goal['original_instruction']+'\n\n当前真人继续要求：\n'+message,
                     'request_context':task_context,'target_snapshot':task_context['target_snapshot'],
-                    'creation_resume':{'request_id':request_id,'window_id':group['window_id'],'source':source,
+                    'creation_resume':{'request_id':request_id,**resume_binding,'source':source,
                         'adopted_revision':revision,'previous_turn_id':goal['current_turn_id'],
                         'prior_business_input':{'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')}},
                     'unfinished_steps':['read_original_request_result','complete_original_instruction'],
                     'next_checkpoint':'read_original_request_result'}
                 self._write_goal(conn,root,resumed)
                 seal(conn,goal,resumed,task_context)
-                event_id='creation-resumed:'+hashlib.sha256(json.dumps([root['id'],source,request_id,group['window_id']],sort_keys=True).encode()).hexdigest()
+                group_id=group['event_id'] if source_task else group['window_id']
+                event_id='creation-resumed:'+hashlib.sha256(json.dumps([root['id'],source,request_id,group_id],sort_keys=True).encode()).hexdigest()
                 root_events=json.loads(root['events_json'])
                 root_events.append({'type':'business_result','event_id':event_id,'phase':'creation_resume','status':'confirmed',
-                    'task_id':task_id,'request_id':request_id,'window_id':group['window_id'],
+                    'task_id':task_id,'request_id':request_id,**resume_binding,
                     'base_version_id':resumed['target_snapshot']['timeline_version_id'],
                     'result_version_id':resumed['target_snapshot']['timeline_version_id'],
                     **({'input_id':goal['source_input_id']} if goal.get('source_input_id') else {})})
@@ -1290,7 +1326,7 @@ class ConversationRepository:
                 outcomes.append({'task_id':task_id,'status':'resumed',**({'reason':checked['reason']} if checked.get('reason') else {})})
                 changed=True
             if proofs:
-                events.append({'type':'creation_request_resumed','request_id':request_id,'window_id':group['window_id'],
+                events.append({'type':'creation_request_resumed','request_id':request_id,**resume_binding,
                     'source':source,'goals':proofs})
                 conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
                     (json.dumps(events,ensure_ascii=False),_now(),turn_id))
@@ -1345,6 +1381,89 @@ class ConversationRepository:
                 (json.dumps(events, ensure_ascii=False), json.dumps(result, ensure_ascii=False), _now(), turn_id))
             return True
 
+    def bind_source_task_input(self, source, payload, *, verify_source):
+        """Freeze one consumed source request before filesystem or identity work."""
+        if source['kind'] != 'conversation_input' or source['request_id'] != payload['request_id']:
+            raise ValueError('原片请求身份与原输入不一致')
+        with self._connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if verify_source(conn) != source:
+                raise ValueError('原片请求的当前输入已变化')
+            original = self.read_source_task_input(source['workspace_id'], source['member_id'],
+                source['request_id'], connection=conn)
+            value = {'source': source, 'payload': payload}
+            if original is not None:
+                if original != value:
+                    raise ValueError('原片请求 UUID 已绑定不同的输入或完整参数')
+                return original
+            row = conn.execute("SELECT t.events_json FROM assistant_conversation_turns t "
+                "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
+                "JOIN assistant_conversations c ON c.id=t.conversation_id "
+                "WHERE t.id=? AND t.conversation_id=? AND r.workspace_id=? AND r.member_id=? "
+                "AND c.workspace_id=r.workspace_id AND c.member_id=r.member_id AND r.outcome='consumed'",
+                (source['turn_id'], source['conversation_id'], source['workspace_id'], source['member_id'])).fetchone()
+            if row is None:
+                raise ValueError('原片请求没有真实成员已消费的对话出处')
+            events = json.loads(row['events_json'])
+            events.append({'type': 'source_task_input', **value})
+            conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
+                (json.dumps(events, ensure_ascii=False, allow_nan=False), _now(), source['turn_id']))
+            return value
+
+    def read_source_task_input(self, workspace_id, member_id, request_id, *, connection=None):
+        """Read the original body even after its turn stopped or the app restarted."""
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            rows = conn.execute("SELECT e.value FROM assistant_conversation_turns t "
+                "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
+                "JOIN assistant_conversations c ON c.id=t.conversation_id, json_each(t.events_json) e "
+                "WHERE r.workspace_id=? AND r.member_id=? AND r.outcome='consumed' "
+                "AND c.workspace_id=r.workspace_id AND c.member_id=r.member_id "
+                "AND json_extract(e.value,'$.type')='source_task_input' "
+                "AND json_extract(e.value,'$.source.workspace_id')=r.workspace_id "
+                "AND json_extract(e.value,'$.source.member_id')=r.member_id "
+                "AND json_extract(e.value,'$.source.turn_id')=t.id "
+                "AND json_extract(e.value,'$.source.conversation_id')=t.conversation_id "
+                "AND json_extract(e.value,'$.source.request_id')=?", (workspace_id, member_id, request_id)).fetchall()
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise ValueError('原片请求存在多个输入锚点，不能猜测原参数')
+        event = json.loads(rows[0][0])
+        return {'source': event['source'], 'payload': event['payload']}
+
+    @staticmethod
+    def _source_task_adoption_current(conn, adoption, workspace_id, member_id, task_id):
+        """Check the original source receipt and adopted Plan on this connection."""
+        event = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
+            "AND id=? AND event_type='source_task_created'", (workspace_id, task_id, adoption['event_id'])).fetchone()
+        task_row = conn.execute('SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?',
+            (workspace_id, task_id)).fetchone()
+        if event is None or task_row is None:
+            return False
+        payload, task = json.loads(event[0]), json.loads(task_row[0])
+        receipt, source = payload['receipt'], payload['source']
+        plan_row = conn.execute('SELECT payload FROM creation_plans WHERE workspace_id=? AND id=?',
+            (workspace_id, task['plan_id'])).fetchone()
+        if plan_row is None:
+            return False
+        plan = json.loads(plan_row[0])
+        adopted = plan.get('adoption') or {}
+        digest = hashlib.sha256(json.dumps({'inputs': payload['inputs'], 'source': source},
+            sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        return (adoption['kind'] == 'source_task'
+            and source.get('kind') == 'conversation_input' and source['member_id'] == member_id
+            and source == adoption['source'] and source['request_id'] == adoption['request_id']
+            and receipt['request_id'] == payload['inputs']['request_id'] == adoption['request_id']
+            and receipt['task_id'] == task['id'] == task_id and task['workspace_id'] == workspace_id
+            and receipt['plan_id'] == task['plan_id'] == plan['id'] == adoption['plan_id']
+            and plan['workspace_id'] == workspace_id and plan['creation_task_id'] == task_id
+            and task['owner_user_id'] == plan['owner_user_id'] == member_id and plan['status'] == 'confirmed'
+            and task['confirmed_script_id'] is None and task['narration_cache_key'] is None
+            and plan.get('source_media') is not None and plan['source_media'] == receipt['source_media']
+            and payload['input_digest'] == digest == adoption['input_fingerprint']
+            and adopted.get('kind') == 'delegated_system' and adopted.get('member_id') == member_id
+            and adopted.get('version') == digest and adopted.get('authorization_source') == source)
+
     def register_creation_task_goals(self, source_turn_id: str, workspace_id: str, member_id: str,
                                      adoption: dict, task_contexts: list[dict]) -> list[str]:
         """Persist host-verified adopted tasks without inventing a user message.
@@ -1380,8 +1499,23 @@ class ConversationRepository:
             registered = []
             for task_context in task_contexts:
                 task_id = task_context["task_id"]
-                identity = f"{source_turn_id}:{adoption['request_id']}:{adoption['window_id']}:{input_id}:{task_id}"
-                root_id = str(uuid5(NAMESPACE_URL, "yaohe-creation-goal:" + identity))
+                source_task = adoption.get('kind') == 'source_task'
+                if source_task:
+                    if not self._source_task_adoption_current(conn, adoption, workspace_id, member_id, task_id):
+                        raise ValueError('原片任务采用回执与持久来源不一致')
+                    current = conn.execute("SELECT json_extract(t.payload,'$.current_timeline_version_id'),v.sequence,"
+                        "json_extract(t.payload,'$.stage') "
+                        "FROM creation_tasks t LEFT JOIN timeline_versions v ON v.workspace_id=t.workspace_id "
+                        "AND v.task_id=t.id AND v.id=json_extract(t.payload,'$.current_timeline_version_id') "
+                        "WHERE t.workspace_id=? AND t.id=?", (workspace_id, task_id)).fetchone()
+                    target = task_context['target_snapshot']
+                    if tuple(current) != (target['timeline_version_id'], target['timeline_sequence'], task_context['stage']):
+                        return []
+                    identity = f"{source_turn_id}:{adoption['event_id']}:{input_id}:{task_id}"
+                    root_id = str(uuid5(NAMESPACE_URL, 'yaohe-source-task-goal:' + identity))
+                else:
+                    identity = f"{source_turn_id}:{adoption['request_id']}:{adoption['window_id']}:{input_id}:{task_id}"
+                    root_id = str(uuid5(NAMESPACE_URL, "yaohe-creation-goal:" + identity))
                 existing = conn.execute("SELECT id FROM assistant_conversation_turns WHERE id=?", (root_id,)).fetchone()
                 if existing is not None:
                     registered.append(root_id)
@@ -1391,7 +1525,8 @@ class ConversationRepository:
                 event_id = "creation-adopted:" + root_id
                 event = {"type": "business_result", "event_id": event_id, "phase": "creation",
                     "status": "confirmed", "task_id": task_id, "request_id": adoption["request_id"],
-                    "window_id": adoption["window_id"], "base_version_id": snapshot["timeline_version_id"],
+                    **({'source_task_event_id': adoption['event_id']} if source_task else {'window_id': adoption['window_id']}),
+                    "base_version_id": snapshot["timeline_version_id"],
                     "result_version_id": snapshot["timeline_version_id"]}
                 goal = {"original_turn_id": root_id, "workspace_id": workspace_id, "member_id": member_id,
                     "task_id": task_id, "conversation_id": row["conversation_id"], "original_instruction": instruction,

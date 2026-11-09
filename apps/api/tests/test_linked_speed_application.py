@@ -198,7 +198,9 @@ def test_late_editorial_write_failure_rolls_back_on_actual_verifier_connection(s
 def test_shared_base_three_branches_and_narration_snapshot_keep_original_rules(state):
     assert state.case.ensure_montage_base('ws', state.task, state.plan).id == state.base.id
     without_head = replace(state.task, current_timeline_version_id=None)
-    assert state.case.ensure_montage_base('ws', without_head, state.plan).id == state.base.id
+    with pytest.raises(EditConflict, match='时间线已变化'):
+        state.case.ensure_montage_base('ws', without_head, state.plan)
+    assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
     plan = CreationPlan('legacy-plan', 'ws', 'legacy', 'legacy', 1, 'zh-CN', '9:16', 4,
         [], [], None, [], 0, 0, 'fixed source', [], [], [], 'fixture')
     legacy = replace(state.task, id='legacy-task', plan_id=plan.id, current_timeline_version_id=None,

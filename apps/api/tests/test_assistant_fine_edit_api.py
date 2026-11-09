@@ -212,7 +212,8 @@ def test_color_patch_preserves_existing_cut_effect_clock_until_fade_is_changed(f
 
 def test_nonzero_face_effect_is_explicitly_unavailable_before_media_submission(fine_state):
     state = fine_state
+    jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
     response = state.client.post(state.base_url + "/edits/exact/preview", json=bound(state,
         operation_type="AdjustVisualEffects", clip_ids=[state.clip.id], effects={"beauty_strength": .2}))
     assert response.status_code == 422 and "受许可执行路径" in response.text
-    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == jobs

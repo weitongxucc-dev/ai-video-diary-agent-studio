@@ -52,6 +52,22 @@ def test_partial_creation_stage_budget_remains_an_explicit_error(field):
         creation_stage_budgets_from_env({field: "256"})
 
 
+def test_declared_montage_budget_cannot_claim_prepared_task_scope():
+    config = {
+        "DEVICE_MONTAGE_MAX_SECTION_COUNT": "10",
+        "DEVICE_MONTAGE_MAX_ASSET_COUNT": "20",
+        "DEVICE_MONTAGE_MAX_INPUT_BYTES": "1000000",
+        "DEVICE_MONTAGE_MAX_OUTPUT_BYTES": "1000000",
+        "DEVICE_MONTAGE_MAX_TIMEOUT_SECONDS": "10",
+        "DEVICE_MONTAGE_ADDITIONAL_MEMORY_BYTES": "1073741824",
+        "DEVICE_MONTAGE_PREPARATION_BASIS_DIGEST": "a" * 64,
+    }
+    narration, montage = creation_stage_budgets_from_env(config)
+    assert narration is None
+    assert montage.max_section_count == 10
+    assert montage.preparation_basis_digest is None
+
+
 def test_media_script_budget_requires_every_explicit_device_value():
     from app.host_resource_probes import MediaScriptBudget
     from app.member_permits import media_script_budget_from_env

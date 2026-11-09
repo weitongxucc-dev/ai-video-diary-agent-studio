@@ -565,8 +565,11 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                 presenter_limits=presenter_limits, presenter_models=presenter_models,
                 resolve_presenter_output=resolve_presenter_output, actor=actor,
                 graphic_source_facts=graphic_source_facts, audio_mix_facts=audio_mix_facts)
-    if not task.montage_plan_id or not task.narration_cache_key or not task.confirmed_script_id:
+    source_mode = creation_plan.source_media is not None
+    if not task.montage_plan_id or (not source_mode and (not task.narration_cache_key or not task.confirmed_script_id)):
         raise ValueError("当前任务缺少已确认故事板或配音")
+    if source_mode and (task.confirmed_script_id is not None or task.narration_cache_key is not None):
+        raise ValueError("原片任务不能隐式采用文案或配音产物")
     row = conn.execute(
         "SELECT payload FROM creation_task_montage_plans WHERE workspace_id=? AND task_id=? AND id=?",
         (task.workspace_id, task.id, task.montage_plan_id),
@@ -585,6 +588,24 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
             or not math.isfinite(montage.duration_seconds) or montage.duration_seconds <= 0):
         raise ValueError("当前故事板尚未确认或与文案不一致")
     presenter = bool(montage.presenter_share_target or any(clip.person_render_id for clip in montage.clips))
+    if source_mode:
+        if presenter or montage.cues or montage.narration_audio_path is not None or montage.audio_timeline is None:
+            raise ValueError("原片任务的故事板或原声音轨契约不一致")
+        source_input = creation_plan.source_media
+        source_asset = repository.get_asset(task.workspace_id, source_input["asset_id"], connection=conn)
+        if source_asset.updated_at.isoformat() != source_input["asset_updated_at"]:
+            raise ValueError("采用的源视频修订已变化，请重新核对素材")
+        from app.source_policy import knowledge_item_readable
+        from app.materials.contracts import material_usage_eligibility
+        if not isinstance(actor, CreationExecutionActor) or not knowledge_item_readable(
+            user_id=actor.user_id or actor.member_id, local_diagnostic=False,
+            visibility=source_asset.visibility, owner_user_id=source_asset.owner_user_id
+        ) or not material_usage_eligibility(source_asset, purpose="manual").eligible:
+            raise PermissionError("采用的源视频已不可用于当前成员的制作")
+        source_path = repository.resolve_workspace_media_reference(
+            task.workspace_id, source_input["source_ref"], require_registered=True, connection=conn)
+        if repository.material_source_files.material_copy_revision(source_path.stat()) != source_input["file_signature"]:
+            raise ValueError("采用的源视频文件已变化，请重新核对素材")
     person_inputs = {}
     if presenter:
         if presenter_limits is None or resolve_presenter_output is None:
@@ -597,7 +618,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     if montage.audio_timeline is not None:
         if not isinstance(actor, CreationExecutionActor) or audio_mix_facts is None:
             raise PermissionError("音轨成片缺少当前成员或已许可来源解析器")
-        audio_mix = audio_mix_facts(task.workspace_id, task.id, montage, actor=actor)
+        audio_mix = audio_mix_facts(task.workspace_id, task.id, montage, actor=actor, connection=conn)
     if any(item.get("kind") not in {"image", "text"} for item in montage.graphic_overlays):
         raise ValueError("CPU 成片当前仅支持文字和已登记PNG图片图层")
     validate_overlays(montage.graphic_overlays, montage.duration_seconds)
@@ -606,26 +627,28 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     if image_refs:
         if not isinstance(actor, CreationExecutionActor) or graphic_source_facts is None:
             raise PermissionError("图片成片缺少当前成员或已登记来源解析器")
-        graphics = [graphic_source_facts(task.workspace_id, task.id, ref, actor=actor) for ref in image_refs]
+        graphics = [graphic_source_facts(task.workspace_id, task.id, ref, actor=actor, connection=conn) for ref in image_refs]
     if any(clip.visual_effects.get("beauty_strength") or clip.visual_effects.get("skin_exposure")
            for clip in montage.clips):
         raise ValueError("本机人像效果尚无受许可执行路径")
-    narration_reference = repository.narration_artifacts.narration_artifact_reference(task.narration_cache_key)
-    if montage.narration_audio_path != narration_reference:
-        raise ValueError("故事板配音与当前任务产物不一致")
-    narration = repository.narration_artifacts.get_narration_artifact(task.workspace_id, task.narration_cache_key)
-    if (narration is None or narration.task_id != task.id or narration.script_id != task.confirmed_script_id):
-        raise ValueError("当前配音产物不可用")
-    if narration.source_kind == "recorded":
-        if (presenter or creation_plan.presenter_share_target != 0
-                or narration.voice_profile_id is not None or narration.model_id is not None):
-            raise ValueError("本人录音只能用于纯素材成片，人物身份仍需已授权的声音版本")
-    elif (narration.source_kind != "generated" or creation_plan.selected_voice is None
-          or narration.voice_profile_id != creation_plan.selected_voice.profile_id):
-        raise ValueError("当前生成配音与已选择的声音版本不一致")
+    narration_reference = None
+    if not source_mode:
+        narration_reference = repository.narration_artifacts.narration_artifact_reference(task.narration_cache_key)
+        if montage.narration_audio_path != narration_reference:
+            raise ValueError("故事板配音与当前任务产物不一致")
+        narration = repository.narration_artifacts.get_narration_artifact(task.workspace_id, task.narration_cache_key, connection=conn)
+        if (narration is None or narration.task_id != task.id or narration.script_id != task.confirmed_script_id):
+            raise ValueError("当前配音产物不可用")
+        if narration.source_kind == "recorded":
+            if (presenter or creation_plan.presenter_share_target != 0
+                    or narration.voice_profile_id is not None or narration.model_id is not None):
+                raise ValueError("本人录音只能用于纯素材成片，人物身份仍需已授权的声音版本")
+        elif (narration.source_kind != "generated" or creation_plan.selected_voice is None
+              or narration.voice_profile_id != creation_plan.selected_voice.profile_id):
+            raise ValueError("当前生成配音与已选择的声音版本不一致")
     version = None
     if task.current_timeline_version_id:
-        version = repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
+        version = repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id, connection=conn)
         if version.task_id != task.id:
             raise ValueError("当前时间线不属于制作任务")
         # Only this request's actual inner publication can advance its own
@@ -638,8 +661,8 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                     or "render_input_timeline_version_id" not in version.snapshot
                     or version.parent_version_id != version.snapshot["render_input_timeline_version_id"]):
                 raise ValueError("当前成片版本缺少本次许可的原始输入")
-            inner = repository.job_records.get_job_run(task.workspace_id, transform_id.removeprefix("transform_"))
-            transform = repository.lineage_records.get_transform_run(task.workspace_id, transform_id)
+            inner = repository.job_records.get_job_run(task.workspace_id, transform_id.removeprefix("transform_"), connection=conn)
+            transform = repository.lineage_records.get_transform_run(task.workspace_id, transform_id, connection=conn)
             if (inner.task_id != task.id or inner.kind != "creation_task_montage_render"
                     or inner.status != "succeeded" or transform.status != "succeeded"
                     or transform.job_id != inner.id or transform.task_id != task.id
@@ -651,7 +674,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                     or inner.output_refs != [payload.get("output_path"), payload.get("subtitle_path")]
                     or not all(isinstance(ref, str) and ref for ref in inner.output_refs)):
                 raise ValueError("当前成片版本与真实渲染记录不一致")
-            version = (repository.timeline_records.get_timeline_version(task.workspace_id, version.parent_version_id)
+            version = (repository.timeline_records.get_timeline_version(task.workspace_id, version.parent_version_id, connection=conn)
                        if version.parent_version_id is not None else None)
     if version is not None:
         previous_montage = version.snapshot.get("montage")
@@ -663,9 +686,10 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         if ({key: item for key, item in previous_montage.items() if key not in transient}
                 != {key: item for key, item in payload.items() if key not in transient}):
             raise ValueError("当前时间线与已确认故事板不一致")
-    audio = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, narration_reference)
-    sources = [audio, *(Path(item["path"]) for item in graphics),
+    sources = [*(Path(item["path"]) for item in graphics),
                *(Path(item["path"]) for item in (audio_mix["sources"] if audio_mix is not None else []))]
+    if narration_reference is not None:
+        sources.insert(0, repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, narration_reference, connection=conn))
     for clip in montage.clips:
         if clip.person_render_id:
             cue = next((item for item in montage.cues if item.id == clip.cue_id), None)
@@ -680,7 +704,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                 raise ValueError("人物镜头版本、授权或输出已失效")
             source = resolve_presenter_output(render)
         else:
-            source = repository.resolve_clip_media_reference(task.workspace_id, clip.asset_id, clip.source_path)
+            source = repository.resolve_clip_media_reference(task.workspace_id, clip.asset_id, clip.source_path, connection=conn)
         if not source.is_file() or source.stat().st_size <= 0:
             raise ValueError("当前镜头源文件不可用")
         sources.append(source)
@@ -702,7 +726,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
             {"id": track.id, "language": track.language, "status": track.status,
              "style": track.style, "cues": [asdict(cue) for cue in track.cues]}
             for track in repository.subtitle_records.list_subtitle_tracks(
-                task.workspace_id, task.id, timeline_version_id=version.id)
+                task.workspace_id, task.id, timeline_version_id=version.id, connection=conn)
         ] if version is not None else [],
         "plan": {key: value for key, value in payload.items()
                  if key not in {"status", "message", "output_path", "subtitle_path", "updated_at"}},
@@ -1000,9 +1024,9 @@ class CreationJobOwnerVerifier:
                     budget=self.narration_audio_budget, connection=conn, request=request)
                 if pending is not None:
                     return pending
-                def mix_facts(workspace_id, task_id, current_montage, *, actor):
+                def mix_facts(workspace_id, task_id, current_montage, *, actor, connection=None):
                     return self.audio_assembly.master_mix_facts(
-                    job, current_montage, actor=actor, budget=self.narration_audio_budget)
+                    job, current_montage, actor=actor, budget=self.narration_audio_budget, connection=connection)
         if self.audio_delivery is not None and job is not None and not plan.presenter_share_target:
             if prepare_assembly and self.audio_delivery.picture.manifest(job, connection=conn) is not None:
                 self.audio_delivery.prepare(job, actor=actor, connection=conn)
@@ -1472,20 +1496,26 @@ class CreationJobOwnerVerifier:
             raise KeyError("创作任务或开始记录不存在")
         task = creation_task_from_payload(json.loads(task_row["payload"]))
         event = self.repository.creation_execution_jobs.creation_execution_input(workspace_id, job.id, connection=conn)
-        script_row = conn.execute(
-            "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=? AND task_id=?",
-            (workspace_id, event.get("script_id"), job.task_id),
-        ).fetchone()
         plan_row = conn.execute(
             "SELECT payload, visibility FROM creation_plans WHERE workspace_id=? AND id=?",
             (workspace_id, task.plan_id),
         ).fetchone()
-        if script_row is None or plan_row is None:
-            raise KeyError("已确认文案或方案不存在")
-        script = self.repository.script_records._creation_task_script_from_payload(json.loads(script_row["payload"]), connection=conn)
+        if plan_row is None:
+            raise KeyError("已确认方案不存在")
         plan_payload = json.loads(plan_row["payload"])
         plan_payload["visibility"] = str(plan_row["visibility"])
         plan = self.repository.plan_records.creation_plan_from_payload(plan_payload)
+        if plan.source_media is not None:
+            from app.creation.execution_input import validate_execution_relationships
+            validate_execution_relationships(task, None, plan)
+            return job, task, event, None, plan
+        script_row = conn.execute(
+            "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=? AND task_id=?",
+            (workspace_id, event.get("script_id"), job.task_id),
+        ).fetchone()
+        if script_row is None:
+            raise KeyError("已确认文案不存在")
+        script = self.repository.script_records._creation_task_script_from_payload(json.loads(script_row["payload"]), connection=conn)
         return job, task, event, script, plan
 
     def verify_submission(self, intent: SubmissionIntent, actor: object, *, connection=None, pcm_preparation=None, request=None) -> VerifiedWork:
@@ -1589,9 +1619,27 @@ class CreationJobOwnerVerifier:
 
     def _check_facts(self, job, task, event, script, plan, stage: str, member_id: str | None, *, revision=None, connection=None) -> str:
         if (not member_id or event.get("member_id") != member_id
-                or job.workspace_id != task.workspace_id or script.workspace_id != job.workspace_id
-                or plan.workspace_id != job.workspace_id or script.task_id != job.task_id):
+                or job.workspace_id != task.workspace_id or job.task_id != task.id
+                or plan.workspace_id != job.workspace_id
+                or script is not None and (script.workspace_id != job.workspace_id or script.task_id != job.task_id)):
             return "unauthorized"
+        if plan.source_media is not None:
+            from app.creation.execution_input import validate_execution_relationships
+            try:
+                validate_execution_relationships(task, script, plan)
+            except ValueError:
+                return 'stale'
+            if task.owner_user_id != (event.get('user_id') or member_id):
+                return 'unauthorized'
+            if (job.kind != KIND or stage != 'render' or job.status not in {'queued', 'interrupted', 'running'}
+                    or event.get('input_digest') != job.input_digest or 'script_id' not in event or event['script_id'] is not None
+                    or event.get('plan_id') != task.plan_id
+                    or event.get('operation') not in {None, 'render_current'}
+                    or (revision if revision is not None else revision_digest(None, plan)) != job.input_digest):
+                return 'stale'
+            return 'ready'
+        if script is None:
+            return 'stale'
         if job.kind in {PERSON_EDIT_KIND, NARRATION_EDIT_KIND}:
             expected_stage = "narration_edit" if job.kind == NARRATION_EDIT_KIND else "person_edit"
             if (stage != expected_stage or job.status not in {"queued", "interrupted", "running"}
@@ -1634,7 +1682,7 @@ class CreationJobOwnerVerifier:
         return "ready"
 
     def _completed_narration(self, job, task, script, conn):
-        if not task.narration_cache_key:
+        if script is None or not task.narration_cache_key:
             return False
         artifact = self.repository.narration_artifacts.get_narration_artifact(job.workspace_id, task.narration_cache_key, connection=conn)
         header, _ = self.repository.script_records.read_execution_script_metadata(conn, task.workspace_id, script.id)
@@ -1658,6 +1706,10 @@ class CreationJobOwnerVerifier:
         return len(rows) == 1 and rows[0]['id'] == request.id
 
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection):
+        # Task-media observes its own sealed request and external sources;
+        # its local commit check owns the later transaction snapshot.
+        if request.unit_key.startswith("task_media:") and self.task_media is not None:
+            return self.task_media.check_current(request, conn)
         # Scheduler observations also supply idle read connections. Own the
         # snapshot for those observations; never replace an active write txn.
         if not conn.in_transaction:
@@ -1669,8 +1721,6 @@ class CreationJobOwnerVerifier:
             return self.segments.check_current(request,conn,self)
         if request.unit_key.startswith("cover:") and self.cover is not None:
             return self.cover.check_current(request, conn)
-        if request.unit_key.startswith("task_media:") and self.task_media is not None:
-            return self.task_media.check_current(request, conn)
         if (request.owner_type != DEVICE_OWNER_TYPE
                 or request.source_refs or not request.member_id):
             return "unauthorized"
@@ -1758,6 +1808,8 @@ class CreationJobOwnerVerifier:
         except (KeyError, ValueError):
             return lambda current: "stale"
         stage = request.unit_key.split(":", 1)[0]
+        if plan.source_media is not None and stage != 'render':
+            return lambda current: 'stale'
         refs = []
         if plan.selected_voice:
             refs.append(("voice", plan.selected_voice.profile_id, plan.selected_voice.version))
@@ -1783,7 +1835,7 @@ class CreationJobOwnerVerifier:
             assets.update(authorization.resource_scope.get("assets", []) if authorization is not None else [])
         if stage == "render" and task.montage_plan_id:
             try:
-                montage = self.repository.get_creation_task_montage_plan(request.workspace_id, task.id)
+                montage = self.repository.get_creation_task_montage_plan(request.workspace_id, task.id, connection=conn)
             except KeyError:
                 return lambda current: "stale"
             for clip in montage.get("clips", []):
@@ -1806,7 +1858,7 @@ class CreationJobOwnerVerifier:
                 if reference.startswith("workspace://"):
                     try:
                         reference = str(self.repository.resolve_workspace_media_reference(
-                            request.workspace_id, reference, require_registered=True))
+                            request.workspace_id, reference, require_registered=True, connection=conn))
                     except (KeyError, ValueError, OSError):
                         return lambda current: "stale"
                 assets.update(row[0] for row in conn.execute(
@@ -1820,10 +1872,10 @@ class CreationJobOwnerVerifier:
                 (request.workspace_id, request.owner_id)).fetchone()
             task_row = current.execute("SELECT plan_id,json_extract(payload,'$.confirmed_script_id'),json_extract(payload,'$.narration_cache_key'),json_extract(payload,'$.montage_plan_id'),json_extract(payload,'$.current_timeline_version_id'),json_extract(payload,'$.owner_user_id'),json_extract(payload,'$.visibility') FROM creation_tasks WHERE workspace_id=? AND id=?",
                 (request.workspace_id, task.id)).fetchone()
-            plan_row = current.execute("SELECT updated_at,visibility FROM creation_plans WHERE workspace_id=? AND id=?",
+            plan_row = current.execute("SELECT updated_at,visibility,json_extract(payload,'$.source_media') FROM creation_plans WHERE workspace_id=? AND id=?",
                 (request.workspace_id, plan.id)).fetchone()
             script_row = current.execute("SELECT updated_at FROM creation_task_scripts WHERE workspace_id=? AND id=?",
-                (request.workspace_id, script.id)).fetchone()
+                (request.workspace_id, script.id)).fetchone() if script is not None else None
             montage_row = current.execute("SELECT id,updated_at FROM creation_task_montage_plans WHERE workspace_id=? AND task_id=?",
                 (request.workspace_id, task.id)).fetchone() if stage == "render" else None
             if stage == "montage_plan" and self.task_authorizations is None:
@@ -1910,11 +1962,14 @@ class CreationJobOwnerVerifier:
                 task, script = snapshot.task, snapshot.script_header
                 if (actor != CreationExecutionActor.from_event(job.workspace_id, event)
                         or actor.member_id != request.member_id
-                        or not self._resumable_montage_request(request, job, task, script, current)
-                        or self.check_current(request, current) != 'ready'):
+                        or not self._resumable_montage_request(request, job, task, script, current)):
                     raise PermissionError('原总轨、作业来源或当前镜头阶段不允许继续')
                 return job
-            verify(conn)
+            if conn.in_transaction:
+                verify(conn)
+            else:
+                with self.repository.execution_inputs.creation_execution_read() as reader:
+                    verify(reader)
             def resume(current):
                 job = verify(current)
                 self.repository.narration_units.resume_creation_narration_job(job.workspace_id, job.id, connection=current)
@@ -1996,6 +2051,10 @@ def migrate_creation_narration_request(repository, scheduler, job, actor, *, wri
     if (job.kind not in {KIND, NARRATION_EDIT_KIND, 'creation_task_segment_revision'} or owner.narration_budget is None
             or owner.narration_budget.input_scope not in {'single_call_experiment_v1', 'single_call_prepared_v1'}):
         return None
+    if job.kind == KIND:
+        task = repository.task_records.get_creation_task(job.workspace_id, job.task_id)
+        if repository.plan_records.get_creation_plan(job.workspace_id, task.plan_id).source_media is not None:
+            return None
     if job.kind == KIND and owner.segments is not None and owner.segments.waiting_for_visual_decision(job):
         return None
     with repository.execution_inputs.creation_execution_read() as conn:
@@ -2108,7 +2167,8 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
     with repository.execution_inputs.creation_execution_read(connection) as conn:
         job, snapshot, event = owner._snapshot_facts(conn, job.workspace_id, job.id)
         task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
-    if owner.segments is not None and job.kind == KIND and not event.get('operation'):
+    source_mode = plan.source_media is not None
+    if not source_mode and owner.segments is not None and job.kind == KIND and not event.get('operation'):
         intent = owner.segments.next_initial(job,owner,connection=connection)
         if intent is not None:
             return intent
@@ -2117,7 +2177,11 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
     regenerate = event.get("operation") == "regenerate_storyboard"
     if plan.presenter_share_target and (owner.presenter_budget is None or owner.presenter_cpu_render_limits is None):
         raise ValueError("人物制作及人物组合 CPU 成片专属预算尚未标定")
-    if regenerate:
+    if source_mode:
+        if event.get('operation') not in {None, 'render_current'}:
+            raise ValueError('原声来源任务只能执行当前已采用时间线的输出')
+        stage = 'render'
+    elif regenerate:
         from app.creation.storyboard_regeneration import request_current
         if not request_current(repository, task, event, connection=connection):
             raise ValueError("故事板原请求的时间线、文案或配音已变化")
@@ -3567,16 +3631,17 @@ class CreationJobUnitExecutor:
 class ExecutionStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    script_id: str = Field(min_length=1)
+    script_id: str | None = Field(min_length=1)
     input_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     requirements_confirmed: bool
 
 
-def revision_digest(script: CreationTaskScript, plan: CreationPlan) -> str:
+def revision_digest(script: CreationTaskScript | None, plan: CreationPlan) -> str:
     """Bind a start intent to the text and making requirements it approved."""
+    from app.creation.plan_contracts import creation_plan_payload
     value = {
-        "script": asdict(script),
-        "plan": asdict(plan),
+        "script": asdict(script) if script is not None else None,
+        "plan": creation_plan_payload(plan),
     }
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
@@ -3613,8 +3678,11 @@ class CreationExecution:
         return snapshot
 
     def validate_input(
-        self, workspace_id: str, task: CreationTask, script_id: str, digest: str
-    ) -> tuple[CreationTaskScript, CreationPlan]:
+        self, workspace_id: str, task: CreationTask, script_id: str | None, digest: str
+    ) -> tuple[CreationTaskScript | None, CreationPlan]:
+        if script_id is None:
+            snapshot = self.validate_input_snapshot(workspace_id, task.id, script_id, digest)
+            return None, snapshot.plan
         if task.confirmed_script_id != script_id:
             raise ValueError("请先确认当前文案；方案确认不能代替文案确认")
         script = self.repository.script_records.get_creation_task_script(workspace_id, script_id)
@@ -3627,7 +3695,7 @@ class CreationExecution:
             raise ValueError("文案或制作要求已变化，请重新检查并确认")
         return script, plan
 
-    def start(self, workspace_id: str, task_id: str, script_id: str, digest: str,
+    def start(self, workspace_id: str, task_id: str, script_id: str | None, digest: str,
               *, member_id: str | None = None, actor: CreationExecutionActor | None = None, write_guard=None, execution_source=None) -> JobRun:
         if actor is not None:
             if actor.workspace_id != workspace_id or (member_id is not None and actor.member_id != member_id):
@@ -3637,7 +3705,7 @@ class CreationExecution:
         task, plan = snapshot.task, snapshot.plan
         narration = (self.repository.narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key)
                      if task.narration_cache_key else None)
-        if (plan.selected_voice is None
+        if (plan.source_media is None and plan.selected_voice is None
                 and (plan.presenter_share_target != 0 or narration is None
                      or narration.source_kind != "recorded")):
             raise ValueError("请先为本次制作选择已授权声音")
@@ -3645,7 +3713,7 @@ class CreationExecution:
         from app.creation.narration_pcm import prepare_narration_source
         existing = any(job.idempotency_key == key for job in self.jobs(workspace_id, task_id))
         source_context = (prepare_narration_source(self.repository, task, plan, actor)
-            if actor is not None and task.stage == 'narration' and plan.selected_voice is not None and narration is None and not existing
+            if plan.source_media is None and actor is not None and task.stage == 'narration' and plan.selected_voice is not None and narration is None and not existing
             else nullcontext(None))
         original = next((job for job in self.jobs(workspace_id, task_id) if job.idempotency_key == key), None)
         policy = (self.repository.execution_records.get_task_event(workspace_id, f'event_{original.id}_start').payload.get('execution_budget_policy')
@@ -3743,7 +3811,7 @@ class CreationExecution:
             return latest
         if self.repository.narration_units.creation_narration_usage(workspace_id, latest.id)['budget'] is not None:
             raise ValueError('原配音已有累计消耗，须继续原作业单元，不能创建新作业重置额度')
-        script_id = str(event.payload["script_id"])
+        script_id = event.payload["script_id"]
         snapshot = self.validate_input_snapshot(workspace_id, task_id, script_id, latest.input_digest)
         task, plan = snapshot.task, snapshot.plan
         if task.stage == 'narration' and task.narration_cache_key is None and plan.selected_voice is not None:
@@ -3792,6 +3860,8 @@ class CreationExecution:
         if job.kind != KIND:
             raise ValueError("不是连续制作作业")
         event = self.repository.execution_records.get_task_event(workspace_id, f"event_{job.id}_start")
+        if event.payload.get('script_id') is None:
+            raise PermissionError('原声来源制作必须由现有设备队列取得许可后执行')
         if event.payload.get("operation") == "regenerate_storyboard":
             raise PermissionError("故事板重算必须由现有设备队列取得许可后执行")
         token = set_workspace_context(workspace_id)

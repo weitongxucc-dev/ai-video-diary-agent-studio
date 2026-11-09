@@ -101,7 +101,7 @@ export function safeBusinessFailure(value: any, secrets: string[] = []): Partial
   for (const key of ["expected_input_fingerprint", "current_input_fingerprint"])
     if (typeof value?.[key] === "string" && /^[a-f0-9]{64}$/.test(value[key])) safe[key] = value[key];
   if (["not_submitted", "rejected", "unknown"].includes(value?.submission_effect)) safe.submission_effect = value.submission_effect;
-  if (typeof value?.query_url === "string" && /^\/api\/(?:creation-requests|creation-tasks)\/[A-Za-z0-9_/-]{1,350}(?:\?phase=(?:apply|preview))?$/.test(value.query_url))
+  if (typeof value?.query_url === "string" && /^\/api\/(?:creation-requests|creation-tasks|source-tasks)\/[A-Za-z0-9_/-]{1,350}(?:\?phase=(?:apply|preview))?$/.test(value.query_url))
     safe.query_url = value.query_url;
   // Existing script-review consumers use these exact fields.
   if (typeof value?.retryable === "boolean") safe.retryable = value.retryable;

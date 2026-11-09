@@ -11,7 +11,7 @@ import { ApiRequestError } from '@/lib/api/transport';
 const scope = 'a'.repeat(64), otherScope = 'b'.repeat(64);
 const key = (owner = scope) => `yaohe:cpu-preparation:v1:${owner}`;
 const uuid = '23a3fb3d-8ca3-462e-973b-e92bd4de99b1';
-const payload = { request_id: uuid, kind: 'cpu', shape: { width_px: 720, height_px: 1280,
+const payload = { request_id: uuid, kind: 'cpu', shape: { width_px: 1080, height_px: 1920,
   frame_rate: 30, duration_seconds: 17, clip_count: 6, audio_input_count: 2, sample_rate: 48000, channels: 2 } };
 const status = { platform: 'darwin', cpu_preparation_supported: true, preparation_configured: true,
   actor_scope: scope, profile_status: 'unprepared', revision: null, available_operations: [] };

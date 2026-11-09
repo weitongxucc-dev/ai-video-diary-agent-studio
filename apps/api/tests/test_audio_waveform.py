@@ -56,8 +56,11 @@ def test_waveform_reports_unreadable_audio(tmp_path):
 def test_waveform_api_rejects_another_tasks_artifact(monkeypatch):
     import app.main as main
 
-    monkeypatch.setattr(main, "_creation_task_or_404", lambda workspace_id, task_id:
-                        SimpleNamespace(id=task_id, narration_cache_key="cache"))
+    def task(workspace_id, task_id):
+        return SimpleNamespace(id=task_id, workspace_id=workspace_id, owner_user_id=None,
+                               narration_cache_key="cache")
+    monkeypatch.setattr(main, "_creation_task_or_404", task)
+    monkeypatch.setattr(main.production_repo.task_records, 'get_creation_task', task)
     monkeypatch.setattr(main.production_repo.narration_artifacts, "get_narration_artifact", lambda *args:
                         SimpleNamespace(task_id="another-task", audio_path="unread"))
     response = TestClient(main.app).get("/api/creation-tasks/this-task/narration/waveform")

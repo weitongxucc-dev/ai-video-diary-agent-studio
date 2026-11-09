@@ -212,9 +212,15 @@ def test_saved_program_uses_new_task_without_inheriting_old_timeline_or_input_au
                    confirmed_script_id=None, current_timeline_version_id=None, narration_cache_key=None, output_ready=False)
     state.production.plan_confirmation.confirm_creation_plan(replace(plan, id=task.plan_id, creation_task_id=task.id), task,
                                             verified_owner_user_id=state.member.member_id)
+    state.execution_task_ids.add(task.id)
+    actor = CreationExecutionActor(state.workspace_id, state.member.member_id)
+    authorization = state.runtime.task_authorizations.ensure(task, actor)
     call = {**invocation(state), "expected_timeline_version_id": None, "expected_timeline_sequence": 0}
     queued = state.client.post(f"/api/creation-tasks/{task.id}/media-script-tools/{state.tool['tool_id']}/preview", json=call)
     assert queued.status_code == 202, queued.text
+    selected = state.production.task_authorization_records.get_task_authorization(state.workspace_id, task.id)
+    assert selected.resource_scope == {**authorization.resource_scope,
+        'references': sorted(set(authorization.resource_scope['references']) | {state.tool['definition_ref']})}
     assert state.runtime.run_once()
     result = state.client.get(queued.json()["result_url"])
     assert result.json()["status"] == "succeeded", result.text

@@ -29,6 +29,26 @@ function panel(compact: boolean, status: JobStatus, failureReason: string) {
     onCancel={vi.fn()} onOpenMontage={vi.fn()} />;
 }
 
+it.each([true, false])("uses original-media requirements with no script or voice, can_continue=%s", async canContinue => {
+  const onStart = vi.fn();
+  const source = { asset_id: "source", asset_updated_at: "2026-11-09", source_ref: "workspace://source.mp4",
+    source_start_seconds: 0, source_end_seconds: 9.25, aspect_ratio: "16:9" as const, preserve_audio: true,
+    file_signature: { size_bytes: "100", mtime_ns: "1", ctime_ns: "1", inode: "1" } };
+  const preview: CreationExecutionPreview = { task_id: "source-task", script_id: null, script_title: "",
+    script_updated_at: null, script_sections_total_count: 0, script_sections_loaded: false, plan_id: "source-plan",
+    narration_source: null, input_digest: "source-digest", requirements: { aspect_ratio: "16:9",
+      duration_target_seconds: 9.25, presenter_share_target: 0, lipsync_quality: "fast", selected_voice: null,
+      can_continue: canContinue, continuation_blocker: canContinue ? null : "原视频已发生变化", template_settings: {} } };
+  render(<CreationExecutionPanel taskStage="montage" taskReason={null} sourceMedia={source}
+    voice={null} availableVoices={[]} preview={preview} execution={null} busy={false}
+    onStart={onStart} onResume={vi.fn()} onCancel={vi.fn()} onOpenMontage={vi.fn()} />);
+  expect(screen.getByText("保留原声")).toBeVisible();
+  expect(screen.queryByText(/这次使用的文案|声音：尚未选择/)).not.toBeInTheDocument();
+  const start = screen.getByRole("button", { name: canContinue ? "生成当前剪辑成片" : "暂不能开始制作" });
+  if (canContinue) { await userEvent.click(start); expect(onStart).toHaveBeenCalledOnce(); }
+  else { expect(start).toBeDisabled(); expect(screen.getByText("原视频已发生变化")).toBeVisible(); }
+});
+
 describe.each([false, true])("CreationExecutionPanel compact=%s", compact => {
   it("shows storyboard confirmation without reporting narration failure from the old task stage", async () => {
     render(panel(compact, "queued", "waiting_for_user"));

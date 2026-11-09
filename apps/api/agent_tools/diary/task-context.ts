@@ -84,6 +84,11 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
       available_voices_truncated: (task.available_voices || []).length > 24,
       plan: plan ? {
         id: plan.id, updated_at: plan.updated_at,
+        source_media: plan.source_media ? {
+          asset_id: plan.source_media.asset_id, asset_updated_at: plan.source_media.asset_updated_at,
+          source_start_seconds: plan.source_media.source_start_seconds, source_end_seconds: plan.source_media.source_end_seconds,
+          aspect_ratio: plan.source_media.aspect_ratio, preserve_audio: plan.source_media.preserve_audio,
+        } : null,
         creation_intent: plan.creation_intent ? {kind: plan.creation_intent.kind, source: plan.creation_intent.source,
           topic_title: plan.creation_intent.topic_title,
           protected_body_digest: plan.creation_intent.final_script?.body_digest} : null,

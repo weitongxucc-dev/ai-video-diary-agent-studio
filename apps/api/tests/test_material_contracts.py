@@ -59,11 +59,11 @@ def test_production_exports_reference_one_material_contract_implementation():
 
     for name in (
         "AssetReviewStatus", "ContentVisibility", "AssetUsageRole", "SuggestedUsageRole",
-        "AnalysisStatus", "MaterialMediaType", "MATERIAL_MEDIA_LABEL", "MATERIAL_MEDIA_BY_SUFFIX",
+        "AnalysisStatus", "MaterialMediaType", "MATERIAL_MEDIA_BY_SUFFIX",
         "BUSINESS_OBJECT_KINDS", "ContentUseState", "MaterialSegment", "MaterialAsset",
         "MaterialAssetNote", "MaterialBusinessObject", "MaterialCollection", "MaterialSegmentMatch",
         "material_media_type_for", "material_media_type_label", "material_allows_footage",
-        "material_allows_automation", "effective_segment_usage_role", "selectable_segment_usage_role",
+        "material_allows_automation", "effective_segment_usage_role",
     ):
         assert getattr(production, name) is getattr(contracts, name)
 

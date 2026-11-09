@@ -369,6 +369,41 @@ class MediaScriptTools:
                 raise KeyError((tool_id,version))
         return self._value(actor, run, head)
 
+    def prepare_task_selection(self, actor, tool_id, *, version, expected_reference):
+        """Qualify one explicit library selection; its commit check only reads SQL."""
+        if self.task_id is not None:
+            raise PermissionError("任务授权不能扩大配方来源范围")
+        owner = self._identity(actor)
+
+        def facts(connection):
+            runs = self.repository.lineage_records.list_recipe_runs(connection, actor.workspace_id, owner, tool_id)
+            head = max(runs, key=lambda item: item.parameters['version']) if runs else None
+            run = next((item for item in runs if item.parameters['version'] == version), None)
+            if run is None or not head.parameters['active']:
+                return None
+            metadata = run.parameters
+            return (run, head,
+                self.repository.job_records.get_job_run(actor.workspace_id, run.job_id, connection=connection),
+                self.repository.execution_records.get_artifact_record(actor.workspace_id,
+                    metadata['recipe_artifact_id'], connection=connection),
+                self.repository.execution_records.get_artifact_record(actor.workspace_id,
+                    metadata['definition_artifact_id'], connection=connection))
+
+        with self.repository._connect() as connection:
+            expected = facts(connection)
+        value = self.get(actor, tool_id, version=version)
+        reference = {key: value[key] for key in ('tool_id', 'version', 'definition_ref', 'code_sha256')}
+        if not value['active'] or reference != expected_reference:
+            raise ScriptToolConflict('所选配方版本或来源已变化')
+        with self.repository._connect() as connection:
+            if expected is None or facts(connection) != expected:
+                raise ScriptToolConflict('配方核验期间来源或可用状态已变化')
+
+        def current(connection):
+            return facts(connection) == expected
+
+        return value['definition_ref'], current
+
     def list(self, actor, *, include_inactive=False, limit=50):
         if type(limit) is not int or not 1 <= limit <= 100:
             raise ScriptToolError("recipe discovery limit must be 1 to 100")

@@ -316,6 +316,8 @@ from app.workspace_assistant_turn_routes import build_workspace_assistant_turn_r
 from app.assistant.home_plan_http_adapter import HomePlanTurnHTTPAdapter
 from app.creation_request_routes import build_creation_request_router
 from app.creation_plan_routes import CreationPlanPreflightHttpAdapter, build_creation_plan_router
+from app.source_task_routes import build_source_task_router
+from app.creation.source_task_use_case import SourceTaskUseCase
 from app.creation.script_library_routes import build_script_library_router
 from app.creation.script_library_use_case import ScriptLibraryUseCase
 from app.task_workspace_routes import TaskWorkspaceResponseAdapter, build_task_workspace_router
@@ -2265,6 +2267,20 @@ def _task_script_capability_facts(task, member_id):
 
 
 def _media_script_submission_http_adapter():
+    def bind_recipe_selection(runtime, actor, task_id, arguments):
+        task = production_repo.task_records.get_creation_task(actor.workspace_id, task_id)
+        authorizations = runtime.task_authorizations
+        authorizations.ensure(task, actor)
+        definition_ref, recipe_current = _media_script_tools().prepare_task_selection(actor,
+            arguments['tool_id'], version=arguments['payload']['tool_version'],
+            expected_reference=arguments['_recipe_ref'])
+        commit = authorizations.prepare_recipe_selection(task, actor, definition_ref,
+            source=arguments['_typed_source'],
+            request_inputs={**arguments['payload'], 'tool_id': arguments['tool_id']}, recipe_current=recipe_current)
+        with production_repo._connect() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            commit(connection)
+
     return MediaScriptSubmissionHttpAdapter(
         exact_edit_access=lambda task_id, request, **values: _exact_edit_access(task_id, request, **values),
         current_workspace_id=lambda request: current_workspace_id(request),
@@ -2276,6 +2292,7 @@ def _media_script_submission_http_adapter():
         script_configuration=lambda: _script_configuration(),
         creation_runtime=lambda: _creation_runtime(),
         media_result_receipt=lambda media, job, actor, runtime: _media_result_receipt(media, job, actor, runtime),
+        bind_recipe_selection=bind_recipe_selection,
         wake=lambda: _wake_assistant_continuations(),
     )
 
@@ -2908,6 +2925,25 @@ app.include_router(build_creation_plan_router(
 ))
 
 
+def _source_task_origin(request, turn_id, actor, request_id, payload):
+    if turn_id is None:
+        if request.headers.get("x-assistant-input-id"):
+            raise HTTPException(409, "助手原片创作缺少原回合身份")
+        return None, None
+    from app.assistant.source_task_binding import SourceTaskBinding
+    return SourceTaskBinding(conversation_repo).prepare(
+        str(turn_id), request.headers.get("x-assistant-input-id") or None, actor, request_id, payload)
+
+
+app.include_router(build_source_task_router(
+    actor_for=lambda request: _require_permit_actor(request, current_workspace_id(request)),
+    case_for=lambda: SourceTaskUseCase(production_repo, _verify_creation_identity),
+    origin_for=_source_task_origin,
+    input_for=lambda actor, request_id: conversation_repo.read_source_task_input(
+        actor.workspace_id, actor.user_id or actor.member_id, request_id),
+))
+
+
 def _bind_script_library_use_case(draft_use_case, reader):
     case = ScriptLibraryUseCase(production_repo, source_repository,
         reader=reader, draft_use_case=draft_use_case)
@@ -3281,6 +3317,7 @@ app.include_router(build_task_turn_router(_task_turn_http_adapter))
 
 def _task_turn_scope_use_case():
     return TaskTurnScopeUseCase(
+        read_plan=lambda ws, plan_id: production_repo.plan_records.get_creation_plan(ws, plan_id),
         read_script_inputs=lambda ws, task_id: _script_context_use_case().read_inputs(ws, task_id),
         read_narration=lambda ws, key: production_repo.narration_artifacts.get_narration_artifact(ws, key),
         read_segments=lambda ws, task_id, script_id: production_repo.narration_records.list_narration_segments(ws, task_id, script_id),
@@ -5790,11 +5827,11 @@ def _build_device_components(*, repository: ProductionRepository):
             narration_stage=_narration_stage_use_case(repository,narration_budget=narration_budget),
             narration_runtime_facts=lambda workspace_id,task_id: _narration_runtime_facts(
                 workspace_id,task_id,repository=repository),
-            graphic_source_facts=lambda workspace_id, task_id, reference, *, actor: graphic_source_facts(
-                repository, artifact_store, workspace_id, task_id, reference, actor=actor),
-            audio_mix_facts=lambda workspace_id, task_id, montage, *, actor: _task_audio().mix_facts(
+            graphic_source_facts=lambda workspace_id, task_id, reference, *, actor, connection=None: graphic_source_facts(
+                repository, artifact_store, workspace_id, task_id, reference, actor=actor, connection=connection),
+            audio_mix_facts=lambda workspace_id, task_id, montage, *, actor, connection=None: _task_audio().mix_facts(
                 workspace_id, task_id, montage.audio_timeline, montage.duration_seconds, actor=actor,
-                normalize_voice_sources=montage.narration_linkage_created_audio_timeline, budget=audio_budget),
+                normalize_voice_sources=montage.narration_linkage_created_audio_timeline, budget=audio_budget, connection=connection),
             render_action=_render_creation_stage_with_grant,
             render_is_valid=_creation_stage_valid_with_grant,
             cpu_render_budget=cpu_render_budget,
@@ -6207,10 +6244,24 @@ def _goal_service():
 def _register_adopted_creation_goals(request, turn_id, creation_request):
     if any(event.get('type')=='creation_request_resumed' for event in conversation_repo.get_turn(turn_id)['events']):
         _wake_assistant_continuations()
-    if creation_request is None:
-        return
     workspace_id = current_workspace_id(request)
     member_id = _content_identity_http_adapter().reader(request, workspace_id)[0]
+    with production_repo._connect() as conn:
+        sources = conn.execute("SELECT id FROM task_events WHERE workspace_id=? "
+            "AND event_type='source_task_created' AND json_extract(payload_json,'$.source.turn_id')=? "
+            "AND json_extract(payload_json,'$.source.member_id')=?", (workspace_id, turn_id, member_id)).fetchall()
+    source_goals = []
+    for source in sources:
+        event = production_repo.execution_records.get_task_event(workspace_id, source['id'])
+        task = production_repo.task_records.get_creation_task(workspace_id, event.task_id)
+        plan = production_repo.plan_records.get_creation_plan(workspace_id, task.plan_id)
+        source_goals.extend(_goal_service().register_source_task(turn_id, workspace_id, member_id, event, task, plan))
+    for root_id in source_goals:
+        _bind_goal_business_scope(request, conversation_repo.get_task_goal(root_id))
+    if source_goals:
+        _wake_assistant_continuations()
+    if creation_request is None:
+        return
     # Never bind the model's returned task IDs. Read the owning repository's
     # actual window/tasks/adoption again through the same member boundary.
     current = _creation_request_response(_creation_request_or_404(request, creation_request.id)).model_dump(mode="json")

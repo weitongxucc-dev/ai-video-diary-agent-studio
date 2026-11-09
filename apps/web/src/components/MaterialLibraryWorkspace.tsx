@@ -9,6 +9,7 @@ import { useMaterialNotes } from "./material-library/useMaterialNotes";
 import { MaterialAssetPreview } from "./material-library/MaterialAssetPreview";
 import { MaterialUsageEvidence } from "./material-library/MaterialUsageEvidence";
 import { MaterialAssetTags } from "./material-library/MaterialAssetTags";
+import { SourceTaskForm } from "./material-library/SourceTaskForm";
 import { MaterialCollectionPicker } from "./material-library/MaterialCollectionPicker";
 import { MaterialResults } from "./material-library/MaterialResults";
 import { MaterialDiscoveryPanel } from "./material-library/MaterialDiscoveryPanel";
@@ -23,6 +24,7 @@ import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AlertCircle, Check, Grid2X2, Plus, Info, List, LoaderCircle, RefreshCw, Search, Sparkles, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
 import { useAssistantMaterialReference, useAssistantSelection } from "./AssistantConversationProvider";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
@@ -54,6 +56,7 @@ export function MaterialLibraryWorkspace({
   // 来自 /library?tag= 的精确标签筛选；URL 是唯一来源，清除后由页面重挂载恢复
   initialTag?: string;
 }) {
+  const router = useRouter();
   const viewActive = useWorkspacePage()?.active ?? true;
   const searchParams = useSearchParams();
   const locateQuery = searchParams?.get("locate_ref") ?? "";
@@ -770,6 +773,7 @@ export function MaterialLibraryWorkspace({
   const inspector = selected ? (
     <div className={`library-inspector ${styles.inspector}`}>
       <MaterialAssetPreview asset={selected} segment={selectedSegment} segmentScope={assistantSelection?.scope === "segment"} selectedSegmentId={assistantSelection?.scope === "segment" ? assistantSelection.segment_id : null} disabled={busy !== null || selectionBlocked} previewFailed={previewErrorId === selected.id} previewReadTick={previewReadTick} sourceAudio={sourceAudio} sourceVideo={sourceVideo} onPreviewError={() => setPreviewErrorId(selected.id)} onRetryPreview={() => { setPreviewErrorId(null); setPreviewReadTick(value => value + 1); }} seekSelectedSegment={seekSelectedSegment} constrainSegmentPlayback={constrainSegmentPlayback} startSegmentPlayback={startSegmentPlayback} onSelectAsset={() => selectAsset(selected)} onSelectSegment={selectSegment} onReferenceSegment={referenceSelection ? segment => appendMaterialReference(selected, segment) : undefined} />
+      {selected.media_type === "video" ? <SourceTaskForm key={`${selected.workspace_id}:${selected.id}`} asset={selected} onCreated={receipt => router.push(`/tasks/${encodeURIComponent(receipt.task_id)}`)} /> : null}
       <details className={styles.detailSection}><summary>原文件与来源</summary><p>文件名：{selected.file_name}</p><p>原文件：{selected.path}</p>{selected.source_url ? <p>来源：<a href={selected.source_url} rel="noreferrer noopener" target="_blank">{selected.source_url}</a></p> : null}</details>
       {(selected.analysis_status === "blocked" || selected.analysis_status === "failed") ? (
         <p className={styles.analysisMessage} role="status">{analysisMessage(selected)}</p>

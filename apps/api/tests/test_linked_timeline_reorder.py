@@ -45,7 +45,7 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
 
     ``swapped`` lays the clips out in the reverse order (and the narration segments with them),
     which is the review's repro for "the reported old position must be the real one".
-    ``material`` drops ``person_render_id`` from the second clip so the plan is mixed.
+    ``material`` uses the existing material source for the second clip so the plan is mixed.
     ``plain`` leaves the plan without any audio track of its own, as before the first split.
     ``broken_source`` drops the second cue's narration source, so the linkage cannot be built.
     """
@@ -64,15 +64,16 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
     # Both clips cut the same first 4s out of their own segment; only their timeline order differs,
     # which is what makes them a clean pair of equal-length sources to permute.
     clips = {}
-    for index, (key, cue_id, start) in enumerate((("a", "cue-link-a", 4), ("b", "cue-link-b", 0)) if swapped
-                                                 else (("a", "cue-link-a", 0), ("b", "cue-link-b", 4))):
+    for key, cue_id, start in ((("a", "cue-link-a", 4), ("b", "cue-link-b", 0)) if swapped
+                             else (("a", "cue-link-a", 0), ("b", "cue-link-b", 4))):
+        source = plan.clips[1] if material and key == "b" else plan.clips[0]
         clips[key] = MontageClip(
-            id=f"clip-link-{key}", cue_id=cue_id, asset_id=plan.clips[0].asset_id,
-            segment_id=plan.clips[index].segment_id, source_path=plan.clips[0].source_path,
+            id=f"clip-link-{key}", cue_id=cue_id, asset_id=source.asset_id,
+            segment_id=source.segment_id, source_path=source.source_path,
             source_start_seconds=0, source_end_seconds=4,
             timeline_start_seconds=start, timeline_end_seconds=start + 4,
-            match_score=1, match_reasons=["已生成人物口型"], needs_confirmation=False,
-            role="a_roll", manually_selected=True,
+            match_score=1, match_reasons=["已授权素材" if material and key == "b" else "已生成人物口型"], needs_confirmation=False,
+            role="b_roll" if material and key == "b" else "a_roll", manually_selected=True,
             person_render_id=state.old_render.id if not (material and key == "b") else None)
     linked = replace(
         plan,

@@ -13,6 +13,7 @@ import { executionStageLabels } from './execution-labels';
 import { CreationPlanApiError } from "@/lib/api";
 import { getCreationTaskScriptSections } from "@/lib/api/creation-tasks";
 import type { CreationTaskScriptSectionWindow } from "@/lib/types/creation-tasks";
+import type { SourceMediaSelection } from "@/lib/types/creation-plans";
 
 function ExecutionScriptWindow({ preview, onStale }: {
     preview: CreationExecutionPreview; onStale: (key: string) => void;
@@ -26,7 +27,7 @@ function ExecutionScriptWindow({ preview, onStale }: {
     const after = cursors[cursors.length - 1];
     const { task_id: taskId, script_id: scriptId, script_updated_at: version, input_digest: digest } = preview;
     useEffect(() => {
-        if (!open) return;
+        if (!open || scriptId === null || version === null) return;
         let active = true;
         setPage(null);
         setLoading(true);
@@ -56,7 +57,8 @@ function ExecutionScriptWindow({ preview, onStale }: {
     </details>;
 }
 
-export function CreationExecutionPanel({ taskStage, taskReason, voice, availableVoices, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, storyboard, onRegenerateStoryboard, onReadStoryboard, compact = false, onStart, onResume, onCancel, onOpenMontage, onRefreshPreview }: {
+export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voice, availableVoices, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, storyboard, onRegenerateStoryboard, onReadStoryboard, compact = false, onStart, onResume, onCancel, onOpenMontage, onRefreshPreview }: {
+    sourceMedia?: SourceMediaSelection | null;
     taskReason: string | null;
     taskStage: WorkspaceState["task"]["stage"];
     voice: WorkspaceState["plan"]["selected_voice"];
@@ -81,7 +83,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
     const [stalePreview, setStalePreview] = useState<string | null>(null);
     const previewKey = preview ? `${preview.task_id}:${preview.input_digest}` : null;
     const previewStale = stalePreview !== null && stalePreview === previewKey;
-    const storyboardControls = storyboard && onRegenerateStoryboard ? <section aria-label="重新安排画面" className={styles.workSection}>
+    const storyboardControls = !sourceMedia && storyboard && onRegenerateStoryboard ? <section aria-label="重新安排画面" className={styles.workSection}>
       <Button variant="outline" disabled={busy || visualBusy || !storyboard.canSubmit} onClick={onRegenerateStoryboard} type="button">重新安排画面，保留配音</Button>
       <p>重新编排当前文案的镜头，保留原配音、字幕与图层；不会自动生成成片。</p>
       {storyboard.requestId ? <>
@@ -158,22 +160,22 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
             : job?.status === "interrupted" ? "应用中断，等待继续" : job?.status === "succeeded" ? execution?.video_ready ? "成片已生成，等待检查" : "成片产物需要检查" : "等待开始";
     const content = <section aria-label="连续制作" className={styles.workSection}>
     <div className={styles.operationHeading}><h2>{job ? "连续制作" : "制作要求"}</h2><span className={styles.stateBadge}>{statusText}</span></div>
-    {needsOutput ? <p>沿用有效配音和故事板，重新输出当前时间线。</p> : null}
+    {needsOutput ? <p>{sourceMedia ? "沿用当前原片与剪辑，重新输出当前时间线。" : "沿用有效配音和故事板，重新输出当前时间线。"}</p> : null}
     {(!job || resumable || waitingForUser) && preview ? <>
-      <ExecutionScriptWindow key={previewKey} preview={preview} onStale={setStalePreview}/>
+      {sourceMedia ? <p>沿用原片 {sourceMedia.source_start_seconds}–{sourceMedia.source_end_seconds} 秒的当前剪辑。</p> : <ExecutionScriptWindow key={previewKey} preview={preview} onStale={setStalePreview}/>}
       {previewStale ? <p role="status">制作前览已过期，请重新核对文案和制作要求。{onRefreshPreview ? <Button variant="outline" disabled={busy} onClick={onRefreshPreview}>重新核对文案和制作要求</Button> : null}</p> : null}
       <section className={styles.executionRequirements} aria-label="这次制作要求">
         <p>画幅 {preview.requirements.aspect_ratio} · 目标时长 {preview.requirements.duration_target_seconds} 秒 · 露脸目标 {preview.requirements.presenter_share_target}%</p>
-        <p>口型：{preview.requirements.lipsync_quality === "high" ? "高精度" : "较快档"} · {preview.narration_source?.source_kind === "recorded"
+        {sourceMedia ? <p>{sourceMedia.preserve_audio ? "保留原声" : "不使用原声音轨"}</p> : <p>口型：{preview.requirements.lipsync_quality === "high" ? "高精度" : "较快档"} · {preview.narration_source?.source_kind === "recorded"
                 ? `配音来源：本人录音 · 已采用 · ${preview.narration_source.duration_seconds.toFixed(1)} 秒`
                 : preview.narration_source?.source_kind === "generated"
                     ? `配音来源：已生成 · ${preview.narration_source.duration_seconds.toFixed(1)} 秒`
-                    : `声音：${voiceLabel}`}</p>
+                    : `声音：${voiceLabel}`}</p>}
         {preview.requirements.selected_voice ? <details><summary>声音引用诊断</summary><p>声音身份：{preview.requirements.selected_voice}{voice?.profile_id === preview.requirements.selected_voice ? ` · 固定版本：${voice.version}` : ""}</p></details> : null}
         {Object.entries(preview.requirements.template_settings).length ? <details><summary>查看模板中的具体设置</summary><dl>{Object.entries(preview.requirements.template_settings).map(([name, value]) => <div key={name}><dt>{({ fit_mode: "画面适配", color_style: "调色", subtitle_style: "字幕样式" } as Record<string, string>)[name] ?? name}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl></details> : null}
       </section>
       {!preview.requirements.can_continue && preview.requirements.continuation_blocker ? <p role="status">{preview.requirements.continuation_blocker}</p> : null}
-      {!job ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || previewStale || !preview.requirements.can_continue} onClick={onStart} type="button">{preview.requirements.can_continue ? "确认以上文案和要求，开始制作" : "暂不能开始制作"}</button></div> : null}
+      {!job ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || previewStale || !preview.requirements.can_continue} onClick={onStart} type="button">{preview.requirements.can_continue ? sourceMedia ? "生成当前剪辑成片" : "确认以上文案和要求，开始制作" : "暂不能开始制作"}</button></div> : null}
     </> : null}
     {job ? <div>
       {execution?.waiting_reason ? <p role="status">{creationTaskFailureReason(execution.waiting_reason, taskStage)}</p> : null}
@@ -187,7 +189,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
       {needsOutput ? <><p>原成片不再对应当前时间线，请先核对以上文案和制作要求，再确认重新输出。</p><div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || visualBusy} onClick={onOpenMontage} type="button">查看剪辑与已有产物</button></div></> : null}
       {hasInitialExecutionControls && active && job.status !== "interrupted" ? <button className={styles.secondaryButton} disabled={busy || visualBusy} onClick={onCancel} type="button">停止制作</button> : null}
       {awaitingMontageConfirmation ? <Button variant="outline" disabled={busy || visualBusy} onClick={onOpenMontage} type="button">审核镜头</Button> : null}
-      {resumable ? <Button className="modern-primary-button" disabled={busy || previewStale || !preview?.requirements.can_continue} onClick={onResume} type="button">{needsOutput ? "确认以上文案和要求，仅重新输出当前剪辑" : "确认以上文案和要求，继续制作"}</Button> : null}
+      {resumable ? <Button className="modern-primary-button" disabled={busy || previewStale || !preview?.requirements.can_continue} onClick={onResume} type="button">{sourceMedia ? needsOutput ? "重新输出当前剪辑" : "继续原片制作" : needsOutput ? "确认以上文案和要求，仅重新输出当前剪辑" : "确认以上文案和要求，继续制作"}</Button> : null}
     </div> : null}
   </section>;
     if (!compact)
@@ -207,7 +209,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, voice, available
     {storyboard?.requestId && !storyboard.receipt ? <span role="status">原画面安排结果待核对</span> : null}
     {storyboard?.error ? <p role="alert">{storyboard.error}</p> : null}
     {visualControls}
-    <HomeCardDialog kind="detail" title="制作文案与要求" open={detailsOpen} onClose={() => setDetailsOpen(false)} footer={<button type="button" onClick={() => setDetailsOpen(false)}>收起制作详情</button>}>
+    <HomeCardDialog kind="detail" title={sourceMedia ? "原片制作要求" : "制作文案与要求"} open={detailsOpen} onClose={() => setDetailsOpen(false)} footer={<button type="button" onClick={() => setDetailsOpen(false)}>收起制作详情</button>}>
       <div className={styles.productionDetails}>{content}{storyboardControls}</div>
     </HomeCardDialog>
   </>;

@@ -85,11 +85,16 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
         device_lock_path=tmp_path / "script-fixture.lock", device_access=access,
         registrations={"creation_job": OwnerRegistration(owner, executor)},
         resources=ControlledResources(), processes=HostProcessProbe())
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    authorizations = TaskAuthorizationUseCase(state.production, lambda value:
+        identity(CreationExecutionActor.from_event(value['workspace_id'], value)))
+    runtime.task_authorizations = owner.task_authorizations = media.task_authorizations = authorizations
     monkeypatch.setattr(main, "_creation_runtime", lambda: runtime)
     monkeypatch.setattr(main, "_require_permit_actor", lambda request, workspace: actor)
     monkeypatch.setattr(main, "_verify_creation_identity", identity)
     monkeypatch.setattr(main, "device_runtime", runtime)
     state.calls = []
+    state.execution_task_ids = {state.task.id}
     def prepare(*, sealed, input_paths, job_directory, limits):
         job_directory.mkdir()
         (job_directory / "out").mkdir()
@@ -98,7 +103,7 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
         scheduler.assert_grant(grant)
         job = state.production.job_records.get_job_run(grant.workspace_id, grant.owner_id)
         event = state.production.execution_records.get_task_event(grant.workspace_id, f"event_{job.id}_start").payload
-        assert job.status == "running" and job.task_id == state.task.id
+        assert job.status == "running" and job.task_id in state.execution_task_ids
         assert CreationExecutionActor.from_event(job.workspace_id, event) == actor
         assert event["resources"]["kind"] == "media_script"
         assert event["resources"]["script_digest"] == prepared.sealed.digest

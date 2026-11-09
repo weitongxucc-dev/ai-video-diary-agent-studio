@@ -46,9 +46,13 @@ def audio_state(tmp_path, monkeypatch):
     monkeypatch.setattr(main, 'local_members_service', members)
     monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path/'outputs'))
     monkeypatch.setattr(main, 'settings', replace(main.settings,
+        database_path=str(repo.database_path),
         video_output_path=str(tmp_path/'outputs'), video_inbox_path=str(repo.video_library_path),
         temporary_root_path=str(tmp_path/'temporary')))
     # These are the existing named fixture caps, not a production calibration.
+    from test_member_permits import _HOST_ENV
+    for name, value in _HOST_ENV.items():
+        monkeypatch.setenv(name, value)
     for name, value in asdict(audio_budget()).items():
         monkeypatch.setenv('DEVICE_CPU_AUDIO_'+name.upper(),str(value))
     media.facts = main._task_media_facts
@@ -56,6 +60,7 @@ def audio_state(tmp_path, monkeypatch):
     runtime = build(media)
     runtime.scheduler.processes = HostProcessProbe()
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
+    monkeypatch.setattr(main, '_media_result_read_components', lambda: (media, runtime.scheduler))
     client = TestClient(main.app, headers={'X-Local-Member-Token':token})
     errors, executions = [], []
     execute = media.audio_ingress.execute

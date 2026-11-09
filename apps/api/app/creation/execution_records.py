@@ -171,9 +171,9 @@ class ExecutionRecordStore:
         return self.artifact_from_row(row)
 
     def list_artifact_records(
-        self, workspace_id: str, task_id: str
+        self, workspace_id: str, task_id: str, *, connection=None
     ) -> list[_ArtifactRecord]:
-        with self._connect() as conn:
+        with self._connect() if connection is None else nullcontext(connection) as conn:
             self._require_creation_task(conn, workspace_id, task_id)
             rows = conn.execute(
                 """

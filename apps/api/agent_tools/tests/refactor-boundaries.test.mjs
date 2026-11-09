@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile, readdir} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import * as publicTools from '../diary_tools.ts';
-import {createDiaryTools} from '../diary/runtime.ts';
+import {createDiaryTools} from '../diary_tools.ts';
 import {createBusinessRequest, BusinessRequestError, RequestNotSubmitted} from '../diary/transport.ts';
 import {createToolCallScope} from '../diary/registration.ts';
 import {verifyTaskVersion} from '../diary/trusted-context.ts';
@@ -12,7 +12,7 @@ import {createMaterialSelection} from '../materials/selection.ts';
 
 test('public exports and session registration do not initialize business services', async () => {
   assert.deepEqual(Object.keys(publicTools).sort(), [
-    'default', 'createDiaryExtension', 'typedRequestId', 'readTaskEditCapabilities', 'readMediaScriptCapabilities',
+    'default', 'createDiaryExtension', 'createDiaryTools', 'typedRequestId', 'readTaskEditCapabilities', 'readMediaScriptCapabilities',
     'readMediaScriptToolCapabilities', 'readCreatorMemoryFacts', 'readCurrentTaskFacts',
   ].sort());
   const originalFetch = globalThis.fetch;

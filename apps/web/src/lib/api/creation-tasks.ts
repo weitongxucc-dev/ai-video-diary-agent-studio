@@ -12,6 +12,13 @@ import type { ContentVisibility } from '../types/common';
 import type { MontageClipCandidate } from '../types/production';
 import { request } from './transport';
 import { creationPlanRequest, assistantStreamRequest } from './creation-transport';
+import type { SourceTaskCreateInput, SourceTaskReceipt } from '../types/creation-tasks';
+export function createSourceTask(input: SourceTaskCreateInput): Promise<SourceTaskReceipt> {
+    return creationPlanRequest('/api/source-tasks', { method: 'POST', body: JSON.stringify(input) });
+}
+export function getSourceTaskRequest(requestId: string): Promise<SourceTaskReceipt> {
+    return creationPlanRequest(`/api/source-tasks/${encodeURIComponent(requestId)}`);
+}
 export function setCreationTaskVisibility(taskId: string, visibility: ContentVisibility): Promise<CreationTaskWorkspace> {
     return request<CreationTaskWorkspace>(`/api/creation-tasks/${encodeURIComponent(taskId)}/visibility`, { method: "PUT", body: JSON.stringify({ visibility }) });
 }

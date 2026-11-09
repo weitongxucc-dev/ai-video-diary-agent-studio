@@ -68,12 +68,12 @@ class PicturePreviewRenderer:
         return output
 
 
-    def validate_material_use(self, workspace_id, plan):
+    def validate_material_use(self, workspace_id, plan, *, connection=None):
         # Validate before cache reuse as well as inside the actual renderer.
         for clip in plan.clips:
             if not clip.person_render_id:
                 try:
-                    asset = self.repository.get_asset(workspace_id, clip.asset_id)
+                    asset = self.repository.get_asset(workspace_id, clip.asset_id, connection=connection)
                 except KeyError as exc:
                     raise ValueError("镜头素材已不存在，请替换后重试") from exc
                 if not material_allows_footage(asset):
@@ -83,7 +83,8 @@ class PicturePreviewRenderer:
             if not track.muted:
                 for clip in track.clips:
                     if not clip.muted:
-                        audio_service.validate_material_use(workspace_id, plan.task_id, clip.source_ref)
+                        audio_service.validate_material_use(workspace_id, plan.task_id, clip.source_ref,
+                            connection=connection)
 
 
     def graphic_source_paths(self, workspace_id, task_id, overlays, context):
@@ -249,7 +250,7 @@ class PicturePreviewRenderer:
     def render_montage(self, 
         workspace_id: str,
         plan,
-        narration_audio_path: Path,
+        narration_audio_path: Path | None,
         *,
         job_staging_path: Path | None = None,
         subtitle_tracks: list[SubtitleTrack] | None = None,
@@ -373,28 +374,33 @@ class PicturePreviewRenderer:
         (output.parent / "preview.mp4").replace(output)
 
 
-    def qualified_picture_sources(self, workspace_id, task, plan, picture_candidates, actor):
+    def qualified_picture_sources(self, workspace_id, task, plan, picture_candidates, actor, *, connection=None):
         task_id = task.id
+        if any(clip.visual_effects.get('beauty_strength') or clip.visual_effects.get('skin_exposure')
+                for candidate in picture_candidates for clip in candidate.clips):
+            raise ValueError('本机人像效果尚无受许可执行路径，请先移除该效果')
         files, graphics = [], []
         def remember(reference, path):
             stat = path.stat()
             fact = [reference, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
             if fact not in files:
                 files.append(fact)
-        self.validate_material_use(workspace_id, plan)
+        self.validate_material_use(workspace_id, plan, connection=connection)
         for clip in plan.clips:
             if clip.person_render_id:
                 from app.creation.person_stage_use_case import adopted_person_render_source
                 cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
                 path = adopted_person_render_source(self.repository, task, clip, cue, self.person_path)
             else:
-                asset = self.repository.get_asset(workspace_id, clip.asset_id)
+                asset = self.repository.get_asset(workspace_id, clip.asset_id, connection=connection)
                 if not content_readable(user_id=actor.user_id or actor.member_id, local_diagnostic=False, visibility=asset.visibility, owner_user_id=asset.owner_user_id):
                     raise PermissionError('当前成员不能读取镜头素材')
-                path = self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+                path = self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path,
+                    connection=connection)
             remember(clip.source_path, path)
         for reference in dict.fromkeys((item['source_ref'] for candidate in picture_candidates for item in candidate.graphic_overlays if item.get('kind') == 'image')):
-            item = graphic_source_facts(self.repository, self.store, workspace_id, task_id, reference, actor=actor)
+            item = graphic_source_facts(self.repository, self.store, workspace_id, task_id, reference,
+                actor=actor, connection=connection)
             graphics.append(item)
             remember(reference, Path(item['path']))
         return files, graphics

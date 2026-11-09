@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Literal
 
@@ -61,7 +61,7 @@ class CreationPlan:
     target_count: int
     language: str
     aspect_ratio: str
-    duration_target_seconds: int
+    duration_target_seconds: float
     knowledge_references: list[CreationPlanKnowledgeReference]
     source_references: list[CreationPlanSourceReference]
     selected_voice: _CreationPlanVoiceReference | None
@@ -91,6 +91,15 @@ class CreationPlan:
     adoption: dict[str, object] | None = None
     duration_mode: str = "exact"
     duration_range_seconds: tuple[float, float] | None = None
+    source_media: dict[str, object] | None = None
+
+
+def creation_plan_payload(plan: CreationPlan) -> dict[str, object]:
+    """Keep ordinary persisted inputs byte-compatible; source mode is explicit."""
+    payload = asdict(plan)
+    if plan.source_media is None:
+        del payload['source_media']
+    return payload
 
 
 def _validate_plan_material_matches(

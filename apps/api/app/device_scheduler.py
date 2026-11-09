@@ -1657,10 +1657,13 @@ class DeviceScheduler(DeviceRequestReadAccess):
                 raise ValueError("只有匹配的终态请求可以显式重试")
             request = self._request(row)
             local = self.owners.capture_local(request, reader)
-            retry = self.owners.verify_retry(request, actor, reason, reader)
+        # Identity/source observations can wait. Release the local snapshot so
+        # an unrelated edit can commit while the retry is being verified.
+        with self._connect() as observer:
+            retry = self.owners.verify_retry(request, actor, reason, observer)
             if not retry.actor_id:
                 raise PermissionError("重试身份未通过服务端验证")
-            observation = request, local, self.owners.check_current(request, reader)
+            observation = request, local, self.owners.check_current(request, observer)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:

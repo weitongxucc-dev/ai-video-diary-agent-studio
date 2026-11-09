@@ -124,7 +124,8 @@ def narration_signature(repository, task, *, connection=None) -> str:
         raise ValueError('当前文案缺少可用的真实分段配音')
     files = []
     for reference in references:
-        path = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, reference)
+        path = repository.narration_artifacts.resolve_authorized_narration_audio_reference(
+            task.workspace_id, reference, connection=connection)
         info = path.stat()
         if info.st_size <= 0:
             raise ValueError('故事板配音文件为空')
@@ -147,8 +148,8 @@ def material_signature(repository, task, *, connection=None) -> str:
         task.workspace_id, viewer_user_id=task.owner_user_id, connection=connection)}
     manifest = []
     for asset_id in sorted(assets):
-        reference = repository.workspace_media_reference_for_asset(task.workspace_id, asset_id)
-        path = repository.resolve_clip_media_reference(task.workspace_id, asset_id, reference)
+        reference = repository.workspace_media_reference_for_asset(task.workspace_id, asset_id, connection=connection)
+        path = repository.resolve_clip_media_reference(task.workspace_id, asset_id, reference, connection=connection)
         info = path.stat()
         manifest.append((asset_id, reference, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
     return hashlib.sha256(json.dumps(manifest).encode()).hexdigest()

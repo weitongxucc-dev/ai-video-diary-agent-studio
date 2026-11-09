@@ -109,7 +109,7 @@ def _assert_montage_endpoint_requires_device_contract(client, production, worksp
                         before = tuple(conn.iterdump())
                     response = client.post(f'/api/creation-tasks/{task_id}/montage/plan', json=payload)
                     assert response.status_code == 409, response.text
-                    assert '预算' in response.text and '标定' in response.text
+                    assert '尚未准备故事板能力' in response.text and '设备准备入口' in response.text
                     with production._connect() as conn:
                         assert tuple(conn.iterdump()) == before
             finally:
@@ -5470,9 +5470,9 @@ def test_silence_edit_real_preview_confirm_and_undo(permitted_media_state):
     audio_budget = main_module._device_operation_budget('cpu_audio')
     runtime = state.preview_runtime
     registration = runtime.registrations['creation_job']
-    registration.owner.audio_mix_facts = lambda workspace, task_id, montage, *, actor: main_module._task_audio().mix_facts(
+    registration.owner.audio_mix_facts = lambda workspace, task_id, montage, *, actor, connection=None: main_module._task_audio().mix_facts(
         workspace, task_id, montage.audio_timeline, montage.duration_seconds, actor=actor,
-        normalize_voice_sources=montage.narration_linkage_created_audio_timeline, budget=audio_budget)
+        normalize_voice_sources=montage.narration_linkage_created_audio_timeline, budget=audio_budget, connection=connection)
     registration.executor.render_action = lambda workspace, task_id, context: main_module._render_creation_task_montage_for_workspace(
         workspace, task_id, render_context=context)
     registration.executor.render_is_valid = lambda workspace, task_id, context: main_module._creation_render_is_valid(

@@ -41,6 +41,8 @@ class SegmentProductionUseCase:
         self.source_repository = source_repository
         self.budget_policy_for = budget_policy_for
         self.narration_runtime_facts = narration_runtime_facts
+        from app.task_audio import TaskAudio
+        self.audio = TaskAudio(repository, artifact_store, self.output_root)
 
     def require_actor(self, workspace_id, task_id, actor, *, connection=None):
         task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection)
@@ -268,22 +270,55 @@ class SegmentProductionUseCase:
             'usage_source': 'original_execution_receipts', 'adoption': self.adoption(task, result),
             'recovery': {'action': action, 'reason_code': reason, 'requires_revalidation': action == 'resume_original'}}
 
-    def planning_inputs(self, snapshot, section_id, *, connection, checksum):
+    def planning_inputs(self, snapshot, section_id, *, connection, checksum, reserved_ranges=None):
         checksum.update(snapshot.input_digest.encode())
         for section, measured, window in self.repository.section_inputs.iter_creation_section_planning_inputs(
                 snapshot.task, snapshot.script_header, connection=connection):
             # The target uses a possibly not-yet-persisted audio/text override.
             # Its original version has a separate CAS; all other inputs belong
             # to the global clock observed in this same snapshot.
-            value = ([section.id] if section.id == section_id else
-                [section.id, hashlib.sha256(section.content.encode()).hexdigest(), measured, window])
+            if section.id == section_id:
+                value = [section.id]
+            else:
+                adopted = self.repository.section_inputs.stage_segment_state(snapshot.task.workspace_id,
+                    snapshot.task.id, section.id, connection=connection)
+                sources = sorted((clip['asset_id'], clip['source_start_seconds'], clip['source_end_seconds'])
+                    for clip in adopted['montage']['clips'] if not clip.get('person_render_id')) if adopted is not None else []
+                if reserved_ranges is not None:
+                    for asset_id, start, end in sources:
+                        reserved_ranges.setdefault(asset_id, []).append((start, end))
+                value = [section.id, hashlib.sha256(section.content.encode()).hexdigest(), measured, window, sources]
             checksum.update(json.dumps(value, ensure_ascii=False, sort_keys=True).encode() + b'\n')
             yield section, measured, window
+
+    @staticmethod
+    def unconsumed_material_segments(assets, reserved_ranges):
+        available = []
+        for asset in assets:
+            segments = []
+            for segment in asset.segments:
+                cursor = segment.start_seconds
+                for start, end in sorted(reserved_ranges.get(asset.id, ())):
+                    if end <= cursor:
+                        continue
+                    if start >= segment.end_seconds:
+                        break
+                    if cursor < start:
+                        segments.append(replace(segment, start_seconds=cursor, end_seconds=start))
+                    cursor = max(cursor, end)
+                    if cursor >= segment.end_seconds:
+                        break
+                if cursor < segment.end_seconds:
+                    segments.append(replace(segment, start_seconds=cursor))
+            available.append(replace(asset, segments=segments))
+        return available
 
     def section_plan(self, task, section_id, audio, owner, *, connection=None, text=None):
         from app.montage import MontagePlanner, creation_task_montage_plan_to_payload
         from app.creation.duration_requirement import SectionWindow
         from app.creation.montage_stage_use_case import delivery_windows_from_section_inputs
+        allowed = (owner.task_authorizations.material_asset_ids(task.workspace_id, task.id)
+            if owner.task_authorizations is not None else None)
         with self.repository.execution_inputs.creation_execution_read(connection) as conn:
             snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
             if snapshot.task.confirmed_script_id != task.confirmed_script_id:
@@ -293,15 +328,15 @@ class SegmentProductionUseCase:
             section = current['section']
             section = replace(section, content=text) if text is not None else section
             checksum = hashlib.sha256()
+            reserved_ranges = {}
             requirement, windows = delivery_windows_from_section_inputs(creation_plan,
-                self.planning_inputs(snapshot, section_id, connection=conn, checksum=checksum),
+                self.planning_inputs(snapshot, section_id, connection=conn, checksum=checksum, reserved_ranges=reserved_ranges),
                 exclude_section=section_id, measured_override={section_id: audio.duration_seconds},
                 text_override=(section_id, section.content))
+            assets = list({asset.id:asset for asset,_ in self.repository.automatic_material_segments(task.workspace_id,
+                viewer_user_id=task.owner_user_id,asset_ids=allowed,connection=conn)}.values())
         window = next(item for item in windows if item.section_id == section_id)
-        allowed = (owner.task_authorizations.material_asset_ids(task.workspace_id, task.id)
-            if owner.task_authorizations is not None else None)
-        assets = list({asset.id:asset for asset,_ in self.repository.automatic_material_segments(task.workspace_id,
-            viewer_user_id=task.owner_user_id,asset_ids=allowed)}.values())
+        assets = self.unconsumed_material_segments(assets, reserved_ranges)
         plan = MontagePlanner().build_for_creation_section(workspace_id=task.workspace_id, task_id=task.id,
             delivery_window=SectionWindow(section_id, 0, window.duration_seconds),
             script_header=script, section=section, profile=self.repository.get_profile(task.workspace_id),
@@ -395,10 +430,21 @@ class SegmentProductionUseCase:
             'width_px': width, 'height_px': height, 'input_bytes': sum(item['size'] for item in sources),
             'clip_count': len(plan.clips), 'overlay_count': len(plan.graphic_overlays),
             'max_output_bytes': limits.max_output_bytes, 'threads': limits.threads, 'timeout_seconds': limits.timeout_seconds}
+        audio_mix = None
+        if plan.audio_timeline is not None:
+            if owner.audio_mix_facts is None:
+                raise PermissionError('有声段落缺少当前成员音轨来源解析器')
+            saved_audio = self.repository.narration_artifacts.get_narration_artifact(task.workspace_id, audio.cache_key)
+            audio_mix = (self.pending_narration_mix_facts(plan, audio, owner.narration_audio_budget)
+                if saved_audio is None else owner.audio_mix_facts(task.workspace_id, task.id, plan,
+                    actor=self.actor_from_event(task.workspace_id, event)))
+            resources['audio_mix'] = audio_mix['resources']
         version = command['expected_segment_version'] if command else digest_section_version(task.confirmed_script_id,
             section_id,text,self.repository.narration_artifacts.narration_artifact_reference(audio.cache_key))
         facts = {'section_id':section_id,'audio_cache_key':audio.cache_key,'montage':payload,'sources':sources,
             'expected_segment_version':version,'resources':resources}
+        if audio_mix is not None:
+            facts['audio_mix'] = audio_mix
         facts['unit_key'] = f'segment_video:{section_id}:{digest(facts)}'
         facts.update(input_digest=job.input_digest,script_id=task.confirmed_script_id,
             audio_reference=self.repository.narration_artifacts.narration_artifact_reference(audio.cache_key))
@@ -408,6 +454,56 @@ class SegmentProductionUseCase:
         return TaskEvent(id=self.visual_decision_id(job,section_id) if waiting else self.video_preparation_id(job,section_id),
             workspace_id=task.workspace_id,task_id=task.id,job_id=job.id,
             event_type='segment_visual_decision_required' if waiting else 'segment_video_prepared',payload=facts)
+
+    def pending_narration_mix_facts(self, plan, audio, budget):
+        """Seal the just-generated voice before the shared audio/video transaction."""
+        from app.task_audio import audio_mix_resources
+        path = Path(audio.audio_path).resolve()
+        before = path.stat()
+        checksum = hashlib.sha256()
+        with path.open('rb') as stream:
+            for chunk in iter(lambda: stream.read(1024*1024), b''):
+                checksum.update(chunk)
+        after = path.stat()
+        if any(getattr(before, field) != getattr(after, field) for field in
+                ('st_size','st_mtime_ns','st_ctime_ns','st_ino','st_dev')):
+            raise ValueError('新段落配音在封存混音输入期间发生变化')
+        source = {'reference': plan.narration_audio_path, 'path': str(path), 'size_bytes': before.st_size,
+            'mtime_ns': before.st_mtime_ns, 'ctime_ns': before.st_ctime_ns, 'inode': before.st_ino,
+            'device': before.st_dev, 'sha256': checksum.hexdigest(), 'producer_job_id': None,
+            'duration_seconds': audio.duration_seconds, 'sample_rate': audio.sample_rate, 'channels': None}
+        resources = audio_mix_resources([{**source, 'uses': 1}], [plan.audio_timeline], plan.duration_seconds,
+            normalize_voice_sources=plan.narration_linkage_created_audio_timeline, budget=budget)
+        return {'sources': [source], 'resources': resources}
+
+    def prepare_render_audio(self, task, plan, actor, prepared, context, stage_dir, *, output_measured):
+        """Mix the sealed section graph under the original composite render grant."""
+        from app.audio_timeline import bounded_audio_context, render_audio_mix
+        declared = prepared['audio_mix']
+        with context.scheduler._connect() as conn:
+            row = conn.execute('SELECT resources_json FROM device_work_requests WHERE id=?',
+                (context.grant.request_id,)).fetchone()
+        if row is None or json.loads(row[0]).get('audio_mix') != declared['resources']:
+            raise PermissionError('原段落许可与封存混音范围不一致')
+        def current_facts():
+            return self.audio.mix_facts(task.workspace_id, task.id, plan.audio_timeline, plan.duration_seconds,
+                actor=actor, normalize_voice_sources=plan.narration_linkage_created_audio_timeline,
+                budget=context.scheduler.resources.budget.cpu_audio)
+        with bounded_audio_context(context) as audio_context:
+            if current_facts() != declared:
+                raise ValueError('段落音轨输入、摘要或资源与原许可不一致')
+            paths = {item['reference']: Path(item['path']) for item in declared['sources']}
+            stage_dir.mkdir(parents=True, exist_ok=True)
+            mixed = stage_dir/'timeline-mix.wav'
+            render_audio_mix(plan.audio_timeline, plan.duration_seconds, paths.__getitem__, mixed,
+                scheduler=audio_context.scheduler, grant=audio_context.grant,
+                cancel_event=audio_context.cancel_event, deadline_monotonic=audio_context.deadline_monotonic,
+                max_output_bytes=audio_context.max_output_bytes, threads=audio_context.threads,
+                normalize_voice_sources=declared['resources']['normalize_voice_sources'], output_measured=output_measured)
+            audio_context.check()
+            if current_facts() != declared:
+                raise ValueError('段落混音期间音频来源或许可发生变化')
+        return mixed
 
     def planning_conflict_event(self, job, task, section_id, audio, error):
         from app.creation.contracts import TaskEvent
@@ -985,12 +1081,22 @@ class SegmentProductionUseCase:
         stage_dir = self.output_root/'segment-staging'/job.id/digest(grant.unit_key)[:24]/str(grant.generation)
         measured_bytes = 0
         retained_bytes = 0
+        audio_output_bytes = 0
         pcm_preparation=None
+
+        def measure_audio_outputs(value):
+            nonlocal audio_output_bytes
+            audio_output_bytes = value
 
         def measure_retained():
             nonlocal retained_bytes
             try:
                 retained_bytes = sum(path.stat().st_size for path in stage_dir.rglob('*') if path.is_file()) if stage_dir.exists() else 0
+                mixed = stage_dir/'timeline-mix.wav'
+                mixed_bytes = mixed.stat().st_size if mixed.exists() else 0
+                # The audio receipt also counts normalization files already
+                # removed by render_audio_mix's bounded temporary scope.
+                retained_bytes += max(0, audio_output_bytes-mixed_bytes)
             except OSError as exc:
                 raise RecoveryBlocked('分段产物消耗尚未核实，保留原开始回执') from exc
 
@@ -1066,7 +1172,11 @@ class SegmentProductionUseCase:
             if published_video is None:
                 executable = replace(plan,clips=[replace(clip,source_path=str(self.repository.resolve_clip_media_reference(
                     job.workspace_id,clip.asset_id,clip.source_path))) for clip in plan.clips])
-                self.renderer.render(executable,audio.audio_path,job_staging_path=stage_dir,
+                render_audio = audio.audio_path
+                if plan.audio_timeline is not None:
+                    render_audio = self.prepare_render_audio(task,plan,actor,prepared_video,context,stage_dir,
+                        output_measured=measure_audio_outputs)
+                self.renderer.render(executable,render_audio,job_staging_path=stage_dir,
                     scheduler=scheduler,grant=grant,cancel_event=cancellation,max_output_bytes=context.max_output_bytes,
                     threads=context.threads,deadline_monotonic=context.deadline_monotonic)
                 context.check()
@@ -1080,7 +1190,8 @@ class SegmentProductionUseCase:
                     expected_duration_seconds=plan.duration_seconds,scheduler=scheduler,grant=grant,
                     cancel_event=cancellation,deadline_monotonic=context.deadline_monotonic)
             now = utc_now()
-            input_refs = [self.repository.narration_artifacts.narration_artifact_reference(audio.cache_key),*[clip.source_path for clip in plan.clips]]
+            input_refs = list(dict.fromkeys([self.repository.narration_artifacts.narration_artifact_reference(audio.cache_key),
+                *[clip.source_path for clip in plan.clips]]))
             artifacts = [ArtifactRecord(id=f'artifact_{job.id}_{digest(grant.unit_key)[:20]}_{kind}',workspace_id=job.workspace_id,
                 task_id=job.task_id,kind=kind,logical_ref=value.logical_ref,sha256=value.sha256,size_bytes=value.size_bytes,
                 producer_job_id=job.id,input_refs=input_refs) for kind,value in [('rendered_video',published_video),('subtitle_track',published_subtitles)]]

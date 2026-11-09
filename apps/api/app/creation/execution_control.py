@@ -134,12 +134,12 @@ class CreationExecutionControl:
             else None
         )
         if (narration_artifact is not None
-                and (narration_artifact.task_id != task.id or narration_artifact.script_id != script.id)):
+                and (narration_artifact.task_id != task.id or script is None or narration_artifact.script_id != script.id)):
             narration_artifact = None
         recorded_narration_ready = (
             narration_artifact is not None and narration_artifact.source_kind == "recorded"
         )
-        can_continue = (
+        can_continue = plan.source_media is not None or (
             plan.presenter_share_target == 0
             if recorded_narration_ready
             else bool(plan.selected_voice)
@@ -156,10 +156,10 @@ class CreationExecutionControl:
             continuation_blocker = "请先选择已授权声音，或保存并明确采用本人录音；本人录音仅支持纯素材成片。"
         return {
             "task_id": task.id,
-            "script_id": script.id,
-            "script_title": script.title,
-            "script_updated_at": script.updated_at.isoformat(),
-            "script_sections_total_count": script.sections_total_count,
+            "script_id": script.id if script is not None else None,
+            "script_title": script.title if script is not None else None,
+            "script_updated_at": script.updated_at.isoformat() if script is not None else None,
+            "script_sections_total_count": script.sections_total_count if script is not None else 0,
             "script_sections_loaded": False,
             "plan_id": plan.id,
             "narration_source": ({
@@ -247,10 +247,11 @@ class CreationExecutionControl:
 
     def status(self, workspace_id: str, task_id: str, *, verify_media: bool, actor=None, job_id=None) -> dict[str, object]:
         task = self.task_or_missing(workspace_id, task_id)
+        plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         result = self._status_summary(task, actor=actor, job_id=job_id)
         job = result["job"]
         decisions=self.segments.visual_decision_locators(workspace_id,task_id,actor,job_id=job["id"] if job else None) if (
-            self.segments is not None and actor is not None and task.owner_user_id==(actor.user_id or actor.member_id)) else {'items':[],'total_count':0,'truncated':False}
+            plan.source_media is None and self.segments is not None and actor is not None and task.owner_user_id==(actor.user_id or actor.member_id)) else {'items':[],'total_count':0,'truncated':False}
         if decisions['items']:
             result['waiting_reason']=('画面采用已保存，原作业排队状态待回查。' if all(item['adopted'] for item in decisions['items'])
                 else '段落配音已保存，画面候选需要用户明确确认。')
@@ -524,8 +525,10 @@ class CreationExecutionControl:
     def submit_person_edit(self, workspace_id, task, proposal, actor, runtime, *, source=None, write_guard=None):
         operation=proposal.operation
         source=self._edit_source(task,proposal,actor,source)
-        script=self.repository.script_records.get_creation_task_script(workspace_id,task.confirmed_script_id)
         plan=self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id)
+        if plan.source_media is not None:
+            raise ValueError('原声来源任务没有可重做的人物配音片段')
+        script=self.repository.script_records.get_creation_task_script(workspace_id,task.confirmed_script_id)
         digest=person_edit_digest(operation)
         payload={**actor.identity_payload(),'script_id':script.id,'plan_id':plan.id,
             'revision_digest':revision_digest(script,plan),'input_digest':digest,'edit_proposal_id':proposal.id,'source':source}
@@ -579,6 +582,8 @@ class CreationExecutionControl:
         with self.repository.execution_inputs.creation_execution_read() as reader:
             snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task.id, connection=reader)
         task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
+        if plan.source_media is not None:
+            raise ValueError('原声来源任务没有可局部重配的文案配音')
         digest = narration_edit_digest(proposal.operation)
         candidate = JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id,
             kind=NARRATION_EDIT_KIND, input_digest=digest,

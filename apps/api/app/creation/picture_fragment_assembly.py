@@ -51,10 +51,13 @@ class PictureFragmentAssembly:
             job.workspace_id, job.task_id, connection=connection))
         if any(clip.person_render_id for clip in montage.clips):
             raise ValueError('人物片段尚未接入此硬切窗口生产路径')
-        self.renderer.validate_material_use(job.workspace_id, montage)
-        files, _graphics = self.renderer.qualified_picture_sources(job.workspace_id, task, montage, [montage], actor)
-        tracks = self.metadata.current_subtitle_tracks(job.workspace_id, task, montage=montage)
-        current_version = self.repository.timeline_records.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        self.renderer.validate_material_use(job.workspace_id, montage, connection=connection)
+        files, _graphics = self.renderer.qualified_picture_sources(job.workspace_id, task, montage, [montage], actor,
+            connection=connection)
+        current_version = self.repository.timeline_records.get_timeline_version(job.workspace_id,
+            task.current_timeline_version_id, connection=connection) if task.current_timeline_version_id else None
+        tracks = self.metadata.current_subtitle_tracks(job.workspace_id, task, current_version=current_version,
+            montage=montage, connection=connection)
         explicit_subtitles = current_version is not None and 'subtitle_track_ids' in current_version.snapshot
         tracks = tracks if tracks or explicit_subtitles else None
         captions = (subtitle_schedule(tracks, montage.duration_seconds) if tracks is not None
@@ -64,12 +67,14 @@ class PictureFragmentAssembly:
         for graphic in graphics:
             if graphic['kind'] == 'image':
                 original = graphic['source_ref']
-                facts = graphic_source_facts(self.repository, self.store, job.workspace_id, job.task_id, original, actor=actor)
+                facts = graphic_source_facts(self.repository, self.store, job.workspace_id, job.task_id, original,
+                    actor=actor, connection=connection)
                 image_facts[original] = facts
                 graphic['source_ref'] = facts['path']
         sources = {}
         for clip in montage.clips:
-            path = self.repository.resolve_workspace_media_reference(job.workspace_id, clip.source_path, require_registered=True)
+            path = self.repository.resolve_workspace_media_reference(job.workspace_id, clip.source_path,
+                require_registered=True, connection=connection)
             sources[clip.source_path] = {'path': str(path), 'file_identity': _identity(path)}
         sidecar = (subtitle_schedule([replace(track, style={**track.style, 'enabled': True}) for track in tracks],
             montage.duration_seconds) if tracks is not None else captions)
@@ -98,7 +103,10 @@ class PictureFragmentAssembly:
             decode_seconds = window.clip.source_end_seconds-window.clip.source_start_seconds
             overlay_count = graphics_count + caption_count
             input_bytes = source['file_identity']['size_bytes'] + sum(facts['size_bytes'] for facts in images.values())
-            if (decode_seconds > max_seconds or width > self.budget.max_width_px or height > self.budget.max_height_px
+            if width > self.budget.max_width_px or height > self.budget.max_height_px:
+                raise ValueError(f'当前设备准备覆盖 {self.budget.max_width_px}×{self.budget.max_height_px}，'
+                    f'成片需要 {width}×{height}；请在设备设置按目标画幅重新准备 1080p 成片。')
+            if (decode_seconds > max_seconds
                     or input_bytes > self.budget.max_input_bytes or overlay_count > self.budget.max_overlay_count
                     or self.budget.max_clip_count < 1):
                 raise ValueError('真实原来源字节、decode prefix、图层或画幅超出当前有限编码单元，未缩报或抬帽')
@@ -179,7 +187,7 @@ class PictureFragmentAssembly:
                     continue
             window = PictureAssemblyWindow(**unit['window'])
             width, height = canvas_size(window.aspect_ratio)
-            resources = {'kind': 'creation_render', 'picture_fragment_unit': unit['id'],
+            resources = {'kind': 'creation_render', 'execution_mode': 'cpu_ffmpeg', 'picture_fragment_unit': unit['id'],
                 'picture_recipe_digest': manifest['picture_recipe'], 'picture_fragment_recipe': unit['recipe'],
                 'picture_fragment': {'first_frame': window.timeline_start_frame,
                     'packet_count': window.frame_count, 'contract': 'h264-crf20-b0-fmp4/v1'},

@@ -476,6 +476,43 @@ function queueStatus(status: NonNullable<CreationExecutionStatus["job"]>["status
     status_updated_at: "2026-10-07T00:00:00Z", video_ready: false, cover_status: "pending", cover_message: null };
 }
 
+it("opens and renders an original-media task without inventing script, narration or analyzed segment", async () => {
+  const task: CreationTask = { ...baseTask, stage: "montage", stage_status: "waiting_for_user", status: "waiting_for_user",
+    selected_topic_id: null, confirmed_script_id: null, narration_cache_key: null,
+    montage_plan_id: "source-montage", current_timeline_version_id: "source-version", timeline_sequence: 1 };
+  const initial = workspace(task, { id: "source-montage", task_id: task.id, script_id: null, script_title: "",
+    status: "ready", cues: [], clips: [{ id: "source-clip", cue_id: null, asset_id: "source", segment_id: null,
+      source_reference: "workspace://source.mp4", source_start_seconds: 0, source_end_seconds: 9.25,
+      timeline_start_seconds: 0, timeline_end_seconds: 9.25, match_score: 0, match_reasons: ["用户选择原片"],
+      needs_confirmation: false, manually_selected: true, role: "a_roll", locked: false }],
+    duration_seconds: 9.25, low_confidence_clip_count: 0, narration_reference: null, output_url: null,
+    audio_timeline: { format_version: 1, tracks: [{ id: "original-track", name: "原声", role: "original",
+      gain_db: 0, muted: false, locked: false, duck_under_voice: false,
+      clips: [{ id: "original-audio", name: "原片音频", source_ref: "workspace://source.mp4",
+        source_start_ms: 0, source_end_ms: 9250, timeline_start_ms: 0, gain_db: 0,
+        fade_in_ms: 0, fade_out_ms: 0, muted: false, locked: false, denoise_db: 0,
+        gain_points: [], envelope_offset_ms: 0, envelope_duration_ms: null }] }] },
+    subtitle_url: null, message: "", created_at: task.created_at, updated_at: task.updated_at });
+  initial.scripts = [];
+  initial.plan.source_media = { asset_id: "source", asset_updated_at: task.updated_at, source_ref: "workspace://source.mp4",
+    source_start_seconds: 0, source_end_seconds: 9.25, aspect_ratio: "16:9", preserve_audio: true,
+    file_signature: { size_bytes: "100", mtime_ns: "1", ctime_ns: "1", inode: "1" } };
+  const preview: CreationExecutionPreview = { ...queuePreview(), script_id: null, script_updated_at: null,
+    script_title: "", script_sections_total_count: 0, requirements: { ...queuePreview().requirements,
+      selected_voice: null, presenter_share_target: 0, duration_target_seconds: 9.25 } };
+  mocks.previewExecution.mockResolvedValue(preview);
+  mocks.getExecution.mockResolvedValue(queueStatus(null));
+  mocks.startExecution.mockResolvedValue(queueStatus("queued"));
+  mocks.getWorkspace.mockResolvedValue(initial);
+  renderTaskSubject(<CreationTaskWorkspace initialWorkspace={initial} initialTopics={null} initialTasks={[task]} />);
+  fireEvent.click(await screen.findByRole("button", { name: "核对制作要求" }));
+  const details = await screen.findByRole("dialog", { name: "原片制作要求" });
+  expect(within(details).getByText("保留原声")).toBeVisible();
+  expect(within(details).queryByText(/这次使用的文案|声音：尚未选择/)).not.toBeInTheDocument();
+  fireEvent.click(within(details).getByRole("button", { name: "生成当前剪辑成片" }));
+  await waitFor(() => expect(mocks.startExecution).toHaveBeenCalledWith(task.id, preview));
+});
+
 function CreationTaskWorkspace(props: Parameters<typeof ActualCreationTaskWorkspace>[0]) {
   mocks.entryWorkspace = props.initialWorkspace;
   return mocks.withReferenceProvider ? <AssistantConversationProvider><ActualCreationTaskWorkspace {...props} /></AssistantConversationProvider> : <ActualCreationTaskWorkspace {...props} />;

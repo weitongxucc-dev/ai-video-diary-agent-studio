@@ -183,7 +183,8 @@ def creation_stage_budgets_from_env(env: Mapping[str, str] | None = None):
     budgets = []
     for budget_type, prefix in ((NarrationBudget, "DEVICE_NARRATION_"), (MontageBudget, "DEVICE_MONTAGE_")):
         numeric_fields = [item for item in fields(budget_type) if item.name not in {"running_cpu_policy", "input_scope",
-            "preparation_backend_identity", "preparation_shape_digest", "preparation_receipt_sha256"}]
+            "preparation_backend_identity", "preparation_shape_digest", "preparation_receipt_sha256",
+            "preparation_basis_digest"}]
         cpu_policy = environment.get("DEVICE_NARRATION_RUNNING_CPU_POLICY_JSON", "").strip() if budget_type is NarrationBudget else ""
         if budget_type is NarrationBudget and environment.get("DEVICE_NARRATION_INPUT_SCOPE", "legacy_stage") not in {"legacy_stage", "single_call_experiment_v1"}:
             raise HostBudgetUncalibrated("显式实验环境不能声明preparation/prepared准备回执，仅允许legacy_stage/single_call_experiment_v1")

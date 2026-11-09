@@ -35,7 +35,7 @@ from app.creation_execution import (
     revision_digest, submit_creation_stage,
 )
 from app.device_scheduler import DeviceScheduler, ProcessIdentity, StaleGrantInput
-from app.host_resource_probes import HostCapacity, HostProcessProbe, HostResourceDecision
+from app.host_resource_probes import HostCapacity, HostProcessProbe, HostResourceDecision, RuntimeCpuPolicy
 from app.local_members import LocalMemberService
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.creation.narration_artifacts import NarrationArtifactRecord
@@ -81,6 +81,40 @@ def _synthetic_memory_monitor():
         decision = monitor.check(system_reserve_bytes=1, additional_commit_bytes=0)
     assert decision.verdict is True
     return monitor
+
+
+def _isolate_linux_cpu_policy(monkeypatch, resources):
+    import sys
+    if sys.platform != "linux":
+        return
+    import app.host_resource_probes as probes
+    from unittest.mock import patch
+    # Portable queue/media coverage does not certify Darwin scheduling.
+    # Keep real grant/process checks and every finite runtime limit; only
+    # the OS scheduling mechanism is isolated on the Linux CI runner.
+    native_sample = resources._sample
+    native_scene_limits = resources.scene_runtime_limits
+
+    def portable_sample(*args, **kwargs):
+        with patch.object(probes, "sys", SimpleNamespace(platform="darwin")):
+            return native_sample(*args, **kwargs)
+
+    def portable_scene_limits(grant, *, purpose=None):
+        limits = native_scene_limits(grant, purpose=purpose)
+        return replace(limits, cpu_policy=None) if limits is not None else None
+
+    monkeypatch.setattr(resources, "_sample", portable_sample)
+    monkeypatch.setattr(resources, "scene_runtime_limits", portable_scene_limits)
+
+
+def _original_execution_diagnostics(repo, workspace_id, job_id):
+    job = repo.job_records.get_job_run(workspace_id, job_id)
+    with repo._connect() as conn:
+        requests = [dict(row) for row in conn.execute(
+            "SELECT id,unit_key,state,wait_reason FROM device_work_requests "
+            "WHERE owner_id=? ORDER BY id", (job_id,))]
+    return {"job_id": job.id, "status": job.status,
+            "failure_reason": job.failure_reason, "requests": requests}
 
 
 def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True, task_suffix: str = "", duration_seconds: int = 30):
@@ -723,7 +757,7 @@ def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_accou
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
                      (json.dumps(asdict(task), default=str), workspace, task_id))
         if stop is None:
-            # Exercise actual granted FFmpeg concatenation, not just one-file copy.
+            # Exercise actual granted multi-input PCM assembly, not a one-file copy.
             script_for_merge.sections.append(replace(script_for_merge.sections[0], id='section_2'))
             conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?",
                 (script_seed_payload(repo, conn, script_for_merge), script_id))
@@ -760,7 +794,9 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             "import subprocess,time\np=subprocess.Popen([sys.executable,'-c','import time; held=bytearray(80000000); time.sleep(5)']); p.wait()\n"
             if stop == "rss" else "import time; time.sleep(5)\n"))
     narration = NarrationBudget(1000, 10, 1_000_000, 300, 8_000_000, 1, 90,
-        1024 ** 3, 16, 0.1, 1024 ** 3, 1_000_000, input_scope="single_call_experiment_v1")
+        1024 ** 3, 16, 0.1, 1024 ** 3, 1_000_000,
+        running_cpu_policy=RuntimeCpuPolicy("darwin_background", "synthetic-queue-worker-policy"),
+        input_scope="single_call_experiment_v1")
     if stop == "rss":
         narration = replace(narration, max_process_rss_bytes=40 * 1024 ** 2)
     elif stop == "output":
@@ -772,8 +808,9 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     montage = MontageBudget(10, 20, 1_000_000, 1_000_000, 30, 1_000_000)
     # Match the existing synthetic media profile, not the production host budget.
     render = CpuRenderBudget(300, 400_000_000, 1920, 1920, 10_000_000, 20, 0,
-                            8_000_000, 1, 90, 512 * 1024 ** 2, 64 * 1024 ** 2, 16)
-    audio_budget = CpuAudioBudget(10, 32*1024**2, 300, 300, 24000, 1, 8_000_000, 1, 90,
+                            8_000_000, 1, 90, 512 * 1024 ** 2, 64 * 1024 ** 2, 16,
+                            running_cpu_policy=RuntimeCpuPolicy("darwin_nice", "synthetic-queue-render-policy", nice=5))
+    audio_budget = CpuAudioBudget(10, 32*1024**2, 300, 300, 48000, 2, 8_000_000, 1, 90,
         1024**3, 16, .1, 1024**3, 1_000_000)
     budget = HostBudget(100, 1, 100 * 1024 ** 3, 1, 10 ** 12, 10_000_000,
                         cpu_render=render, cpu_audio=audio_budget, narration=narration, montage=montage)
@@ -787,9 +824,15 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         return state["identity"]
 
     owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(8_000_000, 1, 90),
-        narration_budget=narration, narration_audio_budget=audio_budget, montage_budget=montage, verify_identity=verify)
+        narration_budget=narration, narration_audio_budget=audio_budget, montage_budget=montage, verify_identity=verify,
+        audio_mix_facts=lambda workspace_id, current_task_id, current_montage, *, actor, connection=None:
+            main_module._task_audio().mix_facts(workspace_id, current_task_id,
+                current_montage.audio_timeline, current_montage.duration_seconds, actor=actor,
+                normalize_voice_sources=current_montage.narration_linkage_created_audio_timeline,
+                budget=audio_budget, connection=connection))
     resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=budget,
         memory_monitor=_synthetic_memory_monitor())
+    _isolate_linux_cpu_policy(monkeypatch, resources)
     # Deterministic ambient load; preserve the probe's real sampling interval.
     def ambient_cpu_percent(*, interval):
         time.sleep(interval)
@@ -845,6 +888,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     narration_stage = main_module._narration_stage_use_case(repo, narration_budget=narration)
     montage_stage = main_module._montage_stage_use_case(repo)
     owner.segments = main_module._segment_production_use_case(repo)
+    owner.segments.narration_stage = narration_stage
     prepare_segment = narration_stage.prepare_segment
     generate_montage = montage_stage.generate
     def narration_action(*args, **kwargs):
@@ -867,11 +911,15 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         result = main_module._render_creation_stage_with_grant(*args)
         if stop == "render_commit_unknown":
             state["identity"] = "unknown"
+            # Account permits remain valid until their persisted lease expires.
+            # Exercise an actually unverified completion, not a still-valid lease.
+            authorization = repo.task_authorization_records.get_task_authorization(workspace, task_id)
+            authorizations.clock = lambda: authorization.expires_at
         return result
 
     executor = CreationJobUnitExecutor(repo, render_action=render_action,
         render_is_valid=main_module._creation_stage_valid_with_grant,
-        narration_stage=narration_stage, montage_stage=montage_stage)
+        narration_stage=narration_stage, montage_stage=montage_stage, segments=owner.segments)
     from app.device_runtime import OwnerRegistration, OwnerRouter
     from app.member_permits import MemberDeviceAccess
     registration = OwnerRegistration(owner, executor)
@@ -938,6 +986,11 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                         time.sleep(0.01)
                     assert marker.exists()
                     state["identity"] = "unauthorized"
+                    if stop == "revoked":
+                        # The real account observer persists revocation outside
+                        # a writer; changing its remote response alone does not
+                        # revoke a previously issued task authorization lease.
+                        authorizations.refresh(repo.task_authorization_records.get_task_authorization(workspace, task_id))
                     if stop == "cancelled":
                         monkeypatch.setattr(main_module, "auth_context", SimpleNamespace(enabled=True,
                             authenticate=lambda _request: principal, is_onboarding_complete=lambda *_args: True))
@@ -953,24 +1006,140 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             assert stop_errors == []
         scheduler.assert_released(grant)
         assert scheduler.processes.children_released(tuple(children)) is True
-        if stop in {"revoked", "cancelled", "output", "rss", "timeout", "commit_unknown"}:
+        if stop == "commit_unknown":
+            # The original audio unit committed under the still-valid account
+            # lease. Unknown remote observation is not a completed whole film.
+            current = repo.job_records.get_job_run(workspace, job_id)
+            assert current.status == "queued" and current.failure_reason == "waiting_for_user"
+            task = repo.task_records.get_creation_task(workspace, task_id)
+            assert task.narration_cache_key is None and not task.output_ready
+            original = scheduler._get(request_id)
+            assert original.state == "done" and original.id == grant.request_id
+            segments = repo.narration_records.list_narration_segments(workspace, task_id, script_id)
+            assert len(segments) == 1 and segments[0].status == "ready"
+            audio_ref = segments[0].audio_reference
+            assert audio_ref and audio_ref.startswith("narration://artifact/")
+            audio = repo.narration_artifacts.get_narration_artifact(workspace, audio_ref.removeprefix("narration://artifact/"))
+            assert audio is not None and Path(audio.audio_path).stat().st_size > 0
+            usage = repo.narration_units.creation_narration_usage(workspace, job_id)
+            assert usage["used_output_bytes"] > 0 and not usage["unsettled"]
+            events = repo.execution_records.list_task_events(workspace, task_id)
+            for event_type in ("creation_narration_unit_started", "creation_narration_unit_settled"):
+                assert sum(event.event_type == event_type for event in events) == 1
+            assert not any(event.payload.get("status") == "completed" for event in events)
+            before = _original_execution_diagnostics(repo, workspace, job_id)
+            assert len(before["requests"]) == 1
+            assert not any(row["unit_key"].startswith("render:") for row in before["requests"])
+            view = owner.segments.read_visual_decision(workspace, task_id, job_id, "section_1", actor)
+            assert view["status"] == "waiting_for_user" and view["audio"]["artifact_reference"] == audio_ref
+            assert scheduler._get(request_id) == original
+            assert submit_creation_stage(execution, scheduler, current, actor) is None
+            assert _original_execution_diagnostics(repo, workspace, job_id) == before
+            assert repo.narration_units.creation_narration_usage(workspace, job_id) == usage
+            assert repo.execution_records.list_task_events(workspace, task_id) == events
+            assert calls == ["narration"] and render_calls == []
+            assert scheduler.pick_and_grant() is None
+            return
+        if stop in {"revoked", "cancelled", "output", "rss", "timeout"}:
             assert repo.job_records.get_job_run(workspace, job_id).status == (
-                "cancelled" if stop == "cancelled" else "interrupted" if stop in {"revoked", "commit_unknown"} else "failed")
+                "cancelled" if stop == "cancelled" else "interrupted" if stop == "revoked" else "failed"), _original_execution_diagnostics(repo, workspace, job_id)
             assert calls == ["narration"]
             assert not any(event.payload.get("status") == "completed" for event in repo.execution_records.list_task_events(workspace, task_id))
             assert scheduler.pick_and_grant() is None
             return
-        grant = scheduler.pick_and_grant()
+        monkeypatch.setattr(main_module, "auth_context", account_context)
+
+        def next_grant():
+            current = scheduler.pick_and_grant()
+            deadline = time.monotonic() + resources.io_window_seconds + 1
+            while current is None and time.monotonic() < deadline:
+                requests = _original_execution_diagnostics(repo, workspace, job_id)["requests"]
+                if not any(row["wait_reason"] == "resource_unknown" for row in requests):
+                    break
+                time.sleep(.1)
+                current = scheduler.pick_and_grant()
+            assert current is not None, _original_execution_diagnostics(repo, workspace, job_id)
+            return current
+
+        # Production adopts each section's visual decision before rendering it,
+        # then proceeds to the next audio section and the original final merge.
+        for index, section in enumerate(script_for_merge.sections):
+            if index:
+                grant = next_grant()
+                assert grant.unit_key.startswith(f"narration:segment:v1:{section.id}:")
+                executor.execute(grant, scheduler)
+                scheduler.assert_released(grant)
+            decision_url = base + f"/jobs/{job_id}/sections/{section.id}/visual-decision"
+            decision = client.get(decision_url)
+            assert decision.status_code == 200, decision.text
+            view = decision.json()
+            assert view["status"] == "waiting_for_user", view
+            assert view["audio"]["persisted"] and view["usage"]["settled"]
+            assert view["usage"]["used_output_bytes"] > 0
+            assert view["required_confirmation_ids"]
+            before_requests = _original_execution_diagnostics(repo, workspace, job_id)["requests"]
+            assert not any(row["unit_key"].startswith(("segment_video:", "render:"))
+                           and row["state"] != "done" for row in before_requests)
+            assert scheduler.pick_and_grant() is None
+            waiting = client.post(base + "/resume")
+            assert waiting.status_code == 202, waiting.text
+            assert waiting.json()["job"]["id"] == job_id
+            assert _original_execution_diagnostics(repo, workspace, job_id)["requests"] == before_requests
+            assert render_calls == []
+            selected = {"decision_digest": view["decision_digest"],
+                        "confirmed_clip_ids": view["required_confirmation_ids"]}
+            rejected = client.post(decision_url, json={**selected, "confirmed_clip_ids": []})
+            assert rejected.status_code == 422, rejected.text
+            assert rejected.json()["detail"][0]["loc"] == ["body", "confirmed_clip_ids"]
+            assert rejected.json()["detail"][0]["type"] == "too_short"
+            assert _original_execution_diagnostics(repo, workspace, job_id)["requests"] == before_requests
+            assert render_calls == [] and scheduler.pick_and_grant() is None
+            adopted = client.post(decision_url, json=selected)
+            assert adopted.status_code == 200, adopted.text
+            adopted_receipt = adopted.json()
+            requests_after_adoption = _original_execution_diagnostics(repo, workspace, job_id)["requests"]
+            with repo._connect() as conn:
+                transforms_after_adoption = [tuple(row) for row in conn.execute(
+                    "SELECT id,status FROM transform_runs WHERE workspace_id=? AND task_id=? ORDER BY id",
+                    (workspace, task_id))]
+            replay = client.post(decision_url, json=selected)
+            assert replay.status_code == 200, replay.text
+            assert replay.json()["decision"] == adopted_receipt["decision"]
+            assert replay.json()["queue"]["request_id"] == adopted_receipt["queue"]["request_id"]
+            assert _original_execution_diagnostics(repo, workspace, job_id)["requests"] == requests_after_adoption
+            with repo._connect() as conn:
+                assert [tuple(row) for row in conn.execute(
+                    "SELECT id,status FROM transform_runs WHERE workspace_id=? AND task_id=? ORDER BY id",
+                    (workspace, task_id))] == transforms_after_adoption
+            assert adopted_receipt["decision"]["confirmed_clip_ids"] == view["required_confirmation_ids"]
+            assert adopted_receipt["decision"]["usage"] == view["usage"]
+            grant = next_grant()
+            assert grant.request_id == adopted_receipt["queue"]["request_id"]
+            assert grant.unit_key.startswith(f"segment_video:{section.id}:")
+            executor.execute(grant, scheduler)
+            scheduler.assert_released(grant)
+            assert repo.section_inputs.stage_segment_state(workspace, task_id, section.id) is not None
+        # Only finite merge checkpoints may occur between the last section and
+        # the existing whole-film montage stage; no audio is regenerated.
+        for _ in range(len(script_for_merge.sections) + 1):
+            grant = next_grant()
+            if grant.unit_key.startswith("montage_plan:"):
+                break
+            assert grant.unit_key.startswith("narration:merge:v1:"), grant.unit_key
+            executor.execute(grant, scheduler)
+            scheduler.assert_released(grant)
         assert grant.unit_key.startswith("montage_plan:")
         executor.execute(grant, scheduler)
         scheduler.assert_released(grant)
         assert repo.job_records.get_job_run(workspace, job_id).status == "failed"
         assert repo.task_records.get_creation_task(workspace, task_id).narration_cache_key
-        retry = execution.retry(workspace, task_id, member_id=actor.member_id)
-        submit_creation_stage(execution, scheduler, retry, actor)
+        resumed = client.post(base + "/resume")
+        assert resumed.status_code == 202, resumed.text
+        assert resumed.json()["job"]["id"] == job_id
+        retry = repo.job_records.get_job_run(workspace, job_id)
         monkeypatch.setattr(main_module, "auth_context", account_context)
         for stage in ("montage_plan", "render"):
-            grant = scheduler.pick_and_grant()
+            grant = next_grant()
             with repo._connect() as conn:
                 queued = [dict(row) for row in conn.execute(
                     "SELECT id,unit_key,state,wait_reason FROM device_work_requests WHERE owner_id=?", (retry.id,))]
@@ -980,71 +1149,28 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                 repo.get_creation_task_montage_plan(workspace, task_id).get("low_confidence_clip_count"))
             if stage == "render" and stop == "render_revoked":
                 state["identity"] = "unauthorized"
+                authorizations.refresh(repo.task_authorization_records.get_task_authorization(workspace, task_id))
             executor.execute(grant, scheduler)
             scheduler.assert_released(grant)
             if stage == "render" and stop in {"render_revoked", "render_commit_unknown"}:
-                assert repo.job_records.get_job_run(workspace, retry.id).status != "succeeded"
+                assert repo.job_records.get_job_run(workspace, retry.id).status != "succeeded", _original_execution_diagnostics(repo, workspace, retry.id)
                 assert not any(event.payload.get("stage") == "render" and event.payload.get("status") == "completed"
                                for event in repo.execution_records.list_task_events(workspace, task_id))
                 assert scheduler.processes.children_released(tuple(children)) is True
                 assert render_calls == ([] if stop == "render_revoked" else ["render"])
                 return
             if stage == "montage_plan":
-                try:
-                    montage = repo.get_creation_task_montage_plan(workspace, task_id)
-                except KeyError:
-                    pytest.fail(repo.job_records.get_job_run(workspace, retry.id).failure_reason)
-                assert "未运行视觉语义模型" in montage["message"]
-                assert montage["status"] == "waiting_for_user"
-                pending = [clip["id"] for clip in montage["clips"] if clip["needs_confirmation"]]
-                assert len(pending) == montage["low_confidence_clip_count"] > 0
-                assert repo.task_records.get_creation_task(workspace, task_id).stage_status == "waiting_for_user"
+                montage = repo.get_creation_task_montage_plan(workspace, task_id)
+                assert montage["status"] == "ready"
+                assert montage["low_confidence_clip_count"] == 0
+                assert all(not clip["needs_confirmation"] for clip in montage["clips"])
                 assert repo.job_records.get_job_run(workspace, retry.id).status == "queued"
-                assert repo.job_records.get_job_run(workspace, retry.id).failure_reason == "waiting_for_user"
                 assert repo.job_records.get_job_run(workspace, retry.id).finished_at is None
                 assert render_calls == []
-                assert scheduler.pick_and_grant() is None
-                with repo._connect() as conn:
-                    requests_before = [dict(row) for row in conn.execute(
-                        "SELECT id,unit_key,state FROM device_work_requests WHERE owner_id=? ORDER BY id", (retry.id,))]
-                assert not any(row["unit_key"].startswith("render:") for row in requests_before)
-                waiting = client.post(base + "/resume")
-                assert waiting.status_code == 202, waiting.json()
-                assert waiting.json()["job"]["id"] == retry.id
-                assert waiting.json()["job"]["status"] == "queued"
-                assert calls == ["narration", "montage_plan", "montage_plan"]
-                with repo._connect() as conn:
-                    assert [dict(row) for row in conn.execute(
-                        "SELECT id,unit_key,state FROM device_work_requests WHERE owner_id=? ORDER BY id", (retry.id,))] == requests_before
-                for clip_id in pending:
-                    before = repo.get_creation_task_montage_plan(workspace, task_id)["clips"]
-                    preview = client.post(f"/api/creation-tasks/{task_id}/edits/exact/preview",
-                        headers={"X-Local-Member-Token": member_token},
-                        json={"operation_type": "ConfirmClip", "clip_id": clip_id})
-                    assert preview.status_code == 200, preview.json()
-                    proposal = preview.json()["proposal"]
-                    assert proposal["preview"]["before"]["detail"] == "待确认"
-                    assert proposal["preview"]["after"]["detail"] == "已确认"
-                    assert repo.get_creation_task_montage_plan(workspace, task_id)["clips"] == before
-                    confirmed = client.post(f"/api/creation-tasks/{task_id}/edits/{proposal['id']}/confirm",
-                        headers={"X-Local-Member-Token": member_token})
-                    assert confirmed.status_code == 200, confirmed.json()
-                    after = repo.get_creation_task_montage_plan(workspace, task_id)["clips"]
-                    expected = [{**clip, "needs_confirmation": False} if clip["id"] == clip_id else clip for clip in before]
-                    assert after == expected
-                    assert render_calls == []
-                    assert scheduler.pick_and_grant() is None
-                confirmed_plan = repo.get_creation_task_montage_plan(workspace, task_id)
-                assert confirmed_plan["status"] == "ready"
-                assert confirmed_plan["low_confidence_clip_count"] == 0
-                resumed = client.post(base + "/resume")
-                assert resumed.status_code == 202, resumed.json()
-                assert resumed.json()["job"]["id"] == retry.id
-                assert resumed.json()["job"]["status"] == "queued"
-                assert calls == ["narration", "montage_plan", "montage_plan"]
+                assert calls == ["narration"] * len(script_for_merge.sections) + ["montage_plan", "montage_plan"]
         finished = repo.job_records.get_job_run(workspace, retry.id)
         assert finished.status == "succeeded", finished.failure_reason
-        assert calls == ["narration", "montage_plan", "montage_plan"]
+        assert calls == ["narration"] * len(script_for_merge.sections) + ["montage_plan", "montage_plan"]
         events = repo.execution_records.list_task_events(workspace, task_id)
         assert any(event.payload.get("stage") == "render" and event.payload.get("status") == "completed" for event in events)
         start = repo.execution_records.get_task_event(workspace, f"event_{retry.id}_start")
@@ -1118,6 +1244,9 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         segments=[MaterialSegment(id="segment_1", asset_id="asset_1", start_seconds=0,
                                   end_seconds=1, description="蓝色画面", review_status="approved")],
     ))
+    with repo._connect() as conn:
+        repo._claim_workspace_media_reference(
+            conn, workspace_id="workspace_a", reference="workspace://source.mp4")
     repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="narration_cache_1", workspace_id="workspace_a", task_id=task_id,
         script_id=script_id, voice_profile_id="voice_1", cache_key="cache_1",
@@ -1153,10 +1282,23 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
     actor = CreationExecutionActor(task.workspace_id, "member-a")
     job = execution.start(task.workspace_id, task_id, script_id, digest, member_id=actor.member_id)
     owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(8_000_000, 1, 90))
+    render_budget = CpuRenderBudget(300, 400_000_000, 1920, 1920, 10_000_000, 20, 0,
+        8_000_000, 1, 90, 512 * 1024 ** 2, 64 * 1024 ** 2, 16,
+        running_cpu_policy=RuntimeCpuPolicy("darwin_nice", "synthetic-pure-material-render-policy", nice=5))
+    host_resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,),
+        budget=HostBudget(100, 1, 100 * 1024 ** 3, 1, 10 ** 12, 10_000_000,
+                          cpu_render=render_budget),
+        memory_monitor=_synthetic_memory_monitor())
+    _isolate_linux_cpu_policy(monkeypatch, host_resources)
+
+    def ambient_cpu_percent(*, interval):
+        time.sleep(interval)
+        return 0
+
+    monkeypatch.setattr("app.host_resource_probes.psutil.cpu_percent", ambient_cpu_percent)
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=owner,
-        resources=SimpleNamespace(admit=lambda request: HostResourceDecision(True, dict(request.resources), {}), continue_unit=lambda _grant: True,
-                                  released=lambda _grant: True),
+        resources=host_resources,
         processes=HostProcessProbe(),
     )
     try:
@@ -1260,7 +1402,11 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
 
         retry_executor._checkpoint = crash_after_inner
         with pytest.raises(RuntimeError, match="simulated crash"):
-            retry_executor.execute(retry_grant, scheduler)
+            try:
+                retry_executor.execute(retry_grant, scheduler)
+            finally:
+                if crash_once["pending"]:
+                    print(_original_execution_diagnostics(repo, task.workspace_id, resumed.id))
         assert render_calls == [1]
         published_task = repo.task_records.get_creation_task(task.workspace_id, task_id)
         published_version = repo.timeline_records.get_timeline_version(task.workspace_id, published_task.current_timeline_version_id)
@@ -1283,7 +1429,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             assert changed_stat.st_mtime_ns == source_stat.st_mtime_ns
             assert changed_stat.st_ino == source_stat.st_ino
             assert changed_stat.st_ctime_ns != source_stat.st_ctime_ns
-            with pytest.raises(PermissionError, match="失效"):
+            with pytest.raises(StaleGrantInput, match="输入版本已过期"):
                 retry_executor.execute(retry_grant, scheduler)
             assert render_calls == [1]
             scheduler.defer_unit(retry_grant, reason="input_stale")
@@ -1296,7 +1442,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             parent_version_id=published_version.id, sequence=published_version.sequence + 1,
             snapshot=published_version.snapshot, created_by_operation_id="operation_independent_edit",
         ))
-        with pytest.raises(PermissionError, match="失效"):
+        with pytest.raises(StaleGrantInput, match="输入版本已过期"):
             retry_executor.execute(retry_grant, scheduler)
         assert render_calls == [1]
         restored_task = repo.task_records.get_creation_task(task.workspace_id, task_id)
@@ -3036,7 +3182,8 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
     from app.host_resource_probes import CpuAudioBudget, HostResourceDecision
     from app.narration import NarrationArtifact
     repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local', duration_seconds=duration_seconds)
-    actor = CreationExecutionActor('local', 'original-member')
+    member = LocalMemberService(repo.database_path).add_member('original narration member')
+    actor = CreationExecutionActor('local', member.member_id)
     register_synthetic_profiles(repo, workspace_id='local', member_id=actor.member_id,
         person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh', model_id='test',
         person_authorization_id='person_auth_1', voice_authorization_id='voice_auth_1')

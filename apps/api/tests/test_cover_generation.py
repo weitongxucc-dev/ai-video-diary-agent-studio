@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import builtins
 import shutil
 import subprocess
 import sys
@@ -280,8 +281,24 @@ def test_ai_image_generation_is_explicitly_unavailable():
     assert "验真" in capability.remediation
 
 
+def test_cover_owner_cold_import_does_not_load_main():
+    result = subprocess.run([sys.executable, '-B', '-c',
+        "import sys; import app.creation.cover_use_case; import app.member_permits; "
+        "assert 'app.main' not in sys.modules"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp_path, monkeypatch):
     """Metadata-only worker/process ports; no native, host, model or main import."""
+    previously_loaded = {name for name in sys.modules if name == 'app.main' or name.startswith('app.main.')}
+    original_import = builtins.__import__
+
+    def metadata_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == 'app.main' or name.startswith('app.main.') or name == 'app' and 'main' in (fromlist or ()):
+            pytest.fail('metadata cover owner imported application composition')
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, '__import__', metadata_import)
     import json
     from dataclasses import asdict
     from datetime import datetime, timezone
@@ -303,7 +320,6 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     from app.creation.plan_contracts import CreationPlan
     from app.creation.contracts import CreationTask
 
-    assert "app.main" not in sys.modules
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("metadata node invoked native"))
     root = tmp_path / "output"
     store = ArtifactStore(root)
@@ -374,12 +390,19 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
     phase = {"name": "parent"}
     hashes = []
     original_describe = ArtifactStore._describe
-    def audited_describe(logical_ref, path):
+    original_describe_stream = ArtifactStore._describe_stream
+    def record_hash(logical_ref):
         if logical_ref.endswith(("current.mp4", "cover.png")):
             hashes.append((logical_ref, phase["name"]))
             assert phase["name"] == "declared_worker", "parent performed a full media hash"
-        return original_describe(logical_ref, path)
+    def audited_describe(logical_ref, path, check=None):
+        record_hash(logical_ref)
+        return original_describe(logical_ref, path, check)
+    def audited_describe_stream(logical_ref, stream, check=None):
+        record_hash(logical_ref)
+        return original_describe_stream(logical_ref, stream, check)
     monkeypatch.setattr(ArtifactStore, "_describe", staticmethod(audited_describe))
+    monkeypatch.setattr(ArtifactStore, "_describe_stream", staticmethod(audited_describe_stream))
     calls = []
     def declared_worker(scheduler, grant, argv, **limits):
         calls.append(grant.request_id)
@@ -420,7 +443,7 @@ def test_cover_owner_declared_worker_adopts_once_without_parent_file_hashing(tmp
         assert len(states) == 1 and states[0]["id"] == calls[0] and states[0]["state"] == "done"
         runtime.scheduler.reconcile_released()
         assert hashes and all(label == "declared_worker" for _, label in hashes)
-        assert "app.main" not in sys.modules
+        assert {name for name in sys.modules if name == 'app.main' or name.startswith('app.main.')} == previously_loaded
     finally:
         runtime.stop(timeout_seconds=1)
 

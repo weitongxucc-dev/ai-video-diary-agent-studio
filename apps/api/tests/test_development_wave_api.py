@@ -266,7 +266,11 @@ def test_execution_finish_keeps_original_input_binding_after_steering(tmp_path, 
     monkeypatch.setattr(main, "_goal_projection", lambda: SimpleNamespace(
         execution_source_current=lambda *_: True))
     monkeypatch.setattr(main, "conversation_repo", SimpleNamespace(
-        record_task_execution=lambda *args, **kwargs: records.append(kwargs)))
+        record_task_execution=lambda *args, **kwargs: records.append(kwargs),
+        # The latest goal is for the steered input; an old result must not bind it.
+        get_task_goal=lambda *_: {'status': 'waiting_result', 'current_turn_id': 'turn',
+                                 'source_input_id': 'input-new'}))
+    monkeypatch.setattr(main, '_bind_goal_business_scope', forbidden)
     monkeypatch.setattr(main, "_wake_assistant_continuations", lambda: None)
     assert main._bind_assistant_execution_result("task", object(), "turn", receipt) == receipt
     assert records == [{"current_source": True, "input_id": "input-old"}]

@@ -88,9 +88,9 @@ class NarrationCue:
 @dataclass
 class MontageClip:
     id: str
-    cue_id: str
+    cue_id: str | None
     asset_id: str
-    segment_id: str
+    segment_id: str | None
     source_path: str
     source_start_seconds: float
     source_end_seconds: float
@@ -138,7 +138,7 @@ class CreationTaskMontagePlan:
     id: str
     workspace_id: str
     task_id: str
-    script_id: str
+    script_id: str | None
     script_title: str
     status: MontagePlanStatus
     cues: list[NarrationCue]
@@ -869,7 +869,10 @@ class MontageRenderer:
         sidecar_schedule = schedule
         if subtitle_tracks and schedule == []:
             sidecar_schedule = subtitle_schedule([replace(track, style={**track.style, "enabled": True}) for track in subtitle_tracks], plan.duration_seconds)
-        subtitle_path.write_text(schedule_srt(sidecar_schedule) if sidecar_schedule is not None else _plan_to_srt(plan), encoding="utf-8")
+        subtitle_text = schedule_srt(sidecar_schedule) if sidecar_schedule is not None else _plan_to_srt(plan)
+        # A valid empty caption list has no cues. Keep its sidecar as a text
+        # document so artifact publication can distinguish it from a missing file.
+        subtitle_path.write_text(subtitle_text or "\n", encoding="utf-8")
 
         temporary_disk_bytes = None
         if isinstance(plan, CreationTaskMontagePlan):

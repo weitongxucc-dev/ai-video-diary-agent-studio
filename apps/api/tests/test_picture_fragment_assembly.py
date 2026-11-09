@@ -94,6 +94,7 @@ def test_real_leaf_consumer_binds_captions_source_permissions_and_publication(tm
         key, resources = pending
         assert resources['input_bytes'] == source.stat().st_size
         assert resources['duration_seconds'] == 1 and resources['clip_count'] == 1
+        assert resources['execution_mode'] == 'cpu_ffmpeg'  # Required by the real render admission boundary.
         assert resources['picture_fragment_recipe']['layers']
         case.scheduler.submit(SubmissionIntent('local', 'creation_job', job.id, job.input_digest, key, SchedulePolicy()), case.actor)
         grant = case.scheduler.pick_and_grant()

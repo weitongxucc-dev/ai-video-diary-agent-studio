@@ -18,6 +18,7 @@ const storyboardFinished = (receipt: CreationTaskStoryboardRegenerationReceipt |
 type ExecutionInput = {
     taskId: string;
     confirmedScriptId: string | null;
+    sourceMedia?: boolean;
     timelineVersionId: string | null;
     voiceId: string | undefined;
     voiceVersion: string | undefined;
@@ -28,7 +29,7 @@ function executionSnapshot(execution: CreationExecutionStatus) {
     return `${execution.job?.id ?? "none"}:${execution.job?.status ?? "none"}:${execution.stages.length}`;
 }
 // Production facts own a separate lifecycle from selection, chat, and unsaved inputs.
-export function useCreationExecution({ taskId, confirmedScriptId, timelineVersionId, voiceId, voiceVersion, workspaceReadRevision, onWorkspaceRead }: ExecutionInput) {
+export function useCreationExecution({ taskId, confirmedScriptId, sourceMedia = false, timelineVersionId, voiceId, voiceVersion, workspaceReadRevision, onWorkspaceRead }: ExecutionInput) {
     const viewActive = useWorkspacePage()?.active ?? true;
     const [visualDecision, setVisualDecision] = useState<SegmentVisualDecision | null>(null);
     const [visualError, setVisualError] = useState<string | null>(null);
@@ -107,7 +108,7 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
         setExecution(null);
         setExecutionPreview(null);
         setExecutionError(null);
-        if (confirmedScriptId) {
+        if (confirmedScriptId || sourceMedia) {
             void previewCreationExecution(taskId).then((preview) => {
                 if (active)
                     setExecutionPreview(preview);
@@ -154,7 +155,7 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
         pollExecution.current = () => void poll();
         void poll();
         return () => { active = false; pollExecution.current = () => undefined; workspaceRead.current = async () => false; window.clearTimeout(timer); };
-    }, [viewActive, taskId, confirmedScriptId, timelineVersionId, voiceId, voiceVersion]);
+    }, [viewActive, taskId, confirmedScriptId, sourceMedia, timelineVersionId, voiceId, voiceVersion]);
     function acceptExecution(next: CreationExecutionStatus) {
         if (next.task_id === currentTask.current)
             setExecution(next);
@@ -224,7 +225,7 @@ export function useCreationExecution({ taskId, confirmedScriptId, timelineVersio
             if (currentTask.current !== taskId || workspaceRead.current !== readWorkspace || command !== commandRequest.current)
                 return;
             setExecutionError(errorDetails(cause));
-            if (confirmedScriptId) {
+            if (confirmedScriptId || sourceMedia) {
                 void previewCreationExecution(taskId).then(preview => {
                     if (currentTask.current === taskId && command === commandRequest.current)
                         setExecutionPreview(preview);

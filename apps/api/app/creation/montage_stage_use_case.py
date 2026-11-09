@@ -94,7 +94,8 @@ def montage_dependency(repository, task, *, connection):
             raise ValueError('当前创作任务缺少可用的分段配音事实')
         add([asdict(section), asdict(audio), repository.section_inputs.stage_segment_state(
             task.workspace_id, task.id, section.id, connection=connection)])
-        path = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, audio.audio_reference)
+        path = repository.narration_artifacts.resolve_authorized_narration_audio_reference(
+            task.workspace_id, audio.audio_reference, connection=connection)
         info = path.stat()
         add([str(path.resolve()), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns])
         count += 1

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from app.creation.contracts import CreationTask
+from app.creation.execution_input import validate_execution_relationships
 from app.creation.script_draft_use_case import ScriptDraftRejected
 from app.creation.editing.metadata_use_case import InvalidMontage, effective_audio_timeline
 from app.montage import creation_task_montage_plan_from_payload
@@ -29,6 +30,7 @@ class TaskTurnSelection:
 
 @dataclass(frozen=True)
 class TaskTurnScopeUseCase:
+    read_plan: Callable
     read_script_inputs: Callable
     read_narration: Callable
     read_segments: Callable
@@ -40,13 +42,28 @@ class TaskTurnScopeUseCase:
     def resolve(self, workspace_id: str, task: CreationTask,
                 selection: TaskTurnSelection) -> tuple[str, list[str]]:
         stage = selection.context_stage
+        try:
+            plan = self.read_plan(workspace_id, task.plan_id)
+        except KeyError as exc:
+            raise TaskTurnScopeRejected(409, '当前任务的已采用方案不可用') from exc
+        source_mode = plan.source_media is not None
+        if source_mode:
+            try:
+                validate_execution_relationships(task, None, plan)
+            except ValueError as exc:
+                raise TaskTurnScopeRejected(409, str(exc)) from exc
+            if (task.workspace_id != workspace_id or task.owner_user_id is None
+                    or plan.owner_user_id != task.owner_user_id):
+                raise TaskTurnScopeRejected(409, '原片方案与任务身份不一致')
+            if stage not in {'montage', 'review', 'subtitle_cover'} or task.stage not in {'montage', 'review'}:
+                raise TaskTurnScopeRejected(409, '原片任务只能沿当前剪辑或成片对话继续')
         if task.stage == "topic":
             if stage != "topic":
                 raise TaskTurnScopeRejected(status_code=409, detail="当前任务只能在选题阶段使用对话")
             if selection.selected_object_refs or selection.playhead_ms is not None:
                 raise TaskTurnScopeRejected(status_code=422, detail="选题对话不能选择剪辑对象")
             return "topic", []
-        if task.stage == "script" or task.confirmed_script_id is None or stage == "script" and task.can_revise_script:
+        if not source_mode and (task.stage == "script" or task.confirmed_script_id is None or stage == "script" and task.can_revise_script):
             if stage != "script":
                 raise TaskTurnScopeRejected(status_code=409, detail="当前任务尚未完成文案确认，不能使用剪辑对话")
             try:
@@ -65,7 +82,7 @@ class TaskTurnScopeUseCase:
         # the explicit execution actions before any narration artifact exists.
         # Object edits still pass through the strict selected-ref checks below;
         # preview_edit's existing endpoint remains the authority for edit scope.
-        if not selection.selected_object_refs and selection.playhead_ms is None:
+        if not source_mode and not selection.selected_object_refs and selection.playhead_ms is None:
             return stage, []
 
         narration = (self.read_narration(workspace_id, task.narration_cache_key)
@@ -84,7 +101,7 @@ class TaskTurnScopeUseCase:
             except KeyError as exc:
                 raise TaskTurnScopeRejected(status_code=409, detail="当前任务没有可修改的故事板") from exc
             if (montage.task_id != task.id or montage.script_id != task.confirmed_script_id
-                    or task.montage_plan_id != montage.id):
+                    or task.montage_plan_id != montage.id or source_mode and montage.workspace_id != workspace_id):
                 raise TaskTurnScopeRejected(status_code=409, detail="当前故事板不属于已确认文案")
             version = None
             if task.current_timeline_version_id:
@@ -94,6 +111,12 @@ class TaskTurnScopeUseCase:
                     raise TaskTurnScopeRejected(status_code=409, detail="当前任务的时间线版本不可用") from exc
                 if version.task_id != task.id:
                     raise TaskTurnScopeRejected(status_code=409, detail="当前时间线不属于此任务")
+            if source_mode and (version is None or version.workspace_id != workspace_id
+                    or version.id != task.current_timeline_version_id
+                    or version.snapshot.get('montage', {}).get('id') != montage.id):
+                raise TaskTurnScopeRejected(409, '原片任务缺少同一故事板的当前采用时间线')
+            if source_mode and not selection.selected_object_refs and selection.playhead_ms is None:
+                return stage, []
             if stage == "review" and (montage.status != "rendered" or not montage.output_path):
                 raise TaskTurnScopeRejected(status_code=409, detail="当前任务没有可查看的成片")
             refs = {f"clip:{clip.id}" for clip in montage.clips}
@@ -117,7 +140,7 @@ class TaskTurnScopeUseCase:
                     raise TaskTurnScopeRejected(status_code=422, detail=str(exc)) from exc
                 tracks = [track for track in current_tracks if track.status == "valid" and track.task_id == task.id
                           and track.timeline_version_id == version.id]
-                if not tracks:
+                if not tracks and not source_mode:
                     raise TaskTurnScopeRejected(status_code=409, detail="当前任务没有可修改的字幕")
                 refs.update(f"subtitle-track:{track.id}" for track in tracks)
                 refs.update(f"cue:{cue.id}" for track in tracks for cue in track.cues)

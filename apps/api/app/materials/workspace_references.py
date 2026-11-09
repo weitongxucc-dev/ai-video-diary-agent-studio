@@ -1,6 +1,7 @@
 """Canonical workspace media paths and original joined reference claims."""
 from __future__ import annotations
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 import sqlite3
 from urllib.parse import unquote
@@ -23,6 +24,7 @@ class WorkspaceMediaReferenceAccess:
         reference: str,
         *,
         require_registered: bool = False,
+        connection: sqlite3.Connection | None = None,
     ) -> Path:
         """Resolve an approved workspace media reference without widening its root."""
         if not workspace_id.strip():
@@ -66,7 +68,7 @@ class WorkspaceMediaReferenceAccess:
                 repair_action="选择当前工作区已授权媒体根目录内的素材。",
             ) from exc
         if require_registered:
-            self._require_workspace_media_reference(workspace_id, value)
+            self._require_workspace_media_reference(workspace_id, value, connection=connection)
         return resolved
 
     def workspace_media_reference_for_asset(
@@ -127,8 +129,9 @@ class WorkspaceMediaReferenceAccess:
         self,
         workspace_id: str,
         reference: str,
+        *, connection: sqlite3.Connection | None = None,
     ) -> None:
-        with self._connect() as conn:
+        with self._connect() if connection is None else nullcontext(connection) as conn:
             row = conn.execute(
                 "SELECT workspace_id FROM workspace_media_references WHERE reference = ?",
                 (reference,),

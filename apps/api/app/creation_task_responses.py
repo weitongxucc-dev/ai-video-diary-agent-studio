@@ -29,6 +29,7 @@ class CreationTaskResponseAdapter:
         return CreationPlanPreviewResponse.model_validate(
             {
                 "creation_intent": plan.creation_intent,
+                "source_media": plan.source_media,
                 "adoption": plan.adoption,
                 "updated_at": plan.updated_at,
                 "template_id": plan.template_id,

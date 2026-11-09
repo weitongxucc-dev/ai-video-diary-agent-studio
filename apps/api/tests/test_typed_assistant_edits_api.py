@@ -841,7 +841,7 @@ def test_typed_replace_replay_lost_receipt_and_undo_keep_narration(material_edit
 
 
 @pytest.mark.parametrize("action", [
-    {"operation_type": "TrimClip", "source_start_seconds": 9},
+    {"operation_type": "TrimClip", "source_start_seconds": 2},
     {"operation_type": "ChangeClipSpeed", "playback_rate": 0.7},
     {"operation_type": "ChangeCrop", "fit_mode": "fill", "crop_x": 0.2, "crop_y": 0.5},
 ])
@@ -1018,7 +1018,7 @@ def test_manual_undo_redo_require_current_expected_pair_without_assistant_turn(t
     assert state.client.post(undo, json={'request_id': 'test_manual_undo_redo_require_current_expected_pair_without_assistant_turn:undo:1018', "expected_timeline_version_id": version.id}).status_code == 422
     assert state.client.post(undo, json={'request_id': 'test_manual_undo_redo_require_current_expected_pair_without_assistant_turn:undo:1019', "expected_timeline_sequence": version.sequence}).status_code == 422
     assert state.client.post(undo, json={'request_id': 'test_manual_undo_redo_require_current_expected_pair_without_assistant_turn:undo:1020', "expected_timeline_version_id": None, "expected_timeline_sequence": None}).status_code == 422
-    assert state.client.post(undo, json={'request_id': 'test_manual_undo_redo_require_current_expected_pair_without_assistant_turn:undo:1021', "expected_timeline_version_id": None, "expected_timeline_sequence": version.sequence}).status_code == 409
+    assert state.client.post(undo, json={'request_id': 'test_manual_undo_redo_require_current_expected_pair_without_assistant_turn:undo:1021', "expected_timeline_version_id": None, "expected_timeline_sequence": version.sequence}).status_code == 422
     _other, token = state.members.join(state.members.create_invite_code(), "other history caller")
     expected = {"request_id": "manual-history-current-undo", "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence}
     assert state.client.post(undo, json=expected, headers={"X-Local-Member-Token": token}).status_code in {403, 404}
