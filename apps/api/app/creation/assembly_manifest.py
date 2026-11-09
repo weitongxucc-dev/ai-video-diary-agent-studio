@@ -9,6 +9,7 @@ from app.audio_timeline import AUDIO_MIX_CONTRACT_VERSION, AudioTimeline
 
 
 AUDIO_ASSEMBLY_VERSION = f'linear-audio-assembly/v2:{AUDIO_MIX_CONTRACT_VERSION}'
+AUDIO_ASSEMBLY_SAMPLE_CLOCK_VERSION = f'linear-audio-assembly/v3:{AUDIO_MIX_CONTRACT_VERSION}'
 
 
 def _json(value):
@@ -47,6 +48,22 @@ class AudioAssemblyManifest:
     producer_job_id: str
     recipe_digest: str
     version: str = AUDIO_ASSEMBLY_VERSION
+    output_sample_count: int | None = None
+
+    @property
+    def sample_count(self):
+        return self.duration_ms * 48 if self.version == AUDIO_ASSEMBLY_VERSION else self.output_sample_count
+
+    @property
+    def output_clock_identity(self):
+        if self.version == AUDIO_ASSEMBLY_VERSION:
+            if self.output_sample_count is not None:
+                raise ValueError('旧音频清单不能重新解释输出采样时钟')
+            return {}
+        if (self.version != AUDIO_ASSEMBLY_SAMPLE_CLOCK_VERSION
+                or type(self.output_sample_count) is not int or self.output_sample_count <= 0):
+            raise ValueError('音频组装缺少明确的正整数输出样本数')
+        return {'output_sample_count': self.output_sample_count}
 
     @property
     def instance_scope(self):
@@ -63,28 +80,34 @@ class AudioAssemblyManifest:
 
     def payload(self):
         from dataclasses import asdict
-        return asdict(self)
+        payload = asdict(self)
+        if self.version == AUDIO_ASSEMBLY_VERSION:
+            payload.pop('output_sample_count')
+        return payload
 
     def validate_unit(self, unit):
         hashes = dict(self.source_hashes)
-        identity = {**self.instance_scope, 'version': self.version, 'duration_ms': self.duration_ms,
+        identity = {**self.instance_scope, **self.output_clock_identity, 'version': self.version, 'duration_ms': self.duration_ms,
             'graph': unit.graph_json, 'sources': {ref: hashes[ref] for ref in unit.input_refs if ref in hashes},
             'dependencies': unit.dependencies, 'master': unit.master,
             'normalize_voice_sources': unit.normalize_voice_sources}
-        if self.version != AUDIO_ASSEMBLY_VERSION or _digest(identity) != unit.id:
+        if _digest(identity) != unit.id:
             raise ValueError('音频组装单元内容与封存摘要不一致')
 
     @classmethod
     def from_payload(cls, data):
-        if data['version'] != AUDIO_ASSEMBLY_VERSION:
+        if data['version'] not in {AUDIO_ASSEMBLY_VERSION, AUDIO_ASSEMBLY_SAMPLE_CLOCK_VERSION}:
             raise ValueError('音频组装清单版本不受支持')
+        if data['version'] == AUDIO_ASSEMBLY_VERSION and 'output_sample_count' in data:
+            raise ValueError('旧音频清单不能追加输出采样时钟')
         units = tuple(AudioAssemblyUnit(**{**item, 'input_refs': tuple(item['input_refs']),
             'dependencies': tuple(item['dependencies'])}) for item in data['units'])
         result = cls(data['digest'], data['duration_ms'], tuple(tuple(pair) for pair in data['source_hashes']), units,
-            data['workspace_id'], data['task_id'], data['producer_job_id'], data['recipe_digest'])
+            data['workspace_id'], data['task_id'], data['producer_job_id'], data['recipe_digest'],
+            data['version'], data.get('output_sample_count'))
         for unit in units:
             result.validate_unit(unit)
-        expected = _digest({**result.instance_scope, 'version': result.version, 'duration_ms': result.duration_ms,
+        expected = _digest({**result.instance_scope, **result.output_clock_identity, 'version': result.version, 'duration_ms': result.duration_ms,
             'sources': result.source_hashes, 'units': [unit.id for unit in units]})
         if expected != result.digest or not units or not units[-1].master or any(unit.master for unit in units[:-1]):
             raise ValueError('音频组装清单摘要或统一master归属无效')
@@ -93,9 +116,13 @@ class AudioAssemblyManifest:
 
 def plan_audio_assembly(timeline: AudioTimeline, duration_ms: int, *, workspace_id: str, task_id: str, producer_job_id: str,
                         source_hashes: dict[str, str], max_input_count: int,
-                        normalize_voice_sources: bool = False) -> AudioAssemblyManifest:
+                        normalize_voice_sources: bool = False, output_sample_count: int | None = None) -> AudioAssemblyManifest:
     if type(duration_ms) is not int or duration_ms <= 0 or type(max_input_count) is not int or max_input_count <= 0:
         raise ValueError('音频归约需要正整数时长与有限输入槽位')
+    if output_sample_count is not None and (type(output_sample_count) is not int or output_sample_count <= 0):
+        raise ValueError('音频组装需要明确的正整数输出样本数')
+    version = AUDIO_ASSEMBLY_VERSION if output_sample_count is None else AUDIO_ASSEMBLY_SAMPLE_CLOCK_VERSION
+    output_clock = {} if output_sample_count is None else {'output_sample_count': output_sample_count}
     if not all(isinstance(value, str) and value for value in (workspace_id, task_id, producer_job_id)):
         raise ValueError('组装实例缺少原工作区、任务或生产作业')
     snapshot = AudioTimeline.model_validate(timeline.model_dump())
@@ -109,9 +136,9 @@ def plan_audio_assembly(timeline: AudioTimeline, duration_ms: int, *, workspace_
     if references != source_hashes.keys() or any(not isinstance(value, str) or len(value) != 64
             or any(char not in '0123456789abcdef' for char in value) for value in source_hashes.values()):
         raise ValueError('归约清单需要每个有效原始来源的真实SHA256')
-    recipe_digest = _digest({'graph': snapshot.model_dump(), 'sources': sorted(source_hashes.items()),
+    recipe_digest = _digest({**output_clock, 'graph': snapshot.model_dump(), 'sources': sorted(source_hashes.items()),
         'duration_ms': duration_ms, 'normalize_voice_sources': normalize_voice_sources,
-        'max_input_count': max_input_count, 'version': AUDIO_ASSEMBLY_VERSION})
+        'max_input_count': max_input_count, 'version': version})
     instance_scope = {'workspace_id': workspace_id, 'task_id': task_id, 'producer_job_id': producer_job_id,
         'recipe_digest': recipe_digest}
     units = []
@@ -119,7 +146,7 @@ def plan_audio_assembly(timeline: AudioTimeline, duration_ms: int, *, workspace_
     def add(graph, dependencies=(), *, master=False, normalize=False):
         refs = tuple(dict.fromkeys(clip.source_ref for track in graph.tracks for clip in track.clips))
         graph_json = _json(graph.model_dump())
-        identity = {**instance_scope, 'version': AUDIO_ASSEMBLY_VERSION, 'duration_ms': duration_ms,
+        identity = {**instance_scope, **output_clock, 'version': version, 'duration_ms': duration_ms,
             'graph': graph_json, 'sources': {ref: source_hashes[ref] for ref in refs if ref in source_hashes},
             'dependencies': dependencies, 'master': master, 'normalize_voice_sources': normalize}
         unit = AudioAssemblyUnit(_digest(identity), graph_json, refs, tuple(dependencies), master, normalize)
@@ -160,9 +187,10 @@ def plan_audio_assembly(timeline: AudioTimeline, duration_ms: int, *, workspace_
             for start in range(0, len(level), max_input_count)]
     add(intermediate_graph(level), [level[0].id], master=True)
     frozen_hashes = tuple(sorted(source_hashes.items()))
-    digest = _digest({**instance_scope, 'version': AUDIO_ASSEMBLY_VERSION, 'duration_ms': duration_ms,
+    digest = _digest({**instance_scope, **output_clock, 'version': version, 'duration_ms': duration_ms,
         'sources': frozen_hashes, 'units': [unit.id for unit in units]})
-    return AudioAssemblyManifest(digest, duration_ms, frozen_hashes, tuple(units), workspace_id, task_id, producer_job_id, recipe_digest)
+    return AudioAssemblyManifest(digest, duration_ms, frozen_hashes, tuple(units), workspace_id, task_id, producer_job_id,
+        recipe_digest, version, output_sample_count)
 
 
 PICTURE_ASSEMBLY_VERSION = 'hardcut-picture-windows/v1'

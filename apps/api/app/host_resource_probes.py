@@ -895,6 +895,13 @@ class HostResourceRefusal(RecoveryBlocked):
         }
         details = []
         for metric, check in decision.checks.items():
+            if metric == 'write_volumes':
+                reported = set()
+                for volume in check.values():
+                    if volume.get('passed') is False and volume['volume_id'] not in reported:
+                        reported.add(volume['volume_id'])
+                        details.append(f"产物写入磁盘可用空间为{volume['actual']}字节，至少需要{volume['minimum']}字节")
+                continue
             if check.get("passed") is not False:
                 continue
             if metric in {"memory_policy", "memory_pressure"}:

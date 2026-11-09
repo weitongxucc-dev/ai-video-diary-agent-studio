@@ -66,3 +66,14 @@ def test_same_source_uuid_cannot_replace_full_parameters_or_stale_origin(anchor_
         with monkeypatch.context() as patch:
             patch.setattr(state.repo, '_connect', lambda: pytest.fail('source guard must reuse the original transaction'))
             guard(connection)
+
+
+def test_input_anchor_without_a_committed_task_is_not_a_recoverable_business_effect(anchor_case):
+    state = anchor_case
+    state.binding.prepare(state.turn['id'], None, state.case.actor, state.body['request_id'], state.body)
+    state.repo.finish_turn(state.turn['id'], 'failed', 'source was never committed')
+    with state.repo._connect() as connection:
+        assert state.repo._committed_source_task_inputs(connection, state.turn['id']) == []
+        assert connection.execute('SELECT count(*) FROM creation_tasks').fetchone()[0] == 0
+    assert state.repo.read_source_task_input('local', state.member, state.body['request_id'])['payload'] == state.body
+    assert state.repo.goal_event_candidates() == []

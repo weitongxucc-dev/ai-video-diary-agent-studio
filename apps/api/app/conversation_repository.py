@@ -1037,8 +1037,13 @@ class ConversationRepository:
             origin = conn.execute("SELECT events_json,status FROM assistant_conversation_turns WHERE id=?",
                 (origin_id,)).fetchone()
             consumed = latest_consumed_input(json.loads(origin["events_json"]))
-            if (origin["status"] != "completed" or consumed and consumed["status"] == "interrupted"
+            source_task = adoption.get('kind') == 'source_task'
+            allowed = {'completed', 'failed'} if source_task else {'completed'}
+            if (origin["status"] not in allowed or consumed and consumed["status"] == "interrupted"
                     or (consumed["input_id"] if consumed else None) != adoption["source"].get("input_id")):
+                return False
+            if source_task and resume is None and not any(item['event_id'] == adoption['event_id']
+                    for item in ConversationRepository._committed_source_task_inputs(conn, origin_id)):
                 return False
         goal=root["goal"]
         prior_resumed_input=(resume is not None and resume['prior_business_input']=={
@@ -1477,7 +1482,9 @@ class ConversationRepository:
                 "JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id WHERE t.id=? "
                 "AND r.workspace_id=? AND r.member_id=? AND r.outcome='consumed'",
                 (source_turn_id, workspace_id, member_id)).fetchone()
-            if row is None or row["status"] != "completed":
+            source_task = adoption.get('kind') == 'source_task'
+            allowed = {'completed', 'failed'} if source_task else {'completed'}
+            if row is None or row["status"] not in allowed:
                 return []
             source = adoption["source"]
             if (source["turn_id"] != source_turn_id or source["conversation_id"] != row["conversation_id"]
@@ -1487,6 +1494,9 @@ class ConversationRepository:
             consumed = latest_consumed_input(events)
             input_id = source.get("input_id")
             if (consumed["input_id"] if consumed else None) != input_id:
+                return []
+            if source_task and not any(item['event_id'] == adoption['event_id']
+                    for item in self._committed_source_task_inputs(conn, source_turn_id)):
                 return []
             context = consumed["request_context"] if consumed else json.loads(row["request_context_json"])
             instruction = consumed["message"] if consumed else row["user_message"]
@@ -1499,7 +1509,6 @@ class ConversationRepository:
             registered = []
             for task_context in task_contexts:
                 task_id = task_context["task_id"]
-                source_task = adoption.get('kind') == 'source_task'
                 if source_task:
                     if not self._source_task_adoption_current(conn, adoption, workspace_id, member_id, task_id):
                         raise ValueError('原片任务采用回执与持久来源不一致')
@@ -2134,6 +2143,71 @@ class ConversationRepository:
             return None
         return latest['input_id']
 
+    @staticmethod
+    def _committed_source_task_inputs(conn, turn_id):
+        """Read actual source adoptions for this still-current consumed input.
+
+        An input anchor proves only an attempt. The persisted Task, Plan and
+        creation receipt must agree before model failure can preserve an effect.
+        This does not issue or reconstruct a task authorization.
+        """
+        row = conn.execute("SELECT t.*,r.workspace_id,r.member_id,r.request_context_json "
+            "FROM assistant_conversation_turns t JOIN assistant_conversation_request_receipts r ON r.turn_id=t.id "
+            "JOIN assistant_conversations c ON c.id=t.conversation_id AND c.workspace_id=r.workspace_id "
+            "AND c.member_id=r.member_id WHERE t.id=? AND r.outcome='consumed'", (turn_id,)).fetchone()
+        if row is None or row['status'] == 'stopped':
+            return []
+        latest = conn.execute("SELECT id FROM assistant_conversation_turns WHERE conversation_id=? "
+            "AND user_message!='' ORDER BY sequence DESC LIMIT 1", (row['conversation_id'],)).fetchone()
+        if latest is None or latest['id'] != turn_id:
+            return []
+        events = json.loads(row['events_json'])
+        if not any(event.get('type') == 'source_task_input' for event in events):
+            return []
+        consumed = latest_consumed_input(events)
+        if consumed and consumed['status'] == 'interrupted':
+            return []
+        context = consumed['request_context'] if consumed else json.loads(row['request_context_json'])
+        if context.get('kind') != 'home':
+            return []
+        instruction = consumed['message'] if consumed else row['user_message']
+        message_digest = hashlib.sha256(instruction.encode()).hexdigest()
+        rows = conn.execute("SELECT id,task_id,payload_json FROM task_events WHERE workspace_id=? "
+            "AND event_type='source_task_created' AND json_extract(payload_json,'$.source.turn_id')=? "
+            "AND json_extract(payload_json,'$.source.member_id')=? "
+            "AND json_extract(payload_json,'$.source.input_id') IS ?",
+            (row['workspace_id'], turn_id, row['member_id'], consumed['input_id'] if consumed else None)).fetchall()
+        committed = []
+        for event in rows:
+            payload = json.loads(event['payload_json'])
+            source, receipt = payload['source'], payload['receipt']
+            if (source['workspace_id'] != row['workspace_id'] or source['conversation_id'] != row['conversation_id']
+                    or source['message_digest'] != message_digest):
+                continue
+            adoption = {'kind': 'source_task', 'event_id': event['id'], 'request_id': receipt['request_id'],
+                'plan_id': receipt['plan_id'], 'input_fingerprint': payload['input_digest'], 'source': source}
+            if ConversationRepository._source_task_adoption_current(conn, adoption,
+                    row['workspace_id'], row['member_id'], event['task_id']):
+                committed.append(adoption)
+        return committed
+
+    def _preserve_committed_source_input(self, conn, turn_id):
+        committed = self._committed_source_task_inputs(conn, turn_id)
+        if not committed:
+            return
+        row = conn.execute('SELECT events_json FROM assistant_conversation_turns WHERE id=?', (turn_id,)).fetchone()
+        events = json.loads(row['events_json'])
+        consumed = latest_consumed_input(events)
+        if consumed is None or consumed.get('business_effect') is not None:
+            return
+        if len(committed) != 1:
+            raise ValueError('同一原输入存在多个原片采用回执，不能猜测业务效果')
+        original, = committed
+        consumed['business_effect'] = {'request_id': original['request_id'], 'status': 'created',
+            'source_task_event_id': original['event_id']}
+        conn.execute('UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?',
+            (json.dumps(events, ensure_ascii=False), _now(), turn_id))
+
     def finish_turn(self, turn_id: str, status: str, assistant_text: str | None = None,
                     result: dict | None = None, *, write_guard=None, completed_input_id=None,
                     connection: sqlite3.Connection | None = None) -> dict | None:
@@ -2147,6 +2221,8 @@ class ConversationRepository:
             if write_guard is not None:
                 write_guard(conn)
             from app.assistant.inputs import settle_delivered_input
+            if status == 'failed':
+                self._preserve_committed_source_input(conn, turn_id)
             settle_delivered_input(conn,turn_id,status)
             if completed_input_id is not None:
                 from app.assistant.inputs import transition_input
@@ -2201,13 +2277,15 @@ class ConversationRepository:
                         row["client_request_id"], row["member_id"])
                     continue
                 from app.assistant.inputs import settle_inputs, settle_delivered_input
+                self._preserve_committed_source_input(conn, row['id'])
                 settle_delivered_input(conn,row['id'],'failed')
+                current_events = conn.execute('SELECT events_json FROM assistant_conversation_turns WHERE id=?', (row['id'],)).fetchone()[0]
                 latest = latest_consumed_input(json.loads(row["events_json"]))
                 source_input = latest["input_id"] if latest else json.loads(row["request_context_json"] or "{}").get("source_input_id")
                 result = self._preserve_execution_result(json.loads(row["result_json"] or "{}"), {"reason": "api_restarted"}, input_id=source_input)
                 conn.execute("UPDATE assistant_conversation_turns SET status='failed',result_json=?,events_json=?,updated_at=? WHERE id=?",
-                    (json.dumps(result, ensure_ascii=False), json.dumps(settle_inputs(json.loads(row["events_json"]), "api_restarted",
-                        adopted_input_id=self._adopted_goal_input_id(conn,row['id'],json.loads(row['events_json']))), ensure_ascii=False), now, row["id"]))
+                    (json.dumps(result, ensure_ascii=False), json.dumps(settle_inputs(json.loads(current_events), "api_restarted",
+                        adopted_input_id=self._adopted_goal_input_id(conn,row['id'],json.loads(current_events))), ensure_ascii=False), now, row["id"]))
             conn.execute(
                 "UPDATE assistant_conversations SET updated_at=? WHERE id IN "
                 "(SELECT DISTINCT conversation_id FROM assistant_conversation_turns WHERE updated_at=? AND status='failed')",

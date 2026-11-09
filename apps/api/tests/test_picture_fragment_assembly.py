@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timezone
 import subprocess
 import sys
 
@@ -11,7 +12,6 @@ from app.creation_execution import CpuRenderGrantContext, CpuRenderLimits, submi
 from app.device_scheduler import SubmissionIntent, SchedulePolicy
 from app.host_resource_probes import CpuRenderBudget
 from app.media.picture_preview import PicturePreviewRenderer
-from app.models import utc_now
 from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, creation_task_montage_plan_to_payload
 from app.packet_copy_policy import PacketCopyBudget
 from app.production import MaterialAsset, MaterialSegment
@@ -39,7 +39,8 @@ def _leaf_case(tmp_path, monkeypatch):
     subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=64x64:rate=24:duration=1',
         '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(source)], check=True)
     asset = case.repo._save_asset(MaterialAsset(id='source', workspace_id='local', file_name=source.name,
-        path=str(source), size_bytes=source.stat().st_size, modified_at=utc_now(), duration_seconds=1,
+        path=str(source), size_bytes=source.stat().st_size,
+        modified_at=datetime.fromtimestamp(source.stat().st_mtime, timezone.utc), duration_seconds=1,
         usage_role='b_roll', review_status='approved', analysis_status='ready', media_type='video', owner_user_id=case.actor.member_id,
         segments=[MaterialSegment(id='segment', asset_id='source', start_seconds=0, end_seconds=1,
             description='approved synthetic picture', review_status='approved')]))

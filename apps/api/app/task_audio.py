@@ -16,10 +16,12 @@ import time
 from collections import Counter
 
 
-def audio_mix_resources(inputs, timelines, duration_seconds, *, normalize_voice_sources, budget, apply_master=True):
+def audio_mix_resources(inputs, timelines, duration_seconds, *, normalize_voice_sources, budget, apply_master=True,
+                        output_sample_count=None):
     if budget is None:
         raise ValueError("CPU 音频处理预算尚未标定，未启动媒体")
-    bounds = [audio_mix_output_bounds(graph, inputs, duration_seconds, normalize_voice_sources, apply_master=apply_master) for graph in timelines]
+    bounds = [audio_mix_output_bounds(graph, inputs, duration_seconds, normalize_voice_sources,
+        apply_master=apply_master, output_sample_count=output_sample_count) for graph in timelines]
     normalized = {item["reference"]: item for bound in bounds for item in bound["normalized_source_outputs"]}
     mix_bytes = bounds[0]["mix_output_bytes"]
     output_duration = max(bound["output_duration_limit_seconds"] for bound in bounds)
@@ -37,6 +39,8 @@ def audio_mix_resources(inputs, timelines, duration_seconds, *, normalize_voice_
         "normalize_voice_sources": bool(normalize_voice_sources),
         "normalized_source_outputs": list(normalized.values()),
         "mix_output_bytes": mix_bytes, "temporary_output_bytes": temporary_bytes}
+    if output_sample_count is not None:
+        resources['output_sample_count'] = output_sample_count
     if (resources["input_count"] > budget.max_input_count or resources["input_bytes"] > budget.max_input_bytes
             or output_duration > budget.max_output_duration_seconds or temporary_bytes > budget.max_output_bytes
             or 48000 > budget.max_sample_rate or 2 > budget.max_channels):
@@ -65,11 +69,13 @@ class TaskAudio:
         self.picture_renderer = picture_renderer
 
     def mix_facts(self, workspace_id, task_id, timeline, duration_seconds, *, actor,
-                  normalize_voice_sources, budget, apply_master=True, assembly_job_id=None, connection=None):
+                  normalize_voice_sources, budget, apply_master=True, assembly_job_id=None, connection=None,
+                  output_sample_count=None):
         sources = self._mix_sources(workspace_id, task_id, timeline, actor=actor, budget=budget,
             assembly_job_id=assembly_job_id, connection=connection)
         resources = audio_mix_resources(sources['inputs'], [timeline], duration_seconds,
-            normalize_voice_sources=normalize_voice_sources, budget=budget, apply_master=apply_master)
+            normalize_voice_sources=normalize_voice_sources, budget=budget, apply_master=apply_master,
+            output_sample_count=output_sample_count)
         return {'sources': sources['sources'], 'resources': resources}
 
     def _mix_sources(self, workspace_id, task_id, timeline, *, actor, budget, assembly_job_id=None, connection=None):
@@ -120,14 +126,16 @@ class TaskAudio:
         from app.creation.assembly_manifest import AUDIO_ASSEMBLY_VERSION
         from app.creation.editing.metadata_use_case import effective_audio_timeline
         graph = montage.audio_timeline or (effective_audio_timeline(montage) if montage.narration_audio_path else None)
+        # Keep the original locator; the manifest payload versions its output clock.
         digest = media_digest([AUDIO_MIX_CONTRACT_VERSION, AUDIO_ASSEMBLY_VERSION, job.id, graph.model_dump() if graph else None,
             montage.duration_seconds, montage.narration_linkage_created_audio_timeline])
         return f'event_{job.id}_audio_assembly_{digest}'
 
-    def render_assembly(self, job, montage, *, actor, budget, prepare=False, connection=None, force_master=False):
+    def render_assembly(self, job, montage, *, actor, budget, prepare=False, connection=None, force_master=False,
+                        output_sample_count=None):
         from app.creation.assembly_manifest import AudioAssemblyManifest, plan_audio_assembly
         if montage.audio_timeline is None:
-            if not force_master:
+            if not force_master and output_sample_count is None:
                 try:
                     self.repository.execution_records.get_task_event(job.workspace_id, self._assembly_plan_id(job, montage), connection=connection)
                 except KeyError:
@@ -143,7 +151,7 @@ class TaskAudio:
         try:
             event = self.repository.execution_records.get_task_event(job.workspace_id, event_id, connection=connection)
         except KeyError:
-            if len(audible) <= budget.max_input_count and not force_master:
+            if len(audible) <= budget.max_input_count and not force_master and output_sample_count is None:
                 return None
             if not prepare:
                 raise ValueError('原音频组装清单尚未准备，未启动成片')
@@ -155,7 +163,8 @@ class TaskAudio:
                 source_hashes={item['reference']: item['sha256']
                     for item in sources['sources'] if item['reference'] in refs},
                 max_input_count=budget.max_input_count,
-                normalize_voice_sources=montage.narration_linkage_created_audio_timeline)
+                normalize_voice_sources=montage.narration_linkage_created_audio_timeline,
+                output_sample_count=output_sample_count)
             event = self.repository.execution_records.append_task_event(TaskEvent(id=event_id, workspace_id=job.workspace_id,
                 task_id=job.task_id, job_id=job.id, event_type='creation_audio_assembly_plan',
                 payload={'input_digest': job.input_digest, 'manifest': manifest.payload()}), connection=connection)
@@ -163,6 +172,8 @@ class TaskAudio:
             raise PermissionError('音频组装清单不属于原执行输入')
         manifest = AudioAssemblyManifest.from_payload(event.payload['manifest'])
         manifest.validate_scope(job.workspace_id, job.task_id, job.id)
+        if output_sample_count is not None and manifest.sample_count != output_sample_count:
+            raise ValueError('原音频组装清单采样时钟与原画面master不一致；原清单和产物保持不变')
         return manifest
 
     def next_assembly_unit(self, job, montage, *, actor, budget, connection=None, request=None):
@@ -196,7 +207,8 @@ class TaskAudio:
         if (record.task_id != job.task_id or record.producer_job_id != job.id or transform.job_id != job.id
                 or transform.task_id != job.task_id or record.logical_ref != unit.output_ref(job.task_id)
                 or transform.status != 'succeeded' or transform.input_digest != unit.id
-                or transform.parameters['manifest_digest'] != manifest.digest):
+                or transform.parameters['manifest_digest'] != manifest.digest
+                or transform.parameters.get('output_sample_count') != manifest.output_sample_count):
             raise ValueError('统一master未完整完成，不能作为成片输入')
         sources = self._mix_sources(job.workspace_id, job.task_id, montage.audio_timeline,
             actor=actor, budget=budget, connection=connection)
@@ -227,7 +239,8 @@ class TaskAudio:
                     or transform.parameters['manifest_digest'] != manifest.digest
                     or not transform.parameters['master'] or transform.parameters['sample_rate'] != 48000
                     or transform.parameters['channels'] != 2
-                    or transform.parameters['duration_ms'] != manifest.duration_ms):
+                    or transform.parameters['duration_ms'] != manifest.duration_ms
+                    or transform.parameters.get('output_sample_count') != manifest.output_sample_count):
                 raise ValueError('唯一音频master缺少原成功变换与完整采样时钟')
             producer = conn.execute("SELECT r.id,r.last_grant_generation FROM device_work_requests r "
                 "JOIN task_events e ON e.workspace_id=r.workspace_id AND e.job_id=r.owner_id "
@@ -254,7 +267,7 @@ class TaskAudio:
             'size_bytes': record.size_bytes, 'producer_request_id': producer['id'],
             'producer_generation': producer['last_grant_generation'], 'transform_id': transform.id,
             'transform_digest': media_digest(asdict(transform))}, 'clock': {
-                'sample_count': manifest.duration_ms * 48, 'sample_rate': 48000,
+                'sample_count': manifest.sample_count, 'sample_rate': 48000,
                 'channels': 2, 'sample_format': 's16le'}}, 'path': str(path),
             'logical_ref': record.logical_ref, 'file_identity': identity}
 
@@ -270,7 +283,8 @@ class TaskAudio:
             clips=[TimelineAudioClip(id='master-clip', name='统一master', source_ref=record.logical_ref,
                 source_start_ms=0, source_end_ms=manifest.duration_ms, timeline_start_ms=0)])])
         facts = self.mix_facts(job.workspace_id, job.task_id, graph, montage.duration_seconds,
-            actor=actor, budget=budget, normalize_voice_sources=False, assembly_job_id=job.id, connection=connection)
+            actor=actor, budget=budget, normalize_voice_sources=False, assembly_job_id=job.id, connection=connection,
+            output_sample_count=manifest.output_sample_count)
         facts['resources']['prepared_master'] = {'manifest_digest': manifest.digest,
             'artifact_id': record.id, 'logical_ref': record.logical_ref, 'sha256': record.sha256}
         return facts
@@ -292,11 +306,13 @@ class TaskAudio:
             if (record.task_id != task_id or record.producer_job_id != job_id or transform.task_id != task_id
                     or transform.parameters.get('manifest_digest') != manifest.digest or transform.status != 'succeeded'
                     or transform.input_digest != dependency or record.logical_ref not in transform.output_refs
-                    or transform.job_id != record.producer_job_id):
+                    or transform.job_id != record.producer_job_id
+                    or transform.parameters.get('output_sample_count') != manifest.output_sample_count):
                 raise ValueError('浮点上游缺少同任务完整变换回执')
         facts = self.mix_facts(workspace_id, task_id, unit.graph, manifest.duration_ms / 1000,
             actor=actor, normalize_voice_sources=unit.normalize_voice_sources, budget=budget,
-            apply_master=unit.master, assembly_job_id=job_id, connection=connection)
+            apply_master=unit.master, assembly_job_id=job_id, connection=connection,
+            output_sample_count=manifest.output_sample_count)
         original_hashes = dict(manifest.source_hashes)
         if any(source['sha256'] != original_hashes[source['reference']] for source in facts['sources']
                 if source['reference'] in original_hashes):
@@ -334,7 +350,8 @@ class TaskAudio:
                 raise ValueError('已完成音频组装内容发生变化，不能静默重用')
             transform = self.repository.lineage_records.get_transform_run(workspace_id, f'transform_audio_assembly_{unit.id}')
             if (transform.status != 'succeeded' or transform.input_digest != unit.id or transform.job_id != job.id
-                    or transform.parameters.get('manifest_digest') != manifest.digest or existing.logical_ref not in transform.output_refs):
+                    or transform.parameters.get('manifest_digest') != manifest.digest or existing.logical_ref not in transform.output_refs
+                    or transform.parameters.get('output_sample_count') != manifest.output_sample_count):
                 raise ValueError('音频组装成果缺少完整变换回执')
             context.check()
             measured_output(0, reused_ref=existing.logical_ref)
@@ -350,11 +367,14 @@ class TaskAudio:
                 scheduler=context.scheduler, grant=context.grant, cancel_event=context.cancel_event,
                 deadline_monotonic=context.deadline_monotonic, max_output_bytes=context.max_output_bytes,
                 threads=context.threads, normalize_voice_sources=unit.normalize_voice_sources,
-                apply_master=unit.master, output_measured=measured_output)
+                apply_master=unit.master, output_measured=measured_output,
+                output_sample_count=manifest.output_sample_count)
             measured = probe_audio_metadata(output, scheduler=context.scheduler, grant=context.grant,
-                cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic, output=True)
+                cancel_event=context.cancel_event, deadline_monotonic=context.deadline_monotonic, output=True,
+                exact_output_clock=manifest.output_sample_count is not None)
             if (measured['sample_rate'] != 48000 or measured['channels'] != 2
-                    or round(measured['duration_seconds'] * 48000) != manifest.duration_ms * 48):
+                    or (measured['sample_count'] if manifest.output_sample_count is not None
+                        else round(measured['duration_seconds'] * 48000)) != manifest.sample_count):
                 raise ValueError('组装音频未完整覆盖原采样时钟，不发布截断成果')
             context.check()
             published = self.artifact_store.publish_file(unit.output_ref(task_id), output)
@@ -365,7 +385,8 @@ class TaskAudio:
             task_id=task_id, job_id=job.id, transform_type='audio_assembly', input_digest=unit.id,
             input_refs=list(unit.input_refs), output_refs=[record.logical_ref], engine=AUDIO_MIX_CONTRACT_VERSION,
             parameters={'manifest_digest': manifest.digest, 'master': unit.master,
-                'duration_ms': manifest.duration_ms, 'sample_rate': 48000, 'channels': 2},
+                'duration_ms': manifest.duration_ms, 'sample_rate': 48000, 'channels': 2,
+                **({'output_sample_count':manifest.output_sample_count} if manifest.output_sample_count is not None else {})},
             status='succeeded', started_at=started, finished_at=utc_now())
         edges = [DependencyEdge(id=f'edge_audio_assembly_{unit.id}_{index}', workspace_id=workspace_id,
             task_id=task_id, upstream_ref=reference, downstream_ref=record.logical_ref,
@@ -560,7 +581,8 @@ class TaskAudio:
                            if item.logical_ref == reference), None)
             if record is not None:
                 parameters = self._transform_for(workspace_id, task_id, record, connection=connection).parameters
-                data = {"duration_seconds": parameters["duration_ms"] / 1000,
+                data = {"duration_seconds": (parameters['output_sample_count'] / 48000
+                            if 'output_sample_count' in parameters else parameters["duration_ms"] / 1000),
                         "sample_rate": parameters.get("sample_rate"), "channels": parameters.get("channels")}
         return data
 

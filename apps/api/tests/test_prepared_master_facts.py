@@ -57,8 +57,8 @@ def test_prepared_master_reads_original_receipt_and_clock_without_remixing(tmp_p
         return record.logical_ref
     case.scheduler.complete_unit(grant, checkpoint_database_path=case.repo.database_path, checkpoint_write=commit)
     calls = []
-    monkeypatch.setattr(audio, 'validate_source_access', lambda ws, task, ref, actor: calls.append(('access', ref)))
-    monkeypatch.setattr(audio, 'validate_material_use', lambda ws, task, ref: calls.append(('rights', ref)))
+    monkeypatch.setattr(audio, 'validate_source_access', lambda ws, task, ref, actor, *, connection=None: calls.append(('access', ref)))
+    monkeypatch.setattr(audio, 'validate_material_use', lambda ws, task, ref, *, connection=None: calls.append(('rights', ref)))
     def forbidden(*a, **kw):
         raise AssertionError('master read must not mix, hash or probe the original sources')
     monkeypatch.setattr(audio, '_mix_sources', forbidden)

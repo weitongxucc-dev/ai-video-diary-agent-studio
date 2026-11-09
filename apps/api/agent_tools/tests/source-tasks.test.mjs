@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {registerSourceTasks} from '../diary/source-tasks.ts';
 import {BusinessRequestError, BusinessResultUnknown} from '../diary/transport.ts';
+import {createTaskContext} from '../diary/task-context.ts';
 
 function setup(request, source = {turnId: 'original-turn', inputId: 'original-input'}) {
   const tools = {};
@@ -94,4 +95,30 @@ test('unknown source input cannot be rebound and survives a new tool runtime', a
   const original = await first.tools.read_source_task.execute('read-old', {request_id: frozen.request_id});
   assert.equal(original.details.receipt.task_id, 'same-task');
   assert.equal(original.details.receipt.request_id, frozen.request_id);
+});
+
+test('source task context keeps editor stage and projects the host execution route without inventing script or narration',async()=>{
+  const paths=[];
+  const requirements={task_kind:'source_video_edit',next_required_stage:'render',
+    not_applicable_preparation_kinds:['narration','montage']};
+  const workspace={task:{id:'source-task',stage:'montage',confirmed_script_id:null,
+    current_timeline_version_id:'source-version',timeline_sequence:1,updated_at:'revision'},
+    plan:{id:'source-plan',source_media:{asset_id:'video',asset_updated_at:asset.updated_at,
+      source_start_seconds:0,source_end_seconds:9.234,aspect_ratio:'16:9',preserve_audio:true}},
+    montage:{clips:[],cues:[],audio_timeline:{tracks:[]}},scripts:[]};
+  const context=createTaskContext({taskId:'source-task',selectedRefs:[],playheadMs:null,
+    initialTaskRead:false,initialScriptDraftUpdatedAt:null,verifyTaskVersion:current=>assert.equal(current,workspace),
+    request:async path=>{
+      paths.push(path);
+      if(path==='/api/creation-tasks/source-task')return workspace;
+      assert.equal(path,'/api/creation-tasks/source-task/execution');
+      return {task_id:'source-task',job:null,current_stage:null,task_execution:requirements};
+    }});
+  const facts=await context.readCurrentTaskFacts();
+  assert.equal(facts.stage,'montage');
+  assert.deepEqual(facts.execution.task_execution,requirements);
+  assert.equal(facts.execution.job,null);assert.equal(facts.confirmed_script,null);
+  assert.equal(facts.narration_segment_count,0);assert.equal(facts.script_context,undefined);
+  assert.deepEqual(facts.plan.source_media,workspace.plan.source_media);
+  assert.equal(paths.length,2);
 });

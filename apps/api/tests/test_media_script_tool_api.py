@@ -814,6 +814,7 @@ def test_submission_metadata_queue_snapshot_completed_and_tool_revalidation(rece
     from test_media_script_api import submission_metadata_context
     from app.device_runtime import OwnerRegistration, build_device_runtime
     from app.creation_execution import CreationJobOwnerVerifier, CreationJobUnitExecutor
+    from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.member_permits import MemberDeviceAccess
     from app.task_audio import TaskMediaJobs
     from app.media_script_tools import ScriptToolError
@@ -834,6 +835,8 @@ def test_submission_metadata_queue_snapshot_completed_and_tool_revalidation(rece
     runtime = build_device_runtime(database_path=state.production.database_path,
         device_lock_path=tmp_path/'submission-only.lock',device_access=MemberDeviceAccess(state.members,identity_verifier=identity),
         registrations={'creation_job':OwnerRegistration(owner,executor)},resources=resources,processes=Processes())
+    runtime.task_authorizations = TaskAuthorizationUseCase(state.production,
+        lambda stored: identity(CreationExecutionActor.from_event(state.workspace_id, stored)))
     monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
     monkeypatch.setattr(main, '_media_result_read_components',
         lambda: (runtime.registrations['creation_job'].owner.task_media, runtime.scheduler))

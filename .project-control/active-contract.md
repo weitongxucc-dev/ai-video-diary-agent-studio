@@ -24,6 +24,8 @@
 
 ## 验证与外部边界
 
+当前接续修复写权：组装代理独占 `creation/assembly_manifest.py`、`task_audio.py`、`audio_timeline.py` 和 PCM 输出时钟回归，将交付 PCM 生成绑定已完成 picture master 的实际帧时钟；主控拥有 `creation_execution.py` 与 `creation/audio_delivery_assembly.py` 的接线和严格合流校验。平台代理独占 `assistant/home_plan_http_adapter.py`、`conversation_repository.py` 及原片目标恢复回归，只对真实已提交原片事件恢复 failed 原回合的接续，普通窗口、停止、讨论及权限边界不放宽。此前包已冻结；模型、媒体、桌面及共享 Git 写仍仅主控串行执行。
+
 原声接续按产品§4.3与领域§5.1补齐实际缺失的“源视频到编辑任务”入口。它属于已授权完整桌面闭环，不实施差异化或未来功能。使用显式 `Plan.source_media` 绑定真实资产修订、逻辑引用、原片区间及原声要求，Script/Narration保持真实空值；同请求创建 Plan/Task/Montage/Timeline 和回执必须原子、可回读，不伪造分析片段或旧配音成果。主控拥有共享类型、schema、API/Web/Agent接线与源模式执行适配；组装代理仅新增 `app/creation/source_task_use_case.py` 及对应独立测试。其余 CI 收口包与本输入模式无语义冲突，继续现有边界；新增包完成后先回读当前上述规范再集成。
 
 可在本工作树使用现有已安装依赖，执行明确隔离数据库/临时文件/回环测试。先静态核对和必要局部复现；合成媒体与设备检查串行申请主控运行窗口，禁止代理并行启动重负载。全组 CI 由主控在相关修复集成后运行，保留首失败和完整结果。不得访问真实用户库、复用密钥跑不明外发、替换外部服务、发布视频/安装包、删除用户材料或调整付费/权限。本机模型和媒体实际验收由主控核明配置、输入、资源与既有授权后串行执行。确需新外部条件仅暂停对应部分，继续独立工作。

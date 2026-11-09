@@ -57,6 +57,7 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
       task_id: taskId,
       name: metadata(task.task?.name),
       stage: task.task?.stage,
+      stage_meaning: '作品的编辑阶段；制作接续以execution.task_execution和真实作业回执为准，全机预算不表示当前任务需要运行全部阶段。',
       status: task.task?.status,
       stage_status: task.task?.stage_status,
       updated_at: task.task?.updated_at,

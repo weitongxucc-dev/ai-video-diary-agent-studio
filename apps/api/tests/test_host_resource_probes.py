@@ -1193,6 +1193,12 @@ def test_resource_error_text_exposes_only_failed_checks_and_keeps_full_decision(
     assert "专属设备预算尚未标定" in str(unknown)
     disk = HostResourceRefusal(HostResourceDecision(None, {}, {}, f"disk_free_bytes:{tmp_path}: OSError: denied"))
     assert "目标磁盘可用空间不可读取" in str(disk) and str(tmp_path) not in str(disk)
+    volume = {'volume_id': 1, 'actual': 100, 'minimum': 200, 'passed': False}
+    volume_decision = HostResourceDecision(False, {}, {'write_volumes': {
+        'staging': volume, 'published': volume}})
+    volume_error = HostResourceRefusal(volume_decision)
+    assert str(volume_error).count('产物写入磁盘可用空间为100字节，至少需要200字节') == 1
+    assert volume_error.decision is volume_decision
 
 
 @pytest.mark.parametrize("release_unknown", [False, True])

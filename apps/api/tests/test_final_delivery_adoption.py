@@ -106,6 +106,23 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
     assert render.valid('local', case.task_id, verify_media=False)
     assert render.valid('local', case.task_id)
     assert case.repo.subtitle_records.list_subtitle_tracks('local', case.task_id, timeline_version_id=version.id)
+    if not rollback:
+        from uuid import uuid4
+        from app.creation.editing.metadata_use_case import metadata_edit_command
+        from app.creation.editing.timeline_restore_use_case import TimelineRestoreCommand, TimelineRestoreUseCase
+        identity = {'member_id': case.actor.member_id, 'local_diagnostic': False}
+        clip = version.snapshot['montage']['clips'][0]
+        metadata.save(current, metadata_edit_command(current, identity, 'ChangeCrop', {
+            'base_version_id': version.id, 'clip_id': clip['id'],
+            'fit_mode': 'fit' if clip.get('fit_mode') == 'fill' else 'fill', 'crop_x': .3, 'crop_y': .5}))
+        assert not render.valid('local', case.task_id, verify_media=False)
+        changed = case.repo.task_records.get_creation_task('local', case.task_id)
+        restorer = TimelineRestoreUseCase(case.repo, metadata,
+            qualify_output=lambda ws, task_id, target: render.valid(ws, task_id, timeline_version=target, verify_media=False))
+        restorer.execute(TimelineRestoreCommand('local', changed, False), actor=case.actor, request_id=str(uuid4()))
+        restored = case.repo.task_records.get_creation_task('local', case.task_id)
+        assert restored.current_timeline_version_id != version.id
+        assert render.valid('local', case.task_id, verify_media=False)
     with case.repo._connect() as conn:
         receipts = [json.loads(row[0]) for row in conn.execute("SELECT payload_json FROM task_events WHERE job_id=? AND event_type='task_execution_unit_settled'", (job.id,))]
     usage = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
@@ -155,10 +172,10 @@ def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_tra
     with case.repo._connect() as conn:
         conn.execute('UPDATE task_events SET id=? WHERE id=?', (measurement_id, 'withheld-measurement'))
     original_record_read = case.repo.execution_records.get_artifact_record
-    def missing_final_registration(workspace_id, artifact_id):
+    def missing_final_registration(workspace_id, artifact_id, *, connection=None):
         if artifact_id.startswith('artifact_final_mux_'):
             raise KeyError(artifact_id)
-        return original_record_read(workspace_id, artifact_id)
+        return original_record_read(workspace_id, artifact_id, connection=connection)
     with monkeypatch.context() as registration_failure:
         registration_failure.setattr(case.repo.execution_records, 'get_artifact_record', missing_final_registration)
         refused(case.actor, 409)

@@ -17,8 +17,8 @@ from app.subtitle_tracks import render_srt
 from test_metadata_edit_use_case import metadata_state
 
 
-def subtitle_state(tmp_path, *, bilingual=True, with_cover=True):
-    state = metadata_state(tmp_path)
+def subtitle_state(tmp_path, *, bilingual=True, with_cover=True, workspace_id='ws'):
+    state = metadata_state(tmp_path, workspace_id=workspace_id)
     voice = state.case.output_root / state.narration.audio_path
     voice.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(voice), 'wb') as stream:
@@ -36,7 +36,7 @@ def subtitle_state(tmp_path, *, bilingual=True, with_cover=True):
         cues=[SubtitleCue('cue', None, '原字幕', 0, 4)])]
     prepared_tracks = []
     for track in tracks:
-        reference, transform = state.case.publish_subtitle_text(workspace_id='ws', task_id=state.task.id,
+        reference, transform = state.case.publish_subtitle_text(workspace_id=workspace_id, task_id=state.task.id,
             proposal_id=f'fixture-{track.id}', kind='fixture_subtitle_input', input_refs=[],
             content=render_srt(execution_subtitle_track(track)), engine='synthetic-fixture-input/v1',
             parameters={'language': track.language})
@@ -54,29 +54,30 @@ def subtitle_state(tmp_path, *, bilingual=True, with_cover=True):
         cover_file.parent.mkdir(parents=True, exist_ok=True)
         Image.new('RGB', (8, 8), '#404040').save(cover_file)
         digest = hashlib.sha256(cover_file.read_bytes()).hexdigest()
-        state.repo.job_records.create_job_run(JobRun('fixture-cover-job', 'ws', state.task.id, 'fixture_input',
+        state.repo.job_records.create_job_run(JobRun('fixture-cover-job', workspace_id, state.task.id, 'fixture_input',
             'fixture-cover-input', digest))
-        running = state.repo.job_records.claim_job_run('ws', 'fixture-cover-job')
-        state.repo.execution_records.create_artifact_record(ArtifactRecord('fixture-cover-artifact', 'ws', state.task.id, 'cover',
+        running = state.repo.job_records.claim_job_run(workspace_id, 'fixture-cover-job')
+        state.repo.execution_records.create_artifact_record(ArtifactRecord('fixture-cover-artifact', workspace_id, state.task.id, 'cover',
             cover_ref, digest, cover_file.stat().st_size, 'fixture-cover-job', []))
-        state.repo.lineage_records.create_transform_run(TransformRun('fixture-cover-transform', 'ws', state.task.id,
+        state.repo.lineage_records.create_transform_run(TransformRun('fixture-cover-transform', workspace_id, state.task.id,
             'fixture-cover-job', 'fixture_input', digest, [], [cover_ref], 'synthetic-fixture-input/v1',
             {}, 'succeeded', running.started_at, utc_now()))
-        state.repo.job_records.finish_job_run('ws', 'fixture-cover-job', status='succeeded', output_refs=[cover_ref])
-        state.cover = CoverAsset('family-cover', 'ws', state.task.id, 'subtitle-base',
-            state.repo.workspace_media_reference_for_asset('ws', state.asset.id),
+        state.repo.job_records.finish_job_run(workspace_id, 'fixture-cover-job', status='succeeded', output_refs=[cover_ref])
+        state.cover = CoverAsset('family-cover', workspace_id, state.task.id, 'subtitle-base',
+            state.repo.workspace_media_reference_for_asset(workspace_id, state.asset.id),
             0, '原封面', {}, {}, 'video_frame', 'fixture-input', cover_ref, 'fixture-cover-transform', 'valid')
         snapshot['cover_asset_id'] = state.cover.id
-    state.base = TimelineVersion('subtitle-base', 'ws', state.task.id, state.base.id, 2, snapshot, None)
+    state.base = TimelineVersion('subtitle-base', workspace_id, state.task.id, state.base.id, 2, snapshot, None)
     state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
         state.repo.subtitle_records.create_subtitle_track(track)
     if state.cover is not None:
         state.repo.cover_records.create_cover_asset(state.cover)
-    state.task = state.repo.task_records.get_creation_task('ws', state.task.id)
+    state.task = state.repo.task_records.get_creation_task(workspace_id, state.task.id)
     state.application = SubtitleEditUseCase(state.repo, state.case)
     state.voice_bytes = voice.read_bytes()
     return state
+
 
 
 def subtitle_command(state, operation, **values):

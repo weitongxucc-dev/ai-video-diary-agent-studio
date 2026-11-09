@@ -103,8 +103,23 @@ def _locations(write_paths, write_files, publication_mode):
     return paths, files, volumes
 
 
+def publication_target_fields(paths, files, volumes, published_target):
+    """Bind the final name to the same controlled publication slot and volume."""
+    if published_target is None:
+        return {}
+    target = Path(published_target).expanduser()
+    directory = Path(paths['published'])
+    if (not target.is_absolute() or target.name in {'.', '..'} or target.is_symlink() or target.parent.resolve() != directory
+            or str(target.parent.resolve() / target.name) in files.values()
+            or existing_volume(target.parent)[0] != volumes['published']):
+        raise ValueError('Published target must be distinct and in its sealed publication directory and volume')
+    facts = {'path': str(target.parent.resolve() / target.name), 'directory': str(directory),
+             'volume_id': volumes['published']}
+    return {'publication_target': facts, 'publication_target_digest': _digest(facts)}
+
+
 def packet_copy_output_allocation(*, write_paths, write_files, publication_mode,
-                                  manifest_bytes, reserve_bytes):
+                                  manifest_bytes, reserve_bytes, published_target=None):
     """Finite available storage candidate, never an encoded-output prediction.
 
     Existing parents already occupy free space. Copy publication reserves two
@@ -114,7 +129,9 @@ def packet_copy_output_allocation(*, write_paths, write_files, publication_mode,
     if not _positive(manifest_bytes) or type(reserve_bytes) is not int or reserve_bytes < 0:
         raise ValueError('Packet-copy storage needs explicit manifest bytes and volume reserve')
     paths, files, volumes = _locations(write_paths, write_files, publication_mode)
-    if any(Path(path).exists() for path in files.values()):
+    target = publication_target_fields(paths, files, volumes, published_target)
+    if (any(Path(path).exists() for path in files.values())
+            or target and Path(target['publication_target']['path']).exists()):
         raise ValueError('New packet-copy allocation cannot overwrite an existing or partial output')
     per_volume = {}
     for role, volume in volumes.items():
@@ -140,7 +157,8 @@ def packet_copy_output_allocation(*, write_paths, write_files, publication_mode,
 
 
 def packet_copy_resources(*, budget, manifest_digest, unit_id, parents, expected_total_packets,
-                          write_paths, write_files, output_limit_bytes, manifest_bytes, publication_mode):
+                          write_paths, write_files, output_limit_bytes, manifest_bytes, publication_mode,
+                          published_target=None):
     """Build facts from all actual parents; source bytes are stream work, not RSS."""
     if not isinstance(budget, PacketCopyBudget) or not _sha(manifest_digest) or not _sha(unit_id):
         raise ValueError('Packet copy needs a policy and original manifest/unit digests')
@@ -175,6 +193,7 @@ def packet_copy_resources(*, budget, manifest_digest, unit_id, parents, expected
         'timeout_seconds': budget.preparation_timeout_seconds,
         'publication_mode': publication_mode, 'write_paths': paths, 'write_files': files,
         'write_allocations': allocations, 'write_volume_ids': volumes,
+        **publication_target_fields(paths, files, volumes, published_target),
         'workload_provenance': {'mode': 'bounded_preparation', 'policy_id': budget.policy_id,
             'deadline_source': 'sealed_packet_copy_preparation_policy',
             'deadline_seconds': budget.preparation_timeout_seconds,
@@ -191,7 +210,8 @@ def packet_copy_refusal(resources, budget):
         expected = packet_copy_resources(budget=budget, **{key: resources[key] for key in (
             'manifest_digest', 'unit_id', 'parents', 'expected_total_packets', 'write_paths', 'write_files',
             'manifest_bytes', 'publication_mode')},
-            output_limit_bytes=resources['max_output_bytes'])
+            output_limit_bytes=resources['max_output_bytes'],
+            published_target=resources['publication_target']['path'] if 'publication_target' in resources else None)
         if json.dumps(resources, sort_keys=True, allow_nan=False) != json.dumps(expected, sort_keys=True, allow_nan=False):
             return 'packet_copy_resources_invalid'
     except OSError:
@@ -202,21 +222,53 @@ def packet_copy_refusal(resources, budget):
 
 
 def packet_copy_remaining_allocations(resources, *, running):
-    """Reserve only still-unwritten bytes; missing is zero, unreadable is unknown."""
-    used = {}
+    """Reserve pending writes; only a sealed immutable target proves publication finished."""
+    target = resources.get('publication_target')
+    target_info = None
+    if target is not None:
+        bound = publication_target_fields(resources['write_paths'], resources['write_files'],
+            resources['write_volume_ids'], target['path'])
+        if (bound['publication_target'] != target
+                or bound['publication_target_digest'] != resources.get('publication_target_digest')):
+            raise ValueError('Published target no longer matches its sealed location')
+        try:
+            target_info = Path(target['path']).lstat()
+        except FileNotFoundError:
+            pass
+    used, observed = {}, {}
     for role, path in resources['write_files'].items():
         try:
             info = Path(path).lstat()
         except FileNotFoundError:
             used[role] = 0
             continue
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        observed[role] = info
+    if target_info is not None:
+        copying = observed.get('published')
+        if copying is not None and (copying.st_dev, copying.st_ino, copying.st_size) != (
+                target_info.st_dev, target_info.st_ino, target_info.st_size):
+            raise ValueError('Publication temporary and final names are different live files')
+        if target_info.st_dev != target['volume_id']:
+            raise ValueError('Published target moved to another volume')
+        # ArtifactStore links its exact temporary name to its final name, then unlinks the former.
+        links = 2 if copying is not None else 1
+        if (not stat.S_ISREG(target_info.st_mode) or target_info.st_size <= 0 or target_info.st_nlink != links
+                or copying is not None and copying.st_nlink != links):
+            raise ValueError('Published target is not the sealed regular file or exact publication link pair')
+        observed['published'] = target_info
+    for role, info in observed.items():
+        links = 2 if role == 'published' and target_info is not None and info.st_nlink == 2 else 1
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != links:
             raise ValueError('Packet-copy output is not its own regular staging/publication file')
         used[role] = info.st_size
         cap = resources['manifest_bytes'] if role == 'manifest' else resources['max_output_bytes']
         if info.st_size > cap or not running:
             raise ValueError('Packet-copy output exceeds its allocation or already exists before admission')
     allocations = resources['write_allocations']
+    if target_info is not None:
+        # The owner publishes only after encoding and copy/fsync/hash/close finish.
+        # Its original output caps stay sealed; neither output can grow after this boundary.
+        return {'manifest': allocations['manifest'] - used['manifest'], 'staging': 0, 'published': 0}
     if resources['publication_mode'] == 'atomic_rename':
         if used['staging'] and used['published']:
             raise ValueError('Atomic publication unexpectedly has two live output copies')

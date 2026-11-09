@@ -6,6 +6,7 @@ import os
 import json
 import re
 import stat
+from fractions import Fraction
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import subprocess
@@ -365,13 +366,16 @@ def build_audio_mix_command(
     *, solo_track_ids: set[str] | None = None, start_seconds: float = 0, end_seconds: float | None = None,
     probe_duration: Callable[[Path], float] | None = None,
     normalized_narration: dict[Path, Path] | None = None,
-    apply_master: bool = True,
+    apply_master: bool = True, output_sample_count: int | None = None,
 ) -> list[str]:
     if not math.isfinite(duration_seconds) or duration_seconds <= 0:
         raise ValueError("音频时间线时长无效")
     end = duration_seconds if end_seconds is None else end_seconds
     if not 0 <= start_seconds < end <= duration_seconds:
         raise ValueError("试听范围必须位于时间线内")
+    if output_sample_count is not None and (type(output_sample_count) is not int or output_sample_count <= 0
+            or start_seconds != 0 or end_seconds is not None):
+        raise ValueError('明确输出采样时钟只用于完整音频组装')
     if solo_track_ids and not solo_track_ids <= {track.id for track in timeline.tracks}:
         raise ValueError("独听轨道不存在")
     command = ["ffmpeg", "-v", "error", "-y"]
@@ -438,13 +442,16 @@ def build_audio_mix_command(
     else:
         filters.append(f"anullsrc=r=48000:cl=stereo,atrim=duration={duration_seconds}[mixed]")
     master = "alimiter=limit=0.95:level=false:latency=true" if apply_master else "anull"
-    filters.append(f"[mixed]{master},atrim=start={start_seconds}:end={end},asetpts=PTS-STARTPTS[out]")
+    output_trim = (f'apad=whole_len={output_sample_count},atrim=end_sample={output_sample_count}'
+        if output_sample_count is not None else f'atrim=start={start_seconds}:end={end}')
+    filters.append(f"[mixed]{master},{output_trim},asetpts=PTS-STARTPTS[out]")
     command.extend(["-filter_complex", ";".join(filters), "-map", "[out]", "-c:a",
                     "pcm_s16le" if apply_master else "pcm_f32le", "-ar", "48000", str(output)])
     return command
 
 
-def audio_mix_output_bounds(timeline, inputs, duration_seconds, normalize_voice_sources, *, apply_master=True):
+def audio_mix_output_bounds(timeline, inputs, duration_seconds, normalize_voice_sources, *, apply_master=True,
+                            output_sample_count=None):
     """Bound the mixed PCM and any whole-source narration files together."""
     normalized = []
     if normalize_voice_sources:
@@ -458,11 +465,16 @@ def audio_mix_output_bounds(timeline, inputs, duration_seconds, normalize_voice_
                 raise ValueError("整源旁白归一化缺少已保存的时长，未处理媒体")
             normalized.append({"reference": source["reference"], "path": source["path"],
                                "duration_seconds": duration, "max_output_bytes": math.ceil(duration * 192000) + 65536})
-    mix_bytes = math.ceil(duration_seconds * (192000 if apply_master else 384000)) + 65536
+    if output_sample_count is not None and (type(output_sample_count) is not int or output_sample_count <= 0):
+        raise ValueError('明确输出样本数必须为正整数')
+    mix_bytes = (output_sample_count * (4 if apply_master else 8) if output_sample_count is not None
+        else math.ceil(duration_seconds * (192000 if apply_master else 384000))) + 65536
     return {"normalize_voice_sources": bool(normalize_voice_sources),
             "normalized_source_outputs": normalized, "mix_output_bytes": mix_bytes,
             "temporary_output_bytes": mix_bytes + sum(item["max_output_bytes"] for item in normalized),
-            "output_duration_limit_seconds": max([duration_seconds, *(item["duration_seconds"] for item in normalized)])}
+            "output_duration_limit_seconds": max([duration_seconds,
+                *([output_sample_count / 48000] if output_sample_count is not None else []),
+                *(item["duration_seconds"] for item in normalized)])}
 
 
 def _measured_audio_outputs(output_paths, normalization_directory):
@@ -505,6 +517,10 @@ def render_audio_mix(*args, **kwargs) -> Path:
     output_measured = kwargs.pop("output_measured", None)
     if scheduler is None or grant is None:
         raise PermissionError("音轨渲染必须提供设备许可")
+    resources = _audio_grant_resources(scheduler, grant)
+    declared = resources['audio_mix'] if resources.get('kind') in {'creation_render', 'creation_presenter_render'} else resources
+    if declared.get('output_sample_count') != kwargs.get('output_sample_count'):
+        raise PermissionError('音频输出采样时钟与原许可不一致')
     if grant is not None:
         if (deadline_monotonic is None or max_output_bytes is None or max_output_bytes <= 0
                 or threads is None or threads <= 0):
@@ -540,7 +556,9 @@ def render_audio_mix(*args, **kwargs) -> Path:
                 mix_duration = kwargs.get("end_seconds") or args[1]
                 mix_duration -= kwargs.get("start_seconds", 0)
                 pcm_bytes_per_second = 192000 if kwargs.get('apply_master', True) else 384000
-                mix_ceiling = min(max_output_bytes, math.ceil(mix_duration * pcm_bytes_per_second) + 65536)
+                pcm_bytes = (kwargs['output_sample_count'] * (4 if kwargs.get('apply_master', True) else 8)
+                    if kwargs.get('output_sample_count') is not None else math.ceil(mix_duration * pcm_bytes_per_second))
+                mix_ceiling = min(max_output_bytes, pcm_bytes + 65536)
                 command[-1:-1] = ["-threads:a", str(threads), "-fs", str(mix_ceiling)]
                 _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
                                            cancel_event=cancel_event, deadline_monotonic=deadline_monotonic,
@@ -674,7 +692,9 @@ def bounded_audio_context(context):
 
 
 def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event=None,
-                         deadline_monotonic=None, output=False) -> dict:
+                         deadline_monotonic=None, output=False, exact_output_clock=False) -> dict:
+    if exact_output_clock and not output:
+        raise ValueError('精确PCM采样时钟只核验已产生的音频输出')
     if grant is None:
         from app.task_audio import TASK_MEDIA_CONTEXT
         active = TASK_MEDIA_CONTEXT.get()
@@ -694,8 +714,9 @@ def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event
         expected = next((item for item in resources['inputs'] if Path(item['path']).resolve() == path.resolve()), None)
         if expected is None:
             raise PermissionError('音频源不在本次固定输入中')
+    entries = 'stream=duration,sample_rate,channels' + (',duration_ts,time_base' if exact_output_clock else '')
     command = ["ffprobe", "-v", "error", "-protocol_whitelist", "file,pipe", "-select_streams", "a:0",
-        "-show_entries", "stream=duration,sample_rate,channels:format=duration", "-of", "json", str(path)]
+        "-show_entries", entries + ':format=duration', "-of", "json", str(path)]
     stdout = _run_granted_audio_command(scheduler, grant, command, timeout_seconds=30,
         cancel_event=cancel_event, deadline_monotonic=deadline_monotonic).stdout
     payload = json.loads(stdout)
@@ -744,6 +765,13 @@ def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event
                 compared = measured.get('source_duration_seconds', actual) if name == 'duration_seconds' else actual
                 if saved is not None and abs(compared - saved) > (.25 if name == "duration_seconds" else 0):
                     raise ValueError("实际音频规格与持久输入元数据不符，未进入 DSP")
+    if exact_output_clock:
+        if type(stream['duration_ts']) is not int:
+            raise ValueError('PCM输出缺少整数时钟计数')
+        count = Fraction(stream['time_base']) * stream['duration_ts'] * measured['sample_rate']
+        if count.denominator != 1 or count <= 0:
+            raise ValueError('PCM输出没有可核实的整数样本时钟')
+        measured['sample_count'] = count.numerator
     return measured
 
 

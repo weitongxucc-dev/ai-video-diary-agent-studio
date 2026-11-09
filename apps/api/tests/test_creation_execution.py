@@ -189,6 +189,16 @@ def _qualify_start_voice(repo, task_id, member_id, workspace_id='local'):
         repo.plan_records.get_creation_plan(workspace_id, task.plan_id))
 
 
+def _local_task_actor(repo, task_id):
+    member = LocalMemberService(repo.database_path).add_member('original task member')
+    task = repo.task_records.get_creation_task('local', task_id)
+    task.owner_user_id = member.member_id
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(task), default=str), 'local', task_id))
+    return CreationExecutionActor('local', member.member_id)
+
+
 def test_creation_owner_uses_canonical_plan_visibility_for_legacy_payload(tmp_path):
     repo, task_id, script_id, _digest = _seed(tmp_path)
     task = repo.task_records.get_creation_task("workspace_a", task_id)
@@ -1927,9 +1937,10 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     execution = _execution(repo)
     # 能被复核的作业必须带着真实成员身份落库，否则开机时就该拒绝重新申请许可。
     queued = execution.start("local", task_id, script_id, digest,
-                              member_id=owner_member.member_id)
+                              actor=CreationExecutionActor('local', owner_member.member_id))
     submitted = []
     runtime_starts = []
+    quality_schedules = []
     monkeypatch.setattr(main_module, "production_repo", repo)
     from app.conversation_repository import ConversationRepository
     monkeypatch.setattr(main_module, "conversation_repo", ConversationRepository(repo.database_path))
@@ -1942,7 +1953,9 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
         scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=scheduler.owners,
             executor=CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail("metadata fixture must not render"),
-                render_is_valid=lambda *_: False))},
+                render_is_valid=lambda *_: False)),
+            main_module.QUALITY_KIND: SimpleNamespace(owner=SimpleNamespace(service=SimpleNamespace(
+                schedule_rendered_tasks=lambda current: quality_schedules.append(current))))},
         task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
             CreationExecutionActor.from_event(identity["workspace_id"], identity))),
         last_error=None, running=False, wake=lambda: None, start=lambda: runtime_starts.append("start"),
@@ -1952,6 +1965,7 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
         # 开机恢复重新申请的是整机许可，不是绕开身份和主机门禁的旧线程。
         assert not submitted
         assert runtime_starts == ["start"]
+        assert quality_schedules == [main_module.device_runtime]
         with repo._connect() as conn:
             recovered = conn.execute(
                 "SELECT member_id, owner_id FROM device_work_requests WHERE owner_type='creation_job'",
@@ -2028,8 +2042,19 @@ def test_read_only_material_directory_refuses_binding_and_recovers(tmp_path):
 def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp_path, monkeypatch, request):
     # Keep the full runtime reload inside a synthetic library and restore its
     # module globals afterwards; no provider or media operation is invoked.
+    import ast
+    import inspect
     from assistant_turn_control_fixtures import isolate_assistant_turn_control
     isolate_assistant_turn_control(monkeypatch, request)
+    for publisher in (main_module._publish_runtime_dependencies, main_module._activate_runtime_reload,
+                      main_module._publish_runtime_routes):
+        for node in ast.walk(ast.parse(inspect.getsource(publisher))):
+            if isinstance(node, ast.Global):
+                for name in node.names:
+                    monkeypatch.setattr(main_module, name, getattr(main_module, name))
+    monkeypatch.setattr(main_module.app.router, 'routes', list(main_module.app.router.routes))
+    monkeypatch.setattr(main_module.app, 'openapi_schema', main_module.app.openapi_schema)
+    monkeypatch.setattr(main_module, '_goal_continuation_service', None)
     for name in (
         "settings repo source_repository model_catalog model_installer visual_semantic_provider "
         "voice_clone_provider avatar_lipsync_provider latentsync_provider production_repo "
@@ -2040,6 +2065,7 @@ def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp
     ).split():
         monkeypatch.setattr(main_module, name, getattr(main_module, name))
     monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
+    monkeypatch.setenv('TMPDIR', os.environ['TMPDIR'])
     (tmp_path / "library").mkdir()
     isolated = Settings(
         database_path=str(tmp_path / "isolated.sqlite3"),
@@ -2053,11 +2079,19 @@ def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp
         hermes_radar_path=str(tmp_path / "radar"),
     )
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda _cls: isolated))
+    from app.model_installer import ModelInstaller
+    from app.runtime_health import model_catalog_from_settings
+    monkeypatch.setattr(main_module, 'model_installer', ModelInstaller(model_catalog_from_settings(isolated),
+        on_complete=lambda: main_module._reload_runtime_dependencies()))
     from test_host_model_installation import metadata_device_components
     monkeypatch.setattr(main_module, "device_runtime", None)
     monkeypatch.setattr(main_module, "_build_device_components",
         lambda **kwargs: metadata_device_components(tmp_path, **kwargs))
     monkeypatch.setattr(main_module, "material_ingestion", None)
+    def release_test_runtime():
+        main_module._stop_device_runtime()
+        main_module._stop_material_ingestion()
+    request.addfinalizer(release_test_runtime)
 
     def assert_running():
         service = main_module.material_ingestion
@@ -2484,8 +2518,8 @@ def test_task_authorization_survives_unknown_and_restart_but_not_expiry_or_revoc
     from datetime import timedelta
     from app.creation.task_authorization import TaskAuthorizationUseCase
     repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
+    actor = _local_task_actor(repo, task_id)
     task = repo.task_records.get_creation_task("local", task_id)
-    actor = CreationExecutionActor("local", "original-member")
     now = [datetime.now(timezone.utc)]
     verdict = ["ready"]
     calls = []
@@ -2526,8 +2560,8 @@ def test_task_authorization_keeps_selected_assets_and_accepts_only_own_derived_o
     from app.creation.contracts import ArtifactRecord, JobRun
     from app.production import MaterialSegmentMatch
     repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
+    actor = _local_task_actor(repo, task_id)
     task = repo.task_records.get_creation_task("local", task_id)
-    actor = CreationExecutionActor("local", "original-member")
     for asset_id in ("selected", "unselected"):
         path = repo.video_library_path / f"{asset_id}.mp4"
         path.write_bytes(b"metadata-only fixture")
@@ -2643,8 +2677,8 @@ def test_host_task_business_reads_sealed_memory_and_fences_late_cancellation(tmp
     from app.creation.contracts import JobRun, TaskEvent
     repo,task_id,_,_=_seed(tmp_path,workspace_id='local',voice=False)
     conversations=ConversationRepository(repo.database_path)
-    member='original-member'
-    actor=CreationExecutionActor('local',member)
+    actor=_local_task_actor(repo,task_id)
+    member=actor.member_id
     chat=conversations.create('local',member,'task',task_id)
     chat=conversations.save_draft(chat['id'],'local',member,'完成原视频并检查输出',chat['draft_version'])
     context={'kind':'task','task_id':task_id,'stage':'narration','selected_object_refs':[],
@@ -2731,7 +2765,7 @@ def _seed_background_business(tmp_path):
     from app.conversation_repository import ConversationRepository
     repo,task_id,script_id,digest=_seed(tmp_path,workspace_id='local',voice=False)
     conversations=ConversationRepository(repo.database_path)
-    member='original-member'
+    member=_local_task_actor(repo,task_id).member_id
     chat=conversations.create('local',member,'task',task_id)
     chat=conversations.save_draft(chat['id'],'local',member,'完成原视频并检查输出',chat['draft_version'])
     context={'kind':'task','task_id':task_id,'stage':'narration','selected_object_refs':[],
@@ -3538,6 +3572,8 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
     else:
         asset, reference = register_synthetic_video_asset(case.repo,workspace_id='local',member_id=case.actor.member_id,
             path=tmp_path/'library/section.mp4',asset_id='section_video',seconds=2)
+        asset.segments = [replace(asset.segments[0], start_seconds=0, end_seconds=2)]
+        asset = case.repo._save_asset(asset)
     class Renderer:
         def render(self, plan, audio_path, **kwargs):
             assert kwargs['scheduler']._get(kwargs['grant'].request_id).resources['kind']=='creation_render'
@@ -3555,7 +3591,7 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
         plan = CreationTaskMontagePlan(id=f'stage_{section_id}',workspace_id='local',task_id=task.id,
             script_id=case.script_id,script_title='section',status='ready',
             cues=[NarrationCue(f'cue_{section_id}',section_id,text,audio.duration_seconds,
-                narration_segment_id=case.stage.segment_id(task.id,case.script_id,section_id))],
+                narration_segment_id=case.stage.segment_id(task.id,case.script_id,section_id), timeline_start_seconds=0.0)],
             clips=[MontageClip(f'clip_{section_id}',f'cue_{section_id}',asset.id,asset.segments[0].id,reference,0,audio.duration_seconds,
                 0,audio.duration_seconds,1,['controlled port'],False)],duration_seconds=audio.duration_seconds,
             low_confidence_clip_count=0,created_at=task.created_at,updated_at=task.created_at,
@@ -3568,7 +3604,13 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
             from app.creation.montage_stage_use_case import delivery_windows_from_section_inputs
             _, windows = delivery_windows_from_section_inputs(snapshot.plan,
                 case.repo.section_inputs.iter_creation_section_planning_inputs(task, snapshot.script_header, connection=conn))
-            plan.delivery_window = asdict(next(window for window in windows if window.section_id == section_id))
+            window = next(window for window in windows if window.section_id == section_id)
+            plan.delivery_window = asdict(window)
+            # The controlled planner must honor the same source non-reuse
+            # contract as the production planner, including section rework.
+            plan.clips[0].source_start_seconds = window.start_seconds
+            plan.clips[0].source_end_seconds = window.start_seconds + audio.duration_seconds
+            assert plan.clips[0].source_end_seconds <= asset.segments[0].end_seconds
             checksum = hashlib.sha256()
             for _ in service.planning_inputs(snapshot, section_id, connection=conn, checksum=checksum):
                 pass
@@ -3733,8 +3775,12 @@ def test_section_undo_redo_preserves_later_other_section_publication(tmp_path,mo
         prepared = restore.prepare_restore(TimelineRestoreCommand('local',task,redo))
         actual=case.repo.section_inputs.section_dependency_snapshot('local',case.task_id,'section_1')
         if json.dumps(actual,sort_keys=True,default=str)!=json.dumps(prepared.section_dependencies,sort_keys=True,default=str):
-            pytest.fail(str({'redo':redo,'audio_actual':actual['timeline'].get('audio_timeline'),
-                'audio_expected':prepared.section_dependencies['timeline'].get('audio_timeline')}))
+            differences = {key: {'actual': actual.get(key), 'expected': prepared.section_dependencies.get(key)}
+                for key in actual.keys() | prepared.section_dependencies.keys()
+                if json.dumps(actual.get(key),sort_keys=True,default=str) !=
+                    json.dumps(prepared.section_dependencies.get(key),sort_keys=True,default=str)}
+            pytest.fail(json.dumps({'redo': redo, 'different_dependencies': differences},
+                ensure_ascii=False,sort_keys=True,default=str))
         result = restore.apply_restore(prepared,TimelineOutputQualification(prepared,False))
         assert (result.montage is not None)==full_timeline
         assert case.repo.section_inputs.effective_creation_script('local',case.task_id).sections[0].content==text
@@ -6724,6 +6770,7 @@ def _bounded_segment_video_case(tmp_path, monkeypatch):
     from app.creation.segment_production_use_case import SegmentProductionUseCase
     from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.narration import _pronunciation_dictionary, _pronunciation_version
+    from app.task_audio import TaskAudio
     case = _narration_units_case(tmp_path, section_count=23, duration_seconds=120)
     repo = case.repo
     task = repo.task_records.get_creation_task('local', case.task_id)
@@ -6760,6 +6807,11 @@ def _bounded_segment_video_case(tmp_path, monkeypatch):
         output_root=tmp_path/'unused-output')
     case.owner.segments = case.segments
     case.owner.cpu_render_limits = CpuRenderLimits(10_000_000, 1, 30)
+    audio_service = TaskAudio(repo, case.segments.artifact_store, tmp_path/'audio-temporary')
+    case.owner.audio_mix_facts = lambda workspace_id, task_id, montage, *, actor, connection=None: audio_service.mix_facts(
+        workspace_id, task_id, montage.audio_timeline, montage.duration_seconds, actor=actor,
+        normalize_voice_sources=montage.narration_linkage_created_audio_timeline,
+        budget=case.owner.narration_audio_budget, connection=connection)
     case.owner.task_authorizations = TaskAuthorizationUseCase(repo, lambda identity: 'ready')
     case.owner.task_authorizations.ensure(task, case.actor)
     case.runtime = SimpleNamespace(scheduler=case.scheduler, wake=lambda: None,
@@ -6962,9 +7014,22 @@ def test_bounded_segment_video_confirmation_rechecks_global_clock(tmp_path, monk
             conn.execute("UPDATE task_events SET payload_json=json_remove(payload_json,'$.planning_dependency_digest') WHERE id=?", (waiting.id,))
             conn.execute("UPDATE narration_segments SET duration_seconds=48 WHERE task_id=? AND source_section_id='section_23'", (case.task_id,))
         else:
+            from app.montage import creation_task_montage_plan_from_payload
+            template = creation_task_montage_plan_from_payload(waiting.payload['montage'])
+            cue = replace(template.cues[0], id='other-clock-cue', source_section_id='section_2',
+                text='改变后的另一段已采用正文', duration_seconds=6, timeline_start_seconds=0,
+                narration_segment_id=case.stage.segment_id(case.task_id, case.script_id, 'section_2'))
+            montage = replace(template, id='other-clock-montage', status='ready', cues=[cue],
+                clips=[replace(template.clips[0], id='other-clock-clip', cue_id=cue.id,
+                    source_start_seconds=8, source_end_seconds=14, timeline_start_seconds=0,
+                    timeline_end_seconds=6, needs_confirmation=False, manually_selected=True)],
+                duration_seconds=6, low_confidence_clip_count=0,
+                narration_audio_path=case.paid_rows[-1].audio_reference, audio_timeline=None,
+                delivery_window={'section_id': 'section_2', 'start_seconds': 8, 'end_seconds': 14})
             publication = TaskEvent('other-adopted-clock', 'local', case.task_id, None, 'segment_publication', {
-                'script_id': case.script_id, 'text': '改变后的另一段已采用正文', 'narration_reference': 'narration://artifact/older',
-                'montage': {'delivery_window': {'section_id': 'section_2', 'start_seconds': 8, 'end_seconds': 14}}})
+                'section_id': 'section_2', 'script_id': case.script_id, 'text': cue.text,
+                'narration_reference': montage.narration_audio_path,
+                'montage': creation_task_montage_plan_to_payload(montage)})
             case.repo.execution_records.append_task_event(publication, connection=conn)
             task = case.repo.task_records.get_creation_task('local', case.task_id, connection=conn)
             version = TimelineVersion(id='other-clock-version', workspace_id='local', task_id=case.task_id,

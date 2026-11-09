@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import asdict, replace
 import json
+import os
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
@@ -20,7 +21,7 @@ from tests.host_memory_boundary import IsolatedMemoryMonitor
 from test_device_resource_profile import profile_document, write_profile, DEVICE, BACKENDS
 
 
-def fixture(tmp_path, monkeypatch, *, mode='copy', output=33554433):
+def fixture(tmp_path, monkeypatch, *, mode='copy', output=33554433, published_target=None):
     budget = PacketCopyBudget('a'*64, 1024**2, 1024**2, 4, 1, .05, 65536, 262144, 65536, 20.)
     paths = {role: tmp_path / role for role in ('manifest', 'staging', 'published')}
     for path in paths.values():
@@ -30,7 +31,7 @@ def fixture(tmp_path, monkeypatch, *, mode='copy', output=33554433):
         'packet_count': 18000, 'producer_request_id': 'original-request', 'producer_generation': 3}]
     resources = packet_copy_resources(budget=budget, manifest_digest='c'*64, unit_id='d'*64,
         parents=parents, expected_total_packets=18000, write_paths=paths, write_files=files,
-        output_limit_bytes=output, manifest_bytes=512, publication_mode=mode)
+        output_limit_bytes=output, manifest_bytes=512, publication_mode=mode, published_target=published_target)
     host = HostBudget(100, 100, None, 200, None, 1, packet_copy=budget)
     probe = HostResourceProbe(tmp_path / 'db', disk_paths=(tmp_path,), budget=host,
         memory_monitor=IsolatedMemoryMonitor())
@@ -179,3 +180,85 @@ def test_packet_copy_backend_identity_tracks_actual_tools_and_unknown_space_is_n
     with pytest.raises(OSError, match='unknown'):
         packet_copy_output_allocation(write_paths=paths, write_files=files, publication_mode='copy',
             manifest_bytes=512, reserve_bytes=200)
+
+
+def test_sealed_publication_target_finishes_output_allocation_across_link_and_unlink(tmp_path, monkeypatch):
+    target = tmp_path/'published'/'final.mp4'
+    budget, resources, probe, paths, files = fixture(tmp_path, monkeypatch, output=1000, published_target=target)
+    assert resources['publication_target'] == {'path':str(target), 'directory':str(target.parent),
+        'volume_id':target.parent.stat().st_dev}
+    files['manifest'].write_bytes(b'm'*512)
+    files['staging'].write_bytes(b's'*700)
+    files['published'].write_bytes(b's'*700)
+    assert packet_copy_remaining_allocations(resources, running=True) == {'manifest':0, 'staging':300, 'published':300}
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=200))
+    assert probe._sample(resources, running_io=True).verdict is False
+    # ArtifactStore closes and hashes the copy before linking its immutable final name.
+    os.link(files['published'], target)
+    assert packet_copy_remaining_allocations(resources, running=True) == {'manifest':0, 'staging':0, 'published':0}
+    assert probe._sample(resources, running_io=True).verdict is True
+    files['published'].unlink()
+    assert packet_copy_remaining_allocations(resources, running=True) == {'manifest':0, 'staging':0, 'published':0}
+    assert probe._sample(resources, running_io=True).verdict is True
+    assert resources['max_output_bytes'] == 1000 and resources['write_allocations']['published'] == 1000
+    assert probe._sample(resources).verdict is not True  # A new admission cannot adopt this existing output.
+    with pytest.raises(ValueError, match='overwrite'):
+        packet_copy_output_allocation(write_paths=paths, write_files=files, publication_mode='copy',
+            manifest_bytes=512, reserve_bytes=200, published_target=target)
+
+
+@pytest.mark.parametrize('failure', ['directory', 'symlink', 'foreign_link', 'different_copy', 'third_link',
+    'oversize_target', 'oversize_staging', 'empty_target', 'wrong_volume', 'changed_digest'])
+def test_sealed_publication_rejects_unknown_or_unowned_final_files(tmp_path, monkeypatch, failure):
+    target = tmp_path/'published'/'final.mp4'
+    _budget, resources, probe, _paths, files = fixture(tmp_path, monkeypatch, output=1000, published_target=target)
+    if failure == 'directory':
+        target.mkdir()
+    elif failure in {'symlink', 'foreign_link'}:
+        other = tmp_path/'unrelated-file'
+        other.write_bytes(b'not the publication')
+        if failure == 'symlink':
+            target.symlink_to(other)
+        else:
+            os.link(other, target)
+    else:
+        target.write_bytes(b't'*700)
+        if failure == 'different_copy':
+            files['published'].write_bytes(b't'*700)
+        elif failure == 'third_link':
+            os.link(target, files['published'])
+            os.link(target, tmp_path/'extra-hardlink')
+        elif failure == 'oversize_target':
+            target.write_bytes(b'x'*1001)
+        elif failure == 'oversize_staging':
+            files['staging'].write_bytes(b'x'*1001)
+        elif failure == 'empty_target':
+            target.write_bytes(b'')
+        elif failure == 'wrong_volume':
+            resources['publication_target']['volume_id'] += 1
+        else:
+            resources['publication_target_digest'] = '0'*64
+    assert probe._sample(resources, running_io=True).verdict is not True
+    with pytest.raises((ValueError, OSError)):
+        packet_copy_remaining_allocations(resources, running=True)
+
+
+def test_missing_or_unsealed_target_does_not_complete_old_output_allocation(tmp_path, monkeypatch):
+    target = tmp_path/'published'/'final.mp4'
+    _budget, resources, _probe, _paths, files = fixture(tmp_path, monkeypatch, output=1000)
+    assert 'publication_target' not in resources and 'publication_target_digest' not in resources
+    files['staging'].write_bytes(b's'*700)
+    before = packet_copy_remaining_allocations(resources, running=True)
+    target.write_bytes(b't'*700)
+    assert packet_copy_remaining_allocations(resources, running=True) == before == {
+        'manifest':512, 'staging':300, 'published':1000}
+
+
+@pytest.mark.parametrize('failure', ['outside', 'same_copy', 'parent'])
+def test_new_publication_target_must_be_its_own_declared_directory_slot(tmp_path, monkeypatch, failure):
+    budget, resources, _probe, paths, files = fixture(tmp_path, monkeypatch, output=1000)
+    target = {'outside':tmp_path/'outside.mp4', 'same_copy':files['published'], 'parent':paths['published']/'..'}[failure]
+    with pytest.raises(ValueError, match='sealed publication'):
+        packet_copy_resources(budget=budget, manifest_digest='c'*64, unit_id='d'*64,
+            parents=resources['parents'], expected_total_packets=18000, write_paths=paths, write_files=files,
+            output_limit_bytes=1000, manifest_bytes=512, publication_mode='copy', published_target=target)

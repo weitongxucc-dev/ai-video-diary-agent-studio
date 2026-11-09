@@ -161,6 +161,21 @@ def apply_delivery_adoption(repo, conn, job, candidate):
     return version
 
 
+def delivery_clock_matches_plan(clock, frame_count, duration_seconds):
+    # picture-fragment-assembly/v2 compiles editorial seconds to 30 fps. Its
+    # rounded frame clock, rather than display milliseconds, owns delivery time.
+    picture, audio = clock['picture'], clock['audio']
+    duration = Fraction(frame_count, 30)
+    return (frame_count == round(Fraction(str(duration_seconds)) * 30) and frame_count > 0
+        and picture['packet_count'] == frame_count and picture['first_pts'] == 0
+        and picture['time_base_num'] == 1 and picture['time_base_den'] == 90000
+        and Fraction(picture['last_end_pts'], picture['time_base_den']) == duration
+        and audio['sample_rate'] == 48000 and audio['channels'] == 2
+        and audio['time_base_num'] == 1 and audio['time_base_den'] == audio['sample_rate']
+        and Fraction(audio['sample_count'], audio['sample_rate']) == duration
+        and audio['last_end_pts'] == audio['sample_count'])
+
+
 def valid_delivery(repository, store, task, version, plan, *, metadata, render_context=None):
     from app.creation.render_stage_use_case import render_input_payload, render_input_digest_for
     from app.creation.audio_delivery_assembly import _identity
@@ -180,12 +195,17 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
             or transform.parameters['delivery_manifest_digest'] != manifest['digest']):
         return False
     original_input = saved['render_input']
+    origin = repository.timeline_records.get_timeline_version(task.workspace_id, f'timeline_delivery_{job.id}')
+    if (origin.task_id != task.id or origin.parent_version_id != original_input['timeline_version_id']
+            or origin.snapshot['audio_delivery'] != saved
+            or origin.snapshot['transform_run_id'] != version.snapshot['transform_run_id']
+            or origin.snapshot['output_refs'] != version.snapshot['output_refs']):
+        return False
     expected = render_input_payload(creation_task_montage_plan_from_payload(plan),
         subtitles_visible=original_input['subtitles_visible'], subtitle_tracks=original_input['subtitle_tracks'],
         timeline_version_id=original_input['timeline_version_id'], bind_timeline_version=True)
     if (expected != original_input or render_input_digest_for(expected) != saved['render_input_digest']
-            or transform.parameters['render_input_digest'] != saved['render_input_digest']
-            or version.parent_version_id != original_input['timeline_version_id']):
+            or transform.parameters['render_input_digest'] != saved['render_input_digest']):
         return False
     final_transform = repository.lineage_records.get_transform_run(task.workspace_id, saved['video_parent']['binding']['transform_id'])
     video = repository.execution_records.get_artifact_record(task.workspace_id, saved['video_artifact_id'])
@@ -274,8 +294,7 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
         if _identity(source['path']) != source['file_identity']:
             return False
     clock = saved['video_parent']['clock']
-    if (Fraction(clock['picture']['last_end_pts'], clock['picture']['time_base_den']) != Fraction(str(actual_plan.duration_seconds))
-            or Fraction(clock['audio']['sample_count'], clock['audio']['sample_rate']) != Fraction(str(actual_plan.duration_seconds))):
+    if not delivery_clock_matches_plan(clock, leaf['units'][-1]['window']['timeline_end_frame'], actual_plan.duration_seconds):
         return False
     # Immutable producer SHA + fresh stat is sufficient for a read projection.
     # A caller that holds a real media Grant may also ask for full-byte checking.

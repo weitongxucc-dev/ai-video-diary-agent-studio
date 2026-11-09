@@ -214,12 +214,15 @@ def test_packet_parent_admission_reads_only_stats_and_sha_runs_in_original_grant
     import app.device_resource_configuration as identities
     import app.montage as media
     allowed = [False]
-    verified_grants, copied = [], []
+    verified_grants, copied, corrupt_parent_ids = [], [], []
     def guard_before_prepare(case, service, store, artifact_ids):
         parent_paths = {store.resolve_file(case.repo.execution_records.get_artifact_record('local', identity).logical_ref)
             for identity in artifact_ids}
         if corrupt:
-            with next(iter(parent_paths)).open('r+b') as file:
+            # The first request consumes the first pair; a set could select the untouched third leaf.
+            corrupt_parent_ids.append(artifact_ids[0])
+            record = case.repo.execution_records.get_artifact_record('local', artifact_ids[0])
+            with store.resolve_file(record.logical_ref).open('r+b') as file:
                 file.write(b'changed')
         def guarded(original):
             def call(path, *args, **kwargs):
@@ -254,6 +257,8 @@ def test_packet_parent_admission_reads_only_stats_and_sha_runs_in_original_grant
         monkeypatch.setattr(media, 'concatenate_granted_picture_fragments', copy_only_after_sha)
     case, service, budget, store, plan, original_next = _packet_case(tmp_path, monkeypatch,
         before_prepare=guard_before_prepare)
+    if corrupt:
+        assert corrupt_parent_ids[0] in plan['units'][0]['parents']
     assert service.master(case.job) is None
     intent = original_next(case.repo, case.scheduler, case.job)
     case.scheduler.submit(intent, case.actor)

@@ -363,7 +363,8 @@ def _device_resource_profile():
     try:
         return resolve_device_resources(settings, os.environ, model_catalog=model_catalog,
                                         select_packet_copy_preparation=True,
-                                        select_audio_delivery_preparation=True)
+                                        select_audio_delivery_preparation=True,
+                                        select_quality_preparation=True)
     except DeviceProfileUnavailable as exc:
         raise HostBudgetUncalibrated(str(exc)) from exc
 
@@ -4198,14 +4199,18 @@ app.include_router(build_task_capability_router(
 
 def _task_execution_capability_facts(task):
     from app.creation.execution_capabilities import execution_capability_facts
+    from app.creation.execution_control import task_execution_requirements
 
     # Reading installed facts must not assemble/start the runtime or sample the host.
     runtime = device_runtime
     observer = runtime.host_observer if runtime is not None else None
-    return execution_capability_facts(
+    facts = execution_capability_facts(
         budget=observer.budget if observer is not None else None,
         registrations=runtime.registrations if runtime is not None else {},
     )
+    facts['task_execution'] = task_execution_requirements(task,
+        production_repo.plan_records.get_creation_plan(task.workspace_id, task.plan_id))
+    return facts
 
 
 
@@ -6568,31 +6573,34 @@ def stop_active_assistant_turns() -> None:
 
 @app.on_event("startup")
 def resume_persisted_creation_executions() -> None:
-    try:
-        # Register the runtime first, recover all persisted owner jobs while its
-        # dispatch loop is still stopped, then allow any queued unit to run.
-        ready = _start_device_runtime(start=False)
-        if device_runtime is not None and not ready:
-            return  # Keep the stopped runtime and original work until release is provable.
-        _start_material_ingestion()
-        _recover_creation_executions()
-        runtime = device_runtime
-        if runtime is not None:
-            runtime.registrations[QUALITY_KIND].owner.service.schedule_rendered_tasks(runtime)
-        if runtime is not None and "platform_publish" in runtime.registrations:
-            recover_platform_publish_jobs(
-                production_repo, runtime,
-                actor_from_event=lambda identity: CreationExecutionActor.from_event(
-                    identity["workspace_id"], identity
-                ),
-                verify_identity=_verify_creation_identity,
-            )
-        if runtime is not None:
-            runtime.start()
-    except Exception:
-        _stop_device_runtime()
-        _stop_material_ingestion()
-        raise
+    with _runtime_reload_lock:
+        if device_runtime is not None and device_runtime.running:
+            return
+        try:
+            # Register the runtime first, recover all persisted owner jobs while its
+            # dispatch loop is still stopped, then allow any queued unit to run.
+            ready = _start_device_runtime(start=False)
+            if device_runtime is not None and not ready:
+                return  # Keep the stopped runtime and original work until release is provable.
+            _start_material_ingestion()
+            _recover_creation_executions()
+            runtime = device_runtime
+            if runtime is not None:
+                runtime.registrations[QUALITY_KIND].owner.service.schedule_rendered_tasks(runtime)
+            if runtime is not None and "platform_publish" in runtime.registrations:
+                recover_platform_publish_jobs(
+                    production_repo, runtime,
+                    actor_from_event=lambda identity: CreationExecutionActor.from_event(
+                        identity["workspace_id"], identity
+                    ),
+                    verify_identity=_verify_creation_identity,
+                )
+            if runtime is not None:
+                runtime.start()
+        except Exception:
+            _stop_device_runtime()
+            _stop_material_ingestion()
+            raise
 
 
 @app.on_event("shutdown")

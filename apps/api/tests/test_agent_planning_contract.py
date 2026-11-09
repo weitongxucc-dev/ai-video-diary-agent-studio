@@ -58,8 +58,10 @@ def test_device_preparation_uses_original_account_actor_and_only_public_facts():
     from app.assistant.task_business import TaskBusiness
     from app.creation_execution import CreationExecutionActor
     actor = CreationExecutionActor.account(str(uuid4()),str(uuid4()),str(uuid4()))
-    task = SimpleNamespace(workspace_id=actor.workspace_id,id='task')
+    task = SimpleNamespace(workspace_id=actor.workspace_id,id='task',plan_id='plan')
     business = object.__new__(TaskBusiness)
+    business.production = SimpleNamespace(plan_records=SimpleNamespace(
+        get_creation_plan=lambda workspace_id, plan_id: SimpleNamespace(source_media=None)))
     calls = []
     def dispatch(action, **values):
         calls.append((action,values))

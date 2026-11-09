@@ -586,16 +586,26 @@ class TaskBusiness:
             from app.device_resource_profile import DeviceProfileUnavailable
             from app.device_preparation_application import DevicePreparationConflict
             from app.device_scheduler import RecoveryBlocked
-            if self.device_preparation is None:
-                raise TaskBusinessRejected('设备准备业务用例尚未装配',kind='unavailable')
             try:
                 if operation=='prepare_device_resources':
                     payload=DevicePreparationRequest.model_validate(args['payload'])
+                    from app.creation.execution_control import task_execution_requirements
+                    plan=self.production.plan_records.get_creation_plan(task.workspace_id,task.plan_id)
+                    requirements=task_execution_requirements(task,plan)
+                    if payload.kind in requirements['not_applicable_preparation_kinds']:
+                        raise TaskOperationRejected(kind='conflict',detail={
+                            'error':'device_preparation_not_applicable','stage':'device_preparation_preflight',
+                            'task_id':task.id,'submission_effect':'not_submitted',
+                            'reason':'当前是原视频剪辑任务，配音和故事板准备不适用；未提交设备准备或改变原任务。',
+                            'repair_action':'读取当前任务的task_execution与实际执行能力，按next_required_stage和原作业回执选择下一步；不要准备不适用的种类。'})
                     shape=payload.shape.model_dump()
                     if payload.kind=='narration':
                         shape['task_id']=task.id
                     if payload.kind=='montage' and shape['task_id'] != task.id:
                         raise TaskBusinessRejected('故事板准备不能切换当前任务', kind='conflict')
+                if self.device_preparation is None:
+                    raise TaskBusinessRejected('设备准备业务用例尚未装配',kind='unavailable')
+                if operation=='prepare_device_resources':
                     result=self.device_preparation('prepare',kind=payload.kind,shape=shape,request_id=str(payload.request_id),actor=actor)
                 elif operation=='read_device_preparation':
                     result=self.device_preparation('status',request_id=args['request_id'],actor=actor)

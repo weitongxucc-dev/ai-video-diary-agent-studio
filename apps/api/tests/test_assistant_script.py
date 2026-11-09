@@ -2,6 +2,7 @@ from __future__ import annotations
 from app.creation_task_responses import CreationTaskResponseAdapter
 
 from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -19,12 +20,14 @@ from app.local_members import LocalMemberService
 
 def _assistant_task_session(tmp_path: Path, monkeypatch, task_id: str, *, database_path=None):
     conversations = ConversationRepository(database_path or tmp_path / "assistant-conversations.sqlite3")
-    members = LocalMemberService(tmp_path / "assistant-members.sqlite3")
+    members = LocalMemberService(conversations.database_path)
     _member, token = members.join(members.create_invite_code(), "成员甲")
     member_id = members.resolve_member(token).member_id
     monkeypatch.setattr(main_module, "conversation_repo", conversations)
     monkeypatch.setattr(main_module, "_goal_continuation_service", None)
     monkeypatch.setattr(main_module, "local_members_service", members)
+    monkeypatch.setattr(main_module, "settings", replace(main_module.settings,
+        database_path=str(conversations.database_path), video_inbox_path=str(tmp_path / 'library')))
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "local")
     conversation = conversations.current_or_create("local", member_id, "task", task_id)
     return conversations, member_id, token, conversation
@@ -262,10 +265,11 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
 def test_topic_scope_is_current_task_only(monkeypatch):
     from test_production_foundation import edit_adoption_no_execution
     forbidden = edit_adoption_no_execution(monkeypatch)
-    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace())
+    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(plan_records=SimpleNamespace(
+        get_creation_plan=lambda *_: SimpleNamespace(source_media=None))))
     monkeypatch.setattr(main_module, "_script_context_use_case", forbidden)
     monkeypatch.setattr(main_module, "_metadata_edit_use_case", forbidden)
-    topic_task = SimpleNamespace(id="task-one", stage="topic")
+    topic_task = SimpleNamespace(id="task-one", stage="topic", plan_id="plan-one")
     request = main_module.CreationTaskAssistantTurnRequest(
         conversation_id=uuid4(), message="请生成选题", client_request_id=uuid4(), expected_draft_version=0,
         context_stage="topic", selected_object_refs=[],
@@ -279,10 +283,11 @@ def test_confirmed_task_without_production_artifacts_can_use_general_assistant_s
     monkeypatch.setattr(main_module, "_script_context_use_case", forbidden)
     monkeypatch.setattr(main_module, "_metadata_edit_use_case", forbidden)
     task = SimpleNamespace(
-        id="task-one", stage="narration", confirmed_script_id="script-confirmed",
+        id="task-one", stage="narration", plan_id="plan-one", confirmed_script_id="script-confirmed",
         narration_cache_key=None, current_timeline_version_id=None, montage_plan_id=None,
     )
-    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace())
+    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(plan_records=SimpleNamespace(
+        get_creation_plan=lambda *_: SimpleNamespace(source_media=None))))
     request = main_module.CreationTaskAssistantTurnRequest(
         conversation_id=uuid4(), message="按已确认文案开始制作", client_request_id=uuid4(), expected_draft_version=0,
         context_stage="narration", selected_object_refs=[],

@@ -25,6 +25,16 @@ from app.task_audio import TASK_MEDIA_KIND
 logger = logging.getLogger("app.main")
 
 
+def task_execution_requirements(task: CreationTask, plan: CreationPlan) -> dict[str, object]:
+    """Task route facts, independent of editor stage and machine configuration."""
+    source_edit = plan.source_media is not None
+    return {
+        'task_kind': 'source_video_edit' if source_edit else 'scripted_creation',
+        'next_required_stage': 'render' if source_edit and not task.output_ready else None,
+        'not_applicable_preparation_kinds': ['narration', 'montage'] if source_edit else [],
+    }
+
+
 class DesktopShutdownUseCase:
     """One save/pause request consumes one common desktop exit budget."""
     def __init__(self, *, runtime, automation, ingestion, assistant, stop_assistant,
@@ -156,6 +166,7 @@ class CreationExecutionControl:
             continuation_blocker = "请先选择已授权声音，或保存并明确采用本人录音；本人录音仅支持纯素材成片。"
         return {
             "task_id": task.id,
+            "task_execution": task_execution_requirements(task, plan),
             "script_id": script.id if script is not None else None,
             "script_title": script.title if script is not None else None,
             "script_updated_at": script.updated_at.isoformat() if script is not None else None,
@@ -236,6 +247,8 @@ class CreationExecutionControl:
             waiting_reason = "故事板仍有镜头等待确认；确认后点击继续制作。"
         return {
             "task_id": task_id,
+            "task_execution": task_execution_requirements(task,
+                self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)),
             "job": asdict(job) if job else None,
             "stages": events,
             "current_stage": current_stage,

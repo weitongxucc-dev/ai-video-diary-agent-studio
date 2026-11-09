@@ -280,8 +280,10 @@ def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boun
     elif receipt_kind == "script_locator":
         assert delivered["failure"]["candidate_section_index"] == delivered["failure"]["candidate_fragment_index"] == 0
         assert delivered["failure"]["candidate_field"] == "title"
-        assert delivered["failure"]["reason"] == "总标题与原用户要求冲突。"
-        assert delivered["failure"]["repair_action"] == "核对当前送审标题后修改冲突表述。"
+        assert delivered["failure"]["reason"].startswith("本次未保存送审稿的总标题第1个片段（第1–4个Unicode字符）与制作要求冲突。")
+        assert "总标题与原用户要求冲突。" in delivered["failure"]["reason"]
+        assert "定位指向本次提交但尚未保存的新稿，不是已保存旧稿" in delivered["failure"]["repair_action"]
+        assert "核对当前送审标题后修改冲突表述。" in delivered["failure"]["repair_action"]
         assert "private-model-explanation" not in json.dumps(events) and "private-response-body" not in json.dumps(events)
         assert len(delivered["failure"]["review_issues"]) == 2
         assert [issue["candidate_field"] for issue in delivered["failure"]["review_issues"]] == ["title", "content"]

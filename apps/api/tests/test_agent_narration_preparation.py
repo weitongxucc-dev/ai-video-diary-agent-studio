@@ -9,8 +9,10 @@ from app.assistant.task_business_errors import TaskBusinessRejected
 
 def test_task_preparation_forwards_real_kind_and_binds_narration_references_to_current_task():
     actor=CreationExecutionActor.account(str(uuid4()),str(uuid4()),str(uuid4()))
-    task=SimpleNamespace(workspace_id=actor.workspace_id,id='actual_task')
+    task=SimpleNamespace(workspace_id=actor.workspace_id,id='actual_task',plan_id='plan')
     business=object.__new__(TaskBusiness)
+    business.production=SimpleNamespace(plan_records=SimpleNamespace(
+        get_creation_plan=lambda workspace_id,plan_id:SimpleNamespace(source_media=None)))
     calls=[]
     def dispatch(action,**values):
         calls.append((action,values))
@@ -34,8 +36,10 @@ def test_task_preparation_forwards_real_kind_and_binds_narration_references_to_c
 
 def test_storyboard_preparation_cannot_switch_the_bound_task():
     actor = CreationExecutionActor('local', 'member')
-    task = SimpleNamespace(workspace_id='local', id='bound-task')
+    task = SimpleNamespace(workspace_id='local', id='bound-task', plan_id='plan')
     business = object.__new__(TaskBusiness)
+    business.production = SimpleNamespace(plan_records=SimpleNamespace(
+        get_creation_plan=lambda workspace_id, plan_id: SimpleNamespace(source_media=None)))
     calls = []
     business.device_preparation = lambda action, **values: calls.append((action, values)) or {'id': 'work'}
     payload = {'request_id': str(uuid4()), 'kind': 'montage', 'shape': {'task_id': task.id}}

@@ -1019,7 +1019,9 @@ class CreationJobOwnerVerifier:
                         or montage.script_id != task.confirmed_script_id or any(clip.needs_confirmation for clip in montage.clips)):
                     raise ValueError('音频组装故事板不属于当前已确认输入')
                 self.audio_assembly.render_assembly(job, montage, actor=actor, budget=self.narration_audio_budget,
-                    prepare=prepare_assembly, connection=conn, force_master=self.audio_delivery is not None)
+                    prepare=prepare_assembly, connection=conn, force_master=self.audio_delivery is not None,
+                    output_sample_count=(self.audio_delivery.picture_sample_count(job, connection=conn)
+                        if self.audio_delivery is not None else None))
                 pending = self.audio_assembly.next_assembly_unit(job, montage, actor=actor,
                     budget=self.narration_audio_budget, connection=conn, request=request)
                 if pending is not None:

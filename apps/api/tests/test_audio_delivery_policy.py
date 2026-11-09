@@ -27,7 +27,7 @@ def parent(clock, name='master'):
         'transform_id': 'transform-'+name, 'transform_digest': 'c'*64}, 'clock': clock}
 
 
-def fixture(tmp_path, monkeypatch, operation='audio_encode'):
+def fixture(tmp_path, monkeypatch, operation='audio_encode', *, published_target=None):
     kind = AudioEncodeBudget if operation == 'audio_encode' else FinalMuxBudget
     budget = kind('a'*64, 1024**2, 1024**2, 4, 1, .05, 65536, 262144, 65536, 20.)
     paths = {role: tmp_path/role for role in ('manifest', 'staging', 'published')}
@@ -36,7 +36,7 @@ def fixture(tmp_path, monkeypatch, operation='audio_encode'):
     files = {role: path/(role+'.fixture') for role, path in paths.items()}
     common = dict(budget=budget, manifest_digest='d'*64, unit_id='e'*64,
         write_paths=paths, write_files=files, output_limit_bytes=33554433, manifest_bytes=2048,
-        publication_mode='copy')
+        publication_mode='copy', published_target=published_target)
     if operation == 'audio_encode':
         resources = audio_encode_resources(**common,
             master=parent(dict(sample_count=48000*1800, sample_rate=48000, channels=2, sample_format='s16le')),
@@ -57,6 +57,38 @@ def fixture(tmp_path, monkeypatch, operation='audio_encode'):
     monkeypatch.setattr(psutil, 'cpu_percent', lambda **kwargs: 0)
     monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=2**40))
     return budget, resources, probe, paths, files
+
+
+@pytest.mark.parametrize('operation', ['audio_encode', 'final_mux'])
+def test_completed_delivery_keeps_reserve_without_recharging_finished_output(tmp_path, monkeypatch, operation):
+    from app.packet_copy_policy import packet_copy_remaining_allocations
+    target = tmp_path/'published'/'immutable.mp4'
+    budget, resources, probe, _paths, files = fixture(tmp_path, monkeypatch, operation, published_target=target)
+    assert audio_delivery_refusal(resources, budget) is None
+    assert resources['publication_target']['path'] == str(target)
+    files['manifest'].write_bytes(b'm'*resources['manifest_bytes'])
+    files['staging'].write_bytes(b'encoded bytes')
+    files['published'].write_bytes(b'encoded bytes')
+    files['published'].replace(target)
+    monkeypatch.setattr(psutil, 'disk_usage', lambda _:SimpleNamespace(free=probe.budget.min_free_disk_bytes))
+    assert packet_copy_remaining_allocations(resources, running=True) == {'manifest':0, 'staging':0, 'published':0}
+    assert probe._sample(resources, running_io=True).verdict is True
+    assert probe._sample(resources).verdict is not True
+    forged = deepcopy(resources)
+    forged['publication_target']['path'] = str(target.parent/'different.mp4')
+    assert audio_delivery_refusal(forged, budget) == 'audio_delivery_resources_invalid'
+    assert probe._sample(forged, running_io=True).verdict is not True
+
+
+@pytest.mark.parametrize('operation', ['audio_encode', 'final_mux'])
+def test_old_delivery_grant_does_not_guess_a_final_publication_path(tmp_path, monkeypatch, operation):
+    from app.packet_copy_policy import packet_copy_remaining_allocations
+    budget, resources, _probe, _paths, files = fixture(tmp_path, monkeypatch, operation)
+    original = deepcopy(resources)
+    (files['published'].parent/'immutable.mp4').write_bytes(b'unsealed target bytes')
+    assert packet_copy_remaining_allocations(resources, running=True) == resources['write_allocations']
+    assert resources == original and 'publication_target' not in resources
+    assert audio_delivery_refusal(resources, budget) is None
 
 
 @pytest.mark.parametrize('operation', ['audio_encode', 'final_mux'])

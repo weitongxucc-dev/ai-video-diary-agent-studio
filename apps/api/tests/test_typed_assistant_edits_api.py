@@ -252,11 +252,11 @@ def metadata_http_state(tmp_path, monkeypatch, request):
             monkeypatch.setattr(LocalPortrait, "process", forbidden)
             monkeypatch.setattr(OpenAICompatibleSubtitleTranslationProvider, "translate", forbidden)
             monkeypatch.setattr(UnavailableSubtitleTranslationProvider, "translate", forbidden)
-    state = metadata_state(tmp_path)
+    state = metadata_state(tmp_path, workspace_id=getattr(request, 'param', 'ws'))
     monkeypatch.setattr(main, "production_repo", state.repo)
     monkeypatch.setattr(main, "artifact_store", state.store)
     monkeypatch.setattr(main, "local_members_service", state.members)
-    monkeypatch.setattr(main, "current_workspace_id", lambda request: request.headers.get("x-test-workspace", "ws"))
+    monkeypatch.setattr(main, "current_workspace_id", lambda request: request.headers.get("x-test-workspace", state.task.workspace_id))
     monkeypatch.setattr(main, "settings", replace(main.settings,
         video_inbox_path=str(state.repo.video_library_path), video_output_path=str(tmp_path / "outputs")))
     state.client = TestClient(main.app, headers={"X-Local-Member-Token": state.token})
@@ -1053,11 +1053,11 @@ def test_other_member_cannot_read_or_replay_private_typed_edit(material_edit_sta
 def linked_speed_http_state(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from test_linked_speed_application import speed_state
-    state = speed_state(tmp_path)
+    state = speed_state(tmp_path, workspace_id='local')
     monkeypatch.setattr(main, 'production_repo', state.repo)
     monkeypatch.setattr(main, 'artifact_store', state.store)
     monkeypatch.setattr(main, 'local_members_service', state.members)
-    monkeypatch.setattr(main, 'current_workspace_id', lambda request: request.headers.get('x-test-workspace', 'ws'))
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request: request.headers.get('x-test-workspace', 'local'))
     monkeypatch.setattr(main, 'settings', replace(main.settings,
         video_inbox_path=str(state.repo.video_library_path), video_output_path=str(tmp_path / 'outputs')))
     state.client = TestClient(main.app, headers={'X-Local-Member-Token': state.token})
@@ -1092,7 +1092,7 @@ def test_linked_speed_HTTP_confirm_and_fixed_result_do_not_use_HTTP_recovery(lin
     later = state.client.post(state.url + '/edits/exact', json={'operation_type': 'ChangeLinkedSpeed', 'clip_id': 'clip', 'playback_rate': 2})
     assert later.status_code == 200, later.text
     from app.task_audio import media_digest
-    event = 'event_edit_request_' + media_digest(['ws', state.member.member_id, request['request_id'], 'apply'])
+    event = 'event_edit_request_' + media_digest(['local', state.member.member_id, request['request_id'], 'apply'])
     recorded = state.repo.execution_records.read_edit_request_result(state.task, event)
     assert recorded['status_code'] == 200 and recorded['response'] == accepted.json()
     with state.repo._connect() as conn:
@@ -1106,7 +1106,7 @@ def test_linked_speed_HTTP_confirm_and_fixed_result_do_not_use_HTTP_recovery(lin
     read = state.client.get(result_url)
     assert read.status_code == 200 and read.json()['result']['operation']['result_version_id'] == operation['result_version_id']
     assert read.json()['result']['montage']['duration_seconds'] == 3
-    assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 2
+    assert len(state.repo.edit_records.list_edit_operations('local', state.task.id)) == 2
 
 
 def test_linked_speed_direct_and_natural_consumers_call_real_application(linked_speed_http_state, monkeypatch):
@@ -1170,7 +1170,7 @@ def test_linked_clip_public_preview_confirm_and_fixed_read(linked_speed_http_sta
     fixed = state.client.get(result_url)
     assert fixed.status_code == 200 and fixed.json()['result']['operation'] == accepted.json()['operation']
     assert fixed.json()['result']['montage']['duration_seconds'] == duration
-    assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 1
+    assert len(state.repo.edit_records.list_edit_operations('local', state.task.id)) == 1
 
 
 @pytest.mark.parametrize('operation,command', [('DeleteClip', '删除这个镜头'),
@@ -1220,9 +1220,9 @@ def test_linked_clip_recovery_keeps_original_version_and_does_not_wake(linked_sp
     operation = accepted.json()['operation']
     later = state.client.post(state.url + '/edits/exact', json=linked_clip_action(state, 'DeleteClip'))
     assert later.status_code == 200, later.text
-    later_head = state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id
+    later_head = state.repo.task_records.get_creation_task('local', state.task.id).current_timeline_version_id
     assert later_head != operation['result_version_id']
-    event = 'event_edit_request_' + media_digest(['ws', state.member.member_id, request['request_id'], 'apply'])
+    event = 'event_edit_request_' + media_digest(['local', state.member.member_id, request['request_id'], 'apply'])
     with state.repo._connect() as conn:
         conn.execute('DELETE FROM task_events WHERE id=?', (event + '_result',))
     before_wakes = len(wakes)
@@ -1233,8 +1233,8 @@ def test_linked_clip_recovery_keeps_original_version_and_does_not_wake(linked_sp
     assert state.repo.execution_records.read_edit_request_result(state.task, event)['response'] == recovered.json()
     fixed = state.client.get(result_url)
     assert fixed.status_code == 200 and fixed.json()['result']['operation'] == operation
-    assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == later_head
-    assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 2
+    assert state.repo.task_records.get_creation_task('local', state.task.id).current_timeline_version_id == later_head
+    assert len(state.repo.edit_records.list_edit_operations('local', state.task.id)) == 2
     changed = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json={**request,
         'expected_input_digest': fixed.json()['input_digest']})
     assert changed.status_code == 409 and len(wakes) == before_wakes
@@ -1249,18 +1249,18 @@ def test_linked_insert_permission_and_range_keep_original_error_projection(linke
     state.repo._save_asset(state.neighbour)
     out_of_range = state.client.post(state.url + '/edits/exact/preview', json={**action, 'source_start_seconds': 4})
     assert out_of_range.status_code == 400 and out_of_range.json()['detail'] == '插入起点须在 0.0–4.0 秒之间。'
-    assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)
+    assert not state.repo.edit_records.list_edit_operations('local', state.task.id)
 
 
 @pytest.fixture
 def subtitle_http_state(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from test_subtitle_application import subtitle_state
-    state = subtitle_state(tmp_path)
+    state = subtitle_state(tmp_path, workspace_id='local')
     monkeypatch.setattr(main, 'production_repo', state.repo)
     monkeypatch.setattr(main, 'artifact_store', state.store)
     monkeypatch.setattr(main, 'local_members_service', state.members)
-    monkeypatch.setattr(main, 'current_workspace_id', lambda request: request.headers.get('x-test-workspace', 'ws'))
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request: request.headers.get('x-test-workspace', 'local'))
     monkeypatch.setattr(main, 'settings', replace(main.settings,
         video_inbox_path=str(state.repo.video_library_path), video_output_path=str(state.case.output_root)))
     state.client = TestClient(main.app, headers={'X-Local-Member-Token': state.token})
@@ -1279,7 +1279,7 @@ def subtitle_action(state, operation):
 @pytest.mark.parametrize('operation', ['ReplaceSubtitleText', 'ConfigureSubtitleTrack', 'UpdateSubtitleCue'])
 def test_subtitle_family_public_preview_confirm_fixed_read_preserves_other_facts(subtitle_http_state, monkeypatch, operation):
     state = subtitle_http_state
-    before_plan = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    before_plan = state.repo.get_creation_task_montage_plan('local', state.task.id)
     preview = state.client.post(state.url + '/edits/exact/preview?draft=true', json={**subtitle_action(state, operation),
         'request_id': str(uuid4()), 'expected_timeline_version_id': state.base.id, 'expected_timeline_sequence': 2})
     assert preview.status_code == 200, preview.text
@@ -1296,15 +1296,15 @@ def test_subtitle_family_public_preview_confirm_fixed_read_preserves_other_facts
     assert accepted.status_code == 200, accepted.text
     result = state.client.get(result_url)
     assert result.status_code == 200 and result.json()['result']['operation'] == accepted.json()['operation']
-    current = state.repo.task_records.get_creation_task('ws', state.task.id)
-    version = state.repo.timeline_records.get_timeline_version('ws', current.current_timeline_version_id)
-    after_plan = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    current = state.repo.task_records.get_creation_task('local', state.task.id)
+    version = state.repo.timeline_records.get_timeline_version('local', current.current_timeline_version_id)
+    after_plan = state.repo.get_creation_task_montage_plan('local', state.task.id)
     assert after_plan['clips'] == before_plan['clips'] and after_plan['audio_timeline'] == before_plan['audio_timeline']
     assert current.narration_cache_key == state.narration.cache_key
     assert (state.case.output_root / state.narration.audio_path).read_bytes() == state.voice_bytes
-    cover = state.repo.cover_records.get_cover_asset('ws', state.task.id, version.snapshot['cover_asset_id'])
+    cover = state.repo.cover_records.get_cover_asset('local', state.task.id, version.snapshot['cover_asset_id'])
     assert cover.title == state.cover.title and cover.artifact_ref == state.cover.artifact_ref
-    tracks = state.repo.subtitle_records.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id)
+    tracks = state.repo.subtitle_records.list_subtitle_tracks('local', state.task.id, timeline_version_id=version.id)
     if operation == 'ReplaceSubtitleText':
         assert len(tracks) == 1 and tracks[0].cues[0].text == '新字幕'
     elif operation == 'ConfigureSubtitleTrack':
@@ -1324,14 +1324,14 @@ def test_subtitle_public_structure_sequence_ends_with_explicit_empty_track_snaps
     en = replace(clone_subtitle_track(state.en, timeline_version_id='structure-start', track_id='structure-en'),
         source_language=None, generation_method='timeline')
     cover = clone_cover_asset(state.cover, timeline_version_id='structure-start')
-    state.repo.timeline_records.create_timeline_version(TimelineVersion('structure-start', 'ws', state.task.id, state.base.id, 3,
+    state.repo.timeline_records.create_timeline_version(TimelineVersion('structure-start', 'local', state.task.id, state.base.id, 3,
         {**state.base.snapshot, 'subtitle_track_ids': [zh.id, en.id], 'cover_asset_id': cover.id}, None))
     state.repo.subtitle_records.create_subtitle_track(zh)
     state.repo.subtitle_records.create_subtitle_track(en)
     state.repo.cover_records.create_cover_asset(cover)
     def preview_confirm(operation, **values):
-        task = state.repo.task_records.get_creation_task('ws', state.task.id)
-        track = next(item for item in state.repo.subtitle_records.list_subtitle_tracks('ws', task.id,
+        task = state.repo.task_records.get_creation_task('local', state.task.id)
+        track = next(item for item in state.repo.subtitle_records.list_subtitle_tracks('local', task.id,
             timeline_version_id=task.current_timeline_version_id) if item.language == 'en-US')
         preview = state.client.post(state.url + '/edits/exact/preview', json={
             'operation_type': operation, 'track_id': track.id, 'cue_id': track.cues[0].id, **values})
@@ -1345,22 +1345,22 @@ def test_subtitle_public_structure_sequence_ends_with_explicit_empty_track_snaps
     preview_confirm('MergeSubtitleCue')
     preview_confirm('DeleteSubtitleCue')
     preview_confirm('DeleteSubtitleCue')
-    task = state.repo.task_records.get_creation_task('ws', state.task.id)
-    tracks = state.repo.subtitle_records.list_subtitle_tracks('ws', task.id, timeline_version_id=task.current_timeline_version_id)
+    task = state.repo.task_records.get_creation_task('local', state.task.id)
+    tracks = state.repo.subtitle_records.list_subtitle_tracks('local', task.id, timeline_version_id=task.current_timeline_version_id)
     assert len(tracks) == 1 and tracks[0].language == 'zh-CN'
     preview = state.client.post(state.url + '/edits/exact/preview', json={
         'operation_type': 'DeleteSubtitleCue', 'track_id': tracks[0].id, 'cue_id': tracks[0].cues[0].id})
     assert preview.status_code == 200, preview.text
     assert state.client.post(state.url + f"/edits/{preview.json()['proposal']['id']}/confirm").status_code == 200
-    task = state.repo.task_records.get_creation_task('ws', task.id)
-    remaining = state.repo.subtitle_records.list_subtitle_tracks('ws', task.id, timeline_version_id=task.current_timeline_version_id)[0]
+    task = state.repo.task_records.get_creation_task('local', task.id)
+    remaining = state.repo.subtitle_records.list_subtitle_tracks('local', task.id, timeline_version_id=task.current_timeline_version_id)[0]
     direct = state.client.post(state.url + '/edits/exact', json={
         'operation_type': 'DeleteSubtitleCue', 'track_id': remaining.id, 'cue_id': remaining.cues[0].id})
     assert direct.status_code == 200, direct.text
-    task = state.repo.task_records.get_creation_task('ws', task.id)
-    version = state.repo.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
+    task = state.repo.task_records.get_creation_task('local', task.id)
+    version = state.repo.timeline_records.get_timeline_version('local', task.current_timeline_version_id)
     assert version.snapshot['subtitle_track_ids'] == []
-    assert state.case.current_subtitle_tracks('ws', task, current_version=version, montage=state.plan) == []
+    assert state.case.current_subtitle_tracks('local', task, current_version=version, montage=state.plan) == []
 
 
 @pytest.mark.parametrize('operation,raw_command,refs', [
@@ -1403,18 +1403,18 @@ def test_subtitle_unknown_claim_and_HTTP_projection_are_not_application_facts(su
     state.repo.execution_records.save_edit_request_result(state.task, event, status_code=200, response={'only': 'a transport projection'})
     refused = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
     assert refused.status_code == 409 and '尚未确定' in refused.text
-    assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)
+    assert not state.repo.edit_records.list_edit_operations('local', state.task.id)
 
 
 @pytest.fixture
 def compound_http_state(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from test_compound_application import compound_state
-    state = compound_state(tmp_path)
+    state = compound_state(tmp_path, workspace_id='local')
     monkeypatch.setattr(main, 'production_repo', state.repo)
     monkeypatch.setattr(main, 'artifact_store', state.store)
     monkeypatch.setattr(main, 'local_members_service', state.members)
-    monkeypatch.setattr(main, 'current_workspace_id', lambda request: request.headers.get('x-test-workspace', 'ws'))
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request: request.headers.get('x-test-workspace', 'local'))
     monkeypatch.setattr(main, 'settings', replace(main.settings,
         video_inbox_path=str(state.repo.video_library_path), video_output_path=str(state.case.output_root)))
     state.client = TestClient(main.app, headers={'X-Local-Member-Token': state.token})
@@ -1434,7 +1434,7 @@ def test_compound_public_selection_restore_confirm_and_fixed_read_are_one_joint_
         return validate(self, *args, **kwargs)
     monkeypatch.setattr(TaskAudio, 'validate', observed)
     monkeypatch.setattr(PicturePreviewRenderer, 'publish_picture', staticmethod(lambda *args, **kwargs: pytest.fail('draft must not publish video')))
-    before = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    before = state.repo.get_creation_task_montage_plan('local', state.task.id)
     full = state.client.post(state.url + '/edits/preview?draft=true', json={
         'raw_command': COMPOUND_TEXT, 'context_stage': 'montage', 'selected_object_refs': ['clip:clip'], 'playhead_ms': 750})
     assert full.status_code == 200, full.text
@@ -1456,9 +1456,9 @@ def test_compound_public_selection_restore_confirm_and_fixed_read_are_one_joint_
     proposal = restored.json()['proposal']
     assert [step['enabled'] for step in proposal['operation']['payload']['steps']] == [True, True, True]
     assert proposal['operation']['payload']['audio_timeline']['tracks'][0]['clips'][0]['gain_db'] == -3
-    assert state.repo.edit_records.get_edit_proposal('ws', original['id']).status == 'proposed'
-    assert state.repo.edit_records.get_edit_proposal('ws', selected['id']).status == 'proposed'
-    assert state.repo.get_creation_task_montage_plan('ws', state.task.id) == before
+    assert state.repo.edit_records.get_edit_proposal('local', original['id']).status == 'proposed'
+    assert state.repo.edit_records.get_edit_proposal('local', selected['id']).status == 'proposed'
+    assert state.repo.get_creation_task_montage_plan('local', state.task.id) == before
     result_url = state.url + f"/edits/{proposal['id']}/result"
     fixed = state.client.get(result_url)
     assert fixed.status_code == 200 and fixed.json()['result'] is None
@@ -1467,13 +1467,13 @@ def test_compound_public_selection_restore_confirm_and_fixed_read_are_one_joint_
         'request_id': str(uuid4()), 'expected_base_version_id': state.base.id,
         'expected_input_digest': fixed.json()['input_digest']})
     assert accepted.status_code == 200, accepted.text
-    task = state.repo.task_records.get_creation_task('ws', state.task.id)
-    version = state.repo.timeline_records.get_timeline_version('ws', task.current_timeline_version_id)
-    assert version.sequence == 4 and len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 1
-    after = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    task = state.repo.task_records.get_creation_task('local', state.task.id)
+    version = state.repo.timeline_records.get_timeline_version('local', task.current_timeline_version_id)
+    assert version.sequence == 4 and len(state.repo.edit_records.list_edit_operations('local', state.task.id)) == 1
+    after = state.repo.get_creation_task_montage_plan('local', state.task.id)
     assert after['clips'][0]['visual_effects']['exposure'] == .25 and after['clips'][1] == before['clips'][1]
     assert after['audio_timeline']['tracks'][0]['clips'][0]['gain_db'] == -3
-    tracks = state.repo.subtitle_records.list_subtitle_tracks('ws', state.task.id, timeline_version_id=version.id)
+    tracks = state.repo.subtitle_records.list_subtitle_tracks('local', state.task.id, timeline_version_id=version.id)
     assert len(tracks) == 2 and all(track.style['font_size'] == 64 for track in tracks)
     assert next(track for track in tracks if track.language == 'en-US').style['enabled'] is False
     assert {track.language: [cue.text for cue in track.cues] for track in tracks} == {
@@ -1500,4 +1500,4 @@ def test_compound_unknown_claim_with_projection_has_no_durable_edit_and_no_exact
     state.repo.execution_records.save_edit_request_result(state.task, event, status_code=200, response={'only': 'transport projection'})
     refused = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
     assert refused.status_code == 409 and '尚未确定' in refused.text
-    assert not state.repo.edit_records.list_edit_operations('ws', state.task.id)
+    assert not state.repo.edit_records.list_edit_operations('local', state.task.id)

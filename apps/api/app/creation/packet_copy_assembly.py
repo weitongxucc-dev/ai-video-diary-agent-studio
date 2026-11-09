@@ -205,13 +205,16 @@ class PacketCopyAssembly:
                 sealed = self.repository.execution_records.get_task_event(job.workspace_id, resource_id, connection=connection).payload
             except KeyError:
                 sealed = None
+            published_target = (self.store._target(logical)
+                if sealed is None or sealed.get('publication_target') is not None else None)
             if sealed is not None:
                 limit = sealed['max_output_bytes']
             elif not prepare:
                 raise ValueError('原Job画面归约尚未封存本单元实际卷分配')
             else:
                 limit = packet_copy_output_allocation(write_paths=paths, write_files=files,
-                    manifest_bytes=manifest_bytes, publication_mode='copy', reserve_bytes=self.reserve_bytes)
+                    manifest_bytes=manifest_bytes, publication_mode='copy', reserve_bytes=self.reserve_bytes,
+                    published_target=published_target)
                 from app.creation.execution_budget_scope import ExecutionBudgetScopes
                 scopes = ExecutionBudgetScopes(self.repository)
                 with self.repository._connect() if connection is None else nullcontext(connection) as conn:
@@ -231,7 +234,8 @@ class PacketCopyAssembly:
                     'packet_count': info['packet_count'], 'producer_request_id': info['producer_request_id'],
                     'producer_generation': info['producer_generation']} for record, _path, info in parents],
                 expected_total_packets=unit['packet_count'], write_paths=paths, write_files=files,
-                output_limit_bytes=limit, manifest_bytes=manifest_bytes, publication_mode='copy')
+                output_limit_bytes=limit, manifest_bytes=manifest_bytes, publication_mode='copy',
+                published_target=published_target)
             if sealed is not None and sealed != facts:
                 raise ValueError('原归约单元封存预算、父事实或目录已变化，不能重写原许可')
             if sealed is None:

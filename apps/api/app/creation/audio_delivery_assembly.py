@@ -19,9 +19,10 @@ from app.task_audio import media_digest
 AUDIO_RECIPE = {'codec': 'aac', 'sample_rate': 48000, 'channels': 2,
     'parameters_digest': media_digest({'encoder': 'ffmpeg:aac', 'bitrate': '192k',
         'rate_control': 'explicit bitrate; remaining encoder defaults bound by backend identity',
-        'container': 'mp4', 'editlist': True}), 'fragmented': False}
+        'container': 'mp4', 'editlist': True, 'movie_timescale': 48000}), 'fragmented': False}
 MUX_RECIPE = {'video': 'copy', 'audio': 'copy', 'parameters_digest': media_digest({
-    'map': ['0:v:0', '1:a:0'], 'container': 'mp4', 'movflags': '+faststart', 'video_track_timescale': 90000}),
+    'map': ['0:v:0', '1:a:0'], 'container': 'mp4', 'movflags': '+faststart',
+    'video_track_timescale': 90000, 'movie_timescale': 48000}),
     'fragmented': False, 'faststart': True}
 
 
@@ -119,13 +120,22 @@ class AudioDeliveryAssembly:
         record, path, facts = self.picture._parent(job, record.id, manifest['recipe_digest'], connection=connection)
         if facts['first_frame'] != 0:
             raise ValueError('最终picture master没有覆盖完整原时钟')
-        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=connection)
         return {'parent': {'binding': {'artifact_id': record.id, 'sha256': record.sha256, 'size_bytes': record.size_bytes,
             'producer_request_id': facts['producer_request_id'], 'producer_generation': facts['producer_generation'],
             'transform_id': transform.id, 'transform_digest': media_digest(asdict(transform))}, 'clock': {
             'packet_count': facts['packet_count'], 'time_base_num': 1, 'time_base_den': 90000,
             'first_pts': 0, 'last_end_pts': facts['packet_count']*3000}},
             'path': str(path), 'logical_ref': record.logical_ref, 'file_identity': _identity(path)}
+
+    def picture_sample_count(self, job, *, connection=None):
+        """Compile the completed picture clock to the delivery's 48 kHz PCM clock."""
+        clock = self._picture(job, connection=connection)['parent']['clock']
+        samples = Fraction((clock['last_end_pts'] - clock['first_pts']) * clock['time_base_num'],
+            clock['time_base_den']) * 48000
+        if samples.denominator != 1 or samples <= 0:
+            raise ValueError('已完成画面时钟不能完整映射到交付音频采样时钟')
+        return samples.numerator
 
     def prepare(self, job, *, actor, connection=None):
         master, picture = self._master(job, actor, connection=connection), self._picture(job, connection=connection)
@@ -167,10 +177,10 @@ class AudioDeliveryAssembly:
     def _artifact(self, job, manifest, phase, *, connection=None):
         identity = self._unit(manifest, phase)
         try:
-            record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_{phase}_{identity}')
+            record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_{phase}_{identity}', connection=connection)
         except KeyError:
             return None
-        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=connection)
         facts = transform.parameters
         if (record.kind != ('rendered_video' if phase == 'final_mux' else phase) or transform.transform_type != phase or transform.engine != 'ffmpeg-audio-delivery/v1'
                 or record.producer_job_id != job.id or record.task_id != job.task_id or transform.job_id != job.id
@@ -236,23 +246,30 @@ class AudioDeliveryAssembly:
                 sealed = None
             if sealed is None and not prepare:
                 raise ValueError('音画单元尚未封存实际卷分配')
+            published_target = (self.store._target(logical)
+                if sealed is None or sealed.get('publication_target') is not None else None)
             if sealed is None:
                 limit = packet_copy_output_allocation(write_paths=paths, write_files=files, publication_mode='copy',
-                    manifest_bytes=manifest_bytes, reserve_bytes=self.reserve_bytes)
+                    manifest_bytes=manifest_bytes, reserve_bytes=self.reserve_bytes, published_target=published_target)
                 from app.creation.execution_budget_scope import ExecutionBudgetScopes
                 scopes = ExecutionBudgetScopes(self.repository)
                 with self.repository._connect() if connection is None else nullcontext(connection) as conn:
-                    binding = scopes.binding(conn, job.workspace_id, job.id)
-                    authority = scopes.current(conn, job.workspace_id, binding.payload['scope_id']).payload
-                    total = authority['limits']['generated_bytes']
-                    if total is not None:
-                        usage = scopes.usage(conn, job.workspace_id, binding.payload['scope_id'])
-                        limit = min(limit, (total-usage['generated_bytes']-usage['reserved_bytes']-manifest_bytes)//2)
+                    try:
+                        binding = scopes.binding(conn, job.workspace_id, job.id)
+                    except KeyError:
+                        binding = None
+                    if binding is not None:
+                        authority = scopes.current(conn, job.workspace_id, binding.payload['scope_id']).payload
+                        total = authority['limits']['generated_bytes']
+                        if total is not None:
+                            usage = scopes.usage(conn, job.workspace_id, binding.payload['scope_id'])
+                            limit = min(limit, (total-usage['generated_bytes']-usage['reserved_bytes']-manifest_bytes)//2)
             else:
                 limit = sealed['max_output_bytes']
             common = dict(budget=budget, manifest_digest=manifest['digest'], unit_id=identity,
                 write_paths=paths, write_files=files, manifest_bytes=manifest_bytes,
-                output_limit_bytes=limit, publication_mode='copy')
+                output_limit_bytes=limit, publication_mode='copy',
+                published_target=published_target)
             resources = (audio_encode_resources(**common, master=parents[0]['parent'], audio_recipe=AUDIO_RECIPE)
                 if phase == 'audio_encode' else final_mux_resources(**common, picture=parents[0]['parent'],
                     encoded_audio=parents[1]['parent'], mux_recipe=MUX_RECIPE))
@@ -326,13 +343,14 @@ class AudioDeliveryAssembly:
                         raise ValueError('原master WAV不是封存的完整S16采样时钟')
                 command = common + ['-i', parents[0]['path'], '-map', '0:a:0', '-vn', '-c:a', 'aac', '-b:a', '192k',
                     '-ar', '48000', '-ac', '2', '-threads:a', str(context.threads), '-map_metadata', '-1',
-                    '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
+                    '-movie_timescale', '48000', '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
                 _run(context, command, output=output)
                 output_clock = _aac_clock(output, context, parents[0]['parent']['clock'])
             else:
                 command = common + ['-i', parents[0]['path'], '-i', parents[1]['path'], '-map', '0:v:0', '-map', '1:a:0',
                     '-map_metadata', '-1', '-c:v', 'copy', '-c:a', 'copy', '-video_track_timescale', '90000',
-                    '-movflags', '+faststart', '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
+                    '-movie_timescale', '48000', '-movflags', '+faststart',
+                    '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
                 _run(context, command, output=output)
                 streams = _probe_streams(output, context)
                 video = next((item for item in streams if item['codec_type'] == 'video'), None)
