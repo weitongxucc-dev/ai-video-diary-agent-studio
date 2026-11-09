@@ -25,6 +25,16 @@ from app.task_audio import TASK_MEDIA_KIND
 logger = logging.getLogger("app.main")
 
 
+def task_execution_requirements(task: CreationTask, plan: CreationPlan) -> dict[str, object]:
+    """Task route facts, independent of editor stage and machine configuration."""
+    source_edit = plan.source_media is not None
+    return {
+        'task_kind': 'source_video_edit' if source_edit else 'scripted_creation',
+        'next_required_stage': 'render' if source_edit and not task.output_ready else None,
+        'not_applicable_preparation_kinds': ['narration', 'montage'] if source_edit else [],
+    }
+
+
 class DesktopShutdownUseCase:
     """One save/pause request consumes one common desktop exit budget."""
     def __init__(self, *, runtime, automation, ingestion, assistant, stop_assistant,
@@ -134,12 +144,12 @@ class CreationExecutionControl:
             else None
         )
         if (narration_artifact is not None
-                and (narration_artifact.task_id != task.id or narration_artifact.script_id != script.id)):
+                and (narration_artifact.task_id != task.id or script is None or narration_artifact.script_id != script.id)):
             narration_artifact = None
         recorded_narration_ready = (
             narration_artifact is not None and narration_artifact.source_kind == "recorded"
         )
-        can_continue = (
+        can_continue = plan.source_media is not None or (
             plan.presenter_share_target == 0
             if recorded_narration_ready
             else bool(plan.selected_voice)
@@ -156,10 +166,11 @@ class CreationExecutionControl:
             continuation_blocker = "请先选择已授权声音，或保存并明确采用本人录音；本人录音仅支持纯素材成片。"
         return {
             "task_id": task.id,
-            "script_id": script.id,
-            "script_title": script.title,
-            "script_updated_at": script.updated_at.isoformat(),
-            "script_sections_total_count": script.sections_total_count,
+            "task_execution": task_execution_requirements(task, plan),
+            "script_id": script.id if script is not None else None,
+            "script_title": script.title if script is not None else None,
+            "script_updated_at": script.updated_at.isoformat() if script is not None else None,
+            "script_sections_total_count": script.sections_total_count if script is not None else 0,
             "script_sections_loaded": False,
             "plan_id": plan.id,
             "narration_source": ({
@@ -236,6 +247,8 @@ class CreationExecutionControl:
             waiting_reason = "故事板仍有镜头等待确认；确认后点击继续制作。"
         return {
             "task_id": task_id,
+            "task_execution": task_execution_requirements(task,
+                self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)),
             "job": asdict(job) if job else None,
             "stages": events,
             "current_stage": current_stage,
@@ -247,10 +260,11 @@ class CreationExecutionControl:
 
     def status(self, workspace_id: str, task_id: str, *, verify_media: bool, actor=None, job_id=None) -> dict[str, object]:
         task = self.task_or_missing(workspace_id, task_id)
+        plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         result = self._status_summary(task, actor=actor, job_id=job_id)
         job = result["job"]
         decisions=self.segments.visual_decision_locators(workspace_id,task_id,actor,job_id=job["id"] if job else None) if (
-            self.segments is not None and actor is not None and task.owner_user_id==(actor.user_id or actor.member_id)) else {'items':[],'total_count':0,'truncated':False}
+            plan.source_media is None and self.segments is not None and actor is not None and task.owner_user_id==(actor.user_id or actor.member_id)) else {'items':[],'total_count':0,'truncated':False}
         if decisions['items']:
             result['waiting_reason']=('画面采用已保存，原作业排队状态待回查。' if all(item['adopted'] for item in decisions['items'])
                 else '段落配音已保存，画面候选需要用户明确确认。')
@@ -290,6 +304,24 @@ class CreationExecutionControl:
         try:
             latest = self.execution.latest(workspace_id, task_id)
             owner = runtime.registrations['creation_job'].owner
+            if latest is not None and latest.status == 'succeeded' and self.render_valid(
+                    workspace_id, task_id, verify_media=False):
+                start = self.repository.execution_records.get_task_event(workspace_id, f'event_{latest.id}_start')
+                if actor != CreationExecutionActor.from_event(workspace_id, start.payload):
+                    raise PermissionError('不能读取其他身份的原完成作业')
+                with self.repository._connect() as conn:
+                    conn.execute('BEGIN IMMEDIATE')
+                    if write_guard is not None:
+                        write_guard(conn)
+                    current = self.repository.job_records.get_job_run(workspace_id, latest.id, connection=conn)
+                    task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=conn)
+                    if (current != latest or task.owner_user_id != (actor.user_id or actor.member_id)
+                            or owner.authorization_verdict(task, actor, 'render', connection=conn) != 'ready'):
+                        raise PermissionError('原完成作业或当前成员授权已变化')
+                    if execution_source is not None:
+                        self.repository.creation_execution_jobs.bind_creation_execution_source(
+                            current, execution_source, connection=conn)
+                return self.read_bound(workspace_id, task_id, latest.id, actor, verify_media=verify_media)
             delivery = owner.audio_delivery
             recovered = (delivery.adoption_recovery.continue_adoption(runtime.scheduler, latest, actor,
                 owner=owner, write_guard=write_guard) if latest is not None and delivery is not None else None)
@@ -524,8 +556,10 @@ class CreationExecutionControl:
     def submit_person_edit(self, workspace_id, task, proposal, actor, runtime, *, source=None, write_guard=None):
         operation=proposal.operation
         source=self._edit_source(task,proposal,actor,source)
-        script=self.repository.script_records.get_creation_task_script(workspace_id,task.confirmed_script_id)
         plan=self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id)
+        if plan.source_media is not None:
+            raise ValueError('原声来源任务没有可重做的人物配音片段')
+        script=self.repository.script_records.get_creation_task_script(workspace_id,task.confirmed_script_id)
         digest=person_edit_digest(operation)
         payload={**actor.identity_payload(),'script_id':script.id,'plan_id':plan.id,
             'revision_digest':revision_digest(script,plan),'input_digest':digest,'edit_proposal_id':proposal.id,'source':source}
@@ -579,6 +613,8 @@ class CreationExecutionControl:
         with self.repository.execution_inputs.creation_execution_read() as reader:
             snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task.id, connection=reader)
         task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
+        if plan.source_media is not None:
+            raise ValueError('原声来源任务没有可局部重配的文案配音')
         digest = narration_edit_digest(proposal.operation)
         candidate = JobRun(id=f'job_{uuid4().hex}', workspace_id=workspace_id, task_id=task.id,
             kind=NARRATION_EDIT_KIND, input_digest=digest,
@@ -601,7 +637,11 @@ class CreationExecutionControl:
         from app.creation.narration_pcm import prepare_narration_source
         with (prepare_narration_source(self.repository, task, plan, actor) if active is None else nullcontext(None)) as prepared:
             preparation = {'_narration_reference': prepared['narration_reference']} if prepared else None
-            owner.narration_edit_facts(candidate, task, payload, plan, pcm_preparation=preparation)
+            if prepared is not None:
+                owner.narration_edit_facts(candidate, task, payload, plan, pcm_preparation=preparation)
+            # Re-entry is revalidated below by the original request's source
+            # migration. A fresh candidate has no sealed reference and would
+            # decode the WAV inside its facts transaction before that migration.
             with self.repository._connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
                 if write_guard is not None:

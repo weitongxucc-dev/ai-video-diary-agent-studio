@@ -1,3 +1,4 @@
+from test_task_assistant_timeline_snapshot import task_client as task_client  # noqa: F401
 from assistant_sdk_fixtures import project_event_fixture, sdk_completed, install_sdk_fixture
 import json
 import shutil
@@ -711,7 +712,7 @@ def test_pi_events_keep_plan_preview_separate_from_edit_preview():
     assert project_event_fixture(output, "edit_preview") == ("请检查新任务预检。", None)
 
 
-def test_script_turn_keeps_generation_gate_with_shared_read_preview_tools(monkeypatch, tmp_path):
+def test_task_stage_is_context_and_shared_tools_keep_session_scope(monkeypatch, tmp_path):
     (tmp_path / "models").mkdir()
     fake_pi = install_sdk_fixture(tmp_path)
     monkeypatch.setenv("AI_VIDEO_DIARY_PI_EXECUTABLE", str(fake_pi))
@@ -739,14 +740,14 @@ def test_script_turn_keeps_generation_gate_with_shared_read_preview_tools(monkey
     assert commands[0]["sessionId"] != commands[2]["sessionId"]
     tools = commands[0]["tools"]
     assert {"read_current_task", "preview_script_draft", "preview_typed_edit", "read_task_object"} <= set(tools)
-    assert "generate_creation_task_topics" not in tools
+    assert "generate_creation_task_topics" in tools
     _, edit_preview = run_task_turn(settings, workspace_id="workspace-one", task_id="task-one",
                                     message="检查镜头", stage="montage", selected_refs=[], playhead_ms=None)
     assert edit_preview is None
     assert commands[3]["sessionId"] != commands[0]["sessionId"]
     edit_tools = set(commands[3]["tools"])
     assert {"preview_typed_edit", "read_task_edit_capabilities", "read_task_object", "start_creation_execution"} <= edit_tools
-    assert "generate_creation_task_topics" not in edit_tools and "preview_script_draft" in edit_tools
+    assert {"generate_creation_task_topics", "preview_script_draft"} <= edit_tools
 
 
 
@@ -926,54 +927,22 @@ def test_pi_turn_requires_external_text_model(monkeypatch, tmp_path):
                       stage="montage", selected_refs=[], playhead_ms=None)
 
 
-def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch, tmp_path):
+def test_assistant_route_scopes_task_before_invoking_pi(monkeypatch, task_client):
+    create, _production, _conversations, _calls, member = task_client
+    client, headers, payload = create(0)
     seen = []
-    def scoped_task(workspace_id, task_id):
-        if workspace_id != "workspace-a" or task_id != "task-a":
-            from fastapi import HTTPException
-            raise HTTPException(status_code=404, detail="task not found")
-        # 助手入口会先按可信身份确认这条任务读得到，因此替身也要带上
-        # visibility / owner_user_id 这两个真实字段。
-        return SimpleNamespace(
-            id="task-a", workspace_id=workspace_id, visibility="private",
-            owner_user_id="member-caller", stage="script", current_timeline_version_id=None, timeline_sequence=0,
-        )
     monkeypatch.setattr(main_module, "current_workspace_id",
-                        lambda request: request.headers.get("x-test-workspace", "workspace-a"))
-    # 助手只在请求带可信身份时读私有任务：这里用真实成员令牌表明调用方。
-    monkeypatch.setattr(
-        main_module, "_local_member_token",
-        lambda request: request.headers.get("x-test-member", "member-caller"),
-    )
-    monkeypatch.setattr(
-        main_module, "local_members_service",
-        SimpleNamespace(resolve_member=lambda token: SimpleNamespace(
-            member_id=token, role="member", name="调用方", created_at=None,
-        )),
-    )
-    monkeypatch.setattr(main_module, "_creation_task_or_404", scoped_task)
-    repo = ConversationRepository(tmp_path / "assistant-task.sqlite3")
-    monkeypatch.setattr(main_module, "conversation_repo", repo)
-    conversation = repo.current_or_create("workspace-a", "member-caller", "task", "task-a")
-    monkeypatch.setattr(main_module, "_assistant_turn_scope",
-                        lambda workspace_id, task, payload: (payload.context_stage, payload.selected_object_refs))
-    monkeypatch.setattr(main_module, "_assistant_task_clip_material_selection", lambda *_args: None)
-    monkeypatch.setattr(main_module, "production_repo", SimpleNamespace(execution_records=SimpleNamespace(append_task_event=lambda event: event), subtitle_records=SimpleNamespace(list_subtitle_tracks=lambda *_: [])))
-    monkeypatch.setattr(main_module, "run_task_turn", lambda settings, **kwargs: (seen.append(kwargs) or ("收到。", None)))
-    client = TestClient(main_module.app)
-    message = "请检查镜头"
-    saved = repo.save_draft(conversation["id"], "workspace-a", "member-caller", message, 0)
-    payload = {"conversation_id": conversation["id"], "message": message, "context_stage": "montage",
-               "client_request_id": str(uuid4()), "expected_draft_version": saved["draft_version"],
-               "selected_object_refs": [], "playhead_ms": 1200, "expected_reference_version":0}
-    denied = client.post("/api/creation-tasks/task-a/assistant/turn", json=payload,
-                         headers={"x-test-workspace": "workspace-b"})
+        lambda request: request.headers.get("x-test-workspace", "qa"))
+    monkeypatch.setattr(main_module, "run_task_turn",
+        lambda settings, **kwargs: (seen.append(kwargs) or ("收到。", None)))
+    denied = client.post("/api/creation-tasks/task/assistant/turn", json=payload,
+        headers={**headers, "x-test-workspace": "workspace-b"})
     assert denied.status_code == 404
     assert seen == []
-    accepted = client.post("/api/creation-tasks/task-a/assistant/turn", json=payload)
-    assert accepted.status_code == 200
+    accepted = client.post("/api/creation-tasks/task/assistant/turn", json=payload, headers=headers)
+    assert accepted.status_code == 200, accepted.text
     assert accepted.json()["reply"] == "收到。"
-    assert seen[0]["workspace_id"] == "workspace-a"
+    assert seen[0]["workspace_id"] == "qa" and seen[0]["caller_user_id"] == member
     assert seen[0]["selected_refs"] == []
 
 

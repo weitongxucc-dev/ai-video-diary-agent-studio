@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from contextlib import nullcontext
 import json
+import re
 from app.creation.task_input_reads import require_creation_task
 from copy import deepcopy
 from typing import TYPE_CHECKING
@@ -74,6 +75,14 @@ class TimelineOutputQualification:
     output_is_valid: bool
 
 
+@dataclass(frozen=True)
+class ClipLockRestoreScope:
+    clip_number: int
+    selected: bool
+    original_locked: bool
+    restored_locked: bool
+
+
 class TimelineRestoreUnavailable(EditConflict):
     def __init__(self, redo: bool):
         action_label = '重做' if redo else '撤销'
@@ -117,6 +126,91 @@ class TimelineRestoreUseCase:
         return MetadataEditResult(operation, plan, self.repository.task_records.get_creation_task(workspace_id, task_id), narration, receipt,
             receipt.get('execution_readiness'))
 
+    @classmethod
+    def require_restore_instruction(cls, message, *, redo, lock_scope=None):
+        if re.search('不要|不用|别|不(?:撤销|重做|取消|放弃)', message):
+            raise EditConflict('当前要求没有授权这一动作，任务保持不变。')
+        if lock_scope is not None and cls.require_lock_restore_instruction(message, redo=redo, scope=lock_scope):
+            return
+        prefix = '(?:请|麻烦|现在|先|帮我|请帮我|可以帮我|能不能帮我)?'
+        scope = '(?:上一步(?:修改|编辑|操作)?|上一次(?:内容)?(?:修改|编辑|操作)?|刚才(?:撤销(?:的)?|的)?(?:那)?(?:一步|一次|修改|编辑|操作)?|最后一次(?:修改|编辑|操作)?)'
+        verb = '重做|恢复' if redo else '撤销|回退'
+        if re.search('调色|颜色|字幕|音量|音乐|配音|口型|镜头|只撤销.+项|仅撤销.+项', message):
+            raise EditConflict('不能用整项历史恢复代替局部修改，任务保持不变。')
+        if not re.fullmatch(prefix + f'(?:整体)?(?:{verb})(?:一下)?{scope}?(?:一下|吧|吗|好吗)?[。！!？?]?', message.strip()):
+            raise EditConflict('需要明确的撤销或重做原修改要求，任务保持不变。')
+
+    @staticmethod
+    def require_lock_restore_instruction(message, *, redo, scope):
+        """A lock undo may restate its exact result, never authorize a new edit."""
+        clauses = [part.strip() for part in re.split('[，,。；;！!\n]', message) if part.strip()]
+        if not clauses:
+            return False
+        verb = '重做|恢复' if redo else '撤销|回退'
+        past = '(?:刚才|上一步|上一次|最后一次)(?:撤销的|(?:这|那)?(?:次|一步|一次)?的?)'
+        action = re.fullmatch('(?:请|麻烦|现在|先|帮我|请帮我)?' + f'(?:{verb}){past}'
+            + '(锁定|解锁)(?:修改|操作|编辑)?', clauses[0])
+        if action is None:
+            return False
+        if (action[1] == '锁定') != scope.original_locked:
+            raise EditConflict('指令描述的锁定操作与指定原修改不一致')
+        for clause in clauses[1:]:
+            result = re.fullmatch(r'(?:恢复|回到)(?:第\s*([1-9]\d*)\s*个镜头|(当前|选中)的?镜头)'
+                + '(?:为|到)?(未锁定|已锁定|锁定|解锁)的?状态', clause)
+            if result is not None:
+                if (result[1] is not None and int(result[1]) != scope.clip_number
+                        or result[2] is not None and not scope.selected):
+                    raise EditConflict('指令中的镜头不属于指定原锁定修改')
+                if (result[3] in {'已锁定', '锁定'}) != scope.restored_locked:
+                    raise EditConflict('指令要求的锁定状态不是本次原修改的恢复结果')
+            elif not (re.fullmatch('(?:保留|保持)(?:原画面(?:和|与|及)原声|原画面|原声)(?:不变)?', clause)
+                    or re.fullmatch('(?:不|无需)(?:重新)?(?:制作|生成|渲染|输出)', clause)
+                    or re.fullmatch('(?:然后|并)?(?:结束|完成)本轮(?:对话)?', clause)):
+                raise EditConflict('锁定恢复只执行原修改的逆向结果，其他修改需要独立指令')
+        return True
+
+    def lock_restore_scope(self, task, operation_id, version_id, sequence, *, redo, context):
+        if operation_id is None or version_id is None or sequence is None:
+            return None
+        ws = task.workspace_id
+        original = self.repository.edit_records.get_edit_operation(ws, operation_id)
+        if original.operation_type != 'SetClipLock':
+            return None
+        seen = self.repository.timeline_records.get_timeline_version(ws, version_id)
+        if (original.task_id != task.id or seen.task_id != task.id or seen.sequence != sequence
+                or not self.repository.timeline_records.timeline_contains_version(ws, task.id, seen.id, original.result_version_id)):
+            raise EditConflict('锁定恢复所见版本不包含指定原修改')
+        before = self.repository.timeline_records.get_timeline_version(ws, original.base_version_id)
+        after = self.repository.timeline_records.get_timeline_version(ws, original.result_version_id)
+        old, changed = before.snapshot['montage'], after.snapshot['montage']
+        # The relaxed wording belongs to an actual single-field local restore,
+        # not merely an operation labelled SetClipLock in persisted history.
+        derived = {'id', 'created_at', 'updated_at', 'status', 'message', 'output_path', 'subtitle_path',
+            'low_confidence_clip_count', 'clips'}
+        if any(old.get(key) != changed.get(key) for key in (old.keys() | changed.keys()) - derived):
+            return None
+        if [clip['id'] for clip in old['clips']] != [clip['id'] for clip in changed['clips']]:
+            return None
+        affected = []
+        for left, right in zip(old['clips'], changed['clips']):
+            if left == right:
+                continue
+            if ({key: value for key, value in left.items() if key != 'locked'} !=
+                    {key: value for key, value in right.items() if key != 'locked'}):
+                return None
+            affected.append((left, right))
+        if len(affected) != 1 or affected[0][0]['id'] != original.payload['clip_id']:
+            return None
+        left, right = affected[0]
+        if right['locked'] != original.payload['locked']:
+            return None
+        order = [clip['id'] for clip in seen.snapshot['montage']['clips']]
+        if left['id'] not in order:
+            raise EditConflict('指定原锁定镜头已不在所见版本中')
+        return ClipLockRestoreScope(order.index(left['id']) + 1,
+            context.get('selected_object_refs', []) == [f'clip:{left["id"]}'], right['locked'],
+            right['locked'] if redo else left['locked'])
+
     def execute(self, command, *, actor, request_id, target_operation_id=None,
                 expected_timeline_version_id=None, expected_timeline_sequence=None, write_guard=None, source=None):
         from app.device_scheduler import RecoveryBlocked
@@ -139,6 +233,10 @@ class TimelineRestoreUseCase:
             if source_input.get('input_id') != source['input_id']:
                 raise PermissionError('恢复动作不属于原已消费输入')
             CreationIntentUseCase.reject_discussion_only_input(source_input['raw_command'])
+            lock_scope = self.lock_restore_scope(task, target_operation_id,
+                expected_timeline_version_id, expected_timeline_sequence, redo=command.redo,
+                context=source_input['context'])
+            self.require_restore_instruction(source_input['raw_command'], redo=command.redo, lock_scope=lock_scope)
         def guarded(connection):
             self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection), actor)
             if source_input is not None:
@@ -365,39 +463,76 @@ class TimelineRestoreUseCase:
         plans = [creation_task_montage_plan_from_payload(value) for value in (current, expected, desired)]
         tracks = [self.montage_edits.current_subtitle_tracks(ws, task, current_version=version, montage=plan)
             for version, plan in zip((current_version, expected_version, desired_version), plans)]
-        def key(track):
-            return (track.language, track.source_language, track.generation_method)
-        mapped = [{key(track): track for track in values} for values in tracks]
-        if any(len(mapping) != len(values) for mapping, values in zip(mapped, tracks)) or mapped[1].keys() != mapped[2].keys():
-            raise EditConflict('原字幕轨身份或集合不适合局部恢复')
-        merged_tracks = list(tracks[0])
-        for identity, old in mapped[1].items():
-            wanted = mapped[2][identity]
-            current_track = mapped[0].get(identity)
-            if current_track is None:
-                raise EditConflict('原字幕轨已被后续编辑移除')
-            cues = self.restore_objects([asdict(cue) for cue in current_track.cues], [asdict(cue) for cue in old.cues],
-                [asdict(cue) for cue in wanted.cues], label='目标字幕条目', allow_membership=True)
-            style = self.restore_fields(current_track.style, old.style, wanted.style, label='字幕样式')
-            changed = replace(current_track, cues=[SubtitleCue(**cue) for cue in sorted(cues,key=lambda cue:cue['start_seconds'])], style=style)
-            merged_tracks = [changed if key(item)==identity else item for item in merged_tracks]
+        merged_tracks = self.restore_subtitle_tracks(*tracks, allow_membership=original.operation_type in {
+            'UpdateSubtitleCue', 'ReplaceSubtitleText', 'ConfigureSubtitleTrack',
+            'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'})
         sources = []
+        person_sources = {}
         for clip_id in affected_clips:
             desired_clip = next(item for item in desired['clips'] if item['id']==clip_id)
-            replacement = (desired_clip['asset_id'], desired_clip['segment_id'])
+            replacement = None if desired_clip.get('person_render_id') else (desired_clip['asset_id'], desired_clip['segment_id'])
             facts = self.repository.clip_sources.facts(ws, task.id, clip_ids=[clip_id], replacement=replacement,
                 user_id=command.restore_member_id, local_diagnostic=False)
             sources.append((clip_id, replacement, facts))
+            for plan in (plans[0], plans[2]):
+                clip = next(item for item in plan.clips if item.id == clip_id)
+                if clip.person_render_id:
+                    cue = next(item for item in plan.cues if item.id == clip.cue_id)
+                    person_sources[(clip.person_render_id, cue.id)] = (clip, cue, self.person_source_facts(task, clip, cue))
         still_changed = changed_stage_sections(desired_version.snapshot, restored, tracks[2], merged_tracks)
         original_sections = changed_stage_sections(expected_version.snapshot, desired, tracks[1], tracks[2])
         validity = {section_id: desired_version.snapshot.get('stage_segment_invalidations',{}).get(section_id)
             for section_id, publication in desired_version.snapshot.get('stage_segments',{}).items()
             if section_id in original_sections and section_id not in still_changed
             and current_version.snapshot.get('stage_segments',{}).get(section_id)==publication}
-        controls = {'sources': sources, 'stage_adoption_restore': validity, 'current_version_id': current_version.id}
+        controls = {'sources': sources, 'person_sources': list(person_sources.values()),
+            'stage_adoption_restore': validity, 'current_version_id': current_version.id}
         return PreparedTimelineRestore(command, changed_version, target_version, plans[0],
             creation_task_montage_plan_from_payload(restored), None, None, True, operation_type, action_label,
             local_tracks=merged_tracks, local_sources=controls)
+
+    def person_source_facts(self, task, clip, cue):
+        from app.creation.person_stage_use_case import adopted_person_render_source
+
+        path = adopted_person_render_source(self.repository, task, clip, cue, self.montage_edits.picture_renderer.person_path)
+        stat = path.stat()
+        return (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev)
+
+    @classmethod
+    def restore_subtitle_tracks(cls, current, expected, desired, *, allow_membership):
+        def key(track):
+            return (track.language, track.source_language, track.generation_method)
+
+        mapped = [{key(track): track for track in values} for values in (current, expected, desired)]
+        if any(len(mapping) != len(values) for mapping, values in zip(mapped, (current, expected, desired))):
+            raise EditConflict('原字幕轨身份不唯一，不能猜测恢复对象')
+        if not allow_membership and mapped[1].keys() != mapped[2].keys():
+            raise EditConflict('原字幕轨集合不适合局部恢复')
+        # Version IDs and generated artifacts change on every save. Membership
+        # conflicts compare the actual subtitle content, style and provenance.
+        derived = {'id', 'timeline_version_id', 'created_at', 'updated_at', 'artifact_ref', 'transform_id'}
+        def member(track):
+            return {'id': key(track), **{field: value for field, value in asdict(track).items() if field not in derived}}
+
+        changed_members = mapped[1].keys() ^ mapped[2].keys()
+        membership = cls.restore_objects([member(track) for track in current],
+            [member(track) for track in expected if key(track) in changed_members],
+            [member(track) for track in desired if key(track) in changed_members],
+            label='目标字幕轨', allow_membership=allow_membership)
+        merged = [mapped[0][item['id']] if item['id'] in mapped[0] else mapped[2][item['id']] for item in membership]
+        for identity in mapped[1].keys() & mapped[2].keys():
+            old, wanted = mapped[1][identity], mapped[2][identity]
+            if member(old) == member(wanted):
+                continue
+            current_track = mapped[0].get(identity)
+            if current_track is None:
+                raise EditConflict('原字幕轨已被后续编辑移除')
+            cues = cls.restore_objects([asdict(cue) for cue in current_track.cues], [asdict(cue) for cue in old.cues],
+                [asdict(cue) for cue in wanted.cues], label='目标字幕条目', allow_membership=True)
+            style = cls.restore_fields(current_track.style, old.style, wanted.style, label='字幕样式')
+            changed = replace(current_track, cues=[SubtitleCue(**cue) for cue in sorted(cues,key=lambda cue:cue['start_seconds'])], style=style)
+            merged = [changed if key(item) == identity else item for item in merged]
+        return merged
 
     def apply_restore(self, prepared: PreparedTimelineRestore, qualification: TimelineOutputQualification) -> MetadataEditResult:
         if qualification.prepared is not prepared:
@@ -635,8 +770,8 @@ class TimelineRestoreUseCase:
         by_key = {(track.language,track.source_language,track.generation_method):track for track in original_tracks}
         tracks = []
         for track in prepared.local_tracks:
-            previous = by_key[(track.language,track.source_language,track.generation_method)]
-            if track.cues != previous.cues or track.style != previous.style:
+            previous = by_key.get((track.language,track.source_language,track.generation_method))
+            if previous is None or track.cues != previous.cues or track.style != previous.style:
                 if track.status == 'valid':
                     reference,transform = self.montage_edits.publish_subtitle_text(workspace_id=ws,task_id=task.id,
                         proposal_id=proposal.id,kind='subtitle_local_restore',input_refs=[f'timeline:{base.id}'],
@@ -651,6 +786,9 @@ class TimelineRestoreUseCase:
                     user_id=command.restore_member_id,local_diagnostic=False,connection=connection)
                 if current != facts:
                     raise EditConflict('局部恢复的实际来源或权限已变化')
+            for clip, cue, facts in prepared.local_sources['person_sources']:
+                if self.person_source_facts(task, clip, cue) != facts:
+                    raise EditConflict('局部恢复的人物产物或固定授权已变化')
         prepare_changed_montage(prepared.restored_plan,message='指定原修改已恢复，无关后续编辑保留；可重新生成成片。')
         return self.montage_edits.persist_montage_edit(workspace_id=ws,task=task,proposal=proposal,base_version=base,
             updated_plan=prepared.restored_plan,operation_type=prepared.operation_type,operation_payload=payload,
@@ -658,17 +796,20 @@ class TimelineRestoreUseCase:
 
     def _timeline_restore_business_facts(self,version,connection):
         snapshot = dict(version.snapshot)
-        for field in ('edit_operation_id','invalidated_refs'):
+        for field in ('edit_operation_id','invalidated_refs','output_refs','transform_run_id','reused_job_id','audio_delivery',
+                'creation_render_request_id','render_input_digest','render_input_timeline_version_id',
+                'render_input_subtitle_tracks','render_input_subtitles_visible'):
             snapshot.pop(field,None)
         if isinstance(snapshot.get('montage'),dict):
             snapshot['montage'] = {key:value for key,value in snapshot['montage'].items()
-                if key not in {'created_at','updated_at','message'}}
+                if key not in {'created_at','updated_at','message','status','output_path','subtitle_path'}}
         if isinstance(snapshot.get('narration_segments'),list):
             snapshot['narration_segments'] = [{key:value for key,value in row.items()
                 if key not in {'created_at','updated_at'}} for row in snapshot['narration_segments']]
         record_fields = {'id','workspace_id','task_id','timeline_version_id','created_at','updated_at'}
         tracks = self.repository.subtitle_records.list_subtitle_tracks(version.workspace_id,version.task_id,timeline_version_id=version.id,connection=connection)
-        track_facts = [{key:value for key,value in asdict(track).items() if key not in record_fields} for track in tracks]
+        track_facts = [{key:value for key,value in asdict(track).items()
+            if key not in record_fields | {'artifact_ref','transform_id'}} for track in tracks]
         declared_tracks = snapshot.pop('subtitle_track_ids',None)
         snapshot['subtitles'] = {'items':sorted(track_facts,key=lambda item:json.dumps(item,sort_keys=True)),
             'explicit_empty':declared_tracks==[] and not track_facts}

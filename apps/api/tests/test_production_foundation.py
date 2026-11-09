@@ -47,8 +47,6 @@ from app.repository import LEGACY_WORKSPACE_ID
 from app.source_repository import SourceRepository
 from app.sources import KnowledgeItem, SourceConnector, SourceItem
 from app.topics import (
-    CreationTaskGeneratedScript,
-    CreationTaskGeneratedScriptSection,
     CreationTaskGeneratedTopic,
     CreationTaskTopicGenerationError,
 )
@@ -3335,21 +3333,24 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     production = _repository(tmp_path)
     sources = SourceRepository(production.database_path)
     _seed_creation_plan_facts(
-        production, sources, workspace_id="workspace_a",
+        production, sources, workspace_id="local",
         verified_owner_user_id=plan_owner[0].member_id,
     )
     monkeypatch.setattr(main_module, "production_repo", production)
     monkeypatch.setattr(main_module, "source_repository", sources)
     monkeypatch.setattr(main_module, "model_catalog", _missing_model_catalog(tmp_path))
-    monkeypatch.setattr(main_module, "settings", Settings())
+    from app.conversation_repository import ConversationRepository
+    monkeypatch.setattr(main_module, 'conversation_repo', ConversationRepository(production.database_path))
+    monkeypatch.setattr(main_module, 'device_runtime', None)
+    monkeypatch.setattr(main_module, "settings", replace(Settings(), database_path=str(production.database_path)))
     _configure_workspace_text_service(
-        "workspace_a",
+        "local",
         provider="custom",
         base_url="https://model.example/v1",
         model="deepseek-test",
         api_key="test-key",
     )
-    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "workspace_a")
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "local")
 
     class FakeTopicGenerator:
         def generate(self, input):
@@ -3367,25 +3368,38 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
             ]
 
     script_calls = []
+    import httpx
+    from uuid import uuid4
+    from threading import Event
+    import time
+    from app.topics import OpenAICompatibleCreationTaskScriptGenerator
+    from test_creation_task_topic_provider import _script_review, _review_tool_response
+    import app.assistant.script_generation_runner as runner
 
-    class FakeScriptGenerator:
-        def generate(self, input):
-            script_calls.append(input)
-            return CreationTaskGeneratedScript(
-                title="已生成的真实文案",
-                language="zh-CN",
-                sections=(
-                    CreationTaskGeneratedScriptSection(
-                        title="开场",
-                        content="先看事实，再给判断，最后说明下一步行动。",
-                        visual_prompt="产品操作界面和人物工作场景",
-                        evidence_reference_ids=tuple(
-                            source.reference_id for source in input.sources
-                        ),
-                    ),
-                ),
-            )
+    def review(request):
+        data = json.loads(json.loads(request.content)['messages'][1]['content'])
+        return _review_tool_response(_script_review(data['script'], data['sources'][0]['text']))
 
+    class FakeScriptGenerator(OpenAICompatibleCreationTaskScriptGenerator):
+        def __init__(self):
+            super().__init__('https://model.invalid/v1', 'test', transport=httpx.MockTransport(review))
+
+    def controlled_agent(settings, **values):
+        case = main_module._generation_script_case('local', plan_owner[0].member_id,
+            main_module._script_generation_intent('local'))
+        _, _, _, sources, _ = case.read_inputs('local', task_id)
+        result = values['business_handler']('start_script_window', {'payload': {
+            'request_id': str(uuid4()), 'title': '已生成的真实文案', 'sections': [{
+                'id': 'foundation-section', 'title': '开场', 'content': '先看事实，再给判断，最后说明下一步行动。',
+                'visual_prompt': '产品操作界面和人物工作场景',
+                'evidence_reference_ids': [source.reference_id for source in sources]}]}},
+            call_id='foundation-call', tool_call_id='foundation-tool', source_binding=values['source_binding'],
+            cancel_event=Event(), deadline_monotonic=time.monotonic()+20)
+        if result['ok']:
+            script_calls.append(result['value'])
+        return '本轮工具调用已结束。', None
+
+    monkeypatch.setattr(runner, 'run_task_turn', controlled_agent)
     monkeypatch.setattr(
         main_module,
         "_creation_task_topic_generator_for",
@@ -3414,7 +3428,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     successful_script_generator = main_module._creation_task_script_generator_for
 
     class FailingScriptGenerator:
-        def generate(self, _input):
+        def check_draft(self, _input, _candidate):
             from app.topics import CreationTaskScriptGenerationError
             raise CreationTaskScriptGenerationError(
                 code="http_failed", reason="文字模型服务拒绝了文案请求。",
@@ -3423,8 +3437,12 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
 
     monkeypatch.setattr(main_module, "_creation_task_script_generator_for",
                         lambda _settings: FailingScriptGenerator())
-    failed = client.post(f"/api/creation-tasks/{task_id}/scripts/generate", json={})
-    assert failed.status_code == 502
+    failed_id = str(uuid4())
+    failed = client.post(f"/api/creation-tasks/{task_id}/scripts/generate", json={'request_id': failed_id})
+    assert failed.status_code == 202, failed.text
+    failed_receipt = client.get(f'/api/creation-tasks/{task_id}/scripts/generation-requests/{failed_id}').json()
+    assert failed_receipt['status'] == 'failed' and failed_receipt['run_status'] == 'failed'
+    assert failed_receipt['run_id'] == failed.json()['run_id']
     runtime = client.get("/api/settings/runtime").json()
     rows = {row["name"]: row["value"] for row in runtime["settings"]}
     assert rows["LLM_SERVICE_STATE"] == "失败"
@@ -3435,27 +3453,34 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     monkeypatch.setattr(main_module, "_creation_task_script_generator_for",
                         successful_script_generator)
 
-    generated = client.post(
-        f"/api/creation-tasks/{task_id}/scripts/generate", json={}
-    )
-    assert generated.status_code == 200
+    request_id = str(uuid4())
+    generated = client.post(f'/api/creation-tasks/{task_id}/scripts/generate', json={'request_id': request_id})
+    assert generated.status_code == 202, generated.text
+    receipt = client.get(f'/api/creation-tasks/{task_id}/scripts/generation-requests/{request_id}').json()
+    assert receipt['status'] == 'draft_ready' and receipt['run_status'] == 'succeeded'
+    assert receipt['run_id'] == generated.json()['run_id']
+    assert client.post(f'/api/creation-tasks/{task_id}/scripts/generate', json={'request_id': request_id}).json()['run_id'] == receipt['run_id']
     recovered_rows = {row["name"]: row["value"] for row in client.get("/api/settings/runtime").json()["settings"]}
     assert recovered_rows["LLM_SERVICE_STATE"] == "可用"
     assert recovered_rows["LLM_SERVICE_REPAIR_ACTION"] == ""
-    body = generated.json()
+    body = client.get(f"/api/creation-tasks/{task_id}").json()
     assert len(script_calls) == 1
     assert body["task"]["stage"] == "script"
     assert body["task"]["stage_status"] == "waiting_for_user"
     assert body["scripts"][0]["selection_status"] == "draft"
     script = body["scripts"][0]
+    window = client.get(f"/api/creation-tasks/{task_id}/scripts/{script['id']}/sections",
+        params={'expected_updated_at': script['updated_at']})
+    assert window.status_code == 200, window.text
+    assert window.json()['next_after_ordinal'] is None
     edited_sections = [
-        {**section, "content": f"{section['content']} 这句话由用户确认。"}
-        for section in script["sections"]
+        {**item['section'], "content": f"{item['section']['content']} 这句话由用户确认。"}
+        for item in window.json()['items']
     ]
     confirmed = client.post(
         f"/api/creation-tasks/{task_id}/scripts/{script['id']}/confirm",
         json={"title": "用户确认后的文案", "sections": edited_sections,
-              "expected_updated_at": script["updated_at"]},
+              "expected_updated_at": script["updated_at"], "edit_mode": "replace_all"},
     )
     assert confirmed.status_code == 200
     assert confirmed.json()["task"]["stage"] == "narration"
@@ -3469,16 +3494,16 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         database_path=production.database_path,
         video_library_path=production.video_library_path,
     )
-    saved_task = reloaded.task_records.get_creation_task("workspace_a", task_id)
+    saved_task = reloaded.task_records.get_creation_task("local", task_id)
     saved_script = reloaded.script_records.get_creation_task_script(
-        "workspace_a", saved_task.confirmed_script_id
+        "local", saved_task.confirmed_script_id
     )
     assert saved_task.stage == "narration"
     assert saved_script.sections[0].content.endswith("这句话由用户确认。")
 
-    reloaded.start_creation_task_narration("workspace_a", task_id)
+    reloaded.start_creation_task_narration("local", task_id)
     reloaded.task_records.fail_creation_task_stage(
-        "workspace_a",
+        "local",
         task_id,
         stage="narration",
         reason="narration_generation_failed",
@@ -3488,7 +3513,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     )
     failed_workspace = client.get(f"/api/creation-tasks/{task_id}").json()
     assert failed_workspace["task"]["can_revise_script"] is True
-    failed_task = reloaded.task_records.get_creation_task("workspace_a", task_id)
+    failed_task = reloaded.task_records.get_creation_task("local", task_id)
     for protected in (
         replace(failed_task, narration_cache_key="completed-audio"),
         replace(failed_task, current_timeline_version_id="existing-timeline"),
@@ -3497,35 +3522,36 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         replace(failed_task, stage_reason="voice_authorization_missing"),
     ):
         assert protected.can_revise_script is False
-    too_long = client.post(
+    missing_revision = client.post(
         f"/api/creation-tasks/{task_id}/scripts/{saved_script.id}/confirm",
         json={"title": "仍然过长", "sections": [
             {**asdict(section), "content": "字" * 2000} for section in saved_script.sections
         ]},
     )
-    assert too_long.status_code == 422
-    assert reloaded.task_records.get_creation_task("workspace_a", task_id).stage_status == "failed"
-    assert reloaded.script_records.get_creation_task_script("workspace_a", saved_script.id).title == saved_script.title
+    assert missing_revision.status_code == 422
+    assert any(item['loc'][-1] == 'expected_updated_at' for item in missing_revision.json()['detail'])
+    assert reloaded.task_records.get_creation_task("local", task_id).stage_status == "failed"
+    assert reloaded.script_records.get_creation_task_script("local", saved_script.id).title == saved_script.title
     direct_repair = client.post(
         f"/api/creation-tasks/{task_id}/scripts/{saved_script.id}/confirm",
         json={"title": "直接修订", "sections": [
             {**asdict(section), "content": "直接压缩正文，无需再次调用文字模型。"} for section in saved_script.sections
-        ], "expected_updated_at": saved_script.updated_at.isoformat()},
+        ], "expected_updated_at": saved_script.updated_at.isoformat(), "edit_mode": "replace_all"},
     )
     assert direct_repair.status_code == 200, direct_repair.text
     assert direct_repair.json()["task"]["stage_status"] == "not_started"
-    assert reloaded.script_records.get_creation_task_script("workspace_a", saved_script.id).title == "直接修订"
-    saved_script = reloaded.script_records.get_creation_task_script("workspace_a", saved_script.id)
+    assert reloaded.script_records.get_creation_task_script("local", saved_script.id).title == "直接修订"
+    saved_script = reloaded.script_records.get_creation_task_script("local", saved_script.id)
     assert len(script_calls) == 1
-    assert client.get(f"/api/creation-tasks/{task_id}").json()["task"]["can_revise_script"] is False
-    reloaded.start_creation_task_narration("workspace_a", task_id)
+    assert client.get(f"/api/creation-tasks/{task_id}").json()["task"]["can_revise_script"] is True
+    reloaded.start_creation_task_narration("local", task_id)
     reloaded.task_records.fail_creation_task_stage(
-        "workspace_a", task_id, stage="narration", reason="narration_generation_failed",
+        "local", task_id, stage="narration", reason="narration_generation_failed",
         impact="配音超时。", repair_action="请压缩并重新确认文案", retryable=True,
     )
     repair_run = ScriptGenerationRun(
         id="script-run-repair",
-        workspace_id="workspace_a",
+        workspace_id="local",
         task_id=task_id,
         plan_id=saved_task.plan_id,
         topic_id=saved_task.selected_topic_id,
@@ -3544,7 +3570,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
         provider_attempted=True,
     )
     repaired_task, repaired_script = reloaded.script_records.confirm_creation_task_script(
-        "workspace_a",
+        "local",
         task_id,
         saved_script.id,
         title="用户压缩后的文案",
@@ -3564,7 +3590,7 @@ def test_creation_task_script_generation_confirmation_and_restart_persistence(
     assert repaired_script.sections[0].content == "用户在文案失败状态中压缩正文，并重新确认。"
     assert [
         item.id
-        for item in reloaded.script_records.list_creation_task_scripts("workspace_a", task_id)
+        for item in reloaded.script_records.list_creation_task_scripts("local", task_id)
         if item.selection_status == "confirmed"
     ] == [repaired_script.id]
     with reloaded._connect() as conn:
@@ -3641,6 +3667,8 @@ def test_creation_task_can_bind_a_later_authorized_voice_without_redoing_script(
         conn.execute("UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?",
             (json.dumps(asdict(plan), default=str), workspace_id, plan.id))
     monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, 'creation_execution', main_module._new_creation_execution(production))
+    monkeypatch.setattr(main_module, 'device_runtime', None)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
     monkeypatch.setattr(
         main_module,
@@ -3940,6 +3968,7 @@ def test_creation_plan_confirmation_requires_current_preflight_and_content_truth
     client = TestClient(main_module.app, headers=plan_owner[1])
     payload = {
         "goal": "一个需要真实资料的目标",
+        "presenter_share_target": 100,
         "selected_voice": {"profile_id": "voice-local", "version": "v1"},
         "selected_person": {"profile_id": "voice-local-person", "version": "v1"},
     }
@@ -4851,19 +4880,6 @@ def test_narration_completion_metadata_preserves_caller_transaction_and_rolls_ba
     workspace_id, task_id = 'workspace', 'completion-metadata'
     _save_creation_task(production, workspace_id=workspace_id, task_id=task_id)
     script_id, sections = _seed_confirmed_script(production, workspace_id=workspace_id, task_id=task_id)
-    from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
-    with production._connect() as conn:
-        conn.execute('BEGIN IMMEDIATE')
-        data = json.loads(conn.execute(
-            'SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?',
-            (workspace_id, script_id)).fetchone()[0])
-        body = [CreationTaskScriptSection(**section) for section in data.pop('sections')]
-        for name in ('created_at', 'updated_at', 'confirmed_at'):
-            data[name] = datetime.fromisoformat(data[name])
-        script = CreationTaskScript(**data, sections=body)
-        payload = production.script_records._script_payload(conn, script)
-        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE workspace_id=? AND id=?',
-            (payload, workspace_id, script_id))
     path = tmp_path / 'declared-narration.bin'
     opaque = b'opaque completion metadata; not decoded audio'
     path.write_bytes(opaque)

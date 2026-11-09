@@ -82,7 +82,9 @@ def test_new_shared_worker_files_enter_existing_candidate_input_filter(tmp_path)
         "apps/desktop/package.json": b"{}",
         "apps/desktop/assets/config.json": b"{}",
         "apps/desktop/dist/api-server": b"fixture-api-binary",
+        "apps/desktop/dist/programmatic/entry.js": b"fixture-programmatic-entry",
         "apps/api/agent_tools/diary_tools.ts": b"fixture-tool",
+        "apps/api/agent_runtime/host.mjs": b"fixture-sdk-host",
         "apps/web/.next/standalone-bundled/apps/web/server.js": b"fixture-web",
     }.items():
         target = candidate / relative

@@ -118,7 +118,8 @@ def test_crop_preview_rejects_unavailable_source(legal_crop_state, crop_previews
             raise ValueError("源素材已断开")
         monkeypatch.setattr(state.production, "resolve_clip_media_reference", disconnected)
     base, before, _, response = preview_crop(state, clip_index)
-    assert response.status_code == (403 if clip_index == 0 else 422), response.text
+    assert response.status_code == 409, response.text
+    assert ('人物片段文件不可用' if clip_index == 0 else '源素材已断开') in response.text
     assert not crop_previews
     assert not state.production.edit_records.list_edit_proposals(state.workspace_id, state.task.id)
     assert state.client.get(base).json()["montage"] == before["montage"]

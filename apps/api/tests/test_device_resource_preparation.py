@@ -52,9 +52,10 @@ def metadata_preparation(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform != 'darwin' or not shutil.which('ffmpeg') or not shutil.which('ffprobe'), reason='macOS CPU preparation backend unavailable')
-def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_without_rerun(tmp_path):
+@pytest.mark.parametrize('clip_count', [2, 6])
+def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_without_rerun(tmp_path, clip_count):
     repository, actor, access, service, paths = preparation(tmp_path)
-    shape = CpuPreparationShape(64, 64, 24, 1.0, 2, 2, 8000, 1)
+    shape = CpuPreparationShape(64, 64, 24, 1.0, clip_count, 2, 8000, 1)
     plan_id, budget = service.prepare(shape, actor, request_id=str(uuid4()))
     assert budget.max_disk_io_bytes_per_second is None
     assert not service.profile_path.exists()
@@ -77,7 +78,7 @@ def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_w
             time.sleep(.1)
         assert row['state'] == 'done', (dict(row), runtime.last_error)
         result = service.finalize(database_path=repository.database_path, request_id=request.id, actor=actor)
-        assert result.revision == 1 and result.budget.cpu_render.max_clip_count == 2
+        assert result.revision == 1 and result.budget.cpu_render.max_clip_count == clip_count
         assert result.budget.cpu_audio.max_input_count == 2
         assert result.budget.cpu_audio.max_output_bytes >= 32000
         assert result.budget.narration is None and result.budget.presenter is None
@@ -133,6 +134,35 @@ def test_prepare_critical_pressure_does_not_start_work_or_publish_profile(tmp_pa
     assert list((service.root / 'plans').glob('*.json')) == []
     with repository._connect() as connection:
         assert connection.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 0
+
+
+def test_incomplete_resource_sample_records_an_actionable_failure_without_publishing(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import app.device_resource_preparation as module
+    from _media_preview_test_fixtures import ControlledResources, ControlledProcesses
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
+    plan_id, _ = service.prepare(CpuPreparationShape(64, 64, 30, 42.827, 1, 1, 48000, 2),
+        actor, request_id=str(uuid4()))
+    runtime = build_device_runtime(database_path=repository.database_path,
+        device_lock_path=tmp_path / 'permit.lock', device_access=access,
+        registrations={'device_preparation': service.registration()},
+        resources=ControlledResources(), processes=ControlledProcesses())
+    monkeypatch.setattr(module, 'run_granted_command', lambda *args, **kwargs: SimpleNamespace(
+        returncode=0, observed_resources=SimpleNamespace(rss_sample_complete=True,
+            threads_sample_complete=False, peak_rss_bytes=1024**2, peak_threads=4)))
+    request = runtime.scheduler.submit(service.intent(plan_id, actor), actor)
+    try:
+        assert runtime.run_once()
+        result = service.status(database_path=repository.database_path, request_id=request.id, actor=actor)
+        assert result['state'] == 'failed' and result['wait_reason'] == 'device_preparation_sampling_incomplete'
+        assert '完整' in result['failure_reason'] and '相同规格' in result['repair_action']
+        assert not service.profile_path.exists()
+        with repository._connect() as connection:
+            assert connection.execute('SELECT state FROM device_permit WHERE id=1').fetchone()[0] == 'free'
+        with pytest.raises(DeviceProfileUnavailable, match='完成回执'):
+            service.finalize(database_path=repository.database_path, request_id=request.id, actor=actor)
+    finally:
+        runtime.stop(0)
 
 
 def test_held_legacy_lock_or_uncertain_receipt_prevents_lock_root_change(tmp_path):
@@ -210,9 +240,32 @@ def test_published_audio_budget_covers_measured_container_and_known_source_bytes
     plan_id, _ = service.prepare(CpuPreparationShape(64, 64, 24, 1, 2, 2, 8000, 1, source_bytes=1000000), actor, request_id=str(uuid4()))
     plan, receipt = _synthetic_publication(service, plan_id)
     result = service._publish(plan, receipt, plan['backends'])
-    assert result.budget.cpu_audio.max_output_bytes == receipt['media']['audio']['bytes']
+    assert result.budget.cpu_audio.max_output_bytes >= receipt['media']['audio']['bytes']
     assert result.budget.cpu_audio.max_input_bytes == 1000000
     assert result.budget.cpu_render.max_input_bytes == 1000000
+
+
+@pytest.mark.parametrize('apply_master', [True, False])
+@pytest.mark.parametrize('duration', [9.167, 42.827])
+def test_prepared_audio_envelope_admits_the_requested_mix_with_its_container_allowance(tmp_path, monkeypatch, apply_master, duration):
+    from app.audio_timeline import AudioTimeline
+    from app.task_audio import audio_mix_resources
+    repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
+    plan_id, _ = service.prepare(CpuPreparationShape(64, 64, 30, duration, 1, 1, 48000, 2),
+        actor, request_id=str(uuid4()))
+    plan, receipt = _synthetic_publication(service, plan_id)
+    # A short measured WAV has a smaller header than the declared mix envelope.
+    receipt['media']['audio']['bytes'] = round(48000 * 2 * 4 * plan['probe_seconds']) + 114
+    result = service._publish(plan, receipt, plan['backends'])
+    sample_count = round(duration * 30) * 1600
+    master = {'reference': 'prepared-master', 'uses': 1, 'size_bytes': sample_count * 4,
+        'duration_seconds': sample_count / 48000, 'sample_rate': 48000, 'channels': 2}
+    resources = audio_mix_resources([master], [AudioTimeline()], duration,
+        normalize_voice_sources=False, budget=result.budget.cpu_audio,
+        apply_master=apply_master, output_sample_count=sample_count)
+    assert resources['max_output_bytes'] <= result.budget.cpu_audio.max_output_bytes
+    assert resources['output_sample_count'] == round(duration * 30) * 1600
+    assert result.budget.cpu_audio.additional_disk_bytes >= resources['temporary_output_bytes']
 
 
 def test_cpu_preparation_preserves_existing_host_policy_and_unrelated_capacity(tmp_path, monkeypatch):
@@ -330,12 +383,14 @@ def test_request_kind_uses_original_unit_and_rejects_other_identity_without_writ
         connection.executemany('INSERT INTO device_work_requests VALUES (?,?,?,?,?)', [
             ('cpu', 'device_preparation', 'workspace', 'member', 'cpu-prepare:v1'),
             ('voice', 'device_preparation', 'workspace', 'member', 'narration-prepare:v1'),
+            ('storyboard', 'device_preparation', 'workspace', 'member', 'montage-prepare:v1'),
             ('unknown', 'device_preparation', 'workspace', 'member', 'unknown:v1'),
             ('other-owner', 'creation_job', 'workspace', 'member', 'cpu-prepare:v1')])
     before = path.read_bytes()
     actor = CreationExecutionActor('workspace', 'member')
     assert request_kind(database_path=path, request_id='cpu', actor=actor) == 'cpu'
     assert request_kind(database_path=path, request_id='voice', actor=actor) == 'narration'
+    assert request_kind(database_path=path, request_id='storyboard', actor=actor) == 'montage'
     with pytest.raises(ValueError, match='Unknown'):
         request_kind(database_path=path, request_id='unknown', actor=actor)
     with pytest.raises(KeyError):

@@ -81,7 +81,8 @@ def test_swap_rechecks_version_and_locks_without_partial_changes(storyboard):
         "operation_type": "SetClipLock", "clip_id": "clip-2", "locked": True})
     assert other.status_code == 200, other.text
     before = current(state)
-    assert state.client.post(state.base_url + f"/edits/{response.json()['proposal']['id']}/confirm").status_code == 409
+    rejected = state.client.post(state.base_url + f"/edits/{response.json()['proposal']['id']}/confirm")
+    assert rejected.status_code == 409, rejected.text
     assert preview(state, "1↔3").status_code == 409
     assert _plan(current(state)) == _plan(before)
 
@@ -108,7 +109,7 @@ def test_unequal_material_swap_cannot_move_incidental_presenter_without_explicit
     state = person_render_edit_state
     material = state.montage.clips[1]
     person = state.montage.clips[0]
-    middle = replace(person, id="clip-middle", source_start_seconds=0, source_end_seconds=3,
+    middle = replace(person if phase == "preview" else material, id="clip-middle", source_start_seconds=0, source_end_seconds=3,
         timeline_start_seconds=2, timeline_end_seconds=5, person_render_id=person.person_render_id if phase == "preview" else None)
     plan = replace(state.montage, status="ready", output_path=None, subtitle_path=None, duration_seconds=9,
         clips=[replace(material, id="clip-first", source_start_seconds=4, source_end_seconds=6,
@@ -127,6 +128,7 @@ def test_unequal_material_swap_cannot_move_incidental_presenter_without_explicit
         # Recheck fresh person facts as well as version/order: attachment facts
         # can change while the proposal still carries the same timeline pointer.
         middle.person_render_id = person.person_render_id
+        middle.asset_id, middle.segment_id, middle.source_path = person.asset_id, person.segment_id, person.source_path
         state.production.montage_plan_adoption.save_creation_task_montage_plan(state.workspace_id, state.task.id, plan.id,
             creation_task_montage_plan_to_payload(plan))
     before = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
@@ -196,7 +198,8 @@ def test_replacement_candidate_requalified_at_confirmation(material_edit_state, 
     else:
         state.asset.use_state = "not_for_automation"
         state.production._save_asset(state.asset)
-    assert state.client.post(state.base_url + f"/edits/{response.json()['proposal']['id']}/confirm").status_code == 409
+    rejected = state.client.post(state.base_url + f"/edits/{response.json()['proposal']['id']}/confirm")
+    assert rejected.status_code == (403 if change == "private" else 409), rejected.text
     assert _plan(current(state))["clips"] == _plan(before)["clips"]
 
 
@@ -282,6 +285,7 @@ def test_task_turn_captures_and_passes_service_material_snapshot(task_client, mo
     client, headers, payload = create(0)
     selection = {"scope": "segment", "asset_id": "asset", "segment_id": "segment",
         "expected_updated_at": "2026-10-11T00:00:00+00:00", "expected_segment_updated_at": "2026-10-11T00:00:00+00:00"}
+    payload["expected_reference_version"] = 0
     monkeypatch.setattr(main, "_assistant_turn_scope", lambda *_: ("montage", ["clip:trusted"]))
     monkeypatch.setattr(main, "_assistant_task_clip_material_selection", lambda *_: selection)
     response = client.post("/api/creation-tasks/task/assistant/turn", headers=headers, json=payload)

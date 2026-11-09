@@ -3,15 +3,15 @@ from dataclasses import asdict
 import json
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from app.creation.editing.metadata_use_case import EditPreviewRejected
+from app.creation.editing.metadata_use_case import EditPreviewRejected, LegacyMontageReference
+from app.creation.editing.picture import EditConflict
 from app.creation.cover_use_case import CoverUnavailable, CoverUnresolved
 from app.montage import creation_task_montage_plan_from_payload
 from typing import Literal
 from uuid import UUID
-from app.creation.contracts import CreationTask
 from app.schemas import CreationTaskEditPreviewResponse, CreationTaskEditPreviewRequest, CreationTaskTimelineUndoRequest, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditJobReplayResponse, CreationTaskEditApplyRequest, CreationTaskExactEditRequest, CompoundEditSelectionRequest
 
-def build_task_edit_router(*, audio_command_preview_for, audio_edit_rejected_for, cover_operation_for, clip_preview_command_for, clip_preview_conflict_for, clip_preview_unavailable_for, command_parse_rejected_for, compound_selection_command_for, creation_execution_actor_for, creation_task_edit_preview_request_for, exact_edit_source_for, edit_preview_rejected_for, goal_projection_rejected_for, http_exception_for, host_budget_uncalibrated_for, json_response_for, linked_edit_operations_for, picture_preview_rejected_for, task_media_required_for, timeline_version_conflict_for, assistant_conversation_for_request_for, assistant_member_id_for, bind_assistant_edit_instruction_for, claim_edit_request_for, command_preview_use_case_for, compound_edit_use_case_for, compound_proposal_command_for, confirm_cover_response_for, confirm_creation_task_edit_for, confirm_linked_timeline_response_for, content_reader_for, content_visible_for, creation_runtime_for, creation_task_or_404_for, current_narration_snapshot_for, edit_preview_response_for, ensure_montage_base_version_for, exact_edit_access_for, exact_preview_use_case_for, linked_timeline_apply_command_for, linked_timeline_use_case_for, logical_montage_output_refs_for, media_result_receipt_for, metadata_edit_command_for, metadata_edit_response_for, original_edit_result_for, read_edit_request_result_for, request_permit_actor_for, require_assistant_input_origin_for, require_permit_actor_for, save_edit_request_result_for, subtitle_edit_use_case_for, subtitle_proposal_command_for, topic_failure_response_for, wake_assistant_continuations_for, auth_context_for, conversation_repo_for, creation_task_montage_plan_from_payload_for, creation_task_montage_plan_to_payload_for, current_workspace_id_for, is_subtitle_edit_for, json_for, media_digest_for, production_repo_for, project_task_summary_for, re_for, route_names):
+def build_task_edit_router(*, edit_controls_for, audio_command_preview_for, audio_edit_rejected_for, cover_operation_for, clip_preview_command_for, clip_preview_conflict_for, clip_preview_unavailable_for, command_parse_rejected_for, creation_execution_actor_for, creation_task_edit_preview_request_for, exact_edit_source_for, edit_preview_rejected_for, goal_projection_rejected_for, http_exception_for, host_budget_uncalibrated_for, json_response_for, linked_edit_operations_for, picture_preview_rejected_for, task_media_required_for, timeline_version_conflict_for, assistant_conversation_for_request_for, assistant_member_id_for, bind_assistant_edit_instruction_for, claim_edit_request_for, command_preview_use_case_for, compound_edit_use_case_for, compound_proposal_command_for, confirm_cover_response_for, confirm_creation_task_edit_for, confirm_linked_timeline_response_for, content_reader_for, content_visible_for, creation_runtime_for, creation_task_or_404_for, current_narration_snapshot_for, edit_preview_response_for, ensure_montage_base_version_for, exact_edit_access_for, exact_preview_use_case_for, linked_timeline_apply_command_for, linked_timeline_use_case_for, logical_montage_output_refs_for, media_result_receipt_for, metadata_edit_command_for, metadata_edit_response_for, original_edit_result_for, read_edit_request_result_for, request_permit_actor_for, require_assistant_input_origin_for, require_permit_actor_for, save_edit_request_result_for, subtitle_edit_use_case_for, subtitle_proposal_command_for, topic_failure_response_for, wake_assistant_continuations_for, auth_context_for, conversation_repo_for, creation_task_montage_plan_from_payload_for, creation_task_montage_plan_to_payload_for, current_workspace_id_for, is_subtitle_edit_for, json_for, media_digest_for, production_repo_for, route_names):
     router = APIRouter()
 
     @router.get('/api/creation-tasks/{task_id}/assistant/edit-requests/{request_id}')
@@ -86,9 +86,11 @@ def build_task_edit_router(*, audio_command_preview_for, audio_edit_rejected_for
             identity = {'member_id': assistant_member_id_for()(request, workspace_id), 'local_diagnostic': False}
         case = command_preview_use_case_for()()
         draft = request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact')
-        options = {'identity': identity, 'reader_identity': {'member_id': reader, 'local_diagnostic': diagnostic}, 'request_source': request_source, 'draft_only': draft, 'execution': None, 'actor': None}
+        actor = request_permit_actor_for()(request, workspace_id) if not diagnostic else None
+        options = {'identity': identity, 'reader_identity': {'member_id': reader, 'local_diagnostic': diagnostic}, 'request_source': request_source, 'draft_only': draft, 'execution': None, 'actor': actor}
         try:
-            outcome = case.preview(task, payload, base_version_id=base_version_id, **options)
+            outcome = case.preview(task, payload, base_version_id=base_version_id,
+                expected_input_id=request.headers.get('X-Assistant-Input-ID'), **options)
             outcome = case.resolve_action(task, outcome, **options)
             if isinstance(outcome, audio_command_preview_for()):
                 actor = request_permit_actor_for()(request, workspace_id)
@@ -105,11 +107,13 @@ def build_task_edit_router(*, audio_command_preview_for, audio_edit_rejected_for
                 receipt['result'] = None
                 return json_response_for()(status_code=202, content=receipt)
             return edit_preview_response_for()(*outcome) if outcome is not None else None
+        except LegacyMontageReference as exc:
+            raise http_exception_for()(status_code=409, detail=exc.details) from exc
         except (edit_preview_rejected_for(), picture_preview_rejected_for(), audio_edit_rejected_for(), command_parse_rejected_for()) as exc:
             raise http_exception_for()(status_code=exc.status_code, detail=exc.detail) from exc
         except (clip_preview_unavailable_for(), host_budget_uncalibrated_for()) as exc:
             raise http_exception_for()(status_code=503, detail=str(exc)) from exc
-        except (clip_preview_conflict_for(), timeline_version_conflict_for()) as exc:
+        except (EditConflict, clip_preview_conflict_for(), timeline_version_conflict_for()) as exc:
             raise http_exception_for()(status_code=409, detail=str(exc)) from exc
 
     @router.get('/api/creation-tasks/{task_id}/edits/{proposal_id}', response_model=CreationTaskEditPreviewResponse)
@@ -135,61 +139,29 @@ def build_task_edit_router(*, audio_command_preview_for, audio_edit_rejected_for
         task = creation_task_or_404_for()(workspace_id, task_id)
         if not content_visible_for()(request, workspace_id, task.visibility, task.owner_user_id):
             raise http_exception_for()(status_code=404, detail='没有找到当前任务。')
-        summary = project_task_summary_for()(production_repo_for(), task).summary
-        proposals = production_repo_for().edit_records.list_edit_proposals(workspace_id, task_id, base_version_id=task.current_timeline_version_id, limit=8)
-        return {'task_id': task_id, 'timeline_version_id': summary['current_timeline_version_id'], 'timeline_sequence': summary['timeline_sequence'], 'can_undo': summary['can_undo'], 'can_redo': summary['can_redo'], 'proposals': [{'id': item.id, 'summary': item.summary, 'operation_type': item.operation['operation_type'], 'steps': item.operation['payload'].get('steps', [])} for item in proposals]}
+        return edit_controls_for()().read(task)
 
-    def _assistant_edit_control_instruction(task: CreationTask, request: Request, payload: CreationTaskTimelineUndoRequest, action: str) -> str:
+    @router.post('/api/creation-tasks/{task_id}/edits/{proposal_id}/reject')
+    def reject_creation_task_edit_proposal(task_id: str, proposal_id: str, request: Request, payload: CreationTaskTimelineUndoRequest):
+        task, _member = exact_edit_access_for()(task_id, request, write=True)
         if payload.assistant_turn_id is None:
             raise http_exception_for()(status_code=409, detail='当前修改要求不可核验，未改变任务。')
         turn = conversation_repo_for().get_turn(str(payload.assistant_turn_id))
         if turn is None:
             raise http_exception_for()(status_code=404, detail='没有找到当前对话要求。')
-        workspace_id, member_id, _chat = assistant_conversation_for_request_for()(request, turn['conversation_id'])
+        source_workspace, member, _chat = assistant_conversation_for_request_for()(request, turn['conversation_id'])
+        actor = creation_execution_actor_for()(source_workspace, member)
+        controls = edit_controls_for()()
         try:
-            origin = conversation_repo_for().task_turn_source(turn['id'], workspace_id, member_id, task.id)
-        except ValueError as exc:
-            raise http_exception_for()(status_code=409, detail=str(exc)) from exc
-        context = origin['context']
-        bound = bind_assistant_edit_instruction_for()(request, task, creation_task_edit_preview_request_for()(assistant_turn_id=payload.assistant_turn_id, raw_command=origin['raw_command'], context_stage=context.get('stage', 'montage'), selected_object_refs=context.get('selected_object_refs', []), playhead_ms=context.get('playhead_ms')))
-        if payload.expected_timeline_version_id != task.current_timeline_version_id or payload.expected_timeline_sequence != context.get('target_snapshot', {}).get('timeline_sequence'):
-            raise http_exception_for()(status_code=409, detail='修改所依据的任务版本已变化，未改变任务。')
-        command = bound.raw_command
-        if re_for().search('不要|不用|别|不(?:撤销|重做|取消|放弃)', command):
-            raise http_exception_for()(status_code=409, detail='当前要求没有授权这一动作，任务保持不变。')
-        prefix = '(?:请|麻烦|现在|先|帮我|请帮我|可以帮我|能不能帮我)?'
-        if action == 'reject':
-            proposal_scope = '(?:这(?:个|份|次)|当前|刚才的)?(?:修改)?(?:提案|方案|修改(?:建议)?)'
-            allowed = re_for().fullmatch(prefix + f'(?:取消|放弃|丢弃)(?:一下)?{proposal_scope}(?:一下|吧|吗|好吗)?[。！!？?]?', command.strip())
-        else:
-            scope = '(?:上一步(?:修改|编辑|操作)?|上一次(?:内容)?(?:修改|编辑|操作)?|刚才(?:撤销(?:的)?|的)?(?:那)?(?:一步|一次|修改|编辑|操作)?|最后一次(?:修改|编辑|操作)?)'
-            verb = '撤销|回退' if action == 'undo' else '重做|恢复'
-            allowed = re_for().fullmatch(prefix + f'(?:整体)?(?:{verb})(?:一下)?{scope}?(?:一下|吧|吗|好吗)?[。！!？?]?', command.strip())
-            if re_for().search('调色|颜色|字幕|音量|音乐|配音|口型|镜头|只撤销.+项|仅撤销.+项', command):
-                raise http_exception_for()(status_code=409, detail='当前只能整体撤销或重做上一项编辑，尚不能选择性撤销复合编辑中的一项；未改变任务。')
-        if not allowed:
-            raise http_exception_for()(status_code=409, detail='需要明确的撤销、重做或取消修改方案要求；未改变任务。')
-        return command
-
-    @router.post('/api/creation-tasks/{task_id}/edits/{proposal_id}/reject')
-    def reject_creation_task_edit_proposal(task_id: str, proposal_id: str, request: Request, payload: CreationTaskTimelineUndoRequest):
-        workspace_id = current_workspace_id_for()(request)
-        task = creation_task_or_404_for()(workspace_id, task_id)
-        _assistant_edit_control_instruction(task, request, payload, 'reject')
-        try:
-            proposal = production_repo_for().edit_records.get_edit_proposal(workspace_id, proposal_id)
-            if production_repo_for().edit_records.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('request_source') is not None:
-                _edit_proposal_binding(task_id, proposal_id, request)
-            if proposal.task_id != task_id or proposal.operation['payload'].get('base_version_id') != task.current_timeline_version_id:
-                raise http_exception_for()(status_code=409, detail='这份修改的任务或基础版本已变化。')
-            if proposal.status != 'rejected':
-                proposal = production_repo_for().edit_records.transition_edit_proposal(workspace_id, task_id, proposal_id, status='rejected')
+            origin = controls.current_origin(task, actor, payload.assistant_turn_id)
+            require_assistant_input_origin_for()(request, {**origin, 'assistant_turn_id': turn['id']})
+            return controls.discard(task, proposal_id, payload, actor=actor, origin=origin)
+        except edit_preview_rejected_for() as exc:
+            raise http_exception_for()(status_code=exc.status_code, detail=exc.detail) from exc
         except KeyError as exc:
             raise http_exception_for()(status_code=404, detail='没有找到这份修改方案。') from exc
         except ValueError as exc:
             raise http_exception_for()(status_code=409, detail=str(exc)) from exc
-        wake_assistant_continuations_for()()
-        return {'task_id': task_id, 'proposal_id': proposal.id, 'status': proposal.status, 'timeline_version_id': task.current_timeline_version_id}
 
     def _edit_proposal_binding(task_id, proposal_id, request):
         task, member_id = exact_edit_access_for()(task_id, request, write=True)
@@ -329,12 +301,13 @@ def build_task_edit_router(*, audio_command_preview_for, audio_edit_rejected_for
     @router.post('/api/creation-tasks/{task_id}/edits/{proposal_id}/selection/preview')
     def preview_compound_selection(task_id: str, proposal_id: str, request: Request, payload: CompoundEditSelectionRequest):
         task = creation_task_or_404_for()(current_workspace_id_for()(request), task_id)
-        actor = metadata_edit_command_for()(task, request, 'EditCompoundTimeline', {'base_version_id': task.current_timeline_version_id}).actor_identity
-        control = compound_selection_command_for()(task.workspace_id, task.id, proposal_id, actor, payload.included_step_indices, payload.raw_command)
+        identity = metadata_edit_command_for()(task, request, 'EditCompoundTimeline', {'base_version_id': task.current_timeline_version_id}).actor_identity
+        actor = creation_execution_actor_for()(task.workspace_id, identity['member_id'])
         draft_only = request.query_params.get('draft') == 'true' or request.url.path.endswith('/edits/exact')
         try:
-            outcome = compound_edit_use_case_for()().preview_selection(control, draft_only=draft_only, execution=None)
-            return edit_preview_response_for()(*outcome) if outcome is not None else None
+            return edit_controls_for()().preview_selection(task, proposal_id, payload, actor=actor, draft_only=draft_only)
+        except edit_preview_rejected_for() as exc:
+            raise http_exception_for()(status_code=exc.status_code, detail=exc.detail) from exc
         except picture_preview_rejected_for() as exc:
             raise http_exception_for()(status_code=exc.status_code, detail=exc.detail) from exc
         except task_media_required_for() as required:

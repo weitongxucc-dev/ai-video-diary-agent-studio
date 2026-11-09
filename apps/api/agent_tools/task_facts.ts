@@ -106,6 +106,8 @@ export function executionFacts(execution: any) {
     job: job ? fields(job, ["id", "task_id", "status", "progress", "current_stage", "waiting_reason", "failure_reason",
       "repair_action", "result_ref", "result_kind", "result_url", "created_at", "updated_at"]) : null,
     current_stage: execution.current_stage ?? null, waiting_reason: execution.waiting_reason ?? null,
+    task_execution: execution.task_execution ? fields(execution.task_execution,
+      ['task_kind', 'next_required_stage', 'not_applicable_preparation_kinds']) : null,
     updated_at: execution.status_updated_at ?? null,
     meaning: job ? "后台安排来自独立执行记录，不能从任务阶段推断。" : "服务端本次未返回该任务的后台安排记录。",
   };

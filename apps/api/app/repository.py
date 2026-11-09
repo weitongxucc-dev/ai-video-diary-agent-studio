@@ -113,6 +113,12 @@ class EpisodeRepository:
         assert self._database_path is not None
         try:
             with sqlite3.connect(self._database_path) as conn:
+                historical_catalog = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name = 'episodes' COLLATE NOCASE "
+                    "AND type IN ('table', 'view')"
+                ).fetchone()
+                if historical_catalog is None:
+                    return
                 columns = {
                     str(row[1])
                     for row in conn.execute("PRAGMA table_info(episodes)").fetchall()

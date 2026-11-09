@@ -54,7 +54,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None,edit_controls=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -76,6 +76,8 @@ class TaskBusiness:
         self.device_preparation=device_preparation
         self.generation_case,self.creator_memory=generation_case,creator_memory
         self.execution_status=execution_status
+        self.media_binding=media_binding
+        self.edit_controls=edit_controls
 
     def invoke_native(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic, invocation: TaskInvocation):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -233,7 +235,7 @@ class TaskBusiness:
         binding=dict(source_binding)
         if is_script_generation(binding) and operation not in SCRIPT_GENERATION_OPERATIONS:
             raise TaskBusinessRejected('本次生成动作仅授权读取与保存原请求草稿')
-        reconcile_original=(operation in {'read_task_quality_check','read_task_quality_continuation','continue_task_quality_check','read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
+        reconcile_original=(operation in {'read_task_workspace','read_task_quality_check','read_task_quality_continuation','continue_task_quality_check','read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
             or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
         # Section owners validate the frozen target and dependency digest at
         # commit. An unrelated timeline publication may legitimately move HEAD.
@@ -380,9 +382,11 @@ class TaskBusiness:
             return self.finish(claim, reply, script_window_request=preview)
         if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
             return self.finish(claim, reply, quality_continuation=preview)
+        if isinstance(preview, dict) and preview.get('kind') == 'media_job':
+            return self.finish(claim, reply, reported_media=preview['media_job'])
         return self.finish(claim, reply)
 
-    def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None):
+    def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None, reported_media=None):
         """Project real host receipts; a model's proposed result is never adopted here."""
         goal=self.conversations.get_task_goal(claim['turn_id'])
         if (goal is None or goal['current_turn_id']!=claim['turn_id'] or goal['status']!='running'
@@ -438,6 +442,26 @@ class TaskBusiness:
             response['media_job']=self.media_result(task,actor,jobs[-1].job_id)
             proofs.append({'kind':'media_job','id':jobs[-1].job_id,
                 **({'input_id':goal['source_input_id']} if goal.get('source_input_id') else {})})
+        if reported_media is not None:
+            if self.media_binding is None:
+                raise TaskBusinessRejected('媒体来源核验尚未装配', kind='unavailable')
+            selection = self.media_binding.select_finish(claim['turn_id'], reported_media)
+            if selection.completed_slot is not None:
+                slot = selection.completed_slot
+                response['media_job'] = self.media_binding.completed_receipt(task, actor, claim['turn_id'], slot,
+                    contract=slot['requested_output'], input_refs=slot['input_refs'])
+        proposals, _ = self.production.execution_records.goal_pending_preview_rows(ws, task_id,
+            task.current_timeline_version_id, goal['conversation_id'], goal['member_id'])
+        for row in proposals:
+            source = json.loads(row['constraints_json'])['request_source']
+            if (source.get('assistant_turn_id') != claim['turn_id']
+                    or source.get('input_id') != goal.get('source_input_id')):
+                continue
+            proposal = self.production.edit_records.get_edit_proposal(ws, row['id'])
+            intent = self.production.edit_records.get_edit_intent(ws, proposal.intent_id)
+            response['edit_preview'] = {'intent': asdict(intent), 'proposal': asdict(proposal)}
+            proofs.append({'kind': 'edit_preview', 'id': proposal.id,
+                **({'input_id': goal['source_input_id']} if goal.get('source_input_id') else {})})
         from threading import Event
         binding={**{key:goal[key] for key in ('workspace_id','member_id','task_id','conversation_id')},
             'turn_id':claim['turn_id'],'goal_revision':str(goal.get('revision',0)),
@@ -493,6 +517,28 @@ class TaskBusiness:
             return self.execution.select_narration_voice(runtime_for=self.runtime,actor=actor,write_guard=guard,
                 workspace_id=ws,task_id=task_id,member_id=member,
                 **{**payload.model_dump(exclude={'assistant_turn_id'}),'request_id':str(payload.request_id)})
+        if operation in {'read_edit_control_context', 'preview_edit_selection', 'discard_edit_proposal'}:
+            if self.edit_controls is None:
+                raise TaskBusinessRejected('编辑控制业务用例尚未装配', kind='unavailable')
+            if operation == 'read_edit_control_context':
+                return self.edit_controls.read(task, actor=actor)
+            from pydantic import ValidationError
+            from app.schemas import CompoundEditSelectionRequest, CreationTaskTimelineUndoRequest
+            try:
+                payload = (CompoundEditSelectionRequest.model_validate(args['payload']) if operation == 'preview_edit_selection'
+                    else CreationTaskTimelineUndoRequest.model_validate({**args['payload'],
+                        'assistant_turn_id': origin['assistant_turn_id']}))
+            except ValidationError as exc:
+                raise TaskOperationRejected(str(exc), kind='invalid_input') from exc
+            if operation == 'preview_edit_selection':
+                if args.get('draft_only') is not True:
+                    raise TaskOperationRejected({'error': 'edit_selection_draft_required',
+                        'reason': '后台修改选择仅准备草稿参数；媒体预览须另行取得执行许可。',
+                        'submission_effect': 'not_submitted'}, kind='conflict')
+                return self.edit_controls.preview_selection(task, args['proposal_id'], payload, actor=actor,
+                    origin=origin, write_guard=guard, draft_only=True)
+            return self.edit_controls.discard(task, args['proposal_id'], payload, actor=actor,
+                origin=origin, write_guard=guard)
         if operation in {'read_timeline_history','read_timeline_restore_request','restore_timeline'}:
             if self.timeline_restores is None:
                 raise TaskBusinessRejected('原修改恢复用例尚未装配')
@@ -563,14 +609,26 @@ class TaskBusiness:
             from app.device_resource_profile import DeviceProfileUnavailable
             from app.device_preparation_application import DevicePreparationConflict
             from app.device_scheduler import RecoveryBlocked
-            if self.device_preparation is None:
-                raise TaskBusinessRejected('设备准备业务用例尚未装配',kind='unavailable')
             try:
                 if operation=='prepare_device_resources':
                     payload=DevicePreparationRequest.model_validate(args['payload'])
+                    from app.creation.execution_control import task_execution_requirements
+                    plan=self.production.plan_records.get_creation_plan(task.workspace_id,task.plan_id)
+                    requirements=task_execution_requirements(task,plan)
+                    if payload.kind in requirements['not_applicable_preparation_kinds']:
+                        raise TaskOperationRejected(kind='conflict',detail={
+                            'error':'device_preparation_not_applicable','stage':'device_preparation_preflight',
+                            'task_id':task.id,'submission_effect':'not_submitted',
+                            'reason':'当前是原视频剪辑任务，配音和故事板准备不适用；未提交设备准备或改变原任务。',
+                            'repair_action':'读取当前任务的task_execution与实际执行能力，按next_required_stage和原作业回执选择下一步；不要准备不适用的种类。'})
                     shape=payload.shape.model_dump()
                     if payload.kind=='narration':
                         shape['task_id']=task.id
+                    if payload.kind=='montage' and shape['task_id'] != task.id:
+                        raise TaskBusinessRejected('故事板准备不能切换当前任务', kind='conflict')
+                if self.device_preparation is None:
+                    raise TaskBusinessRejected('设备准备业务用例尚未装配',kind='unavailable')
+                if operation=='prepare_device_resources':
                     result=self.device_preparation('prepare',kind=payload.kind,shape=shape,request_id=str(payload.request_id),actor=actor)
                 elif operation=='read_device_preparation':
                     result=self.device_preparation('status',request_id=args['request_id'],actor=actor)

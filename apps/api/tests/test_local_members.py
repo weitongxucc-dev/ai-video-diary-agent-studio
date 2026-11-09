@@ -359,15 +359,19 @@ def test_seat_cap_counts_the_owner(tmp_path):
     service = _service(tmp_path)
     owner = _owner(service)
     _fill_to_cap(service)
+    members_before = service.list_members()
+    with sqlite3.connect(str(tmp_path / "agent.sqlite3")) as conn:
+        rows_before = conn.execute("SELECT * FROM local_members ORDER BY member_id").fetchall()
 
     with pytest.raises(LocalMembersError) as exc:
         service.add_member("第六人", "member")
 
     assert exc.value.kind == "conflict"
     # The sixth add left nothing behind: same five ids, same five tokens.
-    assert [m.member_id for m in service.list_members()][0] == owner.member_id
-    assert len(service.list_members()) == 5
+    assert service.list_members() == members_before
+    assert _owner(service) == owner
     with sqlite3.connect(str(tmp_path / "agent.sqlite3")) as conn:
+        assert conn.execute("SELECT * FROM local_members ORDER BY member_id").fetchall() == rows_before
         rows = conn.execute("SELECT COUNT(*) FROM local_members").fetchone()[0]
         tokens = conn.execute("SELECT COUNT(*) FROM local_members WHERE token IS NOT NULL").fetchone()[0]
     assert rows == 5

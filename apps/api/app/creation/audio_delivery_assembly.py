@@ -15,13 +15,15 @@ from app.creation.contracts import ArtifactRecord, DependencyEdge, TaskEvent, Tr
 from app.models import utc_now
 from app.packet_copy_policy import packet_copy_output_allocation
 from app.task_audio import media_digest
+from app.creation.render_generation import current_render_generation, render_namespace, render_generation_fields, stored_render_scope
 
 AUDIO_RECIPE = {'codec': 'aac', 'sample_rate': 48000, 'channels': 2,
     'parameters_digest': media_digest({'encoder': 'ffmpeg:aac', 'bitrate': '192k',
         'rate_control': 'explicit bitrate; remaining encoder defaults bound by backend identity',
-        'container': 'mp4', 'editlist': True}), 'fragmented': False}
+        'container': 'mp4', 'editlist': True, 'movie_timescale': 48000}), 'fragmented': False}
 MUX_RECIPE = {'video': 'copy', 'audio': 'copy', 'parameters_digest': media_digest({
-    'map': ['0:v:0', '1:a:0'], 'container': 'mp4', 'movflags': '+faststart', 'video_track_timescale': 90000}),
+    'map': ['0:v:0', '1:a:0'], 'container': 'mp4', 'movflags': '+faststart',
+    'video_track_timescale': 90000, 'movie_timescale': 48000}),
     'fragmented': False, 'faststart': True}
 
 
@@ -101,9 +103,9 @@ class AudioDeliveryAssembly:
         from app.creation.delivery_adoption_recovery import DeliveryAdoptionRecovery
         self.adoption_recovery = DeliveryAdoptionRecovery(self)
 
-    @staticmethod
-    def manifest_id(job):
-        return f'event_{job.id}_audio_delivery_manifest'
+    def manifest_id(self, job, *, connection=None):
+        return render_namespace(f'event_{job.id}_audio_delivery_manifest',
+            current_render_generation(self.repository, job, connection=connection))
 
     def _master(self, job, actor, *, connection=None):
         from app.montage import creation_task_montage_plan_from_payload
@@ -119,7 +121,7 @@ class AudioDeliveryAssembly:
         record, path, facts = self.picture._parent(job, record.id, manifest['recipe_digest'], connection=connection)
         if facts['first_frame'] != 0:
             raise ValueError('最终picture master没有覆盖完整原时钟')
-        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=connection)
         return {'parent': {'binding': {'artifact_id': record.id, 'sha256': record.sha256, 'size_bytes': record.size_bytes,
             'producer_request_id': facts['producer_request_id'], 'producer_generation': facts['producer_generation'],
             'transform_id': transform.id, 'transform_digest': media_digest(asdict(transform))}, 'clock': {
@@ -127,12 +129,23 @@ class AudioDeliveryAssembly:
             'first_pts': 0, 'last_end_pts': facts['packet_count']*3000}},
             'path': str(path), 'logical_ref': record.logical_ref, 'file_identity': _identity(path)}
 
+    def picture_sample_count(self, job, *, connection=None):
+        """Compile the completed picture clock to the delivery's 48 kHz PCM clock."""
+        clock = self._picture(job, connection=connection)['parent']['clock']
+        samples = Fraction((clock['last_end_pts'] - clock['first_pts']) * clock['time_base_num'],
+            clock['time_base_den']) * 48000
+        if samples.denominator != 1 or samples <= 0:
+            raise ValueError('已完成画面时钟不能完整映射到交付音频采样时钟')
+        return samples.numerator
+
     def prepare(self, job, *, actor, connection=None):
         master, picture = self._master(job, actor, connection=connection), self._picture(job, connection=connection)
         pcm, video = master['parent']['clock'], picture['parent']['clock']
         if Fraction(pcm['sample_count'], pcm['sample_rate']) != Fraction(video['last_end_pts'], video['time_base_den']):
             raise ValueError('音频master与画面master时钟不一致，不能截短或填充后伪装完整交付')
-        payload = {'version': 'audio-video-delivery/v1', 'workspace_id': job.workspace_id, 'task_id': job.task_id,
+        payload = {'version': 'audio-video-delivery/v1',
+            **render_generation_fields(current_render_generation(self.repository, job, connection=connection)),
+            'workspace_id': job.workspace_id, 'task_id': job.task_id,
             'job_id': job.id, 'input_digest': job.input_digest, 'picture_recipe': self.picture.recipe(job, connection=connection),
             'master': master, 'picture': picture, 'audio_recipe': AUDIO_RECIPE, 'mux_recipe': MUX_RECIPE}
         payload['digest'] = media_digest(payload)
@@ -141,17 +154,18 @@ class AudioDeliveryAssembly:
             if existing != payload:
                 raise ValueError('原音画交付manifest已绑定其他来源、时钟或配方')
             return existing
-        self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job), job.workspace_id, job.task_id, job.id,
+        self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job, connection=connection), job.workspace_id, job.task_id, job.id,
             'audio_delivery_manifest', payload), connection=connection)
         return payload
 
     def manifest(self, job, *, actor, connection=None):
         try:
-            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job, connection=connection), connection=connection)
         except KeyError:
             return None
         payload = event.payload
-        if (event.job_id != job.id or event.task_id != job.task_id or payload['digest'] != media_digest({
+        if (stored_render_scope(payload) != (render_generation_fields(current_render_generation(self.repository, job, connection=connection)) or None)
+                or event.job_id != job.id or event.task_id != job.task_id or payload['digest'] != media_digest({
                 key: value for key, value in payload.items() if key != 'digest'})
                 or payload['input_digest'] != job.input_digest
                 or payload['picture_recipe'] != self.picture.recipe(job, connection=connection)
@@ -167,29 +181,31 @@ class AudioDeliveryAssembly:
     def _artifact(self, job, manifest, phase, *, connection=None):
         identity = self._unit(manifest, phase)
         try:
-            record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_{phase}_{identity}')
+            record = self.repository.execution_records.get_artifact_record(job.workspace_id, f'artifact_{phase}_{identity}', connection=connection)
         except KeyError:
             return None
-        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=connection)
         facts = transform.parameters
         if (record.kind != ('rendered_video' if phase == 'final_mux' else phase) or transform.transform_type != phase or transform.engine != 'ffmpeg-audio-delivery/v1'
                 or record.producer_job_id != job.id or record.task_id != job.task_id or transform.job_id != job.id
                 or transform.task_id != job.task_id or transform.status != 'succeeded'
                 or transform.input_digest != identity or transform.output_refs != [record.logical_ref]
                 or transform.input_refs != record.input_refs
-                or facts['manifest_digest'] != manifest['digest'] or facts['phase'] != phase):
+                or facts['manifest_digest'] != manifest['digest'] or facts['phase'] != phase
+                or stored_render_scope(facts) != stored_render_scope(manifest)):
             raise ValueError('音画交付产物没有同原manifest的成功变换')
         with self.repository._connect() if connection is None else nullcontext(connection) as conn:
             receipt = conn.execute("SELECT r.state,r.resources_json FROM device_work_requests r WHERE r.workspace_id=? "
                 "AND r.id=? AND r.owner_id=? AND r.owner_type='creation_job' AND r.input_digest=? "
-                "AND r.last_grant_generation=? AND (r.state='done' OR (r.state='granted' AND EXISTS "
+                "AND r.last_grant_generation=? AND (r.state='done' OR (r.state IN ('granted','failed') AND EXISTS "
                 "(SELECT 1 FROM task_events e WHERE e.workspace_id=r.workspace_id AND e.job_id=r.owner_id "
                 "AND e.event_type='task_execution_unit_settled' AND json_extract(e.payload_json,'$.usage_id')=r.id||':'||r.last_grant_generation)))",
                 (job.workspace_id, facts['producer_request_id'], job.id, job.input_digest, facts['producer_generation'])).fetchone()
         if receipt is None:
             raise ValueError('音画产物原请求与generation完成回执不可核实')
         resources = json.loads(receipt['resources_json'])
-        if (resources.get('unit_id') != identity or resources.get('manifest_digest') != manifest['digest']
+        if (stored_render_scope(resources) != stored_render_scope(manifest)
+                or resources.get('unit_id') != identity or resources.get('manifest_digest') != manifest['digest']
                 or resources.get('kind') != ('creation_audio_encode' if phase == 'audio_encode' else 'creation_final_mux')):
             raise ValueError('音画产物原许可族或manifest与变换不一致')
         path = self.store.resolve_file(record.logical_ref)
@@ -236,23 +252,31 @@ class AudioDeliveryAssembly:
                 sealed = None
             if sealed is None and not prepare:
                 raise ValueError('音画单元尚未封存实际卷分配')
+            published_target = (self.store._target(logical)
+                if sealed is None or sealed.get('publication_target') is not None else None)
             if sealed is None:
                 limit = packet_copy_output_allocation(write_paths=paths, write_files=files, publication_mode='copy',
-                    manifest_bytes=manifest_bytes, reserve_bytes=self.reserve_bytes)
+                    manifest_bytes=manifest_bytes, reserve_bytes=self.reserve_bytes, published_target=published_target)
                 from app.creation.execution_budget_scope import ExecutionBudgetScopes
                 scopes = ExecutionBudgetScopes(self.repository)
                 with self.repository._connect() if connection is None else nullcontext(connection) as conn:
-                    binding = scopes.binding(conn, job.workspace_id, job.id)
-                    authority = scopes.current(conn, job.workspace_id, binding.payload['scope_id']).payload
-                    total = authority['limits']['generated_bytes']
-                    if total is not None:
-                        usage = scopes.usage(conn, job.workspace_id, binding.payload['scope_id'])
-                        limit = min(limit, (total-usage['generated_bytes']-usage['reserved_bytes']-manifest_bytes)//2)
+                    try:
+                        binding = scopes.binding(conn, job.workspace_id, job.id)
+                    except KeyError:
+                        binding = None
+                    if binding is not None:
+                        authority = scopes.current(conn, job.workspace_id, binding.payload['scope_id']).payload
+                        total = authority['limits']['generated_bytes']
+                        if total is not None:
+                            usage = scopes.usage(conn, job.workspace_id, binding.payload['scope_id'])
+                            limit = min(limit, (total-usage['generated_bytes']-usage['reserved_bytes']-manifest_bytes)//2)
             else:
                 limit = sealed['max_output_bytes']
             common = dict(budget=budget, manifest_digest=manifest['digest'], unit_id=identity,
+                render_scope=stored_render_scope(manifest),
                 write_paths=paths, write_files=files, manifest_bytes=manifest_bytes,
-                output_limit_bytes=limit, publication_mode='copy')
+                output_limit_bytes=limit, publication_mode='copy',
+                published_target=published_target)
             resources = (audio_encode_resources(**common, master=parents[0]['parent'], audio_recipe=AUDIO_RECIPE)
                 if phase == 'audio_encode' else final_mux_resources(**common, picture=parents[0]['parent'],
                     encoded_audio=parents[1]['parent'], mux_recipe=MUX_RECIPE))
@@ -285,6 +309,7 @@ class AudioDeliveryAssembly:
             # Full-byte verification belongs to the active Grant, never admission.
             for parent in parents:
                 context.check()
+                check_current = context.scheduler.capture_dependency_check(context.grant)
                 path = Path(parent['path'])
                 descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
                 with os.fdopen(descriptor, 'rb') as source:
@@ -297,7 +322,8 @@ class AudioDeliveryAssembly:
                         raise ValueError('音画父文件描述符与原stat不一致')
                     digest = hashlib.sha256()
                     while True:
-                        context.check()
+                        context.check_execution_limits()
+                        check_current()
                         data = source.read(65536)
                         if not data:
                             break
@@ -307,6 +333,7 @@ class AudioDeliveryAssembly:
                     after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
                     if before_identity != after_identity or _identity(path) != parent['file_identity'] or digest.hexdigest() != parent['parent']['binding']['sha256']:
                         raise ValueError('音画父文件完整SHA或原stat已变化')
+                context.check()
             inputs = {'manifest_digest': manifest['digest'], 'unit_id': request.resources['unit_id'], 'phase': phase,
                 'parents': parents, 'recipe': manifest['audio_recipe' if phase == 'audio_encode' else 'mux_recipe']}
             encoded = json.dumps(inputs, sort_keys=True, ensure_ascii=False).encode()
@@ -326,13 +353,14 @@ class AudioDeliveryAssembly:
                         raise ValueError('原master WAV不是封存的完整S16采样时钟')
                 command = common + ['-i', parents[0]['path'], '-map', '0:a:0', '-vn', '-c:a', 'aac', '-b:a', '192k',
                     '-ar', '48000', '-ac', '2', '-threads:a', str(context.threads), '-map_metadata', '-1',
-                    '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
+                    '-movie_timescale', '48000', '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
                 _run(context, command, output=output)
                 output_clock = _aac_clock(output, context, parents[0]['parent']['clock'])
             else:
                 command = common + ['-i', parents[0]['path'], '-i', parents[1]['path'], '-map', '0:v:0', '-map', '1:a:0',
                     '-map_metadata', '-1', '-c:v', 'copy', '-c:a', 'copy', '-video_track_timescale', '90000',
-                    '-movflags', '+faststart', '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
+                    '-movie_timescale', '48000', '-movflags', '+faststart',
+                    '-fs', str(context.max_output_bytes), '-f', 'mp4', str(output)]
                 _run(context, command, output=output)
                 streams = _probe_streams(output, context)
                 video = next((item for item in streams if item['codec_type'] == 'video'), None)
@@ -350,7 +378,8 @@ class AudioDeliveryAssembly:
                 if _identity(parent['path']) != parent['file_identity']:
                     raise ValueError('音画父文件在处理期间已变化，不发布')
             publication_started = True
-            published = self.store.publish_file(logical, output, temporary_path=files['published'], check=context.check)
+            published = self.store.publish_file(logical, output, temporary_path=files['published'],
+                check=context.check, retain_failed_temporary=True)
             identity = self._unit(manifest, phase)
             record = ArtifactRecord(f'artifact_{phase}_{identity}', job.workspace_id, job.task_id,
                 'rendered_video' if phase == 'final_mux' else phase, logical,
@@ -358,6 +387,7 @@ class AudioDeliveryAssembly:
             transform = TransformRun(id=f'transform_{record.id}', workspace_id=job.workspace_id, task_id=job.task_id,
                 job_id=job.id, transform_type=phase, input_digest=identity, input_refs=record.input_refs,
                 output_refs=[logical], engine='ffmpeg-audio-delivery/v1', parameters={
+                    **(stored_render_scope(manifest) or {}),
                     'manifest_digest': manifest['digest'], 'phase': phase, 'clock': output_clock,
                     'producer_request_id': context.grant.request_id, 'producer_generation': context.grant.generation,
                     'file_identity': _identity(self.store.resolve_file(logical))},

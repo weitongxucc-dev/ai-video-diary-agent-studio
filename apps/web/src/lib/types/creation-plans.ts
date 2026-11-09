@@ -74,6 +74,7 @@ export type CreationPlanBlocker = {
     blocks_confirmation: boolean;
 };
 export type CreationPlanPreview = Omit<CreationPlanInput, "selected_voice"> & {
+    source_media?: SourceMediaSelection | null;
     updated_at?: string | null;
     template_settings?: VideoTemplateSettings;
     name: string;
@@ -94,6 +95,17 @@ export type CreationPlanPreview = Omit<CreationPlanInput, "selected_voice"> & {
         profile_id: string;
         version: string;
     } | null;
+};
+
+export type SourceMediaSelection = {
+    asset_id: string;
+    asset_updated_at: string;
+    source_ref: string;
+    source_start_seconds: number;
+    source_end_seconds: number;
+    aspect_ratio: "9:16" | "16:9" | "1:1";
+    preserve_audio: boolean;
+    file_signature: { size_bytes: string; mtime_ns: string; ctime_ns: string; inode: string };
 };
 export type CreationPlan = CreationPlanPreview & {
     id: string;

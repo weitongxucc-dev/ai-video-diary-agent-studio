@@ -58,8 +58,10 @@ def test_device_preparation_uses_original_account_actor_and_only_public_facts():
     from app.assistant.task_business import TaskBusiness
     from app.creation_execution import CreationExecutionActor
     actor = CreationExecutionActor.account(str(uuid4()),str(uuid4()),str(uuid4()))
-    task = SimpleNamespace(workspace_id=actor.workspace_id,id='task')
+    task = SimpleNamespace(workspace_id=actor.workspace_id,id='task',plan_id='plan')
     business = object.__new__(TaskBusiness)
+    business.production = SimpleNamespace(plan_records=SimpleNamespace(
+        get_creation_plan=lambda workspace_id, plan_id: SimpleNamespace(source_media=None)))
     calls = []
     def dispatch(action, **values):
         calls.append((action,values))
@@ -185,13 +187,14 @@ def test_window_finish_persists_public_original_receipt_without_legacy_full_scri
           'member_id':'member','conversation_id':'conversation','status':'running','request_context':{},
           'source_input_id':None,'source_input_turn_id':None}
     actor=CreationExecutionActor('workspace','member')
-    task=SimpleNamespace(id='task')
+    task=SimpleNamespace(id='task', current_timeline_version_id=None)
     saved=[]
     def finish_turn(*args,**kwargs): saved.append((args,kwargs))
     conversations=SimpleNamespace(get_task_goal=lambda _:goal,finish_turn=finish_turn)
     def forbidden(*args,**kwargs): raise AssertionError('new window results must not hydrate an old full script')
     event=SimpleNamespace(event_type='assistant_script_saved',payload={'source':{'turn_id':turn},'script_id':'script'})
-    production=SimpleNamespace(execution_records=SimpleNamespace(list_task_events=lambda *_:[event]),script_records=SimpleNamespace(get_creation_task_script=forbidden))
+    production=SimpleNamespace(execution_records=SimpleNamespace(list_task_events=lambda *_:[event],
+        goal_pending_preview_rows=lambda *_:([], [])),script_records=SimpleNamespace(get_creation_task_script=forbidden))
     receipt={'task_id':'task','script_id':'script','request_id':request_id,'status':'saved',
              'updated_at':'2026-10-25T00:00:00+00:00','total_count':45,'submitted_input':{'text':'不复制原文'}}
     case=SimpleNamespace(window_request_result=lambda *args,**kwargs:receipt)

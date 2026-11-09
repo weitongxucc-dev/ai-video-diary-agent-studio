@@ -912,10 +912,11 @@ class ScriptRecordStore:
             ]
 
     def get_creation_task_script(
-        self, workspace_id: str, script_id: str
+        self, workspace_id: str, script_id: str, *, connection: sqlite3.Connection | None = None
     ) -> CreationTaskScript:
-        with self._connect() as conn:
-            conn.execute("BEGIN")
+        with self._connect() if connection is None else nullcontext(connection) as conn:
+            if connection is None:
+                conn.execute("BEGIN")
             row = conn.execute(
                 "SELECT payload FROM creation_task_scripts WHERE workspace_id=? AND id=?",
                 (workspace_id, script_id),
@@ -1030,13 +1031,14 @@ class ScriptRecordStore:
         workspace_id: str,
         task_id: str,
         script_id: str | None = None,
+        *, connection: sqlite3.Connection | None = None,
     ) -> str | None:
-        task = self.get_creation_task(workspace_id, task_id)
+        task = self.get_creation_task(workspace_id, task_id, connection=connection)
         current_script_id = script_id or task.confirmed_script_id
         if not current_script_id or task.confirmed_script_id != current_script_id:
             return None
         try:
-            script = self.get_creation_task_script(workspace_id, current_script_id)
+            script = self.get_creation_task_script(workspace_id, current_script_id, connection=connection)
         except KeyError:
             return None
         if (

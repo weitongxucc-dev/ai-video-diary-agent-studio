@@ -1,4 +1,5 @@
 """The finite exact-edit preview application, with explicit source and execution."""
+from app.creation.plan_contracts import creation_plan_payload
 from collections import Counter
 import json
 from app.assistant_goal_continuation import GoalResultProjection
@@ -359,14 +360,19 @@ class ExactPreviewUseCase:
         source = command.source
         if source is None and original_command is not None:
             action = CreationTaskExactEditRequest(operation_type=command.operation_type, **{'clip_ids': command.clip_ids, 'effects': command.values} if command.operation_type == 'AdjustVisualEffects' else {'clip_id': command.clip_ids[0], **command.values})
-            source = {'workspace_id': workspace_id, 'task_id': task_id, 'member_id': actor.user_id or actor.member_id, 'actor_identity': actor.identity_payload(), 'request_id': None, 'raw_command': original_command.raw_command, 'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence, 'action': action.model_dump(mode='json', exclude_unset=True), 'source_facts': self.source_facts(task, action, {'member_id': actor.user_id or actor.member_id, 'local_diagnostic': False}, actor)}
+            source = {'source_kind': 'interactive', 'workspace_id': workspace_id, 'task_id': task_id, 'member_id': actor.user_id or actor.member_id, 'actor_identity': actor.identity_payload(), 'request_id': None, 'raw_command': original_command.raw_command, 'expected_timeline_version_id': base.id, 'expected_timeline_sequence': base.sequence, 'action': action.model_dump(mode='json', exclude_unset=True), 'source_facts': self.source_facts(task, action, {'member_id': actor.user_id or actor.member_id, 'local_diagnostic': False}, actor)}
             if original_command.assistant_turn_id is not None:
                 origin = self.conversations.task_turn_source(str(original_command.assistant_turn_id), workspace_id, actor.user_id or actor.member_id, task_id)
-                source.update(assistant_turn_id=str(original_command.assistant_turn_id), conversation_id=origin['conversation_id'],
+                source.update(source_kind='assistant', assistant_turn_id=str(original_command.assistant_turn_id), conversation_id=origin['conversation_id'],
                               **{key: origin[key] for key in ('input_id', 'input_turn_id') if key in origin})
             command = replace(command, source=source)
         self.clip_preview.prepare(actor, command)
-        self.clip_preview.seal(actor, command)
+        try:
+            self.clip_preview.seal(actor, command)
+        except (ClipPreviewConflict, ClipPreviewUnavailable):
+            raise
+        except ValueError as exc:
+            raise EditPreviewRejected(422, str(exc)) from exc
         return command
     def submit_clip(self, runtime, media, actor, command, *, operation):
         _unused_workspace_id, task_id = (actor.workspace_id, command.task_id)
@@ -510,7 +516,7 @@ class ExactPreviewUseCase:
                     files.append(fact)
                 values = service.source_metadata(workspace_id,task_id,reference)
                 audio_inputs.append({'reference':reference,'path':str(path.resolve()),'size_bytes':stat.st_size,'uses':uses.get(reference,1),**values})
-        facts = {'base_version_id':task.current_timeline_version_id,'script_id':task.confirmed_script_id,'script_digest':self.repository.script_records.confirmed_creation_task_script_digest(workspace_id,task_id,task.confirmed_script_id) if task.confirmed_script_id else None,'plan_id':task.plan_id,'plan_digest':media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),'montage':snapshot,'files':files,'narration_cache_key':task.narration_cache_key}
+        facts = {'base_version_id':task.current_timeline_version_id,'script_id':task.confirmed_script_id,'script_digest':self.repository.script_records.confirmed_creation_task_script_digest(workspace_id,task_id,task.confirmed_script_id) if task.confirmed_script_id else None,'plan_id':task.plan_id,'plan_digest':media_digest(creation_plan_payload(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),'montage':snapshot,'files':files,'narration_cache_key':task.narration_cache_key}
         if visual_scope is not None:
             facts['visual_preview']=visual_scope
         if graphics:
@@ -637,7 +643,7 @@ class ExactPreviewUseCase:
                     raise EditPreviewRejected(422, '精确编辑包含其他操作字段或缺少必要字段')
                 values['base_version_id'] = source['expected_timeline_version_id'] if source else task.current_timeline_version_id
                 command = metadata_edit_command(task, identity, payload.operation_type, values, source=source)
-                audio_edit = AudioEditRequest(base_version_id=command.base_version_id, **payload.audio_edit.model_dump()) if payload.operation_type == 'EditAudioTimeline' else None
+                audio_edit = self.audio_request(payload, command.base_version_id) if payload.operation_type == 'EditAudioTimeline' else None
                 outcome = self.metadata.save(task, command, audio_edit=audio_edit, audio_actor=actor)
             elif payload.operation_type in {'ChangeLinkedSpeed', 'DeleteClip', 'DuplicateClip', 'InsertClip'}:
                 task, values = self.prepare_linked(task.workspace_id, task.id, payload)
@@ -711,9 +717,9 @@ class ExactPreviewUseCase:
             outcome = self.preview(task.workspace_id, task.id, clean, identity=identity, actor=actor,
                 source=source, execution=None, reader_identity=identity, draft_only=draft_only)
             if isinstance(outcome,ClipPreviewCommand):
+                command=self.prepare_clip_submission(actor,outcome)
                 runtime=runtime_for()
                 media=runtime.registrations['creation_job'].owner.task_media
-                command=self.prepare_clip_submission(actor,outcome)
                 job=self.submit_clip(runtime,media,actor,command,operation='exact_edit_preview')
                 receipt=project_media(media,job,actor,runtime)
                 receipt['result']=None

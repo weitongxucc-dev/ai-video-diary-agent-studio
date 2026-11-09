@@ -25,11 +25,12 @@ from app.creation.narration_artifacts import NarrationArtifactRecord
 from app.visual_effects import reusable_color_settings
 from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset, synthetic_wav_bytes
 from test_creation_execution import _seed
+from tests.host_memory_boundary import IsolatedMemoryMonitor
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='synthetic B-roll fixture requires ffmpeg')
 def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(tmp_path, monkeypatch):
-    repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local')
+    repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local', duration_seconds=2)
     members = LocalMemberService(repo.database_path)
     member, token = members.join(members.create_invite_code(), '故事板 normal 合成成员')
     person, voice, *_ = register_synthetic_profiles(repo, workspace_id='local', member_id=member.member_id,
@@ -68,8 +69,10 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
     monkeypatch.setattr(main, 'auth_context', SimpleNamespace(enabled=False))
     monkeypatch.setattr(main, 'local_members_service', members)
     monkeypatch.setattr(main, 'production_repo', repo)
+    from app.quality_inspection import QualityCheckRepository
+    monkeypatch.setattr(main, 'quality_check_repo', QualityCheckRepository(repo.database_path))
     monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path / 'artifacts'))
-    monkeypatch.setattr(main, 'settings', replace(main.settings, video_output_path=str(tmp_path / 'outputs'),
+    monkeypatch.setattr(main, 'settings', replace(main.settings, database_path=str(repo.database_path), video_output_path=str(tmp_path / 'outputs'),
         video_inbox_path=str(tmp_path / 'library'), temporary_root_path=str(tmp_path / 'temporary'),
         native_portrait_worker_path=None, hermes_radar_path=None, obsidian_vault_path=None))
     monkeypatch.setattr(main, 'creation_execution', main._new_creation_execution(repo))
@@ -82,7 +85,9 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
     monkeypatch.setattr(psutil, 'cpu_percent', lambda *args, **kwargs: 0.0)
     monkeypatch.setattr(psutil, 'swap_memory', lambda: swap._replace(used=0))
     monkeypatch.setattr(psutil, 'disk_io_counters', lambda **kwargs: devices if kwargs.get('perdisk') else disk)
-    resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=host_budget)
+    # This normal proves queue/adoption behavior, not native memory-policy calibration.
+    resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=host_budget,
+        memory_monitor=IsolatedMemoryMonitor())
     case = main._montage_stage_use_case(repo)
     assert case.repository is case.metadata.repository is case.person_stage.repository is repo
     assert case.metadata is case.person_stage.metadata and case.montage_planner is main.montage_planner
@@ -115,6 +120,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         device_access=MemberDeviceAccess(members, identity_verifier=main._verify_creation_identity),
         registrations={'creation_job': registration}, resources=resources, processes=HostProcessProbe())
     monkeypatch.setattr(main, 'device_runtime', runtime)
+    monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
     client = TestClient(main.app, headers={'X-Local-Member-Token': token})
     url = '/api/creation-tasks/' + task_id
     request = {'script_id': script_id, 'input_digest': revision_digest(script, plan), 'requirements_confirmed': True}
@@ -146,7 +152,9 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         assert montage['presenter_share_target'] == 0 and montage['aspect_ratio'] == '16:9'
         assert clip['fit_mode'] == 'fit' and clip['visual_effects'] == reusable_color_settings(plan.template_settings['color_style'])
         assert cue['subtitle_style'] == plan.template_settings['subtitle_style']
-        assert '未运行视觉语义模型' in montage['message'] and any('缺少本地多帧' in reason for reason in clip['match_reasons'])
+        assert '未运行视觉语义模型' in montage['message']
+        assert any(reason.startswith('文字词重合 ') for reason in clip['match_reasons'])
+        assert any(reason.startswith('镜头时长适配 ') for reason in clip['match_reasons'])
         assert len(versions) == 1 and versions[0].id == task.current_timeline_version_id
         assert versions[0].snapshot['montage']['id'] == montage['id'] == task.montage_plan_id
         assert versions[0].snapshot['narration_segments'][0]['id'] == segment.id

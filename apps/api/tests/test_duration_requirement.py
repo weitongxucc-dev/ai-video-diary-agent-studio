@@ -18,7 +18,7 @@ def test_goal_duration_is_independent_of_execution_window():
 
     requests = [(CreationPlanDefaultsRequest, {"goal": "A long editing project"}),
                 (CreationRequestDeliveryRequirements, {}),
-                (ScriptLibraryReuseRequest, {"name": "Reuse", "requirements_confirmed": True})]
+                (ScriptLibraryReuseRequest, {"request_id": "9858fb94-6625-49f5-8378-e9944b6ed345", "expected_entry_updated_at": "2026-01-01T00:00:00Z", "name": "Reuse", "requirements_confirmed": True})]
     for schema, fields in requests:
         for seconds in (1, 1800):
             assert schema(**fields, duration_target_seconds=seconds).duration_target_seconds == seconds
@@ -155,7 +155,7 @@ def test_visual_delivery_30_keeps_all_real_voice_and_caption_durations(task_inpu
     assert [cue.text for cue in plan.cues] == texts
     schedule = narration_schedule(plan.cues, plan.duration_seconds)
     assert sum(c.end_seconds - c.start_seconds for c in schedule) == pytest.approx(17.12)
-    assert [c.start_seconds for c in schedule] == pytest.approx([w.start_seconds for w in windows])
+    assert [round(c.start_seconds * 1000) for c in schedule] == [round(w.start_seconds * 1000) for w in windows]
     ordered = sorted(plan.clips, key=lambda clip: clip.source_start_seconds)
     assert all(left.source_end_seconds <= right.source_start_seconds for left, right in zip(ordered, ordered[1:]))
     if source_limited:
@@ -180,12 +180,13 @@ def test_replanned_english_caption_clock_keeps_real_segment_boundaries(task_inpu
             for section, durations in measured.items() for i, duration in enumerate(durations)]
     old = narration_schedule(cues, 29.92)
     assert old[-1].end_seconds == pytest.approx(29.92)
-    monkeypatch.setattr(montage, '_build_creation_task_cues', lambda *args, **kwargs: cues)
+    monkeypatch.setattr(montage, '_build_creation_section_cues', lambda *args, **kwargs: cues)
     windows = [SectionWindow(sections[0].id, 0, 11.2), SectionWindow(sections[1].id, 11.2, 629 / 30),
         SectionWindow(sections[2].id, 629 / 30, 30)]
     plan = MontagePlanner().build_for_creation_task(**{**task_inputs,
         'script': replace(task_inputs['script'], sections=sections)}, duration_target_seconds=30,
-        narration_duration_seconds=29.92, delivery_windows=windows)
+        narration_duration_seconds=29.92, delivery_windows=windows,
+        narration_segment_durations_by_section={section: sum(durations) for section, durations in measured.items()})
     if adopted:
         from dataclasses import asdict
         from app.creation.montage_stage_use_case import MontageStageUseCase
@@ -203,9 +204,20 @@ def test_replanned_english_caption_clock_keeps_real_segment_boundaries(task_inpu
                     for clip in plan.clips if clip.cue_id in ids])
             states[window.section_id] = {'narration_reference': segment.audio_reference,
                 'montage': montage.creation_task_montage_plan_to_payload(local)}
-        repository = SimpleNamespace(section_inputs=SimpleNamespace(effective_creation_script=lambda *args: replace(task_inputs['script'], sections=sections), stage_segment_state=lambda ws, task, section: states[section]),
-            narration_records=SimpleNamespace(list_narration_segments=lambda *args: audio), plan_records=SimpleNamespace(get_creation_plan=lambda *args: SimpleNamespace(duration_target_seconds=30)))
+        from contextlib import nullcontext
         task = SimpleNamespace(workspace_id='workspace', id='task', plan_id='plan')
+        header = replace(task_inputs['script'], sections=sections)
+        snapshot = SimpleNamespace(task=task, script_header=header,
+            plan=SimpleNamespace(duration_target_seconds=30, duration_mode='exact', duration_range_seconds=None))
+        repository = SimpleNamespace(
+            execution_inputs=SimpleNamespace(creation_execution_read=lambda: nullcontext(object()),
+                read_creation_execution_snapshot=lambda *args, **kwargs: snapshot),
+            section_inputs=SimpleNamespace(
+                iter_creation_narration_sections=lambda *args, **kwargs: iter(zip(sections, audio)),
+                iter_creation_section_planning_inputs=lambda *args, **kwargs: iter(
+                    (section, segment.duration_seconds, states[section.id]['montage']['delivery_window'])
+                    for section, segment in zip(sections, audio)),
+                stage_segment_state=lambda ws, task, section, **kwargs: states[section]))
         plan = MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=repository), task, plan)
     schedule = narration_schedule(plan.cues, plan.duration_seconds)
     assert len(schedule) == 12

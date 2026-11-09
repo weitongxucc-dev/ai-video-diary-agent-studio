@@ -65,7 +65,7 @@ for (const [error, reason] of [['script_fact_unsupported', 'unsupported_fact'], 
 test('untrusted diagnostic fields do not enter tool results', async () => {
   const secret = 'private-external-metadata';
   const state = rejectedTool({error: 'script_review_invalid', reason_code: secret, section_index: secret,
-    retryable: secret, reason: secret, repair_action: secret});
+    retryable: secret, reason: secret, repair_action: secret}, {authorization: `Bearer ${secret}`});
   const result = await state.tool.execute('first', draft);
   assert.equal(result.details.failure.reason_code, 'unavailable');
   assert.equal(result.details.failure.section_index, null);
@@ -125,14 +125,14 @@ test('stale, out-of-range and invalid findings cannot carry their explanations',
   assert.equal(JSON.stringify(result).includes('private-'), false);
 });
 
-test('bounded complete findings keep 300 Unicode characters and reject an oversized list', async () => {
+test('complete findings keep 300 Unicode characters across 45 issues and reject empty or oversized explanations', async () => {
   const issue = issueFor(draft.sections[0].content, 'content', 1, 0, '😀'.repeat(300));
   const base = {error: issue.error, reason_code: issue.reason_code, section_index: 1, retryable: false};
-  const state = rejectedTool({...base, review_issues: Array.from({length: 12}, () => ({...issue}))});
+  const state = rejectedTool({...base, review_issues: Array.from({length: 45}, () => ({...issue}))});
   const result = await state.tool.execute('max-review', draft);
-  assert.equal(result.details.failure.review_issues.length, 12);
+  assert.equal(result.details.failure.review_issues.length, 45);
   assert.equal(Array.from(result.details.failure.review_issues[0].review_explanation).length, 300);
-  for (const review_issues of [[], Array.from({length: 13}, () => issue)]) {
+  for (const review_issues of [[], [{...issue, review_explanation: '😀'.repeat(301)}]]) {
     const oversized = await rejectedTool({...base, review_issues}).tool.execute('invalid-count', draft);
     assert.equal('review_issues' in oversized.details.failure, false);
   }
@@ -152,13 +152,17 @@ for (const [field, section, text, fragment, target] of [
     else submitted.sections[0][field] = text;
     const location = locationFor(text, field, section, fragment);
     const state = rejectedTool({error: 'script_fact_unsupported', reason_code: 'unsupported_fact', section_index: 1,
-      retryable: false, ...location, reason: 'private-model-explanation', repair_action: 'private-response-body'});
+      retryable: false, ...location, reason: '宿主核查判定本次内容缺少资料支持。 private-model-explanation',
+      repair_action: '保留原稿，核对全部固定资料后修订。 private-response-body'},
+      {authorization: 'Bearer private-model-explanation', cookie: 'session=private-response-body'});
     const result = await state.tool.execute('located', submitted);
     assert.equal(result.isError, true);
     for (const [key, value] of Object.entries(location)) assert.equal(result.details.failure[key], value);
     assert.ok(result.details.failure.reason.includes(target));
+    assert.match(result.details.failure.reason, /宿主核查判定本次内容缺少资料支持/);
     assert.match(result.details.failure.reason, /本次未保存送审稿/);
     assert.match(result.details.failure.repair_action, /不是已保存旧稿/);
+    assert.match(result.details.failure.repair_action, /保留原稿，核对全部固定资料后修订/);
     assert.equal(JSON.stringify(result).includes('private-model-explanation'), false);
     assert.equal(JSON.stringify(result).includes('private-response-body'), false);
     assert.equal(state.calls.filter(call => call.url.endsWith('/script-draft')).length, 1);

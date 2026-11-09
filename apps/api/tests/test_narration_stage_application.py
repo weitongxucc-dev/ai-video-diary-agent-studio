@@ -18,7 +18,7 @@ import app.main as main
 from app.artifact_store import ArtifactStore
 from app.creation_execution import CreationStageGrantContext, revision_digest
 from app.device_runtime import build_device_runtime
-from app.host_resource_probes import HostBudget, HostProcessProbe, HostResourceProbe, MontageBudget, NarrationBudget
+from app.host_resource_probes import CpuAudioBudget, HostBudget, HostProcessProbe, HostResourceProbe, MontageBudget, NarrationBudget, RuntimeCpuPolicy
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess, creation_job_registration
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
@@ -38,6 +38,7 @@ from app.audio_timeline import narration_audio_timeline
 from app.subtitle_schedule import narration_schedule
 from test_creation_execution import _seed
 from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset
+from tests.host_memory_boundary import IsolatedMemoryMonitor
 
 
 # Exact original finite worker from test_creation_execution; no model execution.
@@ -372,48 +373,74 @@ def narration_application(tmp_path,monkeypatch):
     plan.owner_user_id=member.member_id
     task=repo.task_records.get_creation_task('local',task_id)
     task.owner_user_id=member.member_id
+    script=repo.script_records.get_creation_task_script('local',script_id)
+    script.sections.append(replace(script.sections[0],id='section_2'))
     with repo._connect() as conn:
+        conn.execute('BEGIN')
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?',(json.dumps(asdict(plan),default=str),plan.id))
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',(json.dumps(asdict(task),default=str),task.id))
-        payload=json.loads(conn.execute('SELECT payload FROM creation_task_scripts WHERE id=?',(script_id,)).fetchone()[0])
-        payload['sections'].append({**payload['sections'][0],'id':'section_2'})
-        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?',(json.dumps(payload),script_id))
+        payload=repo.script_records._script_payload(conn,script)
+        conn.execute('UPDATE creation_task_scripts SET payload=? WHERE id=?',(payload,script_id))
     asset,_=register_synthetic_video_asset(repo,workspace_id='local',member_id=member.member_id,
         path=tmp_path/'library/source.mp4',asset_id='asset',seconds=36)
     monkeypatch.setattr(main,'auth_context',SimpleNamespace(enabled=False))
     monkeypatch.setattr(main,'local_members_service',members)
     monkeypatch.setattr(main,'production_repo',repo)
+    from app.conversation_repository import ConversationRepository
+    monkeypatch.setattr(main,'conversation_repo',ConversationRepository(repo.database_path))
     monkeypatch.setattr(main,'narration_generator',generator)
     monkeypatch.setattr(main,'artifact_store',ArtifactStore(tmp_path/'artifacts'))
     monkeypatch.setattr(main,'settings',SimpleNamespace(video_output_path=str(tmp_path/'outputs'),
         video_inbox_path=str(tmp_path/'library'),effective_temporary_root_path=tmp_path/'temporary',native_portrait_worker_path=None))
     execution=main._new_creation_execution(repo)
     monkeypatch.setattr(main,'creation_execution',execution)
-    budget=NarrationBudget(1000,10,1_000_000,300,8_000_000,1,90,1024**3,16,.1,1024**3,1_000_000)
+    budget=NarrationBudget(1000,10,1_000_000,300,8_000_000,1,90,1024**3,16,.1,1024**3,1_000_000,
+        input_scope='single_call_experiment_v1',
+        running_cpu_policy=RuntimeCpuPolicy('darwin_background','synthetic://narration-stage-application'))
+    audio_budget=CpuAudioBudget(10,32*1024**2,300,300,24000,1,8_000_000,1,90,
+        1024**3,16,.1,1024**3,1_000_000)
     montage_budget=MontageBudget(10,20,1_000_000,1_000_000,30,1_000_000)
-    host_budget=HostBudget(100,1,100*1024**3,1,10**12,10_000_000,narration=budget,montage=montage_budget)
+    host_budget=HostBudget(100,1,100*1024**3,1,10**12,10_000_000,
+        cpu_audio=audio_budget,narration=budget,montage=montage_budget)
+    monkeypatch.setattr(main,'_device_host_budget',lambda:host_budget)
     swap=psutil.swap_memory()
     disk=psutil.disk_io_counters()
     disk_devices=psutil.disk_io_counters(perdisk=True)
     monkeypatch.setattr(psutil,'cpu_percent',lambda *args,**kwargs:0.0)
     monkeypatch.setattr(psutil,'swap_memory',lambda:swap._replace(used=0))
     monkeypatch.setattr(psutil,'disk_io_counters',lambda **kwargs:disk_devices if kwargs.get('perdisk') else disk)
-    resources=HostResourceProbe(repo.database_path,disk_paths=(tmp_path,),budget=host_budget)
+    resources=HostResourceProbe(repo.database_path,disk_paths=(tmp_path,),budget=host_budget,
+        memory_monitor=IsolatedMemoryMonitor())
     case=main._narration_stage_use_case(repo,narration_budget=budget)
+    from app.creation.editing.exact_preview_use_case import validate_edit_origin
+    def verify_origin(source,actor,*,connection=None):
+        validate_edit_origin(main.conversation_repo,source,actor,connection=connection)
     registration=creation_job_registration(repo,render_action=main._render_creation_stage_with_grant,
         render_is_valid=main._creation_stage_valid_with_grant,verify_identity=main._verify_creation_identity,
-        narration_budget=budget,montage_budget=montage_budget,narration_stage=case)
+        narration_budget=budget,narration_audio_budget=audio_budget,montage_budget=montage_budget,
+        narration_stage=case,source_verifier=verify_origin)
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import CreationExecutionActor
+    authorizations=TaskAuthorizationUseCase(repo,lambda identity:main._verify_creation_identity(
+        CreationExecutionActor.from_event(identity['workspace_id'],identity)))
+    registration.owner.task_authorizations=authorizations
+    # Component integration stops before video planning; product assembly wires
+    # SegmentProductionUseCase separately and is verified by its own real chain.
+    assert registration.owner.segments is registration.executor.segments is None
     runtime=build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'device.lock',
         device_access=MemberDeviceAccess(members,identity_verifier=main._verify_creation_identity),
         registrations={'creation_job':registration},resources=resources,processes=HostProcessProbe())
+    runtime.task_authorizations=authorizations
     monkeypatch.setattr(main,'device_runtime',runtime)
+    monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
     client=TestClient(main.app,headers={'X-Local-Member-Token':token})
     assert registration.owner.narration_budget is case.narration_budget is budget
     assert registration.executor.narration_stage is case
     assert not hasattr(registration.executor,'stage_actions')
     state=SimpleNamespace(repo=repo,task_id=task_id,script_id=script_id,plan=plan,member=member,generator=generator,
         runtime=runtime,case=case,client=client,asset=asset,worker=worker,budget=budget,host_budget=host_budget,
-        fixture_OS={'cpu_percent':0,'swap_used_bytes':0,'actual_swap_before':swap.used,'disk_io_baseline':disk._asdict(),
+        fixture_OS={'cpu_percent':0,'swap_used_bytes':0,'actual_swap_before':swap.used,
+            'memory_pressure':'isolated synthetic policy boundary; not machine calibration','disk_io_baseline':disk._asdict(),
             'per_device_disk_io_baseline':{name:value._asdict() for name,value in disk_devices.items()}})
     yield state
     assert runtime.stop(1)
@@ -430,8 +457,11 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     assert first.status_code==202,first.text
     assert s.client.post(url+'/execution/start',json=request).json()['job']['id']==first.json()['job']['id']
     full_job=first.json()['job']['id']
-    deadline=time.monotonic()+4
-    while not s.runtime.run_once():
+    deadline=time.monotonic()+s.budget.max_timeout_seconds
+    while repo.task_records.get_creation_task('local',s.task_id).stage=='narration':
+        s.runtime.run_once()
+        current=repo.job_records.get_job_run('local',full_job)
+        assert current.status not in {'failed','cancelled'},current.failure_reason
         assert time.monotonic()<deadline,s.runtime.last_error
         time.sleep(.1)
     task=repo.task_records.get_creation_task('local',s.task_id)
@@ -476,8 +506,14 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
     queued=s.client.post(confirm_url,json={})
     assert queued.status_code==202,queued.text
     assert s.client.post(confirm_url,json={}).json()==queued.json()
-    assert s.runtime.run_once(),s.runtime.last_error
-    job=repo.job_records.get_job_run('local',queued.json()['job_id'])
+    local_job=queued.json()['job_id']
+    deadline=time.monotonic()+s.budget.max_timeout_seconds
+    job=repo.job_records.get_job_run('local',local_job)
+    while job.status in {'queued','running'}:
+        s.runtime.run_once()
+        job=repo.job_records.get_job_run('local',local_job)
+        assert time.monotonic()<deadline,s.runtime.last_error
+        time.sleep(.1)
     assert job.status=='succeeded',asdict(job)
     current=repo.task_records.get_creation_task('local',s.task_id)
     assert current.current_timeline_version_id!=base.id
@@ -515,7 +551,7 @@ def test_full_two_section_narration_then_local_regeneration_uses_concrete_owner(
         'final_files':final_files,'operations':operations,'permit':permit,'replay_started_monotonic':replay_started,
         'database_path':str(repo.database_path),'worker':_file_fact(s.worker),'narration_budget':asdict(s.budget),'host_budget':asdict(s.host_budget),
         'fixture_OS':s.fixture_OS,'business_input_generator_checkpoint_mocks':0,'identity':'actual local roster/token/permit_actor/current verifier; auth disabled synthetic local workspace',
-        'actual_body':'repository/ProfileRecordStore/qualification/NarrationGenerator/Qwen subprocess protocol/concat/probe/concrete owner/editorial and job checkpoint',
+        'actual_body':'repository/ProfileRecordStore/qualification/NarrationGenerator/Qwen subprocess protocol/granted PCM/concrete owner/editorial and job checkpoint',
         'model_GUI_production_auth_resources_full_inflight_PGID':'UNVERIFIED; only original synthetic worker and finite fixture budgets/OS ports'}
     destination=os.environ.get('NARRATION_STAGE_EVIDENCE_DIR')
     if destination:

@@ -1,7 +1,7 @@
 import subprocess
 import pytest
 from app.graphic_overlays import TextOverlay, validate_overlays, write_text_overlay, splice_overlays, compile_overlay_command
-from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, _resolve_subtitle_font
+from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, _resolve_subtitle_font
 
 
 pytestmark = pytest.mark.usefixtures("granted_montage_renderer")
@@ -56,7 +56,7 @@ def test_real_title_only_appears_in_its_interval(tmp_path):
     clip=MontageClip(id='clip',cue_id='cue',asset_id='a',segment_id='s',source_path=str(source),source_start_seconds=0,source_end_seconds=1,
         timeline_start_seconds=0,timeline_end_seconds=1,match_score=1,match_reasons=[],needs_confirmation=False)
     overlay=TextOverlay(text='本地视频 Local',start_seconds=.2,end_seconds=.6,font_size=96,font_family=CHINESE_FONT).model_dump()
-    plan=CreationTaskMontagePlan(id='plan',workspace_id='w',task_id='t',script_id='s',script_title='t',status='ready',cues=[],clips=[clip],
+    plan=CreationTaskMontagePlan(id='plan',workspace_id='w',task_id='t',script_id='s',script_title='t',status='ready',cues=[NarrationCue('cue','section','',1)],clips=[clip],
         duration_seconds=1,low_confidence_clip_count=0,graphic_overlays=[overlay])
     MontageRenderer(tmp_path).render(plan,voice,job_staging_path=tmp_path/'render',subtitle_tracks=[])
     def raw(at):

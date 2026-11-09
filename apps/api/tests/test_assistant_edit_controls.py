@@ -9,7 +9,9 @@ from test_assistant_edit_chain import current, preview, storyboard as storyboard
 from test_montage_pipeline import person_render_edit_state  # noqa: F401
 
 
-def test_original_turn_restore_replays_and_rejects_foreign_input(tmp_path):
+@pytest.mark.parametrize('instruction', ['撤销刚才那一步', '说明撤销的效果', '不要撤销刚才那一步',
+    '只撤销刚才的调色', '重做这一句口型', '重做刚才撤销那一步'])
+def test_original_turn_restore_replays_and_rejects_foreign_input(tmp_path, instruction):
     from app.creation.editing.metadata_use_case import metadata_edit_command
     from app.creation.editing.timeline_restore_use_case import TimelineRestoreCommand, TimelineRestoreUseCase
     from app.creation_execution import CreationExecutionActor
@@ -23,7 +25,6 @@ def test_original_turn_restore_replays_and_rejects_foreign_input(tmp_path):
     conversations = ConversationRepository(state.repo.database_path)
     member = state.member.member_id
     chat = conversations.create('ws', member, 'home', 'home', 'history')
-    instruction = '撤销刚才那一步'
     conversations.save_draft(chat['id'], 'ws', member, instruction, 0)
     turn, created = conversations.create_turn_idempotent(chat['id'], 'ws', member, instruction,
         str(uuid4()), 1, request_context={'kind': 'task', 'task_id': task.id, 'stage': 'montage',
@@ -37,6 +38,15 @@ def test_original_turn_restore_replays_and_rejects_foreign_input(tmp_path):
     kwargs = {'actor': actor, 'request_id': 'original-turn-undo',
         'expected_timeline_version_id': version.id, 'expected_timeline_sequence': version.sequence,
         'source': {'assistant_turn_id': turn['id'], 'input_id': None}}
+    if instruction != '撤销刚才那一步':
+        from app.creation.editing.picture import EditConflict
+        with state.repo._connect() as conn:
+            before = tuple(conn.iterdump())
+        with pytest.raises(EditConflict):
+            restore.execute(command, **kwargs)
+        with state.repo._connect() as conn:
+            assert tuple(conn.iterdump()) == before
+        return
     restored = restore.execute(command, **kwargs)
     assert restored.operation.operation_type == 'UndoTimelineVersion'
     assert not restored.montage.clips[0].locked
@@ -52,6 +62,35 @@ def test_original_turn_restore_replays_and_rejects_foreign_input(tmp_path):
             'source': {'assistant_turn_id': turn['id'], 'input_id': 'unconsumed-input'}})
     with state.repo._connect() as conn:
         assert tuple(conn.iterdump()) == snapshot
+
+
+@pytest.mark.parametrize('conflict', [False, 'reused', 'changed', 'not_subtitle'])
+def test_subtitle_membership_restore_preserves_other_tracks_and_refuses_later_changes(conflict):
+    from dataclasses import replace
+    from app.creation.contracts import SubtitleCue, SubtitleTrack
+    from app.creation.editing.picture import EditConflict
+    from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase
+
+    original = SubtitleTrack('original-en', 'ws', 'task', 'before', 'en-US', 'zh-CN', {'size': 40},
+        [SubtitleCue('en-cue', 'source', 'English', 0, 1)], 'translation', 'model', None, None, 'valid')
+    later = replace(original, id='later-zh', language='zh-CN', source_language=None,
+        generation_method='timeline', cues=[replace(original.cues[0], id='zh-cue', text='后来字幕')])
+    restored = TimelineRestoreUseCase.restore_subtitle_tracks([later], [], [original], allow_membership=True)
+    assert restored == [later, original]
+    current = [later, replace(original, id='current-en', timeline_version_id='current')]
+    if conflict == 'reused':
+        expected, desired = [], [original]
+    else:
+        expected, desired = [original], []
+        if conflict == 'changed':
+            current[-1] = replace(current[-1], cues=[replace(original.cues[0], text='Later translation')])
+    if conflict:
+        with pytest.raises(EditConflict):
+            TimelineRestoreUseCase.restore_subtitle_tracks(current, expected, desired,
+                allow_membership=conflict != 'not_subtitle')
+    else:
+        assert TimelineRestoreUseCase.restore_subtitle_tracks(current, expected, desired,
+            allow_membership=True) == [later]
 
 
 def control(state, monkeypatch, command):
@@ -96,6 +135,7 @@ def test_rejected_proposal_never_changes_timeline_and_can_replay(storyboard, mon
     proposal = preview(state, "1↔2").json()["proposal"]
     before = current(state)["task"]["current_timeline_version_id"]
     body = control(state, monkeypatch, "取消这个修改提案")
+    body.pop("request_id")
     path = state.base_url + f"/edits/{proposal['id']}/reject"
     result = state.client.post(path, json=body)
     assert result.status_code == 200 and result.json()["status"] == "rejected"

@@ -56,11 +56,11 @@ def _fixture_clone(value,*,constructor=False,visual=False,permitted=False):
 
 
 @pytest.fixture
-def command_application(person_render_edit_state,monkeypatch):
+def command_application(person_render_edit_state,monkeypatch,request):
     install,install_proof=_fixture_clone(domain_fixture._granted_domain_preview_adapter,constructor=True)
     monkeypatch.setattr(domain_fixture,'_granted_domain_preview_adapter',install)
     permitted_fixture,permitted_proof=_fixture_clone(domain_fixture.permitted_media_state,permitted=True)
-    lifecycle=permitted_fixture(person_render_edit_state,monkeypatch)
+    lifecycle=permitted_fixture(person_render_edit_state,monkeypatch,request)
     permitted=next(lifecycle)
     visual,visual_proof=_fixture_clone(visual_fixture.visual_application,visual=True)
     state=visual(permitted,monkeypatch)

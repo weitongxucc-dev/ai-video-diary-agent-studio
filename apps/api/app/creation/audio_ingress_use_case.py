@@ -1,5 +1,6 @@
 """Five sealed audio actions using the original source, grant and publication owners."""
-from dataclasses import asdict, dataclass
+from app.creation.plan_contracts import creation_plan_payload
+from dataclasses import dataclass
 from contextlib import contextmanager
 import os
 from uuid import uuid4
@@ -375,7 +376,7 @@ class AudioIngressUseCase:
         facts = {'base_version_id':task.current_timeline_version_id, 'script_id':task.confirmed_script_id,
             'script_digest':self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id)
                 if task.confirmed_script_id else None,
-            'plan_id':task.plan_id, 'plan_digest':media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),
+            'plan_id':task.plan_id, 'plan_digest':media_digest(creation_plan_payload(self.repository.plan_records.get_creation_plan(workspace_id,task.plan_id))),
             'montage':snapshot, 'files':files, 'narration_cache_key':task.narration_cache_key}
         if operation == 'audio_import':
             facts = {'base_version_id':None, 'files':files}

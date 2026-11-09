@@ -115,7 +115,8 @@ def test_empty_restore_body_requires_task_write_access(tmp_path, monkeypatch):
         assert restored.status_code == 200, restored.text
 
 
-def test_restore_control_chain_skips_render_only_and_preserves_full_narration(tmp_path, monkeypatch):
+@pytest.mark.parametrize('publication', ['direct_render', 'final_delivery'])
+def test_restore_control_chain_skips_render_only_and_preserves_full_narration(tmp_path, monkeypatch, publication):
     state = restore_http_state(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match='同一仓储负责人'):
         TimelineRestoreUseCase(object(), state.case)
@@ -127,9 +128,28 @@ def test_restore_control_chain_skips_render_only_and_preserves_full_narration(tm
     first = crop_save(state, .3)
     second = crop_save(state, .6)
     second_version = state.repo.timeline_records.get_timeline_version('ws', second.operation.result_version_id)
+    render_tracks = [clone_subtitle_track(track, timeline_version_id='render-only') for track in
+        state.repo.subtitle_records.list_subtitle_tracks('ws', state.task.id, timeline_version_id=second_version.id)]
     render_only = replace(second_version, id='render-only', parent_version_id=second_version.id,
-        sequence=second_version.sequence + 1, created_by_operation_id=None)
+        sequence=second_version.sequence + 1, created_by_operation_id=None,
+        snapshot={**second_version.snapshot, 'subtitle_track_ids': [track.id for track in render_tracks],
+            'montage': {**second_version.snapshot['montage'], 'status': 'rendered',
+                'output_path': 'artifacts/task/render-only/preview.mp4',
+                'subtitle_path': 'artifacts/task/render-only/subtitles.srt'},
+            'creation_render_request_id': 'render-only-request', 'render_input_digest': 'render-only-input',
+            'render_input_timeline_version_id': second_version.id, 'render_input_subtitle_tracks': [],
+            'render_input_subtitles_visible': True, 'transform_run_id': 'render-only-transform',
+            'output_refs': ['artifacts/task/render-only/preview.mp4', 'artifacts/task/render-only/subtitles.srt']})
+    if publication == 'final_delivery':
+        for key in ('creation_render_request_id','render_input_digest','render_input_timeline_version_id',
+                    'render_input_subtitle_tracks','render_input_subtitles_visible'):
+            render_only.snapshot.pop(key)
+        render_only.snapshot['audio_delivery'] = {'manifest_digest': 'delivery-input', 'job_id': 'delivery-job',
+            'request_id': 'delivery-request', 'permit_generation': 1,
+            'render_input': {'timeline_version_id': second_version.id}, 'render_input_digest': 'render-only-input'}
     state.repo.timeline_records.create_timeline_version(render_only)
+    for track in render_tracks:
+        state.repo.subtitle_records.create_subtitle_track(track)
     prepared = state.application.prepare_restore(TimelineRestoreCommand('ws',
         state.repo.task_records.get_creation_task('ws', state.task.id), False))
     before = editorial_rows(state.repo)

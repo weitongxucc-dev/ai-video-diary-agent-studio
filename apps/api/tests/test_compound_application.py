@@ -13,8 +13,8 @@ from test_linked_speed_application import speed_state
 COMPOUND_TEXT = '当前镜头亮一点，同时配音片段1音量降低3分贝，字幕字号改为64'
 
 
-def compound_state(tmp_path):
-    state = speed_state(tmp_path)
+def compound_state(tmp_path, *, workspace_id='ws'):
+    state = speed_state(tmp_path, workspace_id=workspace_id)
     zh = clone_subtitle_track(state.track, timeline_version_id='compound-base', track_id='compound-zh')
     en = replace(zh, id='compound-en', language='en-US', source_language='zh-CN', generation_method='translation',
         style={**zh.style, 'enabled': False}, cues=[
@@ -22,20 +22,21 @@ def compound_state(tmp_path):
             replace(zh.cues[1], id='en-next', source_cue_id=zh.cues[1].id, text='Next caption')])
     tracks = []
     for track in (zh, en):
-        reference, transform = state.case.publish_subtitle_text(workspace_id='ws', task_id=state.task.id,
+        reference, transform = state.case.publish_subtitle_text(workspace_id=workspace_id, task_id=state.task.id,
             proposal_id=f'fixture-{track.id}', kind='fixture_compound_input', input_refs=[],
             content=render_srt(execution_subtitle_track(track)), engine='synthetic-fixture-input/v1',
             parameters={'language': track.language})
         tracks.append(replace(track, artifact_ref=reference, transform_id=transform))
     state.zh, state.en = tracks
-    state.base = TimelineVersion('compound-base', 'ws', state.task.id, state.base.id, 3,
+    state.base = TimelineVersion('compound-base', workspace_id, state.task.id, state.base.id, 3,
         {**state.base.snapshot, 'subtitle_track_ids': [track.id for track in tracks]}, None)
     state.repo.timeline_records.create_timeline_version(state.base)
     for track in tracks:
         state.repo.subtitle_records.create_subtitle_track(track)
-    state.task = state.repo.task_records.get_creation_task('ws', state.task.id)
+    state.task = state.repo.task_records.get_creation_task(workspace_id, state.task.id)
     state.application = CompoundEditUseCase(state.repo, state.case)
     return state
+
 
 
 def preview_command(state):

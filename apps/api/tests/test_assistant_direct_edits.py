@@ -96,18 +96,21 @@ try{await current.session.prompt(input.message,{source:'rpc'});
 """
 
 
+@pytest.mark.parametrize("metadata_http_state", ["local"], indirect=True)
 def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_state, tmp_path, monkeypatch):
     state = metadata_http_state
+    workspace_id = state.task.workspace_id
+    assert workspace_id == "local"
     # Fixed confirmed editorial input, not evidence of script generation.
-    script = CreationTaskScript("fixed-script", "ws", state.task.id, "fixture-run", "fixture-topic", "既有文案", "zh-CN",
+    script = CreationTaskScript("fixed-script", workspace_id, state.task.id, "fixture-run", "fixture-topic", "既有文案", "zh-CN",
         [CreationTaskScriptSection("section", "开头", "原字幕", "既有画面", ["fixture-evidence"])], selection_status="confirmed")
     task = replace(state.task, confirmed_script_id=script.id)
-    plan = replace(state.repo.plan_records.get_creation_plan("ws", task.plan_id), duration_target_seconds=15)
+    plan = replace(state.repo.plan_records.get_creation_plan(workspace_id, task.plan_id), duration_target_seconds=15)
     with state.repo._connect() as conn:
         conn.execute("BEGIN")
         conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan),default=str),plan.id))
         conn.execute("INSERT INTO creation_task_scripts(id,workspace_id,task_id,run_id,payload,updated_at) VALUES(?,?,?,?,?,?)",
-            (script.id,"ws",task.id,script.run_id,script_seed_payload(state.repo, conn, script),script.updated_at.isoformat()))
+            (script.id,workspace_id,task.id,script.run_id,script_seed_payload(state.repo, conn, script),script.updated_at.isoformat()))
         conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?",(json.dumps(asdict(task),default=str),task.id))
     audio_path=tmp_path / "outputs/artifacts/task/fixed-narration.wav"
     with wave.open(str(audio_path),"wb") as audio:
@@ -115,17 +118,34 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         audio.setsampwidth(2)
         audio.setframerate(16000)
         audio.writeframes(b"\0\0" * 64000)
-    state.repo.narration_artifacts.save_narration_artifact(replace(state.narration,audio_path=str(audio_path)))
-    segment=NarrationSegment("fixed-segment","ws",task.id,script.id,"section","原字幕",state.narration.audio_path,4,16000,
+    # The declared preexisting narration still needs a real current member's
+    # registered voice scope; no TTS or model is executed by this SDK edit test.
+    from app.production import VersionedVoiceProfile
+    from app.profiles.contracts import ProfileReference
+    reference, _, _ = state.repo.import_voice_reference_wav(workspace_id, audio_path.read_bytes(),
+        verified_owner_user_id=state.member.member_id)
+    voice_asset = state.repo._asset_by_path(workspace_id, str(state.repo.resolve_workspace_media_reference(workspace_id, reference)))
+    voice = state.repo.save_versioned_voice_profile(VersionedVoiceProfile(id='fixture-voice', workspace_id=workspace_id,
+        version='1', language='zh', display_name='固定夹具声音', reference_audio_path=reference,
+        reference_text='固定夹具参考文字', model_id='fixture-voice-model', reference=ProfileReference(asset_id=voice_asset.id)),
+        verified_owner_user_id=state.member.member_id)
+    plan = replace(plan, selected_voice=state.repo.creation_plan_voice_reference(workspace_id, voice.id, voice.version,
+        viewer_user_id=state.member.member_id))
+    with state.repo._connect() as conn:
+        conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
+    state.repo.narration_artifacts.save_narration_artifact(replace(state.narration, audio_path=str(audio_path),
+        voice_profile_id=voice.id, model_id=voice.model_id))
+    segment=NarrationSegment("fixed-segment",workspace_id,task.id,script.id,"section","原字幕",state.narration.audio_path,4,16000,
         "fixture-input","fixture-voice","1","zh","fixture-rules","ready")
-    state.repo.narration_records.save_narration_segments("ws",task.id,script.id,[segment])
+    state.repo.narration_records.save_narration_segments(workspace_id,task.id,script.id,[segment])
     state.base=replace(state.base,id="confirmed-input",parent_version_id=state.base.id,sequence=2,
         snapshot={**state.base.snapshot,"subtitle_track_ids":["confirmed-zh"],
                   "narration_segments":[json.loads(json.dumps(asdict(segment),default=str))]})
     state.repo.timeline_records.create_timeline_version(state.base)
     state.repo.subtitle_records.create_subtitle_track(replace(state.track,id="confirmed-zh",timeline_version_id=state.base.id))
-    conversations = ConversationRepository(tmp_path / "assistant.sqlite")
+    conversations = ConversationRepository(state.repo.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
+    monkeypatch.setattr(main, "settings", replace(main.settings, database_path=state.repo.database_path))
     monkeypatch.setattr(main, "creation_execution", main._new_creation_execution(state.repo))
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
         effective_llm_provider="synthetic", effective_llm_model="synthetic-edit", effective_llm_api_key=None))
@@ -142,9 +162,9 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
                 value=json.loads(body)
                 if value["phase"] == "next" and not delivery.get("input_id") and any(
                         item[1].endswith("/edits/exact") for item in requests[delivery["request_offset"]:]):
-                    current=conversations.get(chat["id"],"ws",state.member.member_id)
+                    current=conversations.get(chat["id"],workspace_id,state.member.member_id)
                     message=delivery["message"]
-                    saved=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,current["draft_version"])
+                    saved=conversations.save_draft(chat["id"],workspace_id,state.member.member_id,message,current["draft_version"])
                     input_id=str(uuid4())
                     accepted=state.client.post(f"/api/assistant/conversations/{chat['id']}/inputs",json={
                         "target_turn_id":delivery["turn_id"],"client_request_id":input_id,"message":message,"mode":"steer",
@@ -183,7 +203,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     cwd.mkdir()
     outputs = []
     controls = ["read_current_task", "read_task_edit_capabilities", "apply_typed_edit",
-                "read_edit_control_context", "undo_last_edit"]
+                "read_edit_control_context", "undo_last_edit", "record_input_understanding"]
 
     def run_sdk(_settings, **kwargs):
         capabilities = state.client.get(state.url + "/assistant/edit-capabilities").json()
@@ -206,9 +226,12 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
                 message="只澄清当前保存结果，不再修改或生成" if clarification else "把字幕改成追加输入文字，然后继续生成视频")
             bridge=f"http://127.0.0.1:{server.server_port}/fixture/input-checkpoint"
             steps += [{"name":"apply_typed_edit","args":{"operation_type":"UpdateSubtitleCue","cue_id":"cue","text":"澄清前的修改" if clarification else "旧输入文字"}}]
+            steps += [{"name":"read_current_task","args":{}},
+                {"name":"record_input_understanding","args":{"kind":"clarification" if clarification else "effective_modification",
+                    "summary":"仅澄清已保存结果，停止后续动作" if clarification else "按追加要求修改当前字幕并继续制作",
+                    "target_refs":["cue:cue"]}}]
             if not clarification:
-                steps += [{"name":"read_current_task","args":{}},
-                {"name":"read_task_edit_capabilities","args":{}},
+                steps += [{"name":"read_task_edit_capabilities","args":{}},
                 {"name":"apply_typed_edit","args":{"operation_type":"UpdateSubtitleCue","cue_id":"cue","text":"追加输入文字"}}]
         elif kwargs["message"] == "撤销上一步修改":
             steps += [{"name": "read_edit_control_context", "args": {}}, {"name": "undo_last_edit", "args": {}}]
@@ -237,10 +260,10 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
     replies = []
     try:
         for message in ("把当前字幕改为：第一轮文字", "再把这句改为：第二轮文字", "撤销上一步修改", "画布改成横屏16:9", "撤销上一步修改"):
-            current = state.repo.task_records.get_creation_task("ws", state.task.id)
-            version = state.repo.timeline_records.get_timeline_version("ws", current.current_timeline_version_id)
-            saved = conversations.get(chat["id"], "ws", state.member.member_id)
-            draft = conversations.save_draft(chat["id"], "ws", state.member.member_id, message, saved["draft_version"])
+            current = state.repo.task_records.get_creation_task(workspace_id, state.task.id)
+            version = state.repo.timeline_records.get_timeline_version(workspace_id, current.current_timeline_version_id)
+            saved = conversations.get(chat["id"], workspace_id, state.member.member_id)
+            draft = conversations.save_draft(chat["id"], workspace_id, state.member.member_id, message, saved["draft_version"])
             payload = {"conversation_id": chat["id"], "client_request_id": str(uuid4()),
                 "message": message, "expected_draft_version": draft["draft_version"],
                 "expected_reference_version": 0, "expected_timeline_version_id": version.id,
@@ -252,15 +275,15 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
             assert replay.status_code == 200 and replay.json()["turn_id"] == response.json()["turn_id"], replay.text
             if len(replies) < 3:
                 assert response.json()["timeline_action"] == "apply"
-                cue = state.repo.get_creation_task_montage_plan("ws", state.task.id)["cues"][0]
+                cue = state.repo.get_creation_task_montage_plan(workspace_id, state.task.id)["cues"][0]
                 assert cue["text"] == message.split("：")[1]
                 locator=response.json()["edit_request"]
-                saved_source=state.repo.execution_records.get_task_event("ws",f"event_edit_locator_{response.json()['turn_id']}_{locator['request_id']}").payload["source"]
+                saved_source=state.repo.execution_records.get_task_event(workspace_id,f"event_edit_locator_{response.json()['turn_id']}_{locator['request_id']}").payload["source"]
                 assert saved_source["expected_timeline_version_id"] == version.id
-                candidate={"workspace_id":"ws","task_id":task.id,"event_id":f"recovered-{len(replies)}",
+                candidate={"workspace_id":workspace_id,"task_id":task.id,"event_id":f"recovered-{len(replies)}",
                     "request":{"locator":locator}}
                 context=GoalCandidate(candidate,saved_source,{"status":"completed"},None,
-                    state.repo.task_records.get_creation_task("ws",task.id),False)
+                    state.repo.task_records.get_creation_task(workspace_id,task.id),False)
                 owner=GoalResultProjection(state.repo,conversations)
                 observed=owner.request_result(context,{"status_code":200,"response":locator["result"]},runtime_available=False)
                 projection=owner.request_projection(context,observed,{"edit_request":locator})
@@ -269,9 +292,18 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
                 assert projection.event["result_version_id"] == context.task.current_timeline_version_id
             if len(replies) == 4:
                 assert response.json()["timeline_action"] == "apply"
-                assert state.repo.get_creation_task_montage_plan("ws",task.id)["aspect_ratio"] == "16:9"
-        assert replies[-1]["timeline_action"] == "undo"
-        assert state.repo.get_creation_task_montage_plan("ws", state.task.id)["cues"][0]["text"] == "第一轮文字"
+                assert state.repo.get_creation_task_montage_plan(workspace_id,task.id)["aspect_ratio"] == "16:9"
+            if message == "撤销上一步修改":
+                restored = response.json()['timeline_restore']
+                assert restored['action'] == restored['receipt']['action'] == 'undo'
+                assert restored['receipt']['status'] == 'applied'
+                assert restored['receipt']['task_id'] == task.id
+                assert restored['receipt']['request_id'] == restored['request_id']
+                assert state.repo.task_records.get_creation_task(workspace_id, task.id).current_timeline_version_id == restored['receipt']['result_version_id']
+        assert state.repo.get_creation_task_montage_plan(workspace_id, state.task.id)['aspect_ratio'] == '9:16'
+        assert state.repo.get_creation_task_montage_plan(workspace_id, state.task.id)["cues"][0]["text"] == "第一轮文字"
+        undo_writes = [item for item in requests if item[0] == 'POST' and item[1].endswith('/timeline/undo')]
+        assert len(undo_writes) == len({item[2]['request_id'] for item in undo_writes}) == 2
         writes = [item for item in requests if item[0] == "POST" and item[1].endswith("/edits/exact")]
         assert len(writes) == 3
         assert all(item[3] == 200 for item in writes)
@@ -285,20 +317,20 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert [output["history_count"] for output in outputs] == sorted({output["history_count"] for output in outputs})
         reopened = ConversationRepository(conversations.database_path)
         assert [turn["status"] for turn in reopened.list_turns(chat["id"])] == ["completed"] * 5
-        assert state.repo.timeline_records.get_timeline_version("ws", state.base.id).snapshot == state.base.snapshot
-        assert state.repo.task_records.get_creation_task("ws", state.task.id).narration_cache_key == state.narration.cache_key
-        current=state.repo.task_records.get_creation_task("ws",state.task.id)
-        version=state.repo.timeline_records.get_timeline_version("ws",current.current_timeline_version_id)
-        saved=conversations.get(chat["id"],"ws",state.member.member_id)
+        assert state.repo.timeline_records.get_timeline_version(workspace_id, state.base.id).snapshot == state.base.snapshot
+        assert state.repo.task_records.get_creation_task(workspace_id, state.task.id).narration_cache_key == state.narration.cache_key
+        current=state.repo.task_records.get_creation_task(workspace_id,state.task.id)
+        version=state.repo.timeline_records.get_timeline_version(workspace_id,current.current_timeline_version_id)
+        saved=conversations.get(chat["id"],workspace_id,state.member.member_id)
         message="先改成旧输入文字，然后继续生成视频"
-        draft=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,saved["draft_version"])
+        draft=conversations.save_draft(chat["id"],workspace_id,state.member.member_id,message,saved["draft_version"])
         response=state.client.post(state.url+"/assistant/turn",json={"conversation_id":chat["id"],
             "client_request_id":str(uuid4()),"message":message,"expected_draft_version":draft["draft_version"],
             "expected_reference_version":draft["reference_version"],"expected_timeline_version_id":version.id,
             "expected_timeline_sequence":version.sequence,"context_stage":"montage","selected_object_refs":[]})
         assert response.status_code == 200,response.text
         root_id=response.json()["turn_id"]
-        receipt=conversations.list_inputs(chat["id"],"ws",state.member.member_id)[0]
+        receipt=conversations.list_inputs(chat["id"],workspace_id,state.member.member_id)[0]
         assert receipt["input_id"] == delivery["input_id"] and receipt["status"] == "completed"
         goal=conversations.get_task_goal(root_id)
         assert goal["source_input_id"] == receipt["input_id"]
@@ -306,11 +338,11 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert [item["input_id"] for item in edits] == [None,receipt["input_id"]]
         assert edits[-1]["input_turn_id"] == root_id
         assert input_headers[-1] == receipt["input_id"]
-        assert state.repo.get_creation_task_montage_plan("ws",state.task.id)["cues"][0]["text"] == "追加输入文字"
+        assert state.repo.get_creation_task_montage_plan(workspace_id,state.task.id)["cues"][0]["text"] == "追加输入文字"
         locator=response.json()["edit_request"]
-        source=state.repo.execution_records.get_task_event("ws",f"event_edit_locator_{root_id}_{locator['request_id']}").payload["source"]
+        source=state.repo.execution_records.get_task_event(workspace_id,f"event_edit_locator_{root_id}_{locator['request_id']}").payload["source"]
         assert source["input_id"] == receipt["input_id"] and source["expected_timeline_version_id"] == receipt["request_context"]["target_snapshot"]["timeline_version_id"]
-        monkeypatch.setattr(main,"LEGACY_WORKSPACE_ID","ws")
+        monkeypatch.setattr(main,"LEGACY_WORKSPACE_ID",workspace_id)
         assert main._reconcile_assistant_business_results() > 0
         continuations=[]
         def read_after_apply(_settings,**kwargs):
@@ -327,10 +359,10 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         assert conversations.list_turns(chat["id"])[-1]["user_message"] == ""
         assert len([item for item in requests if item[0] == "POST" and item[1].endswith("/edits/exact")]) == 5
         monkeypatch.setattr(main,"run_task_turn",run_sdk)
-        version=state.repo.timeline_records.get_timeline_version("ws",state.repo.task_records.get_creation_task("ws",state.task.id).current_timeline_version_id)
-        saved=conversations.get(chat["id"],"ws",state.member.member_id)
+        version=state.repo.timeline_records.get_timeline_version(workspace_id,state.repo.task_records.get_creation_task(workspace_id,state.task.id).current_timeline_version_id)
+        saved=conversations.get(chat["id"],workspace_id,state.member.member_id)
         message="先修改，追加输入只作澄清"
-        draft=conversations.save_draft(chat["id"],"ws",state.member.member_id,message,saved["draft_version"])
+        draft=conversations.save_draft(chat["id"],workspace_id,state.member.member_id,message,saved["draft_version"])
         clarified=state.client.post(state.url+"/assistant/turn",json={"conversation_id":chat["id"],"client_request_id":str(uuid4()),
             "message":message,"expected_draft_version":draft["draft_version"],"expected_reference_version":draft["reference_version"],
             "context_stage":"montage","selected_object_refs":[],"expected_timeline_version_id":version.id,"expected_timeline_sequence":version.sequence})
@@ -340,7 +372,7 @@ def test_real_sdk_subtitle_rounds_canvas_replay_restore_and_undo(metadata_http_s
         old_receipts=[item["result"]["details"] for item in outputs[-1]["tool_results"] if item["toolName"] == "apply_typed_edit"]
         assert len(old_receipts) == 1 and old_receipts[0]["input_id"] is None
         assert conversations.get_task_goal(clarified.json()["turn_id"]) is None
-        assert conversations.list_inputs(chat["id"],"ws",state.member.member_id)[-1]["status"] == "completed"
+        assert conversations.list_inputs(chat["id"],workspace_id,state.member.member_id)[-1]["status"] == "completed"
         original_receipt=state.client.get(old_receipts[0]["query_url"])
         assert original_receipt.status_code == 200 and original_receipt.json()["result_status_code"] == 200
         assert len([item for item in requests if item[0] == "POST" and item[1].endswith("/edits/exact")]) == 6

@@ -35,7 +35,7 @@ from app.creation_execution import (
     revision_digest, submit_creation_stage,
 )
 from app.device_scheduler import DeviceScheduler, ProcessIdentity, StaleGrantInput
-from app.host_resource_probes import HostCapacity, HostProcessProbe, HostResourceDecision
+from app.host_resource_probes import HostCapacity, HostProcessProbe, HostResourceDecision, RuntimeCpuPolicy
 from app.local_members import LocalMemberService
 from app.montage import CreationTaskMontagePlan, MontageClip, NarrationCue, creation_task_montage_plan_to_payload
 from app.creation.narration_artifacts import NarrationArtifactRecord
@@ -60,6 +60,62 @@ from _media_preview_test_fixtures import (
 
 
 from app.voice_clone import Qwen3TTSSubprocessProvider
+
+def _inprocess_pcm_command(_scheduler, _grant, command, **_options):
+    from model_workers.pcm_assembly import execute
+    receipt = execute(json.loads(Path(command[-1]).read_text()), {'generated_bytes': 0, 'work_created': False})
+    return SimpleNamespace(returncode=0, stdout=json.dumps(receipt), stderr='')
+
+
+def _synthetic_memory_monitor():
+    """Controlled ambient pressure for queue/media tests, not native OS calibration."""
+    from app.host_memory import HostMemoryMonitor, MemoryPolicy, MemorySample
+    state = SimpleNamespace(now=0.)
+    def sample():
+        state.now += .5
+        return MemorySample("darwin", state.now, "synthetic", "normal", 8*1024**3, None,
+            {"pressure": {"value": "normal", "unit": "state", "source": "synthetic-ambient-load"}})
+    monitor = HostMemoryMonitor(MemoryPolicy("darwin", 1., 1., "synthetic://creation-queue-memory"),
+        sampler=sample, clock=lambda: state.now)
+    for _ in range(3):
+        decision = monitor.check(system_reserve_bytes=1, additional_commit_bytes=0)
+    assert decision.verdict is True
+    return monitor
+
+
+def _isolate_linux_cpu_policy(monkeypatch, resources):
+    import sys
+    if sys.platform != "linux":
+        return
+    import app.host_resource_probes as probes
+    from unittest.mock import patch
+    # Portable queue/media coverage does not certify Darwin scheduling.
+    # Keep real grant/process checks and every finite runtime limit; only
+    # the OS scheduling mechanism is isolated on the Linux CI runner.
+    native_sample = resources._sample
+    native_scene_limits = resources.scene_runtime_limits
+
+    def portable_sample(*args, **kwargs):
+        with patch.object(probes, "sys", SimpleNamespace(platform="darwin")):
+            return native_sample(*args, **kwargs)
+
+    def portable_scene_limits(grant, *, purpose=None):
+        limits = native_scene_limits(grant, purpose=purpose)
+        return replace(limits, cpu_policy=None) if limits is not None else None
+
+    monkeypatch.setattr(resources, "_sample", portable_sample)
+    monkeypatch.setattr(resources, "scene_runtime_limits", portable_scene_limits)
+
+
+def _original_execution_diagnostics(repo, workspace_id, job_id):
+    job = repo.job_records.get_job_run(workspace_id, job_id)
+    with repo._connect() as conn:
+        requests = [dict(row) for row in conn.execute(
+            "SELECT id,unit_key,state,wait_reason FROM device_work_requests "
+            "WHERE owner_id=? ORDER BY id", (job_id,))]
+    return {"job_id": job.id, "status": job.status,
+            "failure_reason": job.failure_reason, "requests": requests}
+
 
 def _seed(tmp_path: Path, *, workspace_id: str = "workspace_a", confirmed: bool = True, voice: bool = True, task_suffix: str = "", duration_seconds: int = 30):
     library = tmp_path / "library"
@@ -131,6 +187,16 @@ def _qualify_start_voice(repo, task_id, member_id, workspace_id='local'):
     task = repo.task_records.get_creation_task(workspace_id, task_id)
     return revision_digest(repo.script_records.get_creation_task_script(workspace_id, task.confirmed_script_id),
         repo.plan_records.get_creation_plan(workspace_id, task.plan_id))
+
+
+def _local_task_actor(repo, task_id):
+    member = LocalMemberService(repo.database_path).add_member('original task member')
+    task = repo.task_records.get_creation_task('local', task_id)
+    task.owner_user_id = member.member_id
+    with repo._connect() as conn:
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(task), default=str), 'local', task_id))
+    return CreationExecutionActor('local', member.member_id)
 
 
 def test_creation_owner_uses_canonical_plan_visibility_for_legacy_payload(tmp_path):
@@ -565,7 +631,8 @@ def test_actual_main_render_publication_and_completion_preserve_own_grant(tmp_pa
         assert grant is not None
         executor = CreationJobUnitExecutor(repo,
             render_action=lambda w, t, context: main_module._render_creation_task_montage_for_workspace(w, t, render_context=context),
-            render_is_valid=lambda w, t, context: main_module._creation_render_is_valid(w, t, render_context=context))
+            render_is_valid=lambda w, t, context: main_module._creation_render_is_valid(w, t, render_context=context),
+            on_render_completed=lambda w, t, _job: main_module._start_creation_task_quality_check(w, t))
         if publication_state == "crash":
             checkpoint = executor._checkpoint
 
@@ -700,7 +767,7 @@ def test_confirmed_script_only_runs_all_queue_stages_and_restores_original_accou
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
                      (json.dumps(asdict(task), default=str), workspace, task_id))
         if stop is None:
-            # Exercise actual granted FFmpeg concatenation, not just one-file copy.
+            # Exercise actual granted multi-input PCM assembly, not a one-file copy.
             script_for_merge.sections.append(replace(script_for_merge.sections[0], id='section_2'))
             conn.execute("UPDATE creation_task_scripts SET payload=? WHERE id=?",
                 (script_seed_payload(repo, conn, script_for_merge), script_id))
@@ -737,7 +804,9 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             "import subprocess,time\np=subprocess.Popen([sys.executable,'-c','import time; held=bytearray(80000000); time.sleep(5)']); p.wait()\n"
             if stop == "rss" else "import time; time.sleep(5)\n"))
     narration = NarrationBudget(1000, 10, 1_000_000, 300, 8_000_000, 1, 90,
-        1024 ** 3, 16, 0.1, 1024 ** 3, 1_000_000, input_scope="single_call_experiment_v1")
+        1024 ** 3, 16, 0.1, 1024 ** 3, 1_000_000,
+        running_cpu_policy=RuntimeCpuPolicy("darwin_background", "synthetic-queue-worker-policy"),
+        input_scope="single_call_experiment_v1")
     if stop == "rss":
         narration = replace(narration, max_process_rss_bytes=40 * 1024 ** 2)
     elif stop == "output":
@@ -749,8 +818,9 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     montage = MontageBudget(10, 20, 1_000_000, 1_000_000, 30, 1_000_000)
     # Match the existing synthetic media profile, not the production host budget.
     render = CpuRenderBudget(300, 400_000_000, 1920, 1920, 10_000_000, 20, 0,
-                            8_000_000, 1, 90, 512 * 1024 ** 2, 64 * 1024 ** 2, 16)
-    audio_budget = CpuAudioBudget(10, 32*1024**2, 300, 300, 24000, 1, 8_000_000, 1, 90,
+                            8_000_000, 1, 90, 512 * 1024 ** 2, 64 * 1024 ** 2, 16,
+                            running_cpu_policy=RuntimeCpuPolicy("darwin_nice", "synthetic-queue-render-policy", nice=5))
+    audio_budget = CpuAudioBudget(10, 32*1024**2, 300, 300, 48000, 2, 8_000_000, 1, 90,
         1024**3, 16, .1, 1024**3, 1_000_000)
     budget = HostBudget(100, 1, 100 * 1024 ** 3, 1, 10 ** 12, 10_000_000,
                         cpu_render=render, cpu_audio=audio_budget, narration=narration, montage=montage)
@@ -764,8 +834,15 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         return state["identity"]
 
     owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(8_000_000, 1, 90),
-        narration_budget=narration, narration_audio_budget=audio_budget, montage_budget=montage, verify_identity=verify)
-    resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=budget)
+        narration_budget=narration, narration_audio_budget=audio_budget, montage_budget=montage, verify_identity=verify,
+        audio_mix_facts=lambda workspace_id, current_task_id, current_montage, *, actor, connection=None:
+            main_module._task_audio().mix_facts(workspace_id, current_task_id,
+                current_montage.audio_timeline, current_montage.duration_seconds, actor=actor,
+                normalize_voice_sources=current_montage.narration_linkage_created_audio_timeline,
+                budget=audio_budget, connection=connection))
+    resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=budget,
+        memory_monitor=_synthetic_memory_monitor())
+    _isolate_linux_cpu_policy(monkeypatch, resources)
     # Deterministic ambient load; preserve the probe's real sampling interval.
     def ambient_cpu_percent(*, interval):
         time.sleep(interval)
@@ -808,7 +885,9 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     from app.creation.task_authorization import TaskAuthorizationUseCase
     authorizations = TaskAuthorizationUseCase(repo, lambda identity: verify(CreationExecutionActor.from_event(workspace, identity)))
     owner.task_authorizations = authorizations
-    runtime = SimpleNamespace(scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)},
+    runtime = SimpleNamespace(scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner,
+            executor=CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail("metadata fixture must not render"),
+                render_is_valid=lambda *_: False))},
         task_authorizations=authorizations, last_error=None, running=True, wake=lambda: None)
     monkeypatch.setattr(main_module, "device_runtime", runtime)
     monkeypatch.setattr(execution, "execute", lambda *_args:
@@ -819,6 +898,7 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
     narration_stage = main_module._narration_stage_use_case(repo, narration_budget=narration)
     montage_stage = main_module._montage_stage_use_case(repo)
     owner.segments = main_module._segment_production_use_case(repo)
+    owner.segments.narration_stage = narration_stage
     prepare_segment = narration_stage.prepare_segment
     generate_montage = montage_stage.generate
     def narration_action(*args, **kwargs):
@@ -841,11 +921,15 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
         result = main_module._render_creation_stage_with_grant(*args)
         if stop == "render_commit_unknown":
             state["identity"] = "unknown"
+            # Account permits remain valid until their persisted lease expires.
+            # Exercise an actually unverified completion, not a still-valid lease.
+            authorization = repo.task_authorization_records.get_task_authorization(workspace, task_id)
+            authorizations.clock = lambda: authorization.expires_at
         return result
 
     executor = CreationJobUnitExecutor(repo, render_action=render_action,
         render_is_valid=main_module._creation_stage_valid_with_grant,
-        narration_stage=narration_stage, montage_stage=montage_stage)
+        narration_stage=narration_stage, montage_stage=montage_stage, segments=owner.segments)
     from app.device_runtime import OwnerRegistration, OwnerRouter
     from app.member_permits import MemberDeviceAccess
     registration = OwnerRegistration(owner, executor)
@@ -912,6 +996,11 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                         time.sleep(0.01)
                     assert marker.exists()
                     state["identity"] = "unauthorized"
+                    if stop == "revoked":
+                        # The real account observer persists revocation outside
+                        # a writer; changing its remote response alone does not
+                        # revoke a previously issued task authorization lease.
+                        authorizations.refresh(repo.task_authorization_records.get_task_authorization(workspace, task_id))
                     if stop == "cancelled":
                         monkeypatch.setattr(main_module, "auth_context", SimpleNamespace(enabled=True,
                             authenticate=lambda _request: principal, is_onboarding_complete=lambda *_args: True))
@@ -927,24 +1016,140 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
             assert stop_errors == []
         scheduler.assert_released(grant)
         assert scheduler.processes.children_released(tuple(children)) is True
-        if stop in {"revoked", "cancelled", "output", "rss", "timeout", "commit_unknown"}:
+        if stop == "commit_unknown":
+            # The original audio unit committed under the still-valid account
+            # lease. Unknown remote observation is not a completed whole film.
+            current = repo.job_records.get_job_run(workspace, job_id)
+            assert current.status == "queued" and current.failure_reason == "waiting_for_user"
+            task = repo.task_records.get_creation_task(workspace, task_id)
+            assert task.narration_cache_key is None and not task.output_ready
+            original = scheduler._get(request_id)
+            assert original.state == "done" and original.id == grant.request_id
+            segments = repo.narration_records.list_narration_segments(workspace, task_id, script_id)
+            assert len(segments) == 1 and segments[0].status == "ready"
+            audio_ref = segments[0].audio_reference
+            assert audio_ref and audio_ref.startswith("narration://artifact/")
+            audio = repo.narration_artifacts.get_narration_artifact(workspace, audio_ref.removeprefix("narration://artifact/"))
+            assert audio is not None and Path(audio.audio_path).stat().st_size > 0
+            usage = repo.narration_units.creation_narration_usage(workspace, job_id)
+            assert usage["used_output_bytes"] > 0 and not usage["unsettled"]
+            events = repo.execution_records.list_task_events(workspace, task_id)
+            for event_type in ("creation_narration_unit_started", "creation_narration_unit_settled"):
+                assert sum(event.event_type == event_type for event in events) == 1
+            assert not any(event.payload.get("status") == "completed" for event in events)
+            before = _original_execution_diagnostics(repo, workspace, job_id)
+            assert len(before["requests"]) == 1
+            assert not any(row["unit_key"].startswith("render:") for row in before["requests"])
+            view = owner.segments.read_visual_decision(workspace, task_id, job_id, "section_1", actor)
+            assert view["status"] == "waiting_for_user" and view["audio"]["artifact_reference"] == audio_ref
+            assert scheduler._get(request_id) == original
+            assert submit_creation_stage(execution, scheduler, current, actor) is None
+            assert _original_execution_diagnostics(repo, workspace, job_id) == before
+            assert repo.narration_units.creation_narration_usage(workspace, job_id) == usage
+            assert repo.execution_records.list_task_events(workspace, task_id) == events
+            assert calls == ["narration"] and render_calls == []
+            assert scheduler.pick_and_grant() is None
+            return
+        if stop in {"revoked", "cancelled", "output", "rss", "timeout"}:
             assert repo.job_records.get_job_run(workspace, job_id).status == (
-                "cancelled" if stop == "cancelled" else "interrupted" if stop in {"revoked", "commit_unknown"} else "failed")
+                "cancelled" if stop == "cancelled" else "interrupted" if stop == "revoked" else "failed"), _original_execution_diagnostics(repo, workspace, job_id)
             assert calls == ["narration"]
             assert not any(event.payload.get("status") == "completed" for event in repo.execution_records.list_task_events(workspace, task_id))
             assert scheduler.pick_and_grant() is None
             return
-        grant = scheduler.pick_and_grant()
+        monkeypatch.setattr(main_module, "auth_context", account_context)
+
+        def next_grant():
+            current = scheduler.pick_and_grant()
+            deadline = time.monotonic() + resources.io_window_seconds + 1
+            while current is None and time.monotonic() < deadline:
+                requests = _original_execution_diagnostics(repo, workspace, job_id)["requests"]
+                if not any(row["wait_reason"] == "resource_unknown" for row in requests):
+                    break
+                time.sleep(.1)
+                current = scheduler.pick_and_grant()
+            assert current is not None, _original_execution_diagnostics(repo, workspace, job_id)
+            return current
+
+        # Production adopts each section's visual decision before rendering it,
+        # then proceeds to the next audio section and the original final merge.
+        for index, section in enumerate(script_for_merge.sections):
+            if index:
+                grant = next_grant()
+                assert grant.unit_key.startswith(f"narration:segment:v1:{section.id}:")
+                executor.execute(grant, scheduler)
+                scheduler.assert_released(grant)
+            decision_url = base + f"/jobs/{job_id}/sections/{section.id}/visual-decision"
+            decision = client.get(decision_url)
+            assert decision.status_code == 200, decision.text
+            view = decision.json()
+            assert view["status"] == "waiting_for_user", view
+            assert view["audio"]["persisted"] and view["usage"]["settled"]
+            assert view["usage"]["used_output_bytes"] > 0
+            assert view["required_confirmation_ids"]
+            before_requests = _original_execution_diagnostics(repo, workspace, job_id)["requests"]
+            assert not any(row["unit_key"].startswith(("segment_video:", "render:"))
+                           and row["state"] != "done" for row in before_requests)
+            assert scheduler.pick_and_grant() is None
+            waiting = client.post(base + "/resume")
+            assert waiting.status_code == 202, waiting.text
+            assert waiting.json()["job"]["id"] == job_id
+            assert _original_execution_diagnostics(repo, workspace, job_id)["requests"] == before_requests
+            assert render_calls == []
+            selected = {"decision_digest": view["decision_digest"],
+                        "confirmed_clip_ids": view["required_confirmation_ids"]}
+            rejected = client.post(decision_url, json={**selected, "confirmed_clip_ids": []})
+            assert rejected.status_code == 422, rejected.text
+            assert rejected.json()["detail"][0]["loc"] == ["body", "confirmed_clip_ids"]
+            assert rejected.json()["detail"][0]["type"] == "too_short"
+            assert _original_execution_diagnostics(repo, workspace, job_id)["requests"] == before_requests
+            assert render_calls == [] and scheduler.pick_and_grant() is None
+            adopted = client.post(decision_url, json=selected)
+            assert adopted.status_code == 200, adopted.text
+            adopted_receipt = adopted.json()
+            requests_after_adoption = _original_execution_diagnostics(repo, workspace, job_id)["requests"]
+            with repo._connect() as conn:
+                transforms_after_adoption = [tuple(row) for row in conn.execute(
+                    "SELECT id,status FROM transform_runs WHERE workspace_id=? AND task_id=? ORDER BY id",
+                    (workspace, task_id))]
+            replay = client.post(decision_url, json=selected)
+            assert replay.status_code == 200, replay.text
+            assert replay.json()["decision"] == adopted_receipt["decision"]
+            assert replay.json()["queue"]["request_id"] == adopted_receipt["queue"]["request_id"]
+            assert _original_execution_diagnostics(repo, workspace, job_id)["requests"] == requests_after_adoption
+            with repo._connect() as conn:
+                assert [tuple(row) for row in conn.execute(
+                    "SELECT id,status FROM transform_runs WHERE workspace_id=? AND task_id=? ORDER BY id",
+                    (workspace, task_id))] == transforms_after_adoption
+            assert adopted_receipt["decision"]["confirmed_clip_ids"] == view["required_confirmation_ids"]
+            assert adopted_receipt["decision"]["usage"] == view["usage"]
+            grant = next_grant()
+            assert grant.request_id == adopted_receipt["queue"]["request_id"]
+            assert grant.unit_key.startswith(f"segment_video:{section.id}:")
+            executor.execute(grant, scheduler)
+            scheduler.assert_released(grant)
+            assert repo.section_inputs.stage_segment_state(workspace, task_id, section.id) is not None
+        # Only finite merge checkpoints may occur between the last section and
+        # the existing whole-film montage stage; no audio is regenerated.
+        for _ in range(len(script_for_merge.sections) + 1):
+            grant = next_grant()
+            if grant.unit_key.startswith("montage_plan:"):
+                break
+            assert grant.unit_key.startswith("narration:merge:v1:"), grant.unit_key
+            executor.execute(grant, scheduler)
+            scheduler.assert_released(grant)
         assert grant.unit_key.startswith("montage_plan:")
         executor.execute(grant, scheduler)
         scheduler.assert_released(grant)
         assert repo.job_records.get_job_run(workspace, job_id).status == "failed"
         assert repo.task_records.get_creation_task(workspace, task_id).narration_cache_key
-        retry = execution.retry(workspace, task_id, member_id=actor.member_id)
-        submit_creation_stage(execution, scheduler, retry, actor)
+        resumed = client.post(base + "/resume")
+        assert resumed.status_code == 202, resumed.text
+        assert resumed.json()["job"]["id"] == job_id
+        retry = repo.job_records.get_job_run(workspace, job_id)
         monkeypatch.setattr(main_module, "auth_context", account_context)
         for stage in ("montage_plan", "render"):
-            grant = scheduler.pick_and_grant()
+            grant = next_grant()
             with repo._connect() as conn:
                 queued = [dict(row) for row in conn.execute(
                     "SELECT id,unit_key,state,wait_reason FROM device_work_requests WHERE owner_id=?", (retry.id,))]
@@ -954,71 +1159,28 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
                 repo.get_creation_task_montage_plan(workspace, task_id).get("low_confidence_clip_count"))
             if stage == "render" and stop == "render_revoked":
                 state["identity"] = "unauthorized"
+                authorizations.refresh(repo.task_authorization_records.get_task_authorization(workspace, task_id))
             executor.execute(grant, scheduler)
             scheduler.assert_released(grant)
             if stage == "render" and stop in {"render_revoked", "render_commit_unknown"}:
-                assert repo.job_records.get_job_run(workspace, retry.id).status != "succeeded"
+                assert repo.job_records.get_job_run(workspace, retry.id).status != "succeeded", _original_execution_diagnostics(repo, workspace, retry.id)
                 assert not any(event.payload.get("stage") == "render" and event.payload.get("status") == "completed"
                                for event in repo.execution_records.list_task_events(workspace, task_id))
                 assert scheduler.processes.children_released(tuple(children)) is True
                 assert render_calls == ([] if stop == "render_revoked" else ["render"])
                 return
             if stage == "montage_plan":
-                try:
-                    montage = repo.get_creation_task_montage_plan(workspace, task_id)
-                except KeyError:
-                    pytest.fail(repo.job_records.get_job_run(workspace, retry.id).failure_reason)
-                assert "未运行视觉语义模型" in montage["message"]
-                assert montage["status"] == "waiting_for_user"
-                pending = [clip["id"] for clip in montage["clips"] if clip["needs_confirmation"]]
-                assert len(pending) == montage["low_confidence_clip_count"] > 0
-                assert repo.task_records.get_creation_task(workspace, task_id).stage_status == "waiting_for_user"
+                montage = repo.get_creation_task_montage_plan(workspace, task_id)
+                assert montage["status"] == "ready"
+                assert montage["low_confidence_clip_count"] == 0
+                assert all(not clip["needs_confirmation"] for clip in montage["clips"])
                 assert repo.job_records.get_job_run(workspace, retry.id).status == "queued"
-                assert repo.job_records.get_job_run(workspace, retry.id).failure_reason == "waiting_for_user"
                 assert repo.job_records.get_job_run(workspace, retry.id).finished_at is None
                 assert render_calls == []
-                assert scheduler.pick_and_grant() is None
-                with repo._connect() as conn:
-                    requests_before = [dict(row) for row in conn.execute(
-                        "SELECT id,unit_key,state FROM device_work_requests WHERE owner_id=? ORDER BY id", (retry.id,))]
-                assert not any(row["unit_key"].startswith("render:") for row in requests_before)
-                waiting = client.post(base + "/resume")
-                assert waiting.status_code == 202, waiting.json()
-                assert waiting.json()["job"]["id"] == retry.id
-                assert waiting.json()["job"]["status"] == "queued"
-                assert calls == ["narration", "montage_plan", "montage_plan"]
-                with repo._connect() as conn:
-                    assert [dict(row) for row in conn.execute(
-                        "SELECT id,unit_key,state FROM device_work_requests WHERE owner_id=? ORDER BY id", (retry.id,))] == requests_before
-                for clip_id in pending:
-                    before = repo.get_creation_task_montage_plan(workspace, task_id)["clips"]
-                    preview = client.post(f"/api/creation-tasks/{task_id}/edits/exact/preview",
-                        headers={"X-Local-Member-Token": member_token},
-                        json={"operation_type": "ConfirmClip", "clip_id": clip_id})
-                    assert preview.status_code == 200, preview.json()
-                    proposal = preview.json()["proposal"]
-                    assert proposal["preview"]["before"]["detail"] == "待确认"
-                    assert proposal["preview"]["after"]["detail"] == "已确认"
-                    assert repo.get_creation_task_montage_plan(workspace, task_id)["clips"] == before
-                    confirmed = client.post(f"/api/creation-tasks/{task_id}/edits/{proposal['id']}/confirm",
-                        headers={"X-Local-Member-Token": member_token})
-                    assert confirmed.status_code == 200, confirmed.json()
-                    after = repo.get_creation_task_montage_plan(workspace, task_id)["clips"]
-                    expected = [{**clip, "needs_confirmation": False} if clip["id"] == clip_id else clip for clip in before]
-                    assert after == expected
-                    assert render_calls == []
-                    assert scheduler.pick_and_grant() is None
-                confirmed_plan = repo.get_creation_task_montage_plan(workspace, task_id)
-                assert confirmed_plan["status"] == "ready"
-                assert confirmed_plan["low_confidence_clip_count"] == 0
-                resumed = client.post(base + "/resume")
-                assert resumed.status_code == 202, resumed.json()
-                assert resumed.json()["job"]["id"] == retry.id
-                assert resumed.json()["job"]["status"] == "queued"
-                assert calls == ["narration", "montage_plan", "montage_plan"]
+                assert calls == ["narration"] * len(script_for_merge.sections) + ["montage_plan", "montage_plan"]
         finished = repo.job_records.get_job_run(workspace, retry.id)
         assert finished.status == "succeeded", finished.failure_reason
-        assert calls == ["narration", "montage_plan", "montage_plan"]
+        assert calls == ["narration"] * len(script_for_merge.sections) + ["montage_plan", "montage_plan"]
         events = repo.execution_records.list_task_events(workspace, task_id)
         assert any(event.payload.get("stage") == "render" and event.payload.get("status") == "completed" for event in events)
         start = repo.execution_records.get_task_event(workspace, f"event_{retry.id}_start")
@@ -1033,10 +1195,14 @@ Path(sys.argv[sys.argv.index('--response')+1]).write_text(json.dumps(dict(schema
 
 def test_scheduled_creation_stage_is_deduplicated_and_waits_for_safe_executor(tmp_path):
     repo, task_id, script_id, digest = _seed(tmp_path)
+    digest = _qualify_start_voice(repo, task_id, "member-a", workspace_id="workspace_a")
     execution = _execution(repo)
     actor = CreationExecutionActor("workspace_a", "member-a")
     job = execution.start(actor.workspace_id, task_id, script_id, digest, member_id=actor.member_id)
     owner = CreationJobOwnerVerifier(repo)
+    # Submission/deduplication and unavailable executor, not voice generation.
+    owner.narration_unit_facts = lambda *_args, **_kwargs: (
+        "narration:synthetic-unavailable-executor", {"kind": "creation_narration"})
     probe = SimpleNamespace(admit=lambda _request: True, continue_unit=lambda _grant: True,
                             released=lambda _grant: True)
     processes = SimpleNamespace(current=lambda: ProcessIdentity(1234, "test", "boot"),
@@ -1055,7 +1221,7 @@ def test_scheduled_creation_stage_is_deduplicated_and_waits_for_safe_executor(tm
         submit_creation_stage(execution, scheduler, job, CreationExecutionActor("workspace_a", ""))
     with pytest.raises(PermissionError, match="原身份不匹配"):
         submit_creation_stage(execution, scheduler, job, CreationExecutionActor("workspace_a", "member-b"))
-    with pytest.raises(PermissionError, match="创建者"):
+    with pytest.raises(PermissionError, match="原输入与身份不同"):
         execution.start("workspace_a", task_id, script_id, digest, member_id="member-b")
     scheduler.close()
 
@@ -1072,6 +1238,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
     monkeypatch.setattr("app.montage.sample_host_capacity",
                         lambda **_kwargs: pinned_capacity)
     repo, task_id, script_id, digest = _seed(tmp_path, duration_seconds=1)
+    digest = _qualify_start_voice(repo, task_id, "member-a", workspace_id="workspace_a")
     audio = tmp_path / "voice.wav"
     video = tmp_path / "library" / "source.mp4"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
@@ -1087,6 +1254,9 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
         segments=[MaterialSegment(id="segment_1", asset_id="asset_1", start_seconds=0,
                                   end_seconds=1, description="蓝色画面", review_status="approved")],
     ))
+    with repo._connect() as conn:
+        repo._claim_workspace_media_reference(
+            conn, workspace_id="workspace_a", reference="workspace://source.mp4")
     repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="narration_cache_1", workspace_id="workspace_a", task_id=task_id,
         script_id=script_id, voice_profile_id="voice_1", cache_key="cache_1",
@@ -1122,10 +1292,23 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
     actor = CreationExecutionActor(task.workspace_id, "member-a")
     job = execution.start(task.workspace_id, task_id, script_id, digest, member_id=actor.member_id)
     owner = CreationJobOwnerVerifier(repo, cpu_render_limits=CpuRenderLimits(8_000_000, 1, 90))
+    render_budget = CpuRenderBudget(300, 400_000_000, 1920, 1920, 10_000_000, 20, 0,
+        8_000_000, 1, 90, 512 * 1024 ** 2, 64 * 1024 ** 2, 16,
+        running_cpu_policy=RuntimeCpuPolicy("darwin_nice", "synthetic-pure-material-render-policy", nice=5))
+    host_resources = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,),
+        budget=HostBudget(100, 1, 100 * 1024 ** 3, 1, 10 ** 12, 10_000_000,
+                          cpu_render=render_budget),
+        memory_monitor=_synthetic_memory_monitor())
+    _isolate_linux_cpu_policy(monkeypatch, host_resources)
+
+    def ambient_cpu_percent(*, interval):
+        time.sleep(interval)
+        return 0
+
+    monkeypatch.setattr("app.host_resource_probes.psutil.cpu_percent", ambient_cpu_percent)
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=owner,
-        resources=SimpleNamespace(admit=lambda request: HostResourceDecision(True, dict(request.resources), {}), continue_unit=lambda _grant: True,
-                                  released=lambda _grant: True),
+        resources=host_resources,
         processes=HostProcessProbe(),
     )
     try:
@@ -1229,7 +1412,11 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
 
         retry_executor._checkpoint = crash_after_inner
         with pytest.raises(RuntimeError, match="simulated crash"):
-            retry_executor.execute(retry_grant, scheduler)
+            try:
+                retry_executor.execute(retry_grant, scheduler)
+            finally:
+                if crash_once["pending"]:
+                    print(_original_execution_diagnostics(repo, task.workspace_id, resumed.id))
         assert render_calls == [1]
         published_task = repo.task_records.get_creation_task(task.workspace_id, task_id)
         published_version = repo.timeline_records.get_timeline_version(task.workspace_id, published_task.current_timeline_version_id)
@@ -1252,7 +1439,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             assert changed_stat.st_mtime_ns == source_stat.st_mtime_ns
             assert changed_stat.st_ino == source_stat.st_ino
             assert changed_stat.st_ctime_ns != source_stat.st_ctime_ns
-            with pytest.raises(PermissionError, match="失效"):
+            with pytest.raises(StaleGrantInput, match="输入版本已过期"):
                 retry_executor.execute(retry_grant, scheduler)
             assert render_calls == [1]
             scheduler.defer_unit(retry_grant, reason="input_stale")
@@ -1265,7 +1452,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
             parent_version_id=published_version.id, sequence=published_version.sequence + 1,
             snapshot=published_version.snapshot, created_by_operation_id="operation_independent_edit",
         ))
-        with pytest.raises(PermissionError, match="失效"):
+        with pytest.raises(StaleGrantInput, match="输入版本已过期"):
             retry_executor.execute(retry_grant, scheduler)
         assert render_calls == [1]
         restored_task = repo.task_records.get_creation_task(task.workspace_id, task_id)
@@ -1297,7 +1484,7 @@ def test_existing_voice_and_pure_material_montage_submit_bounded_render(tmp_path
 def test_draft_and_wrong_workspace_cannot_start(tmp_path, monkeypatch):
     repo, task_id, script_id, digest = _seed(tmp_path, confirmed=False)
     execution = _execution(repo)
-    with pytest.raises(ValueError, match="确认当前文案"):
+    with pytest.raises(ValueError, match="确认实际文案"):
         execution.start("workspace_a", task_id, script_id, digest)
     assert not repo.job_records.list_job_runs("workspace_a", task_id)
     with pytest.raises(KeyError):
@@ -1311,56 +1498,59 @@ def test_missing_authorized_voice_blocks_start_before_job_creation(tmp_path):
     assert repo.job_records.list_job_runs("workspace_a", task_id) == []
 
 
-def test_duplicate_start_and_restart_execute_one_persisted_job(tmp_path, monkeypatch):
-    repo, task_id, script_id, digest = _seed(tmp_path)
-    monkeypatch.setattr(repo, "get_creation_task_montage_plan", lambda *_: {})
-    calls = []
-    execution = _execution(repo, {
-        "narration": lambda *_: calls.append("narration"),
-        "montage_plan": lambda *_: calls.append("montage_plan"),
-        "render": lambda *_: calls.append("render"),
-    })
-    first = execution.start("workspace_a", task_id, script_id, digest)
-    second = execution.start("workspace_a", task_id, script_id, digest)
-    assert first.id == second.id
-    assert len(execution.jobs("workspace_a", task_id)) == 1
-    restarted = _execution(repo, execution.actions)
-    assert restarted.execute("workspace_a", first.id).status == "succeeded"
-    assert restarted.execute("workspace_a", first.id).status == "succeeded"
-    assert calls == ["narration", "montage_plan", "render"]
+def test_duplicate_start_and_restart_execute_one_persisted_job(tmp_path):
+    case = _narration_units_case(tmp_path, section_count=1)
+    digest = case.job.input_digest
+    assert case.execution.start('local', case.task_id, case.script_id, digest, actor=case.actor).id == case.job.id
+    first = submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    case.scheduler.close()
+    # Restore the same persisted Job/request through a fresh queue coordinator.
+    restarted = _execution(case.repo)
+    case.scheduler = DeviceScheduler(case.repo.database_path, tmp_path/'units.lock', owners=case.owner,
+        resources=case.resources, processes=HostProcessProbe())
+    case.executor = CreationJobUnitExecutor(case.repo, render_action=lambda *_: pytest.fail('not render'),
+        render_is_valid=lambda *_: False, narration_stage=case.stage)
+    assert restarted.start('local', case.task_id, case.script_id, digest, actor=case.actor).id == case.job.id
+    assert submit_creation_stage(restarted, case.scheduler, case.job, case.actor) == first
+    case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    task = case.repo.task_records.get_creation_task('local', case.task_id)
+    assert task.stage == 'montage' and task.narration_cache_key
+    assert len(case.generated) == len(case.merged) == 1
+    assert len(restarted.jobs('local', case.task_id)) == 1
+    assert case.scheduler._get(first).state == 'done'
+    case.scheduler.close()
 
 
 def test_failure_resume_reuses_valid_narration(tmp_path, monkeypatch):
-    repo, task_id, script_id, digest = _seed(tmp_path)
-    audio = tmp_path / "narration.wav"
-    attempts = []
-    monkeypatch.setattr(repo, "get_creation_task_montage_plan", lambda *_: {})
-    monkeypatch.setattr(repo.narration_artifacts, "get_narration_artifact", lambda *_: SimpleNamespace(
-        task_id=task_id, script_id=script_id, audio_path=str(audio)))
-
-    def narration(workspace_id, current_task_id):
-        attempts.append("narration")
-        audio.write_bytes(b"synthetic audio")
-        task = repo.task_records.get_creation_task(workspace_id, current_task_id)
-        task.narration_cache_key = "synthetic_cache"
-        with sqlite3.connect(repo.database_path) as conn:
-            conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
-                         (json.dumps(asdict(task), default=str), workspace_id, current_task_id))
-
-    def montage(*_):
-        attempts.append("montage_plan")
-        if attempts.count("montage_plan") == 1:
-            raise ValueError("素材暂不可用")
-
-    execution = _execution(repo, {"narration": narration, "montage_plan": montage,
-                                  "render": lambda *_: attempts.append("render")})
-    first = execution.start("workspace_a", task_id, script_id, digest)
-    assert execution.execute("workspace_a", first.id).status == "failed"
-    assert "素材暂不可用" in execution.latest("workspace_a", task_id).failure_reason
-    resumed = execution.retry("workspace_a", task_id)
-    assert resumed.id != first.id
-    assert execution.execute("workspace_a", resumed.id).status == "succeeded"
-    assert attempts == ["narration", "montage_plan", "montage_plan", "render"]
+    from app.creation.execution_control import CreationExecutionControl
+    case = _narration_units_case(tmp_path, section_count=1)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    segments = case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)
+    assert len(segments) == 1 and segments[0].status == 'ready'
+    merge = case.scheduler.pick_and_grant()
+    original = case.stage.prepare_merge
+    def unavailable(*_args, **_kwargs):
+        raise ValueError('合并暂不可用')
+    monkeypatch.setattr(case.stage, 'prepare_merge', unavailable)
+    case.executor.execute(merge, case.scheduler)
+    failed = case.repo.job_records.get_job_run('local', case.job.id)
+    assert failed.status == 'failed' and '合并暂不可用' in failed.failure_reason
+    monkeypatch.setattr(case.stage, 'prepare_merge', original)
+    control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
+    runtime = SimpleNamespace(scheduler=case.scheduler, registrations={'creation_job':
+        SimpleNamespace(owner=case.owner, executor=case.executor)}, wake=lambda: None)
+    resumed = control.resume('local', case.task_id, case.actor, runtime, verify_media=False)
+    assert resumed['job']['id'] == case.job.id
+    retried = case.scheduler.pick_and_grant()
+    assert retried.request_id == merge.request_id
+    case.executor.execute(retried, case.scheduler)
+    task = case.repo.task_records.get_creation_task('local', case.task_id)
+    assert task.stage == 'montage' and task.narration_cache_key
+    assert case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id) == segments
+    assert len(case.generated) == len(case.merged) == len(case.execution.jobs('local', case.task_id)) == 1
+    case.scheduler.close()
 
 
 def test_cancel_at_boundary_and_revision_change_blocks_resume(tmp_path, monkeypatch):
@@ -1383,7 +1573,12 @@ def test_cancel_at_boundary_and_revision_change_blocks_resume(tmp_path, monkeypa
 
 def _permit_scheduler(repo, tmp_path):
     """整机许可队列 + 真实本机名册；许可身份从成员行来，不从字符串来。"""
-    owner = CreationJobOwnerVerifier(repo)
+    owner = CreationJobOwnerVerifier(repo,
+        narration_budget=NarrationBudget(1000, 3, 1_000_000, 30, 3*1024**2, 1, 300,
+            1024, 16, .1, 2048, 1024, input_scope="single_call_experiment_v1"),
+        narration_audio_budget=CpuAudioBudget(10, 32*1024**2, 30, 30, 48000, 2,
+            3*1024**2, 1, 30, 1024, 16, .1, 2048, 1024))
+    owner.segments = main_module._segment_production_use_case(repo)
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=owner,
         resources=SimpleNamespace(admit=lambda request: HostResourceDecision(True, dict(request.resources), {}), continue_unit=lambda _grant: True,
@@ -1405,7 +1600,9 @@ def test_http_start_requires_explicit_confirmation_and_is_idempotent(tmp_path, m
     monkeypatch.setattr(main_module, "creation_execution", _execution(repo))
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=scheduler.owners,
+            executor=CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail("metadata fixture must not render"),
+                render_is_valid=lambda *_: False))},
         task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
             CreationExecutionActor.from_event(identity["workspace_id"], identity))),
         last_error=None, running=True, wake=lambda: None,
@@ -1447,7 +1644,9 @@ def test_http_start_refuses_an_identity_it_cannot_verify(tmp_path, monkeypatch):
     monkeypatch.setattr(main_module, "creation_execution", _execution(repo))
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=scheduler.owners,
+            executor=CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail("metadata fixture must not render"),
+                render_is_valid=lambda *_: False))},
         task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
             CreationExecutionActor.from_event(identity["workspace_id"], identity))),
         last_error=None, running=True, wake=lambda: None,
@@ -1481,14 +1680,16 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     with repo._connect() as conn:
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
             (json.dumps(asdict(task), default=str), "local", task_id))
-    owner = CreationJobOwnerVerifier(repo)
+    owner = scheduler.owners
     wake_calls = []
     monkeypatch.setattr(main_module, "production_repo", repo)
     monkeypatch.setattr(main_module, "creation_execution", execution)
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "creation_execution_mode", "scheduled")
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner)},
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=owner,
+            executor=CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail("metadata fixture must not render"),
+                render_is_valid=lambda *_: False))},
         task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
             CreationExecutionActor.from_event(identity["workspace_id"], identity))), last_error=None,
         running=True, wake=lambda: wake_calls.append(True),
@@ -1511,6 +1712,9 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     main_module._recover_creation_executions()
     with repo._connect() as conn:
         assert conn.execute("SELECT count(*) FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == 1
+    # The prepared request survives temporarily unavailable execution policy.
+    prepared_budget = owner.narration_budget
+    owner.narration_budget = None
     assert scheduler.pick_and_grant() is None
     waiting = client.get(route)
     assert waiting.status_code == 200
@@ -1529,6 +1733,7 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
     assert stopped.json()["waiting_reason"] is None
     with repo._connect() as conn:
         assert conn.execute("SELECT state FROM device_work_requests WHERE owner_type='creation_job'").fetchone()[0] == "cancelled"
+    owner.narration_budget = prepared_budget
     resumed = client.post(route + "/resume")
     assert resumed.status_code == 202
     assert resumed.json()["job"]["id"] != first.json()["job"]["id"]
@@ -1539,28 +1744,46 @@ def test_scheduled_http_start_uses_one_persisted_device_request_and_reports_wait
 
 
 def test_failed_new_narration_never_reuses_leftover_old_audio(tmp_path, monkeypatch):
-    repo, task_id, script_id, digest = _seed(tmp_path)
-    old_audio = tmp_path / "old.wav"
-    old_audio.write_bytes(b"old voice")
-    task = repo.task_records.get_creation_task("workspace_a", task_id)
-    task.narration_cache_key = "old_voice_cache"
-    with sqlite3.connect(repo.database_path) as conn:
-        conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
-                     (json.dumps(asdict(task), default=str), "workspace_a", task_id))
-    monkeypatch.setattr(repo.narration_artifacts, "get_narration_artifact", lambda *_: SimpleNamespace(
-        task_id=task_id, script_id=script_id, audio_path=str(old_audio)))
+    from app.creation.execution_control import CreationExecutionControl
+    case = _segment_units_case(tmp_path, monkeypatch, declared_source=True)
+    old_audio = tmp_path / 'old.wav'
+    old_audio.write_bytes(b'old voice')
+    old = case.repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
+        id='old_narration', workspace_id='local', task_id=case.task_id, script_id='previous-script',
+        voice_profile_id='voice_1', cache_key='old_voice_cache', audio_path=str(old_audio),
+        duration_seconds=1, sample_rate=24000, model_id='old-fixture'))
+    with case.repo._connect() as conn:
+        task = case.repo.task_records.get_creation_task('local', case.task_id)
+        task.narration_cache_key = old.cache_key
+        conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
+            (json.dumps(asdict(task), default=str), task.id))
     attempts = []
-
-    def failing_narration(*_):
-        attempts.append("called")
-        raise ValueError("新声音暂不可用")
-
-    execution = _execution(repo, {"narration": failing_narration})
-    first = execution.start("workspace_a", task_id, script_id, digest)
-    assert execution.execute("workspace_a", first.id).status == "failed"
-    resumed = execution.retry("workspace_a", task_id)
-    assert execution.execute("workspace_a", resumed.id).status == "failed"
-    assert attempts == ["called", "called"]
+    def failing_narration(**_kwargs):
+        attempts.append('called')
+        raise ValueError('新声音暂不可用')
+    monkeypatch.setattr(case.stage.generator, 'generate_for_creation_task', failing_narration)
+    request_id = submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
+    control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
+    runtime = SimpleNamespace(scheduler=case.scheduler, registrations={'creation_job':
+        SimpleNamespace(owner=case.owner, executor=case.executor)}, wake=lambda: None)
+    resumed = control.resume('local', case.task_id, case.actor, runtime, verify_media=False)
+    assert resumed['job']['id'] == case.job.id
+    retried = case.scheduler.pick_and_grant()
+    assert retried.request_id == request_id
+    case.executor.execute(retried, case.scheduler)
+    assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
+    from app.creation_execution import upstream_stage_valid
+    current = case.repo.task_records.get_creation_task('local', case.task_id)
+    assert not current.output_ready and not upstream_stage_valid(case.repo, current, 'narration')
+    assert all(item.status == 'pending' for item in case.repo.narration_records.list_narration_segments(
+        'local', case.task_id, case.script_id))
+    assert old_audio.read_bytes() == b'old voice'
+    assert case.repo.narration_artifacts.get_narration_artifact('local', old.cache_key) == old
+    assert attempts == ['called', 'called']
+    assert len(case.execution.jobs('local', case.task_id)) == 1
+    case.scheduler.close()
 
 
 def _render_validity_fixture(tmp_path, monkeypatch):
@@ -1685,7 +1908,9 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
     current_task = asdict(repo.task_records.get_creation_task("local", task_id))
     control = CreationExecutionControl(repo, execution, None, lambda original: "ready")
     runtime = SimpleNamespace(scheduler=scheduler,
-        registrations={"creation_job": SimpleNamespace(owner=scheduler.owners)}, wake=lambda: None)
+        registrations={"creation_job": SimpleNamespace(owner=scheduler.owners,
+            executor=CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail("metadata fixture must not render"),
+                render_is_valid=lambda *_: False))}, wake=lambda: None)
     control.recover(runtime)
     recovered = repo.task_records.get_creation_task("local", task_id)
     if scenario == "single":
@@ -1705,17 +1930,23 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
     scheduler.close()
 
 
-def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path, monkeypatch):
+def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path, monkeypatch, request):
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    # App shutdown closes its assistant owner permanently, not later test apps.
+    isolate_assistant_turn_control(monkeypatch, request)
     repo, task_id, script_id, digest = _seed(tmp_path, workspace_id="local")
     scheduler, members, owner_member = _permit_scheduler(repo, tmp_path)
     digest = _qualify_start_voice(repo, task_id, owner_member.member_id)
     execution = _execution(repo)
     # 能被复核的作业必须带着真实成员身份落库，否则开机时就该拒绝重新申请许可。
     queued = execution.start("local", task_id, script_id, digest,
-                              member_id=owner_member.member_id)
+                              actor=CreationExecutionActor('local', owner_member.member_id))
     submitted = []
     runtime_starts = []
+    quality_schedules = []
     monkeypatch.setattr(main_module, "production_repo", repo)
+    from app.conversation_repository import ConversationRepository
+    monkeypatch.setattr(main_module, "conversation_repo", ConversationRepository(repo.database_path))
     monkeypatch.setattr(main_module, "quality_check_repo", main_module.QualityCheckRepository(repo.database_path))
     monkeypatch.setattr(main_module, "video_job_runner", VideoJobRunner(repo.job_records))
     monkeypatch.setattr(main_module, "creation_execution", execution)
@@ -1723,7 +1954,11 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
     monkeypatch.setattr(ThreadPoolExecutor, "submit", lambda *args, **kwargs: submitted.append(args))
     monkeypatch.setattr(main_module, "material_ingestion", None)
     monkeypatch.setattr(main_module, "device_runtime", SimpleNamespace(
-        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=CreationJobOwnerVerifier(repo))},
+        scheduler=scheduler, registrations={"creation_job": SimpleNamespace(owner=scheduler.owners,
+            executor=CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail("metadata fixture must not render"),
+                render_is_valid=lambda *_: False)),
+            main_module.QUALITY_KIND: SimpleNamespace(owner=SimpleNamespace(service=SimpleNamespace(
+                schedule_rendered_tasks=lambda current: quality_schedules.append(current))))},
         task_authorizations=TaskAuthorizationUseCase(repo, lambda identity: MemberDeviceAccess(members).verify_identity(
             CreationExecutionActor.from_event(identity["workspace_id"], identity))),
         last_error=None, running=False, wake=lambda: None, start=lambda: runtime_starts.append("start"),
@@ -1733,6 +1968,7 @@ def test_lifespan_recovers_pending_job_and_binds_only_current_workspace(tmp_path
         # 开机恢复重新申请的是整机许可，不是绕开身份和主机门禁的旧线程。
         assert not submitted
         assert runtime_starts == ["start"]
+        assert quality_schedules == [main_module.device_runtime]
         with repo._connect() as conn:
             recovered = conn.execute(
                 "SELECT member_id, owner_id FROM device_work_requests WHERE owner_type='creation_job'",
@@ -1809,8 +2045,19 @@ def test_read_only_material_directory_refuses_binding_and_recovers(tmp_path):
 def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp_path, monkeypatch, request):
     # Keep the full runtime reload inside a synthetic library and restore its
     # module globals afterwards; no provider or media operation is invoked.
+    import ast
+    import inspect
     from assistant_turn_control_fixtures import isolate_assistant_turn_control
     isolate_assistant_turn_control(monkeypatch, request)
+    for publisher in (main_module._publish_runtime_dependencies, main_module._activate_runtime_reload,
+                      main_module._publish_runtime_routes):
+        for node in ast.walk(ast.parse(inspect.getsource(publisher))):
+            if isinstance(node, ast.Global):
+                for name in node.names:
+                    monkeypatch.setattr(main_module, name, getattr(main_module, name))
+    monkeypatch.setattr(main_module.app.router, 'routes', list(main_module.app.router.routes))
+    monkeypatch.setattr(main_module.app, 'openapi_schema', main_module.app.openapi_schema)
+    monkeypatch.setattr(main_module, '_goal_continuation_service', None)
     for name in (
         "settings repo source_repository model_catalog model_installer visual_semantic_provider "
         "voice_clone_provider avatar_lipsync_provider latentsync_provider production_repo "
@@ -1821,6 +2068,7 @@ def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp
     ).split():
         monkeypatch.setattr(main_module, name, getattr(main_module, name))
     monkeypatch.setattr(tempfile, "tempdir", tempfile.tempdir)
+    monkeypatch.setenv('TMPDIR', os.environ['TMPDIR'])
     (tmp_path / "library").mkdir()
     isolated = Settings(
         database_path=str(tmp_path / "isolated.sqlite3"),
@@ -1834,11 +2082,19 @@ def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp
         hermes_radar_path=str(tmp_path / "radar"),
     )
     monkeypatch.setattr(Settings, "from_env", classmethod(lambda _cls: isolated))
+    from app.model_installer import ModelInstaller
+    from app.runtime_health import model_catalog_from_settings
+    monkeypatch.setattr(main_module, 'model_installer', ModelInstaller(model_catalog_from_settings(isolated),
+        on_complete=lambda: main_module._reload_runtime_dependencies()))
     from test_host_model_installation import metadata_device_components
     monkeypatch.setattr(main_module, "device_runtime", None)
     monkeypatch.setattr(main_module, "_build_device_components",
         lambda **kwargs: metadata_device_components(tmp_path, **kwargs))
     monkeypatch.setattr(main_module, "material_ingestion", None)
+    def release_test_runtime():
+        main_module._stop_device_runtime()
+        main_module._stop_material_ingestion()
+    request.addfinalizer(release_test_runtime)
 
     def assert_running():
         service = main_module.material_ingestion
@@ -1857,6 +2113,7 @@ def test_reload_startup_shutdown_do_not_leave_ingestion_or_execution_threads(tmp
             assert tuple(connection.execute("SELECT state,request_id FROM device_permit WHERE id=1").fetchone()) == ("free", None)
 
     main_module._reload_runtime_dependencies()
+    assert main_module._start_device_runtime()
     first_service, first_thread, first_worker = assert_running()
     with TestClient(main_module.app):
         assert main_module.material_ingestion is first_service
@@ -2064,7 +2321,7 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
     owner = CreationJobOwnerVerifier(repo, narration_budget=narration, verify_identity=access.verify_identity)
     # Only host pressure is substituted. Identity, inputs, SQLite, process and lock checks are real.
     resources = SimpleNamespace(admit=lambda request: HostResourceDecision(
-        request.resources.get("kind") == "creation_narration", dict(request.resources), {}),
+        request.resources.get("kind") in {"creation_narration", "task_audio"}, dict(request.resources), {}),
         continue_unit=lambda grant: True, released=lambda grant: True)
     unknown_reason = {"unknown":"disk_io_before_unavailable", "io_gap":"io_observation_gap"}.get(after_wait)
     failure = HostResourceRefusal(HostResourceDecision(None if unknown_reason else False,
@@ -2098,9 +2355,6 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
                 monkeypatch.setattr(context.scheduler.processes, 'children_released', lambda children: False)
             raise failure
         result = prepare_segment(workspace, current_task, **kwargs)
-        if after_wait == 'checkpoint_pressure':
-            repo.narration_completion.complete_creation_task_narration(result[0])
-            raise failure
         return result
     monkeypatch.setattr(stage, 'prepare_segment', action)
     audio_budget = CpuAudioBudget(10, 32*1024**2, 30, 30, 24000, 1, 100000, 1, 10, 1024, 16, .1, 1024, 1)
@@ -2108,13 +2362,30 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
     from app.narration import NarrationArtifact, _pronunciation_dictionary, _pronunciation_version
     def generated(**kwargs):
         output = tmp_path / 'library' / 'narration.wav'
-        output.write_bytes(synthetic_wav_bytes())
+        import wave
+        with wave.open(str(output), 'wb') as stream:
+            stream.setparams((1, 2, 24000, 0, 'NONE', 'not compressed'))
+            stream.writeframes(b'\x01\x00' * 24000)
         pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=kwargs['pronunciation_entries'],
             workspace_id='local', person_profile_id=kwargs['voice_identity'].person_profile_id, task_id=task_id))
-        return NarrationArtifact(task_id=task_id, script_id=script_id, audio_path=str(output), duration_seconds=2,
-            sample_rate=8000, model_id='synthetic', voice_profile_id=kwargs['voice_identity'].id,
+        return NarrationArtifact(task_id=task_id, script_id=script_id, audio_path=str(output), duration_seconds=1,
+            sample_rate=24000, model_id='test', voice_profile_id=kwargs['voice_identity'].id,
             cache_key='pressure_cache', language='zh', pronunciation_version=pronunciation)
     monkeypatch.setattr(generator, 'generate_for_creation_task', generated)
+    original_merge = stage.prepare_merge
+    merge_attempts = []
+    def prepare_merge(*args, **kwargs):
+        from unittest.mock import patch
+        context = kwargs['grant_context']
+        merge_attempts.append(context.grant)
+        used = repo.narration_units.creation_narration_usage('local', context.grant.owner_id)['used_seconds']
+        assert context.deadline_monotonic - context.started_monotonic <= narration.max_timeout_seconds - used + .01
+        if after_wait == 'checkpoint_pressure' and len(merge_attempts) == 1:
+            grants.append(kwargs['grant_context'].grant)
+            raise failure
+        with patch('app.granted_subprocess.run_granted_command', _inprocess_pcm_command):
+            return original_merge(*args, **kwargs)
+    monkeypatch.setattr(stage, 'prepare_merge', prepare_merge)
     executor = CreationJobUnitExecutor(repo, render_action=lambda *args: pytest.fail('not render'),
         render_is_valid=lambda *args: False, narration_stage=stage)
     runtime = build_device_runtime(database_path=repo.database_path, device_lock_path=tmp_path / "device.lock",
@@ -2130,13 +2401,20 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         original_append = repo.execution_records.append_task_event
         def fail_pressure_receipt(event, **kwargs):
             if event.id.startswith(f"event_{job.id}_pressure_"):
+                with repo._connect() as conn:
+                    rolled_back.append((conn.execute("SELECT state FROM device_permit").fetchone()[0],
+                        conn.execute("SELECT status FROM job_runs WHERE id=?", (job.id,)).fetchone()[0],
+                        repo.task_records.get_creation_task("local", task_id).stage_status))
                 raise OSError("fixture receipt storage failure")
-            with repo._connect() as conn:
-                rolled_back.append((conn.execute("SELECT state FROM device_permit").fetchone()[0],
-                    conn.execute("SELECT status FROM job_runs WHERE id=?", (job.id,)).fetchone()[0],
-                    repo.task_records.get_creation_task("local", task_id).stage_status))
             return original_append(event, **kwargs)
         monkeypatch.setattr(repo.execution_records, "append_task_event", fail_pressure_receipt)
+    if after_wait == 'checkpoint_pressure':
+        # The first paid segment is already durable; pressure affects the next
+        # merge unit, not a fabricated whole-narration completion.
+        assert runtime.run_once()
+        with repo._connect() as conn:
+            row = conn.execute("SELECT id,first_ready_at_utc FROM device_work_requests WHERE owner_id=? AND state='waiting'", (job.id,)).fetchone()
+            request_id, first_ready = row['id'], row['first_ready_at_utc']
     try:
         if after_wait in {"unknown", "unreleased", "write_failure"}:
             with pytest.raises(OSError if after_wait == "write_failure" else RecoveryBlocked):
@@ -2178,15 +2456,18 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             with repo._connect() as conn:
                 assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "free"
             runtime.scheduler.assert_released(grants[-1])
-            resumed = execution.retry("local", task_id, member_id=member.member_id)
-            assert resumed.id != job.id and resumed.input_digest == job.input_digest
-            submit_creation_stage(execution, runtime.scheduler, resumed, actor)
+            from app.creation.execution_control import CreationExecutionControl
+            control = CreationExecutionControl(repo, execution, SimpleNamespace(valid=lambda *_a, **_k: False), access.verify_identity)
+            resumed = control.resume('local', task_id, actor, runtime, verify_media=False)
+            assert resumed['job']['id'] == job.id and resumed['job']['input_digest'] == job.input_digest
             assert runtime.run_once() is True
-            assert repo.job_records.get_job_run("local", resumed.id).status == "queued"
+            assert runtime.run_once() is True  # Independently permitted PCM merge.
+            current_job = repo.job_records.get_job_run("local", job.id)
+            assert current_job.status == "queued", current_job.failure_reason
             recovered = repo.task_records.get_creation_task("local", task_id)
-            assert recovered.narration_cache_key == "pressure_cache" and recovered.stage == "montage"
+            assert recovered.narration_cache_key and recovered.stage == "montage"
             assert attempts == [1, 2]
-            runtime.scheduler.assert_released(grants[-1])
+            runtime.scheduler.assert_released(merge_attempts[-1])
             return
         if after_wait == "model_error":
             assert repo.job_records.get_job_run("local", job.id).status == "failed"
@@ -2198,7 +2479,8 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
         assert attempts == [1] and repo.job_records.get_job_run("local", job.id).status == "interrupted"
         assert repo.task_records.get_creation_task("local", task_id).stage_status == "not_started"
         if after_wait == "checkpoint_pressure":
-            assert repo.task_records.get_creation_task("local", task_id).stage == "montage"
+            assert repo.task_records.get_creation_task("local", task_id).stage == "narration"
+            assert repo.narration_records.list_narration_segments("local", task_id, script_id)[0].status == "ready"
         with repo._connect() as conn:
             row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
             assert row["state"] == "blocked" and row["wait_reason"] == "resource_pressure"
@@ -2216,11 +2498,18 @@ def test_resource_pressure_defers_original_job_and_revalidates_before_regrant(tm
             execution.cancel("local", task_id, member_id=member.member_id)
             runtime.scheduler.cancel(request_id, actor)
         monkeypatch.setattr(runtime.scheduler, "_now", lambda: retry_at + timedelta(seconds=1))
-        assert runtime.run_once() is (after_wait in {"recover", "io_gap", "checkpoint_pressure"})
+        ran = runtime.run_once()
+        current_request = runtime.scheduler._get(request_id)
+        assert ran is (after_wait in {"recover", "io_gap", "checkpoint_pressure"}), (current_request.state, current_request.wait_reason, repo.job_records.get_job_run("local", job.id).failure_reason)
         assert attempts == ([1, 2] if after_wait in {"recover", "io_gap"} else [1])
+        if after_wait in {"recover", "io_gap"}:
+            assert runtime.run_once() is True  # Finish the separately granted merge.
         if after_wait in {"recover", "io_gap", "checkpoint_pressure"}:
-            assert repo.job_records.get_job_run("local", job.id).status == "queued"
-            assert repo.task_records.get_creation_task("local", task_id).narration_cache_key == "pressure_cache"
+            current_job = repo.job_records.get_job_run("local", job.id)
+            assert current_job.status == "queued", current_job.failure_reason
+            current_task = repo.task_records.get_creation_task("local", task_id)
+            assert current_task.narration_cache_key and current_task.stage == "montage"
+            assert repo.narration_records.list_narration_segments("local", task_id, script_id)[0].audio_reference == "narration://artifact/pressure_cache"
             assert all(event.payload.get("stage") != "render" for event in repo.execution_records.list_task_events("local", task_id))
         with repo._connect() as conn:
             assert conn.execute("SELECT state FROM device_permit").fetchone()[0] == "free"
@@ -2232,8 +2521,8 @@ def test_task_authorization_survives_unknown_and_restart_but_not_expiry_or_revoc
     from datetime import timedelta
     from app.creation.task_authorization import TaskAuthorizationUseCase
     repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
+    actor = _local_task_actor(repo, task_id)
     task = repo.task_records.get_creation_task("local", task_id)
-    actor = CreationExecutionActor("local", "original-member")
     now = [datetime.now(timezone.utc)]
     verdict = ["ready"]
     calls = []
@@ -2274,8 +2563,8 @@ def test_task_authorization_keeps_selected_assets_and_accepts_only_own_derived_o
     from app.creation.contracts import ArtifactRecord, JobRun
     from app.production import MaterialSegmentMatch
     repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
+    actor = _local_task_actor(repo, task_id)
     task = repo.task_records.get_creation_task("local", task_id)
-    actor = CreationExecutionActor("local", "original-member")
     for asset_id in ("selected", "unselected"):
         path = repo.video_library_path / f"{asset_id}.mp4"
         path.write_bytes(b"metadata-only fixture")
@@ -2313,6 +2602,12 @@ def test_restart_keeps_revoked_task_paused_and_recovers_other_valid_task(tmp_pat
         person_id="person_1", voice_id="voice_1", person_version="v1", voice_version="v1",
         language="zh", model_id="test", person_authorization_id="person_auth_1",
         voice_authorization_id="voice_auth_1", voice_usage_scopes=("narration",))
+    with repo._connect() as conn:
+        for task_id in (revoked_task, valid_task):
+            task = repo.task_records.get_creation_task('local', task_id)
+            task.owner_user_id = member.member_id
+            conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?',
+                (json.dumps(asdict(task), default=str), task_id))
     actor = CreationExecutionActor("local", member.member_id)
     service = TaskAuthorizationUseCase(repo, lambda _: "ready")
     scheduler.owners.task_authorizations = service
@@ -2324,7 +2619,9 @@ def test_restart_keeps_revoked_task_paused_and_recovers_other_valid_task(tmp_pat
     repo.task_authorization_records.save_task_authorization(replace(revoked,revision=revoked.revision+1,
         revoked_at=datetime.now(timezone.utc),last_verdict="unauthorized"),expected_revision=revoked.revision)
     runtime = SimpleNamespace(scheduler=scheduler,
-        registrations={"creation_job":SimpleNamespace(owner=scheduler.owners)},wake=lambda:None)
+        registrations={"creation_job":SimpleNamespace(owner=scheduler.owners,
+            executor=CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail('recovery must not render'),
+                render_is_valid=lambda *_: False))},wake=lambda:None)
     try:
         CreationExecutionControl(repo,execution,None,lambda _: "ready").recover(runtime)
         with repo._connect() as conn:
@@ -2383,8 +2680,8 @@ def test_host_task_business_reads_sealed_memory_and_fences_late_cancellation(tmp
     from app.creation.contracts import JobRun, TaskEvent
     repo,task_id,_,_=_seed(tmp_path,workspace_id='local',voice=False)
     conversations=ConversationRepository(repo.database_path)
-    member='original-member'
-    actor=CreationExecutionActor('local',member)
+    actor=_local_task_actor(repo,task_id)
+    member=actor.member_id
     chat=conversations.create('local',member,'task',task_id)
     chat=conversations.save_draft(chat['id'],'local',member,'完成原视频并检查输出',chat['draft_version'])
     context={'kind':'task','task_id':task_id,'stage':'narration','selected_object_refs':[],
@@ -2471,7 +2768,7 @@ def _seed_background_business(tmp_path):
     from app.conversation_repository import ConversationRepository
     repo,task_id,script_id,digest=_seed(tmp_path,workspace_id='local',voice=False)
     conversations=ConversationRepository(repo.database_path)
-    member='original-member'
+    member=_local_task_actor(repo,task_id).member_id
     chat=conversations.create('local',member,'task',task_id)
     chat=conversations.save_draft(chat['id'],'local',member,'完成原视频并检查输出',chat['draft_version'])
     context={'kind':'task','task_id':task_id,'stage':'narration','selected_object_refs':[],
@@ -2663,10 +2960,12 @@ def test_execution_projection_failure_reports_original_committed_job(tmp_path,mo
     assert result['failure']['query_tool']=='read_creation_execution'
 
 
-def test_background_safe_point_uses_host_binding_and_keeps_old_tool_origin(tmp_path):
+def test_background_safe_point_uses_host_binding_and_keeps_old_tool_origin(tmp_path, monkeypatch, request):
     import sys
     from uuid import uuid4
     from app import assistant_pi as pi
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+    isolate_assistant_turn_control(monkeypatch, request)
     business,host,binding,claim,_,_=_seed_background_business(tmp_path)
     repo=business.conversations
     chat=repo.get(binding['conversation_id'],'local',binding['member_id'])
@@ -2826,12 +3125,19 @@ def _queued_creation_admission_case(tmp_path, *, static):
         verify_identity=lambda current:'ready' if current==actor else 'unauthorized')
     # Fixed stage facts and host observation are declared ports; the real owner,
     # scheduler, process identity and SQLite transactions run without a model.
-    resources={'kind':'creation_narration','execution_mode':'isolated_qwen3_tts',
-        'text_chars':547 if static else 300,'section_count':3,'reference_bytes':627574,
-        'duration_seconds':30,'max_output_bytes':3145728,'threads':2,'timeout_seconds':300.0}
-    key='narration:'+'b'*64
-    owner.stage_facts=lambda *_, **_kwargs:(key,dict(resources))
-    owner.narration_unit_facts=lambda *args,**kwargs:owner.stage_facts()
+    with repo.execution_inputs.creation_execution_read() as conn:
+        current_job, snapshot, _ = owner._snapshot_facts(conn, 'local', job.id)
+        key, resources = owner.narration_unit_facts(conn, current_job, snapshot.task,
+            snapshot.script_header, snapshot.plan)
+    resources = {**resources, 'text_chars':547 if static else 300}
+    def declared_unit(*_args, comparison_reference=None, **_kwargs):
+        # Source comparison retains the original declaration; the current unit
+        # identity includes an explicitly changed execution policy.
+        current_key = key if comparison_reference is not None or owner.narration_budget == budget else (
+            key + ':budget-' + str(owner.narration_budget.max_text_chars))
+        return current_key, dict(resources)
+    owner.stage_facts = declared_unit
+    owner.narration_unit_facts = declared_unit
     calls=[]
     def admit(request):
         calls.append(request.id)
@@ -2869,6 +3175,7 @@ def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_wait
         assert status['current_stage']=='narration' and '547' in first.failure_reason
         stored=repo.execution_records.get_task_event('local',receipt['observation_id'])
         with repo._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             assert owner.record_admission(conn,request,SimpleNamespace(verdict=False,
                 reason='declared_resources_exceed_budget',declared=request.resources),datetime.now(timezone.utc))=='input_rejected'
         assert repo.execution_records.get_task_event('local',stored.id)==stored
@@ -2879,17 +3186,17 @@ def test_creation_admission_static_refusal_is_persistent_but_pressure_keeps_wait
             scheduler=scheduler,wake=lambda:None)
         with pytest.raises(ExecutionControlRejected) as same_input:
             control.resume('local',task_id,actor,runtime,verify_media=False)
-        assert same_input.value.detail['job_id']==request.owner_id
+        assert same_input.value.status_code == 409
+        assert control.read_bound('local',task_id,request.owner_id,actor,verify_media=False)['input_rejection'] == receipt
         assert len(repo.job_records.list_job_runs('local',task_id))==1
         from fastapi.encoders import jsonable_encoder
         assert jsonable_encoder(status)['input_rejection']['failed_limits']==receipt['failed_limits']
-        # An explicitly changed unit declaration may use the formal continue
-        # entry; the old refusal survives and no admission/model is run here.
-        changed={**request.resources,'text_chars':300}
-        owner.stage_facts=lambda *_, **_kwargs:('narration:'+'c'*64,changed)
+        # A changed explicit unit budget can resume the sealed, never-started
+        # original Job; source revalidation must not create a new allowance.
+        owner.narration_budget = replace(owner.narration_budget, max_text_chars=600)
         resumed=control.resume('local',task_id,actor,runtime,verify_media=False)
-        assert resumed['job']['status']=='queued' and resumed['job']['id']!=request.owner_id
-        assert repo.job_records.get_job_run('local',request.owner_id).status=='failed'
+        assert resumed['job']['status']=='queued' and resumed['job']['id']==request.owner_id
+        assert len(repo.job_records.list_job_runs('local',task_id)) == 1
         assert repo.execution_records.get_task_event('local',stored.id)==stored and calls==[request.id]
     else:
         assert current.state=='blocked' and current.wait_reason=='resource_busy'
@@ -2914,7 +3221,8 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
     from app.host_resource_probes import CpuAudioBudget, HostResourceDecision
     from app.narration import NarrationArtifact
     repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local', duration_seconds=duration_seconds)
-    actor = CreationExecutionActor('local', 'original-member')
+    member = LocalMemberService(repo.database_path).add_member('original narration member')
+    actor = CreationExecutionActor('local', member.member_id)
     register_synthetic_profiles(repo, workspace_id='local', member_id=actor.member_id,
         person_id='person_1', voice_id='voice_1', person_version='v1', voice_version='v1', language='zh', model_id='test',
         person_authorization_id='person_auth_1', voice_authorization_id='voice_auth_1')
@@ -2982,13 +3290,10 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
             if not pcm_inprocess:
                 return super().prepare_merge(*args,**kwargs)
             from unittest.mock import patch
-            from model_workers.pcm_assembly import execute as assemble
             def worker(current_scheduler,grant,command,**options):
                 request=current_scheduler._get(grant.request_id)
                 merged.append([item['reference'].removeprefix('narration://artifact/') for item in request.resources['inputs']])
-                manifest=json.loads(Path(command[-1]).read_text())
-                receipt=assemble(manifest,{'generated_bytes':0,'work_created':False})
-                return SimpleNamespace(returncode=0,stdout=json.dumps(receipt),stderr='')
+                return _inprocess_pcm_command(current_scheduler, grant, command, **options)
             with patch('app.granted_subprocess.run_granted_command',worker):
                 return super().prepare_merge(*args,**kwargs)
     stage = Stage(repo,Generator(),None,budget)
@@ -3257,7 +3562,7 @@ def test_regenerate_narration_keeps_original_job_and_budget_through_pcm_adoption
 
 def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
     from app.creation.segment_production_use_case import SegmentProductionUseCase
-    case = _narration_units_case(tmp_path)
+    case = _narration_units_case(tmp_path, duration_seconds=2)
     if declared_source:
         path = tmp_path / 'library/section.mp4'
         path.write_bytes(b'declared-planning-source-not-native-media')
@@ -3272,6 +3577,8 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
     else:
         asset, reference = register_synthetic_video_asset(case.repo,workspace_id='local',member_id=case.actor.member_id,
             path=tmp_path/'library/section.mp4',asset_id='section_video',seconds=2)
+        asset.segments = [replace(asset.segments[0], start_seconds=0, end_seconds=2)]
+        asset = case.repo._save_asset(asset)
     class Renderer:
         def render(self, plan, audio_path, **kwargs):
             assert kwargs['scheduler']._get(kwargs['grant'].request_id).resources['kind']=='creation_render'
@@ -3289,7 +3596,7 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
         plan = CreationTaskMontagePlan(id=f'stage_{section_id}',workspace_id='local',task_id=task.id,
             script_id=case.script_id,script_title='section',status='ready',
             cues=[NarrationCue(f'cue_{section_id}',section_id,text,audio.duration_seconds,
-                narration_segment_id=case.stage.segment_id(task.id,case.script_id,section_id))],
+                narration_segment_id=case.stage.segment_id(task.id,case.script_id,section_id), timeline_start_seconds=0.0)],
             clips=[MontageClip(f'clip_{section_id}',f'cue_{section_id}',asset.id,asset.segments[0].id,reference,0,audio.duration_seconds,
                 0,audio.duration_seconds,1,['controlled port'],False)],duration_seconds=audio.duration_seconds,
             low_confidence_clip_count=0,created_at=task.created_at,updated_at=task.created_at,
@@ -3299,6 +3606,16 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
             'ctime_ns':path.stat().st_ctime_ns} for path in paths]
         with case.repo.execution_inputs.creation_execution_read() as conn:
             snapshot = case.repo.execution_inputs.read_creation_execution_snapshot('local', task.id, connection=conn)
+            from app.creation.montage_stage_use_case import delivery_windows_from_section_inputs
+            _, windows = delivery_windows_from_section_inputs(snapshot.plan,
+                case.repo.section_inputs.iter_creation_section_planning_inputs(task, snapshot.script_header, connection=conn))
+            window = next(window for window in windows if window.section_id == section_id)
+            plan.delivery_window = asdict(window)
+            # The controlled planner must honor the same source non-reuse
+            # contract as the production planner, including section rework.
+            plan.clips[0].source_start_seconds = window.start_seconds
+            plan.clips[0].source_end_seconds = window.start_seconds + audio.duration_seconds
+            assert plan.clips[0].source_end_seconds <= asset.segments[0].end_seconds
             checksum = hashlib.sha256()
             for _ in service.planning_inputs(snapshot, section_id, connection=conn, checksum=checksum):
                 pass
@@ -3463,8 +3780,12 @@ def test_section_undo_redo_preserves_later_other_section_publication(tmp_path,mo
         prepared = restore.prepare_restore(TimelineRestoreCommand('local',task,redo))
         actual=case.repo.section_inputs.section_dependency_snapshot('local',case.task_id,'section_1')
         if json.dumps(actual,sort_keys=True,default=str)!=json.dumps(prepared.section_dependencies,sort_keys=True,default=str):
-            pytest.fail(str({'redo':redo,'audio_actual':actual['timeline'].get('audio_timeline'),
-                'audio_expected':prepared.section_dependencies['timeline'].get('audio_timeline')}))
+            differences = {key: {'actual': actual.get(key), 'expected': prepared.section_dependencies.get(key)}
+                for key in actual.keys() | prepared.section_dependencies.keys()
+                if json.dumps(actual.get(key),sort_keys=True,default=str) !=
+                    json.dumps(prepared.section_dependencies.get(key),sort_keys=True,default=str)}
+            pytest.fail(json.dumps({'redo': redo, 'different_dependencies': differences},
+                ensure_ascii=False,sort_keys=True,default=str))
         result = restore.apply_restore(prepared,TimelineOutputQualification(prepared,False))
         assert (result.montage is not None)==full_timeline
         assert case.repo.section_inputs.effective_creation_script('local',case.task_id).sections[0].content==text
@@ -6454,6 +6775,7 @@ def _bounded_segment_video_case(tmp_path, monkeypatch):
     from app.creation.segment_production_use_case import SegmentProductionUseCase
     from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.narration import _pronunciation_dictionary, _pronunciation_version
+    from app.task_audio import TaskAudio
     case = _narration_units_case(tmp_path, section_count=23, duration_seconds=120)
     repo = case.repo
     task = repo.task_records.get_creation_task('local', case.task_id)
@@ -6490,6 +6812,11 @@ def _bounded_segment_video_case(tmp_path, monkeypatch):
         output_root=tmp_path/'unused-output')
     case.owner.segments = case.segments
     case.owner.cpu_render_limits = CpuRenderLimits(10_000_000, 1, 30)
+    audio_service = TaskAudio(repo, case.segments.artifact_store, tmp_path/'audio-temporary')
+    case.owner.audio_mix_facts = lambda workspace_id, task_id, montage, *, actor, connection=None: audio_service.mix_facts(
+        workspace_id, task_id, montage.audio_timeline, montage.duration_seconds, actor=actor,
+        normalize_voice_sources=montage.narration_linkage_created_audio_timeline,
+        budget=case.owner.narration_audio_budget, connection=connection)
     case.owner.task_authorizations = TaskAuthorizationUseCase(repo, lambda identity: 'ready')
     case.owner.task_authorizations.ensure(task, case.actor)
     case.runtime = SimpleNamespace(scheduler=case.scheduler, wake=lambda: None,
@@ -6692,9 +7019,22 @@ def test_bounded_segment_video_confirmation_rechecks_global_clock(tmp_path, monk
             conn.execute("UPDATE task_events SET payload_json=json_remove(payload_json,'$.planning_dependency_digest') WHERE id=?", (waiting.id,))
             conn.execute("UPDATE narration_segments SET duration_seconds=48 WHERE task_id=? AND source_section_id='section_23'", (case.task_id,))
         else:
+            from app.montage import creation_task_montage_plan_from_payload
+            template = creation_task_montage_plan_from_payload(waiting.payload['montage'])
+            cue = replace(template.cues[0], id='other-clock-cue', source_section_id='section_2',
+                text='改变后的另一段已采用正文', duration_seconds=6, timeline_start_seconds=0,
+                narration_segment_id=case.stage.segment_id(case.task_id, case.script_id, 'section_2'))
+            montage = replace(template, id='other-clock-montage', status='ready', cues=[cue],
+                clips=[replace(template.clips[0], id='other-clock-clip', cue_id=cue.id,
+                    source_start_seconds=8, source_end_seconds=14, timeline_start_seconds=0,
+                    timeline_end_seconds=6, needs_confirmation=False, manually_selected=True)],
+                duration_seconds=6, low_confidence_clip_count=0,
+                narration_audio_path=case.paid_rows[-1].audio_reference, audio_timeline=None,
+                delivery_window={'section_id': 'section_2', 'start_seconds': 8, 'end_seconds': 14})
             publication = TaskEvent('other-adopted-clock', 'local', case.task_id, None, 'segment_publication', {
-                'script_id': case.script_id, 'text': '改变后的另一段已采用正文', 'narration_reference': 'narration://artifact/older',
-                'montage': {'delivery_window': {'section_id': 'section_2', 'start_seconds': 8, 'end_seconds': 14}}})
+                'section_id': 'section_2', 'script_id': case.script_id, 'text': cue.text,
+                'narration_reference': montage.narration_audio_path,
+                'montage': creation_task_montage_plan_to_payload(montage)})
             case.repo.execution_records.append_task_event(publication, connection=conn)
             task = case.repo.task_records.get_creation_task('local', case.task_id, connection=conn)
             version = TimelineVersion(id='other-clock-version', workspace_id='local', task_id=case.task_id,

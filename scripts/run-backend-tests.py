@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a complete platform suite, partitioned into sorted round-robin shards."""
+"""Run complete platform suites, isolating the measured heavy portable files."""
 
 import argparse
 import fnmatch
@@ -15,11 +15,25 @@ API = Path(__file__).resolve().parents[1] / "apps" / "api"
 DARWIN_FILES = frozenset({
     "tests/test_host_resource_probes.py",
     "tests/test_creation_audio_mix.py",
+    "tests/test_source_task_render.py",
+    "tests/test_visual_preview_application.py",
+    "tests/test_compound_preview_application.py",
+    "tests/test_command_preview_application.py",
+    "tests/test_exact_preview_application.py",
+    "tests/test_render_stage_application.py",
     "tests/test_task_media_grants.py",
     "tests/test_member_permits.py",
     "tests/test_material_probe.py",
     "tests/test_material_scene.py",
+    "tests/test_narration_stage_application.py",
+    "tests/test_device_resource_preparation.py",
 })
+# CI401/402 showed these complete media suites dominate file-count sharding.
+# Keep their ownership stable; all other portable files remain automatic.
+PORTABLE_HEAVY_SHARDS = (
+    ("tests/test_creation_execution.py",),
+    ("tests/test_montage_pipeline.py", "tests/test_twenty_two_cut_delivery.py"),
+)
 IGNORED_DIRECTORIES = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "__pycache__")
 
 
@@ -32,11 +46,24 @@ def test_files():
     return sorted(files)
 
 
+def partition_files(files, *, suite, total):
+    if suite == "darwin":
+        return [files[index::total] for index in range(total)]
+    if total != 4:
+        raise ValueError("portable suite requires four shards")
+    heavy = {path for shard in PORTABLE_HEAVY_SHARDS for path in shard}
+    missing = heavy.difference(files)
+    if missing:
+        raise ValueError(f"Heavy portable suite files not found: {sorted(missing)}")
+    remaining = sorted(path for path in files if path not in heavy)
+    return [list(shard) for shard in PORTABLE_HEAVY_SHARDS] + [remaining[index::2] for index in range(2)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--suite", choices=("portable", "darwin"), default="portable")
     parser.add_argument("--shard", type=int, required=True)
-    parser.add_argument("--total", type=int, default=3)
+    parser.add_argument("--total", type=int, default=4)
     parser.add_argument("--junitxml", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -49,11 +76,14 @@ def main():
     files = [path for path in all_files if (path in DARWIN_FILES) == (args.suite == "darwin")]
     if args.suite == "darwin" and sys.platform != "darwin" and not args.dry_run:
         parser.error("Darwin native tests require a real macOS runner")
-    shards = [files[index::args.total] for index in range(args.total)]
+    try:
+        shards = partition_files(files, suite=args.suite, total=args.total)
+    except ValueError as exc:
+        parser.error(str(exc))
     if any(not shard for shard in shards):
         parser.error("each shard must contain test files")
     selected = shards[args.shard - 1]
-    argv = [sys.executable, "-m", "pytest", "-ra", "--tb=short", "--durations=20",
+    argv = [sys.executable, "-m", "pytest", "-v", "-ra", "--tb=short", "--durations=20",
             f"--junitxml={args.junitxml}", *selected]
     print(json.dumps({"suite": args.suite, "discovered_files": len(all_files), "shard": args.shard, "total": args.total, "total_files": len(files),
                       "shard_counts": [len(shard) for shard in shards], "files": selected,

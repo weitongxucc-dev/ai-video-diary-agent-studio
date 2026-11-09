@@ -24,8 +24,8 @@ from app.creation.plan_contracts import CreationPlan
 from test_metadata_edit_use_case import metadata_state, editorial_rows
 
 
-def speed_state(tmp_path):
-    state = metadata_state(tmp_path)
+def speed_state(tmp_path, *, workspace_id='ws'):
+    state = metadata_state(tmp_path, workspace_id=workspace_id)
     repo = state.repo
     neighbour_path = repo.video_library_path / 'neighbour.mp4'
     neighbour_path.write_bytes(b'opaque neighbour; only stat identity inspected')
@@ -34,21 +34,21 @@ def speed_state(tmp_path):
         size_bytes=neighbour_path.stat().st_size, modified_at=when,
         segments=[MaterialSegment('neighbour-segment', 'neighbour', 0, 4, usage_role='b_roll')])
     repo._save_asset(neighbour)
-    neighbour_ref = repo.workspace_media_reference_for_asset('ws', neighbour.id)
+    neighbour_ref = repo.workspace_media_reference_for_asset(workspace_id, neighbour.id)
     voice_path = repo.video_library_path / 'speech.wav'
     with wave.open(str(voice_path), 'wb') as stream:
         stream.setnchannels(1)
         stream.setsampwidth(2)
         stream.setframerate(16000)
         stream.writeframes(b'\0\0' * 64000)
-    voice = MaterialAsset('voice-input', 'ws', voice_path.name, str(voice_path), voice_path.stat().st_size,
+    voice = MaterialAsset('voice-input', workspace_id, voice_path.name, str(voice_path), voice_path.stat().st_size,
         datetime.fromtimestamp(voice_path.stat().st_mtime, timezone.utc), media_type='audio', duration_seconds=4,
         owner_user_id=state.member.member_id, visibility='private', analysis_status='ready')
     repo._save_asset(voice)
-    voice_ref = repo.workspace_media_reference_for_asset('ws', voice.id)
+    voice_ref = repo.workspace_media_reference_for_asset(workspace_id, voice.id)
     with repo._connect() as conn:
         for reference in (neighbour_ref, voice_ref):
-            repo._claim_workspace_media_reference(conn, workspace_id='ws', reference=reference)
+            repo._claim_workspace_media_reference(conn, workspace_id=workspace_id, reference=reference)
     first = replace(state.plan.clips[0], source_end_seconds=2, timeline_end_seconds=2)
     second = replace(first, id='neighbour-clip', cue_id='neighbour-cue', asset_id=neighbour.id,
         segment_id='neighbour-segment', source_path=neighbour_ref, timeline_start_seconds=2, timeline_end_seconds=4)
@@ -61,17 +61,18 @@ def speed_state(tmp_path):
     for clip in state.plan.audio_timeline.tracks[0].clips:
         clip.locked = False
     payload = creation_task_montage_plan_to_payload(state.plan)
-    repo.montage_plan_adoption.save_creation_task_montage_plan('ws', state.task.id, state.plan.id, payload)
+    repo.montage_plan_adoption.save_creation_task_montage_plan(workspace_id, state.task.id, state.plan.id, payload)
     state.track = clone_subtitle_track(state.track, timeline_version_id='linked-base', track_id='linked-zh',
         cues=[replace(state.track.cues[0], end_seconds=2), replace(state.track.cues[0], id='neighbour-cue', text='后续字幕', start_seconds=2, end_seconds=4)])
-    state.base = TimelineVersion('linked-base', 'ws', state.task.id, state.base.id, 2,
+    state.base = TimelineVersion('linked-base', workspace_id, state.task.id, state.base.id, 2,
         {'montage': payload, 'subtitle_track_ids': [state.track.id], 'narration_cache_key': state.narration.cache_key}, None)
     repo.timeline_records.create_timeline_version(state.base)
     repo.subtitle_records.create_subtitle_track(state.track)
-    state.task = repo.task_records.get_creation_task('ws', state.task.id)
+    state.task = repo.task_records.get_creation_task(workspace_id, state.task.id)
     state.neighbour = neighbour
     state.application = LinkedTimelineEditUseCase(repo, state.case)
     return state
+
 
 
 @pytest.fixture
@@ -198,7 +199,9 @@ def test_late_editorial_write_failure_rolls_back_on_actual_verifier_connection(s
 def test_shared_base_three_branches_and_narration_snapshot_keep_original_rules(state):
     assert state.case.ensure_montage_base('ws', state.task, state.plan).id == state.base.id
     without_head = replace(state.task, current_timeline_version_id=None)
-    assert state.case.ensure_montage_base('ws', without_head, state.plan).id == state.base.id
+    with pytest.raises(EditConflict, match='时间线已变化'):
+        state.case.ensure_montage_base('ws', without_head, state.plan)
+    assert state.repo.task_records.get_creation_task('ws', state.task.id).current_timeline_version_id == state.base.id
     plan = CreationPlan('legacy-plan', 'ws', 'legacy', 'legacy', 1, 'zh-CN', '9:16', 4,
         [], [], None, [], 0, 0, 'fixed source', [], [], [], 'fixture')
     legacy = replace(state.task, id='legacy-task', plan_id=plan.id, current_timeline_version_id=None,

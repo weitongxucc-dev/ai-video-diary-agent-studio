@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.creation.plan_contracts import (
     CreationPlan as _CreationPlan,
+    creation_plan_payload,
 )
 from app.creation.plan_records import CreationPlanRecordStore
 from app.creation.plan_confirmation_use_case import CreationPlanConfirmationUseCase
@@ -603,6 +604,8 @@ class ProductionRepository:
         from app.creation.editing.sources import EditClipSourceReader
         self.clip_sources = EditClipSourceReader(
             connection_factory=self._connect, read_montage=self.get_creation_task_montage_plan,
+            read_task=self.task_records.get_creation_task,
+            read_plan=lambda workspace_id, plan_id, *, connection: self.plan_records.read_creation_plan(connection, workspace_id, plan_id),
             read_asset=self.get_asset, read_person_render=lambda workspace_id, task_id, render_id: self.person_renders.get_person_render(workspace_id, task_id, render_id),
             asset_reference=self.workspace_media_reference_for_asset, resolve_reference=self.resolve_clip_media_reference,
             segment_eligible=material_segment_eligible, conflict_error=TimelineVersionConflict)
@@ -649,9 +652,10 @@ class ProductionRepository:
         )
         self.narration_artifacts = NarrationArtifactStore(
             connection_factory=lambda: self._connect(),
-            recorded_source_is_current=lambda record: self.narration_completion.recorded_source_is_current(record),
-            resolve_workspace_media_reference=lambda workspace_id, reference, *, require_registered: self.resolve_workspace_media_reference(
-                workspace_id, reference, require_registered=require_registered),
+            recorded_source_is_current=lambda record, *, connection=None: self.narration_completion.recorded_source_is_current(
+                record, connection=connection),
+            resolve_workspace_media_reference=lambda workspace_id, reference, *, require_registered, connection=None: self.resolve_workspace_media_reference(
+                workspace_id, reference, require_registered=require_registered, connection=connection),
         )
         self.narration_checkpoints = NarrationCheckpointTransactions(
             connection_factory=lambda: self._connect(),
@@ -721,13 +725,15 @@ class ProductionRepository:
         reference: str,
         *,
         require_registered: bool = False,
+        connection: sqlite3.Connection | None = None,
     ) -> Path:
-        return self._workspace_media_references.resolve_workspace_media_reference(workspace_id, reference, require_registered=require_registered)
+        return self._workspace_media_references.resolve_workspace_media_reference(
+            workspace_id, reference, require_registered=require_registered, connection=connection)
 
-    def validate_material_reference_use(self, workspace_id: str, reference: str) -> None:
+    def validate_material_reference_use(self, workspace_id: str, reference: str, *, connection=None) -> None:
         """Check current material restrictions for a source retained in artifact lineage."""
-        path = self.resolve_workspace_media_reference(workspace_id, reference)
-        with self._connect() as conn:
+        path = self.resolve_workspace_media_reference(workspace_id, reference, connection=connection)
+        with self._connect() if connection is None else nullcontext(connection) as conn:
             row = conn.execute(
                 "SELECT payload FROM material_assets WHERE workspace_id = ? AND file_path = ?",
                 (workspace_id, str(path)),
@@ -941,7 +947,9 @@ class ProductionRepository:
             if asset_ids is not None and asset.id not in asset_ids:
                 continue
             try:
-                self.resolve_workspace_media_reference(workspace_id, self.workspace_media_reference_for_asset(workspace_id, asset.id), require_registered=True)
+                self.resolve_workspace_media_reference(workspace_id,
+                    self.workspace_media_reference_for_asset(workspace_id, asset.id, connection=connection),
+                    require_registered=True, connection=connection)
             except (ValueError, KeyError, OSError):
                 continue
             result.extend((asset, segment) for segment in asset.segments if automatic_segment_eligible(asset, segment, workspace_id))
@@ -1155,7 +1163,7 @@ class ProductionRepository:
         with self._connect() as conn:
             conn.execute(
                 "UPDATE creation_plans SET payload=?, visibility=?, updated_at=? WHERE workspace_id=? AND id=?",
-                (_json_payload(plan), visibility, plan.updated_at.isoformat(), workspace_id, plan_id),
+                (_json_object(creation_plan_payload(plan)), visibility, plan.updated_at.isoformat(), workspace_id, plan_id),
             )
         return plan
 
@@ -1573,7 +1581,7 @@ class ProductionRepository:
         plan.creation_task_id=task.id
         plan.confirmed_at=now
         conn.execute("INSERT INTO creation_plans (id,workspace_id,payload,visibility,updated_at) VALUES (?,?,?,?,?)",
-            (plan.id,workspace_id,_json_payload(plan),plan.visibility,plan.updated_at.isoformat()))
+            (plan.id,workspace_id,_json_object(creation_plan_payload(plan)),plan.visibility,plan.updated_at.isoformat()))
         conn.execute("INSERT INTO creation_tasks (id,workspace_id,plan_id,payload,visibility,updated_at) VALUES (?,?,?,?,?,?)",
             (task.id,workspace_id,plan.id,_json_payload(task),task.visibility,task.updated_at.isoformat()))
         return task

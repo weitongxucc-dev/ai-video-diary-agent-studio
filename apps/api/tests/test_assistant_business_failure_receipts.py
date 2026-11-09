@@ -14,7 +14,7 @@ from app.schemas import AssistantStreamEvent
 
 
 RUNNER = r"""
-const {createBusinessRequest,RequestNotSubmitted} = await import(new URL('../agent_tools/diary/transport.ts', process.argv[1]));
+const {createBusinessRequest,RequestNotSubmitted,safeBusinessFailure} = await import(new URL('../agent_tools/diary/transport.ts', process.argv[1]));
 const {createDiaryTools} = await import(new URL('../agent_tools/diary/runtime.ts', process.argv[1]));
 const {registerExecutionTools} = await import(new URL('../agent_tools/diary/execution-tools.ts', process.argv[1]));
 const {createHash} = await import('node:crypto');
@@ -81,9 +81,13 @@ const scriptIssues=[{error:'script_goal_conflict',reason_code:'goal_conflict',se
   review_explanation:'private-stale-finding'}];
 globalThis.fetch=async(url)=>url.endsWith('/script-context')?Response.json({creation_intent:{kind:'discussion'}})
  :Response.json({detail:{error:'script_goal_conflict',reason_code:'goal_conflict',section_index:1,retryable:false,
-  ...scriptLocation,review_issues:scriptIssues,reason:'private-model-explanation',repair_action:'private-response-body'}},{status:422});
+  ...scriptLocation,review_issues:scriptIssues,reason:'总标题与原用户要求冲突。',repair_action:'核对当前送审标题后修改冲突表述。'}},{status:422});
 await createDiaryTools(environment).register({registerTool:tool=>scriptTools.set(tool.name,tool)});
 output.scriptRejection=await scriptTools.get('preview_script_draft').execute('script-call',script);
+output.completeReview=safeBusinessFailure({error:'script_fact_unsupported',section_index:25,
+ candidate_section_index:25,candidate_field:'content',candidate_fragment_index:0,candidate_field_digest:'a'.repeat(64),
+ review_issues:Array.from({length:13},(_,i)=>({...scriptIssues[1],section_index:i+21,candidate_section_index:i+21,
+   review_explanation:'待核对资料中的完整问题。'}))});
 // A failure before POST must not consume the one-write guard; an unknown POST must.
 const execution=new Map();let marked=0,mode='not_ready',posts=0,turnId;
 registerExecutionTools({registerTool:tool=>execution.set(tool.name,tool)},{taskId:'task-a',isTaskRead:()=>true,
@@ -276,7 +280,10 @@ def test_actual_stream_adapter_persists_the_projected_business_receipt(tool_boun
     elif receipt_kind == "script_locator":
         assert delivered["failure"]["candidate_section_index"] == delivered["failure"]["candidate_fragment_index"] == 0
         assert delivered["failure"]["candidate_field"] == "title"
-        assert "总标题" in delivered["failure"]["reason"] and "本次未保存送审稿" in delivered["failure"]["reason"]
+        assert delivered["failure"]["reason"].startswith("本次未保存送审稿的总标题第1个片段（第1–4个Unicode字符）与制作要求冲突。")
+        assert "总标题与原用户要求冲突。" in delivered["failure"]["reason"]
+        assert "定位指向本次提交但尚未保存的新稿，不是已保存旧稿" in delivered["failure"]["repair_action"]
+        assert "核对当前送审标题后修改冲突表述。" in delivered["failure"]["repair_action"]
         assert "private-model-explanation" not in json.dumps(events) and "private-response-body" not in json.dumps(events)
         assert len(delivered["failure"]["review_issues"]) == 2
         assert [issue["candidate_field"] for issue in delivered["failure"]["review_issues"]] == ["title", "content"]
@@ -382,6 +389,10 @@ def test_verified_script_location_reaches_model_and_projection_without_free_revi
     assert "private-model-explanation" not in json.dumps(result) and "private-response-body" not in json.dumps(result)
     assert len(failure["review_issues"]) == 2
     assert failure["review_issues"][0]["review_explanation"] == '总标题与原用户要求冲突。'
+    complete = tool_boundary["completeReview"]
+    assert complete["candidate_section_index"] == 25
+    assert [issue["section_index"] for issue in complete["review_issues"]] == list(range(21, 34))
+    assert _safe_business_failure(complete) == complete
     for secret in ('opaque-auth-value', 'opaque-cookie-value', 'opaque-member-value', '/Users/private', 'private-stale-finding', 'private-nested-response'):
         assert secret not in json.dumps(result)
 
@@ -404,6 +415,7 @@ def test_review_issue_projection_keeps_only_bounded_validated_data_and_redacts_k
         assert secret not in json.dumps(safe)
     unicode_issue = {**issue, "review_explanation": '😀' * 300}
     assert len(_safe_business_failure({"error": "script_fact_unsupported", "review_issues": [unicode_issue]})["review_issues"][0]["review_explanation"]) == 300
-    for invalid_list in ([], [issue] * 13):
+    assert len(_safe_business_failure({"error": "script_fact_unsupported", "review_issues": [issue] * 13})["review_issues"]) == 13
+    for invalid_list in ([],):
         assert "review_issues" not in _safe_business_failure({"error": "script_fact_unsupported", "review_issues": invalid_list})
     assert "review_issues" not in _safe_business_failure({"error": "script_review_invalid", "review_issues": [issue]})

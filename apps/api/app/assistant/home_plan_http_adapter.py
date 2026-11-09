@@ -37,6 +37,10 @@ class HomePlanTurnHTTPAdapter:
         knowledge_reference = self.assistant_knowledge_snapshot_for()(request, payload.selected_knowledge_reference.knowledge_item_id, payload.selected_knowledge_reference.version, payload.selected_knowledge_reference.locator) if payload.selected_knowledge_reference is not None else None
         turn_id, created, turn = self.task_turn_http_adapter_for()().begin(request, str(payload.conversation_id), 'home', 'home', payload.message.strip(), payload.client_request_id, payload.expected_draft_version, {'kind': 'home', 'profile_reference': payload.selected_profile_reference.model_dump() if payload.selected_profile_reference else None, 'knowledge_reference': payload.selected_knowledge_reference.model_dump() if payload.selected_knowledge_reference else None, 'target_snapshot': {'profile_reference': profile_reference, 'knowledge_reference': knowledge_reference, 'material_selection': material_selection}}, on_event, expected_reference_version=payload.expected_reference_version)
         if not created:
+            if turn['status'] == 'failed':
+                # A committed source task outlives a failed model response.
+                # None limits this reconciliation to actual source adoptions.
+                self.register_adopted_creation_goals_for()(request, turn_id, None)
             settings_for_replay = self.workspace_settings_for_for()(workspace_id)
             response = self.task_turn_http_adapter_for()().replay(turn_id, self.workspace_assistant_plan_turn_response_type_for(), provider=settings_for_replay.effective_llm_provider, model=settings_for_replay.effective_llm_model, draft_version=payload.expected_draft_version + 1)
             self.register_adopted_creation_goals_for()(request, turn_id, response.creation_request)
@@ -92,6 +96,7 @@ class HomePlanTurnHTTPAdapter:
                         result = completed.value
                         break
         except self.home_plan_for().HomePlanTurnRejected as exc:
+            self.register_adopted_creation_goals_for()(request, turn_id, None)
             failure = self.http_exception_type_for()(status_code=exc.status_code, detail=exc.detail)
             raise failure from exc.__cause__ or exc
         response = result.rendered.response

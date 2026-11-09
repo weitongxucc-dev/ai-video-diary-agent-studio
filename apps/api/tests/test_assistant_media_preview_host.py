@@ -90,7 +90,8 @@ def test_run_task_turn_returns_media_job_without_restarting_model(monkeypatch, t
     assert "已安排，预览尚未完成" in reply
     assert len(calls) == 1
     prompt = calls[0]["systemPrompt"]
-    assert "失败或未知结果不可盲重放" in prompt
+    assert "未知结果先查原请求" in prompt
+    assert "相同失败不重放" in prompt and "无进展不盲循环" in prompt
     assert "preview_edit" not in calls[0]["tools"]
 
 

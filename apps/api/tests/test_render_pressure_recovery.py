@@ -19,7 +19,7 @@ from app.device_scheduler import RecoveryBlocked
 from app.host_resource_probes import HostCapacity, HostProcessProbe, HostResourceDecision, HostResourceRefusal
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
-from app.creation.contracts import TimelineVersion, CreationPlanVoiceReference
+from app.creation.contracts import TimelineVersion, CreationPlanVoiceReference, NarrationSegment
 from app.creation.narration_artifacts import NarrationArtifactRecord
 from app.montage import CreationTaskMontagePlan, NarrationCue, MontageClip, creation_task_montage_plan_to_payload
 from app.production import MaterialAsset, MaterialSegment
@@ -55,6 +55,11 @@ def render_case(tmp_path, monkeypatch):
     audio.write_bytes(synthetic_wav_bytes(1))
     repo.narration_artifacts.save_narration_artifact(NarrationArtifactRecord('render-input', 'local', script_id,
         voice.id, 'render-input', str(audio), 1, 8000, 'synthetic-render-input', task_id=task_id))
+    repo.narration_records.save_narration_segments('local', task_id, script_id, [NarrationSegment(
+        id='render-input-segment', workspace_id='local', task_id=task_id, script_id=script_id,
+        source_section_id='section_1', text='真实待制作文案', audio_reference='narration://artifact/render-input',
+        duration_seconds=1, sample_rate=8000, model_id='test', voice_profile_id=voice.id,
+        voice_version=voice.version, language='zh', pronunciation_version='', status='ready')])
     picture = tmp_path/'library'/'render-input.dat'
     picture.write_bytes(b'opaque picture measurement fixture, not media')
     asset = repo._save_asset(MaterialAsset(id='render-input', workspace_id='local', file_name=picture.name,
@@ -64,12 +69,13 @@ def render_case(tmp_path, monkeypatch):
         segments=[MaterialSegment(id='render-section', asset_id='render-input', start_seconds=0, end_seconds=1,
             description='opaque render measurement fixture', review_status='approved')]))
     reference = repo.workspace_media_reference_for_asset('local', asset.id)
+    with repo._connect() as conn:
+        repo._claim_workspace_media_reference(conn, workspace_id='local', reference=reference)
     montage = CreationTaskMontagePlan('fixture_montage', 'local', task_id, script_id, 'render pressure', 'ready',
-        [NarrationCue('render-cue', 'section_1', '真实待制作文案', 1)],
+        [NarrationCue('render-cue', 'section_1', '真实待制作文案', 1, narration_segment_id='render-input-segment')],
         [MontageClip('render-clip', 'render-cue', asset.id, asset.segments[0].id, reference,
             0, 1, 0, 1, 1, [], False)], 1, 0, narration_audio_path='narration://artifact/render-input')
     original_montage = creation_task_montage_plan_to_payload(montage)
-    repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, montage.id, original_montage)
     task = repo.task_records.get_creation_task('local', task_id)
     task.owner_user_id = member.member_id
     task.stage, task.stage_status = 'montage', 'completed'
@@ -77,6 +83,7 @@ def render_case(tmp_path, monkeypatch):
     with repo._connect() as conn:
         conn.execute('UPDATE creation_plans SET payload=? WHERE id=?', (json.dumps(asdict(plan), default=str), plan.id))
         conn.execute('UPDATE creation_tasks SET payload=? WHERE id=?', (json.dumps(asdict(task), default=str), task.id))
+    repo.montage_plan_adoption.save_creation_task_montage_plan('local', task_id, montage.id, original_montage)
     repo.timeline_records.create_timeline_version(TimelineVersion('render-input-base', 'local', task_id,
         None, 1, {'montage': original_montage}, None))
     digest = revision_digest(repo.script_records.get_creation_task_script('local', script_id),

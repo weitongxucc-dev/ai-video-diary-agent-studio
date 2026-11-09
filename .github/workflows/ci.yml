@@ -35,13 +35,13 @@ jobs:
         run: uvx "ruff==0.15.7" check .
 
   backend:
-    name: Backend (${{ matrix.shard }}/3)
+    name: Backend (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
 
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +59,8 @@ jobs:
 
       - name: Install FFmpeg
         run: |
+          # Keep package downloads on Ubuntu's HTTPS archive, outside the Azure mirror.
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
           sudo apt-get install --yes ffmpeg fonts-noto-cjk
 
@@ -66,9 +68,17 @@ jobs:
         working-directory: apps/api
         run: uv sync --locked
 
+      - name: Setup Pi runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned Pi SDK
+        run: npm install --global @earendil-works/pi-coding-agent@1.5.0
+
       - name: Run backend tests
         working-directory: apps/api
-        run: uv run python ../../scripts/run-backend-tests.py --suite portable --shard "${{ matrix.shard }}" --total 3 --junitxml "$RUNNER_TEMP/backend-tests/junit-${{ matrix.shard }}.xml"
+        run: uv run python ../../scripts/run-backend-tests.py --suite portable --shard "${{ matrix.shard }}" --total 4 --junitxml "$RUNNER_TEMP/backend-tests/junit-${{ matrix.shard }}.xml"
 
       - name: Upload backend test report
         if: ${{ !cancelled() }}

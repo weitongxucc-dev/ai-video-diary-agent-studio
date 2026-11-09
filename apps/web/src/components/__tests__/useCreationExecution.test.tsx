@@ -22,6 +22,16 @@ beforeEach(() => {
   vi.resetAllMocks();
   api.readExecution.mockImplementation(async taskId => execution(taskId));
 });
+
+it("reads source-media execution requirements without a confirmed script", async () => {
+  const preview = { task_id: "source-task", script_id: null, input_digest: "source-digest" };
+  api.preview.mockResolvedValue(preview);
+  const { result } = renderHook(() => useCreationExecution({ taskId: "source-task", confirmedScriptId: null,
+    sourceMedia: true, timelineVersionId: "source-version", voiceId: undefined, voiceVersion: undefined,
+    workspaceReadRevision: 0, onWorkspaceRead: () => true }));
+  await waitFor(() => expect(api.preview).toHaveBeenCalledWith("source-task"));
+  await waitFor(() => expect(result.current.executionPreview).toEqual(preview));
+});
 afterEach(() => vi.useRealTimers());
 
 it("keeps a late execution command from replacing the task entered afterwards", async () => {

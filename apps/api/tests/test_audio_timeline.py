@@ -337,18 +337,19 @@ def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use
     assert service.source(task.workspace_id, task.id, processed.logical_ref).is_file()
     repo.update_asset_use_state(task.workspace_id, asset.id, use_state)
     for ref in (reference, extracted.logical_ref, processed.logical_ref):
-        with pytest.raises(ValueError, match='使用状态'):
+        with pytest.raises(ValueError, match='使用限制'):
             service.source(task.workspace_id, task.id, ref)
     from types import SimpleNamespace
     from app import main as main_module
     monkeypatch.setattr(main_module, 'production_repo', repo)
-    monkeypatch.setattr(main_module, '_task_audio', lambda:service)
+    monkeypatch.setattr(main_module, 'artifact_store', service.artifact_store)
     timeline = AudioTimeline(tracks=[TimelineAudioTrack(id='original', name='原声', role='original', clips=[TimelineAudioClip(
         id='extracted', name='镜头原声', source_ref=processed.logical_ref,
         source_start_ms=0, source_end_ms=4000, timeline_start_ms=0)])])
     plan = SimpleNamespace(task_id=task.id, clips=[], audio_timeline=timeline)
-    with pytest.raises(ValueError, match='使用状态'):
-        main_module._validate_montage_material_use(task.workspace_id, plan)
+    renderer = main_module._picture_preview_renderer()
+    with pytest.raises(ValueError, match='使用限制'):
+        renderer.validate_material_use(task.workspace_id, plan)
     repo.update_asset_use_state(task.workspace_id, asset.id, 'available')
-    main_module._validate_montage_material_use(task.workspace_id, plan)
+    renderer.validate_material_use(task.workspace_id, plan)
     assert service.source(task.workspace_id, task.id, processed.logical_ref).is_file()

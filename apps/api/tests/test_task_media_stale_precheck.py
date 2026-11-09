@@ -21,7 +21,7 @@ from test_device_runtime import Access, CompletingExecutor, Processes, Resources
 @pytest.fixture
 def media_case(tmp_path):
     runtimes = []
-    def create(operation="audio_waveform", version="timeline-base", include_version=True):
+    def create(operation="audio_waveform", version="timeline-base", include_version=True, *, task_authorization=False):
         root = tmp_path / str(len(runtimes))
         root.mkdir()
         repo = ProductionRepository(root / "studio.sqlite", root / "library")
@@ -49,13 +49,22 @@ def media_case(tmp_path):
             if include_version:
                 value["base_version_id"] = version
             return value, {"kind": "task_audio", "execution_mode": "cpu_ffmpeg"}
+        actor = CreationExecutionActor("local", "fixture-member")
+        authorizations = None
+        if task_authorization:
+            from app.creation.task_authorization import TaskAuthorizationUseCase
+            from app.local_members import LocalMemberService
+            member, _token = LocalMemberService(repo.database_path).whoami(None)
+            actor = CreationExecutionActor("local", member.member_id)
+            authorizations = TaskAuthorizationUseCase(repo, identity)
         media = TaskMediaJobs(repo, facts=facts, verify_identity=identity)
+        media.task_authorizations = authorizations
         runtime = build_device_runtime(database_path=repo.database_path, device_lock_path=root / "device.lock",
             device_access=Access(), registrations={"creation_job": OwnerRegistration(
-                CreationJobOwnerVerifier(repo, task_media=media, verify_identity=identity), CompletingExecutor())},
+                CreationJobOwnerVerifier(repo, task_media=media, verify_identity=identity,
+                    task_authorizations=authorizations), CompletingExecutor())},
             resources=Resources(), processes=Processes(), poll_interval_seconds=.01)
         runtimes.append(runtime)
-        actor = CreationExecutionActor("local", "fixture-member")
         job = media.submit(runtime, actor, "task", operation, {"_media_kind": "waveform", "clip_id": "voice"}, "waveform")
         with repo._connect() as conn:
             row = conn.execute("SELECT * FROM device_work_requests WHERE owner_id=?", (job.id,)).fetchone()
@@ -164,12 +173,22 @@ def test_same_connection_sees_uncommitted_version_without_opening_another_connec
 
 @pytest.mark.parametrize("expired", [True, False])
 def test_old_scan_does_not_hold_write_lock_waiting_for_identity(media_case, monkeypatch, expired):
-    case = media_case()
+    case = media_case(task_authorization=True)
     if expired:
         advance(case)
-    case.state["block_identity"] = True
+    original_check = case.media.check_current
+    def slow_observation(request, conn):
+        verdict = original_check(request, conn)
+        # Only the scheduler's external observation is delayed. The real task
+        # authorization still checks local roster/revisions at commit time.
+        if verdict == "ready":
+            case.entered.set()
+            if not case.release.wait(3):
+                raise RuntimeError("Controlled owner observation was not released")
+        return verdict
+    monkeypatch.setattr(case.media, "check_current", slow_observation)
     def short_writer_connection():
-        # Test-only deadline exposes the controlled writer conflict without a five-second wait.
+        # Fail promptly if a reader/writer is retained during the observation.
         conn = sqlite3.connect(case.repo.database_path, timeout=.05)
         conn.row_factory = sqlite3.Row
         return conn
@@ -193,8 +212,8 @@ def test_old_scan_does_not_hold_write_lock_waiting_for_identity(media_case, monk
             assert case.state["identity_calls"] == 0
         else:
             assert case.entered.wait(1) and not done.is_set()
-            with pytest.raises(sqlite3.OperationalError, match="locked"):
-                case.repo.edit_records.create_edit_intent(intent, source=None)
+            assert case.repo.edit_records.create_edit_intent(intent, source=None).id == intent.id
+            advance(case)
     finally:
         case.release.set()
         worker.join(3)
@@ -202,5 +221,8 @@ def test_old_scan_does_not_hold_write_lock_waiting_for_identity(media_case, monk
         if results and results[0] is not None:
             case.runtime.scheduler.fail_unit(results[0], reason="fixture_finished", failure_write=lambda *args: None)
     assert errors == []
+    assert results == [None]  # The observed input changed before grant commit.
+    assert case.state["identity_calls"] == 0
+    assert case.state["facts_calls"] == (0 if expired else 1)
     with case.repo._connect() as conn:
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"

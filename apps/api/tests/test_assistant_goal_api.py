@@ -27,6 +27,9 @@ script_state = test_media_script_api.state
 
 @pytest.fixture(autouse=True)
 def isolated_local_workspace(request, monkeypatch):
+    if request.node.name.split("[")[0] == "test_common_edit_registration_persists_real_start_source_without_running_media":
+        monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "local")
+        return
     if request.node.name == "test_execution_binding_plain_receipt_preserves_committed_successor_and_bounds":
         import subprocess
         import threading
@@ -91,8 +94,19 @@ def isolated_local_workspace(request, monkeypatch):
         monkeypatch.setattr(main, 'run_task_turn', forbidden)
         monkeypatch.setattr(main, 'start_assistant_continuation_driver', forbidden)
         monkeypatch.setattr(main.montage_renderer, 'render', forbidden)
+    script_runtime = None
+    if "script_state" in request.fixturenames:
+        script_runtime = request.getfixturevalue("script_state").runtime
     state = request.getfixturevalue("edit_result_state" if "edit_result_state" in request.fixturenames else
         "execution_http_state" if "execution_http_state" in request.fixturenames else "state")
+    if script_runtime is not None:
+        script_runtime.task_authorizations = state.runtime.task_authorizations
+        script_runtime.registrations["creation_job"].owner.task_media.on_settled = main._wake_assistant_continuations
+        state.runtime = script_runtime
+        monkeypatch.setattr(main, "device_runtime", script_runtime)
+        monkeypatch.setattr(main, "_creation_runtime", lambda: script_runtime)
+        monkeypatch.setattr(main, "_media_result_read_components", lambda: (
+            script_runtime.registrations["creation_job"].owner.task_media, script_runtime.scheduler))
     # Existing domain fixtures name their single local workspace workspace_a.
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
     from test_montage_pipeline import synthetic_clip_preview_budget
@@ -107,17 +121,23 @@ def isolated_local_workspace(request, monkeypatch):
         # The script fixture declares its finite experiment budget in env;
         # preserve it alongside this fixture's audio/render envelopes.
         monkeypatch.setattr(main, '_device_host_budget',
-            lambda: replace(profile, media_script=media_script_budget_from_env()))
+            lambda: replace(profile, media_script=media_script_budget_from_env(),
+                min_available_memory_bytes=512*1024**2, min_free_disk_bytes=64*1024**2))
 
 
 
-def wait_until(predicate):
+def wait_until(predicate, *, diagnostic=None):
     deadline = time.monotonic() + 4
     while time.monotonic() < deadline:
         value = predicate()
         if value:
             return value
         time.sleep(.02)
+    if diagnostic is not None:
+        from pathlib import Path
+        path = Path("/tmp") / f"yaohe-assistant-goal-wait-{uuid4().hex}.json"
+        path.write_text(json.dumps(diagnostic(), ensure_ascii=False, default=str))
+        pytest.fail(f"normal lifecycle driver did not advance; isolated facts: {path}")
     pytest.fail("normal lifecycle driver did not advance the actual result")
 
 
@@ -266,6 +286,9 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
         effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=""))
     models, receipts = [], []
+    original_job_ids = {job.id for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id)}
+    def job_ids():
+        return {job.id for job in state.production.job_records.list_job_runs(state.workspace_id, state.task.id)}
     def submit_source(kwargs, *, name="card.png"):
         version = kwargs["task_version"]
         return state.raw_post(state.base_url + "/media-scripts/preview", json={**script_state.payload,
@@ -293,7 +316,7 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
         reused = repeated.json()
         assert reused["job_id"] == receipts[0]["job_id"] and reused["result"]["reused_completed_source"] is True
         assert reused["result"]["applied"] is False
-        assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 1
+        assert job_ids() == original_job_ids | {receipts[0]["job_id"]}
         if len(models) == 2:
             prepared = main._media_script_submission_http_adapter().run(state.request, main._media_script_submission_use_case().prepare_source(state.task.id, media_script_submission_source(main.MediaScriptPreviewRequest.model_validate({
                 **script_state.payload, "request_id": uuid4(), "assistant_turn_id": kwargs["turn_id"],
@@ -324,11 +347,19 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
     root_id = response.json()["turn_id"]
     main.start_assistant_continuation_driver()
     assert state.runtime.run_once()
-    wait_until(lambda: len(models) == 2)
+    source_job = state.production.job_records.get_job_run(state.workspace_id, receipts[0]["job_id"])
+    assert source_job.status == "succeeded", main.jsonable_encoder(source_job)
+    wait_until(lambda: len(models) == 2, diagnostic=lambda: {"goal":state.conversations.get_task_goal(root_id),
+        "turns":state.conversations.list_turns(state.conversation["id"]),"calls":len(models),
+        "jobs":[main.jsonable_encoder(job) for job in state.production.job_records.list_job_runs(state.workspace_id,state.task.id)],
+        "task_events":[main.jsonable_encoder(event) for event in state.production.execution_records.list_task_events(state.workspace_id,state.task.id)]})
     if not damaged:
         child_id = models[-1]["turn_id"]
         preview = wait_until(lambda: (state.conversations.get_turn(child_id)["result"] or {}).get("response", {}).get("edit_preview"))
         assert state.production.edit_records.get_edit_proposal(state.workspace_id, preview["proposal"]["id"]).status == "proposed"
+        pending_goal = state.conversations.get_task_goal(root_id)
+        assert pending_goal["status"] == "waiting_adoption", {
+            "goal":pending_goal, "turn":state.conversations.get_turn(child_id)}
         adopted = state.raw_post(state.base_url + f"/edits/{preview['proposal']['id']}/confirm", json={"request_id": str(uuid4())})
         assert adopted.status_code == 200, adopted.text
         wait_until(lambda: len(models) == 3)
@@ -339,7 +370,7 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
         assert final["result"]["response"]["media_job"]["status"] == "succeeded"
         assert final["result"]["response"]["media_job"]["result"]["reused_completed_source"] is True
     assert len(state.calls) == 1 and main._goal_service().reconcile() == 0
-    assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 1
+    assert job_ids() == original_job_ids | {receipts[0]["job_id"]}
     if not damaged:
         chat = state.conversations.get(chat["id"], state.workspace_id, state.member.member_id)
         new_instruction = "新的独立指令：重新生成同名图片"
@@ -351,11 +382,12 @@ def test_completed_script_slot_is_reused_after_real_adoption_without_new_job_and
             "selected_object_refs": [], "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence})
         assert new.status_code == 200 and new.json()["media_job"]["status"] == "queued", new.text
         assert new.json()["media_job"]["job_id"] != receipts[0]["job_id"]
-        assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 2 and len(state.calls) == 1
+        assert job_ids() == original_job_ids | {receipts[0]["job_id"], new.json()["media_job"]["job_id"]}
+        assert len(state.calls) == 1
 
 
 @pytest.mark.parametrize("shutdown,operation", [(False, "ChangeCrop"), (True, "ChangeCrop"), (False, "DeleteClip")])
-def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(state, monkeypatch, shutdown, operation):
+def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(state, monkeypatch, request, shutdown, operation):
     state.finish()  # Old history must never become an inferred goal.
     monkeypatch.setattr(main, "quality_check_repo", QualityCheckRepository(state.production.database_path))
     monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
@@ -447,13 +479,17 @@ def test_normal_endpoint_preview_adoption_resumes_original_instruction_once(stat
         child = state.conversations.get_turn(child_id)
         assert child["status"] == "failed" and child["result"]["reason"] == "api_shutdown"
         assert state.conversations.get_task_goal(root_id)["status"] == "waiting_unknown"
+        from assistant_turn_control_fixtures import isolate_assistant_turn_control
+        isolate_assistant_turn_control(monkeypatch, request)
         main.start_assistant_continuation_driver()
         assert main._goal_service().reconcile() == 0 and len(calls) == 2
         assert state.runtime.run_once()
         proposal = wait_until(lambda: state.conversations.get_turn(child_id)["result"].get("response", {}).get("edit_preview"))
         second = state.raw_post(state.base_url + f"/edits/{proposal['proposal']['id']}/confirm", json={"request_id": str(uuid4())})
         assert second.status_code == 200, second.text
-        wait_until(lambda: len(calls) == 3)
+        wait_until(lambda: len(calls) == 3, diagnostic=lambda: {"goal":state.conversations.get_task_goal(root_id),
+            "turns":state.conversations.list_turns(state.conversation["id"]),"calls":len(calls),
+            "task_events":[main.jsonable_encoder(event) for event in state.production.execution_records.list_task_events(state.workspace_id,state.task.id)]})
     wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == "no_progress")
     turns = state.conversations.list_turns(chat["id"])
     assert turns[-1]["user_message"] == "" and calls[-1]["message"] == raw
@@ -612,7 +648,9 @@ def test_actual_start_is_persisted_before_model_failure_then_original_job_contin
     assert original.status_code == 200 and original.json()["job"]["id"] == job_ids[0]
     main.start_assistant_continuation_driver()
     wait_until(lambda: state.conversations.get_task_goal(root_id)["status"] == (
-        "waiting_unknown" if continuation_failure else "no_progress"))
+        "waiting_unknown" if continuation_failure else "no_progress"), diagnostic=lambda: {
+            "goal":state.conversations.get_task_goal(root_id),
+            "turns":state.conversations.list_turns(state.conversation["id"]),"calls":len(calls)})
     if continuation_failure:
         child = state.conversations.get_turn(calls[-1]["turn_id"])
         assert child["status"] == "failed" and child["result"]["kind"] == "failure"
@@ -731,6 +769,12 @@ def test_consumed_input_observes_existing_job_then_resumes_without_starting_agai
         handler=kwargs["input_handler"]
         assert handler("next",mode="any")["input_id"] == input_id
         assert handler("consume",input_id)["environment"]["AI_VIDEO_DIARY_AGENT_INPUT_ID"] == input_id
+        understood=state.raw_post(state.base_url+"/assistant/input-understanding",json={
+            "assistant_turn_id":turn_id,"input_id":input_id,"kind":"effective_modification",
+            "summary":"仅在原作业完成后观察其结果，禁止重新制作或修改作品",
+            "target_refs":[f"task:{state.task.id}",f"job:{job_ids[0]}",f"timeline:{state.version.id}"]},
+            headers={"X-Assistant-Input-ID":input_id})
+        assert understood.status_code == 200,understood.text
         read=state.client.get(state.base_url+"/execution",params={"job_id":job_ids[0]})
         assert read.status_code == 200,read.text
         handler("complete",input_id)
@@ -761,6 +805,8 @@ def test_consumed_input_observes_existing_job_then_resumes_without_starting_agai
     assert main._goal_service().reconcile() == 1 and len(calls) == 2
     assert main._goal_service().reconcile() == 0
     assert len([job for job in state.production.job_records.list_job_runs(state.workspace_id,state.task.id) if job.kind == "creation_task_execution"]) == 1
+    assert state.production.task_records.get_creation_task(
+        state.workspace_id,state.task.id).current_timeline_version_id == state.version.id
 
 
 @pytest.mark.parametrize("mutation", ["none", "watched_input", "hash", "version", "preview", "foreign_goal", "no_video", "pending", "unknown"])
@@ -880,7 +926,7 @@ def execution_http_state(tmp_path, monkeypatch, request):
             (json.dumps(asdict(task), default=str), task.id))
     version = repo.timeline_records.create_timeline_version(TimelineVersion(
         'http-source-version', 'local', task.id, None, 1, {}, None))
-    conversations = ConversationRepository(root / 'conversations.sqlite3')
+    conversations = ConversationRepository(repo.database_path)
     chat = conversations.create('local', member.member_id, 'task', task.id)
     chat = conversations.save_draft(chat['id'], 'local', member.member_id, '核对当前作品', chat['draft_version'])
     turn, _ = conversations.create_turn_idempotent(chat['id'], 'local', member.member_id,
@@ -947,11 +993,13 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
     from app.host_resource_probes import PresenterBudget,NarrationBudget,CpuAudioBudget,MontageBudget,HostProcessProbe
     from app.member_permits import MemberDeviceAccess,creation_job_registration
     from app.schemas import CreationTaskExactEditRequest
-    from test_montage_pipeline import _person_render_edit_state
+    from test_montage_pipeline import _person_render_edit_state, _author_person_voice_revision
     from _media_preview_test_fixtures import ControlledResources
     root=tmp_path/'source-registration'
     root.mkdir()
     s=_person_render_edit_state(root,monkeypatch,'local')
+    if operation == 'ChangePersonSegment':
+        _author_person_voice_revision(s)
     repo=s.production
     actor=CreationExecutionActor('local',s.member.member_id)
     conversations=ConversationRepository(repo.database_path)
@@ -975,10 +1023,12 @@ def test_common_edit_registration_persists_real_start_source_without_running_med
     monkeypatch.setattr(main,'_creation_execution_control',lambda:control)
     case=main._exact_preview_use_case()
     task=repo.task_records.get_creation_task('local',s.task.id)
+    main._task_authorizations_for_goal(repo).ensure(task, actor, interactive=True)
     base=case.metadata.ensure_montage_base('local',task,s.montage)
     task=repo.task_records.get_creation_task('local',s.task.id)
     action=({'narration_segment_id':s.montage.cues[0].narration_segment_id}
-        if operation=='RegenerateNarrationSegment' else {'clip_id':s.montage.clips[0].id})
+        if operation=='RegenerateNarrationSegment' else {'clip_id':next(clip.id for clip in s.montage.clips
+            if (clip.person_render_id is None) == (operation == 'ChangePersonSegment'))})
     assistant={}
     if operation!='ChangePersonSegment':
         chat=conversations.create('local',actor.member_id,'task',task.id)
@@ -1360,6 +1410,7 @@ def test_execution_binding_preserves_source_actor_and_receipt_error_order(execut
     assert no_plan.value.status_code == 404 and calls == ['actor']
 
 
+@pytest.mark.parametrize('execution_http_state', [pytest.param(False, id='metadata-no-voice')], indirect=True)
 def test_execution_binding_repairs_conversation_after_original_locator_commit(execution_binding_state, monkeypatch):
     state = execution_binding_state
     source, replay = main._assistant_execution_source(state.task.id, state.request,

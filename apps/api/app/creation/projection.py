@@ -26,6 +26,13 @@ def history_edit_head(
             version_id = version.parent_version_id
             continue
         operation = repository.edit_records.get_edit_operation(workspace_id, version.created_by_operation_id)
+        if for_redo and operation.operation_type == "RedoTimelineVersion" and operation.payload.get("target_undo_operation_id"):
+            # A scoped redo restores an original edit's content. Continue the
+            # pending redo chain from the exact undo it consumed, rather than
+            # treating that restored edit as the end of the control history.
+            undone = repository.edit_records.get_edit_operation(workspace_id, operation.payload["target_undo_operation_id"])
+            version_id = undone.base_version_id
+            continue
         follow_restore = operation.operation_type == "RedoTimelineVersion" or (
             not for_redo and operation.operation_type == "UndoTimelineVersion"
         )

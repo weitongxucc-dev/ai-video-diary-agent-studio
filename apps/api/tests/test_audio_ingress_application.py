@@ -46,9 +46,13 @@ def audio_state(tmp_path, monkeypatch):
     monkeypatch.setattr(main, 'local_members_service', members)
     monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path/'outputs'))
     monkeypatch.setattr(main, 'settings', replace(main.settings,
+        database_path=str(repo.database_path),
         video_output_path=str(tmp_path/'outputs'), video_inbox_path=str(repo.video_library_path),
         temporary_root_path=str(tmp_path/'temporary')))
     # These are the existing named fixture caps, not a production calibration.
+    from test_member_permits import _HOST_ENV
+    for name, value in _HOST_ENV.items():
+        monkeypatch.setenv(name, value)
     for name, value in asdict(audio_budget()).items():
         monkeypatch.setenv('DEVICE_CPU_AUDIO_'+name.upper(),str(value))
     media.facts = main._task_media_facts
@@ -56,6 +60,7 @@ def audio_state(tmp_path, monkeypatch):
     runtime = build(media)
     runtime.scheduler.processes = HostProcessProbe()
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
+    monkeypatch.setattr(main, '_media_result_read_components', lambda: (media, runtime.scheduler))
     client = TestClient(main.app, headers={'X-Local-Member-Token':token})
     errors, executions = [], []
     execute = media.audio_ingress.execute
@@ -116,11 +121,15 @@ def test_public_import_recording_mp4_and_original_fixed_receipt(tmp_path, monkey
         'source_ref':repo.execution_records.list_artifact_records('local','task')[0].logical_ref,'name':'input.wav','duration_ms':200}
     fixed=repo.execution_records.get_task_event('local','event_'+original['job_id']+'_result').payload
     assert client.get(original['result_url']).json()['result']==fixed['result']
-    # The old recorded rejection becomes a finite domain fact, then the same persistent label.
+    # The domain refusal survives asynchronous settlement on the original job.
     bad=client.post('/api/creation-tasks/task/audio/recordings',files={'audio':('bad-stage.wav',data,'audio/wav')})
     assert bad.status_code==202, bad.text
     failed=settled(client,runtime,bad.json())
-    assert failed['status']=='failed' and failed['failure_reason']=='HTTPException' and failed['result'] is None
+    assert failed['status']=='failed' and failed['failure_reason']=='请先确认当前任务文案，再保存电脑录音' and failed['result'] is None
+    assert failed['job_id'] == bad.json()['job_id']
+    rejection, = [event for event in repo.execution_records.list_task_events('local','task')
+                  if event.job_id == failed['job_id'] and event.event_type == 'task_media_failed']
+    assert rejection.payload['status_code'] == 409 and rejection.payload['detail'] == failed['failure_reason']
     assert errors==[(409,'请先确认当前任务文案，再保存电脑录音')]
     task,script=confirmed_script(repo)
     source=tmp_path/'fixture-source.wav'

@@ -23,7 +23,8 @@ def test_script_record_owner_cold_import_does_not_load_application_or_parent_rep
             "-B",
             "-c",
             "import sys; import app.creation.script_records; "
-            "assert 'app.production' not in sys.modules; assert 'app.main' not in sys.modules",
+            "assert 'app.production' not in sys.modules; assert 'app.main' not in sys.modules; "
+            "assert 'app.device_runtime' not in sys.modules",
         ],
         capture_output=True,
         text=True,
@@ -33,6 +34,10 @@ def test_script_record_owner_cold_import_does_not_load_application_or_parent_rep
 
 @pytest.mark.parametrize("input_form", ["dataclass", "json"])
 def test_standalone_owner_roundtrips_its_own_rows_without_cross_domain_ports(tmp_path, monkeypatch, input_form):
+    forbidden_prefixes = ("app.main", "app.creation_execution", "app.device_",
+                          "app.pi_", "app.runtime", "app.providers", "app.granted_subprocess")
+    previously_loaded = {name for name in sys.modules if name.startswith(forbidden_prefixes)}
+
     def forbidden_execution(*args, **kwargs):
         raise AssertionError("record metadata must not run a process, media or runtime")
 
@@ -41,14 +46,11 @@ def test_standalone_owner_roundtrips_its_own_rows_without_cross_domain_ports(tmp
     original_import = builtins.__import__
 
     def metadata_import(name, *args, **kwargs):
-        if name.startswith(("app.main", "app.creation_execution", "app.device_",
-                            "app.pi_", "app.runtime", "app.providers", "app.granted_subprocess")):
+        if name.startswith(forbidden_prefixes):
             forbidden_execution()
         return original_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", metadata_import)
-    assert "app.main" not in sys.modules
-    assert "app.device_runtime" not in sys.modules
     path = tmp_path / "scripts.sqlite"
     connections = []
 
@@ -235,8 +237,7 @@ def test_standalone_owner_roundtrips_its_own_rows_without_cross_domain_ports(tmp
         assert failed.value.args == (missing,) and len(policy_calls) == 2
         assert len(traces[-1]) == (1 if missing == "missing-task" else 2)
         closed_current_reader(count)
-    assert "app.main" not in sys.modules
-    assert "app.device_runtime" not in sys.modules
+    assert {name for name in sys.modules if name.startswith(forbidden_prefixes)} == previously_loaded
 
 
 def test_positive_seed_caller_owns_header_sections_and_task_transaction(tmp_path, monkeypatch):

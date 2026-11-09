@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
+from fractions import Fraction
 import hashlib
 import json
 import math
@@ -20,6 +21,7 @@ import time
 
 import psutil
 
+from app.audio_timeline import PCM_CONTAINER_ALLOWANCE_BYTES
 from app.device_resource_configuration import backend_identity
 from app.device_resource_profile import DeviceProfileIdentity, DeviceProfileUnavailable, _BUDGET_TYPES, _digest, load_device_resource_profile
 from app.device_resource_volumes import sample_write_volumes
@@ -32,6 +34,10 @@ from app.granted_subprocess import run_granted_command, GrantedCommandError
 
 OWNER_TYPE = 'device_preparation'
 POLICY_ID = 'interactive-cpu-preparation/v1'
+
+
+class PreparationSamplingIncomplete(ValueError):
+    """The original run did not establish a complete resource observation."""
 
 
 @dataclass(frozen=True)
@@ -143,7 +149,7 @@ def request_kind(*, database_path, request_id, actor):
         raise KeyError(request_id)
     if row[:3] != (OWNER_TYPE, actor.workspace_id, actor.member_id):
         raise PermissionError('Preparation request belongs to another owner, workspace or member')
-    kinds = {'cpu-prepare:v1': 'cpu', 'narration-prepare:v1': 'narration'}
+    kinds = {'cpu-prepare:v1': 'cpu', 'narration-prepare:v1': 'narration', 'montage-prepare:v1': 'montage'}
     if row[3] not in kinds:
         raise ValueError('Unknown device preparation execution unit')
     return kinds[row[3]]
@@ -369,7 +375,7 @@ class DeviceResourcePreparation:
             observed = result.observed_resources
             if (observed is None or not observed.rss_sample_complete or not observed.threads_sample_complete
                     or observed.peak_rss_bytes is None or observed.peak_threads is None):
-                raise ValueError('CPU preparation resource observation is incomplete')
+                raise PreparationSamplingIncomplete('CPU preparation resource observation is incomplete')
             observations.append(asdict(observed))
             return result
         try:
@@ -378,20 +384,20 @@ class DeviceResourcePreparation:
                 command = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-filter_complex_threads', '1']
                 total_frames = math.ceil(duration * shape.frame_rate)
                 frame_counts = [total_frames // count + (index < total_frames % count) for index in range(count)]
-                for frames in frame_counts:
-                    command += ['-threads', '1', '-f', 'lavfi', '-i',
-                        f'testsrc2=size={shape.width_px}x{shape.height_px}:rate={shape.frame_rate}:duration={frames / shape.frame_rate}']
-                graph = ''.join(f'[{i}:v]trim=end_frame={frames},setpts=PTS-STARTPTS[v{i}];'
+                # Each lavfi input creates its own automatic graph thread pool.
+                # Keep the synthetic sources in the explicitly bounded complex
+                # graph so preparation obeys the same declared thread policy.
+                graph = ''.join(f'testsrc2=size={shape.width_px}x{shape.height_px}:rate={shape.frame_rate}:'
+                    f'duration={frames / shape.frame_rate},trim=end_frame={frames},setpts=PTS-STARTPTS[v{i}];'
                     for i, frames in enumerate(frame_counts))
                 graph += ''.join(f'[v{i}]' for i in range(count)) + f'concat=n={count}:v=1:a=0[v]'
                 command += ['-filter_complex', graph, '-map', '[v]', '-t', str(duration), '-c:v', plan['policy']['encoder'],
                     '-threads', '1', '-preset', plan['policy']['encoder_preset'], '-crf', str(plan['policy']['encoder_crf']), '-pix_fmt', 'yuv420p', str(video)]
                 run(command, (video,))
                 command = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-filter_complex_threads', '1']
-                for index in range(shape.audio_input_count):
-                    command += ['-threads', '1', '-f', 'lavfi', '-i',
-                        f'sine=frequency={440 + index}:sample_rate={shape.sample_rate}:duration={duration}']
-                graph = ''.join(f'[{i}:a]' for i in range(shape.audio_input_count)) + f'amix=inputs={shape.audio_input_count}:normalize=0[a]'
+                graph = ''.join(f'sine=frequency={440 + index}:sample_rate={shape.sample_rate}:'
+                    f'duration={duration}[a{index}];' for index in range(shape.audio_input_count))
+                graph += ''.join(f'[a{i}]' for i in range(shape.audio_input_count)) + f'amix=inputs={shape.audio_input_count}:normalize=0[a]'
                 command += ['-filter_complex', graph, '-map', '[a]', '-t', str(duration), '-ar', str(shape.sample_rate),
                     '-ac', str(shape.channels), '-threads', '1', '-c:a', 'pcm_f32le', str(audio)]
                 run(command, (video, audio))
@@ -421,10 +427,12 @@ class DeviceResourcePreparation:
                 digest = _atomic_json(receipt_path, receipt)
             scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
                 checkpoint_write=lambda conn, current: 'device-resource-preparation:' + digest)
-        except (GrantedCommandError, ValueError, OSError, KeyError, StopIteration):
+        except (GrantedCommandError, ValueError, OSError, KeyError, StopIteration) as exc:
             # The broker preserves unknown child release by raising RecoveryBlocked,
             # which is deliberately not caught here. No profile is published on failure.
-            scheduler.fail_unit(grant, reason='device_preparation_failed', failure_write=lambda conn, current: None)
+            reason = ('device_preparation_sampling_incomplete' if isinstance(exc, PreparationSamplingIncomplete)
+                else 'device_preparation_failed')
+            scheduler.fail_unit(grant, reason=reason, failure_write=lambda conn, current: None)
 
     def _request(self, *, database_path, request_id, actor):
         with sqlite3.connect(Path(database_path).resolve().as_uri() + '?mode=ro', uri=True) as connection:
@@ -442,7 +450,11 @@ class DeviceResourcePreparation:
 
     def status(self, *, database_path, request_id, actor):
         row, plan = self._request(database_path=database_path, request_id=request_id, actor=actor)
-        return {'id': row['id'], 'plan_id': plan['id'], 'state': row['state'], 'wait_reason': row['wait_reason']}
+        result = {'id': row['id'], 'plan_id': plan['id'], 'state': row['state'], 'wait_reason': row['wait_reason']}
+        if row['state'] == 'failed' and row['wait_reason'] == 'device_preparation_sampling_incomplete':
+            result.update(failure_reason='本次准备未取得完整的资源采样，未启用新的资源档。',
+                repair_action='先核验并收束原准备，确认资源释放后重新准备相同规格。原失败记录保留。')
+        return result
 
     def status_for_plan(self, *, database_path, plan_id, actor):
         if not self._can_access(self._plan(plan_id), actor):
@@ -485,9 +497,14 @@ class DeviceResourcePreparation:
         threads = min(original.cpu_render.max_process_threads,
             math.ceil(max(item['peak_threads'] for item in samples) * policy.measured_margin))
         video_bytes = math.ceil(shape.width_px * shape.height_px * 4 * shape.frame_rate * shape.duration_seconds)
-        container_bytes = max(0, receipt['media']['audio']['bytes'] - math.ceil(
+        # The CPU delivery contract rounds picture to whole 30fps frames; its
+        # PCM master is also a later mix input. Prepare both sides of that clock.
+        audio_duration = max(shape.duration_seconds, round(Fraction(str(shape.duration_seconds)) * 30) / 30)
+        # Admission declares the mix container allowance, even when this short
+        # measured WAV happened to need a smaller header.
+        container_bytes = max(PCM_CONTAINER_ALLOWANCE_BYTES, receipt['media']['audio']['bytes'] - math.ceil(
             shape.sample_rate * shape.channels * 4 * plan['probe_seconds']))
-        audio_bytes = math.ceil(shape.sample_rate * shape.channels * 4 * shape.duration_seconds) + container_bytes
+        audio_bytes = math.ceil(shape.sample_rate * shape.channels * 4 * audio_duration) + container_bytes
         input_bytes = max(video_bytes + audio_bytes * shape.audio_input_count, shape.source_bytes or 0)
         output_bytes = video_bytes + audio_bytes
         timeout = max(receipt['elapsed_seconds'], receipt['elapsed_seconds'] * shape.duration_seconds / plan['probe_seconds']) * policy.measured_margin
@@ -496,8 +513,8 @@ class DeviceResourcePreparation:
             max_input_bytes=input_bytes, max_output_bytes=output_bytes,
             max_timeout_seconds=timeout, additional_memory_bytes=rss, additional_disk_bytes=math.ceil(output_bytes * policy.measured_margin),
             max_process_threads=threads)
-        audio = CpuAudioBudget(shape.audio_input_count, max(audio_bytes * shape.audio_input_count, shape.source_bytes or 0), shape.duration_seconds,
-            shape.duration_seconds, shape.sample_rate, shape.channels, audio_bytes, 1, timeout, rss, threads,
+        audio = CpuAudioBudget(shape.audio_input_count, max(audio_bytes * shape.audio_input_count, shape.source_bytes or 0), audio_duration,
+            audio_duration, shape.sample_rate, shape.channels, audio_bytes, 1, timeout, rss, threads,
             policy.sample_seconds, rss, math.ceil(audio_bytes * policy.measured_margin))
         budget = replace(original, cpu_render=render, cpu_audio=audio,
             clip_preview=replace(render, max_pixel_seconds=render.max_pixel_seconds * 2),

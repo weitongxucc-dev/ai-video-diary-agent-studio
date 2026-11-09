@@ -102,10 +102,29 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
     assert measured['consumption_known'] and measured['output_bytes'] > 2*subtitle.size_bytes
     def no_full_sha_outside_grant(*args, **kwargs):
         raise AssertionError('delivery validity read must not scan media outside a Grant')
-    monkeypatch.setattr('app.device_resource_configuration._hash_file', no_full_sha_outside_grant)
-    assert render.valid('local', case.task_id, verify_media=False)
-    assert render.valid('local', case.task_id)
+    with monkeypatch.context() as metadata_read:
+        metadata_read.setattr('app.device_resource_configuration._hash_file', no_full_sha_outside_grant)
+        assert render.valid('local', case.task_id, verify_media=False)
+        assert render.valid('local', case.task_id)
     assert case.repo.subtitle_records.list_subtitle_tracks('local', case.task_id, timeline_version_id=version.id)
+    if not rollback:
+        from uuid import uuid4
+        from app.creation.editing.metadata_use_case import metadata_edit_command
+        from app.creation.editing.timeline_restore_use_case import TimelineRestoreCommand, TimelineRestoreUseCase
+        identity = {'member_id': case.actor.member_id, 'local_diagnostic': False}
+        clip = version.snapshot['montage']['clips'][0]
+        metadata.save(current, metadata_edit_command(current, identity, 'ChangeCrop', {
+            'base_version_id': version.id, 'clip_id': clip['id'],
+            'fit_mode': 'fit' if clip.get('fit_mode') == 'fill' else 'fill', 'crop_x': .3, 'crop_y': .5}))
+        assert not render.valid('local', case.task_id, verify_media=False)
+        changed = case.repo.task_records.get_creation_task('local', case.task_id)
+        restorer = TimelineRestoreUseCase(case.repo, metadata,
+            qualify_output=lambda ws, task_id, target: render.valid(ws, task_id, timeline_version=target, verify_media=False))
+        restorer.execute(TimelineRestoreCommand('local', changed, False), actor=case.actor, request_id=str(uuid4()))
+        restored = case.repo.task_records.get_creation_task('local', case.task_id)
+        assert restored.current_timeline_version_id != version.id
+        assert render.valid('local', case.task_id, verify_media=False)
+        version = _rerender_edited_timeline(case, metadata, render, store, version, monkeypatch)
     with case.repo._connect() as conn:
         receipts = [json.loads(row[0]) for row in conn.execute("SELECT payload_json FROM task_events WHERE job_id=? AND event_type='task_execution_unit_settled'", (job.id,))]
     usage = case.repo.execution_budget_scope_usage('local', 'isolated-local-goal')['usage']
@@ -116,6 +135,55 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
         output.write(b'changed')
     assert not render.valid('local', case.task_id, verify_media=False)
     case.scheduler.close()
+
+
+def _rerender_edited_timeline(case, metadata, render, store, original_version, monkeypatch):
+    """Run a second real progressive delivery, keeping the original Job and media."""
+    import hashlib
+    from app.creation.editing.metadata_use_case import metadata_edit_command
+    from app.creation.execution_control import CreationExecutionControl
+    original_ref = original_version.snapshot['montage']['output_path']
+    original_sha = hashlib.sha256(store.resolve_file(original_ref).read_bytes()).hexdigest()
+    original_tts = list(case.generated)
+    current = case.repo.task_records.get_creation_task('local', case.task_id)
+    edited = metadata.save(current, metadata_edit_command(current,
+        {'member_id':case.actor.member_id, 'local_diagnostic':False}, 'SetClipLock',
+        {'base_version_id':current.current_timeline_version_id, 'clip_id':'clip', 'locked':True}))
+    monkeypatch.setattr(case.execution, 'render_is_valid',
+        lambda ws, task_id: render.valid(ws, task_id, verify_media=False))
+    runtime = SimpleNamespace(scheduler=case.scheduler, registrations={
+        'creation_job':SimpleNamespace(owner=case.owner, executor=case.executor)}, wake=lambda:None)
+    control = CreationExecutionControl(case.repo, case.execution, render, lambda _:'ready')
+    assert control.resume('local', case.task_id, case.actor, runtime, verify_media=False)['job']['id'] == case.job.id
+    with case.repo._connect() as conn:
+        requests = tuple(conn.execute('SELECT id FROM device_work_requests WHERE owner_id=?', (case.job.id,)))
+    assert control.resume('local', case.task_id, case.actor, runtime, verify_media=False)['job']['id'] == case.job.id
+    with case.repo._connect() as conn:
+        assert tuple(conn.execute('SELECT id FROM device_work_requests WHERE owner_id=?', (case.job.id,))) == requests
+    families = []
+    for _ in range(12):
+        grant = case.scheduler.pick_and_grant()
+        if grant is None:
+            break
+        request = case.scheduler._get(grant.request_id)
+        assert request.resources['render_input_timeline_version_id'] == edited.task.current_timeline_version_id
+        assert request.resources['render_generation_id']
+        families.append(grant.unit_key.split(':')[1])
+        case.executor.execute(grant, case.scheduler)
+        assert case.scheduler._get(grant.request_id).state == 'done', case.repo.job_records.get_job_run('local', case.job.id).failure_reason
+    completed = case.repo.job_records.get_job_run('local', case.job.id)
+    assert completed.status == 'succeeded' and len(case.execution.jobs('local', case.task_id)) == 1
+    assert families == ['picture-fragment', 'picture-fragment', 'packet-copy', 'audio-encode', 'final-mux']
+    assert case.generated == original_tts
+    assert hashlib.sha256(store.resolve_file(original_ref).read_bytes()).hexdigest() == original_sha
+    current = case.repo.task_records.get_creation_task('local', case.task_id)
+    version = case.repo.timeline_records.get_timeline_version('local', current.current_timeline_version_id)
+    assert version.id != original_version.id and version.parent_version_id == edited.task.current_timeline_version_id
+    assert version.snapshot['audio_delivery']['job_id'] == case.job.id
+    assert version.snapshot['montage']['output_path'] != original_ref
+    assert render.valid('local', case.task_id, verify_media=False)
+    assert render.valid('local', case.task_id, timeline_version=original_version, verify_media=False)
+    return version
 
 
 def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_track, original_grant, before):
@@ -155,10 +223,10 @@ def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_tra
     with case.repo._connect() as conn:
         conn.execute('UPDATE task_events SET id=? WHERE id=?', (measurement_id, 'withheld-measurement'))
     original_record_read = case.repo.execution_records.get_artifact_record
-    def missing_final_registration(workspace_id, artifact_id):
+    def missing_final_registration(workspace_id, artifact_id, *, connection=None):
         if artifact_id.startswith('artifact_final_mux_'):
             raise KeyError(artifact_id)
-        return original_record_read(workspace_id, artifact_id)
+        return original_record_read(workspace_id, artifact_id, connection=connection)
     with monkeypatch.context() as registration_failure:
         registration_failure.setattr(case.repo.execution_records, 'get_artifact_record', missing_final_registration)
         refused(case.actor, 409)

@@ -194,3 +194,9 @@ it("offers recovery only for queued, running, interrupted or succeeded jobs", ()
     expect(taskMediaJobMatchesContext(edit, "version-one", ["clip:one"])).toBe(false);
   }
 });
+
+it("shows the recorded refusal when an asynchronous media job fails", () => {
+  expect(taskMediaJobLabel({ ...queued, status: "failed", failure_reason: "所选字体未安装" }))
+    .toBe("预览未完成：所选字体未安装");
+  expect(taskMediaJobLabel({ ...queued, status: "failed" })).toBe("预览未完成");
+});

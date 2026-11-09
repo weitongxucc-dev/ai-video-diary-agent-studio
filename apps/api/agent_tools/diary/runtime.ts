@@ -13,6 +13,7 @@ import {registerEditControls} from './edit-controls.ts';
 import {registerWorkspaceTools} from './workspace-tools.ts';
 import {registerMaterialCandidates} from './material-candidates.ts';
 import {registerCreationPlans} from './creation-plans.ts';
+import {registerSourceTasks} from './source-tasks.ts';
 import {registerTaskReads} from './task-reads.ts';
 import {registerObservationTools} from './observation-tools.ts';
 import {registerPreviewJobReader} from './preview-job-reader.ts';
@@ -107,6 +108,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
     preferences.register(pi);
     registerMaterialCandidates(pi, {request});
     registerCreationPlans(pi, {request, readActionSource, hasPreview, markPreview});
+    registerSourceTasks(pi, {request, readActionSource, taskId, hasPreview, markPreview});
     registerTaskReads(pi, {request, taskId, readCurrentTaskFacts, readTaskEditCapabilities, markTaskRead, verifyTaskVersion});
     if (taskId) {
       registerDirectEdit(pi,{request,taskId,selectedTaskVersion,isTaskRead,readActionSource,typedRequestId,

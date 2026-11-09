@@ -1,4 +1,5 @@
 """Concrete compound preview/selection/application with the existing joint save owner."""
+from app.creation.plan_contracts import creation_plan_payload
 from dataclasses import asdict, dataclass, replace
 from collections import Counter
 import json
@@ -113,9 +114,9 @@ class CompoundEditUseCase:
             selection_command=control.selection_command, verifier=verifier, output_refs=logical_montage_output_refs(plan))
         return PreparedCompoundEdit(task, base, plan, tracks, calculated, command, intent, proposal)
 
-    def save_preview(self, prepared: PreparedCompoundEdit):
+    def save_preview(self, prepared: PreparedCompoundEdit, *, write_guard=None):
         return self.repository.edit_adoption.save_clip_preview_proposal(prepared.intent, prepared.proposal,
-            expected_version_id=prepared.base.id)
+            expected_version_id=prepared.base.id, write_guard=write_guard)
 
     def prepare_selection(self, control: CompoundSelectionCommand):
         task = self.repository.task_records.get_creation_task(control.workspace_id, control.task_id)
@@ -203,7 +204,7 @@ class CompoundEditUseCase:
             edited_subtitle_tracks=changed_tracks, proposal_source_command=command, proposal_source_verifier=verifier)
 
 
-    def preview(self, prepared, *, draft_only, execution):
+    def preview(self, prepared, *, draft_only, execution, write_guard=None):
         if prepared is None:
             return None
         task, base, plan, tracks = prepared.task, prepared.base, prepared.before, prepared.original_tracks
@@ -220,12 +221,13 @@ class CompoundEditUseCase:
                 "detail": "整片视听预览；全部修改确认后写入同一个版本，可一次撤销。",
                 "video_url": f"/api/creation-tasks/{task.id}/visual/artifacts/{record.id}"}
             for side, record in zip(("before", "after"), records)}})
-        intent, proposal = self.save_preview(replace(prepared, proposal=proposal))
+        intent, proposal = self.save_preview(replace(prepared, proposal=proposal), write_guard=write_guard)
         return intent, proposal
 
-    def preview_selection(self, control, *, draft_only, execution):
+    def preview_selection(self, control, *, draft_only, execution, write_guard=None):
         try:
-            return self.preview(self.prepare_selection(control), draft_only=draft_only, execution=execution)
+            return self.preview(self.prepare_selection(control), draft_only=draft_only, execution=execution,
+                write_guard=write_guard)
         except CompoundProposalMissing as exc:
             raise PicturePreviewRejected(status_code=404, detail=exc.args[0]) from exc
         except CompoundSelectionInputError as exc:
@@ -285,7 +287,7 @@ class CompoundEditUseCase:
                     files.append(fact)
                 values = service.source_metadata(workspace_id, task_id, reference)
                 audio_inputs.append({'reference': reference, 'path': str(path.resolve()), 'size_bytes': stat.st_size, 'uses': audio_uses.get(reference, 1), **values})
-        facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id, 'script_digest': self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None, 'plan_id': task.plan_id, 'plan_digest': media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))), 'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
+        facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id, 'script_digest': self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None, 'plan_id': task.plan_id, 'plan_digest': media_digest(creation_plan_payload(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))), 'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
         if graphics:
             facts['graphic_sources'] = graphics
         if compound_proposal is not None:

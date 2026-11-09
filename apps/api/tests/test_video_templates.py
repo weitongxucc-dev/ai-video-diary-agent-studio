@@ -12,7 +12,7 @@ from app.source_repository import SourceRepository
 from app.sources import SourceConnector, SourceItem, KnowledgeItem
 from app.topics import OpenAICompatibleCreationTaskScriptGenerator, CreationTaskScriptGenerationError
 from test_production_foundation import _repository, _missing_model_catalog, plan_owner as plan_owner
-from test_creation_task_topic_provider import _script_input, _script_document, _response
+from test_creation_task_topic_provider import _script_input, _script_document, _response, _script_review, _review_tool_response
 from _media_preview_test_fixtures import register_synthetic_profiles, register_synthetic_video_asset
 from app.avatar_lipsync import PronunciationEntry as ProfilePronunciationEntry
 
@@ -140,12 +140,12 @@ def test_template_share_is_default_and_slider_choice_rechecks_plan(state):
 def test_lipsync_quality_defaults_and_stays_in_versioned_plan(state):
     production, template, client = state
     goal = "完全不同的新主题"
-    new_preview = client.post("/api/creation-plans/preview", json={"goal": goal}).json()
-    fast_preview = client.post("/api/creation-plans/preview", json={"goal": goal, "lipsync_quality": "fast"}).json()
+    new_preview = client.post("/api/creation-plans/preview", json={"goal": goal, "presenter_share_target": 100}).json()
+    fast_preview = client.post("/api/creation-plans/preview", json={"goal": goal, "presenter_share_target": 100, "lipsync_quality": "fast"}).json()
     assert new_preview["lipsync_quality"] == "high"
     assert fast_preview["lipsync_quality"] == "fast"
     assert new_preview["preflight_fingerprint"] != fast_preview["preflight_fingerprint"]
-    assert any(item["id"].startswith("latentsync-") for item in new_preview["model_snapshot"])
+    assert any(item["id"] == main._presenter_model_ids()["high"] for item in new_preview["model_snapshot"])
     assert any(item["id"] == main.avatar_lipsync_provider.model_id for item in fast_preview["model_snapshot"])
 
     # Templates saved before the selector existed keep the former MuseTalk path.
@@ -207,18 +207,27 @@ def test_template_preflight_does_not_substitute_unrelated_materials(state, monke
     ("en-US", "word " * 30),
     ("zh-CN", "字" * 24 + " word" * 15),
 ])
-def test_script_rejects_total_speech_duration_across_sections(language, text):
-    document = _script_document(evidence_ids=["evidence_1"])
-    document["script"]["language"] = language
-    section = document["script"]["sections"][0]
-    document["script"]["sections"] = [{**section, "content": text}, {**section, "content": text}]
-    generator = OpenAICompatibleCreationTaskScriptGenerator(
-        base_url="https://model.invalid/v1", model="test",
-        transport=httpx.MockTransport(lambda request: _response(document)),
-    )
-    # Each section is 12 seconds, but the shared total exceeds the 20-second plan.
-    with pytest.raises(CreationTaskScriptGenerationError, match="24.0 秒"):
-        generator.generate(replace(_script_input(), language=language, duration_target_seconds=20))
+def test_script_preserves_total_speech_text_and_twenty_second_goal(language, text):
+    document = _script_document(evidence_ids=['evidence_1'])
+    document['script']['language'] = language
+    section = document['script']['sections'][0]
+    document['script']['sections'] = [{**section, 'content': text}, {**section, 'content': text}]
+    calls = []
+    def respond(request):
+        payload = json.loads(request.content)
+        values = json.loads(payload['messages'][1]['content'])
+        calls.append((payload['tools'][0]['function']['name'], values))
+        if 'script' in values:
+            return _review_tool_response(_script_review(values['script'], values['sources'][0]['text']))
+        return _response(document)
+    generator = OpenAICompatibleCreationTaskScriptGenerator(base_url='https://model.invalid/v1', model='test',
+        transport=httpx.MockTransport(respond))
+    generated = generator.generate(replace(_script_input(), language=language, duration_target_seconds=20))
+    assert [name for name, _ in calls] == ['submit_script_draft', 'submit_script_review']
+    assert calls[0][1]['duration_target_seconds'] == 20
+    assert calls[1][1]['requirements']['duration_target_seconds'] == 20
+    assert generated.language == language
+    assert [section.content for section in generated.sections] == [text.strip(), text.strip()]
 
 
 @pytest.mark.parametrize('ratio',['16:9','1:1'])
@@ -295,13 +304,17 @@ def test_shared_template_reader_cannot_append_through_existing_task_save(state, 
     reader = TestClient(main.app, headers={"X-Local-Member-Token": token})
     # This focused permission test substitutes the rendered-task prerequisites only;
     # the template, trusted member, HTTP guard and immutable versions are real.
-    task = SimpleNamespace(id="fixture-rendered-task", current_timeline_version_id="fixture-timeline")
+    from app.creation.contracts import CreationTask
+    from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_to_payload
+    task = CreationTask('fixture-rendered-task', 'workspace_a', 'fixture-plan', 'template permission',
+        'knowledge_explanation', current_timeline_version_id='fixture-timeline')
+    montage = CreationTaskMontagePlan('fixture-montage', task.workspace_id, task.id, 'fixture-script',
+        'template permission', 'rendered', [], [], 1, 0, output_path='fixture-output')
     output = tmp_path / "fixture-output"
     output.write_bytes(b"nonempty fixture; no generated video")
     monkeypatch.setattr(main, "_creation_task_or_404", lambda *_args: task)
     monkeypatch.setattr(main, "_creation_plan_for_task_or_404", lambda *_args: SimpleNamespace())
-    monkeypatch.setattr(production, "get_creation_task_montage_plan", lambda *_args: {})
-    monkeypatch.setattr(main, "creation_task_montage_plan_from_payload", lambda _payload: SimpleNamespace(status="rendered", output_path=str(output)))
+    monkeypatch.setattr(production, "get_creation_task_montage_plan", lambda *_args: creation_task_montage_plan_to_payload(montage))
     monkeypatch.setattr(main, "_creation_task_output_path", lambda *_args, **_kwargs: output)
     response = reader.post(f"/api/creation-tasks/{task.id}/templates", json={"name": "不能另增他人模板", "template_id": template.id, "expected_version": 1})
     assert response.status_code == 403, response.text

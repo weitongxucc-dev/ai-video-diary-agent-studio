@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 import array
+import json
 import math
 from pathlib import Path
 import shutil
 import struct
 import subprocess
 import threading
-import time
+from types import SimpleNamespace
 import wave
 
 import pytest
@@ -45,7 +46,7 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
 
     ``swapped`` lays the clips out in the reverse order (and the narration segments with them),
     which is the review's repro for "the reported old position must be the real one".
-    ``material`` drops ``person_render_id`` from the second clip so the plan is mixed.
+    ``material`` uses the existing material source for the second clip so the plan is mixed.
     ``plain`` leaves the plan without any audio track of its own, as before the first split.
     ``broken_source`` drops the second cue's narration source, so the linkage cannot be built.
     """
@@ -64,15 +65,16 @@ def _build_linked_state(state, *, zh_cues: list[SubtitleCue] | None = None,
     # Both clips cut the same first 4s out of their own segment; only their timeline order differs,
     # which is what makes them a clean pair of equal-length sources to permute.
     clips = {}
-    for index, (key, cue_id, start) in enumerate((("a", "cue-link-a", 4), ("b", "cue-link-b", 0)) if swapped
-                                                 else (("a", "cue-link-a", 0), ("b", "cue-link-b", 4))):
+    for key, cue_id, start in ((("a", "cue-link-a", 4), ("b", "cue-link-b", 0)) if swapped
+                             else (("a", "cue-link-a", 0), ("b", "cue-link-b", 4))):
+        source = plan.clips[1] if material and key == "b" else plan.clips[0]
         clips[key] = MontageClip(
-            id=f"clip-link-{key}", cue_id=cue_id, asset_id=plan.clips[0].asset_id,
-            segment_id=plan.clips[index].segment_id, source_path=plan.clips[0].source_path,
+            id=f"clip-link-{key}", cue_id=cue_id, asset_id=source.asset_id,
+            segment_id=source.segment_id, source_path=source.source_path,
             source_start_seconds=0, source_end_seconds=4,
             timeline_start_seconds=start, timeline_end_seconds=start + 4,
-            match_score=1, match_reasons=["已生成人物口型"], needs_confirmation=False,
-            role="a_roll", manually_selected=True,
+            match_score=1, match_reasons=["已授权素材" if material and key == "b" else "已生成人物口型"], needs_confirmation=False,
+            role="b_roll" if material and key == "b" else "a_roll", manually_selected=True,
             person_render_id=state.old_render.id if not (material and key == "b") else None)
     linked = replace(
         plan,
@@ -501,8 +503,8 @@ def test_a_reordered_narration_mix_renders_and_keeps_each_source_at_its_own_leve
         assert abs(before[before_second] - after[after_second]) <= 0.2
 
 
-def test_the_narration_normalization_is_a_second_granted_pass_under_the_same_grant(tmp_path, monkeypatch):
-    """The measurement is a real second FFmpeg unit, not a way around the resource gate.
+def test_the_narration_normalization_is_a_second_granted_pass_under_the_same_grant(tmp_path, monkeypatch, granted_media):
+    """The two-command protocol uses one real grant; FFmpeg workers stand in here.
 
     Both commands leave under the one grant, deadline and cancel the caller handed over, the second
     one no longer measures anything, and the files in between live inside the caller's own output
@@ -518,42 +520,46 @@ def test_the_narration_normalization_is_a_second_granted_pass_under_the_same_gra
     # units themselves stand in; the real mix is covered by the reordered-render regression above.
     def fake_granted(scheduler, grant, command, *, timeout_seconds, cancel_event, deadline_monotonic,
                      output_paths=(), max_output_file_bytes=None):
+        scheduler.assert_grant(grant)
+        if command[0] == 'ffprobe':
+            with wave.open(command[-1], 'rb') as stream:
+                return SimpleNamespace(stdout=json.dumps({'streams':[{
+                    'duration':str(stream.getnframes()/stream.getframerate()),
+                    'sample_rate':str(stream.getframerate()), 'channels':stream.getnchannels()}]}))
         seen.append({"scheduler": scheduler, "grant": grant, "command": list(command),
                      "cancel_event": cancel_event, "deadline": deadline_monotonic})
         shutil.copyfile(source, command[-1])
 
     monkeypatch.setattr(audio_timeline, "_run_granted_audio_command", fake_granted)
-    monkeypatch.setattr(audio_timeline, "probe_audio_source", lambda path, **_options: _wav_seconds(path))
+    with granted_media([source]) as context:
+        grant, scheduler, cancel = context.grant, context.scheduler, threading.Event()
+        deadline = context.deadline_monotonic
+        render_audio_mix(_split_narration_timeline(), 8, lambda _ref: source, output,
+            normalize_voice_sources=True, scheduler=scheduler, grant=grant, cancel_event=cancel,
+            deadline_monotonic=deadline, max_output_bytes=ceiling, threads=1)
 
-    grant, scheduler, cancel = object(), object(), threading.Event()
-    deadline = time.monotonic() + 600
-    render_audio_mix(_split_narration_timeline(), 8, lambda _ref: source, output,
-        normalize_voice_sources=True, scheduler=scheduler, grant=grant, cancel_event=cancel,
-        deadline_monotonic=deadline, max_output_bytes=ceiling, threads=1)
+        # Two units, one gate: the measurement, then the mix that reads it.
+        assert len(seen) == 2
+        assert [call["grant"] for call in seen] == [grant, grant]
+        assert [call["scheduler"] for call in seen] == [scheduler, scheduler]
+        assert [call["cancel_event"] for call in seen] == [cancel, cancel]
+        assert [call["deadline"] for call in seen] == [deadline, deadline]
 
-    # Two units, one gate: the measurement, then the mix that reads it.
-    assert len(seen) == 2
-    assert [call["grant"] for call in seen] == [grant, grant]
-    assert [call["scheduler"] for call in seen] == [scheduler, scheduler]
-    assert [call["cancel_event"] for call in seen] == [cancel, cancel]
-    assert [call["deadline"] for call in seen] == [deadline, deadline]
+        measured = Path(seen[0]["command"][-1])
+        # The measurement is bounded and stays inside the caller's own output directory.
+        assert 0 < int(seen[0]["command"][seen[0]["command"].index("-fs") + 1]) <= ceiling
+        assert measured.parent.parent == tmp_path
+        # The mix reads the measurement and no longer measures anything itself.
+        assert str(measured) in seen[1]["command"]
+        assert "loudnorm" not in seen[1]["command"][seen[1]["command"].index("-filter_complex") + 1]
 
-    measured = Path(seen[0]["command"][-1])
-    # The measurement is bounded and stays inside the caller's own output directory.
-    assert 0 < int(seen[0]["command"][seen[0]["command"].index("-fs") + 1]) <= ceiling
-    assert measured.parent.parent == tmp_path
-    # The mix reads the measurement and no longer measures anything itself.
-    assert str(measured) in seen[1]["command"]
-    assert "loudnorm" not in seen[1]["command"][seen[1]["command"].index("-filter_complex") + 1]
-
-    # The same file played as original sound is not the linkage's narration, so it is not substituted
-    # and there is nothing to measure: one pass, reading the source it was recorded at.
-    seen.clear()
-    render_audio_mix(_split_narration_timeline("original"), 8, lambda _ref: source, output,
-        normalize_voice_sources=True, scheduler=scheduler, grant=grant, cancel_event=cancel,
-        deadline_monotonic=deadline, max_output_bytes=ceiling, threads=1)
-    assert len(seen) == 1
-    assert str(source) in seen[0]["command"]
+        # Original sound keeps its recorded level and requires only one pass.
+        seen.clear()
+        render_audio_mix(_split_narration_timeline("original"), 8, lambda _ref: source, output,
+            normalize_voice_sources=True, scheduler=scheduler, grant=grant, cancel_event=cancel,
+            deadline_monotonic=deadline, max_output_bytes=ceiling, threads=1)
+        assert len(seen) == 1
+        assert str(source) in seen[0]["command"]
 
     assert output.stat().st_size > 0
     assert not list(tmp_path.glob("narration-normalized-*"))

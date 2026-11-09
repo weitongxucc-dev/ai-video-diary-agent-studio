@@ -12,10 +12,11 @@ from app.creation.contracts import (
 from app.creation.plan_contracts import (
     CreationPlan, CreationPlanKnowledgeReference, CreationPlanSourceReference,
     CreationPlanPronunciationReference, CreationPlanBlocker,
+    creation_plan_payload,
 )
 from app.materials.contracts import MaterialSegmentMatch, material_usage_eligibility
 from app.models import utc_now
-from app.persistence_json import _json_payload, _with_datetime
+from app.persistence_json import _json_payload, _json_object, _with_datetime
 
 
 class CreationPlanRecordStore:
@@ -44,7 +45,7 @@ class CreationPlanRecordStore:
                 raise ValueError("创作方案引用的素材片段不可用")
         conn.execute(
             "INSERT INTO creation_plans (id, workspace_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (plan.id, plan.workspace_id, _json_payload(plan), plan.visibility, plan.updated_at.isoformat()),
+            (plan.id, plan.workspace_id, _json_object(creation_plan_payload(plan)), plan.visibility, plan.updated_at.isoformat()),
         )
         conn.execute(
             "INSERT INTO creation_tasks (id, workspace_id, plan_id, payload, visibility, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -135,7 +136,7 @@ class CreationPlanRecordStore:
     def write_knowledge_adopted_plan(self, connection, workspace_id, plan):
         connection.execute(
             "UPDATE creation_plans SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
-            (_json_payload(plan), plan.updated_at.isoformat(), workspace_id, plan.id),
+            (_json_object(creation_plan_payload(plan)), plan.updated_at.isoformat(), workspace_id, plan.id),
         )
 
     @staticmethod

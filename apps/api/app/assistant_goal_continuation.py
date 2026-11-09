@@ -187,6 +187,34 @@ class GoalContinuationService:
             {"request_id": saved["id"], "window_id": window["id"],
              "input_fingerprint": window["input_fingerprint"], "source": source}, tasks)
 
+    def register_source_task(self, turn_id, workspace_id, member_id, event, task, plan) -> list[str]:
+        """Continue a real adopted source task without manufacturing a window."""
+        source, receipt = event.payload['source'], event.payload['receipt']
+        if source.get('kind') != 'conversation_input' or source.get('turn_id') != turn_id:
+            return []
+        adopted = plan.adoption or {}
+        if (event.event_type != 'source_task_created' or event.workspace_id != workspace_id
+                or event.task_id != task.id or receipt['task_id'] != task.id or receipt['plan_id'] != plan.id
+                or task.workspace_id != workspace_id or task.plan_id != plan.id or plan.creation_task_id != task.id
+                or plan.source_media is None or receipt['source_media'] != plan.source_media
+                or adopted.get('kind') != 'delegated_system' or adopted.get('member_id') != member_id
+                or adopted.get('authorization_source') != source or adopted.get('version') != event.payload['input_digest']):
+            raise ValueError('原片任务采用回执与原制作目标不一致')
+        with self.repo._connect() as conn:
+            saved = conn.execute("SELECT task_id,payload_json FROM task_events WHERE workspace_id=? AND id=? "
+                "AND event_type='source_task_created'", (workspace_id, event.id)).fetchone()
+            if saved is None or saved['task_id'] != task.id or json.loads(saved['payload_json']) != event.payload:
+                raise ValueError('原片任务采用回执不是当前持久事件')
+            version = conn.execute('SELECT sequence FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=?',
+                (workspace_id, task.id, task.current_timeline_version_id)).fetchone()
+        if version is None:
+            raise ValueError('原片任务缺少实际采用的时间线版本')
+        return self.repo.register_creation_task_goals(turn_id, workspace_id, member_id,
+            {'kind': 'source_task', 'event_id': event.id, 'request_id': receipt['request_id'],
+             'plan_id': plan.id, 'input_fingerprint': event.payload['input_digest'], 'source': source},
+            [{'kind': 'task', 'task_id': task.id, 'stage': task.stage, 'selected_object_refs': [], 'playhead_ms': None,
+              'target_snapshot': {'timeline_version_id': task.current_timeline_version_id, 'timeline_sequence': version[0]}}])
+
     def verify_resume_business(self, goal, task, actor, business, owner, *, read_request, read_media):
         """Reconcile fixed original receipts before another task turn may act."""
         facts={}
@@ -305,7 +333,13 @@ class GoalContinuationService:
                 (workspace_id,task.plan_id)).fetchone()[0])
             adoption=plan.get('adoption') or {}
             original=goal['creation_adoption']
-            if (adoption.get('plan_id')!=task.plan_id or adoption.get('request_id')!=original['request_id'] or adoption.get('window_id')!=original['window_id']
+            if original.get('kind') == 'source_task':
+                if not self.repo._source_task_adoption_current(conn, original, workspace_id, member_id, task.id):
+                    return {'status': 'blocked', 'reason': '原片任务采用出处已变化，没有恢复其他来源'}
+                selected_asset = (human_context.get('target_snapshot', {}).get('material_selection') or {}).get('asset_id')
+                if selected_asset is not None and selected_asset != plan['source_media']['asset_id']:
+                    return {'status': 'blocked', 'reason': '当前输入选择了原任务范围外的源视频，未扩大后台授权'}
+            elif (adoption.get('plan_id')!=task.plan_id or adoption.get('request_id')!=original['request_id'] or adoption.get('window_id')!=original['window_id']
                     or adoption.get('kind')!='delegated_system' or adoption.get('member_id')!=member_id
                     or adoption.get('authorization_source')!=original['source']
                     or adoption.get('window_input_fingerprint')!=original.get('input_fingerprint')):

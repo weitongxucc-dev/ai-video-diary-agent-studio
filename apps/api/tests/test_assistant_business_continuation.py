@@ -18,12 +18,14 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
     from assistant_turn_control_fixtures import isolate_assistant_turn_control
     isolate_assistant_turn_control(monkeypatch, request)
     state = material_edit_state
+    state.original_jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
     monkeypatch.setattr(main, "settings", replace(main.settings,
         video_inbox_path=str(state.production.video_library_path),
         tencentcloud_secret_id="", tencentcloud_secret_key=""))
     conversations = ConversationRepository(state.production.database_path)
     monkeypatch.setattr(main, "conversation_repo", conversations)
     monkeypatch.setattr(main, "assistant_continuation_driver", None)
+    monkeypatch.setattr(main, "_goal_continuation_service", None)
     monkeypatch.setattr(main, "_verify_creation_identity", lambda actor:
         "ready" if actor.member_id == state.member.member_id and main.find_member(state.members, actor.member_id) else "unauthorized")
     conversation = conversations.create(state.workspace_id, state.member.member_id, "task", state.task.id)
@@ -33,6 +35,7 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
     version = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
     turn, _ = conversations.create_turn_idempotent(conversation["id"], state.workspace_id, state.member.member_id,
         raw, str(uuid4()), conversation["draft_version"], request_context={"kind": "task", "task_id": task.id,
+        "stage": "montage", "selected_object_refs": [f"clip:{state.clip.id}"], "playhead_ms": None,
         "target_snapshot": {"timeline_version_id": version.id, "timeline_sequence": version.sequence}})
     state.raw_post = state.client.post
     runtime = _granted_domain_preview_adapter(state, monkeypatch)
@@ -50,8 +53,21 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
         "request_id": str(uuid4()), "assistant_turn_id": turn["id"],
         "expected_timeline_version_id": version.id, "expected_timeline_sequence": version.sequence})
     def finish(status="completed", **response):
-        conversations.finish_turn(turn["id"], status, "已安排预览", result={"kind": "task_turn", "edit_preview": False,
+        from app.schemas import AssistantEditRequestLocator, CreationTaskEditPreviewResponse, TaskMediaJobResponse
+
+        adapter = main._task_turn_http_adapter()
+        proof_types = {"media_job": TaskMediaJobResponse, "edit_preview": CreationTaskEditPreviewResponse,
+            "edit_request": AssistantEditRequestLocator}
+        proofs = adapter.case().action_proofs(state.workspace_id, task.id, turn["id"],
+            **{key: model.model_validate(response[key]) if response.get(key) else None
+               for key, model in proof_types.items()}, execution_status=response.get("execution_status"))
+        conversations.finish_turn(turn["id"], status, "已安排预览", result={"kind": "task_turn", "goal_business_actions": proofs, "edit_preview": False,
             "response": {"reply": "已安排预览", "provider": "fixture", "model": "fixture", "turn_id": turn["id"], **response}})
+        # Match the live task-turn finish checkpoints: only persisted business
+        # receipts can register a goal, then the real owner seals its scope.
+        goal = main._goal_service().register_turn(turn["id"])
+        if goal is not None:
+            main._bind_goal_business_scope(state.request, goal)
     state.finish = finish
     yield state
     main.stop_assistant_continuation_driver()
@@ -77,6 +93,13 @@ def test_lifecycle_driver_completes_preview_and_projects_user_decision_once(stat
     queued = state.submit()
     assert queued.status_code == 202, queued.text
     state.finish(media_job=queued.json())
+    goal = state.conversations.get_task_goal(state.turn["id"])
+    assert goal["status"] == "waiting_result"
+    assert current(state)["result"]["goal_business_actions"] == [{"kind": "media_job", "id": queued.json()["job_id"]}]
+    scope = state.production.execution_records.get_task_event(state.workspace_id,
+        state.runtime.task_authorizations.business_context_id(goal))
+    assert scope.payload["original_turn_id"] == state.turn["id"]
+    assert scope.payload["identity"]["member_id"] == state.member.member_id
     main.start_assistant_continuation_driver()
     assert state.runtime.run_once()
     turn = await_projection(state, lambda item: item["result"].get("edit_preview") is True)
@@ -166,7 +189,9 @@ def test_failure_is_projected_without_retry_or_fabricated_proposal(state, monkey
     assert after["result"]["continuation"]["status"] == "failed"
     assert not after["result"]["edit_preview"]
     assert after["result"]["response"]["media_job"]["status"] == "failed"
-    assert len(state.production.job_records.list_job_runs(state.workspace_id, state.task.id)) == 1
+    jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
+    assert [job for job in jobs if job.id != queued.json()["job_id"]] == state.original_jobs
+    assert [job.id for job in jobs if job.id not in {original.id for original in state.original_jobs}] == [queued.json()["job_id"]]
 
 
 def test_locator_unknown_is_bound_then_late_rejection_is_read_without_post(state):
@@ -186,7 +211,7 @@ def test_locator_unknown_is_bound_then_late_rejection_is_read_without_post(state
     main._task_edit_receipt_http_adapter().save_edit_request_result(task, event_id, main.JSONResponse(status_code=409, content={"detail": "original turn ended"}))
     after = await_projection(state, lambda item: item["result"]["response"]["edit_request"]["status"] == "rejected")
     assert not after["result"]["edit_preview"]
-    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == state.original_jobs
     assert len(state.conversations.list_turns(state.conversation["id"])) == 1
 
 
@@ -222,7 +247,7 @@ def test_assistant_dispatch_persists_unknown_request_location_without_502(state,
     assert response.json()["edit_preview"] is None and response.json()["media_job"] is None
     saved = state.conversations.get_turn(response.json()["turn_id"])
     assert saved["result"]["response"]["edit_request"] == response.json()["edit_request"]
-    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == state.original_jobs
 
 
 def test_script_view_dispatches_real_typed_proposal_by_receipt_shape(state, monkeypatch):
