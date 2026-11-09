@@ -57,6 +57,7 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
       task_id: taskId,
       name: metadata(task.task?.name),
       stage: task.task?.stage,
+      stage_meaning: '作品的编辑阶段；制作接续以execution.task_execution和真实作业回执为准，全机预算不表示当前任务需要运行全部阶段。',
       status: task.task?.status,
       stage_status: task.task?.stage_status,
       updated_at: task.task?.updated_at,
@@ -84,6 +85,11 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
       available_voices_truncated: (task.available_voices || []).length > 24,
       plan: plan ? {
         id: plan.id, updated_at: plan.updated_at,
+        source_media: plan.source_media ? {
+          asset_id: plan.source_media.asset_id, asset_updated_at: plan.source_media.asset_updated_at,
+          source_start_seconds: plan.source_media.source_start_seconds, source_end_seconds: plan.source_media.source_end_seconds,
+          aspect_ratio: plan.source_media.aspect_ratio, preserve_audio: plan.source_media.preserve_audio,
+        } : null,
         creation_intent: plan.creation_intent ? {kind: plan.creation_intent.kind, source: plan.creation_intent.source,
           topic_title: plan.creation_intent.topic_title,
           protected_body_digest: plan.creation_intent.final_script?.body_digest} : null,

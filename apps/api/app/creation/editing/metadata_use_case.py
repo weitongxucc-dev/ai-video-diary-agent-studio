@@ -524,7 +524,7 @@ class MetadataEditUseCase:
         linkage, tracks = self.reorder_narration_linkage(task.workspace_id, task, candidate)
         return tracks, linkage
 
-    def subtitle_track_from_montage(self, workspace_id: str, task: CreationTask, version: TimelineVersion, montage: CreationTaskMontagePlan):
+    def subtitle_track_from_montage(self, workspace_id: str, task: CreationTask, version: TimelineVersion, montage: CreationTaskMontagePlan, *, connection=None):
         if montage.status != 'rendered' or not montage.subtitle_path:
             return None
         transform_id = version.snapshot.get('transform_run_id')
@@ -541,29 +541,35 @@ class MetadataEditUseCase:
             end = round(caption.end_seconds, 3)
             normalized_text, line_breaks = normalized_subtitle_text(cue.text, None)
             cues.append(SubtitleCue(id=cue.id, source_cue_id=None, text=normalized_text, start_seconds=start, end_seconds=end, line_breaks=line_breaks))
-        source_language = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id).language
+        if connection is None:
+            source_language = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id).language
+        else:
+            source_language = self.repository.plan_records.read_creation_plan(connection, workspace_id, task.plan_id).language
         track_language = 'en-US' if source_language == 'en-US' else 'zh-CN'
         return SubtitleTrack(id=f"subtitle_{version.id}_{('en' if track_language == 'en-US' else 'zh')}", workspace_id=workspace_id, task_id=task.id, timeline_version_id=version.id, language=track_language, source_language=None, style=dict(montage.cues[0].subtitle_style) if montage.cues and montage.cues[0].subtitle_style else default_subtitle_style(), cues=cues, generation_method='timeline', model_id=None, artifact_ref=montage.subtitle_path, transform_id=transform_id, status='valid')
 
-    def current_subtitle_tracks(self, workspace_id: str, task: CreationTask, *, current_version: TimelineVersion | None=None, montage: CreationTaskMontagePlan | None=None):
+    def current_subtitle_tracks(self, workspace_id: str, task: CreationTask, *, current_version: TimelineVersion | None=None, montage: CreationTaskMontagePlan | None=None, connection=None):
         if current_version is None and task.current_timeline_version_id:
             try:
-                current_version = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id)
+                current_version = self.repository.timeline_records.get_timeline_version(workspace_id,
+                    task.current_timeline_version_id, connection=connection)
             except KeyError:
                 current_version = None
         if current_version is None:
             return []
-        tracks = self.repository.subtitle_records.list_subtitle_tracks(workspace_id, task.id, timeline_version_id=current_version.id)
+        tracks = self.repository.subtitle_records.list_subtitle_tracks(workspace_id, task.id,
+            timeline_version_id=current_version.id, connection=connection)
         if tracks:
             return tracks
         if current_version.snapshot.get('subtitle_track_ids') == []:
             return []
         if montage is None:
             try:
-                montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(workspace_id, task.id))
+                montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(
+                    workspace_id, task.id, connection=connection))
             except KeyError:
                 return []
-        projected = self.subtitle_track_from_montage(workspace_id, task, current_version, montage)
+        projected = self.subtitle_track_from_montage(workspace_id, task, current_version, montage, connection=connection)
         return [projected] if projected is not None else []
 
     def cover_asset_for_version(self, workspace_id: str, task_id: str, version: TimelineVersion):
@@ -810,7 +816,12 @@ class MetadataEditUseCase:
             raise EditPreviewRejected(status_code=409, detail='画幅与适配方式没有变化')
         clip = montage.clips[0]
         try:
-            self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
+            if clip.person_render_id:
+                from app.creation.person_stage_use_case import adopted_person_render_source
+                cue = next((item for item in montage.cues if item.id == clip.cue_id), None)
+                adopted_person_render_source(self.repository, task, clip, cue, self.picture_renderer.person_path)
+            else:
+                self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
             records = []
             if not draft_only:
                 from copy import deepcopy
@@ -819,6 +830,8 @@ class MetadataEditUseCase:
                 changed.clips = [replace(item, fit_mode=payload.fit_mode or item.fit_mode) for item in changed.clips]
                 tracks = self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=montage)
                 records = [self.picture_renderer.publish_picture(workspace_id, task, base, candidate, tracks, kind='canvas_preview', parameters={'side': side, 'aspect_ratio': candidate.aspect_ratio}, execution=execution) for side, candidate in (('before', montage), ('after', changed))]
+        except PermissionError as exc:
+            raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
             raise EditPreviewRejected(status_code=422, detail=str(exc) if isinstance(exc, ValueError) else '画幅预览失败，请检查素材与本机FFmpeg') from exc
         if self.repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
@@ -952,7 +965,7 @@ class MetadataEditUseCase:
             raise EditPreviewRejected(status_code=404, detail=str(exc)) from exc
         except TimelineVersionConflict as exc:
             raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
-        except ClipPreviewConflict as exc:
+        except (ClipPreviewConflict, EditConflict) as exc:
             raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             status = 422 if payload.split_time_seconds is not None else 400
@@ -964,17 +977,11 @@ class MetadataEditUseCase:
     def trim_clip_source_url(self, workspace_id, task_id, clip, cue):
         """Return an authorized source interval; browser playback does no media work."""
         if clip.person_render_id:
+            from app.creation.person_stage_use_case import adopted_person_render_source
+            task = self.task_or_missing(workspace_id, task_id)
             render = self.repository.person_renders.get_person_render(workspace_id, task_id, clip.person_render_id)
-            if render.narration_segment_id != cue.narration_segment_id:
-                raise ValueError('人物口型镜头与当前配音段落不匹配')
-            synthetic_source = clip.asset_id == f'person:{render.id}' and clip.source_path == f'person-render://{render.id}'
-            legacy_source = clip.source_path == render.visual_reference and (not clip.asset_id.startswith('person:'))
-            if legacy_source:
-                self.repository.resolve_clip_media_reference(workspace_id, clip.asset_id, clip.source_path)
-            if not (synthetic_source or legacy_source):
-                raise ValueError('人物口型镜头来源不匹配')
-            path = self.picture_renderer.person_path(render)
-            if path is None or clip.source_end_seconds > (render.duration_seconds or 0) + 0.001:
+            path = adopted_person_render_source(self.repository, task, clip, cue, self.picture_renderer.person_path)
+            if clip.source_end_seconds > (render.duration_seconds or 0) + 0.001:
                 raise ValueError('人物口型源片段不可用')
             route = f"/api/creation-tasks/{quote(task_id, safe='')}/person-renders/{quote(render.id, safe='')}/media"
         else:

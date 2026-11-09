@@ -33,7 +33,7 @@ from app.creation.contracts import CreationTask
 from app.task_audio import TaskAudio
 
 
-def metadata_state(tmp_path):
+def metadata_state(tmp_path, *, workspace_id='ws'):
     """Seed fixed editorial facts and opaque source bytes; never decode media."""
     library = tmp_path / 'library'
     library.mkdir()
@@ -42,9 +42,9 @@ def metadata_state(tmp_path):
     members = LocalMemberService(repo.database_path)
     member, token = members.whoami(None)
     owner = member.member_id
-    plan = CreationPlan('plan', 'ws', 'metadata', 'metadata', 1, 'zh-CN', '9:16', 4,
+    plan = CreationPlan('plan', workspace_id, 'metadata', 'metadata', 1, 'zh-CN', '9:16', 4,
         [], [], None, [], 0, 0, 'fixed source', [], [], [], 'fixture')
-    task = CreationTask('task', 'ws', plan.id, 'metadata', 'knowledge_explanation',
+    task = CreationTask('task', workspace_id, plan.id, 'metadata', 'knowledge_explanation',
         stage='montage', owner_user_id=owner, visibility='private', narration_cache_key='fixed-narration')
     repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner)
     # The fixture begins at an already-produced editorial state. This is input
@@ -55,39 +55,40 @@ def metadata_state(tmp_path):
     source = library / 'source.mp4'
     source.write_bytes(b'opaque metadata source; only stat identity is inspected')
     stat = source.stat()
-    asset = MaterialAsset(id='asset', workspace_id='ws', file_name=source.name, path=str(source),
+    asset = MaterialAsset(id='asset', workspace_id=workspace_id, file_name=source.name, path=str(source),
         size_bytes=stat.st_size, modified_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc),
         duration_seconds=4, owner_user_id=owner, visibility='private', analysis_status='ready', usage_role='b_roll',
         segments=[MaterialSegment('segment', 'asset', 0, 4, usage_role='b_roll')])
     repo._save_asset(asset)
-    reference = repo.workspace_media_reference_for_asset('ws', asset.id)
+    reference = repo.workspace_media_reference_for_asset(workspace_id, asset.id)
     with repo._connect() as conn:
-        repo._claim_workspace_media_reference(conn, workspace_id='ws', reference=reference)
-    montage = CreationTaskMontagePlan('montage', 'ws', task.id, 'fixed-script', 'fixed', 'ready',
+        repo._claim_workspace_media_reference(conn, workspace_id=workspace_id, reference=reference)
+    montage = CreationTaskMontagePlan('montage', workspace_id, task.id, 'fixed-script', 'fixed', 'ready',
         [NarrationCue('cue', 'section', '原字幕', 4, narration_segment_id='fixed-segment')],
         [MontageClip('clip', 'cue', asset.id, 'segment', reference, 0, 4, 0, 4, 1, [], False)],
         4, 0, narration_audio_path='artifacts/task/fixed-narration.wav')
     payload = creation_task_montage_plan_to_payload(montage)
-    repo.montage_plan_adoption.save_creation_task_montage_plan('ws', task.id, montage.id, payload)
-    narration = NarrationArtifactRecord('narration', 'ws', 'fixed-script', None, 'fixed-narration',
+    repo.montage_plan_adoption.save_creation_task_montage_plan(workspace_id, task.id, montage.id, payload)
+    narration = NarrationArtifactRecord('narration', workspace_id, 'fixed-script', None, 'fixed-narration',
         montage.narration_audio_path, 4, 16000, 'fixture-input', task_id=task.id)
     repo.narration_artifacts.save_narration_artifact(narration)
-    base = TimelineVersion('base', 'ws', task.id, None, 1,
+    base = TimelineVersion('base', workspace_id, task.id, None, 1,
         {'montage': payload, 'subtitle_track_ids': ['base-zh'], 'narration_cache_key': narration.cache_key}, None)
     repo.timeline_records.create_timeline_version(base)
     subtitle_ref = 'artifacts/task/fixed-subtitles.srt'
     subtitle_file = tmp_path / 'outputs' / subtitle_ref
     subtitle_file.parent.mkdir(parents=True)
     subtitle_file.write_text('1\n00:00:00,000 --> 00:00:04,000\n原字幕\n', encoding='utf-8')
-    track = SubtitleTrack('base-zh', 'ws', task.id, base.id, 'zh-CN', None, default_subtitle_style(),
+    track = SubtitleTrack('base-zh', workspace_id, task.id, base.id, 'zh-CN', None, default_subtitle_style(),
         [SubtitleCue('cue', None, '原字幕', 0, 4)], 'timeline', None, subtitle_ref, 'fixed-track-input', 'valid')
     repo.subtitle_records.create_subtitle_track(track)
     store = ArtifactStore(tmp_path / 'outputs')
     audio = TaskAudio(repo, store, tmp_path / 'temporary')
     case = MetadataEditUseCase(repo, store, output_root=tmp_path / 'outputs', audio_service=audio)
-    return SimpleNamespace(repo=repo, task=repo.task_records.get_creation_task('ws', task.id), plan=montage, base=base,
+    return SimpleNamespace(repo=repo, task=repo.task_records.get_creation_task(workspace_id, task.id), plan=montage, base=base,
         asset=asset, source=source, case=case, store=store, members=members, member=member, token=token,
         identity={'member_id': owner, 'local_diagnostic': False}, narration=narration, track=track)
+
 
 
 @pytest.fixture

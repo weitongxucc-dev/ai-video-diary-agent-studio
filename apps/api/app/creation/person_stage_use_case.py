@@ -22,6 +22,51 @@ from app.models import utc_now
 from uuid import uuid4
 from app.creation.editing.metadata_use_case import prepare_changed_montage, LegacyMontageReference, InvalidMontage
 
+
+def adopted_person_render_source(repository, task, clip, cue, resolve_output):
+    """Read an adopted render using its fixed identities, not the next production target."""
+    from app.avatar_lipsync import _authorization_failure
+
+    render = repository.person_renders.get_person_render(task.workspace_id, task.id, clip.person_render_id)
+    if cue is None or cue.narration_segment_id != render.narration_segment_id:
+        raise ValueError('人物口型镜头与当前配音段落不匹配')
+    synthetic_source = clip.asset_id == f'person:{render.id}' and clip.source_path == f'person-render://{render.id}'
+    legacy_source = clip.source_path == render.visual_reference and not clip.asset_id.startswith('person:')
+    if not (synthetic_source or legacy_source):
+        raise ValueError('人物口型镜头来源不匹配')
+    if legacy_source:
+        repository.resolve_clip_media_reference(task.workspace_id, clip.asset_id, clip.source_path)
+    segment = repository.narration_records.get_narration_segment(task.workspace_id, task.id, render.narration_segment_id)
+    if (render.status != 'ready' or segment.status != 'ready' or segment.script_id != task.confirmed_script_id
+            or (segment.voice_profile_id, segment.voice_version) != (render.voice_profile_id, render.voice_version)
+            or render.duration_seconds is None or render.duration_seconds + .001 < segment.duration_seconds):
+        raise PermissionError('当前人物片段或对应配音版本已失效')
+    person = repository.profile_records.get_person_profile(task.workspace_id, render.person_profile_id, render.person_version)
+    audio = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
+    request = repository.profile_inputs.resolve_avatar_lipsync_request(
+        workspace_id=task.workspace_id, person_id=render.person_profile_id, person_version=render.person_version,
+        voice_profile_id=render.voice_profile_id, voice_version=render.voice_version,
+        audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
+        motion=render.motion, expression=render.expression, model_id=render.model_id,
+        authorization_id=person.authorization.id if person.authorization else '',
+        authorization_version=person.authorization.version if person.authorization else '', viewer_user_id=task.owner_user_id)
+    if _authorization_failure(request) is not None:
+        raise PermissionError('当前人物或声音授权已失效')
+    input_facts = presenter_input_facts(request)
+    if not any(item.transform_type == 'person_render' and item.status == 'succeeded'
+            and item.input_digest == render.cache_key and render.artifact_ref in item.output_refs
+            and segment.audio_reference in item.input_refs and item.engine == render.model_id
+            and item.parameters.get('language') == segment.language
+            and item.parameters.get('motion') == render.motion and item.parameters.get('expression') == render.expression
+            and item.parameters.get('presenter_input_facts') == input_facts
+            for item in repository.lineage_records.list_transform_runs(task.workspace_id, task.id)):
+        raise PermissionError('当前人物片段缺少匹配的来源与产物记录')
+    path = resolve_output(render)
+    if path is None or not path.is_file() or path.stat().st_size <= 0:
+        raise ValueError('当前人物片段文件不可用')
+    return path
+
+
 class PersonStageRejected(Exception):
 
     def __init__(self, *, status_code, detail):

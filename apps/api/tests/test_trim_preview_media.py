@@ -3,8 +3,8 @@
 import json
 import shutil
 import subprocess
+from dataclasses import replace
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
@@ -76,7 +76,7 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
         status="waiting_for_user", progress=70, recovery_point="montage",
         owner_user_id=creator_id,
     )
-    repository.plan_confirmation.confirm_creation_plan(plan, task)
+    repository.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=creator_id)
     repository.narration_artifacts.save_narration_artifact(NarrationArtifactRecord(
         id="voice-trim", workspace_id=workspace_id, script_id="script-trim", voice_profile_id=None,
         cache_key="voice-trim", audio_path=str(voice), duration_seconds=1, sample_rate=44100,
@@ -101,9 +101,9 @@ def test_trim_preview_is_playable_and_uses_before_and_after_source_ranges(tmp_pa
     monkeypatch.setattr(main_module, "production_repo", repository)
     monkeypatch.setattr(main_module, "artifact_store", ArtifactStore(tmp_path / "output"))
     monkeypatch.setattr(main_module, "montage_renderer", MontageRenderer(tmp_path / "output"))
-    monkeypatch.setattr(main_module, "settings", SimpleNamespace(
-        video_inbox_path=str(tmp_path), effective_temporary_root_path=tmp_path / "temp",
-    ))
+    monkeypatch.setattr(main_module, "settings", replace(main_module.settings,
+        database_path=str(repository.database_path), video_inbox_path=str(tmp_path),
+        video_output_path=str(tmp_path / "output"), temporary_root_path=str(tmp_path / "temp")))
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: workspace_id)
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(

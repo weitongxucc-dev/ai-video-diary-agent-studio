@@ -215,6 +215,7 @@ class AssistantExecutionBinding:
     def record_result(
         self, workspace_id: str, task_id: str, member_id: str,
         turn_id: str, result: dict, *, source: dict | None = None,
+        bind_goal_scope: Callable[[dict], None] | None = None,
     ) -> dict:
         """Persist a result already read through the current task/actor gate."""
         if source is None:
@@ -243,6 +244,14 @@ class AssistantExecutionBinding:
         self.conversations.record_task_execution(
             turn_id, workspace_id, member_id, task_id, result,
             current_source=current, input_id=source.get('input_id'))
+        if current and bind_goal_scope is not None:
+            goal = self.conversations.get_task_goal(turn_id)
+            if (goal is not None and goal['status'] == 'waiting_result'
+                    and goal['current_turn_id'] == turn_id
+                    and goal.get('source_input_id') == source.get('input_id')):
+                # Seal the interactive scope as soon as real work is recorded;
+                # a later model failure must not strand the original Job.
+                bind_goal_scope(goal)
         return result
 
     def prepare_observation(

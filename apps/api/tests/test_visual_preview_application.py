@@ -7,14 +7,13 @@ import json
 import os
 from pathlib import Path
 import shutil
-import sys
 import psutil
 
 from PIL import Image
 import pytest
 
 import app.main as main
-from app.montage import creation_task_montage_plan_to_payload
+from app.montage import creation_task_montage_plan_to_payload, _subtitle_font, _resolve_subtitle_font
 from app.creation.contracts import SubtitleTrack, SubtitleCue
 from app.task_audio import TaskAudio, TASK_MEDIA_CONTEXT
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state, permitted_media_state as permitted_media_state
@@ -80,9 +79,11 @@ def visual_application(permitted_media_state, monkeypatch):
         kind='subtitle_fixture', input_refs=['timeline:'+base.id],
         content='1\n00:00:00,200 --> 00:00:01,500\nTAIL DEMO\n', engine='fixture-subtitle-text',
         parameters={'language':'en-US'})
+    family = _subtitle_font(40).getname()[0]
+    _resolve_subtitle_font(family)
     track = state.production.subtitle_records.create_subtitle_track(SubtitleTrack(id='visual-fixture-caption',
         workspace_id=state.workspace_id, task_id=task.id, timeline_version_id=base.id,
-        language='en-US', source_language=None, style={**main.metadata_default_subtitle_style(), 'font_family': 'PingFang SC' if sys.platform == 'darwin' else 'Noto Sans CJK SC', 'enabled':True},
+        language='en-US', source_language=None, style={**main.metadata_default_subtitle_style(), 'font_family': family, 'enabled':True},
         cues=[SubtitleCue('visual-caption-one', None, 'TAIL DEMO', .2, 1.5)],
         generation_method='timeline', model_id=None, artifact_ref=caption_ref, transform_id=caption_transform, status='valid'))
     state.visual_plan, state.visual_clip, state.visual_base = plan, clip, base

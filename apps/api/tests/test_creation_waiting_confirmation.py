@@ -32,7 +32,7 @@ def waiting_state(generator_api, monkeypatch):  # noqa: F811 (existing pytest fi
         task.montage_plan_id = None
         connection.execute("UPDATE creation_tasks SET payload=? WHERE id=?",
             (json.dumps(asdict(task), default=str), task.id))
-        asset = state.repo.get_asset("local", "asset_1")
+        asset = state.repo.get_asset("local", state.asset.id)
         state.repo._claim_workspace_media_reference(connection, workspace_id="local",
             reference=state.repo.workspace_media_reference_for_asset("local", asset.id))
     state.task = state.repo.task_records.get_creation_task("local", state.task.id)

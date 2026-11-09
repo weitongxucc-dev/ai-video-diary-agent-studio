@@ -28,6 +28,80 @@ def audio_budget():
                           128 * 1024**2, 16, .05, 128 * 1024**2, 1_000_000)
 
 
+def test_section_render_mixes_short_voice_to_delivery_window_under_original_grant(tmp_path):
+    import hashlib
+    import wave
+    from pathlib import Path
+    from app.creation.segment_production_use_case import SegmentProductionUseCase
+    from app.creation_execution import CpuRenderLimits, revision_digest
+    from app.device_runtime import OwnerRegistration
+    from app.montage import MontageRenderer
+    from test_creation_execution import _narration_units_case
+    from _media_preview_test_fixtures import register_synthetic_video_asset
+
+    scope = _narration_units_case(tmp_path, section_count=1, duration_seconds=2, start_job=False)
+    store = ArtifactStore(tmp_path/'artifacts')
+    segments = SegmentProductionUseCase(scope.repo, narration_stage=scope.stage,
+        renderer=MontageRenderer(tmp_path/'output'), artifact_store=store, output_root=tmp_path/'temporary')
+    register_synthetic_video_asset(scope.repo, workspace_id='local', member_id=scope.actor.member_id,
+        path=tmp_path/'library/section.mp4', asset_id='section-picture', seconds=3)
+    scope.owner.cpu_render_limits = CpuRenderLimits(1_000_000, 1, 30)
+    scope.owner.narration_audio_budget = audio_budget()
+    scope.owner.audio_mix_facts = lambda ws, task_id, plan, *, actor, connection=None: segments.audio.mix_facts(
+        ws, task_id, plan.audio_timeline, plan.duration_seconds, actor=actor,
+        normalize_voice_sources=plan.narration_linkage_created_audio_timeline, budget=audio_budget(), connection=connection)
+    scope.owner.segments = scope.executor.segments = segments
+    task = scope.repo.task_records.get_creation_task('local', scope.task_id)
+    script = scope.repo.script_records.get_creation_task_script('local', scope.script_id)
+    plan = scope.repo.plan_records.get_creation_plan('local', task.plan_id)
+    scope.job = scope.execution.start('local', scope.task_id, scope.script_id, revision_digest(script, plan), actor=scope.actor)
+    runtime = SimpleNamespace(scheduler=scope.scheduler,
+        registrations={'creation_job': OwnerRegistration(scope.owner, scope.executor)}, wake=lambda: None)
+    try:
+        submit_creation_stage(scope.execution, scope.scheduler, scope.job, scope.actor)
+        narration_grant = scope.scheduler.pick_and_grant()
+        scope.executor.execute(narration_grant, scope.scheduler)
+        decision = segments.read_visual_decision('local', scope.task_id, scope.job.id, 'section_1', scope.actor)
+        assert decision['status'] == 'waiting_for_user'
+        source_ref = decision['audio']['artifact_reference']
+        source = scope.repo.narration_artifacts.resolve_authorized_narration_audio_reference('local', source_ref)
+        original_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+        with wave.open(str(source), 'rb') as stream:
+            assert stream.getnframes()/stream.getframerate() == 1
+        render = CpuRenderBudget(2, 8_000_000, 1920, 1920, 8_000_000, 4, 0, 1_000_000, 1, 30,
+            # Match the existing 1080p normal render envelope; audio retains its separate 128 MiB cap.
+            512*1024**2, 16*1024**2, 16, running_cpu_policy=_render_budget().running_cpu_policy)
+        probe = HostResourceProbe(scope.repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
+            100, 1, 2**63, 0, 2**63, 8_000_000, sample_seconds=.01, cpu_render=render,
+            cpu_audio=audio_budget()), memory_monitor=IsolatedMemoryMonitor())
+        scope.scheduler.resources = probe
+        adopted = segments.adopt_visual_decision('local', scope.task_id, scope.job.id, 'section_1', scope.actor,
+            decision_digest=decision['decision_digest'], confirmed_clip_ids=decision['required_confirmation_ids'], runtime=runtime)
+        deadline = time.monotonic()+probe.io_window_seconds+1
+        grant = scope.scheduler.pick_and_grant()
+        while grant is None and time.monotonic() < deadline:
+            time.sleep(.1)
+            grant = scope.scheduler.pick_and_grant()
+        assert grant is not None and grant.request_id == adopted['device_request_id']
+        declared = scope.scheduler._get(grant.request_id).resources
+        assert declared['duration_seconds'] == 2
+        assert declared['audio_mix']['inputs'][0]['reference'] == source_ref
+        assert declared['audio_mix']['inputs'][0]['duration_seconds'] == 1
+        scope.executor.execute(grant, scope.scheduler)
+        scope.scheduler.assert_released(grant)
+        publication = scope.repo.section_inputs.stage_segment_state('local', scope.task_id, 'section_1')
+        assert publication is not None and publication['duration_seconds'] == 2
+        assert publication['montage']['narration_audio_path'] == source_ref
+        mixed, = Path(tmp_path/'temporary/segment-staging').rglob('timeline-mix.wav')
+        with wave.open(str(mixed), 'rb') as stream:
+            assert (stream.getnchannels(), stream.getframerate(), stream.getnframes()) == (2, 48000, 96000)
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == original_sha
+        assert len(scope.generated) == 1
+        assert scope.scheduler._get(grant.request_id).owner_id == scope.job.id
+    finally:
+        scope.scheduler.close()
+
+
 def case(tmp_path, *, normalize=False, budget=True):
     repo, task_id, script_id, digest, actor, execution, owner, scheduler, base, members = _render_version_fixture(tmp_path)
     narration = repo.narration_artifacts.get_narration_artifact('local', 'cache_1')
@@ -53,9 +127,9 @@ def case(tmp_path, *, normalize=False, budget=True):
                                         snapshot={'montage': payload}))
     service = TaskAudio(repo, ArtifactStore(tmp_path/'artifacts'), tmp_path/'temp')
     cap = audio_budget() if budget else None
-    owner.audio_mix_facts = lambda workspace, task, plan, *, actor: service.mix_facts(
+    owner.audio_mix_facts = lambda workspace, task, plan, *, actor, connection=None: service.mix_facts(
         workspace, task, plan.audio_timeline, plan.duration_seconds, actor=actor,
-        normalize_voice_sources=plan.narration_linkage_created_audio_timeline, budget=cap)
+        normalize_voice_sources=plan.narration_linkage_created_audio_timeline, budget=cap, connection=connection)
     render = CpuRenderBudget(10, 30_000_000, 1920, 1920, 8_000_000, 4, 4, 8_000_000, 1, 60, 1_000_000, 1_000_000, 16)  # Synthetic test profile.
     probe = HostResourceProbe(repo.database_path, disk_paths=(tmp_path,), budget=HostBudget(
         100, 1, 2**63, 0, 2**63, 8_000_000, sample_seconds=.01, cpu_render=replace(render,running_cpu_policy=_render_budget().running_cpu_policy), cpu_audio=cap),memory_monitor=IsolatedMemoryMonitor())

@@ -46,10 +46,13 @@ def test_creation_owner_ignores_unrelated_task_text_but_refuses_changed_source_r
         kind="creation_task_narration", idempotency_key="job", input_digest=digest))
     repo.execution_records.append_task_event(TaskEvent(id="event_job_start", workspace_id=job.workspace_id,
         task_id=task_id, job_id=job.id, event_type="creation_execution_started",
-        payload={"script_id": script_id, "member_id": "member"}))
+        payload={"script_id": script_id, "member_id": "member", "input_digest": job.input_digest}))
     asset = _asset(repo, job.workspace_id, "source.mp4")
-    owner = CreationJobOwnerVerifier(repo)
-    request = SimpleNamespace(workspace_id=job.workspace_id, owner_id=job.id, unit_key="montage_plan:fixed")
+    # This metadata owner selects the workspace library; current identity is an
+    # explicit external fact, while the commit check below forbids all file IO.
+    owner = CreationJobOwnerVerifier(repo, verify_identity=lambda actor: "ready")
+    request = SimpleNamespace(workspace_id=job.workspace_id, owner_id=job.id,
+                              unit_key="montage_plan:fixed", resources={})
     with repo._connect() as conn:
         observed = owner.capture_local(request, conn)
         conn.execute("UPDATE creation_tasks SET payload=json_set(payload,'$.name','new title') WHERE id=?", (task_id,))

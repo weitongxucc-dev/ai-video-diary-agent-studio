@@ -112,7 +112,8 @@ def backend_identity(name, budget, *, settings, model_catalog=None):
                 if path is None:
                     return None
                 facts[tool] = _hash_file(path)
-            facts["resource_policy"] = _hash_file(audio_delivery_policy.__file__)
+            facts["resource_policy"] = _hash_file(
+                sys.executable if getattr(sys, "frozen", False) else audio_delivery_policy.__file__)
         elif name == "packet_copy":
             from app import montage, packet_copy_policy
             for tool in ("ffmpeg", "ffprobe"):
@@ -121,8 +122,11 @@ def backend_identity(name, budget, *, settings, model_catalog=None):
                     return None
                 facts[tool] = _hash_file(path)
             facts["fragment_contract"] = montage.PICTURE_FRAGMENT_CONTRACT
-            facts["implementation"] = _hash_file(montage.__file__)
-            facts["resource_policy"] = _hash_file(packet_copy_policy.__file__)
+            # Frozen modules live inside the executable, without loose .py files.
+            facts["implementation"] = _hash_file(
+                sys.executable if getattr(sys, "frozen", False) else montage.__file__)
+            facts["resource_policy"] = _hash_file(
+                sys.executable if getattr(sys, "frozen", False) else packet_copy_policy.__file__)
         elif name == "quality":
             from app import quality_worker, quality_checks, quality_worker_runtime
             for tool in ("ffmpeg", "ffprobe"):
@@ -173,6 +177,9 @@ def backend_identity(name, budget, *, settings, model_catalog=None):
             source = ("creation/native_task_operations.py" if name == "native_command" else "montage.py")
             executable = Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__).parent / source
             facts["implementation"] = _hash_file(executable)
+            if name == 'montage' and not getattr(sys, 'frozen', False):
+                for source in ('creation/montage_stage_use_case.py', 'montage_resource_preparation.py'):
+                    facts[source] = _hash_file(Path(__file__).parent / source)
             if name == "native_command":
                 facts["python"] = _hash_file(settings.model_runtime_python_path)
         else:
@@ -350,11 +357,68 @@ def with_audio_delivery_preparation(profile: ResolvedDeviceProfile, *, operation
     return replace(profile, budget=budget, digest=digest, evidence={**profile.evidence, operation: provenance})
 
 
+def _quality_first_use_tools():
+    from app import quality_checks, quality_worker_runtime, quality_worker
+
+    tools = {}
+    for name in ('ffmpeg', 'ffprobe'):
+        path = shutil.which(name)
+        if path is None:
+            raise ValueError('Quality first use needs its installed native tools')
+        key = _file_key(path)
+        tools.update({name + '_path': key[0], name + '_size_bytes': key[3],
+            name + '_sha256': _file_digest(key)})
+        if _file_key(path) != key:
+            raise OSError('Quality tool changed during first-use selection')
+    paths = ([Path(sys.executable)] if getattr(sys, 'frozen', False) else
+        [Path(module.__file__) for module in (quality_checks, quality_worker_runtime, quality_worker)])
+    tools['worker_sha256'] = _quality_worker_digest(tuple(_file_key(path) for path in paths))
+    return tools
+
+
+def with_quality_preparation(profile: ResolvedDeviceProfile, *, backend_identities) -> ResolvedDeviceProfile:
+    """Explicit streaming first use, preserving valid and invalid explicit quality."""
+    if (profile.source_kind != 'device_profile' or profile.budget.quality is not None
+            or 'quality' in profile.unavailable):
+        return profile
+    if profile.budget.cpu_render is None or profile.budget.memory_policy is None:
+        return replace(profile, unavailable={**profile.unavailable,
+            'quality': 'quality_process_policy_unavailable'})
+    from app.quality_preparation_policy import quality_preparation_budget, QUALITY_FIRST_USE_POLICY
+    try:
+        tools = _quality_first_use_tools()
+        candidate = quality_preparation_budget(host_budget=profile.budget, tools=tools)
+        identity = (backend_identities('quality', candidate) if callable(backend_identities)
+            else backend_identities.get('quality'))
+        if not isinstance(identity, str) or not identity:
+            raise ValueError('Quality first-use backend identity unavailable')
+        budget = replace(profile.budget, quality=candidate)
+    except (OSError, ValueError, TypeError):
+        return replace(profile, unavailable={**profile.unavailable,
+            'quality': 'quality_first_use_policy_or_backend_unavailable'})
+    provenance = {'status': 'declared', 'verification_status': 'unknown',
+        'selection': 'bounded_first_use', 'policy_id': QUALITY_FIRST_USE_POLICY,
+        'source_profile_digest': profile.digest, 'source_profile_revision': profile.revision,
+        'source_operation': 'cpu_render',
+        'source_operation_budget_digest': _identity(asdict(profile.budget.cpu_render)),
+        'backend_identity': identity, 'budget_digest': _identity(asdict(candidate)),
+        'protocol': 'quality_stream_v1', 'quality_measurement': 'not_performed',
+        'throughput_verification': 'unknown',
+        'byte_allocation_basis': 'one_65536_byte_stream_packet_per_report_and_diagnostic',
+        'tool_sizes_bytes': {name: tools[name + '_size_bytes'] for name in ('ffmpeg', 'ffprobe')}}
+    digest = _identity({'selection_contract': 'device-profile-quality-first-use/v1',
+        'source_profile_digest': profile.digest, 'effective_budget': asdict(budget), 'selection': provenance})
+    return replace(profile, budget=budget, digest=digest,
+        evidence={**profile.evidence, 'quality': provenance})
+
+
 def resolve_device_resources(settings, environment, *, model_catalog=None, device=None,
                              backend_identities=None, select_packet_copy_preparation: bool = False,
-                             select_audio_delivery_preparation: bool = False) -> ResolvedDeviceProfile:
+                             select_audio_delivery_preparation: bool = False,
+                             select_quality_preparation: bool = False) -> ResolvedDeviceProfile:
     """The only normal/experimental selection point; environment is explicit input."""
-    if type(select_packet_copy_preparation) is not bool or type(select_audio_delivery_preparation) is not bool:
+    if any(type(flag) is not bool for flag in (select_packet_copy_preparation,
+            select_audio_delivery_preparation, select_quality_preparation)):
         raise DeviceProfileUnavailable("设备准备策略选择必须显式指定")
     mode = settings.device_resource_mode
     if mode == "experiment":
@@ -387,6 +451,6 @@ def resolve_device_resources(settings, environment, *, model_catalog=None, devic
                     identity = None
             profile = (with_packet_copy_preparation(profile, backend_identity=identity) if operation == 'packet_copy'
                        else with_audio_delivery_preparation(profile, operation=operation, backend_identity=identity))
-        return profile
+        return with_quality_preparation(profile, backend_identities=identities) if select_quality_preparation else profile
     except DeviceProfileUnavailable as exc:
         raise DeviceProfileUnavailable(f"{exc}；请准备或更新该设备档，保留已有任务与产物。") from exc

@@ -78,12 +78,12 @@ def test_each_model_turn_receives_current_memory_as_data_and_keeps_original_inst
     monkeypatch.setattr(pi, "_read_memory_before_pi", lambda *_args: dict(memory))
     sent = []
 
-    def run(_command, *, input, env, **_kwargs):
-        sent.append((json.loads(input)["message"], env["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"]))
+    def run(_command, *, message, env, **_kwargs):
+        sent.append((json.loads(message)["message"], env["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"]))
         result = {"type": "message_end", "message": {"role": "assistant", "content": [{"type": "text", "text": "受控回复"}], "stopReason": "stop"}}
         return sdk_completed(_command, 0, json.dumps(result) + "\n" + json.dumps({"type": "agent_settled"}), "")
 
-    monkeypatch.setattr(pi.subprocess, "run", run)
+    monkeypatch.setattr(pi, "_run_pi_streaming", run)
     settings = Settings(model_root_path=str(tmp_path), database_path=str(tmp_path / "db.sqlite"))
     pi.run_plan_turn(settings, workspace_id="isolated", conversation_id="one", caller_user_id="alice", message="这次用长句")
     memory.update(revision=2, style_preferences={})

@@ -25,12 +25,15 @@ class ExecutionInputReader:
 
     def read_creation_execution_snapshot(self, workspace_id, task_id, *, connection=None):
         """Finish metadata, ordered body digest and count in one read transaction."""
-        from app.creation.execution_input import ExecutionInputSnapshot, execution_input_digest
+        from app.creation.execution_input import ExecutionInputSnapshot, execution_input_digest, validate_execution_relationships
         with self.creation_execution_read(connection) as conn:
             task = require_creation_task(conn, workspace_id, task_id)
+            plan = self._read_plan(conn, workspace_id, task.plan_id)
+            if plan.source_media is not None:
+                validate_execution_relationships(task, None, plan)
+                return ExecutionInputSnapshot(task, plan, None, execution_input_digest(None, plan, ()))
             if not task.confirmed_script_id:
                 raise ValueError("请先确认实际文案")
-            plan = self._read_plan(conn, workspace_id, task.plan_id)
             header, fields = self._read_script_metadata(conn, workspace_id, task.confirmed_script_id)
             digest = execution_input_digest(fields, plan,
                 self._iter_script_sections(conn, workspace_id, header.id))

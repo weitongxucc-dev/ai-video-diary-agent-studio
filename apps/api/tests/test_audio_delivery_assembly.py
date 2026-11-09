@@ -102,6 +102,11 @@ def test_native_durable_aac_then_copy_restarts_and_keeps_priming_and_original_ma
     from pathlib import Path
     path = Path(encoded['path'])
     mtime = path.stat().st_mtime_ns
+    # Older builds failed the producer when preparing its successor failed,
+    # after the AAC transform and its exact usage had already committed.
+    with case.repo._connect() as conn:
+        conn.execute("UPDATE device_work_requests SET state='failed' WHERE id=?", (encode.request_id,))
+    assert delivery._artifact(original_job, manifest, 'audio_encode') == encoded
     case.scheduler.close()
     repo = ProductionRepository(case.repo.database_path, video_library_path=tmp_path/'library')
     fresh_audio = TaskAudio(repo, store, tmp_path/'audio')

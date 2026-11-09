@@ -184,6 +184,50 @@ def _complete(scheduler, grant):
                                    checkpoint_write=lambda conn, current: current.unit_key)
 
 
+def test_streaming_dependency_check_keeps_live_permissions_without_per_chunk_resource_sampling(tmp_path, monkeypatch):
+    class VersionedOwners(Owners):
+        def capture_local(self, request, conn):
+            return conn.execute('SELECT version FROM owner_inputs').fetchone()[0]
+
+        def check_local(self, request, conn, observed):
+            if self.revoked:
+                return 'unauthorized'
+            return 'ready' if conn.execute('SELECT version FROM owner_inputs').fetchone()[0] == observed else 'stale'
+
+    owners, resources = VersionedOwners(), Resources()
+    scheduler = _scheduler(tmp_path, owners=owners, resources=resources)
+    with sqlite3.connect(scheduler.database_path) as conn:
+        conn.executescript('CREATE TABLE owner_inputs(version INTEGER); INSERT INTO owner_inputs VALUES(1)')
+    scheduler.submit(_intent('streaming-source'), 'member-a')
+    grant = scheduler.pick_and_grant()
+    assert grant is not None
+    check = scheduler.capture_dependency_check(grant)
+    monkeypatch.setattr(resources, 'continue_unit', lambda _: pytest.fail('a read chunk must not start a blocking resource sample'))
+    try:
+        check()
+        owners.revoked = True
+        with pytest.raises(PermissionError):
+            check()
+        owners.revoked = False
+        with sqlite3.connect(scheduler.database_path) as conn:
+            conn.execute('UPDATE owner_inputs SET version=2')
+        with pytest.raises(PermissionError):
+            check()
+        with sqlite3.connect(scheduler.database_path) as conn:
+            conn.execute('UPDATE owner_inputs SET version=1')
+        check()
+        # Command/resource boundaries keep their resource refusal, independently
+        # of the successful stream dependency reads.
+        monkeypatch.setattr(resources, 'continue_unit', lambda _: False)
+        with pytest.raises(RecoveryBlocked):
+            scheduler.capture_running_check(grant)()
+        _complete(scheduler, grant)
+        with pytest.raises(PermissionError):
+            check()
+    finally:
+        scheduler.close()
+
+
 def _sqlite_connection_facts(conn):
     # Read the actual connection policy; never set a PRAGMA to make contention pass.
     return {"database": conn.execute("PRAGMA database_list").fetchone()[2],
@@ -1295,11 +1339,11 @@ def test_failed_and_invalid_result_retry_requires_business_proof_and_keeps_audit
     scheduler = _scheduler(tmp_path)
     verify_retry = scheduler.owners.verify_retry
 
-    def verify_in_snapshot(request, actor, reason, conn):
-        assert conn.in_transaction
+    def verify_after_snapshot(request, actor, reason, conn):
+        assert not conn.in_transaction
         return verify_retry(request, actor, reason, conn)
 
-    monkeypatch.setattr(scheduler.owners, "verify_retry", verify_in_snapshot)
+    monkeypatch.setattr(scheduler.owners, "verify_retry", verify_after_snapshot)
     request = scheduler.submit(_intent("job"), "member-a")
     grant = scheduler.pick_and_grant()
     with sqlite3.connect(scheduler.database_path) as conn:

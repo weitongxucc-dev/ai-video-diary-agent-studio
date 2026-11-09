@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.host_memory_boundary import IsolatedMemoryMonitor
+
 from app.device_scheduler import DeviceScheduler
 from app.material_ingestion import (
     MaterialHashOwnerVerifier, MaterialHashUnitExecutor, MaterialIngestionService,
@@ -43,6 +45,9 @@ def _scene_test_scheduler(repo: ProductionRepository, tmp_path: Path) -> DeviceS
             2**63, 3 * 1024 * 1024, 0.02,
             scene_window=scene_budget,
         ),
+        # Keep native decoding and grant mechanics real; pressure policy has
+        # independent host-memory coverage and is not calibrated by this test.
+        memory_monitor=IsolatedMemoryMonitor(),
     )
     return DeviceScheduler(
         repo.database_path, tmp_path / "device.lock",

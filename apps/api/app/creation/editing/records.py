@@ -180,8 +180,8 @@ class EditRecordStore:
         )
         return intent
 
-    def get_edit_intent(self, workspace_id: str, intent_id: str) -> EditIntent:
-        with self._connect() as conn:
+    def get_edit_intent(self, workspace_id: str, intent_id: str, *, connection=None) -> EditIntent:
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute(
                 "SELECT * FROM edit_intents WHERE workspace_id = ? AND id = ?",
                 (workspace_id, intent_id),
@@ -299,8 +299,17 @@ class EditRecordStore:
         proposal_id: str,
         *,
         status: Literal["confirmed", "rejected", "expired"],
+        connection=None,
+        write_guard=None,
     ) -> EditProposal:
-        with self._connect() as conn:
+        if connection is None:
+            with self._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                return self.transition_edit_proposal(workspace_id, task_id, proposal_id, status=status,
+                    connection=conn, write_guard=write_guard)
+        with nullcontext(connection) as conn:
+            if write_guard is not None:
+                write_guard(conn)
             require_creation_task(conn, workspace_id, task_id)
             row = conn.execute(
                 """
@@ -331,7 +340,7 @@ class EditRecordStore:
             ).rowcount
             if changed != 1:
                 raise ValueError("编辑提案已被其他操作转换")
-        return self.get_edit_proposal(workspace_id, proposal_id)
+            return self.get_edit_proposal(workspace_id, proposal_id, connection=conn)
 
     def create_edit_operation(self, operation: EditOperation) -> EditOperation:
         validate_edit_operation(operation)

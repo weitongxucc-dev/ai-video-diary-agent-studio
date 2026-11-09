@@ -108,6 +108,7 @@ class TaskAuthorizationRecordStore:
                 raise KeyError(task_id)
             keys = ("id","goal","target_count","language","aspect_ratio","duration_target_seconds")
             plan_row = conn.execute("SELECT "+",".join("json_extract(payload,'$."+key+"')" for key in keys)+
+                ",json_extract(payload,'$.source_media')"
                 " FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id,row[0])).fetchone()
             # Window creation/confirmation also advances the request's optimistic
             # revision. Bind goal contents so another bounded window cannot revoke
@@ -115,6 +116,8 @@ class TaskAuthorizationRecordStore:
             origin = conn.execute("SELECT r.id,r.goal,r.target_count,r.output_relation,r.requirements_json,r.material_scope_json FROM creation_request_items i "
                 "JOIN creation_request_windows w ON w.id=i.window_id JOIN creation_requests r ON r.id=w.request_id "
                 "WHERE r.workspace_id=? AND i.task_id=?", (workspace_id,task_id)).fetchone()
-        identity = dict(zip(keys, plan_row, strict=True))
+        identity = dict(zip(keys, plan_row[:-1], strict=True))
+        if plan_row[-1] is not None:
+            identity['source_media'] = json.loads(plan_row[-1])
         identity["request"] = list(origin) if origin is not None else None
         return hashlib.sha256(json.dumps(identity,ensure_ascii=False,sort_keys=True).encode()).hexdigest()

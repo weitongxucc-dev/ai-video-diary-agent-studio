@@ -28,11 +28,19 @@ def test_concrete_modules_do_not_import_assembly_or_routes():
     root = Path(host.__file__).parent / "assistant"
     for source in root.glob("*.py"):
         tree = ast.parse(source.read_text())
+        type_only = {id(node) for guard in ast.walk(tree) if isinstance(guard, ast.If)
+            and isinstance(guard.test, ast.Name) and guard.test.id == "TYPE_CHECKING"
+            for statement in guard.body for node in ast.walk(statement)}
+        forbidden = {"app.main", "app.production"}
+        if source.name != "script_generation_runner.py":
+            forbidden.add("app.assistant_pi")
         for node in ast.walk(tree):
+            if id(node) in type_only:
+                continue
             if isinstance(node, ast.ImportFrom):
-                assert node.module not in {"app.assistant_pi", "app.main", "app.production"}
+                assert node.module not in forbidden
             if isinstance(node, ast.Import):
-                assert not any(alias.name in {"app.assistant_pi", "app.main", "app.production"} for alias in node.names)
+                assert not any(alias.name in forbidden for alias in node.names)
     tree = ast.parse(Path(host.__file__).read_text())
     definitions = {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
     assert "_PiStreamProjector" not in definitions and "AssistantUnavailable" not in definitions

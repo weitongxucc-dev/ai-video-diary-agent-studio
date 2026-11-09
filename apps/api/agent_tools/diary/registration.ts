@@ -2,6 +2,7 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 import type {ToolRegistrar, ActionSource} from './contracts.ts';
 
 const inputBoundActions = new Set([
+  'create_source_task', 'read_source_task',
   'apply_typed_edit', 'preview_typed_edit', 'preview_media_script', 'preview_media_script_tool',
   'continue_task_quality_check', 'observe_task_output', 'save_media_script_tool', 'update_media_script_tool', 'revoke_media_script_tool',
   'start_creation_execution', 'resume_creation_execution', 'cancel_creation_execution',

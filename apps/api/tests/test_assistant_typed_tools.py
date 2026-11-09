@@ -186,7 +186,7 @@ def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, resu
     env["AI_VIDEO_DIARY_AGENT_SELECTED_REFERENCES"]=json.dumps(references)
     if pi_module:
         env["AI_VIDEO_DIARY_AGENT_PI_MODULE"] = str(pi_module)
-    workspace = workspace or {"task": {"id": "task-current", "current_timeline_version_id": "version-current", "timeline_sequence": 4}}
+    workspace = workspace or {"task": {"id": "task-current", "stage": stage, "current_timeline_version_id": "version-current", "timeline_sequence": 4}}
     runner = tmp_path / "controlled-tools-fixture.mjs"
     runner.write_text(RUNNER)
     completed = subprocess.run([os.environ.get("MATERIAL_TOOLS_TEST_NODE", "node"), "--experimental-strip-types",
@@ -319,8 +319,9 @@ def test_parameter_corrections_are_not_capped_at_three_candidates(tmp_path):
               "clip_id": "second", "source_start_seconds": position}}
              for position in (1, 2, 3, 4)]
     seen = invoke(tmp_path, steps=[*steps, steps[-1]], failure=True)
-    assert all(item["ok"] and item["result"]["details"]["correction_allowed"]
-               for item in seen["results"][:4])
+    assert all(not item["ok"] and item["result"]["isError"]
+               and item["result"]["details"]["status"] == "rejected"
+               and item["result"]["details"]["correction_allowed"] for item in seen["results"][:4])
     assert seen["results"][4]["result"]["isError"] is True
     posts = [call for call in seen["calls"] if call["method"] == "POST"]
     assert len(posts) == 4
@@ -500,8 +501,9 @@ def test_non_script_knowledge_reads_a_current_bounded_server_page(tmp_path):
     facts = seen["results"][0]["result"]["details"]
     assert facts["total_count"] == 1000 and facts["matches"] == page["items"]
     assert facts["scope"] == "current_authorized_knowledge_versions"
-    assert seen["calls"][0]["path"] == "/api/knowledge-items/search"
-    assert "offset=995" in seen["calls"][0]["query"] and "limit=5" in seen["calls"][0]["query"]
+    assert [call["path"] for call in seen["calls"]] == [
+        "/api/creation-tasks/task-current", "/api/knowledge-items/search"]
+    assert "offset=995" in seen["calls"][-1]["query"] and "limit=5" in seen["calls"][-1]["query"]
     assert all(call["path"] != "/api/knowledge-items" for call in seen["calls"])
 
 
@@ -511,7 +513,8 @@ def test_script_knowledge_remains_current_task_allowed_sources(tmp_path):
         steps=[{"tool": "find_knowledge", "args": {"query": "剪辑"}}])
     facts = seen["results"][0]["result"]["details"]
     assert facts["scope"] == "current_task_allowed_sources" and facts["matches"][0]["id"] == "knowledge:allowed:2"
-    assert [call["path"] for call in seen["calls"]] == ["/api/creation-tasks/task-current/assistant/script-context"]
+    assert [call["path"] for call in seen["calls"]] == [
+        "/api/creation-tasks/task-current", "/api/creation-tasks/task-current/assistant/script-context"]
 
 
 def test_observation_reads_and_enqueue_bind_actual_current_task_and_no_media(tmp_path):

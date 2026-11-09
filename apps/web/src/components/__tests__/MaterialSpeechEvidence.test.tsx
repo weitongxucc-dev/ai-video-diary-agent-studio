@@ -5,6 +5,7 @@ import type { MaterialAsset, MaterialLibraryInsights } from "@/lib/types";
 import { MaterialLibraryWorkspace } from "../MaterialLibraryWorkspace";
 import { updateProductionMaterialSegment } from "@/lib/api";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
 vi.mock("../AppShell", () => ({ AppShell: ({ children, inspector }: { children: ReactNode; inspector: ReactNode }) => <>{children}{inspector}</> }));
 vi.mock("@/lib/api", () => ({
   getProductionMaterials: vi.fn(() => new Promise(() => {})),

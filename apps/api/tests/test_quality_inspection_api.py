@@ -25,12 +25,20 @@ from app.quality_worker_runtime import source_receipt
 
 @pytest.fixture
 def system(tmp_path, monkeypatch, request):
+    from app.auth import SupabaseAuthContext
+    from app.config import Settings
+    settings = Settings(database_path=str(tmp_path / "studio.sqlite"),
+        video_inbox_path=str(tmp_path / "inbox"), video_output_path=str(tmp_path / "output"),
+        model_root_path=str(tmp_path / "models"), temporary_root_path=str(tmp_path / "temporary"),
+        obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
+        local_whisper_cli_path=None, local_whisper_model_path=None,
+        supabase_url=None, supabase_publishable_key=None)
+    monkeypatch.setattr(main, "settings", settings)
+    monkeypatch.setattr(main, "auth_context", SupabaseAuthContext(settings))
     metadata_only = request.node.name == "test_authority_and_empty_body_reject_before_check_write"
     forbidden_calls = []
     if metadata_only:
         import wave
-        from app.auth import SupabaseAuthContext
-        from app.config import Settings
         from app.device_runtime import DeviceRuntime
         from app.device_scheduler import DeviceScheduler
         from app.creation.quality_execution import QualityCheckUnitExecutor
@@ -46,14 +54,6 @@ def system(tmp_path, monkeypatch, request):
         monkeypatch.setattr(DeviceScheduler, "pick_and_grant", forbidden)
         monkeypatch.setattr(QualityCheckUnitExecutor, "execute", forbidden)
         monkeypatch.setattr(main, "_start_device_runtime", forbidden)
-        settings = Settings(database_path=str(tmp_path / "studio.sqlite"),
-            video_inbox_path=str(tmp_path / "inbox"), video_output_path=str(tmp_path / "output"),
-            model_root_path=str(tmp_path / "models"), temporary_root_path=str(tmp_path / "temporary"),
-            obsidian_vault_path=None, hermes_radar_path=None, local_whisper_python_path=None,
-            local_whisper_cli_path=None, local_whisper_model_path=None,
-            supabase_url=None, supabase_publishable_key=None)
-        monkeypatch.setattr(main, "settings", settings)
-        monkeypatch.setattr(main, "auth_context", SupabaseAuthContext(settings))
     members = LocalMemberService(tmp_path / "studio.sqlite")
     owner, token = members.whoami(None)
     other, other_token = members.join(members.create_invite_code(), "另一个成员")

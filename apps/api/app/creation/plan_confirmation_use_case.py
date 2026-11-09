@@ -5,7 +5,7 @@ import hashlib
 from dataclasses import asdict, replace
 
 from app.creation.contracts import CreationTask as _CreationTask, TaskEvent as _TaskEvent
-from app.creation.plan_contracts import CreationPlan, _validate_plan_material_matches
+from app.creation.plan_contracts import CreationPlan, _validate_plan_material_matches, creation_plan_payload
 from app.creation.script_contracts import (
     _validated_assistant_reply_reference, _assistant_reply_request_event_id,
 )
@@ -14,7 +14,7 @@ from app.source_policy import content_owner
 
 
 def _creation_plan_conversion_intent(plan: CreationPlan) -> dict[str, object]:
-    value = asdict(plan)
+    value = creation_plan_payload(plan)
     for key in ("id", "creation_task_id", "owner_user_id", "created_at", "confirmed_at", "updated_at"):
         value.pop(key, None)
     return value

@@ -201,31 +201,51 @@ def test_failed_user_shutdown_keeps_auth_transport_open(monkeypatch):
     assert client.is_closed
 
 
-def test_goal_unknown_can_reverify_but_actual_revocation_still_blocks(monkeypatch):
-    calls, verified = [], []
-    outcome = "unknown"
+def test_task_goal_authority_unknown_can_reverify_but_actual_revocation_still_blocks(tmp_path):
+    from dataclasses import replace
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    from app.creation_execution import CreationExecutionActor
+    from app.device_accounts import DeviceAccountService, DeviceCredential
+    from test_metadata_edit_use_case import metadata_state
+
+    state = metadata_state(tmp_path)
+    workspace, device = str(uuid4()), str(uuid4())
+    user = state.member.member_id
+    plan = replace(state.repo.plan_records.get_creation_plan('ws', 'plan'), id='account-plan', workspace_id=workspace)
+    task = replace(state.task, id='account-task', workspace_id=workspace, plan_id=plan.id,
+        current_timeline_version_id=None, montage_plan_id=None, narration_cache_key=None)
+    task = state.repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=user)[1]
+    calls = []
+    outcome = 'unknown'
     def read(request):
         calls.append(request)
-        if outcome == "unknown":
-            raise httpx.ConnectTimeout("fixture unavailable", request=request)
-        return httpx.Response(200, json=[{"workspace_id": "ws", "role": "owner"}] if outcome == "ready" else [])
+        assert request.url.path == '/rest/v1/rpc/device_creation_permit'
+        assert json.loads(request.content) == {'target_device_id': device, 'device_proof': 'a' * 64,
+            'target_user_id': user, 'target_workspace_id': workspace}
+        assert 'authorization' not in request.headers
+        if outcome == 'unknown':
+            raise httpx.ConnectTimeout('fixture unavailable', request=request)
+        return httpx.Response(200, json=outcome == 'ready')
     with httpx.Client(transport=httpx.MockTransport(read)) as client:
-        ctx = SupabaseAuthContext(Settings(supabase_url="https://auth.example",
-            supabase_publishable_key="sb_publishable_fixture"), http_client=client)
-        def verify(token):
-            verified.append(token)
-            return {"sub": "member"}
-        monkeypatch.setattr(ctx, "verify_token", verify)
-        monkeypatch.setattr(main, "auth_context", ctx)
-        saved = {"authorization": "Bearer fixture-token", "cookie": None, "blocked": False}
-        monkeypatch.setattr(main, "_assistant_goal_transports", {("ws", "member"): saved})
-        goal = {"workspace_id": "ws", "member_id": "member", "task_id": "task"}
-        assert main._goal_readiness_use_case().verify(goal, {}) == {"status": "waiting_identity", "reason": "interactive_identity_not_available"}
-        assert saved["blocked"] is False
-        outcome = "ready"
-        request = main._goal_request(goal)
-        assert request.state.principal.user_id == "member" and request.state.principal.workspace_id == "ws"
-        outcome = "revoked"
-        assert main._goal_request(goal) is None and saved["blocked"] is True
-        assert main._goal_request(goal) is None
-    assert len(calls) == 3 and verified == ["fixture-token"] * 3
+        service = DeviceAccountService(Settings(supabase_url='https://auth.example',
+            supabase_publishable_key='sb_publishable_fixture'), DeviceCredential(device, 'a' * 64),
+            creation_permit_client=client)
+        authority = TaskAuthorizationUseCase(state.repo, lambda identity: service.creation_permit(
+            identity['device_id'], identity['user_id'], identity['workspace_id']))
+        actor = CreationExecutionActor.account(workspace, device, user)
+        saved = authority.ensure(task, actor, interactive=True)
+        assert saved.revoked_at is None and saved.last_verdict == 'unknown'
+        assert authority.status(workspace, task.id, operation='task_goal') == 'unverified'
+        outcome = 'ready'
+        authority.refresh(saved)
+        saved = state.repo.task_authorization_records.get_task_authorization(workspace, task.id)
+        assert authority.status(workspace, task.id, operation='task_goal') == 'valid'
+        outcome = 'revoked'
+        authority.refresh(saved)
+        saved = state.repo.task_authorization_records.get_task_authorization(workspace, task.id)
+        assert saved.revoked_at is not None
+        assert authority.status(workspace, task.id, operation='task_goal') == 'revoked'
+        outcome = 'ready'
+        authority.refresh(saved)
+        assert authority.status(workspace, task.id, operation='task_goal') == 'revoked'
+    assert len(calls) == 3

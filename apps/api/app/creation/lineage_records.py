@@ -147,8 +147,8 @@ class LineageRecordStore:
             row = conn.execute("SELECT * FROM transform_runs WHERE workspace_id=? AND id=?", (run.workspace_id, run.id)).fetchone()
             return self._transform_run_from_row(row)
 
-    def get_transform_run(self, workspace_id: str, transform_id: str) -> _TransformRun:
-        with self._connect() as conn:
+    def get_transform_run(self, workspace_id: str, transform_id: str, *, connection=None) -> _TransformRun:
+        with self._connect() if connection is None else nullcontext(connection) as conn:
             row = conn.execute(
                 "SELECT * FROM transform_runs WHERE workspace_id = ? AND id = ?",
                 (workspace_id, transform_id),
@@ -158,9 +158,9 @@ class LineageRecordStore:
         return self._transform_run_from_row(row)
 
     def list_transform_runs(
-        self, workspace_id: str, task_id: str
+        self, workspace_id: str, task_id: str, *, connection: sqlite3.Connection | None = None
     ) -> list[_TransformRun]:
-        with self._connect() as conn:
+        with self._connect() if connection is None else nullcontext(connection) as conn:
             self._require_creation_task(conn, workspace_id, task_id)
             rows = conn.execute(
                 """

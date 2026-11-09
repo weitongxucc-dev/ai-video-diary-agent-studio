@@ -18,6 +18,7 @@ from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload, render_granted_picture_fragment
 from app.subtitle_schedule import TimedCaption, narration_schedule, subtitle_schedule, schedule_srt
 from app.task_audio import media_digest
+from app.creation.render_generation import current_render_generation, render_namespace, render_generation_fields, stored_render_scope
 
 
 def _identity(path):
@@ -36,9 +37,9 @@ class PictureFragmentAssembly:
         self.budget, self.packet = render_budget, packet_copy_assembly
         self.root = Path(temporary_root).expanduser().resolve() / 'picture-fragments'
 
-    @staticmethod
-    def manifest_id(job):
-        return f'event_{job.id}_picture_fragment_manifest'
+    def manifest_id(self, job, *, connection=None):
+        return render_namespace(f'event_{job.id}_picture_fragment_manifest',
+            current_render_generation(self.repository, job, connection=connection))
 
     def _inputs(self, job, actor, *, connection=None):
         from app.source_policy import knowledge_item_readable as content_readable
@@ -51,10 +52,13 @@ class PictureFragmentAssembly:
             job.workspace_id, job.task_id, connection=connection))
         if any(clip.person_render_id for clip in montage.clips):
             raise ValueError('人物片段尚未接入此硬切窗口生产路径')
-        self.renderer.validate_material_use(job.workspace_id, montage)
-        files, _graphics = self.renderer.qualified_picture_sources(job.workspace_id, task, montage, [montage], actor)
-        tracks = self.metadata.current_subtitle_tracks(job.workspace_id, task, montage=montage)
-        current_version = self.repository.timeline_records.get_timeline_version(job.workspace_id, task.current_timeline_version_id) if task.current_timeline_version_id else None
+        self.renderer.validate_material_use(job.workspace_id, montage, connection=connection)
+        files, _graphics = self.renderer.qualified_picture_sources(job.workspace_id, task, montage, [montage], actor,
+            connection=connection)
+        current_version = self.repository.timeline_records.get_timeline_version(job.workspace_id,
+            task.current_timeline_version_id, connection=connection) if task.current_timeline_version_id else None
+        tracks = self.metadata.current_subtitle_tracks(job.workspace_id, task, current_version=current_version,
+            montage=montage, connection=connection)
         explicit_subtitles = current_version is not None and 'subtitle_track_ids' in current_version.snapshot
         tracks = tracks if tracks or explicit_subtitles else None
         captions = (subtitle_schedule(tracks, montage.duration_seconds) if tracks is not None
@@ -64,12 +68,14 @@ class PictureFragmentAssembly:
         for graphic in graphics:
             if graphic['kind'] == 'image':
                 original = graphic['source_ref']
-                facts = graphic_source_facts(self.repository, self.store, job.workspace_id, job.task_id, original, actor=actor)
+                facts = graphic_source_facts(self.repository, self.store, job.workspace_id, job.task_id, original,
+                    actor=actor, connection=connection)
                 image_facts[original] = facts
                 graphic['source_ref'] = facts['path']
         sources = {}
         for clip in montage.clips:
-            path = self.repository.resolve_workspace_media_reference(job.workspace_id, clip.source_path, require_registered=True)
+            path = self.repository.resolve_workspace_media_reference(job.workspace_id, clip.source_path,
+                require_registered=True, connection=connection)
             sources[clip.source_path] = {'path': str(path), 'file_identity': _identity(path)}
         sidecar = (subtitle_schedule([replace(track, style={**track.style, 'enabled': True}) for track in tracks],
             montage.duration_seconds) if tracks is not None else captions)
@@ -78,6 +84,7 @@ class PictureFragmentAssembly:
     def prepare(self, job, *, actor, write_guard, connection=None):
         if self.budget is None:
             raise ValueError('画面窗口缺少本机CPU编码预算')
+        scope = render_generation_fields(current_render_generation(self.repository, job, connection=connection))
         task, montage, captions, graphics, sources, images, files, subtitle_text = self._inputs(job, actor, connection=connection)
         width, height = canvas_size(montage.aspect_ratio)
         max_seconds = min(self.budget.max_duration_seconds, self.budget.max_pixel_seconds/(width*height))
@@ -98,7 +105,10 @@ class PictureFragmentAssembly:
             decode_seconds = window.clip.source_end_seconds-window.clip.source_start_seconds
             overlay_count = graphics_count + caption_count
             input_bytes = source['file_identity']['size_bytes'] + sum(facts['size_bytes'] for facts in images.values())
-            if (decode_seconds > max_seconds or width > self.budget.max_width_px or height > self.budget.max_height_px
+            if width > self.budget.max_width_px or height > self.budget.max_height_px:
+                raise ValueError(f'当前设备准备覆盖 {self.budget.max_width_px}×{self.budget.max_height_px}，'
+                    f'成片需要 {width}×{height}；请在设备设置按目标画幅重新准备 1080p 成片。')
+            if (decode_seconds > max_seconds
                     or input_bytes > self.budget.max_input_bytes or overlay_count > self.budget.max_overlay_count
                     or self.budget.max_clip_count < 1):
                 raise ValueError('真实原来源字节、decode prefix、图层或画幅超出当前有限编码单元，未缩报或抬帽')
@@ -117,7 +127,7 @@ class PictureFragmentAssembly:
         last['subtitle_bytes'] = sidecar_bytes
         last['id'] = media_digest([last['id'], last['subtitle_sha256'], 'subtitle-sidecar/v1'])
         last['artifact_id'] = f'artifact_picture_fragment_{last["id"]}'
-        payload = {'version': 'picture-fragment-assembly/v2', 'subtitle_text': subtitle_text, 'job_id': job.id, 'input_digest': job.input_digest,
+        payload = {'version': 'picture-fragment-assembly/v2', **scope, 'subtitle_text': subtitle_text, 'job_id': job.id, 'input_digest': job.input_digest,
             'task_id': task.id, 'head': task.current_timeline_version_id, 'subtitles': [asdict(cue) for cue in captions],
             'picture_recipe': self.packet.recipe(job, connection=connection), 'sources': sources, 'images': images,
             'qualified_files': files, 'units': units}
@@ -143,18 +153,19 @@ class PictureFragmentAssembly:
             if (current.current_timeline_version_id != payload['head']
                     or self.packet.recipe(job, connection=conn) != payload['picture_recipe']):
                 raise ValueError('原任务画面配方在manifest封存期间已变化')
-            self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job), job.workspace_id, job.task_id,
+            self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job, connection=conn), job.workspace_id, job.task_id,
                 job.id, 'picture_fragment_manifest', payload), connection=conn)
         return payload
 
     def manifest(self, job, *, actor, connection=None):
         try:
-            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job, connection=connection), connection=connection)
         except KeyError:
             return None
         payload = event.payload
         task, _montage, captions, _graphics, sources, images, files, subtitle_text = self._inputs(job, actor, connection=connection)
-        if (payload['digest'] != media_digest({key: value for key, value in payload.items() if key != 'digest'})
+        if (stored_render_scope(payload) != (render_generation_fields(current_render_generation(self.repository, job, connection=connection)) or None)
+                or payload['digest'] != media_digest({key: value for key, value in payload.items() if key != 'digest'})
                 or payload['job_id'] != job.id or payload['task_id'] != job.task_id or payload['input_digest'] != job.input_digest
                 or payload['head'] != task.current_timeline_version_id or payload['sources'] != sources
                 or payload['images'] != images or payload['qualified_files'] != json.loads(json.dumps(files))
@@ -179,7 +190,8 @@ class PictureFragmentAssembly:
                     continue
             window = PictureAssemblyWindow(**unit['window'])
             width, height = canvas_size(window.aspect_ratio)
-            resources = {'kind': 'creation_render', 'picture_fragment_unit': unit['id'],
+            resources = {'kind': 'creation_render', 'execution_mode': 'cpu_ffmpeg', 'picture_fragment_unit': unit['id'],
+                **(stored_render_scope(manifest) or {}),
                 'picture_recipe_digest': manifest['picture_recipe'], 'picture_fragment_recipe': unit['recipe'],
                 'picture_fragment': {'first_frame': window.timeline_start_frame,
                     'packet_count': window.frame_count, 'contract': 'h264-crf20-b0-fmp4/v1'},
@@ -224,6 +236,7 @@ class PictureFragmentAssembly:
         try:
             source = Path(unit['source']['path'])
             context.check()
+            check_current = context.scheduler.capture_dependency_check(context.grant)
             digest = hashlib.sha256()
             descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(descriptor, 'rb') as reader:
@@ -234,7 +247,10 @@ class PictureFragmentAssembly:
                 if opened_identity != before:
                     raise ValueError('原画面来源文件描述符与封存stat不一致')
                 while True:
-                    context.check()
+                    # Use the scheduler's live local dependency check while
+                    # streaming, with full input verification at both ends.
+                    context.check_execution_limits()
+                    check_current()
                     chunk = reader.read(65536)
                     if not chunk:
                         break
@@ -244,6 +260,7 @@ class PictureFragmentAssembly:
                         or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) !=
                            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
                     raise ValueError('原画面来源在完整SHA期间已变化')
+            context.check()
             if manifest['images']:
                 montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id))
                 self.renderer.graphic_source_paths(job.workspace_id, job.task_id, montage.graphic_overlays, context)
@@ -261,12 +278,13 @@ class PictureFragmentAssembly:
                     raise ValueError('画面与字幕真实总输出超出本单元许可')
                 subtitle_publication_started = True
                 published_subtitles = self.store.publish_file(subtitle_logical, subtitle_path,
-                    temporary_path=subtitle_temporary, check=context.check)
+                    temporary_path=subtitle_temporary, check=context.check, retain_failed_temporary=True)
             context.check()
             if _identity(source) != unit['source']['file_identity']:
                 raise ValueError('画面来源在编码期间已变化')
             started = True
-            published = self.store.publish_file(logical, output, temporary_path=publication_file, check=context.check)
+            published = self.store.publish_file(logical, output, temporary_path=publication_file,
+                check=context.check, retain_failed_temporary=True)
             record = ArtifactRecord(unit['artifact_id'], job.workspace_id, job.task_id, 'picture_fragment', logical,
                 published.sha256, published.size_bytes, job.id, [window.clip.source_path, *manifest['images']])
             facts = {**request.resources['picture_fragment'], 'recipe_digest': manifest['picture_recipe'],
@@ -275,7 +293,8 @@ class PictureFragmentAssembly:
             transform = TransformRun(id=f'transform_{record.id}', workspace_id=job.workspace_id, task_id=job.task_id,
                 job_id=job.id, transform_type='picture_fragment', input_digest=unit['id'], input_refs=record.input_refs,
                 output_refs=[logical], engine='h264-crf20-b0-fmp4/v1', parameters={'picture_fragment': facts,
-                    'picture_fragment_recipe': unit['recipe'], 'manifest_digest': manifest['digest']},
+                    'picture_fragment_recipe': unit['recipe'], 'manifest_digest': manifest['digest'],
+                    **(stored_render_scope(manifest) or {})},
                 status='succeeded', started_at=utc_now(), finished_at=utc_now())
             with self.repository._connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')
@@ -293,6 +312,7 @@ class PictureFragmentAssembly:
                         workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
                         transform_type='subtitle_render', input_digest=unit['id'], input_refs=subtitle_record.input_refs,
                         output_refs=[subtitle_logical], engine='subtitle-sidecar/v1', parameters={
+                            **(stored_render_scope(manifest) or {}),
                             'manifest_digest': manifest['digest'], 'producer_request_id': context.grant.request_id,
                             'producer_generation': context.grant.generation, 'file_identity': _identity(self.store.resolve_file(subtitle_logical))},
                         status='succeeded', started_at=utc_now(), finished_at=utc_now()), connection=conn)

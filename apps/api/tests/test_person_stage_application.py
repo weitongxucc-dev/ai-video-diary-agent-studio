@@ -38,6 +38,7 @@ from _media_preview_test_fixtures import register_synthetic_profiles,synthetic_w
 from test_device_scheduler import Owners, Resources, Processes, _intent
 from test_metadata_edit_use_case import editorial_rows
 from test_timeline_restore_application import restore_state
+from tests.host_memory_boundary import IsolatedMemoryMonitor
 
 
 SYNTHETIC_PERSON_WORKER='''import json,shutil,sys
@@ -130,7 +131,7 @@ def test_person_edit_checkpoint_keeps_identity_checks_outside_writer(tmp_path, m
 
 @pytest.fixture
 def person_application(tmp_path,monkeypatch):
-    repo,task_id,script_id,_=_seed(tmp_path,workspace_id='local')
+    repo,task_id,script_id,_=_seed(tmp_path,workspace_id='local',duration_seconds=2)
     members=LocalMemberService(repo.database_path)
     member,token=members.join(members.create_invite_code(),'人物 normal 合成成员')
     runtime_root=tmp_path/'runtime'
@@ -183,10 +184,12 @@ def person_application(tmp_path,monkeypatch):
     monkeypatch.setattr(main,'auth_context',SimpleNamespace(enabled=False))
     monkeypatch.setattr(main,'local_members_service',members)
     monkeypatch.setattr(main,'production_repo',repo)
+    from app.quality_inspection import QualityCheckRepository
+    monkeypatch.setattr(main,'quality_check_repo',QualityCheckRepository(repo.database_path))
     monkeypatch.setattr(main,'avatar_lipsync_provider',provider)
     monkeypatch.setattr(main,'artifact_store',ArtifactStore(tmp_path/'artifacts'))
     monkeypatch.setattr(main,'video_job_runner',VideoJobRunner(repo.job_records))
-    monkeypatch.setattr(main,'settings',replace(main.settings,video_output_path=str(tmp_path/'outputs'),video_inbox_path=str(tmp_path/'library'),
+    monkeypatch.setattr(main,'settings',replace(main.settings,database_path=str(repo.database_path),video_output_path=str(tmp_path/'outputs'),video_inbox_path=str(tmp_path/'library'),
         temporary_root_path=str(tmp_path/'temporary'),native_portrait_worker_path=None,hermes_radar_path=None,obsidian_vault_path=None))
     monkeypatch.setattr(main,'creation_execution',main._new_creation_execution(repo))
     gib=1024**3
@@ -201,16 +204,19 @@ def person_application(tmp_path,monkeypatch):
     monkeypatch.setattr(psutil,'cpu_percent',lambda *args,**kwargs:0.0)
     monkeypatch.setattr(psutil,'swap_memory',lambda:swap._replace(used=0))
     monkeypatch.setattr(psutil,'disk_io_counters',lambda **kwargs:devices if kwargs.get('perdisk') else disk)
-    resources=HostResourceProbe(repo.database_path,disk_paths=(tmp_path,),budget=host_budget)
+    # This normal proves queue/worker/adoption behavior, not native memory-policy calibration.
+    resources=HostResourceProbe(repo.database_path,disk_paths=(tmp_path,),budget=host_budget,
+        memory_monitor=IsolatedMemoryMonitor())
     case=main._person_stage_use_case(repo)
     registration=creation_job_registration(repo,render_action=main._render_creation_stage_with_grant,render_is_valid=main._creation_stage_valid_with_grant,
         verify_identity=main._verify_creation_identity,presenter_budget=budget,presenter_cpu_render_budget=render,cpu_render_budget=render,
         montage_budget=montage_budget,presenter_models=main._presenter_model_ids(),resolve_presenter_output=case.metadata.picture_renderer.person_path,
-        person_stage=case)
+        person_stage=case,source_verifier=main._exact_preview_use_case(repo).validate_origin)
     runtime=build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'device.lock',
         device_access=MemberDeviceAccess(members,identity_verifier=main._verify_creation_identity),
         registrations={'creation_job':registration},resources=resources,processes=HostProcessProbe())
     monkeypatch.setattr(main,'device_runtime',runtime)
+    monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
     client=TestClient(main.app,headers={'X-Local-Member-Token':token})
     assert registration.executor.person_stage is case
     assert case.repository is case.metadata.repository is case.person_preview.repository is repo
@@ -279,11 +285,22 @@ def test_full_person_segment_then_selected_regeneration_preserves_early_child(pe
     assert preview.status_code==200,preview.text
     proposal=preview.json()['proposal']
     assert proposal['operation']['operation_type']=='RegeneratePersonRender'
+    source=repo.edit_records.get_edit_intent('local',proposal['intent_id']).constraints['request_source']
+    assert source['source_kind']=='interactive' and 'assistant_turn_id' not in source
+    assert source['raw_command']=='这里只重做口型，其他都不要动'
+    assert source['member_id']==s.member.member_id
+    assert (source['expected_timeline_version_id'],source['expected_timeline_sequence'])==(base.id,base.sequence)
     confirm_url=url+'/edits/'+proposal['id']+'/confirm'
     queued=s.client.post(confirm_url,json={})
     assert queued.status_code==202,queued.text
+    assert repo.execution_records.get_task_event('local',f"event_{queued.json()['job_id']}_start").payload['source']==source
     assert s.client.post(confirm_url,json={}).json()==queued.json()
-    assert s.runtime.run_once(),s.runtime.last_error
+    deadline=time.monotonic()+s.runtime.scheduler.resources.io_window_seconds+1
+    while not s.runtime.run_once():
+        waiting=s.runtime.scheduler._get(queued.json()['request_id'])
+        assert waiting.wait_reason=='resource_unknown',waiting
+        assert time.monotonic()<deadline,waiting
+        time.sleep(.1)
     job=repo.job_records.get_job_run('local',queued.json()['job_id'])
     assert job.status=='succeeded',asdict(job)
     current=repo.task_records.get_creation_task('local',s.task_id)

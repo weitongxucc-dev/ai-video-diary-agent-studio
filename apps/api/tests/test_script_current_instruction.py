@@ -15,6 +15,7 @@ from test_creation_task_script_grounding import (
 def start_turn(state, monkeypatch, message):
     conversations = ConversationRepository(state.repository.database_path)
     monkeypatch.setattr(main, 'conversation_repo', conversations)
+    monkeypatch.setattr(main, '_goal_continuation_service', None)
     chat = conversations.create('local', state.owner.member_id, 'task', 'task', '文案')
     saved = conversations.save_draft(chat['id'], 'local', state.owner.member_id, message, 0)
     turn, _ = conversations.create_turn_idempotent(chat['id'], 'local', state.owner.member_id, message,
@@ -101,13 +102,18 @@ def test_actual_script_adoption_triggers_one_existing_continuation(api_state, mo
     body.update(expected_updated_at=script['updated_at'], adoption_kind='delegated_system', assistant_turn_id=turn['id'])
     response = state.client.post(f"/api/creation-tasks/task/scripts/{script['id']}/confirm", json=body)
     assert response.status_code == 200, response.text
-    actual = state.repository.script_records.get_creation_task_script('local', script['id'])
+    actual = state.repository.script_records.confirmed_script_adoption_facts(
+        'local', 'task', script['id'], response.json()['scripts'][0]['updated_at'])
     source = conversations.task_turn_source(turn['id'], 'local', state.owner.member_id, 'task')
     current = state.repository.task_records.get_creation_task('local', 'task')
     plan = state.repository.plan_records.get_creation_plan('local', current.plan_id)
     service = main._goal_service()
+    from app.creation.intent_use_case import CreationIntentUseCase
+    assert CreationIntentUseCase.adopted_for_execution(plan, actual, verified_body_digest=actual.body_digest), (
+        current.confirmed_script_id, actual.adoption, plan.creation_intent)
     # Same real receipt is replayed; no second event or adoption is invented.
-    assert service.record_script_adoption(turn['id'], 'local', state.owner.member_id, current, plan, actual, source)
+    assert service.record_script_adoption(turn['id'], 'local', state.owner.member_id, current, plan, actual, source,
+        verified_body_digest=actual.body_digest)
     conversations.finish_turn(turn['id'], 'completed', '采用完成。', result={'kind': 'task_turn',
         'response': {'script_draft': response.json()['scripts'][0]}})
     assert service.register_turn(turn['id'])

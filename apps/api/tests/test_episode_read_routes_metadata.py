@@ -1,7 +1,10 @@
-"""Historical read views on in-memory metadata; not history URL or media acceptance."""
+"""Historical read views and their optional SQLite catalog; no media acceptance."""
 from copy import deepcopy
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
+import json
+import logging
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,6 +14,67 @@ import app.repository as repository_module
 from app.models import (Episode, EpisodeStatus, ProductionChainStage, ProductionChainStep,
                         ScriptPackage, SourceFileState, SourceRef, TopicCandidate)
 from app.repository import EpisodeRepository
+
+
+def test_current_production_database_without_legacy_catalog_loads_empty_history_without_warning(tmp_path, caplog):
+    from app.production import ProductionRepository
+    database = tmp_path/'new-install.sqlite3'
+    ProductionRepository(database, tmp_path/'library')
+    with sqlite3.connect(database) as conn:
+        before = list(conn.iterdump())
+    with caplog.at_level(logging.WARNING, logger='app.repository'):
+        history = EpisodeRepository(database_path=database)
+    assert history.all(workspace_id='local') == []
+    assert not [record for record in caplog.records if record.name == 'app.repository']
+    with sqlite3.connect(database) as conn:
+        assert list(conn.iterdump()) == before
+        assert conn.execute("SELECT 1 FROM sqlite_master WHERE name='episodes'").fetchone() is None
+
+
+@pytest.mark.parametrize('workspace_column', [False, True])
+def test_real_legacy_history_preserves_payload_and_workspace_while_bad_row_is_logged(tmp_path, caplog, workspace_column):
+    database = tmp_path/'history.sqlite3'
+    original = Episode('retained-history', 3, date(2026, 10, 29), EpisodeStatus.CREATED,
+        notes='历史正文与用户备注', script=ScriptPackage('historical-script', '历史开头', [], [], '', '', ''))
+    payload = json.dumps(EpisodeRepository()._episode_to_dict(original), ensure_ascii=False)
+    with sqlite3.connect(database) as conn:
+        conn.execute('CREATE TABLE EPISODES (payload TEXT' + (', workspace_id TEXT' if workspace_column else '') + ')')
+        rows = [(payload, 'original-workspace'), ('invalid historical JSON', 'original-workspace')] if workspace_column else [
+            (payload,), ('invalid historical JSON',)]
+        conn.executemany('INSERT INTO episodes VALUES (' + ','.join('?' for _ in rows[0]) + ')', rows)
+        before = list(conn.iterdump())
+    with caplog.at_level(logging.WARNING, logger='app.repository'):
+        history = EpisodeRepository(database_path=database)
+    workspace = 'original-workspace' if workspace_column else 'local'
+    restored = history.get(original.id, workspace_id=workspace)
+    assert history._episode_to_dict(restored) == history._episode_to_dict(original)
+    assert restored.workspace_id == workspace
+    assert [episode.id for episode in history.all(workspace_id=workspace)] == [original.id]
+    assert history.all(workspace_id='other-workspace') == []
+    failures = [record for record in caplog.records if record.name == 'app.repository']
+    assert len(failures) == 1 and 'skipping unparseable episode row' in failures[0].message
+    assert failures[0].exc_info[0] is json.JSONDecodeError
+    with sqlite3.connect(database) as conn:
+        assert list(conn.iterdump()) == before
+
+
+@pytest.mark.parametrize('failure', ['missing_payload_column', 'corrupt_database', 'broken_view'])
+def test_optional_history_catalog_does_not_hide_other_database_failures(tmp_path, caplog, failure):
+    database = tmp_path/'damaged-history.sqlite3'
+    if failure == 'corrupt_database':
+        database.write_bytes(b'not a SQLite database')
+    else:
+        with sqlite3.connect(database) as conn:
+            conn.execute('CREATE TABLE episodes (wrong_column TEXT)' if failure == 'missing_payload_column'
+                else 'CREATE VIEW episodes AS SELECT payload FROM missing_historical_storage')
+    before = database.read_bytes()
+    with caplog.at_level(logging.WARNING, logger='app.repository'):
+        history = EpisodeRepository(database_path=database)
+    assert history.all(workspace_id='local') == []
+    failures = [record for record in caplog.records if record.name == 'app.repository']
+    assert len(failures) == 1 and 'unable to read historical episodes' in failures[0].message
+    assert issubclass(failures[0].exc_info[0], sqlite3.Error)
+    assert database.read_bytes() == before
 
 
 def test_episode_metadata_reads_canonical_history_and_refusals_preserve_state(monkeypatch):

@@ -20,23 +20,34 @@ def _respond(action):
         raise HTTPException(503, str(exc)) from exc
 
 
-def build_device_preparation_router(*, authorized_actor, application):
+def build_device_preparation_router(*, authorized_actor, application, profile_status, actor_scope):
     router = APIRouter(prefix='/api/device/resource-preparations')
+
+    def bound_actor(request):
+        actor = authorized_actor(request)
+        expected = request.headers.get('X-Device-Preparation-Scope')
+        if expected is not None and expected != actor_scope(actor):
+            raise HTTPException(409, '当前设备或成员身份已变化，请重新读取准备状态。')
+        return actor
+
+    @router.get('')
+    def current_profile(request: Request):
+        return profile_status(authorized_actor(request))
 
     @router.post('')
     def prepare(payload: DevicePreparationRequest, request: Request):
-        actor = authorized_actor(request)
+        actor = bound_actor(request)
         return _respond(lambda: application(kind=payload.kind).dispatch('prepare',
             shape=payload.shape.model_dump(), request_id=str(payload.request_id), actor=actor))
 
     @router.get('/{request_id}')
     def status(request_id: str, request: Request):
-        actor = authorized_actor(request)
+        actor = bound_actor(request)
         return _respond(lambda: application(request_id=request_id, actor=actor).status(request_id, actor))
 
     @router.post('/{request_id}/finalize')
     def finalize(request_id: str, request: Request):
-        actor = authorized_actor(request)
+        actor = bound_actor(request)
         return _respond(lambda: application(request_id=request_id, actor=actor).finalize(request_id, actor))
 
     return router

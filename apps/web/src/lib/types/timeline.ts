@@ -75,9 +75,9 @@ export type CreationTaskMontageClip = {
     crop_x?: number;
     crop_y?: number;
     id: string;
-    cue_id: string;
+    cue_id: string | null;
     asset_id: string;
-    segment_id: string;
+    segment_id: string | null;
     source_reference: string;
     source_start_seconds: number;
     source_end_seconds: number;

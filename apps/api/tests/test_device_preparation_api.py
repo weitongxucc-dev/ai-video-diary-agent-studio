@@ -15,6 +15,54 @@ def preparation_metadata_no_execution(monkeypatch):
     edit_adoption_no_execution(monkeypatch)
 
 
+def test_profile_status_reads_current_profile_without_exposing_host_paths(metadata_http_state, monkeypatch, tmp_path):
+    from test_device_resource_profile import DEVICE, BACKENDS, profile_document, write_profile
+    import app.device_resource_configuration as configuration
+
+    state = metadata_http_state
+    monkeypatch.setattr(main, 'LEGACY_WORKSPACE_ID', 'ws')
+    path = tmp_path / 'private-device-profile.json'
+    monkeypatch.setenv('DEVICE_ID', DEVICE.device_id)
+    monkeypatch.setattr(main, 'settings', replace(main.settings, device_resource_mode='normal',
+        device_resource_profile_path=str(path)))
+    monkeypatch.setattr(configuration, 'current_device_identity', lambda _: DEVICE)
+    monkeypatch.setattr(configuration, 'backend_identity', lambda name, *_args, **_kwargs: BACKENDS.get(name))
+    url = '/api/device/resource-preparations'
+    missing = state.client.get(url)
+    assert missing.status_code == 200 and missing.json()['profile_status'] == 'unprepared'
+    assert missing.json()['preparation_configured'] and missing.json()['available_operations'] == []
+    path.write_text(write_profile(tmp_path, profile_document()).read_text())
+    available = state.client.get(url).json()
+    assert available['profile_status'] == 'available' and available['revision'] == 3
+    assert available['available_operations'] == ['cpu_render', 'narration']
+    assert str(tmp_path) not in str(available) and 'budget' not in available and 'backends' not in available
+    path.write_text('{"format_version": 99}')
+    invalid = state.client.get(url).json()
+    assert invalid['profile_status'] == 'invalid' and invalid['available_operations'] == []
+    assert invalid['actor_scope'] == available['actor_scope']
+    _, token = state.members.join(state.members.create_invite_code(), 'other setup member')
+    other = state.client.get(url, headers={'X-Local-Member-Token': token}).json()
+    assert other['actor_scope'] != available['actor_scope']
+
+
+def test_preparation_expected_actor_scope_rejects_before_read_or_submission(metadata_http_state, monkeypatch):
+    state = metadata_http_state
+    monkeypatch.setattr(main, 'LEGACY_WORKSPACE_ID', 'ws')
+    url = '/api/device/resource-preparations'
+    scope = state.client.get(url).json()['actor_scope']
+    _, token = state.members.join(state.members.create_invite_code(), 'new setup member')
+    headers = {'X-Local-Member-Token': token, 'X-Device-Preparation-Scope': scope}
+    monkeypatch.setattr(main, '_device_preparation_application',
+        lambda **_kwargs: pytest.fail('a stale actor scope must not read or submit work'))
+    payload = {'request_id': str(uuid4()), 'shape': {'width_px': 64, 'height_px': 64,
+        'frame_rate': 24, 'duration_seconds': 1.0, 'clip_count': 2,
+        'audio_input_count': 2, 'sample_rate': 8000, 'channels': 1}}
+    for response in (state.client.post(url, json=payload, headers=headers),
+                     state.client.get(url + '/original', headers=headers),
+                     state.client.post(url + '/original/finalize', headers=headers)):
+        assert response.status_code == 409 and '身份已变化' in response.text
+
+
 def test_preparation_http_reuses_request_and_never_resumes_old_work(metadata_http_state, monkeypatch, tmp_path):
     state = metadata_http_state
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "ws")

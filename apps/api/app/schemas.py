@@ -85,15 +85,21 @@ class NarrationPreparationShapeRequest(BaseModel):
     task_id: str | None = Field(default=None, min_length=1)
 
 
+class MontagePreparationShapeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    task_id: str = Field(min_length=1)
+
+
 class DevicePreparationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: UUID
-    kind: Literal["cpu", "narration"] = "cpu"
-    shape: DevicePreparationShapeRequest | NarrationPreparationShapeRequest
+    kind: Literal["cpu", "narration", "montage"] = "cpu"
+    shape: DevicePreparationShapeRequest | NarrationPreparationShapeRequest | MontagePreparationShapeRequest
 
     @model_validator(mode="after")
     def shape_matches_kind(self):
-        expected = DevicePreparationShapeRequest if self.kind == "cpu" else NarrationPreparationShapeRequest
+        expected = {'cpu': DevicePreparationShapeRequest, 'narration': NarrationPreparationShapeRequest,
+                    'montage': MontagePreparationShapeRequest}[self.kind]
         if not isinstance(self.shape, expected):
             raise ValueError("准备类型与输入形状不一致")
         return self
@@ -1658,9 +1664,9 @@ class CreationTaskMontageClipResponse(BaseModel):
     crop_x: float = Field(default=0.5, ge=0, le=1)
     crop_y: float = Field(default=0.5, ge=0, le=1)
     id: str
-    cue_id: str
+    cue_id: str | None
     asset_id: str
-    segment_id: str
+    segment_id: str | None
     source_reference: str
     source_start_seconds: float = Field(ge=0)
     source_end_seconds: float = Field(gt=0)
@@ -1864,7 +1870,7 @@ class CreationTaskMontagePlanResponse(BaseModel):
     presenter_share_actual: float = Field(default=0, ge=0, le=100)
     id: str
     task_id: str
-    script_id: str
+    script_id: str | None
     script_title: str
     status: Literal["waiting_for_user", "ready", "rendering", "rendered", "failed"]
     cues: list[CreationTaskNarrationCueResponse]
@@ -1872,7 +1878,7 @@ class CreationTaskMontagePlanResponse(BaseModel):
     duration_seconds: float = Field(gt=0)
     low_confidence_clip_count: int = Field(ge=0)
     audio_timeline: AudioTimelineResponse | None = None
-    narration_reference: str
+    narration_reference: str | None
     output_url: str | None
     subtitle_url: str | None
     message: str
@@ -2096,6 +2102,13 @@ class CreationTaskTimelineUndoRequest(BaseModel):
     assistant_turn_id: UUID | None = None
     expected_timeline_version_id: str | None = None
     expected_timeline_sequence: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def complete_expected_version(self):
+        if self.model_fields_set & {"expected_timeline_version_id", "expected_timeline_sequence"}:
+            if self.expected_timeline_version_id is None or self.expected_timeline_sequence is None:
+                raise ValueError("恢复需要同时提供所见版本与序号")
+        return self
 
 
 class CreationTaskTimelineRestoreRequest(CreationTaskTimelineUndoRequest):
@@ -2828,6 +2841,7 @@ class CreationPlanPreviewResponse(BaseModel):
     updated_at: datetime | None = None
     creation_intent: dict[str, object] | None = None
     adoption: dict[str, object] | None = None
+    source_media: dict[str, object] | None = None
     template_id: str | None = None
     template_version: int | None = None
     template_settings: dict[str, object] = Field(default_factory=dict)
@@ -2836,7 +2850,7 @@ class CreationPlanPreviewResponse(BaseModel):
     target_count: int = Field(ge=1)
     language: Literal["zh-CN", "en-US", "zh-CN/en-US"]
     aspect_ratio: Literal["9:16", "16:9", "1:1"]
-    duration_target_seconds: int = Field(ge=1)
+    duration_target_seconds: float = Field(gt=0, allow_inf_nan=False)
     duration_mode: Literal["exact", "approximate"] = "exact"
     duration_range_seconds: tuple[float, float] | None = None
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0

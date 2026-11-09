@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.creation.contracts import TaskEvent
+from app.creation.plan_contracts import creation_plan_payload
 from app.creation.intent_use_case import CreationIntentUseCase
 from app.creation.script_contracts import ScriptGenerationRun
 from app.creation.source_errors import SourcePreflightError
@@ -74,10 +75,10 @@ class ScriptGenerationIntent:
         sources, references, _ = self.source_inputs(
             task.workspace_id, task, plan, cloud_egress=route_snapshot["execution_location"] == "cloud",
         )
-        requirements = asdict(plan)
+        requirements = creation_plan_payload(plan)
         fields = ("id", "creation_task_id", "goal", "language", "presenter_share_target",
                   "duration_target_seconds", "duration_mode", "duration_range_seconds", "template_settings",
-                  "knowledge_references", "source_references", "creation_intent", "adoption")
+                  "knowledge_references", "source_references", "creation_intent", "adoption", "source_media")
         frozen = _canonical({
             "goal": goal, "plan_id": plan.id, "topic_id": topic.id,
             "requirements": {key: requirements[key] for key in fields if key in requirements},

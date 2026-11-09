@@ -309,6 +309,9 @@ def test_real_upload_uses_measured_source_specs_and_fixed_receipt(tmp_path, monk
     monkeypatch.setattr(main, 'current_workspace_id', lambda request: 'local')
     for field, value in asdict(audio_budget()).items():
         monkeypatch.setenv('DEVICE_CPU_AUDIO_'+field.upper(), str(value))
+    from test_member_permits import _HOST_ENV
+    for name, value in _HOST_ENV.items():
+        monkeypatch.setenv(name, value)
     media.facts = main._task_media_facts
     media.audio_ingress = main._audio_ingress_use_case()
     media.audio_edit = main._audio_edit_use_case()

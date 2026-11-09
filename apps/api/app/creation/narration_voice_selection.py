@@ -7,10 +7,11 @@ import json
 
 from app.creation.contracts import CreationTask as _CreationTask, TaskEvent as _TaskEvent
 from app.creation.plan_contracts import CreationPlanPronunciationReference as _CreationPlanPronunciationReference
+from app.creation.plan_contracts import creation_plan_payload
 from app.creation.script_contracts import _assistant_reply_request_event_id
 from app.materials.contracts import MediaAuthorityError as _MediaAuthorityError
 from app.models import utc_now
-from app.persistence_json import _json_payload
+from app.persistence_json import _json_payload, _json_object
 from app.source_policy import knowledge_item_readable as _content_readable
 
 
@@ -160,7 +161,7 @@ class NarrationVoiceSelectionTransaction:
             task.updated_at = now
             conn.execute(
                 "UPDATE creation_plans SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
-                (_json_payload(plan), now.isoformat(), workspace_id, plan.id),
+                (_json_object(creation_plan_payload(plan)), now.isoformat(), workspace_id, plan.id),
             )
             conn.execute(
                 "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",

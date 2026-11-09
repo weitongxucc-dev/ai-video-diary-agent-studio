@@ -1,19 +1,7 @@
 """Finite public failure diagnostics shared by business and host projections."""
 import re
 from app.assistant.catalogue import _PI_TOOL_LABELS
-
-
-def _safe_failure_text(value: object, secrets=()) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value
-    for secret in secrets:
-        if secret:
-            text = text.replace(secret, "[已隐藏]")
-    text = re.sub(r"\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[已隐藏]", text, flags=re.I)
-    text = re.sub(r"\b(?:authorization|cookie|api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+", "[已隐藏]", text, flags=re.I)
-    text = re.sub(r"https?://[^\s）)；;]+|(?:[A-Za-z]:\\|/(?!api/)[A-Za-z0-9_.~-]+/)[^\s）)；;]+", "[已隐藏]", text)
-    return re.sub(r"[\x00-\x1f\x7f]", " ", text)[:500]
+from app.public_failure import safe_failure_text as _safe_failure_text
 
 
 def _safe_script_candidate_location(value: object) -> dict:
@@ -25,8 +13,8 @@ def _safe_script_candidate_location(value: object) -> dict:
     digest = value.get("candidate_field_digest")
     if (value.get("error") in ("script_fact_unsupported", "script_goal_conflict")
             and isinstance(field, str) and field in {"title", "content", "visual_prompt"}
-            and type(value.get("section_index")) is int and 1 <= value["section_index"] <= 20
-            and type(section) is int and 0 <= section <= 20
+            and type(value.get("section_index")) is int and 1 <= value["section_index"] <= 9007199254740991
+            and type(section) is int and 0 <= section <= 9007199254740991
             and (field == "title" if section == 0 else section == value.get("section_index"))
             and type(fragment) is int and 0 <= fragment <= {"title": 0, "content": 19, "visual_prompt": 4}[field]
             and isinstance(digest, str) and re.fullmatch(r"[a-f0-9]{64}", digest)):
@@ -73,7 +61,7 @@ def _safe_business_failure(value: object, *, secrets=()) -> dict:
     if type(value.get("retryable")) is bool:
         safe["retryable"] = value["retryable"]
     if "section_index" in value and (value["section_index"] is None
-            or type(value["section_index"]) is int and 1 <= value["section_index"] <= 20):
+            or type(value["section_index"]) is int and 1 <= value["section_index"] <= 9007199254740991):
         safe["section_index"] = value["section_index"]
     safe.update(_safe_script_candidate_location(value))
     issues = value.get("review_issues")

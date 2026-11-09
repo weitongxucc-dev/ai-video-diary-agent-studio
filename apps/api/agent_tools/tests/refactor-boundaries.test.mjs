@@ -3,16 +3,45 @@ import assert from 'node:assert/strict';
 import {readFile, readdir} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import * as publicTools from '../diary_tools.ts';
-import {createDiaryTools} from '../diary/runtime.ts';
+import {createDiaryTools} from '../diary_tools.ts';
 import {createBusinessRequest, BusinessRequestError, RequestNotSubmitted} from '../diary/transport.ts';
 import {createToolCallScope} from '../diary/registration.ts';
 import {verifyTaskVersion} from '../diary/trusted-context.ts';
 import {modelParameters, typedEditSchema} from '../diary/schemas.ts';
 import {createMaterialSelection} from '../materials/selection.ts';
+import {registerObservationTools} from '../diary/observation-tools.ts';
+
+test('observe the newly produced output without rebasing the original edit selection', async () => {
+  const tools = new Map(), calls = [];
+  const selected = {timeline_version_id: 'before-render', timeline_sequence: 2};
+  const request = createBusinessRequest({taskId: 'task', selectedTaskVersion: selected,
+    verifyTaskVersion: workspace => verifyTaskVersion(workspace, selected),
+    readCredentials: () => ({}), getSignal: () => undefined,
+    fetchRequest: () => {throw new Error('must use the host');},
+    businessCall: async (operation, args) => {
+      calls.push({operation, args});
+      if (operation === 'read_task_workspace') return {ok: true, value: {
+        task: {id: 'task', current_timeline_version_id: 'rendered', timeline_sequence: 3}}};
+      assert.equal(operation, 'observe_task_output');
+      assert.equal(args.payload.expected_timeline_version_id, 'rendered');
+      assert.equal(args.payload.expected_timeline_sequence, 3);
+      return {ok: true, value: {job_id: 'observation', result_kind: 'observation', status: 'queued'}};
+    }});
+  registerObservationTools({registerTool: tool => tools.set(tool.name, tool)}, {
+    request, taskId: 'task', verifyTaskVersion: workspace => verifyTaskVersion(workspace, selected),
+    readActionSource: () => ({turnId: 'original-turn'}),
+    typedRequestId: () => '00000000-0000-4000-8000-000000000001'});
+  const result = await tools.get('observe_task_output').execute('observe', {target: {kind: 'final'}});
+  assert.equal(result.details.media_job.job_id, 'observation');
+  assert.equal(result.details.media_job.status, 'queued');
+  assert.deepEqual(selected, {timeline_version_id: 'before-render', timeline_sequence: 2});
+  await assert.rejects(request('/api/creation-tasks/task/edits/exact/preview', {method: 'POST', body: '{}'}), RequestNotSubmitted);
+  assert.deepEqual(calls.map(call => call.operation), ['read_task_workspace', 'observe_task_output', 'read_task_workspace']);
+});
 
 test('public exports and session registration do not initialize business services', async () => {
   assert.deepEqual(Object.keys(publicTools).sort(), [
-    'default', 'createDiaryExtension', 'typedRequestId', 'readTaskEditCapabilities', 'readMediaScriptCapabilities',
+    'default', 'createDiaryExtension', 'createDiaryTools', 'typedRequestId', 'readTaskEditCapabilities', 'readMediaScriptCapabilities',
     'readMediaScriptToolCapabilities', 'readCreatorMemoryFacts', 'readCurrentTaskFacts',
   ].sort());
   const originalFetch = globalThis.fetch;
@@ -158,6 +187,38 @@ test('targeted restore uses the original operation and UUID after an unknown wri
   assert.equal(read.details.receipt.result_version_id,'composed-version');
   assert.equal(calls.filter(call=>call.operation==='restore_timeline').length,1);
   assert.equal(calls.at(-1).args.request_id,originalRequest);
+});
+
+test('restore control records are rejected before consuming the write slot', async () => {
+  const tools = new Map(), writes = [];
+  const runtime = createDiaryTools({AI_VIDEO_DIARY_AGENT_TASK_ID:'task', AI_VIDEO_DIARY_AGENT_TURN_ID:'turn',
+    AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION:'撤销上一步修改',
+    AI_VIDEO_DIARY_AGENT_TASK_VERSION:JSON.stringify({timeline_version_id:'v3',timeline_sequence:3})},undefined,
+    async(operation,args)=>{
+      if (operation==='read_task_workspace') return {ok:true,value:{task:{id:'task',current_timeline_version_id:'v3',timeline_sequence:3}}};
+      if (operation==='read_timeline_history') return {ok:true,value:{task_id:'task',items:[
+        {operation_id:'redo-record',operation_type:'RedoTimelineVersion'},
+        {operation_id:'undo-record',operation_type:'UndoTimelineVersion'},
+        {operation_id:'lock-edit',operation_type:'SetClipLock'}]}};
+      if (operation==='restore_timeline') {
+        writes.push(args.payload);
+        return {ok:true,value:{restore_request:{task_id:'task',request_id:args.payload.request_id,status:'applied'}}};
+      }
+      throw new Error('unexpected operation '+operation);
+    });
+  await runtime.register({registerTool:tool=>tools.set(tool.name,tool)});
+  await tools.get('read_edit_history').execute('history',{});
+  for (const id of ['redo-record','undo-record']) {
+    const rejected = await tools.get('undo_last_edit').execute('wrong-'+id,{target_operation_id:id});
+    assert.equal(rejected.isError,true);
+    assert.match(JSON.stringify(rejected),/不是原编辑/);
+  }
+  assert.equal(writes.length,0);
+  const restored = await tools.get('undo_last_edit').execute('latest',{});
+  assert.equal(restored.isError,false,JSON.stringify(restored));
+  assert.equal(restored.details.receipt.status,'applied');
+  assert.equal(writes.length,1);
+  assert.equal(writes[0].target_operation_id,undefined);
 });
 
 for (const phase of ['write','read_not_submitted','read_rejected']) test(`restore ${phase} refusal does not confuse the original write effect`, async()=>{

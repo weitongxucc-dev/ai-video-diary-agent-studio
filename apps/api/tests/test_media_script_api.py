@@ -32,6 +32,7 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
     from assistant_turn_control_fixtures import isolate_assistant_turn_control
     isolate_assistant_turn_control(monkeypatch, request)
     state = material_edit_state
+    state.original_jobs = state.production.job_records.list_job_runs(state.workspace_id, state.task.id)
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", state.workspace_id)
     # The API/owner tests already substitute preparation/execution. Isolate
     # only this adapter's platform inventory; do not mutate global sys or the
@@ -84,11 +85,16 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
         device_lock_path=tmp_path / "script-fixture.lock", device_access=access,
         registrations={"creation_job": OwnerRegistration(owner, executor)},
         resources=ControlledResources(), processes=HostProcessProbe())
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+    authorizations = TaskAuthorizationUseCase(state.production, lambda value:
+        identity(CreationExecutionActor.from_event(value['workspace_id'], value)))
+    runtime.task_authorizations = owner.task_authorizations = media.task_authorizations = authorizations
     monkeypatch.setattr(main, "_creation_runtime", lambda: runtime)
     monkeypatch.setattr(main, "_require_permit_actor", lambda request, workspace: actor)
     monkeypatch.setattr(main, "_verify_creation_identity", identity)
     monkeypatch.setattr(main, "device_runtime", runtime)
     state.calls = []
+    state.execution_task_ids = {state.task.id}
     def prepare(*, sealed, input_paths, job_directory, limits):
         job_directory.mkdir()
         (job_directory / "out").mkdir()
@@ -97,7 +103,7 @@ def state(material_edit_state, tmp_path, monkeypatch, request):
         scheduler.assert_grant(grant)
         job = state.production.job_records.get_job_run(grant.workspace_id, grant.owner_id)
         event = state.production.execution_records.get_task_event(grant.workspace_id, f"event_{job.id}_start").payload
-        assert job.status == "running" and job.task_id == state.task.id
+        assert job.status == "running" and job.task_id in state.execution_task_ids
         assert CreationExecutionActor.from_event(job.workspace_id, event) == actor
         assert event["resources"]["kind"] == "media_script"
         assert event["resources"]["script_digest"] == prepared.sealed.digest
@@ -181,7 +187,7 @@ def test_unavailable_script_configuration_is_explicit_and_never_queues(state, mo
     assert capabilities.status_code == 200 and not capabilities.json()["available"]
     assert capabilities.json()["reason"]
     assert submit(state).status_code == 503
-    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == state.original_jobs
     assert state.calls == []
 
 
@@ -192,7 +198,7 @@ def test_unsupported_linux_platform_is_rejected_without_unrestricted_fallback(st
     assert "macOS" in capabilities.json()["reason"]
     assert submit(state).status_code == 503
     assert state.calls == []
-    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == []
+    assert state.production.job_records.list_job_runs(state.workspace_id, state.task.id) == state.original_jobs
 
 
 def test_script_current_png_input_is_frozen_and_source_change_refuses_commit(state):

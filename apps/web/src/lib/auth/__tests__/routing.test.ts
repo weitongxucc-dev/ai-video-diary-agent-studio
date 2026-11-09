@@ -72,6 +72,13 @@ describe("auth routing", () => {
     expect(isOnboardingSupportApiPath("/api/onboarding/complete")).toBe(true);
     expect(isOnboardingSupportApiPath("/api/settings/runtime")).toBe(true);
     expect(isOnboardingSupportApiPath("/api/runtime/health")).toBe(true);
+    for (const path of ["/api/device/resource-preparations", "/api/device/resource-preparations/original-request",
+      "/api/device/resource-preparations/original-request/finalize"]) {
+      expect(shouldBlockOnboarding("user-1", false, "POST", path), path).toBe(false);
+      expect(isPublicApiPath(path), path).toBe(false);
+    }
+    expect(isOnboardingSupportApiPath("/api/device/resource-preparations/original-request/extra")).toBe(false);
+    expect(isOnboardingSupportApiPath("/api/device/queue")).toBe(false);
     expect(shouldBlockOnboarding("user-1", false, "GET", "/api/runtime/health")).toBe(false);
     expect(shouldBlockOnboarding("user-1", false, "GET", "/api/runtime/health/extra")).toBe(true);
     expect(isOnboardingSupportApiPath("/api/models")).toBe(true);

@@ -35,6 +35,25 @@ export type CreationTasksResponse = {
     items: CreationTask[];
     total_count: number;
 };
+export type SourceTaskCreateInput = {
+    request_id: string;
+    asset_id: string;
+    expected_asset_updated_at: string;
+    source_start_seconds: number;
+    source_end_seconds: number;
+    name: string;
+    aspect_ratio: "9:16" | "16:9" | "1:1";
+    preserve_audio: boolean;
+};
+export type SourceTaskReceipt = {
+    request_id: string;
+    status: "created";
+    plan_id: string;
+    task_id: string;
+    montage_plan_id: string;
+    timeline_version_id: string;
+    source_media: import('./creation-plans').SourceMediaSelection;
+};
 export type CreationTaskTopicRoutePreflight = {
     provider_kind: string;
     execution_location: "cloud" | "local";
@@ -474,14 +493,14 @@ export type CreationTaskMontage = {
     audio_timeline?: AudioTimeline | null;
     id: string;
     task_id: string;
-    script_id: string;
+    script_id: string | null;
     script_title: string;
     status: "waiting_for_user" | "ready" | "rendering" | "rendered" | "failed";
     cues: NarrationCue[];
     clips: CreationTaskMontageClip[];
     duration_seconds: number;
     low_confidence_clip_count: number;
-    narration_reference: string;
+    narration_reference: string | null;
     output_url: string | null;
     subtitle_url: string | null;
     message: string;
@@ -508,9 +527,9 @@ export type CreationTaskWorkspace = {
 };
 export type CreationExecutionPreview = {
     task_id: string;
-    script_id: string;
+    script_id: string | null;
     script_title: string;
-    script_updated_at: string;
+    script_updated_at: string | null;
     script_sections_total_count: number;
     script_sections_loaded: false;
     plan_id: string;

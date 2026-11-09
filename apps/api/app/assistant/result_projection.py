@@ -430,7 +430,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                   "redo": "已重做刚才撤销的整项编辑，保留了历史版本。",
                   "reject": "已取消这份待确认的修改方案；草稿和成片未改变。"}[action]
         return answer, edit_control_result
-    if kind == "edit_preview" and material_write_attempted:
+    if kind in {"edit_preview", "plan_preview"} and material_write_attempted:
         if (material_failed or material_result_invalid or material_write_result is None
                 or "action" not in material_write_result or "changed" not in material_write_result):
             raise _fail(FAILURE_TOOL_FAILED)

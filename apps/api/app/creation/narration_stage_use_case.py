@@ -384,11 +384,6 @@ class NarrationStageUseCase:
         updated.message = '所选配音片段已更新，镜头范围已同步；请核对字幕时间及人物口型依赖，再重新渲染。'
         return updated
 
-    def prepare_edit(self, workspace_id, task_id, context, proposal_id, resources):
-        candidate = self.repository.narration_checkpoints.narration_edit_generated(workspace_id,context.grant.owner_id)
-        receipt = context.run_pcm_assembly(resources)
-        return self.prepare_edit_adoption(workspace_id,task_id,proposal_id,candidate,resources,receipt),receipt
-
     def prepare_edit_adoption(self, workspace_id, task_id, proposal_id, candidate, resources, receipt):
         with self.repository.execution_inputs.creation_execution_read() as conn:
             task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=conn)

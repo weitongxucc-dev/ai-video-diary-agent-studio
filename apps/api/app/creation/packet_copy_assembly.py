@@ -9,6 +9,7 @@ import stat
 from app.creation.contracts import ArtifactRecord, DependencyEdge, TaskEvent, TransformRun
 from app.models import utc_now
 from app.packet_copy_policy import packet_copy_output_allocation, packet_copy_resources
+from app.creation.render_generation import current_render_generation, render_namespace, render_generation_fields, stored_render_scope
 
 
 def _digest(value):
@@ -35,20 +36,21 @@ class PacketCopyAssembly:
             plan = dict(plan)
             for transient in ('status', 'message', 'output_path', 'subtitle_path', 'updated_at'):
                 plan.pop(transient, None)
-            payload = {'input_digest': job.input_digest, 'head': task.current_timeline_version_id,
+            payload = {**render_generation_fields(current_render_generation(self.repository, job, connection=conn)),
+                'input_digest': job.input_digest, 'head': task.current_timeline_version_id,
                 'script_id': task.confirmed_script_id, 'montage': plan}
             return _digest(payload)
 
-    @staticmethod
-    def manifest_id(job):
-        return f'event_{job.id}_picture_packet_manifest'
+    def manifest_id(self, job, *, connection=None):
+        return render_namespace(f'event_{job.id}_picture_packet_manifest',
+            current_render_generation(self.repository, job, connection=connection))
 
     def _parent(self, job, artifact_id, recipe, *, connection=None):
-        record = self.repository.execution_records.get_artifact_record(job.workspace_id, artifact_id)
+        record = self.repository.execution_records.get_artifact_record(job.workspace_id, artifact_id, connection=connection)
         if (record.task_id != job.task_id or record.producer_job_id != job.id
                 or record.kind not in {'picture_fragment', 'picture_packet_copy'}):
             raise ValueError('画面父产物不属于原任务与原producer Job')
-        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=connection)
         facts = transform.parameters.get('picture_fragment', {})
         if (transform.task_id != job.task_id or transform.job_id != job.id or transform.status != 'succeeded'
                 or transform.output_refs != [record.logical_ref] or transform.input_refs != record.input_refs
@@ -63,10 +65,13 @@ class PacketCopyAssembly:
                 (job.workspace_id, job.id, f"{facts.get('producer_request_id')}:{facts.get('producer_generation')}")).fetchone()
         if (row is None or row['owner_type'] != 'creation_job' or row['owner_id'] != job.id
                 or row['input_digest'] != job.input_digest
-                or not (row['state'] == 'done' or row['state'] == 'granted' and settled is not None)
+                or not (row['state'] == 'done' or row['state'] in {'granted', 'failed'} and settled is not None)
                 or row['last_grant_generation'] != facts.get('producer_generation')):
             raise ValueError('画面父产物没有原请求、原generation的完成回执')
         resources = json.loads(row['resources_json'])
+        scope = render_generation_fields(current_render_generation(self.repository, job, connection=connection)) or None
+        if stored_render_scope(resources) != scope or stored_render_scope(transform.parameters) != scope:
+            raise ValueError('画面父产物不属于本次重新输出范围')
         if record.kind == 'picture_fragment':
             if (resources.get('kind') != 'creation_render' or resources.get('picture_recipe_digest') != recipe
                     or resources.get('picture_fragment') != {key: facts[key] for key in ('first_frame', 'packet_count', 'contract')}):
@@ -86,7 +91,7 @@ class PacketCopyAssembly:
         expected_identity = facts.get('file_identity')
         if record.kind == 'picture_fragment':
             try:
-                sealed = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
+                sealed = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job, connection=connection), connection=connection)
             except KeyError:
                 sealed = None
             if sealed is not None:
@@ -114,7 +119,8 @@ class PacketCopyAssembly:
         plan = self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id, connection=connection)
         if expected != round(Fraction(str(plan['duration_seconds'])) * 30):
             raise ValueError('画面父产物未覆盖完整目标帧时钟')
-        instance = {'version': 1, 'workspace_id': job.workspace_id, 'task_id': job.task_id,
+        instance = {'version': 1, **render_generation_fields(current_render_generation(self.repository, job, connection=connection)),
+            'workspace_id': job.workspace_id, 'task_id': job.task_id,
             'producer_job_id': job.id, 'input_digest': job.input_digest, 'recipe_digest': recipe,
             'leaf_artifact_ids': list(artifact_ids),
             'leaf_file_identities': {record.id: _file_identity(path.stat()) for record, path, _facts in parents}}
@@ -146,18 +152,19 @@ class PacketCopyAssembly:
             for record, path, _facts in parents:
                 if _file_identity(path.stat()) != instance['leaf_file_identities'][record.id]:
                     raise ValueError('画面父stat在manifest封存期间已变化')
-            self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job), job.workspace_id, job.task_id,
+            self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job, connection=conn), job.workspace_id, job.task_id,
                 job.id, 'picture_packet_manifest', payload), connection=conn)
         return payload
 
     def manifest(self, job, *, connection=None):
         try:
-            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job), connection=connection)
+            event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job, connection=connection), connection=connection)
         except KeyError:
             return None
         payload = event.payload
         identity = {key: value for key, value in payload.items() if key != 'manifest_digest'}
-        if (payload.get('manifest_digest') != _digest(identity) or payload.get('producer_job_id') != job.id
+        if (stored_render_scope(payload) != (render_generation_fields(current_render_generation(self.repository, job, connection=connection)) or None)
+                or payload.get('manifest_digest') != _digest(identity) or payload.get('producer_job_id') != job.id
                 or payload.get('input_digest') != job.input_digest or payload.get('recipe_digest') != self.recipe(job, connection=connection)):
             raise ValueError('原Job画面归约manifest或当前配方已变化')
         return payload
@@ -167,7 +174,7 @@ class PacketCopyAssembly:
             record, _path, _facts = self._parent(job, unit['artifact_id'], manifest['recipe_digest'], connection=connection)
         except KeyError:
             return None
-        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}')
+        transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=connection)
         if transform.parameters.get('packet_copy_manifest_digest') != manifest['manifest_digest']:
             raise ValueError('画面归约检查点不属于原manifest')
         return record
@@ -205,13 +212,16 @@ class PacketCopyAssembly:
                 sealed = self.repository.execution_records.get_task_event(job.workspace_id, resource_id, connection=connection).payload
             except KeyError:
                 sealed = None
+            published_target = (self.store._target(logical)
+                if sealed is None or sealed.get('publication_target') is not None else None)
             if sealed is not None:
                 limit = sealed['max_output_bytes']
             elif not prepare:
                 raise ValueError('原Job画面归约尚未封存本单元实际卷分配')
             else:
                 limit = packet_copy_output_allocation(write_paths=paths, write_files=files,
-                    manifest_bytes=manifest_bytes, publication_mode='copy', reserve_bytes=self.reserve_bytes)
+                    manifest_bytes=manifest_bytes, publication_mode='copy', reserve_bytes=self.reserve_bytes,
+                    published_target=published_target)
                 from app.creation.execution_budget_scope import ExecutionBudgetScopes
                 scopes = ExecutionBudgetScopes(self.repository)
                 with self.repository._connect() if connection is None else nullcontext(connection) as conn:
@@ -231,7 +241,8 @@ class PacketCopyAssembly:
                     'packet_count': info['packet_count'], 'producer_request_id': info['producer_request_id'],
                     'producer_generation': info['producer_generation']} for record, _path, info in parents],
                 expected_total_packets=unit['packet_count'], write_paths=paths, write_files=files,
-                output_limit_bytes=limit, manifest_bytes=manifest_bytes, publication_mode='copy')
+                output_limit_bytes=limit, manifest_bytes=manifest_bytes, publication_mode='copy',
+                published_target=published_target, render_scope=stored_render_scope(manifest))
             if sealed is not None and sealed != facts:
                 raise ValueError('原归约单元封存预算、父事实或目录已变化，不能重写原许可')
             if sealed is None:
@@ -267,6 +278,7 @@ class PacketCopyAssembly:
         verified = {}
         for record, path, _facts in parents:
             context.check()
+            check_current = context.scheduler.capture_dependency_check(context.grant)
             before = _file_identity(path.stat())
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             with os.fdopen(descriptor, 'rb') as source:
@@ -274,7 +286,8 @@ class PacketCopyAssembly:
                     raise ValueError('画面父产物在完整字节核验前已替换')
                 digest = hashlib.sha256()
                 while True:
-                    context.check()
+                    context.check_execution_limits()
+                    check_current()
                     part = source.read(65536)
                     if not part:
                         break
@@ -284,6 +297,7 @@ class PacketCopyAssembly:
                     raise ValueError('画面父产物在完整字节核验期间已变化')
             if digest.hexdigest() != record.sha256:
                 raise ValueError('画面父产物完整SHA与原生产回执不一致')
+            context.check()
             verified[record.id] = before
         return verified
 
@@ -320,7 +334,8 @@ class PacketCopyAssembly:
                 if _file_identity(path.stat()) != verified[record.id]:
                     raise ValueError('画面父产物在copy期间已变化，未发布归约结果')
             publication_started = True
-            published = self.store.publish_file(logical, files['staging'], temporary_path=files['published'], check=context.check)
+            published = self.store.publish_file(logical, files['staging'], temporary_path=files['published'],
+                check=context.check, retain_failed_temporary=True)
             fragment = {'recipe_digest': manifest['recipe_digest'], 'contract': 'h264-crf20-b0-fmp4/v1',
                 'first_frame': unit['first_frame'], 'packet_count': unit['packet_count'],
                 'producer_request_id': context.grant.request_id, 'producer_generation': context.grant.generation,
@@ -331,7 +346,7 @@ class PacketCopyAssembly:
                 task_id=job.task_id, job_id=job.id, transform_type='picture_packet_copy', input_digest=unit['id'],
                 input_refs=record.input_refs, output_refs=[logical], engine='h264-crf20-b0-fmp4/v1',
                 parameters={'picture_fragment': fragment, 'packet_copy_unit_id': unit['id'],
-                    'packet_copy_manifest_digest': manifest['manifest_digest']}, status='succeeded',
+                    'packet_copy_manifest_digest': manifest['manifest_digest'], **(stored_render_scope(manifest) or {})}, status='succeeded',
                 started_at=utc_now(), finished_at=utc_now())
             with self.repository._connect() as conn:
                 conn.execute('BEGIN IMMEDIATE')

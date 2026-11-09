@@ -41,6 +41,7 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     monkeypatch.setattr(main, 'artifact_store', store)
     monkeypatch.setattr(main, 'local_members_service', members)
     monkeypatch.setattr(main, 'settings', replace(main.settings,
+        database_path=str(repo.database_path),
         video_output_path=str(tmp_path/'outputs'), video_inbox_path=str(repo.video_library_path),
         temporary_root_path=str(tmp_path/'temporary'), native_ocr_worker_path=''))
     # Exact existing configure_synthetic_media_budgets render envelope; not a host default.
@@ -50,6 +51,9 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
         additional_memory_bytes=512*1024**2, additional_disk_bytes=64*1024**2, max_process_threads=16)
     for name, value in asdict(render).items():
         monkeypatch.setenv('DEVICE_CPU_RENDER_'+name.upper(), str(value))
+    from test_member_permits import _HOST_ENV
+    for name, value in _HOST_ENV.items():
+        monkeypatch.setenv(name, value)
     monkeypatch.delenv('TASK_OUTPUT_OBSERVATION_BUDGET_JSON', raising=False)
     media.facts = main._task_media_facts
     media.output_observation = main._output_observation_use_case()
@@ -65,6 +69,7 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
         return json.loads(row[0]) if row else None
     runtime.scheduler.resources._grant_resources = grant_resources
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
+    monkeypatch.setattr(main, '_media_result_read_components', lambda: (media, runtime.scheduler))
     repo.video_library_path.mkdir(parents=True, exist_ok=True)
     original = repo.video_library_path/'owned-output-source.mp4'
     width, height = canvas_size('16:9')

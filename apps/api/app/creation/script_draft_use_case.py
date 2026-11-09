@@ -1,5 +1,6 @@
 """Shared assistant draft validation and persistence, independent of transport."""
 from __future__ import annotations
+from app.creation.plan_contracts import creation_plan_payload
 from dataclasses import asdict
 from uuid import NAMESPACE_URL, uuid4, uuid5
 import hashlib
@@ -60,13 +61,13 @@ class ScriptDraftUseCase:
                 raise ScriptDraftRejected(status_code=409, detail="文案版本已变化，请重新读取后再确认。")
             checked_task, checked_plan, topic, sources, refs, library_entry = self._confirmation_inputs(workspace_id, task_id, script)
             reader = self.validate_inputs(workspace_id, checked_plan, refs)
-            binding = (asdict(checked_plan), asdict(topic) if topic else None, tuple(sources), refs, reader,
+            binding = (creation_plan_payload(checked_plan), asdict(topic) if topic else None, tuple(sources), refs, reader,
                        asdict(library_entry) if library_entry else None)
             self._review_candidate(workspace_id, checked_task, checked_plan, topic, sources, reader,
                                    payload.title, sections, origin, library_entry=library_entry)
             _, current_plan, current_topic, current_sources, current_refs, current_entry = self._confirmation_inputs(workspace_id, task_id, script)
             current_reader = self.validate_inputs(workspace_id, current_plan, current_refs)
-            if binding != (asdict(current_plan), asdict(current_topic) if current_topic else None, tuple(current_sources),
+            if binding != (creation_plan_payload(current_plan), asdict(current_topic) if current_topic else None, tuple(current_sources),
                            current_refs, current_reader, asdict(current_entry) if current_entry else None):
                 raise ScriptDraftRejected(status_code=409, detail="方案、选题或资料已变化，确认没有写入，请重新读取当前任务。")
         def commit_guard(conn):
@@ -77,7 +78,7 @@ class ScriptDraftUseCase:
             if binding is not None:
                 _,cp,ct,cs,cr,ce=self._confirmation_inputs(workspace_id,task_id,script)
                 reader=self.validate_inputs(workspace_id,cp,cr)
-                if binding!=(asdict(cp),asdict(ct) if ct else None,tuple(cs),cr,reader,asdict(ce) if ce else None):
+                if binding!=(creation_plan_payload(cp),asdict(ct) if ct else None,tuple(cs),cr,reader,asdict(ce) if ce else None):
                     raise ScriptDraftRejected(status_code=409,detail="提交时来源或要求已变化，原确认稿保持不变。")
             if origin is not None:
                 if reread_origin is not None:
@@ -146,7 +147,7 @@ class ScriptDraftUseCase:
 
     @staticmethod
     def _window_binding(plan,topic,sources,refs,reader,entry):
-        return (asdict(plan),asdict(topic) if topic else None,tuple(sources),refs,reader,entry)
+        return (creation_plan_payload(plan),asdict(topic) if topic else None,tuple(sources),refs,reader,entry)
 
     def save_library_entry(self, workspace_id, payload, *, member_id, write_guard=None):
         if not isinstance(member_id,str) or not member_id.strip():
@@ -332,7 +333,7 @@ class ScriptDraftUseCase:
             script_id='script_'+uuid5(NAMESPACE_URL,json.dumps([workspace_id,task_id,str(generation_request_id),member_id])).hex
             window=CreationTaskScriptReviewWindow(script_id,'new',tuple(p.id for p in sections),len(sections))
             binding=self._review_candidate(workspace_id,task,plan,topic,sources,reader,payload.title,sections,instruction_origin,review_window=window)
-            commit_guard=self._source_commit_guard(workspace_id,task_id,(asdict(plan),asdict(topic),tuple(sources),refs,reader),guard,instruction_origin,reread_origin,draft_only=True)
+            commit_guard=self._source_commit_guard(workspace_id,task_id,(creation_plan_payload(plan),asdict(topic),tuple(sources),refs,reader),guard,instruction_origin,reread_origin,draft_only=True)
             script=CreationTaskScript(id=script_id,workspace_id=workspace_id,task_id=task_id,run_id=state['run_id'],topic_id=topic.id,
                 title=payload.title,language=plan.language,sections=sections,draft_complete=False)
             def result_write(conn,saved):
@@ -550,7 +551,7 @@ class ScriptDraftUseCase:
             if source_metadata is None:
                 _,plan,topic,sources,refs=self.read_inputs(workspace_id,task_id)
                 reader=self.validate_inputs(workspace_id,plan,refs)
-                current=(asdict(plan),asdict(topic),tuple(sources),refs,reader)
+                current=(creation_plan_payload(plan),asdict(topic),tuple(sources),refs,reader)
             else:
                 _,plan,topic,sources,refs,entry=self._window_inputs(workspace_id,task_id,source_metadata)
                 reader=self.validate_inputs(workspace_id,plan,refs)
@@ -599,7 +600,7 @@ class ScriptDraftUseCase:
                 raise ScriptDraftRejected(status_code=409, detail="草稿已被修改，请重新读取后再提交。")
         elif getattr(payload, "expected_updated_at", None) is not None:
             raise ScriptDraftRejected(status_code=409, detail="草稿版本已变化，请重新读取后再保存")
-        binding = (asdict(plan), asdict(topic), tuple(sources), input_references)
+        binding = (creation_plan_payload(plan), asdict(topic), tuple(sources), input_references)
         review_binding = self._review_candidate(workspace_id, task, plan, topic, sources, reader, payload.title, sections, instruction_origin,
             review_window=window_start['review_window'] if window_start else None)
         if window_start:
@@ -610,7 +611,7 @@ class ScriptDraftUseCase:
         # Re-read those bindings; the repository still owns the final draft CAS.
         current_task, current_plan, current_topic, current_sources, current_refs = _assistant_script_inputs(workspace_id, task_id)
         current_reader = _require_current_script_inputs(workspace_id, current_plan, current_refs)
-        if binding != (asdict(current_plan), asdict(current_topic), tuple(current_sources), current_refs) or reader != current_reader:
+        if binding != (creation_plan_payload(current_plan), asdict(current_topic), tuple(current_sources), current_refs) or reader != current_reader:
             raise ScriptDraftRejected(status_code=409, detail="方案、选题或资料已变化，修订没有写入，请重新读取当前任务。")
         if instruction_origin is not None and instruction_origin != reread_origin(True):
             raise ScriptDraftRejected(status_code=409, detail="本轮要求已变化，旧要求核查的文案没有保存，请读取当前输入。")

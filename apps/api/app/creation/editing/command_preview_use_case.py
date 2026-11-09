@@ -1,5 +1,6 @@
 """One command application: ordered compilation, source binding and explicit media work."""
 from __future__ import annotations
+from app.creation.plan_contracts import creation_plan_payload
 
 from collections import Counter
 from app.creation.editing.picture import EditConflict
@@ -97,7 +98,22 @@ class CommandPreviewUseCase:
         return self.metadata.audio_service.validate_publications(job,event,result,context)
 
 
-    def preview(self, task, payload, *, base_version_id, identity, reader_identity, request_source, draft_only, execution, actor):
+    def command_source(self, task, payload, action, *, identity, actor, source, expected_input_id):
+        if source is not None:
+            return source
+        if actor is None:
+            raise EditPreviewRejected(403, '人物或配音编辑需要当前成员身份')
+        version = self.repository.timeline_records.get_timeline_version(task.workspace_id,
+            task.current_timeline_version_id) if task.current_timeline_version_id else None
+        bound = action.model_copy(update={'assistant_turn_id': payload.assistant_turn_id,
+            'expected_timeline_version_id': task.current_timeline_version_id,
+            'expected_timeline_sequence': version.sequence if version else 0})
+        _clean, source = self.exact._source(task, bound, identity, actor, None, expected_input_id)
+        if not source.get('assistant_turn_id'):
+            source['raw_command'] = payload.raw_command.strip()
+        return source
+
+    def preview(self, task, payload, *, base_version_id, identity, reader_identity, request_source, draft_only, execution, actor, expected_input_id=None):
         workspace_id, task_id = (task.workspace_id, task.id)
         short_preview_base_version = base_version_id
         command = payload.raw_command.strip()
@@ -181,6 +197,10 @@ class CommandPreviewUseCase:
                 raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc
             return AudioCommandPreview(audio_edit)
         if selected_ref.startswith('narration:'):
+            action = CreationTaskExactEditRequest(operation_type='RegenerateNarrationSegment',
+                narration_segment_id=selected_ref.removeprefix('narration:'), delivery_instruction=command)
+            request_source = self.command_source(task, payload, action, identity=identity, actor=actor,
+                source=request_source, expected_input_id=expected_input_id)
             return self.narration.preview(task, payload, selected_ref, command, identity=identity, request_source=request_source, draft_only=draft_only, execution=execution, actor=actor)
         if selected_ref.startswith('cover:'):
             action = self.metadata.command_cover(task, payload, selected_ref, command, identity=identity, request_source=request_source, draft_only=draft_only, execution=execution, actor=actor)
@@ -196,6 +216,16 @@ class CommandPreviewUseCase:
             action = self.subtitles.command_cue(task, payload, selected_ref, command, identity=identity, request_source=request_source, draft_only=draft_only, execution=execution, actor=actor)
             return self.resolve_action(task, action, identity=identity, reader_identity=reader_identity, request_source=request_source, draft_only=draft_only, execution=execution, actor=actor)
         if selected_ref.startswith('clip:') and any((token in command.casefold() for token in ('出镜', '口型', '人物', '表情', 'avatar', 'lip sync', 'lipsync', 'expression'))):
+            from app.avatar_lipsync import compile_person_edit_command
+            try:
+                operation = compile_person_edit_command(command)
+            except ValueError:
+                # The person owner reports its existing precise rejection.
+                return self.person.preview(task, payload, selected_ref, command, identity=identity,
+                    request_source=request_source, draft_only=draft_only, execution=execution, actor=actor)
+            action = CreationTaskExactEditRequest(operation_type=operation, clip_id=selected_ref.removeprefix('clip:'))
+            request_source = self.command_source(task, payload, action, identity=identity, actor=actor,
+                source=request_source, expected_input_id=expected_input_id)
             return self.person.preview(task, payload, selected_ref, command, identity=identity, request_source=request_source, draft_only=draft_only, execution=execution, actor=actor)
         return self.metadata.preview_replacement(task, payload, identity=identity, request_source=request_source, draft_only=draft_only, execution=execution, actor=actor)
 
@@ -274,7 +304,7 @@ class CommandPreviewUseCase:
             audio_uses.update(Counter((clip.source_ref for clip in clips)))
             for reference in sorted(references):
                 remember(reference, service.source(workspace_id, task_id, reference, actor=actor), audio=True)
-        facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id, 'script_digest': self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None, 'plan_id': task.plan_id, 'plan_digest': media_digest(asdict(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))), 'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
+        facts = {'base_version_id': task.current_timeline_version_id, 'script_id': task.confirmed_script_id, 'script_digest': self.repository.script_records.confirmed_creation_task_script_digest(workspace_id, task_id, task.confirmed_script_id) if task.confirmed_script_id else None, 'plan_id': task.plan_id, 'plan_digest': media_digest(creation_plan_payload(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))), 'montage': snapshot, 'files': files, 'narration_cache_key': task.narration_cache_key}
         if visual_scope is not None:
             facts['visual_preview'] = visual_scope
         if graphics:

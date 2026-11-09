@@ -33,6 +33,7 @@ class ArtifactStore:
         self, logical_ref: str, source: str | Path, *,
         temporary_path: str | Path | None = None,
         check: Callable[[], None] | None = None,
+        retain_failed_temporary: bool = False,
     ) -> PublishedArtifact:
         source_path = Path(source)
         if not source_path.is_file():
@@ -47,7 +48,8 @@ class ArtifactStore:
                         break
                     target.write(chunk)
 
-        return self.publish(logical_ref, copy, temporary_path=temporary_path, check=check)
+        return self.publish(logical_ref, copy, temporary_path=temporary_path, check=check,
+                            retain_failed_temporary=retain_failed_temporary)
 
     def publish(
         self,
@@ -56,7 +58,10 @@ class ArtifactStore:
         *,
         temporary_path: str | Path | None = None,
         check: Callable[[], None] | None = None,
+        retain_failed_temporary: bool = False,
     ) -> PublishedArtifact:
+        if retain_failed_temporary and temporary_path is None:
+            raise ValueError("保留失败复制文件需要明确的计量路径")
         target = self._target(logical_ref)
         self._check_publication(check)
         if temporary_path is not None:
@@ -71,6 +76,7 @@ class ArtifactStore:
         target_parent_identity = (target_parent_stat.st_dev, target_parent_stat.st_ino)
         temporary_parent_identity = None
         temporary_identity = None
+        completed = False
         if temporary_path is None:
             descriptor, temporary_name = tempfile.mkstemp(
                 dir=target.parent, prefix=f".{target.name}.", suffix=".tmp",
@@ -121,13 +127,18 @@ class ArtifactStore:
                 if existing != publication:
                     raise FileExistsError("产物逻辑引用已绑定到不同内容")
                 self._check_publication(check)
+                completed = True
                 return existing
+            completed = True
             return publication
         finally:
             if descriptor is not None:
                 os.close(descriptor)
             # A replacement disk/directory must not receive even cleanup writes.
-            if (temporary_parent_identity is not None and temporary_identity is not None
+            # Metered media owners need the exact partial copy to settle the
+            # original attempt. Generic publications retain their normal cleanup.
+            if ((completed or not retain_failed_temporary)
+                    and temporary_parent_identity is not None and temporary_identity is not None
                     and self._storage_root_matches()
                     and self._directory_matches(temporary.parent, temporary_parent_identity)
                     and (temporary_path is None or temporary.parent.resolve() == temporary.parent)

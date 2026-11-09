@@ -153,9 +153,9 @@ def test_public_render_publishes_physical_media_and_one_current_version(tmp_path
     registration=creation_job_registration(repo,render_action=main._render_creation_stage_with_grant,
         render_is_valid=main._creation_stage_valid_with_grant,verify_identity=main._verify_creation_identity,
         presenter_budget=budget,presenter_cpu_render_budget=render,cpu_render_budget=render,montage_budget=montage_budget,
-        audio_mix_facts=lambda workspace, target, montage, *, actor: main._task_audio().mix_facts(
+        audio_mix_facts=lambda workspace, target, montage, *, actor, connection=None: main._task_audio().mix_facts(
             workspace, target, montage.audio_timeline, montage.duration_seconds, actor=actor,
-            normalize_voice_sources=montage.narration_linkage_created_audio_timeline, budget=audio_budget))
+            normalize_voice_sources=montage.narration_linkage_created_audio_timeline, budget=audio_budget, connection=connection))
     runtime=build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'device.lock',
         device_access=MemberDeviceAccess(members,identity_verifier=main._verify_creation_identity),
         registrations={'creation_job':registration},resources=resources,processes=HostProcessProbe())

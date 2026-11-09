@@ -113,7 +113,8 @@ export function registerObservationTools(pi: ToolRegistrar, {request, taskId, ve
           throw new Error("本轮观察尚待核验或已提交相同观察；请回读原请求与实际结果，不重复提交");
         const task = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}`);
         if (task.task?.id !== taskId) throw new Error("任务响应身份不一致");
-        verifyTaskVersion(task);
+        // Observe the currently registered output, including one just produced
+        // by this turn. Editing keeps its original selection and version gate.
         const turn = readActionSource().turnId;
         if (!turn) throw new Error("观察缺少宿主绑定的真实轮次，未提交操作");
         const requestId = typedRequestId(turn, id);

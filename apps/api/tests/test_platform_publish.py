@@ -49,26 +49,36 @@ class _Connection:
     def fetchone(self): return None
 
 
-class _Repository:
-    database_path = "/tmp/isolated-test.sqlite3"
-    def __init__(self):
-        self.jobs = {}
-        self.events = []
-    @contextmanager
-    def _connect(self): yield _Connection()
+class _JobRecords:
+    def __init__(self, jobs): self.jobs = jobs
     def create_job_run(self, job, *, connection=None):
         self.jobs[job.id] = job
         return job
-    def append_task_event(self, event, *, connection=None):
-        self.events.append(event)
-        return event
     def get_job_run_by_idempotency_key(self, _workspace, key):
         return next((job for job in self.jobs.values() if job.idempotency_key == key), None)
     def get_job_run(self, _workspace, job_id): return self.jobs[job_id]
     def list_job_runs(self, _workspace, task_id):
         return [job for job in self.jobs.values() if job.task_id == task_id]
+
+
+class _ExecutionRecords:
+    def __init__(self, events): self.events = events
+    def append_task_event(self, event, *, connection=None):
+        self.events.append(event)
+        return event
     def list_task_events(self, _workspace, task_id):
         return [event for event in self.events if event.task_id == task_id]
+
+
+class _Repository:
+    database_path = "/tmp/isolated-test.sqlite3"
+    def __init__(self):
+        self.jobs = {}
+        self.events = []
+        self.job_records = _JobRecords(self.jobs)
+        self.execution_records = _ExecutionRecords(self.events)
+    @contextmanager
+    def _connect(self): yield _Connection()
 
 
 class _Scheduler:

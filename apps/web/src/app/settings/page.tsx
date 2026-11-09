@@ -12,6 +12,7 @@ import { FormErrorBanner } from "@/components/FormErrorBanner";
 import { LlmProviderFields } from "@/components/LlmProviderFields";
 import { AsrFields, FieldRow, type FieldDef } from "@/components/SettingsFields";
 import { ModelInstallPanel } from "@/components/ModelInstallPanel";
+import { DeviceResourcePreparationPanel } from "@/components/DeviceResourcePreparationPanel";
 import {
   getLocalModels,
   getProductionFoundation,
@@ -493,7 +494,7 @@ export default async function SettingsPage({
           {offline ? <p role="alert">暂时无法连接本地服务。</p> : null}
           {activeCategory === "creators" ? <SettingsCreators selectedMemberId={params.member} /> : null}
           {activeCategory === "appearance" ? <section className={own.auxiliary} aria-label="外观设置"><h2>外观</h2><SettingsAppearance /></section> : null}
-          {activeCategory === "runtime" ? <section className={own.auxiliary} aria-label="运行与诊断"><h2>运行与诊断</h2><Link href="/health">打开运行情况与修复入口</Link><Link href="/settings?section=paths">本地模型安装与路径诊断</Link><Link href="/settings?section=model">对话服务状态与连接</Link></section> : null}
+          {activeCategory === "runtime" ? <section className={own.auxiliary} aria-label="运行与诊断"><h2>运行与诊断</h2><DeviceResourcePreparationPanel/><Link href="/health">打开运行情况与修复入口</Link><Link href="/settings?section=paths">本地模型安装与路径诊断</Link><Link href="/settings?section=model">对话服务状态与连接</Link></section> : null}
           {activeCategory === "about" ? <section className={own.auxiliary} aria-label="关于与隐私"><h2>智能视频日记</h2><SettingsHelpButton/><nav aria-label="法律与帮助"><Link href="/privacy">隐私政策</Link><Link href="/terms">使用条款</Link><Link href="/health">运行检查与技术诊断</Link></nav><details><summary>数据与模型使用说明</summary><p>本地素材处理使用本机能力；对话和文案使用你配置的文字服务。发送范围、凭据与外部服务费用在相应设置中说明。原始音视频不会因普通文字对话自动上传。</p></details></section> : null}
 
 

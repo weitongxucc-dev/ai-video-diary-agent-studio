@@ -310,14 +310,25 @@ class MontageBudget:
     max_output_bytes: int
     max_timeout_seconds: float
     additional_memory_bytes: int
+    preparation_basis_digest: str | None = None
 
     def __post_init__(self) -> None:
         for name, value in vars(self).items():
+            if name == 'preparation_basis_digest':
+                if value is not None and (not isinstance(value, str) or re.fullmatch('[0-9a-f]{64}', value) is None):
+                    raise ValueError('Prepared montage needs its exact task input basis')
+                continue
             if name == "max_timeout_seconds":
                 if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
                     raise ValueError("Montage timing limit must be explicitly positive")
             elif type(value) is not int or value <= 0:
                 raise ValueError("Montage limits must be explicit positive integers")
+
+
+def montage_scope_digest(task_id, dependency_digest, manifest_sha256, authorized_asset_ids):
+    basis = {'task_id': task_id, 'dependency_digest': dependency_digest, 'manifest_sha256': manifest_sha256,
+             'authorized_asset_ids': sorted(authorized_asset_ids)}
+    return hashlib.sha256(json.dumps(basis, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -884,6 +895,13 @@ class HostResourceRefusal(RecoveryBlocked):
         }
         details = []
         for metric, check in decision.checks.items():
+            if metric == 'write_volumes':
+                reported = set()
+                for volume in check.values():
+                    if volume.get('passed') is False and volume['volume_id'] not in reported:
+                        reported.add(volume['volume_id'])
+                        details.append(f"产物写入磁盘可用空间为{volume['actual']}字节，至少需要{volume['minimum']}字节")
+                continue
             if check.get("passed") is not False:
                 continue
             if metric in {"memory_policy", "memory_pressure"}:
@@ -1525,6 +1543,9 @@ class HostResourceProbe:
                      self.budget.narration if kind == "creation_narration" else self.budget.montage)
             if stage is None:
                 return decision(None, "stage_budget_unavailable")
+            if (kind == 'creation_montage_plan' and stage.preparation_basis_digest is not None
+                    and resources.get('preparation_basis_digest') != stage.preparation_basis_digest):
+                return decision(False, 'montage_preparation_binding_changed')
             if kind == "creation_narration" and resources.get("input_scope") is not None:
                 if (stage.input_scope not in {'single_call_experiment_v1', 'single_call_preparation_v1', 'single_call_prepared_v1'}
                         or resources.get("input_scope") != stage.input_scope

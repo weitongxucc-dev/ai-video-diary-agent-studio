@@ -116,7 +116,7 @@ export function taskMediaJobLabel(job: TaskMediaJob): string {
     if (job.status === "stale")
         return "输入已变化，请重新预览";
     if (job.status === "failed")
-        return "预览未完成";
+        return job.failure_reason ? `预览未完成：${job.failure_reason}` : "预览未完成";
     return "预览已生成";
 }
 export function taskMediaResourceCheckLabel(check: ResourceAdmissionCheck): string {

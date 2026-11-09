@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.host_memory_boundary import IsolatedMemoryMonitor
+
 from app.device_scheduler import (
     DeviceScheduler, ProcessIdentity, SchedulePolicy, SubmissionIntent, VerifiedWork,
 )
@@ -351,7 +353,10 @@ def test_real_short_video_ffprobe_uses_grant_and_leaves_scene_pending(tmp_path: 
     repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     resources = host.HostResourceProbe(
         repo.database_path, disk_paths=(tmp_path,),
-        budget=host.HostBudget(100, 0, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
+        # Isolate pressure policy while retaining the real grant, resource probe,
+        # ffprobe process and checkpoint; this is not machine calibration.
+        budget=host.HostBudget(100, 64 * 1024 * 1024, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
+        memory_monitor=IsolatedMemoryMonitor(),
     )
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=MaterialHashOwnerVerifier(repo),
@@ -407,7 +412,10 @@ def test_real_invalid_media_ffprobe_failure_is_terminal(tmp_path: Path) -> None:
     repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     resources = host.HostResourceProbe(
         repo.database_path, disk_paths=(tmp_path,),
-        budget=host.HostBudget(100, 0, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
+        # Isolate pressure policy while retaining the real grant, resource probe,
+        # ffprobe process and checkpoint; this is not machine calibration.
+        budget=host.HostBudget(100, 64 * 1024 * 1024, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
+        memory_monitor=IsolatedMemoryMonitor(),
     )
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=MaterialHashOwnerVerifier(repo),
@@ -460,7 +468,10 @@ def test_probe_timeout_cleans_child_and_persists_failure(
     repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     resources = host.HostResourceProbe(
         repo.database_path, disk_paths=(tmp_path,),
-        budget=host.HostBudget(100, 0, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
+        # Isolate pressure policy while retaining the real grant, resource probe,
+        # ffprobe process and checkpoint; this is not machine calibration.
+        budget=host.HostBudget(100, 64 * 1024 * 1024, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
+        memory_monitor=IsolatedMemoryMonitor(),
     )
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=MaterialHashOwnerVerifier(repo),
@@ -511,7 +522,10 @@ def test_probe_stop_cancels_registered_child_and_defers_without_result(
     repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     resources = host.HostResourceProbe(
         repo.database_path, disk_paths=(tmp_path,),
-        budget=host.HostBudget(100, 0, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
+        # Isolate pressure policy while retaining the real grant, resource probe,
+        # ffprobe process and checkpoint; this is not machine calibration.
+        budget=host.HostBudget(100, 64 * 1024 * 1024, 2**63, 0, 2**63, 8 * 1024 * 1024, 0.02),
+        memory_monitor=IsolatedMemoryMonitor(),
     )
     scheduler = DeviceScheduler(
         repo.database_path, tmp_path / "device.lock", owners=MaterialHashOwnerVerifier(repo),

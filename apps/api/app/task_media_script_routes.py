@@ -22,7 +22,8 @@ def media_script_submission_command(task_id, payload, *, tool_id=None):
 class MediaScriptSubmissionHttpAdapter:
     def __init__(self, *, exact_edit_access, current_workspace_id, require_permit_actor,
                  request_permit_actor, auth_enabled, require_assistant_input_origin,
-                 creation_task_or_404, script_configuration, creation_runtime, media_result_receipt, wake):
+                 creation_task_or_404, script_configuration, creation_runtime, media_result_receipt,
+                 bind_recipe_selection, wake):
         self.exact_edit_access = exact_edit_access
         self.current_workspace_id = current_workspace_id
         self.require_permit_actor = require_permit_actor
@@ -33,6 +34,7 @@ class MediaScriptSubmissionHttpAdapter:
         self.script_configuration = script_configuration
         self.creation_runtime = creation_runtime
         self.media_result_receipt = media_result_receipt
+        self.bind_recipe_selection = bind_recipe_selection
         self.wake = wake
 
     def run(self, request: Request, steps):
@@ -65,6 +67,8 @@ class MediaScriptSubmissionHttpAdapter:
                     elif isinstance(stage, script_submission.QueueScript):
                         runtime = self.creation_runtime()
                         media = runtime.registrations['creation_job'].owner.task_media
+                        if stage.operation == 'media_script_tool_preview':
+                            self.bind_recipe_selection(runtime, stage.actor, stage.task_id, stage.arguments)
                         job = media.submit(runtime, stage.actor, stage.task_id, stage.operation, stage.arguments, 'graphic_source')
                         answer = self.media_result_receipt(media, job, stage.actor, runtime)
                     elif isinstance(stage, script_submission.WakeContinuations):

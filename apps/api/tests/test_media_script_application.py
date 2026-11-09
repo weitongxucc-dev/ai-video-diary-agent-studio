@@ -1,5 +1,6 @@
 """One explicit application flow; external prepare/run are disclosed substitutes."""
 import hashlib
+from dataclasses import replace
 import io
 import json
 import os
@@ -25,7 +26,7 @@ legacy_state = _owner_test_media_script_api.state
 @pytest.fixture
 def script_application(legacy_state, monkeypatch):
     state = legacy_state
-    monkeypatch.setattr(main.settings, 'native_ocr_worker_path', '', raising=False)
+    monkeypatch.setattr(main, 'settings', replace(main.settings, native_ocr_worker_path=''))
     media = state.runtime.registrations['creation_job'].owner.task_media
     media.media_script = main._media_script_use_case(state.production)
     assert media.media_script.repository is state.production
@@ -137,7 +138,7 @@ def test_raw_source_recipe_and_replay_use_explicit_owner(script_application):
     assert len(state.port_calls) == len(state.prepared_calls) == 2
     assert not state.runtime.run_once()
     assert state.production.task_records.get_creation_task(state.workspace_id, state.task.id).current_timeline_version_id == before
-    assert not scripts.MEDIA_SCRIPT_ACTIONS.intersection(main._TASK_MEDIA_HANDLERS)
+    assert not hasattr(main, '_TASK_MEDIA_HANDLERS')
     assert not hasattr(next(route.endpoint for route in main.app.routes if route.name == 'preview_media_script'), '__wrapped__')
     assert not hasattr(next(route.endpoint for route in main.app.routes if route.name == 'preview_media_script_tool'), '__wrapped__')
     with state.production._connect() as conn:

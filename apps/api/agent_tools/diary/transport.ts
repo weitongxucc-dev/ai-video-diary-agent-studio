@@ -29,8 +29,8 @@ export function safeScriptCandidateLocation(value: any): ScriptCandidateLocation
   if (!["script_fact_unsupported", "script_goal_conflict"].includes(value?.error)) return undefined;
   const section = value.candidate_section_index, field = value.candidate_field;
   const fragment = value.candidate_fragment_index, digest = value.candidate_field_digest;
-  if (!Number.isInteger(value.section_index) || value.section_index < 1 || value.section_index > 20
-      || !Number.isInteger(section) || section < 0 || section > 20
+  if (!Number.isSafeInteger(value.section_index) || value.section_index < 1
+      || !Number.isSafeInteger(section) || section < 0
       || !["title", "content", "visual_prompt"].includes(field)
       || (section === 0 ? field !== "title" : section !== value.section_index)
       || !Number.isInteger(fragment) || fragment < 0
@@ -64,7 +64,7 @@ export function safeFailureText(value: unknown, secrets: string[] = []): string 
 export function safeScriptReviewIssues(value: any, secrets: string[] = []): ScriptReviewIssue[] | undefined {
   const issues = value?.review_issues;
   if (!["script_fact_unsupported", "script_goal_conflict"].includes(value?.error)
-      || !Array.isArray(issues) || issues.length < 1 || issues.length > 12) return undefined;
+      || !Array.isArray(issues) || issues.length < 1) return undefined;
   const safe: ScriptReviewIssue[] = [];
   for (const issue of issues) {
     const location = safeScriptCandidateLocation(issue);
@@ -101,11 +101,11 @@ export function safeBusinessFailure(value: any, secrets: string[] = []): Partial
   for (const key of ["expected_input_fingerprint", "current_input_fingerprint"])
     if (typeof value?.[key] === "string" && /^[a-f0-9]{64}$/.test(value[key])) safe[key] = value[key];
   if (["not_submitted", "rejected", "unknown"].includes(value?.submission_effect)) safe.submission_effect = value.submission_effect;
-  if (typeof value?.query_url === "string" && /^\/api\/(?:creation-requests|creation-tasks)\/[A-Za-z0-9_/-]{1,350}(?:\?phase=(?:apply|preview))?$/.test(value.query_url))
+  if (typeof value?.query_url === "string" && /^\/api\/(?:creation-requests|creation-tasks|source-tasks)\/[A-Za-z0-9_/-]{1,350}(?:\?phase=(?:apply|preview))?$/.test(value.query_url))
     safe.query_url = value.query_url;
   // Existing script-review consumers use these exact fields.
   if (typeof value?.retryable === "boolean") safe.retryable = value.retryable;
-  if (value?.section_index === null || (Number.isInteger(value?.section_index) && value.section_index >= 1 && value.section_index <= 20))
+  if (value?.section_index === null || (Number.isSafeInteger(value?.section_index) && value.section_index >= 1))
     safe.section_index = value.section_index;
   Object.assign(safe, safeScriptCandidateLocation(value));
   const issues = safeScriptReviewIssues(value, secrets);
@@ -129,7 +129,7 @@ function scriptDraftFailure(detail: any, secrets: string[]): ScriptDraftFailure 
   return {error, reason_code: validReason ? reason : "unavailable",
     ...(safeFailureText(detail.reason, secrets) ? {reason: safeFailureText(detail.reason, secrets)} : {}),
     ...(safeFailureText(detail.repair_action, secrets) ? {repair_action: safeFailureText(detail.repair_action, secrets)} : {}),
-    section_index: Number.isInteger(detail.section_index) && detail.section_index >= 1 && detail.section_index <= 20
+    section_index: Number.isSafeInteger(detail.section_index) && detail.section_index >= 1
       ? detail.section_index : null,
     retryable: detail.retryable === true, ...safeScriptCandidateLocation(detail), ...(issues ? {review_issues: issues} : {})};
 }
@@ -228,6 +228,7 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
       return result('read_task_quality_continuation', {...args,
         job_id: query.get('job_id'), failed_request_id: query.get('failed_request_id')});
     const reads: Record<string, string> = {
+      '/edit-controls': 'read_edit_control_context',
       '/execution/preview': 'read_creation_execution_preview',
       '/assistant/script-context': 'read_assistant_script_context',
       '/assistant/edit-capabilities': 'read_task_edit_capabilities',
@@ -267,7 +268,13 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
       {...args, assistant_turn_id: query.get('assistant_turn_id'), payload});
   if (suffix === '/edits/exact/preview' && only('draft') && (!query.has('draft') || ['true','false'].includes(query.get('draft')!)))
     return result('preview_task_edit', {...args,payload,...(query.has('draft') ? {draft_only:query.get('draft') === 'true'} : {})});
+  const selection = suffix.match(/^\/edits\/([^/]+)\/selection\/preview$/);
+  if (selection && only('draft') && (!query.has('draft') || ['true','false'].includes(query.get('draft')!)))
+    return result('preview_edit_selection', {...args, proposal_id:decodeURIComponent(selection[1]), payload,
+      draft_only:query.get('draft') === 'true'});
   if (search) return null;
+  const discard = suffix.match(/^\/edits\/([^/]+)\/reject$/);
+  if (discard) return result('discard_edit_proposal', {...args, proposal_id:decodeURIComponent(discard[1]), payload});
   if (suffix === '/timeline/undo' || suffix === '/timeline/redo') return result('restore_timeline',
     {...args, action: suffix.endsWith('/undo') ? 'undo' : 'redo', payload});
   const segmentResume = suffix.match(/^\/segment-requests\/([^/]+)\/resume$/);
@@ -343,7 +350,10 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     // The section owner checks the original section and dependency digest.
     // The quality application reads an existing successor before checking HEAD for a new continuation.
     const qualityContinuation = path === `${taskRoot}/quality-check/continue`;
-    if (taskId && selectedTaskVersion && write && !sectionWrite && !targetedRestore && !qualityContinuation && path.startsWith(`${taskRoot}/`)) {
+    // Observation freezes the current output version in its payload. Its owner
+    // checks that version at admission; this does not rebase an edit selection.
+    const outputObservation = path === `${taskRoot}/observations`;
+    if (taskId && selectedTaskVersion && write && !sectionWrite && !targetedRestore && !qualityContinuation && !outputObservation && path.startsWith(`${taskRoot}/`)) {
       try {
         const current = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}`, undefined, false);
         verifyTaskVersion(current);

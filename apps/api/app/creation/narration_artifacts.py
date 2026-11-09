@@ -49,7 +49,7 @@ def narration_artifact_from_payload(
 class NarrationArtifactStore:
     def __init__(
         self, *, connection_factory: Callable[[], sqlite3.Connection],
-        recorded_source_is_current: Callable[[NarrationArtifactRecord], bool],
+        recorded_source_is_current: Callable[..., bool],
         resolve_workspace_media_reference: Callable[..., Path],
     ) -> None:
         self._connect = connection_factory
@@ -66,6 +66,7 @@ class NarrationArtifactStore:
         self,
         workspace_id: str,
         reference: str,
+        *, connection: sqlite3.Connection | None = None,
     ) -> Path:
         value = reference.strip()
         if value.startswith("workspace://"):
@@ -73,6 +74,7 @@ class NarrationArtifactStore:
                 workspace_id,
                 value,
                 require_registered=True,
+                connection=connection,
             )
         parsed = urlsplit(value)
         if (
@@ -90,6 +92,7 @@ class NarrationArtifactStore:
         artifact = self.get_narration_artifact(
             workspace_id,
             parsed.path.removeprefix("/"),
+            connection=connection,
         )
         if artifact is None:
             raise _MediaAuthorityError(
@@ -118,7 +121,7 @@ class NarrationArtifactStore:
         record = narration_artifact_from_payload(json.loads(str(row["payload"])))
         if not Path(record.audio_path).is_file():
             return None
-        if record.source_kind == "recorded" and not self.recorded_source_is_current(record):
+        if record.source_kind == "recorded" and not self.recorded_source_is_current(record, connection=connection):
             return None
         return record
 

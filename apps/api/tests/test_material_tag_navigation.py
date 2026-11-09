@@ -128,7 +128,8 @@ def test_selected_material_assistant_binds_visible_owner_and_returns_persisted_t
     )
     conversation = create_material_conversation(tag_client.client, tag_client.headers, asset_id, "把整条素材标签改成新标签")
 
-    def fake_turn(_settings, *, workspace_id, selection, **_kwargs):
+    def fake_turn(_settings, *, workspace_id, material_selection: dict, **_kwargs):
+        selection = material_selection
         assert workspace_id == WORKSPACE
         assert {key: selection[key] for key in ("scope", "asset_id")} == {"scope": "asset", "asset_id": asset_id}
         assert selection["expected_updated_at"]
@@ -141,7 +142,7 @@ def test_selected_material_assistant_binds_visible_owner_and_returns_persisted_t
             "action": "replace", "changed": True, "previous_user_tags": before.user_tags,
         }}
 
-    monkeypatch.setattr(main_module, "run_material_turn", fake_turn)
+    monkeypatch.setattr(main_module, "run_plan_turn", fake_turn)
     response = tag_client.client.post(
         "/api/assistant/material/turn", headers=tag_client.headers,
         json={"message": "把整条素材标签改成新标签", "conversation_id": conversation["id"],
@@ -166,7 +167,7 @@ def test_selected_material_assistant_does_not_call_pi_for_an_invisible_asset(tag
         called = True
         raise AssertionError("Pi must not run for an invisible target")
 
-    monkeypatch.setattr(main_module, "run_material_turn", forbidden_turn)
+    monkeypatch.setattr(main_module, "run_plan_turn", forbidden_turn)
     response = tag_client.client.post(
         "/api/assistant/material/turn", headers=tag_client.headers,
         json={"message": "读一下标签", "conversation_id": conversation["id"],
@@ -194,7 +195,7 @@ def test_selected_material_assistant_rejects_credentials_in_user_message(tag_cli
         called = True
         raise AssertionError("Pi must not receive credentials pasted into the message")
 
-    monkeypatch.setattr(main_module, "run_material_turn", forbidden_turn)
+    monkeypatch.setattr(main_module, "run_plan_turn", forbidden_turn)
     response = tag_client.client.post(
         "/api/assistant/material/turn", headers=tag_client.headers,
         json={"message": "添加标签 token=synthetic-secret-123", "conversation_id": conversation["id"],

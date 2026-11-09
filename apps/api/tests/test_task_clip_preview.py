@@ -308,6 +308,7 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
     with repo._connect() as conn:
         task=repo.task_records.get_creation_task('local','task')
         task.montage_plan_id='montage'
+        task.owner_user_id=actor.member_id
         conn.execute("UPDATE creation_tasks SET payload=? WHERE workspace_id='local' AND id='task'",(json.dumps(asdict(task),default=str),))
         conn.execute("INSERT INTO creation_task_montage_plans (id,workspace_id,task_id,payload,updated_at) VALUES (?,?,?,?,?)",
             ('montage','local','task',json.dumps(creation_task_montage_plan_to_payload(plan)),task.updated_at.isoformat()))
@@ -332,6 +333,7 @@ def test_change_crop_on_long_task_only_renders_selected_silent_window(tmp_path,m
     runtime=build(media)
     runtime.scheduler.processes=HostProcessProbe()
     monkeypatch.setattr(main,'_creation_runtime',lambda:runtime)
+    monkeypatch.setattr(main,'_media_result_read_components',lambda:(media,runtime.scheduler))
     client=TestClient(main.app)
     payload={'operation_type':'ChangeCrop','clip_id':'clip','fit_mode':'fit','crop_x':.5,'crop_y':.5}
     queued=client.post('/api/creation-tasks/task/edits/exact/preview',json=payload)

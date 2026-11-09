@@ -66,7 +66,7 @@ def render_input_payload(
 def render_input_refs(task: CreationTask, plan) -> list[str]:
     return list(dict.fromkeys([
         f"montage-plan://{task.id}/{plan.id}",
-        plan.narration_audio_path,
+        *([plan.narration_audio_path] if plan.narration_audio_path else []),
         *(clip.source_path for clip in plan.clips),
         *((clip.source_ref for track in plan.audio_timeline.tracks for clip in track.clips) if plan.audio_timeline else ()),
         *(f"person-render://{clip.person_render_id}" for clip in plan.clips if clip.person_render_id),
@@ -97,14 +97,19 @@ class RenderStageUseCase:
             )
         except KeyError as exc:
             raise RenderRejected(status_code=404, detail="creation task montage plan not found") from exc
-        requirement = DurationRequirement.from_plan(self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id))
+        creation_plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
+        requirement = DurationRequirement.from_plan(creation_plan)
         try:
             requirement.require(plan.duration_seconds, 30)
         except DurationConflict as exc:
             raise RenderRejected(status_code=409, detail=str(exc)) from exc
         if any(clip.needs_confirmation for clip in plan.clips) or plan.status not in {"ready", "rendering", "rendered", "failed"}:
             raise RenderRejected(status_code=409, detail="仍有镜头等待确认，请先检查并确认这些镜头。")
-        if not plan.narration_audio_path:
+        if not plan.narration_audio_path and not (
+            creation_plan.source_media is not None and plan.audio_timeline is not None
+            and plan.script_id is None and task.confirmed_script_id is None
+            and task.narration_cache_key is None
+        ):
             raise RenderRejected(status_code=409, detail="creation task narration missing")
         if render_context is not None:
             self.graphic_source_paths(workspace_id, task_id, plan.graphic_overlays, render_context)
@@ -346,9 +351,9 @@ class RenderStageUseCase:
                     rendered = plan
                     rendered.status = "rendered"
                 except FileNotFoundError:
-                    narration_path = self.repository.narration_artifacts.resolve_authorized_narration_audio_reference(
-                        workspace_id, plan.narration_audio_path or ""
-                    )
+                    narration_path = (self.repository.narration_artifacts.resolve_authorized_narration_audio_reference(
+                        workspace_id, plan.narration_audio_path
+                    ) if plan.narration_audio_path else None)
                     rendering_payload = creation_task_montage_plan_to_payload(plan)
                     rendering_payload["status"] = "rendering"
                     self.repository.montage_plan_adoption.save_creation_task_montage_plan(
@@ -782,7 +787,7 @@ class RenderStageUseCase:
 
     def record_usage(self, workspace_id: str, plan) -> None:
         for clip in plan.clips:
-            if clip.person_render_id:
+            if clip.person_render_id or clip.segment_id is None:
                 continue
             self.repository.material_assets.record_segment_usage(
                 workspace_id,

@@ -318,6 +318,34 @@ console.log('device preparation correction: PASS');`,
   assert.match(stdout,/device preparation correction: PASS/);
 });
 
+test('storyboard preparation binds the current task and rejects supplied task or budget fields', async t => {
+  const tree = await resourceTree(t);
+  const {stdout} = await execute(process.execPath,['--experimental-strip-types','--input-type=module','-e',`
+import assert from 'node:assert/strict';
+const {createBusinessRequest}=await import(process.argv[1]);
+const {registerExecutionTools}=await import(process.argv[2]);
+const {createToolCallScope}=await import(process.argv[3]);
+const tools=new Map(),calls=[],source={turnId:'turn:original',inputId:'input:original'};
+const request=createBusinessRequest({taskId:'task:original',selectedTaskVersion:null,verifyTaskVersion(){},
+ readCredentials(){throw Error('credentials forbidden')},getSignal:()=>undefined,fetchRequest(){throw Error('HTTP forbidden')},
+ businessCall:async(operation,args)=>{calls.push({operation,args});return {ok:true,value:{id:'work',plan_id:'plan',state:'waiting',wait_reason:null}}}});
+registerExecutionTools(createToolCallScope(()=>source).bind({registerTool:tool=>tools.set(tool.name,tool)}),
+ {request,taskId:'task:original',readActionSource:()=>source,typedRequestId:()=> '11111111-1111-4111-8111-111111111111'});
+const tool=tools.get('prepare_device_resources');
+await tool.execute('prepare',{kind:'montage',shape:{}});
+assert.equal(calls.length,1);assert.equal(calls[0].operation,'prepare_device_resources');
+assert.deepEqual(calls[0].args.payload.shape,{task_id:'task:original'});
+await assert.rejects(()=>tool.execute('other',{kind:'montage',shape:{task_id:'other-task'}}));
+await assert.rejects(()=>tool.execute('budget',{kind:'montage',shape:{section_count:999}}));
+assert.equal(calls.length,1);
+console.log('bound storyboard preparation: PASS');`,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','transport.ts')).href,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','execution-tools.ts')).href,
+    pathToFileURL(join(tree.root,'Resources','agent-tools','diary','registration.ts')).href],
+    {cwd:tree.root,env:tree.environment,timeout:10000});
+  assert.match(stdout,/bound storyboard preparation: PASS/);
+});
+
 test('device preparation tools use the original key after an unknown result and never invent run or normal work', async t => {
   const tree = await resourceTree(t);
   const {stdout} = await execute(process.execPath,['--experimental-strip-types','--input-type=module','-e',`

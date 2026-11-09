@@ -55,7 +55,7 @@ class NarrationCompletionTransaction:
                 or task.confirmed_script_id != artifact.script_id
             ):
                 raise ValueError("配音产物与当前创作任务不一致")
-            if artifact.source_kind == "recorded" and not self.recorded_source_is_current(artifact):
+            if artifact.source_kind == "recorded" and not self.recorded_source_is_current(artifact, connection=conn):
                 raise ValueError("采用的电脑录音不再是当前任务的有效来源")
             if artifact.source_kind == "recorded" and (
                 segments is None or len(segments) != 1
@@ -105,13 +105,15 @@ class NarrationCompletionTransaction:
             )
         return task, artifact
 
-    def recorded_source_is_current(self, artifact: NarrationArtifactRecord) -> bool:
+    def recorded_source_is_current(self, artifact: NarrationArtifactRecord, *, connection=None) -> bool:
         if (artifact.source_kind != "recorded" or not artifact.task_id
                 or not artifact.source_artifact_ref or not artifact.source_sha256
                 or not artifact.source_script_digest
                 or artifact.voice_profile_id is not None or artifact.model_id is not None):
             return False
-        with self._connect() as conn:
+        with self._connect() if connection is None else nullcontext(connection) as conn:
+            if connection is None:
+                conn.execute("BEGIN")
             row = conn.execute(
                 "SELECT * FROM artifact_records WHERE workspace_id=? AND task_id=? AND logical_ref=?",
                 (artifact.workspace_id, artifact.task_id, artifact.source_artifact_ref),
@@ -122,22 +124,22 @@ class NarrationCompletionTransaction:
             if source.kind != "task_recording" or source.sha256 != artifact.source_sha256:
                 return False
             try:
-                job = self._read_job(artifact.workspace_id, source.producer_job_id)
-                transform = next((item for item in self._list_transforms(artifact.workspace_id, artifact.task_id)
+                job = self._read_job(artifact.workspace_id, source.producer_job_id, connection=conn)
+                transform = next((item for item in self._list_transforms(artifact.workspace_id, artifact.task_id, connection=conn)
                     if item.job_id == source.producer_job_id and item.output_refs == [source.logical_ref]), None)
             except KeyError:
                 return False
-        if transform is None:
-            return False
-        if (job.task_id != artifact.task_id or job.status != "succeeded"
-                or transform.task_id != artifact.task_id or transform.status != "succeeded"
-                or transform.job_id != job.id or transform.output_refs != [source.logical_ref]
-                or transform.parameters.get("script_id") != artifact.script_id
-                or transform.parameters.get("script_digest") != artifact.source_script_digest
-                or self._confirmed_script_digest(
-                    artifact.workspace_id, artifact.task_id, artifact.script_id
-                ) != artifact.source_script_digest):
-            return False
+            if transform is None:
+                return False
+            if (job.task_id != artifact.task_id or job.status != "succeeded"
+                    or transform.task_id != artifact.task_id or transform.status != "succeeded"
+                    or transform.job_id != job.id or transform.output_refs != [source.logical_ref]
+                    or transform.parameters.get("script_id") != artifact.script_id
+                    or transform.parameters.get("script_digest") != artifact.source_script_digest
+                    or self._confirmed_script_digest(
+                        artifact.workspace_id, artifact.task_id, artifact.script_id, connection=conn
+                    ) != artifact.source_script_digest):
+                return False
         path = Path(artifact.audio_path)
         if not path.is_file() or path.stat().st_size != source.size_bytes:
             return False

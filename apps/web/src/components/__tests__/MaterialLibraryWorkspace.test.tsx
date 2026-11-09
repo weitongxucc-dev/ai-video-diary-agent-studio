@@ -126,6 +126,11 @@ it("switches the material collection between cover grid and object rows", async 
   expect(within(collection).getByRole("button", { name:"对象列表" })).toHaveAttribute("aria-pressed", "true");
 });
 
+it("offers original-video creation from the selected imported video", () => {
+  render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{ collections: [], total_count: 0 }} />);
+  expect(screen.getByRole("button", { name: "以原片创作" })).toBeVisible();
+});
+
 it("shows pending analysis and unknown duration without inventing a queue or manual execution action", async () => {
   const waiting = { ...asset, analysis_status:"pending" as const, analysis_message:"复制完成确认已保存，正在分析；确认不代表文件通过校验。", duration_seconds:null, usage_role:"unassigned" as const, suggested_usage_role:"a_roll" as const, review_status:"raw" as const };
   const waitingLibrary = { ...library, assets:[waiting] };

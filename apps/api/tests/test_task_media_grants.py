@@ -104,6 +104,31 @@ def test_cross_member_replay_is_not_authorized(tmp_path):
     runtime.stop(0)
 
 
+def test_captured_media_running_check_rejects_removed_original_member(tmp_path):
+    repo, _owner, state, _factory, build, media = case(tmp_path)
+    members = LocalMemberService(repo.database_path)
+    joined, _token = members.join(members.create_invite_code(), '原媒体成员')
+    actor = CreationExecutionActor('local', joined.member_id)
+    runtime = build(media)
+    grant = None
+    try:
+        job = media.submit(runtime, actor, 'task', 'audio_listen', {}, 'audio_listen')
+        grant = runtime.scheduler.pick_and_grant()
+        assert grant is not None and grant.owner_id == job.id
+        check = runtime.scheduler.capture_running_check(grant)
+        check()
+        members.remove_member(joined.member_id)
+        with pytest.raises(PermissionError):
+            check()
+        assert state['calls'] == 0
+    finally:
+        if grant is not None:
+            runtime.scheduler.fail_unit(grant, reason='fixture_finished',
+                failure_write=lambda conn, current: 'fixture_finished')
+            runtime.scheduler.assert_released(grant)
+        runtime.stop(0)
+
+
 def test_cancel_before_grant_never_calls_media(tmp_path):
     repo, actor, state, factory, build, media = case(tmp_path)
     runtime = build(media)
@@ -540,8 +565,8 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     plan = CreationTaskMontagePlan('montage', 'local', 'task', 'script', 'scope fixture', 'ready',
         [NarrationCue(f'cue_{index}', f'section_{index}', '', clip.timeline_end_seconds-clip.timeline_start_seconds)
          for index, clip in enumerate(clips)], clips, at, 0, aspect_ratio='1:1', audio_timeline=graph, narration_audio_path=references[1],
-        graphic_overlays=[{'kind':'text', 'id':'in-window', 'text':'fixture', 'start_seconds':2, 'end_seconds':3},
-                          {'kind':'text', 'id':'outside', 'text':'outside', 'start_seconds':9, 'end_seconds':10}])
+        graphic_overlays=[{'kind':'text', 'id':'in-window', 'text':'fixture', 'start_seconds':2, 'end_seconds':3, 'font_family':'Arial'},
+                          {'kind':'text', 'id':'outside', 'text':'outside', 'start_seconds':9, 'end_seconds':10, 'font_family':'Arial'}])
     payload = creation_task_montage_plan_to_payload(plan)
     with repo._connect() as conn:
         task = repo.task_records.get_creation_task('local', 'task')
@@ -698,7 +723,9 @@ def test_long_fade_preview_seals_one_stable_linked_window_and_renders_its_tail(t
         response = client.get(queued.json()['result_url'])
         assert response.status_code == 200, response.text
         done = response.json()
-        assert done['status'] == 'succeeded', {'receipt': done, 'execution_failures': failures}
+        if done['status'] != 'succeeded' and failures:
+            pytest.fail('\n\n'.join(failures), pytrace=False)
+        assert done['status'] == 'succeeded', done
         assert '完整区间' in done['result']['proposal']['preview']['after']['detail']
         assert '未覆盖相邻转场' in done['result']['proposal']['preview']['after']['detail']
         inputs = [item for item in repo.execution_records.list_task_events('local', 'task')
