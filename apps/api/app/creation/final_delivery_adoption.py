@@ -327,14 +327,18 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
     if render_context is not None:
         for ref, expected_sha in [(video.logical_ref, video.sha256)] + ([(subtitle.logical_ref, subtitle.sha256)]
                 if saved['subtitle_artifact_id'] is not None else []):
+            render_context.check()
+            check_current = render_context.scheduler.capture_running_check(render_context.grant)
             digest = hashlib.sha256()
             with store.resolve_file(ref).open('rb') as stream:
                 while True:
-                    render_context.check()
+                    render_context.check_execution_limits()
+                    check_current()
                     part = stream.read(65536)
                     if not part:
                         break
                     digest.update(part)
             if digest.hexdigest() != expected_sha:
                 return False
+            render_context.check()
     return True

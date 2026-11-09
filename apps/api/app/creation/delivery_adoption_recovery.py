@@ -275,6 +275,8 @@ class DeliveryAdoptionRecovery:
         with self.repository._connect() as conn:
             plan = self.read_plan(job, request.unit_key.removeprefix(PREFIX), conn)
         for facts in [plan['video']] + ([plan['subtitle']] if plan['subtitle'] is not None else []):
+            context.check()
+            check_current = context.scheduler.capture_running_check(context.grant)
             expected = facts['file_identity']
             binding = facts['parent']['binding'] if 'parent' in facts else facts
             descriptor = os.open(facts['path'], os.O_RDONLY | os.O_NOFOLLOW)
@@ -285,7 +287,8 @@ class DeliveryAdoptionRecovery:
                     raise ValueError('原已知成片文件描述符身份变化')
                 digest = hashlib.sha256()
                 while True:
-                    context.check()
+                    context.check_execution_limits()
+                    check_current()
                     chunk = source.read(65536)
                     if not chunk:
                         break
