@@ -80,22 +80,22 @@ def test_packet_copy_actual_three_volumes_and_remaining_write_allocation(tmp_pat
     monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=free[str(path)]))
     amount = packet_copy_output_allocation(write_paths=paths, write_files=files, publication_mode='copy',
         manifest_bytes=512, reserve_bytes=200)
-    assert amount == 1000
+    assert amount == 500
     resources = packet_copy_resources(budget=budget, manifest_digest='c'*64, unit_id='d'*64,
         parents=_resources['parents'], expected_total_packets=18000, write_paths=paths, write_files=files,
         output_limit_bytes=amount, manifest_bytes=512, publication_mode='copy')
     assert probe._sample(resources).verdict is True
-    free[str(paths['staging'])] -= 1
+    free[str(paths['staging'])] = 200 + amount - 1
     assert probe._sample(resources).verdict is False  # Other volumes cannot cover the short staging volume.
-    free[str(paths['staging'])] += 1
+    free[str(paths['staging'])] = 1200
     with pytest.raises(ValueError, match='same actual volume'):
         packet_copy_output_allocation(write_paths=paths, write_files=files, publication_mode='atomic_rename',
             manifest_bytes=512, reserve_bytes=200)
     files['manifest'].write_bytes(b'm' * 512)
-    files['staging'].write_bytes(b's' * 700)
+    files['staging'].write_bytes(b's' * 350)
     free[str(paths['manifest'])] -= 512
-    free[str(paths['staging'])] -= 700
-    assert packet_copy_remaining_allocations(resources, running=True) == {'manifest': 0, 'staging': 300, 'published': 1000}
+    free[str(paths['staging'])] -= 350
+    assert packet_copy_remaining_allocations(resources, running=True) == {'manifest': 0, 'staging': 150, 'published': 500}
     assert probe._sample(resources, running_io=True).verdict is True  # No double charge of already-written bytes.
     assert probe._sample(resources).verdict is None  # New admission cannot reuse an unverified partial output.
     original = Path.lstat
@@ -111,7 +111,7 @@ def test_atomic_packet_copy_reserves_one_live_output_and_preserves_unknown_volum
     budget, resources, probe, paths, files = fixture(tmp_path, monkeypatch, mode='atomic_rename', output=1000)
     monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=1712))
     assert packet_copy_output_allocation(write_paths=paths, write_files=files, publication_mode='atomic_rename',
-        manifest_bytes=512, reserve_bytes=200) == 1000
+        manifest_bytes=512, reserve_bytes=200) == 500
     assert probe._sample(resources).verdict is True
     files['manifest'].write_bytes(b'm' * 512)
     files['staging'].write_bytes(b's' * 700)
@@ -120,6 +120,26 @@ def test_atomic_packet_copy_reserves_one_live_output_and_preserves_unknown_volum
     assert probe._sample(resources, running_io=True).verdict is True
     files['staging'].write_bytes(b'not-an-atomic-rename')
     assert probe._sample(resources, running_io=True).verdict is None
+
+
+def test_new_allocation_leaves_room_for_real_filesystem_and_unrelated_writes(tmp_path, monkeypatch):
+    budget, original, probe, paths, files = fixture(tmp_path, monkeypatch)
+    free = 200 + 512 + 4 * 1024 * 1024
+    monkeypatch.setattr(psutil, 'disk_usage', lambda path: SimpleNamespace(free=free))
+    amount = packet_copy_output_allocation(write_paths=paths, write_files=files,
+        publication_mode='copy', manifest_bytes=512, reserve_bytes=200)
+    resources = packet_copy_resources(budget=budget, manifest_digest='c'*64, unit_id='d'*64,
+        parents=original['parents'], expected_total_packets=18000, write_paths=paths, write_files=files,
+        output_limit_bytes=amount, manifest_bytes=512, publication_mode='copy')
+    assert probe._sample(resources).verdict is True
+    files['manifest'].write_bytes(b'm' * 512)
+    files['staging'].write_bytes(b's' * 4096)
+    # Logical bytes, filesystem metadata and unrelated writes all consume space.
+    free -= 512 + 4096 + 416890
+    assert probe._sample(resources, running_io=True).verdict is True
+    remaining = packet_copy_remaining_allocations(resources, running=True)
+    free = 200 + sum(remaining.values()) - 1
+    assert probe._sample(resources, running_io=True).verdict is False
 
 
 def test_packet_copy_runtime_reads_original_grant_and_policy_profile_stays_unverified(tmp_path, monkeypatch):

@@ -124,8 +124,11 @@ def packet_copy_output_allocation(*, write_paths, write_files, publication_mode,
     """Finite available storage candidate, never an encoded-output prediction.
 
     Existing parents already occupy free space. Copy publication reserves two
-    live outputs; a same-volume atomic rename reserves one. No source-size ratio
-    is asserted as a muxer bound. Caller still needs fresh host admission.
+    live outputs; a same-volume atomic rename reserves one. Allocate at most
+    half the spendable space: filesystem metadata and other writers must not
+    invalidate an otherwise unchanged unit as soon as it creates a file.
+    This is a finite allocation policy, not a muxer size prediction. Caller
+    still needs fresh host admission, including the original volume reserve.
     """
     if not _positive(manifest_bytes) or type(reserve_bytes) is not int or reserve_bytes < 0:
         raise ValueError('Packet-copy storage needs explicit manifest bytes and volume reserve')
@@ -150,7 +153,7 @@ def packet_copy_output_allocation(*, write_paths, write_files, publication_mode,
         if available < 0:
             raise ValueError('Packet-copy write volume has insufficient or unknown available space')
         if item['copies']:
-            limits.append(available // item['copies'])
+            limits.append(available // (2 * item['copies']))
     limit = min(limits)
     if limit <= 0:
         raise ValueError('Packet-copy write volumes cannot reserve an output')
