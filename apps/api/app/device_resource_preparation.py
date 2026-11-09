@@ -20,6 +20,7 @@ import time
 
 import psutil
 
+from app.audio_timeline import PCM_CONTAINER_ALLOWANCE_BYTES
 from app.device_resource_configuration import backend_identity
 from app.device_resource_profile import DeviceProfileIdentity, DeviceProfileUnavailable, _BUDGET_TYPES, _digest, load_device_resource_profile
 from app.device_resource_volumes import sample_write_volumes
@@ -485,7 +486,9 @@ class DeviceResourcePreparation:
         threads = min(original.cpu_render.max_process_threads,
             math.ceil(max(item['peak_threads'] for item in samples) * policy.measured_margin))
         video_bytes = math.ceil(shape.width_px * shape.height_px * 4 * shape.frame_rate * shape.duration_seconds)
-        container_bytes = max(0, receipt['media']['audio']['bytes'] - math.ceil(
+        # Admission declares the mix container allowance, even when this short
+        # measured WAV happened to need a smaller header.
+        container_bytes = max(PCM_CONTAINER_ALLOWANCE_BYTES, receipt['media']['audio']['bytes'] - math.ceil(
             shape.sample_rate * shape.channels * 4 * plan['probe_seconds']))
         audio_bytes = math.ceil(shape.sample_rate * shape.channels * 4 * shape.duration_seconds) + container_bytes
         input_bytes = max(video_bytes + audio_bytes * shape.audio_input_count, shape.source_bytes or 0)

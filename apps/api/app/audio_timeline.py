@@ -22,6 +22,7 @@ from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked
 
 
 AUDIO_MIX_CONTRACT_VERSION = 'audio-mix/v2'
+PCM_CONTAINER_ALLOWANCE_BYTES = 65536
 
 
 # FFmpeg loudnorm can emit NaN for fully silent input; preserve silence for encoders.
@@ -464,11 +465,11 @@ def audio_mix_output_bounds(timeline, inputs, duration_seconds, normalize_voice_
             if type(duration) not in {int, float} or not math.isfinite(duration) or duration <= 0:
                 raise ValueError("整源旁白归一化缺少已保存的时长，未处理媒体")
             normalized.append({"reference": source["reference"], "path": source["path"],
-                               "duration_seconds": duration, "max_output_bytes": math.ceil(duration * 192000) + 65536})
+                               "duration_seconds": duration, "max_output_bytes": math.ceil(duration * 192000) + PCM_CONTAINER_ALLOWANCE_BYTES})
     if output_sample_count is not None and (type(output_sample_count) is not int or output_sample_count <= 0):
         raise ValueError('明确输出样本数必须为正整数')
     mix_bytes = (output_sample_count * (4 if apply_master else 8) if output_sample_count is not None
-        else math.ceil(duration_seconds * (192000 if apply_master else 384000))) + 65536
+        else math.ceil(duration_seconds * (192000 if apply_master else 384000))) + PCM_CONTAINER_ALLOWANCE_BYTES
     return {"normalize_voice_sources": bool(normalize_voice_sources),
             "normalized_source_outputs": normalized, "mix_output_bytes": mix_bytes,
             "temporary_output_bytes": mix_bytes + sum(item["max_output_bytes"] for item in normalized),
@@ -558,7 +559,7 @@ def render_audio_mix(*args, **kwargs) -> Path:
                 pcm_bytes_per_second = 192000 if kwargs.get('apply_master', True) else 384000
                 pcm_bytes = (kwargs['output_sample_count'] * (4 if kwargs.get('apply_master', True) else 8)
                     if kwargs.get('output_sample_count') is not None else math.ceil(mix_duration * pcm_bytes_per_second))
-                mix_ceiling = min(max_output_bytes, pcm_bytes + 65536)
+                mix_ceiling = min(max_output_bytes, pcm_bytes + PCM_CONTAINER_ALLOWANCE_BYTES)
                 command[-1:-1] = ["-threads:a", str(threads), "-fs", str(mix_ceiling)]
                 _run_granted_audio_command(scheduler, grant, command, timeout_seconds=None,
                                            cancel_event=cancel_event, deadline_monotonic=deadline_monotonic,
@@ -602,7 +603,7 @@ def _render_narration_normalizations(directory: str, timeline: AudioTimeline,
             raise ValueError("音轨的源文件已丢失")
         expected = probe(source)
         # 48kHz stereo pcm_s16le carries 192000 bytes per second, plus room for the wav header.
-        ceiling = math.ceil(expected * 192000) + 65536
+        ceiling = math.ceil(expected * 192000) + PCM_CONTAINER_ALLOWANCE_BYTES
         if max_output_bytes is not None:
             ceiling = min(ceiling, max_output_bytes)
         target = Path(directory) / f"narration-{position}.wav"
