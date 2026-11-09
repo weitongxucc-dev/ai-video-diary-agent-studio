@@ -403,7 +403,7 @@ def test_non_streaming_and_streaming_share_the_phase_runner(tmp_path, monkeypatc
     monkeypatch.setattr(host, "_read_task_before_pi", lambda *args: {"task_id": "task", "selected_refs": []})
     def version_only(cmd, **kwargs):
         assert cmd[-1] == "--version", "SDK invocation bypassed the phase runner"
-        return subprocess.CompletedProcess(cmd, 0, "1.4.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "1.5.0\n" if Path(cmd[0]).name == "pi" else "v24.16.0\n", "")
     monkeypatch.setattr(host.subprocess, "run", version_only)
     calls = []
     def phase_runner(cmd, **kwargs):

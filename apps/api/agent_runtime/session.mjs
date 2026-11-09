@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {createNativeTaskTools} from './native-tools.mjs';
 
-export const PI_VERSION = "1.4.0";
+export const PI_VERSION = "1.5.0";
 const resources = dirname(fileURLToPath(import.meta.url));
 
 /** One SDK session owns the model loop, history, compaction and input queues.

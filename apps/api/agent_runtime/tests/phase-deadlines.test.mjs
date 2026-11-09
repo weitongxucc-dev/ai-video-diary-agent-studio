@@ -159,7 +159,7 @@ test("parallel and nested scopes retain the actual outer SDK call; HTTP budget s
   } finally {captured.restore();AbortSignal.timeout=timeout;}
 });
 
-test("actual Pi 1.4 emits model/tool turn boundaries and compaction_start/end", async () => {
+test("actual Pi 1.5 emits model/tool turn boundaries and compaction_start/end", async () => {
   const options = await fixture();
   const captured = captureRequests();
   let current;
@@ -231,7 +231,7 @@ test("stdin abort reaches actual SDK signal and retains an unknown write receipt
     // tool execution, cancellation signal and host protocol are the real SDK.
     const wrapper = join(options.cwd,"sdk/dist");
     await mkdir(wrapper,{recursive:true});
-    await writeFile(join(options.cwd,"sdk/package.json"),JSON.stringify({type:"module",version:"1.4.0"}));
+    await writeFile(join(options.cwd,"sdk/package.json"),JSON.stringify({type:"module",version:"1.5.0"}));
     await writeFile(join(wrapper,"index.js"),`
       export * from ${JSON.stringify(pathToFileURL(modulePath).href)};
       import {createAgentSession as open} from ${JSON.stringify(pathToFileURL(modulePath).href)};
