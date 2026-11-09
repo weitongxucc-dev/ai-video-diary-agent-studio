@@ -187,6 +187,8 @@ test('Pi 1.5 validates plain JSON Schema before invoking a product tool', async 
     await current.session.prompt('验证合法参数转换与非法参数拒绝。');
     assert.deepEqual(executed,[{limit:2,files:['frame.png']}]);
     assert.deepEqual(completed.map(event => [event.toolCallId,event.isError]).sort(),[['coerced',false],['invalid',true]]);
+    assert.match(completed.find(event => event.toolCallId === 'invalid').result.content[0].text,
+      /Validation failed for tool "schema_fixture":[\s\S]*expected number, got string[\s\S]*Received arguments:/);
   } finally {current?.session.dispose();await rm(options.cwd,{recursive:true,force:true});}
 });
 
