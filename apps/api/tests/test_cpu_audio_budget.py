@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -19,6 +19,17 @@ def audio_resources():
         'source_sample_rate_limit': 48000, 'source_channels_limit': 8, 'output_sample_rate_limit':48000, 'output_channels_limit':2,
         'input_policy':'probe_then_bounded_decode', 'inputs':[{'path':'/isolated.wav'}],
         'max_output_bytes': 100000, 'threads': 1, 'timeout_seconds': 5}
+
+
+def test_source_duration_failure_exposes_original_requirement_without_raising_budget():
+    from app.creation.audio_source_limits import validate_audio_source_specs
+    source = {'duration_seconds': 16.166667, 'sample_rate': 44100, 'channels': 2}
+    budget = replace(audio_budget(), max_source_duration_seconds=15.64)
+    with pytest.raises(ValueError) as error:
+        validate_audio_source_specs([source], budget)
+    assert '原音频源完整时长' in str(error.value) and '16.1667' in str(error.value) and '15.64' in str(error.value)
+    assert budget.max_source_duration_seconds == 15.64
+    validate_audio_source_specs([source], replace(budget, max_source_duration_seconds=16.166667))
 
 
 def test_audio_environment_requires_its_own_complete_calibration():

@@ -114,7 +114,11 @@ class PictureFragmentAssembly:
             if (decode_seconds > max_seconds
                     or input_bytes > self.budget.max_input_bytes
                     or self.budget.max_clip_count < 1):
-                raise ValueError('真实原来源字节、decode prefix、图层或画幅超出当前有限编码单元，未缩报或抬帽')
+                raise ValueError(f'当前画面单元需从原镜头起点解码 {decode_seconds:g} 秒（准备覆盖 {max_seconds:g} 秒），'
+                    f'输入 {input_bytes} 字节（覆盖 {self.budget.max_input_bytes}），'
+                    f'1 个镜头（覆盖 {self.budget.max_clip_count}）。'
+                    '请回读当前设备能力，按真实解码范围和输入形状完成CPU媒体准备并核验结果后，沿原Job继续；'
+                    '不能靠再切小输出窗口缩报解码前缀，也不提高资源阈值。')
             unit = {'id': identity, 'artifact_id': f'artifact_picture_fragment_{identity}',
                 'window': asdict(window), 'layers': [asdict(layer) for layer in layers], 'recipe': recipe,
                 'source': source, 'decode_seconds': decode_seconds, 'input_bytes': input_bytes,

@@ -384,10 +384,10 @@ await assert.rejects(()=>tools.get('prepare_device_resources').execute('duplicat
 assert.equal(calls.length,2);
 await tools.get('prepare_device_resources').execute('again',{shape});
 assert.equal(calls[2].operation,'read_device_preparation');
-await tools.get('read_device_preparation').execute('read',{request_id:'work:original'});
+await tools.get('read_device_preparation').execute('read',{preparation_id:'work:original'});
 await assert.rejects(()=>tools.get('prepare_device_resources').execute('done-not-released',{shape,request_id:changed}));
 assert.equal(calls.length,4);
-const finalized=await tools.get('finalize_device_preparation').execute('final',{request_id:'work:original'});
+const finalized=await tools.get('finalize_device_preparation').execute('final',{preparation_id:'work:original'});
 assert.equal(finalized.details.receipt.normal_work_started,false);assert.equal(finalized.details.receipt.profile_published,true);
 assert.deepEqual(calls.map(c=>c.operation),['prepare_device_resources','prepare_device_resources','read_device_preparation','read_device_preparation','finalize_device_preparation']);
 await assert.rejects(()=>request('/api/device/resource-preparations/plan/run',{method:'POST',body:'{}'}),RequestNotSubmitted);

@@ -6,6 +6,7 @@ from collections import Counter
 from app.creation.editing.picture import EditConflict
 from app.production import TimelineVersionConflict
 from app.task_audio import audio_mix_resources
+from app.creation.audio_source_limits import validate_audio_source_specs
 from app.audio_timeline import compile_audio_command
 from app.compound_edits import compile_compound_edit
 from app.graphic_overlays import compile_overlay_command
@@ -316,11 +317,7 @@ class CommandPreviewUseCase:
                 raise ValueError('CPU 音频处理预算尚未标定，未启动媒体')
             if not audio_inputs:
                 raise ValueError('没有固定的音频输入，未启动媒体')
-            for source in audio_inputs:
-                for field, cap in (('duration_seconds', budget.max_source_duration_seconds), ('sample_rate', budget.max_sample_rate), ('channels', budget.max_channels)):
-                    value = source[field]
-                    if value is not None and (not isinstance(value, (int, float)) or value <= 0 or value > cap):
-                        raise ValueError('已保存的音频源规格超出标定预算')
+            validate_audio_source_specs(audio_inputs, budget)
             if plan is None:
                 raise ValueError('当前任务没有可试听的音轨')
             start = payload.get('start_seconds', 0)
