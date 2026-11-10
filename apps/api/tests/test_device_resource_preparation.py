@@ -252,6 +252,7 @@ def test_published_audio_budget_covers_measured_container_and_known_source_bytes
 @pytest.mark.parametrize('apply_master', [True, False])
 @pytest.mark.parametrize('duration', [9.167, 42.827])
 def test_prepared_audio_envelope_admits_the_requested_mix_with_its_container_allowance(tmp_path, monkeypatch, apply_master, duration):
+    from fractions import Fraction
     from app.audio_timeline import AudioTimeline
     from app.task_audio import audio_mix_resources
     repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
@@ -261,6 +262,10 @@ def test_prepared_audio_envelope_admits_the_requested_mix_with_its_container_all
     # A short measured WAV has a smaller header than the declared mix envelope.
     receipt['media']['audio']['bytes'] = round(48000 * 2 * 4 * plan['probe_seconds']) + 114
     result = service._publish(plan, receipt, plan['backends'])
+    picture = result.budget.cpu_render
+    frame_capacity = min(picture.max_duration_seconds,
+        picture.max_pixel_seconds / (picture.max_width_px * picture.max_height_px))
+    assert int(Fraction(str(frame_capacity)) * 30) >= round(Fraction(str(duration)) * 30)
     sample_count = round(duration * 30) * 1600
     master = {'reference': 'prepared-master', 'uses': 1, 'size_bytes': sample_count * 4,
         'duration_seconds': sample_count / 48000, 'sample_rate': 48000, 'channels': 2}
@@ -409,3 +414,21 @@ def test_request_kind_uses_original_unit_and_rejects_other_identity_without_writ
     with pytest.raises(sqlite3.OperationalError):
         request_kind(database_path=absent, request_id='cpu', actor=actor)
     assert not absent.exists()
+
+
+def test_repeated_source_reads_report_the_total_bytes_without_claiming_an_input_count_failure(tmp_path, monkeypatch):
+    from app.audio_timeline import AudioTimeline
+    from app.task_audio import audio_mix_resources
+    _, actor, _, service, _ = metadata_preparation(tmp_path, monkeypatch)
+    plan_id, _ = service.prepare(CpuPreparationShape(64, 64, 30, 1, 1, 2, 48000, 2,
+        source_bytes=1000000), actor, request_id=str(uuid4()))
+    plan, receipt = _synthetic_publication(service, plan_id)
+    budget = service._publish(plan, receipt, plan['backends']).budget.cpu_audio
+    source = {'reference': 'master', 'uses': 2, 'size_bytes': 1000000,
+        'duration_seconds': 1, 'sample_rate': 48000, 'channels': 2}
+    with pytest.raises(ValueError, match='输入累计字节需要 2000000，已准备 1000000') as rejected:
+        audio_mix_resources([source], [AudioTimeline()], 1, normalize_voice_sources=False, budget=budget)
+    assert '输入路数' not in str(rejected.value)
+    actual = audio_mix_resources([source], [AudioTimeline()], 1, normalize_voice_sources=False,
+        budget=replace(budget, max_input_bytes=2000000))
+    assert actual['input_count'] == 2 and actual['input_bytes'] == 2000000

@@ -511,22 +511,22 @@ class DeviceResourcePreparation:
         video_bytes = math.ceil(shape.width_px * shape.height_px * 4 * shape.frame_rate * shape.duration_seconds)
         # The CPU delivery contract rounds picture to whole 30fps frames; its
         # PCM master is also a later mix input. Prepare both sides of that clock.
-        audio_duration = max(shape.duration_seconds, round(Fraction(str(shape.duration_seconds)) * 30) / 30)
+        delivery_duration = max(shape.duration_seconds, round(Fraction(str(shape.duration_seconds)) * 30) / 30)
         # Admission declares the mix container allowance, even when this short
         # measured WAV happened to need a smaller header.
         container_bytes = max(PCM_CONTAINER_ALLOWANCE_BYTES, receipt['media']['audio']['bytes'] - math.ceil(
             shape.sample_rate * shape.channels * 4 * plan['probe_seconds']))
-        audio_bytes = math.ceil(shape.sample_rate * shape.channels * 4 * audio_duration) + container_bytes
+        audio_bytes = math.ceil(shape.sample_rate * shape.channels * 4 * delivery_duration) + container_bytes
         input_bytes = max(video_bytes + audio_bytes * shape.audio_input_count, shape.source_bytes or 0)
         output_bytes = video_bytes + audio_bytes
         timeout = max(receipt['elapsed_seconds'], receipt['elapsed_seconds'] * shape.duration_seconds / plan['probe_seconds']) * policy.measured_margin
-        render = replace(original.cpu_render, max_duration_seconds=shape.duration_seconds,
-            max_pixel_seconds=shape.width_px * shape.height_px * shape.duration_seconds,
+        render = replace(original.cpu_render, max_duration_seconds=delivery_duration,
+            max_pixel_seconds=shape.width_px * shape.height_px * delivery_duration,
             max_input_bytes=input_bytes, max_output_bytes=output_bytes,
             max_timeout_seconds=timeout, additional_memory_bytes=rss, additional_disk_bytes=math.ceil(output_bytes * policy.measured_margin),
             max_process_threads=threads)
-        audio = CpuAudioBudget(shape.audio_input_count, max(audio_bytes * shape.audio_input_count, shape.source_bytes or 0), audio_duration,
-            audio_duration, shape.sample_rate, shape.channels, audio_bytes, 1, timeout, rss, threads,
+        audio = CpuAudioBudget(shape.audio_input_count, max(audio_bytes * shape.audio_input_count, shape.source_bytes or 0), delivery_duration,
+            delivery_duration, shape.sample_rate, shape.channels, audio_bytes, 1, timeout, rss, threads,
             policy.sample_seconds, rss, math.ceil(audio_bytes * policy.measured_margin))
         budget = replace(original, cpu_render=render, cpu_audio=audio,
             clip_preview=replace(render, max_pixel_seconds=render.max_pixel_seconds * 2),

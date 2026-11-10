@@ -42,10 +42,14 @@ def audio_mix_resources(inputs, timelines, duration_seconds, *, normalize_voice_
         "mix_output_bytes": mix_bytes, "temporary_output_bytes": temporary_bytes}
     if output_sample_count is not None:
         resources['output_sample_count'] = output_sample_count
-    if (resources["input_count"] > budget.max_input_count or resources["input_bytes"] > budget.max_input_bytes
-            or output_duration > budget.max_output_duration_seconds or temporary_bytes > budget.max_output_bytes
-            or 48000 > budget.max_sample_rate or 2 > budget.max_channels):
-        raise ValueError("当前音轨组合输入或临时输出超出已标定 CPU 音频预算")
+    exceeded = [f'{label}需要 {actual}，已准备 {cap}' for label, actual, cap in (
+        ('输入路数', resources['input_count'], budget.max_input_count),
+        ('输入累计字节', resources['input_bytes'], budget.max_input_bytes),
+        ('输出时长（秒）', output_duration, budget.max_output_duration_seconds),
+        ('临时输出字节', temporary_bytes, budget.max_output_bytes),
+        ('输出采样率', 48000, budget.max_sample_rate), ('输出声道', 2, budget.max_channels)) if actual > cap]
+    if exceeded:
+        raise ValueError("当前音轨组合输入或临时输出超出已标定 CPU 音频预算：" + '；'.join(exceeded))
     for source in inputs:
         for field, cap in (("duration_seconds", budget.max_source_duration_seconds),
                            ("sample_rate", budget.max_sample_rate), ("channels", budget.max_channels)):

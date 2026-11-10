@@ -6,6 +6,7 @@ Only explicit owner/access ports are assembled by the application host.
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 
 from app.assistant import turn_admission_use_case as admission
 from app.assistant import task_turn_use_case as task
@@ -274,7 +275,7 @@ class TaskTurnHTTPAdapter:
                 business_handler=host, native_handler=native, source_binding=stage.binding,
                 input_handler=business.input_delivery(stage.binding), profile_reference=stage.facts.get('profile_reference'),
                 knowledge_reference=stage.facts.get('knowledge_reference'), task_version=stage.task_version,
-                material_selection=None, selected_references=[], continuation_context=stage.continuation_context)
+                material_selection=None, selected_references=[], continuation_context=jsonable_encoder(stage.continuation_context))
         if isinstance(stage, task.ReadSettings):
             return self._settings_for(stage.workspace_id)
         if isinstance(stage, task.SafeText):
