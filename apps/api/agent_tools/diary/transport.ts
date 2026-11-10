@@ -345,6 +345,8 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     const notSubmitted = (error: string, reason: string, stage: string) => reject(new RequestNotSubmitted(reason,
       {...locators, error, reason, repair_action: "重新读取当前对象和原请求，处理阻断后再提交。", stage, submission_effect: "not_submitted"}));
     const operation = businessCall ? hostOperation(path, (init?.method || 'GET').toUpperCase(), requestBody) : null;
+    if (operation?.operation === 'read_task_workspace' && selectedTaskVersion)
+      operation.arguments.expected_task_version = {...selectedTaskVersion};
     if (businessCall && !operation) return notSubmitted('business_operation_not_supported', '该操作未接入原目标后台执行，请求未提交。', 'capability');
     if (!businessCall && !apiBase) return notSubmitted("business_service_unavailable", "本地业务服务不可用，请求未提交。", "connection");
     const taskRoot = `/api/creation-tasks/${encodeURIComponent(taskId || '')}`;

@@ -866,6 +866,8 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
             payload = {'source':source,'locator':{'status':'unknown','request_id':str(uuid4()),'phase':'preview'}}
             connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('unknown','workspace','task',None,'assistant_edit_request_located',json.dumps(payload)))
     repository=SimpleNamespace(_connect=lambda:connection,execution_records=SimpleNamespace(get_task_event=lambda *_:SimpleNamespace(payload=start)))
+    repository.goal_render_request_row = lambda ws, identifier: connection.execute(
+        'SELECT owner_id,state FROM device_work_requests WHERE workspace_id=? AND id=?', (ws, identifier)).fetchone()
     from types import MethodType
     from app.creation.execution_records import ExecutionRecordStore
     repository.execution_records._connect=repository._connect
@@ -882,7 +884,7 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
         return {'status':'unknown'}
     monkeypatch.setattr(main,'_goal_request_metadata',read_request)
     task=SimpleNamespace(workspace_id='workspace',id='task')
-    version=SimpleNamespace(id='final',sequence=2,parent_version_id='base',snapshot={
+    version=SimpleNamespace(id='final',workspace_id='workspace',task_id='task',sequence=2,parent_version_id='base',snapshot={
         'creation_render_request_id':'render-request','render_input_timeline_version_id':'base'})
     checkpoint=main._goal_readiness_use_case().output_checkpoint(goal,{'phase':'observation','status':'succeeded'},
         {'media_job':{'job_id':'observation','status':'succeeded','result':result}},task,version,None,business)

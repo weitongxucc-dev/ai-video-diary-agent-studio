@@ -11,6 +11,7 @@ from app.assistant.task_business_errors import TaskBusinessRejected, TaskOperati
 from app.assistant.script_generation_policy import SCRIPT_GENERATION_OPERATIONS, is_script_generation
 from app.creation.intent_use_case import CreationIntentUseCase
 from app.assistant.material_reads import MATERIAL_READ_OPERATIONS, read_goal_materials
+from app.assistant.goal_versions import effective_goal_version, owned_version_transition
 from app.creation.output_observation_use_case import read_original_observation_request
 from app.creation_execution import CreationExecutionActor, ExecutionStartRequest
 from app.schemas import CreationTaskScriptDraftRequest, CreationTaskScriptConfirmRequest, CreationTaskTopicConfirmRequest
@@ -138,11 +139,8 @@ class TaskBusiness:
                     or self.authorizations.verdict(actor,task_id,'task_goal',connection=conn,check_scope=False)!='ready'):
                 raise TaskBusinessRejected('原任务授权已到期或撤销')
             task=self.production.task_records.get_creation_task(ws,task_id,connection=conn)
-            version=conn.execute('SELECT sequence FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=?',
-                (ws,task_id,task.current_timeline_version_id)).fetchone() if task.current_timeline_version_id else None
-            snapshot=binding.get('task_version')
-            if check_version and snapshot is not None and (snapshot.get('timeline_version_id'),snapshot.get('timeline_sequence',0)) != (task.current_timeline_version_id,version[0] if version else 0):
-                raise TaskBusinessRejected('原目标的预期作品版本已变化',kind='conflict')
+            goal = (effective_goal_version(self.production, self.conversations, root['goal'],
+                binding.get('task_version'), task, connection=conn) if check_version else root['goal'])
             sealed=self.production.execution_records.get_task_event(ws,self.authorizations.business_context_id(root['goal']),connection=conn).payload
             if sealed['authorization_id']!=authorization.id or sealed['identity']!=authorization.identity:
                 raise TaskBusinessRejected('原目标封存范围不匹配')
@@ -153,7 +151,7 @@ class TaskBusiness:
             if self.production.task_authorization_records.task_source_revisions(ws,[item['id'] for item in sealed['knowledge']],
                     [item['id'] for item in sealed['sources']],connection=conn)!=sealed['source_revisions']:
                 raise TaskBusinessRejected('原目标固定资料或本地读取权限已变化',kind='conflict')
-        return actor,task,root['goal'],origin,sealed
+        return actor,task,goal,origin,sealed
 
     def _check_generation(self, binding, *, connection):
         if (binding.get('intent_kind') != 'script_generation' or not binding.get('generation_request_id')
@@ -595,7 +593,10 @@ class TaskBusiness:
                 {**origin,'assistant_turn_id':goal['current_turn_id']},
                 {k:v for k,v in args['payload'].items() if k not in {'assistant_turn_id','input_id'}},write_guard=guard)
         if operation=='read_task_workspace':
-            return self.workspace_facts(ws,task)
+            facts = self.workspace_facts(ws,task)
+            transition = owned_version_transition(self.production, self.conversations, goal,
+                args.get('expected_task_version') or goal['target_snapshot'], task)
+            return {**facts, **({'owned_version_transition': transition} if transition else {})}
         if operation=='read_creator_memory':
             if generation:
                 if self.creator_memory is None:

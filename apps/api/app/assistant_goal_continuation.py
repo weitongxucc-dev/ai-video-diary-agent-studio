@@ -551,11 +551,10 @@ class GoalResultProjection:
         return matches[0] if len(matches) == 1 else None
 
     def owned_render_version(self, goal, version):
+        from app.creation.render_result_provenance import rendered_version_provenance
         bound = self.bound_execution(goal, version.parent_version_id)
-        if bound is None or version.snapshot.get("render_input_timeline_version_id") != version.parent_version_id:
-            return False
-        rendered = self.production.goal_render_request_row(goal["workspace_id"], version.snapshot.get("creation_render_request_id"))
-        return bool(rendered and rendered["owner_id"] == bound[1].id and rendered["state"] == "done")
+        provenance = rendered_version_provenance(self.production, version)
+        return bool(bound and provenance and provenance['job_id'] == bound[1].id)
 
     def owned_edit_version(self, goal, version):
         for operation in self.production.edit_records.list_edit_operations(goal["workspace_id"], goal["task_id"]):
@@ -588,8 +587,9 @@ class GoalResultProjection:
                 return None
             if version.parent_version_id in chain:
                 return None
-            version = self.production.timeline_records.get_timeline_version(goal["workspace_id"], version.parent_version_id)
-            chain.add(version.id)
+            version = (self.production.timeline_records.get_timeline_version(goal["workspace_id"], version.parent_version_id)
+                if version.parent_version_id is not None else None)
+            chain.add(version.id if version else None)
         return chain if original in chain else None
 
     def verify_version(self, goal, event, task):
@@ -798,8 +798,12 @@ class GoalResultProjection:
         if (result.get("output") != {key: value for key, value in output.items() if key not in {"logical_ref", "mtime_ns", "ctime_ns"}}
                 or observation["observed_start"]["input_facts"]["output"] != output):
             return None
+        from app.creation.render_result_provenance import rendered_version_provenance
+        provenance = rendered_version_provenance(self.production, version)
+        if provenance is None:
+            return None
         rendered, located, pending, unknown = self.production.execution_records.goal_output_provenance_rows(
-            task.workspace_id, task.id, version.snapshot.get("creation_render_request_id"),
+            task.workspace_id, task.id, provenance["request_id"],
             goal["conversation_id"], goal["member_id"], TASK_MEDIA_KIND,
             input_id=goal.get("source_input_id"),input_turn_id=goal.get("source_input_turn_id"))
         for row in pending:
@@ -819,13 +823,16 @@ class GoalResultProjection:
         return original["status"] in {"unknown", "result_unknown"}
 
     def output_execution_source(self, goal, version, sources):
+        from app.creation.render_result_provenance import rendered_version_provenance
+        provenance = rendered_version_provenance(self.production, version)
         rendered, located = sources["rendered"], sources["located"]
-        if rendered is None or rendered["state"] != "done" or located is None:
+        if (provenance is None or rendered is None or rendered["state"] != "done" or located is None
+                or provenance['job_id'] != rendered['owner_id']):
             return None
         source = json.loads(located["payload_json"])
         base = source["source"]["expected_timeline_version_id"]
         if (not self.source_belongs_to_goal(goal, source["source"])
-                or version.parent_version_id != base or version.snapshot.get("render_input_timeline_version_id") != base):
+                or version.parent_version_id != base):
             return None
         return {"job_id": rendered["owner_id"], "input_digest": source.get("input_digest")}
 
@@ -879,9 +886,9 @@ class GoalResultProjection:
         if status != "succeeded" or result is None:
             return False
         version = self.production.timeline_records.get_timeline_version(task.workspace_id, result)
-        rendered = self.production.goal_render_request_row(task.workspace_id, version.snapshot.get("creation_render_request_id"))
-        return (version.parent_version_id == base and version.snapshot.get("render_input_timeline_version_id") == base
-            and rendered is not None and rendered["owner_id"] == job_id and rendered["state"] == "done")
+        from app.creation.render_result_provenance import rendered_version_provenance
+        provenance = rendered_version_provenance(self.production, version)
+        return bool(version.parent_version_id == base and provenance and provenance['job_id'] == job_id)
 
     def execution_candidate(self, row):
         located = json.loads(row["payload_json"])

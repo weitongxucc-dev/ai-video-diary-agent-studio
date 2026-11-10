@@ -101,6 +101,13 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     if fast_render:
         finish_render()
     owner = GoalResultProjection(state.repo, repo)
+    from app.assistant.goal_versions import effective_goal_version
+    owned_task = state.repo.task_records.get_creation_task('ws', state.task.id)
+    frozen = context['target_snapshot']
+    expected = {key: frozen[key] for key in ('timeline_version_id', 'timeline_sequence')}
+    effective = effective_goal_version(state.repo, repo, repo.get_task_goal(turn['id']), expected, owned_task)
+    assert effective['target_snapshot']['timeline_version_id'] == owned_task.current_timeline_version_id
+    assert repo.get_task_goal(turn['id'])['request_context'] == context
     op = state.repo.edit_records.get_edit_operation("ws", operation["id"])
     proposal = state.repo.edit_records.get_edit_proposal("ws", operation["proposal_id"])
     typed_source = state.repo.edit_records.get_edit_intent("ws", proposal.intent_id).constraints["request_source"]
@@ -167,3 +174,7 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     state.repo.timeline_records.create_timeline_version(foreign)
     owner = GoalResultProjection(state.repo, repo)
     assert owner.selection_version_chain(repo.get_task_goal(turn["id"]), foreign) is None
+    from app.assistant.task_business_errors import TaskBusinessRejected
+    with pytest.raises(TaskBusinessRejected):
+        effective_goal_version(state.repo, repo, repo.get_task_goal(turn['id']), expected,
+            state.repo.task_records.get_creation_task('ws', state.task.id))

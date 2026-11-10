@@ -47,9 +47,12 @@ def test_existing_observation_defaults_mutability_and_serialized_values_are_pres
     other_speech = observations.MaterialSpeechAnalysis("blocked")
     assert asdict(other_speech) == {
         "status": "blocked", "source_fingerprint": "", "model_id": "", "observations": [], "message": "",
+        "word_observations": [], "timing_granularity": "segment", "audio_present": None,
     }
     speech.observations.append(observations.SubtitleSegment(1000, 2000, "接续"))
+    speech.word_observations.append({"start_ms": 0, "end_ms": 1000, "text": "原始语音"})
     assert other_speech.observations == []
+    assert other_speech.word_observations == []
     assert '"observations": [{"start_ms": 0, "end_ms": 1000, "text": "原始语音"}' in _json_payload(speech)
     understanding = observations.SegmentUnderstanding("ready")
     other_understanding = observations.SegmentUnderstanding("blocked")

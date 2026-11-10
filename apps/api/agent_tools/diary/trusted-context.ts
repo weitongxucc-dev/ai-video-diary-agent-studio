@@ -29,6 +29,17 @@ export function readAgentContext(environment: Record<string, string | undefined>
   };
 }
 
-export function verifyTaskVersion(workspace: {task?: {current_timeline_version_id?: string | null; timeline_sequence?: number}}, selectedTaskVersion: TaskVersion | null) {
+export function verifyTaskVersion(workspace: {task?: {current_timeline_version_id?: string | null; timeline_sequence?: number};
+  owned_version_transition?: {scope:string;from:TaskVersion;to:TaskVersion}}, selectedTaskVersion: TaskVersion | null, allowOwnedTransitions=false) {
+  const transition=workspace.owned_version_transition;
+  if (allowOwnedTransitions && selectedTaskVersion && transition?.scope==='same_goal_owned_changes'
+      && transition.from.timeline_version_id===selectedTaskVersion.timeline_version_id
+      && transition.from.timeline_sequence===selectedTaskVersion.timeline_sequence
+      && transition.to.timeline_version_id===workspace.task?.current_timeline_version_id
+      && transition.to.timeline_sequence===workspace.task?.timeline_sequence) {
+    // Only the task host may prove this goal's actual edit/render lineage.
+    // Every subsequent write rechecks that lineage, identity and original input.
+    Object.assign(selectedTaskVersion,transition.to);
+  }
   if (selectedTaskVersion && (workspace.task?.current_timeline_version_id !== selectedTaskVersion.timeline_version_id || workspace.task?.timeline_sequence !== selectedTaskVersion.timeline_sequence)) throw new Error("任务版本已变化，请重新查看选中对象后发送；未提交操作");
 }

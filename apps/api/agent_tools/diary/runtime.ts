@@ -32,7 +32,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
     selectedTaskVersion, readCredentials, readActionSource, readMaterialSelection,
     initialTaskRead, initialScriptDraftUpdatedAt,
     initialEditCapabilities, initialMediaScriptCapabilities, initialScriptToolCapabilities} = readAgentContext(environment);
-  const verifyTaskVersion = (workspace: any) => verifyVersion(workspace, selectedTaskVersion);
+  const verifyTaskVersion = (workspace: any) => verifyVersion(workspace, selectedTaskVersion, Boolean(businessCall));
   const typedRequestId = (turn: string, call: string) => requestIdentity(taskId, turn, call);
   const callScope = createToolCallScope(readActionSource);
   const failures = new AsyncLocalStorage<{first?: BusinessFailure}>();
