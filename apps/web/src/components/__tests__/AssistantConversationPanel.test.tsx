@@ -145,6 +145,18 @@ function projectedTaskConversation(status: "queued" | "unknown" | "proposed" | "
   return saved;
 }
 
+it("distinguishes a refused output check from discarding an edit proposal", () => {
+  const saved = projectedTaskConversation("rejected");
+  const response = saved.turns[0].result!.response as Record<string, unknown>;
+  response.edit_request = {task_id:"task-one", request_id:"original-observation", phase:"observation",
+    status:"rejected", query_url:"/api/creation-tasks/task-one/assistant/edit-requests/original-observation?phase=observation"};
+  render(<AssistantConversationPanel state={state({conversation:saved})} input="保留草稿" onInput={vi.fn()}
+    onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+  expect(screen.getByText("本次输出检查已被拒绝；原成片保留。")).toBeVisible();
+  expect(screen.queryByText(/修改方案已放弃/)).not.toBeInTheDocument();
+  expect(screen.getByRole("textbox")).toHaveValue("保留草稿");
+});
+
 function goalTaskConversation(status = "waiting_result") {
   const saved = projectedTaskConversation("queued");
   saved.turns[0].result = {...saved.turns[0].result, goal_continuation: {

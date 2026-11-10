@@ -417,6 +417,9 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
   const businessSummary = taskResult ? unknownRequest
     ? "请求结果尚未核实；原请求定位已保留。先查询结果，不重复提交。"
     : graphicSourceReady ? graphicSourceSummary
+    : request?.status === "rejected" ? request.phase === "observation"
+      ? "本次输出检查已被拒绝；原成片保留。"
+      : "本次请求已被拒绝，没有沿该请求继续应用。"
     : outcomeStatus === "confirmed"
       ? continuation?.result_version_id ? "修改已应用并保存到草稿，可撤销；成片尚未重新生成。" : "已收到采用决定，保存结果仍待核实。"
       : outcomeStatus === "rejected" ? "修改方案已放弃，当前草稿保持不变。"
@@ -429,8 +432,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
                     : outcomeStatus === "interrupted" ? "后台处理已中断，等待明确决定；没有自动重试。"
                       : canOpenTurnProposal(turn) ? "实际修改预览已返回，等待你查看并决定是否采用；当前草稿尚未改变。"
                         : request?.status === "not_submitted" ? "请求没有提交；请处理具体原因后明确再试。"
-                          : request?.status === "rejected" ? "本次请求已被拒绝，没有沿该请求继续应用。"
-                            : null : null;
+                          : null : null;
   const executionStatusLabels: Record<string, string> = {
     queued: "已排队", running: "后台处理中", succeeded: "已完成", failed: "失败",
     cancelled: "已取消", interrupted: "中断等待继续",
