@@ -117,7 +117,7 @@ def test_assistant_capabilities_describes_product_sdk_runtime(tmp_path, monkeypa
         "owner": "pi-coding-agent-sdk", "version": "1.5.0", "status": "ready",
         "reason": "隔离版本检查已通过。",
     }
-    assert response.json()["skills"]["names"] == ["source-speech", "narration-materials", "local-edit"]
+    assert response.json()["skills"]["names"] == ["source-speech", "narration-materials", "local-edit", "visual-template"]
     assert response.json()["prompt_templates"]["names"] == ["review-result"]
     assert response.json()["business_tools"] == {
         scope: list(tools) for scope, tools in ASSISTANT_BUSINESS_TOOLS.items()

@@ -1,7 +1,4 @@
 .page { container-type:inline-size; min-width: 0; padding: 16px 20px 24px; color: var(--text-1); }
-.collectionTabs { display:flex; gap:16px; border-bottom:1px solid var(--border-1); margin-bottom:16px; }
-.collectionTabs button { min-height:32px; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; color:var(--text-2); font:inherit; cursor:pointer; }
-.collectionTabs button[aria-pressed="true"] { color:var(--text-1); border-bottom-color:var(--accent); }
 .exampleBanner { margin-bottom: 10px; padding: 7px 9px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-2); color: var(--text-2); font-size: 12px; }
 .top { display:flex; flex-wrap:wrap; align-items: stretch; gap:9px; }
 .categories { display: grid; flex: 1; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; min-width: 0; }
@@ -123,3 +120,6 @@
 .card { padding:0; border:0; border-radius:0; background:transparent; }
 .cardHeading { padding:0 0 8px; }
 .compare section, .detailSection { padding:0 0 12px; border:0; border-bottom:1px solid var(--border-1); border-radius:0; background:transparent; }
+.collectionTabs { composes: tabs from "../../components/ui/workspace-controls.module.css"; border-bottom:1px solid var(--border-1); margin-bottom:12px; }
+
+@container (max-width:480px) { .searchBar label { flex-basis:100%; } .searchBar [data-app-select-trigger] { flex:1; max-width:none; } }

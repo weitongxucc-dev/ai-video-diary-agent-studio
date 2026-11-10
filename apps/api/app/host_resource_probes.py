@@ -91,6 +91,7 @@ class CpuRenderBudget:
     additional_disk_bytes: int
     max_process_threads: int
     running_cpu_policy: RuntimeCpuPolicy | None = None
+    max_template_count: int = 0
 
     def __post_init__(self) -> None:
         if (not math.isfinite(self.max_duration_seconds) or self.max_duration_seconds <= 0
@@ -101,6 +102,7 @@ class CpuRenderBudget:
             self.max_width_px, self.max_height_px, self.max_input_bytes,
             self.max_clip_count, self.max_overlay_count, self.max_output_bytes, self.max_threads,
             self.additional_memory_bytes, self.additional_disk_bytes, self.max_process_threads,
+            self.max_template_count,
         )) or any(value == 0 for value in (
             self.max_width_px, self.max_height_px, self.max_input_bytes,
             self.max_clip_count, self.max_output_bytes, self.max_threads,
@@ -1432,6 +1434,9 @@ class HostResourceProbe:
                     or "audio_mix" in resources):
                 return decision(False, "clip_preview_scope_invalid")
             checks["render_budget"] = {"limits": asdict(render)}
+            if (type(resources.get('template_count', 0)) is not int
+                    or not 0 <= resources.get('template_count', 0) <= render.max_template_count):
+                return decision(False, 'template_render_preparation_required')
             if "dynamic_clip_count_limit" in resources or "dynamic_overlay_count_limit" in resources:
                 for name, actual, cap in (("dynamic_clip_count_limit", "clip_count", render.max_clip_count),
                                           ("dynamic_overlay_count_limit", "overlay_count", render.max_overlay_count)):

@@ -5,7 +5,7 @@ import "./globals.css";
 import "./modern-overrides.css";
 
 export const metadata: Metadata = {
-  title: "曜核1.0",
+  title: "曜核AI剪辑",
   description: "从素材到成片的本机视频创作工具",
   icons: {
     icon: { url: "/favicon.png", type: "image/png", sizes: "32x32" }

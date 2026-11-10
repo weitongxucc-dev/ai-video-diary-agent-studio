@@ -22,6 +22,6 @@ it("binds a scoped resource return into the existing toolbar and keeps its page/
   render(<AppShell><p>素材库正文</p></AppShell>);
   await waitFor(() => expect(screen.getByRole("button", { name: "返回创作" })).toBeEnabled());
   expect(screen.getByText("素材库正文")).toBeInTheDocument(); expect(screen.getByText("已有助手消费者")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "返回创作" }).closest(".desktop-toolbar")).not.toBeNull();
+  expect(screen.getByRole("button", { name: "返回创作" }).closest("header")).not.toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "返回创作" })); await waitFor(() => expect(mocks.push).toHaveBeenCalledWith(mocks.raw));
 });

@@ -19,6 +19,9 @@ export type CpuPreparationShape = {
   audio_input_count: number;
   sample_rate: number;
   channels: number;
+  overlay_count?: number;
+  template_count?: number;
+  native_command?: boolean;
 };
 
 export type CpuPreparationRequest = {

@@ -22,7 +22,13 @@ function readAttempt(scope: string): Attempt | null {
   const value = JSON.parse(raw) as Attempt;
   if (value.scope !== scope || value.payload?.kind !== 'cpu'
       || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.payload.request_id)
-      || !value.payload.shape || Object.keys(value.payload.shape).length !== shapeKeys.length
+      || !value.payload.shape || Object.keys(value.payload.shape).some(key=>![...shapeKeys,'overlay_count','template_count','native_command'].includes(key))
+      || ['overlay_count','template_count'].some(key=>{
+        const count=value.payload.shape[key as 'overlay_count'|'template_count'];
+        return count!==undefined&&(!Number.isInteger(count)||count<0);
+      })
+      || (value.payload.shape.template_count??0)>(value.payload.shape.overlay_count??0)
+      || value.payload.shape.native_command!==undefined&&typeof value.payload.shape.native_command!=='boolean'
       || shapeKeys.some(key => {
         const item = value.payload.shape[key as keyof CpuPreparationShape];
         return typeof item !== 'number' || !Number.isFinite(item) || item <= 0
@@ -69,6 +75,8 @@ export function DeviceResourcePreparationPanel() {
   const [duration, setDuration] = useState('30');
   const [clips, setClips] = useState('6');
   const [audioInputs, setAudioInputs] = useState('2');
+  const [overlays,setOverlays]=useState('0'),[templates,setTemplates]=useState('0');
+  const [nativeCommand,setNativeCommand]=useState(false);
   const busyRef = useRef(false);
   const mounted = useRef(false);
   const scope = useRef<string | null>(null);
@@ -93,6 +101,9 @@ export function DeviceResourcePreparationPanel() {
           setResolution(String(Math.min(shape.width_px, shape.height_px)));
           setFps(String(shape.frame_rate)); setDuration(String(shape.duration_seconds));
           setClips(String(shape.clip_count)); setAudioInputs(String(shape.audio_input_count));
+          setOverlays(String(shape.overlay_count??0));
+          setTemplates(String(shape.template_count??0));
+          setNativeCommand(shape.native_command??false);
         }
       }
       catch (cause) { rememberAttempt(null); setStorageError(true); setError(failureDetail(cause)); }
@@ -157,10 +168,16 @@ export function DeviceResourcePreparationPanel() {
       const dimensions = ratio === '1:1' ? [short, short] : ratio === '9:16' ? [short, long] : [long, short];
       const shape: CpuPreparationShape = { width_px: dimensions[0], height_px: dimensions[1], frame_rate: Number(fps),
         duration_seconds: Number(duration), clip_count: Number(clips), audio_input_count: Number(audioInputs), sample_rate: 48000, channels: 2 };
-      if (Object.values(shape).some(value => !Number.isFinite(value) || value <= 0)
+      if (Object.values(shape).some(value => typeof value!=='number' || !Number.isFinite(value) || value <= 0)
           || !Number.isInteger(shape.clip_count) || !Number.isInteger(shape.audio_input_count)) {
         throw new Error('请填写大于零的时长、镜头数量和声音数量，数量须为整数。');
       }
+      const layerCount=Number(overlays),templateCount=Number(templates);
+      if(!Number.isInteger(layerCount)||!Number.isInteger(templateCount)||templateCount<0||layerCount<templateCount)
+        throw new Error('请填写非负整数图层数，动画图层不能多于总图层。');
+      if(layerCount)shape.overlay_count=layerCount;
+      if(templateCount)shape.template_count=templateCount;
+      if(nativeCommand)shape.native_command=true;
       original = { scope: current.actor_scope, payload: { request_id: crypto.randomUUID(), kind: 'cpu', shape } };
       try { saveAttempt(original); }
       catch { throw new Error('无法保存原准备记录，尚未发送请求。请恢复应用存储后重试。'); }
@@ -237,6 +254,9 @@ export function DeviceResourcePreparationPanel() {
       <label><span>处理时长（秒）</span><input aria-label="处理时长（秒）" type="number" min="0" step="any" value={duration} onChange={event => setDuration(event.target.value)}/></label>
       <label><span>镜头数量</span><input aria-label="镜头数量" type="number" min="1" step="1" value={clips} onChange={event => setClips(event.target.value)}/></label>
       <label><span>同时使用的声音</span><input aria-label="同时使用的声音" type="number" min="1" step="1" value={audioInputs} onChange={event => setAudioInputs(event.target.value)}/></label>
+      <label><span>图文与字幕总层数</span><input aria-label="图文与字幕总层数" type="number" min="0" step="1" value={overlays} onChange={e=>setOverlays(e.target.value)}/></label>
+      <label><span>其中的动画模板层数</span><input aria-label="动画模板层数" type="number" min="0" step="1" value={templates} onChange={e=>setTemplates(e.target.value)}/></label>
+      <label><input type="checkbox" checked={nativeCommand} onChange={e=>setNativeCommand(e.target.checked)}/>同时准备程序化制作</label>
     </fieldset>
     <p className={styles.secondary}>音频使用 48 kHz 立体声。准备结果只记录所选规格的条件，不代表整条视频制作已通过。</p>
     {attempt && !closed ? <p role="status">{attempt.inputRejected ? '输入尚未被接受，未开始准备。请修改规格后再提交。' : receipt ? receiptLabel(receipt) : '尚未取得原请求的队列回执，请沿原输入继续核对。'}</p> : null}

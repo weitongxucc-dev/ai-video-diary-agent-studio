@@ -11,6 +11,7 @@ from app.assistant.task_business_errors import TaskBusinessRejected, TaskOperati
 from app.assistant.script_generation_policy import SCRIPT_GENERATION_OPERATIONS, is_script_generation
 from app.creation.intent_use_case import CreationIntentUseCase
 from app.assistant.material_reads import MATERIAL_READ_OPERATIONS, read_goal_materials
+from app.assistant.visual_templates import VISUAL_TEMPLATE_OPERATIONS, visual_template_operation
 from app.assistant.goal_versions import effective_goal_version, owned_version_transition
 from app.creation.output_observation_use_case import read_original_observation_request
 from app.creation_execution import CreationExecutionActor, ExecutionStartRequest
@@ -613,6 +614,8 @@ class TaskBusiness:
                     raise TaskBusinessRejected('当前成员偏好读取尚未装配',kind='unavailable')
                 return self.creator_memory(ws,actor.user_id or actor.member_id)
             return sealed['memory']
+        if operation in VISUAL_TEMPLATE_OPERATIONS:
+            return visual_template_operation(self.production, actor, operation, args, write_guard=guard)
         if operation=='read_assistant_script_context':
             return self.script_context(ws,task_id,actor.user_id or actor.member_id)
         if operation in {'prepare_device_resources','read_device_preparation','finalize_device_preparation'}:

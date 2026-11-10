@@ -56,16 +56,19 @@ class OutputObservationUseCase:
             self.version(task,payload)
         except ValueError as exc:
             raise OutputObservationRejected(409,str(exc)) from exc
+        values={'_media_kind':'output_observation','_draft':False,'_typed_source':source,
+            'payload':payload.model_dump(mode='json',exclude_unset=True)}
+        # A missing preparation or invalid source is a known rejection. Claim
+        # only after those reads; failures after commit still remain unknown.
+        prepared=media.prepare_submission(actor,task.id,'output_observation',values,'observation')
         event_id=None
         if payload.request_id is not None:
             event_id,fresh=self.repository.execution_records.claim_edit_request(task,actor.user_id or actor.member_id,
                 payload.request_id,'observation',payload.model_dump(mode='json',exclude_unset=True),write_guard=write_guard)
             if not fresh:
                 return self.original_request(task,actor,payload)
-        values={'_media_kind':'output_observation','_draft':False,'_typed_source':source,
-            'payload':payload.model_dump(mode='json',exclude_unset=True)}
         try:
-            job=media.submit(runtime,actor,task.id,'output_observation',values,'observation',write_guard=write_guard)
+            job=media.submit_prepared(runtime,actor,*prepared,write_guard=write_guard)
             receipt=receipt_for(media,job,actor,runtime)
             if event_id is not None:
                 self.repository.execution_records.save_edit_request_result(task,event_id,status_code=202,response=receipt)

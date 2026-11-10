@@ -84,7 +84,7 @@ export type CreationTaskExactEditInput = {
 } | {
     operation_type: "EditGraphicOverlay";
     overlay_action: "add" | "update" | "delete";
-    graphic_overlay?: (Omit<TextOverlay, "id"> | Omit<ImageOverlay, "id"> | Omit<ArrowOverlay, "id">) & {
+    graphic_overlay?: (Omit<TextOverlay, "id"> | Omit<ImageOverlay, "id"> | Omit<ArrowOverlay, "id"> | Omit<import('./timeline').VisualTemplateOverlay, "id">) & {
         id?: string;
     };
     overlay_id?: string;
@@ -297,7 +297,7 @@ export type CreationTaskSubtitleSaveInput = Extract<CreationTaskExactEditInput, 
     expected_timeline_sequence: number;
 };
 export type CreationTaskMetadataSaveInput = (CreationTaskClipMetadataInput | Extract<CreationTaskExactEditInput, {
-    operation_type: "UpdateSubtitleCue";
+    operation_type: "UpdateSubtitleCue" | "EditGraphicOverlay";
 }>) & Pick<CreationTaskSubtitleSaveInput, "request_id" | "expected_timeline_version_id" | "expected_timeline_sequence">;
 export type CreationTaskEditRequestReceipt = {
     request_id: string;

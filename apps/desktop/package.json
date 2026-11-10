@@ -26,6 +26,9 @@
     "productName": "Yaohe Studio",
     "artifactName": "智能视频日记 0.11 测试版-${version}-${arch}.${ext}",
     "copyright": "MIT License",
+    "win": {
+      "icon": "assets/icon.ico"
+    },
     "mac": {
       "category": "public.app-category.utilities",
       "target": [
@@ -62,6 +65,7 @@
     ],
     "beforePack": "./scripts/generate-build-identity.js",
     "extraResources": [
+      { "from": "runtime/template-renderer.js", "to": "template-renderer/template-renderer.js" },
       { "from": "dist/api-server", "to": "api-server" },
       { "from": "dist/programmatic", "to": "programmatic", "filter": ["**/*.mjs", "**/*.txt"] },
       { "from": "../api/model_workers", "to": "model-workers", "filter": ["**/*.py"] },

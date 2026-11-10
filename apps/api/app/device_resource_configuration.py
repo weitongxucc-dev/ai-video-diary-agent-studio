@@ -5,6 +5,7 @@ from dataclasses import asdict, replace
 from functools import lru_cache
 import hashlib
 import json
+import os
 import csv
 from pathlib import Path
 import platform
@@ -105,6 +106,9 @@ def backend_identity(name, budget, *, settings, model_catalog=None):
             if name in {"cpu_render", "presenter_cpu_render", "clip_preview"}:
                 from app.creation.render_stage_use_case import CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
                 facts["render_contract"] = CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION
+                if os.environ.get('YAOHE_TEMPLATE_RENDERER'):
+                    from app.media.template_frames import renderer_identity
+                    facts['template_renderer'] = renderer_identity()
         elif name in {"audio_encode", "final_mux"}:
             from app import audio_delivery_policy
             for tool in ("ffmpeg", "ffprobe"):

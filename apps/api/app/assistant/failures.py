@@ -49,8 +49,8 @@ _FAILURES: dict[str, dict[str, object]] = {
     },
     FAILURE_QUOTA_EXHAUSTED: {
         "service_contacted": True,
-        "explanation": "模型服务返回用量额度已耗尽，本轮未取得完整回复；已保存的任务与业务回执保留。",
-        "next_step": "在当前服务商核对套餐额度或余额，恢复后沿原任务继续；不会自动更换服务或重复提交制作。",
+        "explanation": "模型服务返回套餐用量限制，本轮未取得完整回复；可能是当前计费窗口或额度上限，已保存的任务与业务回执保留。",
+        "next_step": "在当前服务商核对窗口限额、套餐额度与余额，限制解除后沿原任务继续；不会自动更换服务或重复提交制作。",
     },
     FAILURE_RATE_LIMITED: {
         "service_contacted": True,

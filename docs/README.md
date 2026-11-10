@@ -10,7 +10,7 @@
 | 产品定位、用户结果、能力边界和端到端验收 | [`product-requirements.md`](product-requirements.md) | 产品范围或完成判断发生变化 |
 | 业务名词、对象关系、状态机和转换语义 | [`domain-model.md`](domain-model.md) | 数据结构、API 契约或工作流状态发生变化 |
 | 模块责任、跨进程数据流、模型与平台适配 | [`system-architecture.md`](system-architecture.md) | 变更跨越两个以上运行模块或外部服务 |
-| UI 信息架构、三栏职责、功能命名和视觉系统 | [`../DESIGN.md`](../DESIGN.md) | UI、产品文案、组件或截图验收 |
+| UI 视觉与交互原则、作品优先及公共组件 | [`../DESIGN.md`](../DESIGN.md) | UI、产品文案、组件或截图验收 |
 | 任务拆分、并行代理、审核、验证和文档治理 | [`development-workflow.md`](development-workflow.md) | 复杂、高风险或跨模块任务 |
 | 账号、首启和 workspace 安全不变量 | [`auth-workspace-boundary.md`](auth-workspace-boundary.md) | 认证、授权或数据隔离变更 |
 | Electron 开发与运行结构 | [`../apps/desktop/README.md`](../apps/desktop/README.md) | 桌面调试、进程或打包实现 |
@@ -32,13 +32,13 @@
 - 代码拆分与重构：工程要求读 [AGENTS.md 第1.1节](../AGENTS.md#11-高内聚低耦合与代码拆分)，模块和事务边界读系统架构。已结束的重构计划从活动目录退役，未完成真实验收保留在当前合同；新实施范围由当前合同和最新指令确定。
 - 新产品能力：`product-requirements.md` 的目标章节；涉及对象状态时补读 `domain-model.md`。
 - 版本需求覆盖和样本：按需读[版本开发清单](../.project-control/0.11-development-plan.md)，不默认整份加载；具体行为返回产品/领域/设计权威。清单不表示已实现或自动授权实施。
-- 首次使用、声音采样及素材发现：产品第4.1、7节；身份/文件权限补读认证第3、6节，UI补读DESIGN第5.11节。
-- Agent、提示词、原子能力、Skill与Pi升级：[架构第3.15节](system-architecture.md#315-pi-复用与视频创作-agent)；对话行为见产品第4.2节，引用对象见领域第7.5节，胶囊见DESIGN第4.6节。
+- 首次使用、声音采样及素材发现：产品第4.1、7节；身份/文件权限补读认证第3、6节，UI补读DESIGN第5.6节。
+- Agent、提示词、原子能力、Skill与Pi升级：[架构第3.15节](system-architecture.md#315-pi-复用与视频创作-agent)；对话行为见产品第4.2节，引用对象见领域第7.5节，引用见DESIGN第4.5节。
 - 下一阶段规划：长期优先级读 [`product-requirements.md`](product-requirements.md#151-制作质量修改效率与复用的优先级)；本轮工作包和剩余项读 [`../.project-control/active-contract.md`](../.project-control/active-contract.md)。后者是短期执行入口，不是第二份产品权威；合同结束删除时同步移除此链接。
-- UI 页面：先定位 `DESIGN.md` 的目标页面与受影响规则，并按需查看[当前参考资产入口](../DESIGN.md#510-当前视觉与交互基线)；原型只供构图与交互对照。应用 design-md Skill 时按其要求补读，同一任务不重复读取未变内容。只有范围不明确时才读产品需求。
+- UI 页面：先定位 `DESIGN.md` 的目标页面与受影响规则，并按需查看[候选边界](../DESIGN.md#63-交付边界)；原型只供构图与交互对照。应用 design-md Skill 时按其要求补读，同一任务不重复读取未变内容。只有范围不明确时才读产品需求。
 - 跨 Web/API/Worker：`system-architecture.md` 的目标边界和直接相关代码，不读全部产品文档。
 - 外部Agent/CLI/MCP/飞书钉钉调用：当前真实命令读 [`cli.md`](cli.md)，交付目标读产品第12.3节，适配归属读架构第3.16节，身份/原生工具边界读认证第10节；CLI说明不虚构待实现命令。
-- 三种创作场景、粗剪与多轮精修：产品第4节与第9.3–9.4节；文案采用/变体见领域第5节；现有左导航/右侧页签/标准组件见DESIGN第2、4、5节。
+- 三种创作场景、粗剪与多轮精修：产品第4节与第9.3–9.4节；文案采用/变体见领域第5节；导航、作品与公共组件原则见DESIGN第2、4、5节。
 - Pi原生工具、提示词与Skills：架构第3.15.1–3.15.2节；任务/对话/session/执行归属读领域第7.5节，资源访问读认证第10节。已有SDK、业务工具及事务继续复用，不另造通用运行Owner。
 - 企业业务知识与纠正：产品第6.1、7节拥有用户结果，领域第3.4节拥有对象/来源/范围；检索与分析实现读架构第3.5–3.6节。任务档案、偏好与经验边界读领域第4.5节，不另设行业规则或长期记忆权威。
 - 外部研究与历史证据：仅在当前任务需要时沿Git/Issue定位，不从旧调研恢复规则或派工；竞品能力和上游声明不等于本产品已实现。

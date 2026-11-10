@@ -29,7 +29,7 @@ from app.materials.contracts import MediaAuthorityError
 from app.creation.contracts import CreationTask
 from app.task_runtime import JobFailure, JobResult
 
-CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v22"
+CREATION_TASK_MONTAGE_RENDER_CONTRACT_VERSION = "creation-task-montage-render/v23"
 
 
 class RenderRejected(Exception):

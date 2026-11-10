@@ -1,0 +1,36 @@
+<!-- Adapted from RenderComp KpiCounter, MIT, copyright 2026 Trimora Inc.
+     Yaohe HTML adaptation: deterministic DOM digit drums, no Remotion runtime. -->
+<!doctype html><html><head><meta charset="utf-8"><style>
+:root{--background:#0f172a;--card:#1e293b;--color:#f8fafc;--muted:#94a3b8;--accent:#6366f1;--font:-apple-system,"Segoe UI","PingFang SC",sans-serif}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}body{background:var(--background);font-family:var(--font);color:var(--color);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px;gap:36px}
+header{text-align:center;width:100%}.title{font-size:63px;font-weight:800}.subtitle{font-size:30px;color:var(--muted);margin-top:8px}.line{height:2px;background:var(--accent)}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:20px;width:100%}.card{background:var(--card);border:1px solid #ffffff0f;border-radius:20px;padding:25px;position:relative;overflow:hidden;box-shadow:0 4px 24px #0005}
+.label{font-size:25px;color:var(--muted);margin-bottom:14px}.readout{display:flex;align-items:center;font-size:58px;font-weight:800;line-height:1}.drum{display:inline-block;position:relative;overflow:hidden;width:.62em;height:1.2em;mask-image:linear-gradient(to bottom,transparent,#000 14%,#000 86%,transparent)}
+.strip{position:absolute;top:0;left:0;width:100%}.digit{display:block;height:1.2em;line-height:1.2;text-align:center;font-variant-numeric:tabular-nums}.unit{font-size:35px;color:var(--accent)}.n{display:none}
+</style></head><body><header><div class="title">季度成果</div><div class="subtitle">本期表现</div></header><div class="line"></div><div class="grid">
+<div class="card"><div class="label l1">营收</div><span class="n v1">2840000</span><div class="readout"></div></div>
+<div class="card"><div class="label l2">增长率</div><span class="n v2">127</span><div class="readout"></div></div>
+<div class="card"><div class="label l3">客户数</div><span class="n v3">384</span><div class="readout"></div></div>
+<div class="card"><div class="label l4">推荐指数</div><span class="n v4">72</span><div class="readout"></div></div></div>
+<script>
+const clamp=x=>Math.max(0,Math.min(1,x));
+// Format and digit-carry behavior adapted from the upstream MIT component.
+function formatFor(value){return value>=1e6?{div:1e6,unit:'M',dec:1}:value>=1e3?{div:1e3,unit:'K',dec:1}:{div:1,unit:'',dec:0}}
+function wheelPos(value,p){const q=Math.max(0,value)/10**p,whole=Math.floor(q),frac=q-whole;return whole%10+(p===0?frac:clamp(frac*10-9))}
+window.film={frame(t){const frame=t*30;
+ const title=clamp(frame/18);document.querySelector('header').style.opacity=title;document.querySelector('header').style.transform=`translateY(${-20*(1-title)}px)`;
+ document.querySelector('.line').style.width=`${315*clamp((frame-10)/18)}px`;
+ document.querySelectorAll('.card').forEach((card,i)=>{
+  const target=Number(card.querySelector('.n').textContent);if(!Number.isFinite(target)||target<0||target>1e12)throw Error('指标须为0至一万亿之间的数字');
+  const delay=14+i*8,entry=clamp((frame-delay)/22),progress=1-(1-clamp((frame-delay-6)/49))**3;
+  card.style.opacity=entry;card.style.transform=`translateX(${-40*(1-entry)}px)`;
+  const fmt=formatFor(target),units=Math.round(target/fmt.div*10**fmt.dec),text=(units/10**fmt.dec).toFixed(fmt.dec),readout=card.querySelector('.readout');
+  if(readout.dataset.target!==String(target)){
+   readout.replaceChildren();readout.dataset.target=String(target);
+   for(const char of text){const span=document.createElement('span');if(char==='.')span.textContent='.';else{span.className='drum';const strip=document.createElement('span');strip.className='strip';for(let n=0;n<11;n++){const digit=document.createElement('span');digit.className='digit';digit.textContent=String(n%10);strip.append(digit)}span.append(strip)}readout.append(span)}
+   const unit=document.createElement('span');unit.className='unit';unit.textContent=fmt.unit;readout.append(unit);
+  }
+  const drums=[...readout.querySelectorAll('.strip')];drums.forEach((strip,j)=>{strip.style.transform=`translateY(${-wheelPos(units*progress,drums.length-1-j)*1.2}em)`});
+ });
+}};
+</script></body></html>

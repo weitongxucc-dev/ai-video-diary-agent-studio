@@ -112,9 +112,12 @@ def test_new_shared_worker_files_enter_existing_candidate_input_filter(tmp_path)
 def frozen_script_sources(tmp_path, monkeypatch):
     frozen = tmp_path / "_MEIPASS"
     for source, relative in declared_data_inputs():
-        target = frozen / relative / source.name
+        target = frozen / relative if source.is_dir() else frozen / relative / source.name
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
+        if source.is_dir():
+            shutil.copytree(source, target)
+        else:
+            shutil.copyfile(source, target)
     monkeypatch.setattr(media_script, "__file__", str(frozen / "app/media_script.py"))
     # Sealing only; this nonexistent runtime is never launched or called ready.
     toolchain = ScriptToolchain(Path("/missing/python"), Path("/missing/stdlib"),

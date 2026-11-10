@@ -1025,7 +1025,7 @@ app.include_router(build_video_template_router(_video_template_http_adapter, ('s
 app.include_router(build_video_template_router(_video_template_http_adapter, ('list_video_templates',)))
 
 
-app.include_router(build_video_template_router(_video_template_http_adapter, ('create_video_template_version',)))
+app.include_router(build_video_template_router(_video_template_http_adapter, ('create_video_template_version', 'read_video_template', 'save_visual_template', 'visual_template_preview')))
 
 
 app.include_router(build_video_template_router(_video_template_http_adapter, ('save_creation_task_template',)))
@@ -6053,7 +6053,7 @@ _goal_continuation_service = None
 
 def _task_authorizations_for_goal(repository=None):
     repo = production_repo if repository is None else repository
-    if device_runtime is not None and repo is production_repo:
+    if device_runtime is not None and repo is production_repo and device_runtime.task_authorizations is not None:
         return device_runtime.task_authorizations
     from app.creation.task_authorization import TaskAuthorizationUseCase
     return TaskAuthorizationUseCase(repo,lambda identity:_verify_creation_identity(

@@ -34,6 +34,7 @@ _ENTRY = _SPEC_DIR / "server.py"
 # These exact bare files are read/hash inputs of app.media_script. PyInstaller
 # supplies __file__ under _MEIPASS/app, so preserve that declared relative layout.
 _ASSET_DIRS: list[tuple[str, str]] = [
+    (str(_SPEC_DIR / 'app' / 'template_assets'), 'app/template_assets'),
     (str(_SPEC_DIR / "app" / "media_script.py"), "app"),
     (str(_SPEC_DIR / "model_workers" / "media_script_worker.py"), "model_workers"),
 ]

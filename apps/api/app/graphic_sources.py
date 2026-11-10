@@ -62,7 +62,7 @@ def _successful_graphic_transform(repository,workspace_id,task_id,record,*,conne
     if job.task_id!=task_id or job.status!='succeeded' or record.logical_ref not in job.output_refs:
         raise ValueError('图片生产作业尚未成功，不作为可编辑来源')
     transform=next((item for item in repository.lineage_records.list_transform_runs(workspace_id,task_id,connection=connection)
-        if item.job_id==job.id and item.status=='succeeded' and item.transform_type in {'graphic_import','media_script'}
+        if item.job_id==job.id and item.status=='succeeded' and item.transform_type in {'graphic_import','media_script','native_artifact_registration'}
         and record.logical_ref in item.output_refs),None)
     if transform is None:
         raise ValueError('图片缺少成功来源记录')
@@ -99,7 +99,7 @@ def resolve_graphic_source(repository,store,workspace_id,task_id,reference,*,con
     actual={'size_bytes':file_stat.st_size,'mtime_ns':file_stat.st_mtime_ns,'ctime_ns':file_stat.st_ctime_ns}
     if path.is_symlink() or file_stat.st_size!=record.size_bytes or (expected is not None and actual!=expected):
         raise ValueError('登记图片文件修订已变化')
-    if transform.transform_type=='media_script' and expected is None:
+    if transform.transform_type in {'media_script','native_artifact_registration'} and expected is None:
         raise ValueError('脚本图片缺少实测文件修订')
     return path
 
@@ -123,9 +123,10 @@ def graphic_source_facts(repository, store, workspace_id, task_id, reference, *,
     transform = _successful_graphic_transform(repository, workspace_id, task_id, record, connection=connection)
     job = repository.job_records.get_job_run(workspace_id, record.producer_job_id, connection=connection)
     if ((transform.transform_type == 'graphic_import' and job.kind != 'graphic_import')
-            or (transform.transform_type == 'media_script' and job.kind != TASK_MEDIA_KIND)):
+            or (transform.transform_type == 'media_script' and job.kind != TASK_MEDIA_KIND)
+            or (transform.transform_type == 'native_artifact_registration' and job.kind != 'native_task_command')):
         raise ValueError('PNG生产作业类型与来源记录不一致')
-    if job.kind == TASK_MEDIA_KIND:
+    if job.kind in {TASK_MEDIA_KIND, 'native_task_command'}:
         event = repository.execution_records.get_task_event(workspace_id, f'event_{job.id}_start', connection=connection)
         if CreationExecutionActor.from_event(workspace_id, event.payload) != actor:
             raise PermissionError('图片生产作业不属于当前成员')

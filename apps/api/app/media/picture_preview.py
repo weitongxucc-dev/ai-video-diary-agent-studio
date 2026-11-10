@@ -432,6 +432,7 @@ class PicturePreviewRenderer:
             'execution_mode': 'cpu_ffmpeg', 'duration_seconds': plan.duration_seconds, 'width_px': width, 'height_px': height,
             'input_bytes': sum(item[1] for item in facts['files']), 'clip_count': len(plan.clips),
             'overlay_count': max(len(candidate.graphic_overlays) for candidate in picture_candidates),
+            'template_count': max(sum(item.get('kind') == 'template' for item in candidate.graphic_overlays) for candidate in picture_candidates),
             'threads': budget.max_threads, 'timeout_seconds': budget.max_timeout_seconds, 'max_output_bytes': budget.max_output_bytes}
         return resources
 

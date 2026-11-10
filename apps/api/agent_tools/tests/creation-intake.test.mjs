@@ -98,6 +98,22 @@ function workspaceReader(request) {
   return tools;
 }
 
+test('template discovery reaches later catalog pages and only returns bounded metadata', async()=>{
+  const tools=workspaceReader(async()=>({items:Array.from({length:66},(_,i)=>({
+    id:`template-${i}`,name:i===65?'季度图表':`组件${i}`,version:1,origin:'built_in',
+    settings:{kind:'visual_component',visual:{category:i===65?'data':'title',source:'PRIVATE_FULL_SOURCE'}}}))}));
+  const first=(await tools.read_video_templates.execute('first',{})).details;
+  assert.equal(first.templates.length,50);
+  assert.equal(first.next_offset,50);
+  const last=(await tools.read_video_templates.execute('next',{offset:first.next_offset})).details;
+  assert.equal(last.templates.length,16);
+  assert.equal(last.templates.at(-1).id,'template-65');
+  assert.equal(last.truncated,false);
+  assert.equal(JSON.stringify(last).includes('PRIVATE_FULL_SOURCE'),false);
+  const found=(await tools.read_video_templates.execute('search',{query:'季度',category:'data'})).details;
+  assert.deepEqual(found.templates.map(item=>item.id),['template-65']);
+});
+
 for (const [returned, total] of [[0, 0], [8, 8], [19, 19], [3, 50]]) {
   test(`recent workspace summaries remain bounded and report the actual count (${returned}/${total})`, async () => {
     const calls = [];

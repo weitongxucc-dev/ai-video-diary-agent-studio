@@ -129,18 +129,25 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
 
   pi.registerTool({
     name: "read_video_templates",
-    label: "读取我的模板",
-    description: "用户要求使用已有模板时，读取当前工作区真实模板名称、ID和版本。",
-    parameters: { type: "object", properties: {}, additionalProperties: false },
-    execute: async () => {
+    label: "检索可用模板",
+    description: "读取真实模板名称、ID、版本和视觉分类。可按query名称或category筛选；offset/limit分页，truncated为真时继续next_offset。需要源码时再read_visual_template，不把整个资源库源码放进上下文。",
+    parameters: { type: "object", properties: {query:{type:"string"},category:{type:"string"},
+      offset:{type:"integer",minimum:0},limit:{type:"integer",minimum:1,maximum:50}}, additionalProperties: false },
+    execute: async (_id:string,params:{query?:string;category?:string;offset?:number;limit?:number}) => {
       const data = await request("/api/video-templates");
-      const allTemplates = (data.items || []) as Record<string, unknown>[];
-      const templates = [...allTemplates.filter((item) => item.origin === "user"), ...allTemplates.filter((item) => item.origin !== "user")]
-        .slice(0, 50).map((item: Record<string, unknown>) => ({
-        id: item.id, name: item.name, version: item.version, origin: item.origin,
+      const allTemplates = (data.items || []) as Record<string, any>[];
+      const matching=allTemplates.filter(item=>(!params.query||String(item.name).toLowerCase().includes(params.query.toLowerCase()))&&
+        (!params.category||item.settings?.visual?.category===params.category));
+      const ordered=[...matching.filter(item=>item.origin==="user"),...matching.filter(item=>item.origin!=="user")];
+      const offset=params.offset??0,limit=params.limit??50;
+      if(!Number.isInteger(offset)||offset<0||!Number.isInteger(limit)||limit<1||limit>50)throw Error('模板分页范围无效');
+      const templates = ordered.slice(offset,offset+limit).map(item=>({
+        id:item.id,name:item.name,version:item.version,origin:item.origin,
+        kind:item.settings?.kind??'production_structure',category:item.settings?.visual?.category,
       }));
-      const truncated = allTemplates.length > templates.length;
-      return { content: [{ type: "text", text: JSON.stringify({ templates, truncated }) }], details: { templates, truncated } };
+      const truncated=offset+templates.length<ordered.length;
+      const details={templates,offset,total_count:ordered.length,truncated,next_offset:truncated?offset+templates.length:null};
+      return {content:[{type:"text",text:JSON.stringify(details)}],details};
     },
   });
 

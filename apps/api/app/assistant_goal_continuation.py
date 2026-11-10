@@ -593,9 +593,9 @@ class GoalResultProjection:
         return chain if original in chain else None
 
     def verify_version(self, goal, event, task):
-        expected = goal["target_snapshot"].get("timeline_version_id")
+        from app.assistant.goal_versions import event_follows_owned_version
         event_version = event.get("result_version_id") or event.get("base_version_id")
-        if event.get("base_version_id") != expected:
+        if not event_follows_owned_version(self, goal, event):
             return {"status": "invalidated", "reason": "unrelated_timeline_change"}
         if task.current_timeline_version_id != event_version:
             version = self.production.timeline_records.get_timeline_version(goal["workspace_id"], task.current_timeline_version_id)

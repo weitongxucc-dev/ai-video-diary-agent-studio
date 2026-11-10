@@ -31,6 +31,8 @@ corepack pnpm --dir apps/desktop dev
 
 首次准备本机制作能力时，在“设备设置 → 运行 → 基础媒体准备”选择视频规格，等待原准备完成后核验启用。页面支持退出后查询原请求，不需要手填资源预算；当前 CPU 准备支持 macOS。基础媒体准备不包含模型测量：配音和故事板仍按当前任务通过原设备准备入口分别处理，准备完成不会自动启动已有作品。
 
+视觉组件在“视频模板”中预览、修改参数或源码并另存版本，在作品的图文编辑区添加。动画图层使用固定源码和参数，可调整位置、层级与关键帧，沿原时间线撤销；整片组合用于独立的新主题，不复制旧作品正文和完成状态。准备时填写总图层数及其中的动画模板数；需要原生程序制作时选择“同时准备程序化制作”。缺依赖会明确拒绝，不自动更换模板或执行环境。
+
 ## 本地构建
 
 ```bash
@@ -74,9 +76,10 @@ macOS包内主程序、Helper可执行名及`CFBundleName`保持ASCII（`Yaohe S
 
 ## 图标和权限
 
-- `assets/icon.icns`：macOS 构建输入。
-- `assets/icon.png`：通用 512px 源图。
-- `assets/generate_icon.py`：从同一图形规则重新生成上述两份资产。
+- `assets/icon-source.svg`：黑白折叠 Y 母版，沿用 `designs/yaohe-desktop-language-20261020/candidate-v2/public/brand/yaohe-symbol-small-white.svg` 的路径；`icon-source.png` 是其 1024px RGBA 栅格版。
+- `assets/icon.icns`：macOS 构建输入；`assets/icon.ico`：Windows 构建和窗口图标，包含 16–256px 多尺寸。
+- `assets/icon.png`：通用 512px 窗口及 macOS Dock 图标，开发启动也使用产品标识。
+- `assets/generate_icon.py`：使用 Pillow，从 `icon-source.png` 统一生成 PNG、ICNS、ICO 和 Web 品牌／favicon；SVG favicon 直接复制母版。修改 SVG 后先用 SVG 渲染器更新 1024px `icon-source.png`，再运行此脚本。
 - `assets/entitlements.plist`：Hardened Runtime/JIT 权限。
 
 中间尺寸 PNG 不进入仓库；需要时由生成脚本在内存中构造。

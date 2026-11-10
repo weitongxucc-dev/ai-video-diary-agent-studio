@@ -1,14 +1,14 @@
-.workspace { display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface-1); color: var(--text-1); font: 400 var(--font-size-body)/var(--line-body) "PingFang SC", -apple-system, sans-serif; }
+.workspace { --timeline-label-width:64px; --timeline-column-gap:8px; display: flex; flex-direction: column; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface-1); color: var(--text-1); font: 400 var(--font-size-body)/var(--line-body) "PingFang SC", -apple-system, sans-serif; }
 .workspace *, .inspector * { box-sizing: border-box; }
 .toolbarTitle { display: flex; flex: 1; min-width: 0; align-items:center;gap:8px; container-type:inline-size; container-name:editor-toolbar-title; }
 .toolbarTitle h1 {flex:1;min-width:0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-title);line-height:var(--line-title); font-weight: 500; }
 .toolbarTitle span { color: var(--text-3); font-size: 12px; white-space: nowrap; }
 .toolbarTitle button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .toolbarActions { display: flex; flex-wrap:wrap; gap: 4px; }
-.button, .primary, .iconButton { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 6px; min-height: 32px; width: auto; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font-family: inherit; font-size: 13px; font-weight: 400; line-height: 1.3; cursor: pointer; white-space: nowrap; }
+.primary, .iconButton { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 6px; min-height: 32px; width: auto; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font-family: inherit; font-size: 13px; font-weight: 400; line-height: 1.3; cursor: pointer; white-space: nowrap; }
 .primary { min-height: 36px; padding: 0 14px; border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); font-weight: 500; }
 .iconButton { width: 32px; padding: 0; border-color: transparent; background: transparent; }
-.button:hover:not(:disabled), .iconButton:hover:not(:disabled) { background: var(--surface-2); }
+.iconButton:hover:not(:disabled) { background: var(--surface-2); }
 .primary:hover:not(:disabled) { filter: brightness(.96); }
 .button:disabled, .primary:disabled, .iconButton:disabled { opacity: .42; cursor: default; }
 .workspace button:focus-visible, .inspector button:focus-visible, .toolbarActions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -48,7 +48,14 @@
 .shotLabel { display: flex; flex-direction: column; gap: 0; }
 .shotLabel strong { font-size: 12px; font-weight: 500; }
 .shotLabel small { font-size:12px; line-height:18px; color:var(--text-3); font-variant-numeric:tabular-nums; }
-.tracks { flex: 0 1 auto; display: grid; min-height:72px; max-height:180px; gap:5px; padding:6px 0 0; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+.tracks { display:flex; flex-direction:column; flex:0 0 auto; min-height:72px; max-height:42%; gap:5px; padding:8px 0 4px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+.tracks > * { flex-shrink:0; }
+.ruler { position:sticky; top:0; z-index:2; background:var(--surface-1); }
+.overlayTracks { display:grid; gap:4px; }
+.track > .overlayLane { position:relative; display:block; height:28px; background:var(--surface-2); border-radius:4px; }
+.overlayLane > button { position:absolute; top:1px; height:26px; text-align:left; border-color:color-mix(in srgb,var(--accent) 24%,var(--border-1)); }
+.timelineThumbnail { display:block; flex:0 0 30px; width:30px; height:22px; overflow:hidden; border-radius:2px; }
+.timelineThumbnail > span { display:block; height:100%; }
 @container editor-stage (max-height:460px) {
   .playerViewport { min-height:48px; }
   .storyboard { padding:3px 0; }
@@ -56,21 +63,14 @@
   .shotImage { display:none; }
   .shot[aria-pressed="true"] { border-color:var(--focus); }
   .shotLabel { line-height:18px; }
-  .tracks { max-height:140px; }
+  .tracks { max-height:48%; }
 }
-@container workspace-stage (max-height:460px) and (min-width:560px) {
-  .stage { display:grid; grid-template-columns:minmax(180px,.9fr) minmax(260px,1.1fr); grid-template-rows:36px 44px minmax(0,1fr) 40px; column-gap:16px; row-gap:4px; }
-  .previewToolbar { grid-column:1 / -1; grid-row:1; }
-  .playerViewport { grid-column:1; grid-row:2 / 4; min-height:0; }
-  .transport { grid-column:1 / -1; grid-row:4; }
-  .storyboard { grid-column:2; grid-row:2; padding:0; }
-  .tracks { grid-column:2; grid-row:3; align-self:stretch; align-content:start; min-height:0; max-height:none; padding:0; }
-}
-.ruler, .track { display: grid; grid-template-columns: 100px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); }
+.ruler, .track { display: grid; grid-template-columns: var(--timeline-label-width,64px) minmax(0, 1fr); align-items: center; gap: var(--timeline-column-gap,8px); font-size: 12px; color: var(--text-2); }
+.ruler > div time { white-space:nowrap; }
 .ruler > div { display: flex; justify-content: space-between; color: var(--text-3); font-size:12px; border-bottom: 1px solid var(--border-1); padding-bottom: 3px; }
 .track > div { display: flex; min-width: 0; gap: 2px; }
-.track > .videoLane { position:relative; display:block; height:26px; overflow:hidden; border-block:1px solid var(--border-1); background:var(--surface-2); }
-.track .videoTimelineClip { position:absolute; top:1px; height:22px; min-width:0; overflow:hidden; padding:0 3px; border:1px solid var(--border-1); border-radius:4px; background:var(--surface-1); color:var(--text-2); font-size:10px; text-align:left; text-overflow:clip; }
+.track > .videoLane { position:relative; display:block; height:34px; overflow:hidden; border-block:1px solid var(--border-1); background:var(--surface-2); }
+.track .videoTimelineClip { display:flex; align-items:center; gap:5px; position:absolute; top:2px; height:28px; min-width:0; overflow:hidden; padding:0 3px; border:1px solid var(--border-1); border-radius:4px; background:var(--surface-1); color:var(--text-2); font-size:12px; text-align:left; text-overflow:clip; }
 .track .videoTimelineClip[aria-pressed="true"] { z-index:1; border-color:var(--focus); box-shadow:inset 0 0 0 1px var(--focus); background:color-mix(in srgb,var(--focus) 12%,var(--surface-1)); color:var(--text-1); }
 .track button { min-width: 0; height: 26px; padding: 0 5px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 4px; background: var(--surface-2); color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .track button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface-1)); }
@@ -142,7 +142,7 @@
 .audioToolbar input[type=range] { width: 80px; }
 .audioToolbar [data-app-select-trigger], .audioToolbar input[type=number] { min-height: 30px; padding: 3px 6px; border: 1px solid var(--border-2); border-radius: 5px; background: var(--surface-1); color: var(--text-1); font: inherit; }
 .audioScroll { overflow-x: auto; max-height: 230px; overflow-y: auto; }
-.audioTrack { display: grid; grid-template-columns: 100px minmax(0,1fr); gap: 8px; min-height: 48px; margin-bottom: 4px; }
+.audioTrack { display: grid; grid-template-columns: var(--timeline-label-width,64px) minmax(0,1fr); gap: var(--timeline-column-gap,8px); min-height: 48px; margin-bottom: 4px; }
 .audioTrackLabel { display: flex; align-items: center; gap: 4px; position: static; z-index: 1; background: var(--surface-1); }
 .audioScroll .audioTrackLabel { position: sticky; left: 0; }
 .audioTrackLabel button { padding: 3px; border: 0; color: var(--text-2); background: transparent; font-size: 12px; cursor: pointer; }
@@ -194,3 +194,5 @@
 @container editor-toolbar-title (max-width:260px) {
   .toolbarTitle > span {display:none;}
 }
+
+.button { composes: button from "./ui/workspace-controls.module.css"; }

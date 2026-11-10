@@ -12,6 +12,7 @@ from PIL import Image
 OUT_DIR = Path(__file__).resolve().parent
 SOURCE_PATH = OUT_DIR / "icon-source.png"
 SIZES = (16, 32, 64, 128, 256, 512, 1024)
+ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
 TYPE_MAP = {
     16: b"icp4",
     32: b"icp5",
@@ -58,10 +59,15 @@ def main() -> None:
         if source.width != source.height:
             raise SystemExit("Brand master must be square")
         pngs = {size: render_png(source, size) for size in SIZES}
+        source.save(OUT_DIR / "icon.ico", format="ICO", sizes=[(size, size) for size in ICO_SIZES])
 
     (OUT_DIR / "icon.png").write_bytes(pngs[512])
     (OUT_DIR / "icon.icns").write_bytes(build_icns(pngs))
-    print("Generated icon.png and icon.icns from icon-source.png")
+    web_public = OUT_DIR.parents[1] / "web" / "public"
+    (web_public / "yaohe-icon.png").write_bytes(pngs[128])
+    (web_public / "favicon.png").write_bytes(pngs[32])
+    (web_public / "favicon.svg").write_bytes((OUT_DIR / "icon-source.svg").read_bytes())
+    print("Generated desktop PNG/ICNS/ICO and Web brand/favicon assets")
 
 
 if __name__ == "__main__":

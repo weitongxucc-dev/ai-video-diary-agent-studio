@@ -2920,7 +2920,9 @@ def test_observation_reconciles_original_before_version_and_marks_unknown(tmp_pa
     assert conflict.value.status_code==409
     unknown=payload.model_copy(update={'request_id':uuid4()})
     class FailedQueue:
-        def submit(self,*args,**kwargs):
+        def prepare_submission(self,*args):
+            return None,None
+        def submit_prepared(self,*args,**kwargs):
             raise ValueError('queue failed after claim')
     with pytest.raises(OutputObservationRejected) as failure:
         case.submit(None,FailedQueue(),task,actor,unknown,{},receipt_for=None)

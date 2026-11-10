@@ -72,7 +72,7 @@ function buildMenu({ app, Menu, dialog, shell, getWindow, checkForUpdates, build
       label: '帮助',
       submenu: [
         {
-          label: 'AI视频日记 帮助',
+          label: '曜核AI剪辑 帮助',
           click: () => {
             getWindow()?.webContents.send('open-help');
           },
@@ -86,11 +86,11 @@ function buildMenu({ app, Menu, dialog, shell, getWindow, checkForUpdates, build
         },
         { type: 'separator' },
         {
-          label: '关于 AI视频日记',
+          label: '关于曜核AI剪辑',
           click: () => {
             dialog.showMessageBox(getWindow(), {
               type: 'info',
-              title: '关于曜核1.0',
+              title: '关于曜核AI剪辑',
               message: `AI视频日记 Agent Studio v${app.getVersion()}`,
               detail: `构建身份：${buildIdentity}\n\n本地优先的 macOS 内容生产 Agent。\n\n将素材、想法和语音指令推进成可验证、可回滚、可导入剪映的完整视频草稿。\n\n© 2026 AI视频日记 Contributors\nMIT License`,
             });

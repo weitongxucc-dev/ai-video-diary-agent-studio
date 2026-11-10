@@ -146,11 +146,12 @@ export function registerObservationTools(pi: ToolRegistrar, {request, taskId, ve
       description: "仅GET原phase=observation回执，不重POST、不换绑版本；recorded表示受理，须回读真实作业后才判断实际检查结果。",
       parameters: {type: "object", properties: {request_id: {type: "string", format: "uuid"}}, required: ["request_id"], additionalProperties: false},
       execute: async (_id: string, params: {request_id: string}) => {
-        const receipt = await request(`/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/edit-requests/${encodeURIComponent(params.request_id)}?phase=observation`);
-        if (receipt.request_id !== params.request_id || receipt.phase !== "observation") throw new Error("观察请求回执身份不一致");
+        const query = `/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/edit-requests/${encodeURIComponent(params.request_id)}?phase=observation`;
+        const receipt = await request(query);
+        if (receipt.task_id !== taskId || receipt.request_id !== params.request_id || receipt.phase !== "observation") throw new Error("观察请求回执身份不一致");
         const details = receipt.status === "recorded" && receipt.result?.job_id
           ? {kind: "task_media_job", media_job: receipt.result}
-          : {kind: "edit_request_status", ...receipt};
+          : {kind: "edit_request_status", ...receipt, query_url: query};
         return {content: [{type: "text", text: JSON.stringify(details)}], details};
       },
     });

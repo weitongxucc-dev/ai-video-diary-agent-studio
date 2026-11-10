@@ -7,6 +7,7 @@
 .fields legend { padding:0;margin:0 0 8px;color:var(--text-2);font-size:12px; }
 .fields input { width:min(240px,100%);min-width:0;min-height:32px;padding:4px 8px;border:1px solid var(--border-1);border-radius:8px;background:var(--surface-1);color:var(--text-1);font:inherit; }
 .fields input:focus-visible { outline:2px solid var(--accent);outline-offset:2px; }
+.fields input[type=checkbox] {width:16px;min-height:16px;}
 .actions { display:flex;flex-wrap:wrap;gap:8px;align-items:center; }
 .panel button:disabled { cursor:default;opacity:.6; }
 .details { min-width:0;color:var(--text-2);font-size:12px;line-height:18px;overflow-wrap:anywhere; }

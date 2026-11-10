@@ -108,7 +108,7 @@ describe("independent profile consumers",()=>{
  });
 
  it("references the exact historical profile version without inventing an asset selection",async()=>{
-  render(<PeopleAndVoiceWorkspace initialView="voices"/>);await openProfile("独立声音");fireEvent.click(screen.getByRole("button",{name:"引用当前档案到对话"}));expect(referenceProfile).toHaveBeenLastCalledWith({kind:"voice",profile_id:"voice",version:"v1",label:"独立声音"},true);await chooseSelectValue(screen.getByLabelText("档案版本"), "v0");await waitFor(()=>expect(referenceProfile).toHaveBeenLastCalledWith({kind:"voice",profile_id:"voice",version:"v0",label:"独立声音"}));expect(referenceProfile.mock.calls.at(-1)![0]).not.toHaveProperty("asset_id");
+  render(<PeopleAndVoiceWorkspace initialView="voices"/>);await openProfile("独立声音");fireEvent.click(screen.getByRole("button",{name:"引用当前档案到对话"}));expect(referenceProfile).toHaveBeenLastCalledWith({kind:"voice",profile_id:"voice",version:"v1",label:"独立声音"},true);await chooseSelectValue(screen.getByLabelText("档案版本"), "v0");expect(referenceProfile).toHaveBeenCalledTimes(1);fireEvent.click(screen.getByRole("button",{name:"引用当前档案到对话"}));await waitFor(()=>expect(referenceProfile).toHaveBeenLastCalledWith({kind:"voice",profile_id:"voice",version:"v0",label:"独立声音"},true));expect(referenceProfile.mock.calls.at(-1)![0]).not.toHaveProperty("asset_id");
  });
 
  it("shows the persisted audition text separately from newly edited input and keeps its output identity",async()=>{

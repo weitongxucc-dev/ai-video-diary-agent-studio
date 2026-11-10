@@ -4,6 +4,7 @@ import { StrictMode } from "react";
 import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import { WorkspacePageContext, type WorkspacePageSlot } from "../workbench/context";
 import { useWorkspaceViewState } from "../workbench/context";
+import { WorkspaceInspector } from "../workbench/WorkspaceInspector";
 import { Dialog } from "../ui/overlay";
 
 afterEach(cleanup);
@@ -68,4 +69,20 @@ it("keeps unsaved inputs bound to their original version when a closed view reop
   expect(screen.getByLabelText("裁剪起点草稿")).toHaveValue("1");
   view.rerender(content("v1"));
   expect(screen.getByLabelText("裁剪起点草稿")).toHaveValue("1.5");
+});
+
+it("closes the dock without losing drafts, releases hidden media and returns keyboard focus", () => {
+  const pause=vi.spyOn(HTMLMediaElement.prototype,"pause").mockImplementation(()=>undefined);
+  vi.spyOn(HTMLMediaElement.prototype,"load").mockImplementation(()=>undefined);
+  const content=(open:boolean)=><><button>素材属性</button><WorkspaceInspector title="素材属性" open={open} onClose={vi.fn()}><input aria-label="未保存说明" defaultValue=""/><WorkspaceVideo aria-label="属性媒体" src="/api/material/media"/></WorkspaceInspector></>;
+  const view=render(content(false));
+  const trigger=screen.getByRole("button",{name:"素材属性"});trigger.focus();
+  view.rerender(content(true));
+  fireEvent.change(screen.getByLabelText("未保存说明"),{target:{value:"保留的草稿"}});
+  const media=screen.getByLabelText("属性媒体");
+  expect(media).toHaveAttribute("src");
+  view.rerender(content(false));
+  expect(pause).toHaveBeenCalled();expect(media).not.toHaveAttribute("src");expect(trigger).toHaveFocus();
+  view.rerender(content(true));
+  expect(screen.getByLabelText("未保存说明")).toHaveValue("保留的草稿");
 });

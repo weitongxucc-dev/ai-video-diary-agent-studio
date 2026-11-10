@@ -45,7 +45,8 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
   onPreview: (input: AudioEditInput) => void; busy: boolean; onListenPosition?: (time: number) => void; sharedTimeScale?: boolean; subtitleTrack?: ReactNode;
 }) {
   const [zoom, setZoom] = useWorkspaceViewState("audio.zoom", 1);
-  const [role, setRole] = useWorkspaceViewState("audio.role", "audio-music");
+  const [role, setRole] = useWorkspaceViewState("audio.role", graph.tracks.find(track => track.role === "music")?.id ?? graph.tracks[0]?.id ?? "");
+  const importTrackId = graph.tracks.some(track => track.id === role) ? role : "";
   const [solo, setSolo] = useWorkspaceViewState<string[]>("audio.solo", []);
   const [start, setStart] = useWorkspaceViewState("audio.start", 0);
   const [end, setEnd] = useWorkspaceViewState("audio.end", Math.min(10,duration));
@@ -74,7 +75,7 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
         onUpdate: value => { if (!controller.signal.aborted && currentListenContext.current === context) setJob({ context: listenContext, value }); },
       });
       if (controller.signal.aborted || currentListenContext.current !== context) return;
-      onPreview({ base_version_id: versionId, action: "add", target_id: role,
+      onPreview({ base_version_id: versionId, action: "add", target_id: importTrackId,
         values: { source_ref: source.source_ref, name: source.name, source_start_ms: 0,
           source_end_ms: Math.min(source.duration_ms, Math.round(duration*1000)), timeline_start_ms: 0 } });
     } catch (cause) { if (!controller.signal.aborted && currentListenContext.current === context && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) setError(cause instanceof Error ? cause.message : "音频导入失败"); }
@@ -109,9 +110,9 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
   }
   const importControls = (
 <div className={ui.audioToolbar}>
-      <AppSelect aria-label="音频导入轨道" value={role} onValueChange={newValue => setRole(newValue)} disabled={busy || working}>{graph.tracks.map(track => <AppSelectOption key={track.id} value={track.id}>{track.name}</AppSelectOption>)}</AppSelect>
-      <button className={ui.button} type="button" disabled={busy || working} onClick={() => file.current?.click()}>导入音频</button>
-      <input ref={file} aria-label="选择音频文件" type="file" hidden accept=".wav,.mp3,.m4a,.aac,.flac" onChange={event => { const selected = event.target.files?.[0]; if (selected) void importAudio(selected); event.target.value=""; }} />
+      <AppSelect aria-label="音频导入轨道" value={importTrackId} onValueChange={newValue => setRole(newValue)} disabled={busy || working}><AppSelectOption value="">选择导入轨道</AppSelectOption>{graph.tracks.map(track => <AppSelectOption key={track.id} value={track.id}>{track.name}</AppSelectOption>)}</AppSelect>
+      <button className={ui.button} type="button" disabled={busy || working || !importTrackId} onClick={() => file.current?.click()}>导入音频</button>
+      <input ref={file} aria-label="选择音频文件" type="file" disabled={busy || working || !importTrackId} hidden accept=".wav,.mp3,.m4a,.aac,.flac" onChange={event => { const selected = event.target.files?.[0]; if (selected) void importAudio(selected); event.target.value=""; }} />
       {!sharedTimeScale ? <label>缩放<input aria-label="音轨缩放" type="range" min={1} max={4} step={.5} value={zoom} onChange={event => setZoom(Number(event.target.value))} /></label> : null}
     </div>
   );

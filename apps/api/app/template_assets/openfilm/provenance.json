@@ -1,0 +1,703 @@
+{
+  "repository": "https://github.com/openfilm/openfilm",
+  "revision": "758b1a3888819bf191db191f690c4ca2fcb292af",
+  "license": "CC0-1.0",
+  "files": [
+    {
+      "file": "lower-corporate.html",
+      "path": "packages/openfilm/library/text/lower-corporate/files/lower-corporate.html",
+      "blob_sha": "d5e4f12ca96e6ddb967e405360414147c4c7559d",
+      "sha256": "051aaa9e86f226467b6b8069cbde9f5736c2380d9cc3d0126036de61a92cc5c9"
+    },
+    {
+      "file": "lower-corporate.json",
+      "path": "packages/openfilm/library/text/lower-corporate/saved.json",
+      "blob_sha": "99861325d5cab901dfe64b436adfc42d6cb4acd5",
+      "sha256": "4d01e23650e066ea995e870bb05898e1357f8bb6d8e8c86d79029d6e000be16a"
+    },
+    {
+      "file": "chapter-number.html",
+      "path": "packages/openfilm/library/text/chapter-number/files/chapter-number.html",
+      "blob_sha": "c095051a2e2e8268417fd6476d6ab34bf5c529c1",
+      "sha256": "d11029a9c73b664bfdebc1dd392e738d5291c665559a003083e5d3e489f4ba1c"
+    },
+    {
+      "file": "chapter-number.json",
+      "path": "packages/openfilm/library/text/chapter-number/saved.json",
+      "blob_sha": "574282ac72a66390f241402ffa6d5a807e197db5",
+      "sha256": "347e795190cf56f004841e38bbaf5dfdeab83fd7d2c03613a6a496888c567edd"
+    },
+    {
+      "file": "callout-leader.html",
+      "path": "packages/openfilm/library/text/callout-leader/files/callout-leader.html",
+      "blob_sha": "e4f018ec0ac364317c623370417e61dcd71641f6",
+      "sha256": "93f525d2737c708c7a5d9a0193e47a669d0ab904454d4bbbc58164656ff76759"
+    },
+    {
+      "file": "callout-leader.json",
+      "path": "packages/openfilm/library/text/callout-leader/saved.json",
+      "blob_sha": "b6d08daf1b1b43924c77dfaf22c08e5d967f28c3",
+      "sha256": "2b6766f39e181df1e1b221632104b55b9b11fc5ee599f4ded489d6a22a958823"
+    },
+    {
+      "file": "info-count.html",
+      "path": "packages/openfilm/library/text/info-count/files/info-count.html",
+      "blob_sha": "a46e651594e20db0220a3e022306f7b496bd4fc6",
+      "sha256": "7f95ff33a4e7b8283ae752f9aa5addca7a1d18dcc6b38c94ecb9646aa73d393e"
+    },
+    {
+      "file": "info-count.json",
+      "path": "packages/openfilm/library/text/info-count/saved.json",
+      "blob_sha": "16366a3ebf456e660bde7691bdcf38701eb3d5e1",
+      "sha256": "17cf77996956125546913f1b77cc64de8956574434d774e68df31f6bd55e8c33"
+    },
+    {
+      "file": "shop-specs.html",
+      "path": "packages/openfilm/library/text/shop-specs/files/shop-specs.html",
+      "blob_sha": "602124e9e08a9859aa54f2591a68304e736f67f2",
+      "sha256": "3b1de67440e366feec5309a1f89e6b0807d08bbb6c29e46b89ce4d49a87aceb4"
+    },
+    {
+      "file": "shop-specs.json",
+      "path": "packages/openfilm/library/text/shop-specs/saved.json",
+      "blob_sha": "d6963c775ca9a71019c79d3d45786dcaf474393f",
+      "sha256": "4c978d86cd84d784229f1b3cff4487bbb9d2808f8a584cf87957c0884a254059"
+    },
+    {
+      "file": "end-thanks.html",
+      "path": "packages/openfilm/library/text/end-thanks/files/end-thanks.html",
+      "blob_sha": "56305fdcaffc70d8e760f7c6c66e4e4a7537ab30",
+      "sha256": "573d4e84663aeecaf213d95ec4a6985f021d3dcb1ab4112529cc81948ef1778a"
+    },
+    {
+      "file": "end-thanks.json",
+      "path": "packages/openfilm/library/text/end-thanks/saved.json",
+      "blob_sha": "8a27cf8166cf8169f4f5ad24c54d707521b5b3aa",
+      "sha256": "5c28198f34b6afde5cf741bbe3f1a0125f548861a654b93dfe2c165786e8926a"
+    },
+    {
+      "file": "title-stagger.html",
+      "path": "packages/openfilm/library/text/title-stagger/files/title-stagger.html",
+      "blob_sha": "bd133dba555c7e46ed226b00190dd9367d4940ce",
+      "sha256": "bb0beeef85043c18ea8709ddf722d0459643e9b001ee82e604cbd8c9b2c5adb1"
+    },
+    {
+      "file": "title-stagger.json",
+      "path": "packages/openfilm/library/text/title-stagger/saved.json",
+      "blob_sha": "35a9ca5eea715357e50675067b0984ddf39a98bd",
+      "sha256": "009cd7d155fb75a86fb8b5ada3ad2dafd84be12cbffe2a86dab1f91555993b9f"
+    },
+    {
+      "file": "title-split.html",
+      "path": "packages/openfilm/library/text/title-split/files/title-split.html",
+      "blob_sha": "9ce16aa86cd056a80a0a6d028917ba78a8f80f4c",
+      "sha256": "c18f0267165898b472b5e7214db3d0c30f19627cd6da8750f2c724dba8d5fb82"
+    },
+    {
+      "file": "title-split.json",
+      "path": "packages/openfilm/library/text/title-split/saved.json",
+      "blob_sha": "565111cce35890d9b6378b67313aabdbc38eb6d7",
+      "sha256": "3bee16481cca92e7a956e2ce9e5201f3273e689df5f16f6dcd570d7e6e199fef"
+    },
+    {
+      "file": "title-sweep.html",
+      "path": "packages/openfilm/library/text/title-sweep/files/title-sweep.html",
+      "blob_sha": "4c35ec664bba6dcf60b6497c291854d5964f9f04",
+      "sha256": "f18872de28754516a84c73a26c35a38c78170ff40212eb715d92654b7a323c8f"
+    },
+    {
+      "file": "title-sweep.json",
+      "path": "packages/openfilm/library/text/title-sweep/saved.json",
+      "blob_sha": "5a115266ffded9952136a84a9fdc4cf6c19bb3cd",
+      "sha256": "a0f53a71727ee916eccadacbbc69f8ee8b230fa3eb99d59c8f9a0cbd9801d1a2"
+    },
+    {
+      "file": "title-serif.html",
+      "path": "packages/openfilm/library/text/title-serif/files/title-serif.html",
+      "blob_sha": "b6a0ca3e878dde4db3ad6eab42ab8703b50a4bf5",
+      "sha256": "0831deb31df4bc3746c5b516cb74fe450b32f3edfae1813b98c397153e454ab9"
+    },
+    {
+      "file": "title-serif.json",
+      "path": "packages/openfilm/library/text/title-serif/saved.json",
+      "blob_sha": "1be5ee4764137b53c9050e5111b1ac369f8249b7",
+      "sha256": "a9c55c34ba0a0d16bb8d0bc1d365375030b6f23caf4825d70eb9bb7316fefbef"
+    },
+    {
+      "file": "title-slab.html",
+      "path": "packages/openfilm/library/text/title-slab/files/title-slab.html",
+      "blob_sha": "3c24ee4932d33916896aa0fc7687a580046cbd77",
+      "sha256": "ea79a8613af8a38febf0df30898350fe0a17360314b95b99415315e990d0c83f"
+    },
+    {
+      "file": "title-slab.json",
+      "path": "packages/openfilm/library/text/title-slab/saved.json",
+      "blob_sha": "3fdb995c6f6a53d89c6471fbc38f06478c395e0e",
+      "sha256": "b410a92d220d1f7882c44c48bde8cad816c68283a772a3e3660255b3c167d47a"
+    },
+    {
+      "file": "title-glitch.html",
+      "path": "packages/openfilm/library/text/title-glitch/files/title-glitch.html",
+      "blob_sha": "080cb066de8e9698880ec9c1dc1c4211f4cae1e9",
+      "sha256": "8e483e428596a20636a9ae260611cd7249cc4c0bcc82ddd6fd083be23351b5c5"
+    },
+    {
+      "file": "title-glitch.json",
+      "path": "packages/openfilm/library/text/title-glitch/saved.json",
+      "blob_sha": "66581ecd52946c6c742d45ec8b96bdfc08ad2cc3",
+      "sha256": "89a70d345e937ece3f7014bcd6fd1946773558d3e7558b6ceb9b7a2783ad62b4"
+    },
+    {
+      "file": "title-script.html",
+      "path": "packages/openfilm/library/text/title-script/files/title-script.html",
+      "blob_sha": "7012d2d976527ebb748bfadc110b6f2faa23895b",
+      "sha256": "12df49045c6f835007893397466bcfd9603834970f3d91692553e228c293d5ab"
+    },
+    {
+      "file": "title-script.json",
+      "path": "packages/openfilm/library/text/title-script/saved.json",
+      "blob_sha": "55bf7da646a50c3d980679f6fbd365e769bfdae3",
+      "sha256": "2dc5dcdc87ce7cc37e6637fbc7746fd1250d07bfbd374a61b055d7cc6e53ee02"
+    },
+    {
+      "file": "lower-vlog.html",
+      "path": "packages/openfilm/library/text/lower-vlog/files/lower-vlog.html",
+      "blob_sha": "380d4224c0fedbe10c3580331b57603cd52054ce",
+      "sha256": "f7f679630d7905e75b67f37b9cbd477f0dd6cc2a5081fb95e296096c5e726d8b"
+    },
+    {
+      "file": "lower-vlog.json",
+      "path": "packages/openfilm/library/text/lower-vlog/saved.json",
+      "blob_sha": "bd31e19850881ebaa885ea24876283be6fcb3b3b",
+      "sha256": "ae2d9f180e31fe947a55b728b1aef4a2d6de7eca735ce260fa84c95a33343173"
+    },
+    {
+      "file": "lower-news.html",
+      "path": "packages/openfilm/library/text/lower-news/files/lower-news.html",
+      "blob_sha": "6f3b9c41fd4c255aa5b942affb16527913077e5f",
+      "sha256": "17499ac13ff0e1a91042abca95d11c63cc3899728692d5af0f0b0917efe79a69"
+    },
+    {
+      "file": "lower-news.json",
+      "path": "packages/openfilm/library/text/lower-news/saved.json",
+      "blob_sha": "928fbce2ca5338b8ded97717e1e2ed55b245d6c9",
+      "sha256": "3e26ceb45a48b072af579393d6c4f629b8511fbee1ad87d437ab96751e2f85ab"
+    },
+    {
+      "file": "lower-elegant.html",
+      "path": "packages/openfilm/library/text/lower-elegant/files/lower-elegant.html",
+      "blob_sha": "c798727119a44859afa713a4aae2d0cf94b02d85",
+      "sha256": "ad9919e7d6e8a01f5230840222bb9a58de1cb87aef7b94f5115392145a231e01"
+    },
+    {
+      "file": "lower-elegant.json",
+      "path": "packages/openfilm/library/text/lower-elegant/saved.json",
+      "blob_sha": "7a96238c13bed5687936e9b4e79e93481288b7b3",
+      "sha256": "177294d3187c9cce3bf0c29cb85c8430beb09215b3d38264d9625014927a0eba"
+    },
+    {
+      "file": "lower-neon.html",
+      "path": "packages/openfilm/library/text/lower-neon/files/lower-neon.html",
+      "blob_sha": "9632be69ba09f916d030ebea60b1d6f7fb4c6c45",
+      "sha256": "ae9ba53ddc6239529b8c42544f40d7e8867bbfb223a76d2f74a0f3bce3176065"
+    },
+    {
+      "file": "lower-neon.json",
+      "path": "packages/openfilm/library/text/lower-neon/saved.json",
+      "blob_sha": "156ef9f55301c8c56c0bc31d91b0e3d50b0025a7",
+      "sha256": "6ee12bb8f93c680bae8b6a6d3254f452a7a9bf596cb780136a23e26ee961a63b"
+    },
+    {
+      "file": "lower-handle.html",
+      "path": "packages/openfilm/library/text/lower-handle/files/lower-handle.html",
+      "blob_sha": "d2489983f901129097fac36a9cd4e6e80d422be2",
+      "sha256": "54b77ca2d2673a92faa5df9fedc38ac2317990c03db0784f7f08bf35198fbfff"
+    },
+    {
+      "file": "lower-handle.json",
+      "path": "packages/openfilm/library/text/lower-handle/saved.json",
+      "blob_sha": "0381034dbc81cf29298e04cb551ef19b811e67ba",
+      "sha256": "f34f0bec4de8d0de76bcc24533132d9766ddb3ebefd060c24a854580649f7461"
+    },
+    {
+      "file": "lower-guest.html",
+      "path": "packages/openfilm/library/text/lower-guest/files/lower-guest.html",
+      "blob_sha": "68ffa56c990edbc5ab665324b1ae09ac6911e839",
+      "sha256": "ef963df7e705600d3f66c77ee956b4d488c9a8811669e8096c0c4271b0037bea"
+    },
+    {
+      "file": "lower-guest.json",
+      "path": "packages/openfilm/library/text/lower-guest/saved.json",
+      "blob_sha": "bf167d378c8c47242c38dc2a25feab00becc5e0a",
+      "sha256": "36257d4a4d8af3db32c65c00662f264db93289d37dcde29babe6575e4c33c27f"
+    },
+    {
+      "file": "callout-note.html",
+      "path": "packages/openfilm/library/text/callout-note/files/callout-note.html",
+      "blob_sha": "6c9bf72f3dac9d361707bdad3377f6adb959d69d",
+      "sha256": "0327dc58fc02c5938e1c58e0c202d6e5529625faeb33c23025532542033a68b1"
+    },
+    {
+      "file": "callout-note.json",
+      "path": "packages/openfilm/library/text/callout-note/saved.json",
+      "blob_sha": "3f335bd7d867643a6cd67404d7d7974acb5fc7dc",
+      "sha256": "d7d45e73b3dac6c8e7468e3ddb866c5ad70aec229ac56b6d25bc8207aee4d832"
+    },
+    {
+      "file": "callout-step.html",
+      "path": "packages/openfilm/library/text/callout-step/files/callout-step.html",
+      "blob_sha": "5ad78641508c38654e16c385ce7416872bcb3312",
+      "sha256": "61f22cc8a52e0ccdedbcd306041a48f87db92588f42015d1935ddf1f0d58932e"
+    },
+    {
+      "file": "callout-step.json",
+      "path": "packages/openfilm/library/text/callout-step/saved.json",
+      "blob_sha": "2098d4a09f4e204e32ca794ed995143b18a54186",
+      "sha256": "69d52558a225400e1de4d2870aa83ddacda6d11d7956a2196147a72bd806f367"
+    },
+    {
+      "file": "callout-tip.html",
+      "path": "packages/openfilm/library/text/callout-tip/files/callout-tip.html",
+      "blob_sha": "7eab5f24b0aa382f5cf375f214199759ff9ad0ef",
+      "sha256": "a9cbdadd3b73c76379da6063e178bac97839af4f568e0856b1e537347e07a975"
+    },
+    {
+      "file": "callout-tip.json",
+      "path": "packages/openfilm/library/text/callout-tip/saved.json",
+      "blob_sha": "06e0cf8f8c12d1f50c17b56404ef38b72e6627e9",
+      "sha256": "4e41354d77ea3c711393c94b3ccae896687f61e70ae1d9a23c7f527a99a3448f"
+    },
+    {
+      "file": "callout-proscons.html",
+      "path": "packages/openfilm/library/text/callout-proscons/files/callout-proscons.html",
+      "blob_sha": "9368678c30412832dbc74b732b8fd3798d1f100f",
+      "sha256": "eac285bb1a6bcf98aeecd257a00e7485bdb2792d925187ab7837408483dab3c5"
+    },
+    {
+      "file": "callout-proscons.json",
+      "path": "packages/openfilm/library/text/callout-proscons/saved.json",
+      "blob_sha": "e1e15356ea0a68aa5ecee324d43dda41496acbd0",
+      "sha256": "18e6989bfad2bb75c52b10d196532deb8722fd08ea5dcacb36c07ea665598923"
+    },
+    {
+      "file": "social-subscribe.html",
+      "path": "packages/openfilm/library/text/social-subscribe/files/social-subscribe.html",
+      "blob_sha": "f3b389856d8ef0c01e99490aaeadcce3289abc0f",
+      "sha256": "d5426e473a3ae6bee3be5adec6f88f851d7e89298104d93d3873bf807e5fdbf0"
+    },
+    {
+      "file": "social-subscribe.json",
+      "path": "packages/openfilm/library/text/social-subscribe/saved.json",
+      "blob_sha": "5f5cecda7571f6620348a9b889d90b2c18117f66",
+      "sha256": "069ce1e627761333616354e91536ab3f095e59747baaf396cf62c60b985820c5"
+    },
+    {
+      "file": "social-actions.html",
+      "path": "packages/openfilm/library/text/social-actions/files/social-actions.html",
+      "blob_sha": "e215046eeb5cb3104b5c3fcd5ed530bed19e3394",
+      "sha256": "7cb73f2925b9390d305f1301fa820a51644339b0a9cd43ed37a931f54fcb743b"
+    },
+    {
+      "file": "social-actions.json",
+      "path": "packages/openfilm/library/text/social-actions/saved.json",
+      "blob_sha": "e4534216b1ef3feb22a374b6487e891a742c1cf3",
+      "sha256": "005a763482b41f8b380dd7b11594882b305b9305f30de421d3d84f0e1285ad3c"
+    },
+    {
+      "file": "social-follow.html",
+      "path": "packages/openfilm/library/text/social-follow/files/social-follow.html",
+      "blob_sha": "6b311b468902950774d4e5633b4dd7a1d99b3fa6",
+      "sha256": "a89d04b6d7c45a380e706acee55ab5dbdefaabe8cf4ee94f5092b4b238a4d45b"
+    },
+    {
+      "file": "social-follow.json",
+      "path": "packages/openfilm/library/text/social-follow/saved.json",
+      "blob_sha": "dbf5b4b8cfb0a34167dd93d82a324d2640e45846",
+      "sha256": "0ef2b80c4d422e740e4b82a4503f4cd3b64365865a46903026a1e1ec3bb4b057"
+    },
+    {
+      "file": "social-swipe.html",
+      "path": "packages/openfilm/library/text/social-swipe/files/social-swipe.html",
+      "blob_sha": "11cd13e23382ecef7f1b66d53e17027137df9202",
+      "sha256": "db49fbce026050ea8924a2bb1c9c8692d4af28ae70c1b8a3e6324d2f7e6c144a"
+    },
+    {
+      "file": "social-swipe.json",
+      "path": "packages/openfilm/library/text/social-swipe/saved.json",
+      "blob_sha": "c97714a48fa249f6c9e874701b621bbb2d06550c",
+      "sha256": "1b49d67adba1cbeab1fd7375a4c4e9398546fd24c812e3c2a2e56b58c4d34dab"
+    },
+    {
+      "file": "social-linkbio.html",
+      "path": "packages/openfilm/library/text/social-linkbio/files/social-linkbio.html",
+      "blob_sha": "b30f6a49fc0c03bf9fee7a74123336a75e2eb312",
+      "sha256": "820c2c779d811b43fa46aadce6546b652f80aa72010caa27016e2e650e5e5e9c"
+    },
+    {
+      "file": "social-linkbio.json",
+      "path": "packages/openfilm/library/text/social-linkbio/saved.json",
+      "blob_sha": "f7cf2da829c79ae674e35ca152ffbdda10f61500",
+      "sha256": "03d4b293f384ef2a8e4d12bd07f9557dc24941b5e0ed5a48a9433dee687c977c"
+    },
+    {
+      "file": "shop-strike.html",
+      "path": "packages/openfilm/library/text/shop-strike/files/shop-strike.html",
+      "blob_sha": "b811d9f6dec2fbc83ca7e63785e642ad49f6f2f0",
+      "sha256": "70023aa1c114226ebae21ac4e57ad3c9e13c5d691ea9265fcd682400d5c84bf1"
+    },
+    {
+      "file": "shop-strike.json",
+      "path": "packages/openfilm/library/text/shop-strike/saved.json",
+      "blob_sha": "88474980409e09c62b47ad9136ea7c72fa1c2187",
+      "sha256": "67a658790b6cfe12b99ffe6df5dabaf7416c7bd3a3ab06e2227be41004d3bb02"
+    },
+    {
+      "file": "shop-burst.html",
+      "path": "packages/openfilm/library/text/shop-burst/files/shop-burst.html",
+      "blob_sha": "2cb7e2572ac6e70765cb9e1d24a72d603b1c397e",
+      "sha256": "21c87e690158e1164f7d52c90a88d70d2bfae10b7317a16351aadd475cf506cc"
+    },
+    {
+      "file": "shop-burst.json",
+      "path": "packages/openfilm/library/text/shop-burst/saved.json",
+      "blob_sha": "e0c2971b377ef12c5d5307b4c27c9f06d435f6d0",
+      "sha256": "01a4b9b7c62f7956ae00675ec4c9305784ee19e710da52be690bf987ea955e46"
+    },
+    {
+      "file": "shop-coupon.html",
+      "path": "packages/openfilm/library/text/shop-coupon/files/shop-coupon.html",
+      "blob_sha": "fc95a75e1c2acdee60dec2e9cab0277805630b60",
+      "sha256": "5116eaf047606c0919626906b0921fb86530491e887f0f5ea66575e8f66e7107"
+    },
+    {
+      "file": "shop-coupon.json",
+      "path": "packages/openfilm/library/text/shop-coupon/saved.json",
+      "blob_sha": "cea4bbb532fac8a11bda1d97b079437385531de9",
+      "sha256": "b204b8bc98aaf8beb873bc21dba777d8b949b48ed101a1065e2b2be6e23418b0"
+    },
+    {
+      "file": "shop-limited.html",
+      "path": "packages/openfilm/library/text/shop-limited/files/shop-limited.html",
+      "blob_sha": "a7458e993227e2aa3cd7f566d9f4fb41b30cf42c",
+      "sha256": "568c62cfd56e6574845770a412df5491314c9c9c01a275abc4c877071334396c"
+    },
+    {
+      "file": "shop-limited.json",
+      "path": "packages/openfilm/library/text/shop-limited/saved.json",
+      "blob_sha": "6b5bc5fd341c714f6fdb7d7e0a4a9f62674a6c9b",
+      "sha256": "66bcc598eae107d823912b5fb4abb45b74b6016f62ce6150ed2e5850e1a5a5d5"
+    },
+    {
+      "file": "shop-buy.html",
+      "path": "packages/openfilm/library/text/shop-buy/files/shop-buy.html",
+      "blob_sha": "58efab2d6796d95b89d52442154ef9732b06ee9e",
+      "sha256": "1d6ab80a5210da4c3daf6bc59ed3da4feeb939c3190045c78ebfb50759edb1ce"
+    },
+    {
+      "file": "shop-buy.json",
+      "path": "packages/openfilm/library/text/shop-buy/saved.json",
+      "blob_sha": "f1fbdb90dc7cb7aced29cf06d95e5e25012bc6b8",
+      "sha256": "8806e14be0c4118cabc217d9a032364e59ab214e83d68293210432e48b026807"
+    },
+    {
+      "file": "info-list.html",
+      "path": "packages/openfilm/library/text/info-list/files/info-list.html",
+      "blob_sha": "5bb056739b70b80d6aa224b7a7a0ccf371f47022",
+      "sha256": "edbc6a516f223adddfbab562642bc89902299796ea272cd1ce85cd955aa2673f"
+    },
+    {
+      "file": "info-list.json",
+      "path": "packages/openfilm/library/text/info-list/saved.json",
+      "blob_sha": "8bb2a7e112328dab5b8830079732a45e752e3b30",
+      "sha256": "7eb36621ba3f6d9088b8f452845d0a4bc9bf4387ad41a300d3d3df2c6f9932f5"
+    },
+    {
+      "file": "info-compare.html",
+      "path": "packages/openfilm/library/text/info-compare/files/info-compare.html",
+      "blob_sha": "17ce965591beb04632197f50cc379fadaab2b01a",
+      "sha256": "e92c108d2e497e96e6b1057386638a9cd13c3b8951c3beaafbc965463e87e3e9"
+    },
+    {
+      "file": "info-compare.json",
+      "path": "packages/openfilm/library/text/info-compare/saved.json",
+      "blob_sha": "5f14259bcf49cc836960b2ddbb928e05e070f68d",
+      "sha256": "15c125119ae05b80560fc06f45362ec3c35c8255e1f7f29a4c4f3018fbca2dc2"
+    },
+    {
+      "file": "info-timeline.html",
+      "path": "packages/openfilm/library/text/info-timeline/files/info-timeline.html",
+      "blob_sha": "6520f2dd9a77ad376dd6203e2b39ce9b688cded6",
+      "sha256": "e355a6968b78394ab02b7384a4a452e1a22e9f7541703d6118b6a3591c6c9718"
+    },
+    {
+      "file": "info-timeline.json",
+      "path": "packages/openfilm/library/text/info-timeline/saved.json",
+      "blob_sha": "ce1f59178672c229cad5d51c220061448e0124c0",
+      "sha256": "2ece8432869de5aea86b744b88daf9480fb02576e454feb4c77197c35c327af4"
+    },
+    {
+      "file": "info-define.html",
+      "path": "packages/openfilm/library/text/info-define/files/info-define.html",
+      "blob_sha": "2c250e699d6129cffd156aa2595786700cb9a4d1",
+      "sha256": "6cbff840be1244de18caaf030090130bd501e39d30dee5fa4bb1c0e22d9eab83"
+    },
+    {
+      "file": "info-define.json",
+      "path": "packages/openfilm/library/text/info-define/saved.json",
+      "blob_sha": "2da6184e777a59fe7ae8f3388ce95671a839517e",
+      "sha256": "28c338905362faefdf22b7afb5ffed37d33849c9089402668d479760d231ed62"
+    },
+    {
+      "file": "info-quote.html",
+      "path": "packages/openfilm/library/text/info-quote/files/info-quote.html",
+      "blob_sha": "590759b79eb88e627a56b78b61c29379df99b4e1",
+      "sha256": "356da674b1f98db7cc0c09c4aecb702feec62c3cbcc38af4cb3224db951d5603"
+    },
+    {
+      "file": "info-quote.json",
+      "path": "packages/openfilm/library/text/info-quote/saved.json",
+      "blob_sha": "5337650dd5eda6490f3c1ce340de2d82db6c36b6",
+      "sha256": "ed8a11f4b378cbd90522674935dd4591863ba5e09cf041854da0619d82f9518c"
+    },
+    {
+      "file": "chapter-later.html",
+      "path": "packages/openfilm/library/text/chapter-later/files/chapter-later.html",
+      "blob_sha": "b2f09ceb00a3d7e228e74e8df2f87d76049da876",
+      "sha256": "a8244e6366887234290313d11474ff7aaa3f97c154716afd63d83e4626586f44"
+    },
+    {
+      "file": "chapter-later.json",
+      "path": "packages/openfilm/library/text/chapter-later/saved.json",
+      "blob_sha": "43568eaf9398bd59f2cbe6876ec715818e955c20",
+      "sha256": "1d832b5bcccec1bab85344d4a54176851c80229855ecfa76eb18b29b2b9f420e"
+    },
+    {
+      "file": "chapter-part.html",
+      "path": "packages/openfilm/library/text/chapter-part/files/chapter-part.html",
+      "blob_sha": "177920b2256a6d61ad055bd6fbe6b270314c3b9e",
+      "sha256": "12320d9f335601614fd8b79d084616825d20d6d4ee5523d9570c0eab9252bfb5"
+    },
+    {
+      "file": "chapter-part.json",
+      "path": "packages/openfilm/library/text/chapter-part/saved.json",
+      "blob_sha": "da88cb9e4caab181486d95d015064f884a8a8046",
+      "sha256": "fd8f0987d36ba3412d20ccfa0c82e06c08bc8f06e7e44a8b380101edd4718199"
+    },
+    {
+      "file": "end-credits.html",
+      "path": "packages/openfilm/library/text/end-credits/files/end-credits.html",
+      "blob_sha": "739b165538bbdb6a24db7e10ac70615e573ea503",
+      "sha256": "b20fcac3f195179dfd4f35ca9237a51140be98605ec5b3f322d5aaa1f220e5b8"
+    },
+    {
+      "file": "end-credits.json",
+      "path": "packages/openfilm/library/text/end-credits/saved.json",
+      "blob_sha": "ca927b5bca0a6094071ed00eefeab3a392e7e978",
+      "sha256": "fbfb1d5369556b57ef24382aeb348516c5992a22df8ed5242b9e346c247e2d37"
+    },
+    {
+      "file": "end-seeyou.html",
+      "path": "packages/openfilm/library/text/end-seeyou/files/end-seeyou.html",
+      "blob_sha": "fffc8ca6cdaadf838f83b123709855d849e6167d",
+      "sha256": "8347e338ebe0372c8b20bb3fbac1204b3e6aa66ba430f3c62f4f7f4a25967488"
+    },
+    {
+      "file": "end-seeyou.json",
+      "path": "packages/openfilm/library/text/end-seeyou/saved.json",
+      "blob_sha": "7951cad79dca5cfe6921871a3af934b95d1048d5",
+      "sha256": "8a2d4062f818430fb08f81ae7c8b871329b4734f11031443056fb5fe83a65338"
+    },
+    {
+      "file": "var-wow.html",
+      "path": "packages/openfilm/library/text/var-wow/files/var-wow.html",
+      "blob_sha": "720e3942851138fe06c36fc4648c0a998e545bcc",
+      "sha256": "18bcf504fd13105bf5d257cb0cd60ac72eb5126c21fd636b16d2259a37d6b58a"
+    },
+    {
+      "file": "var-wow.json",
+      "path": "packages/openfilm/library/text/var-wow/saved.json",
+      "blob_sha": "664eff833263fd949742c18f182049ad01f8d91a",
+      "sha256": "95c1cdd853e596129ad6b1920a3727d5d6992a07002dac22eaa33d007b987ec2"
+    },
+    {
+      "file": "var-noway.html",
+      "path": "packages/openfilm/library/text/var-noway/files/var-noway.html",
+      "blob_sha": "55ee735c6ea03fbed458b2caed4e913b4952e0bf",
+      "sha256": "facdafae8c23b61edd6491948bdc90b32a7b2b51aa03cf61faea0fbaa1dba777"
+    },
+    {
+      "file": "var-noway.json",
+      "path": "packages/openfilm/library/text/var-noway/saved.json",
+      "blob_sha": "75e1904315e836318727f2d705cdbe32ec4ce798",
+      "sha256": "18f24c59f6d0f5cddf3608e79b31a7ec27eb024d66cd8125a45bf8e21182f388"
+    },
+    {
+      "file": "var-lol.html",
+      "path": "packages/openfilm/library/text/var-lol/files/var-lol.html",
+      "blob_sha": "aa0010501982b4d0e6581258f96d0b74c4ffbd8c",
+      "sha256": "81426060a621a53b2015e1e8ce4179b6f34427ca4f429938d1c6408216d2153d"
+    },
+    {
+      "file": "var-lol.json",
+      "path": "packages/openfilm/library/text/var-lol/saved.json",
+      "blob_sha": "edbc53cd40612b80c499a62f6980d25b86e7b527",
+      "sha256": "1e54484a96a67bfe3901187210aa038dcbb98a9513fc381da194b0fafbcff3f3"
+    },
+    {
+      "file": "var-omg.html",
+      "path": "packages/openfilm/library/text/var-omg/files/var-omg.html",
+      "blob_sha": "655c503f05a9dd2b30be3312451f4a63901122f3",
+      "sha256": "2c301afe2c2593f56daef57a00618de8397abe271bf96b356da05a9f10c9fe17"
+    },
+    {
+      "file": "var-omg.json",
+      "path": "packages/openfilm/library/text/var-omg/saved.json",
+      "blob_sha": "775f8a6b6e350c0c32ae76b859247febc8654d79",
+      "sha256": "c265b2ab2686562ded8223595671add5528f5428b58e7e57bc454b3a47b15575"
+    },
+    {
+      "file": "chat-thread.html",
+      "path": "packages/openfilm/library/text/chat-thread/files/chat-thread.html",
+      "blob_sha": "2f62cd1beafbe236be5288abc2f4179f14809b56",
+      "sha256": "b555ac1d34a224600f8880ad6dd8cfb6cc678e125c5159152c281f772a253c90"
+    },
+    {
+      "file": "chat-thread.json",
+      "path": "packages/openfilm/library/text/chat-thread/saved.json",
+      "blob_sha": "9a731d56646b964803d6d099dc31966a5235f93a",
+      "sha256": "bf2d44294e659d18afaffd7c7598d3d9172dc5b2982455babb6e917bc601d857"
+    },
+    {
+      "file": "chat-notify.html",
+      "path": "packages/openfilm/library/text/chat-notify/files/chat-notify.html",
+      "blob_sha": "e9c154d2b72bb6103d262dad3ad0a68972685d12",
+      "sha256": "db657f4062bde914aaedaa8d9e55a6791ecfa30a78ec478b4c1aea0b3e474976"
+    },
+    {
+      "file": "chat-notify.json",
+      "path": "packages/openfilm/library/text/chat-notify/saved.json",
+      "blob_sha": "f5cebb8c803045a4505577f80627cc72e34d1786",
+      "sha256": "52d10583d7dda2fc46722e4f872a5c14097fdb206d877a5487f806ceb7e88199"
+    },
+    {
+      "file": "chat-thought.html",
+      "path": "packages/openfilm/library/text/chat-thought/files/chat-thought.html",
+      "blob_sha": "5451116dca857c93c2d6faebf59b72f9dc038c3f",
+      "sha256": "5af60f499f6bb4c52c3b8665e585ca8a190a668c8d486de8e396a6453d96288a"
+    },
+    {
+      "file": "chat-thought.json",
+      "path": "packages/openfilm/library/text/chat-thought/saved.json",
+      "blob_sha": "6e9365676617b8c1503559e63c75f0f0946dd552",
+      "sha256": "2ef27e8d4031aacf976291c680d242344f5910d6f66112e1b44fc9670b7df88c"
+    },
+    {
+      "file": "news-breaking.html",
+      "path": "packages/openfilm/library/text/news-breaking/files/news-breaking.html",
+      "blob_sha": "b92061649e8896604946990a3735dbf89f3ad82e",
+      "sha256": "1e31a81bc0f79e6257aadd7ee9af5b7f9b428d948209f84ddcee4c4201fcfe47"
+    },
+    {
+      "file": "news-breaking.json",
+      "path": "packages/openfilm/library/text/news-breaking/saved.json",
+      "blob_sha": "509ec02761ac5905f8ca7a5bcecf01a82687552e",
+      "sha256": "b68a6c9e87af927951a40baae23c04fd8f76ef87598f28f83d50ccb187c45260"
+    },
+    {
+      "file": "news-ticker.html",
+      "path": "packages/openfilm/library/text/news-ticker/files/news-ticker.html",
+      "blob_sha": "0ebf0da583461f0fbdd6ed60011dc52f06ab44bc",
+      "sha256": "9e8ccf8fc48afc337f58212b1d6ec37da891babc7777d581188b24afb727e35b"
+    },
+    {
+      "file": "news-ticker.json",
+      "path": "packages/openfilm/library/text/news-ticker/saved.json",
+      "blob_sha": "4f356e8b898d845c34f5e0582a4eb4dc0003c40e",
+      "sha256": "572e67aa6286538525d9f9ef85b219d71cc55f1e9a8a9a98098bfc9e8701c536"
+    },
+    {
+      "file": "news-headline.html",
+      "path": "packages/openfilm/library/text/news-headline/files/news-headline.html",
+      "blob_sha": "b137dcbe38d7eeec7f5e5bfac99bf2f42582f770",
+      "sha256": "b98a391b6a1112eb450a8975bc055cb4b36f345a9e301be4dada69f330a0b742"
+    },
+    {
+      "file": "news-headline.json",
+      "path": "packages/openfilm/library/text/news-headline/saved.json",
+      "blob_sha": "ae19a8bdaf1eee760ee890cba0d5084d50b417c1",
+      "sha256": "4f0b985ecd0de168f4bf9897735f297cb7b212a9f739a4552373b70d542e0866"
+    },
+    {
+      "file": "place-pin.html",
+      "path": "packages/openfilm/library/text/place-pin/files/place-pin.html",
+      "blob_sha": "1b97750e20258ec3740add36f51726a89ead7122",
+      "sha256": "817cd4e9c3342a03225c34cce860ba01cc95f7d66beb9dcf0ba0311bac3558bf"
+    },
+    {
+      "file": "place-pin.json",
+      "path": "packages/openfilm/library/text/place-pin/saved.json",
+      "blob_sha": "d2d1572b2e01992e3babf6f5e282ac5df25e48f9",
+      "sha256": "346a2603636af340293429f1cc5b44fd74d5a596ab2963c756445fd72844e5cc"
+    },
+    {
+      "file": "place-date.html",
+      "path": "packages/openfilm/library/text/place-date/files/place-date.html",
+      "blob_sha": "b1ff391a90e6279151391ee6fc67a9d2fc453d6b",
+      "sha256": "ea63a61532e8ff20942f13864a17551b99df74bb02331a9327d9af53a18ebe50"
+    },
+    {
+      "file": "place-date.json",
+      "path": "packages/openfilm/library/text/place-date/saved.json",
+      "blob_sha": "a909507e829195d58c972890c04efaddae36a5cf",
+      "sha256": "8e2f63280a1e53cdea28b1691021dd64923fbb8e40f65f49f15017e93ab4c3f5"
+    },
+    {
+      "file": "place-weather.html",
+      "path": "packages/openfilm/library/text/place-weather/files/place-weather.html",
+      "blob_sha": "bf2480539fa196aee28bc998754207b284536276",
+      "sha256": "6e9020e6cf3639dc6e65e91d9dad681b2f98533c208afe0fd52477d047fff895"
+    },
+    {
+      "file": "place-weather.json",
+      "path": "packages/openfilm/library/text/place-weather/saved.json",
+      "blob_sha": "d7b649be1c620f93322bb74e217c0dd81b80c7b3",
+      "sha256": "dfb52230cab6729aa7b73ba4d3137980d64f7389777cb8eeac7d5a086d8df0c4"
+    },
+    {
+      "file": "fest-newyear.html",
+      "path": "packages/openfilm/library/text/fest-newyear/files/fest-newyear.html",
+      "blob_sha": "4fc0a790f8ab261c0e73d9f0c3eb583982057655",
+      "sha256": "6f4cfd87f2b36b8dc69843044038ee21565c54e1a34f64923f847ecd51c67f42"
+    },
+    {
+      "file": "fest-newyear.json",
+      "path": "packages/openfilm/library/text/fest-newyear/saved.json",
+      "blob_sha": "216a52097f648205acd046a7ede41524900ecf54",
+      "sha256": "cf811874e92606848c6c00ac50945b3d81ee51135deaf6fa3b0f8e69d3b201e6"
+    },
+    {
+      "file": "fest-xmas.html",
+      "path": "packages/openfilm/library/text/fest-xmas/files/fest-xmas.html",
+      "blob_sha": "5046184b7d261ef84fec7eefd8114ab1da298b75",
+      "sha256": "c74635f0337f9b1308b1295c09cef9b8715a01f269550c757a1a8c4e1eeeac09"
+    },
+    {
+      "file": "fest-xmas.json",
+      "path": "packages/openfilm/library/text/fest-xmas/saved.json",
+      "blob_sha": "1c98d88262945b8902279f2138fd79c43c774bf0",
+      "sha256": "837a8aa31e13996cbdd4a6dcb078f6548ac0de9de6e4fb79775e1ee838b6ffdc"
+    },
+    {
+      "file": "fest-birthday.html",
+      "path": "packages/openfilm/library/text/fest-birthday/files/fest-birthday.html",
+      "blob_sha": "766f4b52058c0744692343fb38f12d3e1c64f29e",
+      "sha256": "de3311cb6cd0cdb29c047199cd7e1358f6cada8894595d2bd79652a6a8f86be5"
+    },
+    {
+      "file": "fest-birthday.json",
+      "path": "packages/openfilm/library/text/fest-birthday/saved.json",
+      "blob_sha": "1f225aa289f45af66783aaa4854ad261586747f7",
+      "sha256": "70ce64c60e888a3375e7aa30375cbf73bbf48cf67444d89d6a539bbcb6d63dbd"
+    }
+  ]
+}

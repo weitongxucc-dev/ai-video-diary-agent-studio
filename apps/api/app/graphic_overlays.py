@@ -5,6 +5,7 @@ import re
 from uuid import uuid4
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.creation.visual_template_contracts import VisualTemplateOverlay, slice_template_motion
 
 
 class TextOverlay(BaseModel):
@@ -71,6 +72,8 @@ class ArrowOverlay(BaseModel):
 
 def parse_overlay(value):
     kind=value.get('kind')
+    if kind=='template':
+        return VisualTemplateOverlay.model_validate(value)
     if kind=='image':
         return ImageOverlay.model_validate(value)
     if kind=='arrow':
@@ -106,7 +109,7 @@ def validate_overlays(values, duration):
         raise ValueError('叠加层最多30个，标识不能重复')
     if any(item.end_seconds>duration+.001 for item in overlays):
         raise ValueError('叠加层显示区间超出成片，请调整结束时间')
-    return overlays
+    return sorted(overlays, key=lambda item: getattr(item, 'z_index', 0))
 
 
 def write_text_overlay(value, output: Path, size):
@@ -183,7 +186,9 @@ def splice_overlays(values, intervals):
             if right-left>=40:
                 parts.append((left,right,new_start+left-old_start))
         for index,(left,right,at) in enumerate(parts):
-            result.append({**value,'id':value['id'] if index==0 else f'overlay_{uuid4().hex[:12]}',
+            sliced = (slice_template_motion(value, (left-start)/1000, (right-left)/1000)
+                if value.get('kind') == 'template' else value)
+            result.append({**sliced,'id':value['id'] if index==0 else f'overlay_{uuid4().hex[:12]}',
                 'start_seconds':at/1000,'end_seconds':(at+right-left)/1000})
     return result
 

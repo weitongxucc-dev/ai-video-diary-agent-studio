@@ -125,6 +125,7 @@ describe("editing proposal input ownership", () => {
     const input = await screen.findByRole("textbox", { name: "局部修改要求" });
     await waitFor(() => expect(input).toBeEnabled());
     fireEvent.change(input, { target: { value: "删除当前镜头" } });
+    fireEvent.click(screen.getByRole("button", { name: "展开镜头列表" }));
     fireEvent.click(screen.getByRole("button", { name: "选择镜头 1" }));
     if (origin === "exact") {
       fireEvent.click(screen.getByRole("button", { name: "查看详情" }));

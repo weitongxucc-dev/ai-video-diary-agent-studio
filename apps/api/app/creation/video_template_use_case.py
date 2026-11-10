@@ -17,6 +17,9 @@ from app.creation.plan_contracts import CreationPlan
 from app.source_policy import knowledge_item_readable as content_readable
 from app.creation.contracts import CreationTask
 from app.visual_effects import reusable_color_settings
+from app.creation.visual_template_contracts import VisualTemplate
+from app.creation.visual_template_catalog import visual_templates
+from app.creation.visual_template_reuse import reusable_components
 
 
 VideoTemplateRejectionCode = Literal["field_builtin_readonly", "field_not_owner", "task_not_rendered",
@@ -34,13 +37,19 @@ class VideoTemplateUseCase:
         self.production = production
 
     def builtin_templates(self, workspace_id: str) -> list[VideoTemplate]:
-        return [VideoTemplate(
+        structures = [VideoTemplate(
             id=f"builtin_{item.template_id}", workspace_id=workspace_id, version=1,
             name=item.name, origin="built_in",
             settings={"language": "zh-CN", "aspect_ratio": "9:16", "duration_target_seconds": 60,
                       "script_structure": item.script_structure, "style_instruction": item.scenario,
                       "fit_mode": "fill", "subtitle_style": default_subtitle_style(), "voice": None},
         ) for item in list_content_templates()]
+        return structures + [VideoTemplate(id=f'builtin_visual_{identity}', workspace_id=workspace_id,
+            version=1, name=name, origin='built_in', settings={
+                'kind': 'visual_component', 'visual': definition.model_dump(), 'language': 'zh-CN',
+                'aspect_ratio': '9:16', 'duration_target_seconds': 60, 'style_instruction': '',
+                'fit_mode': 'fill', 'subtitle_style': default_subtitle_style(), 'voice': None})
+            for identity, name, definition in visual_templates()]
 
     def builtin_template(self, workspace_id: str, template_id: str, version: int) -> VideoTemplate | None:
         for item in self.builtin_templates(workspace_id):
@@ -56,14 +65,38 @@ class VideoTemplateUseCase:
             raise KeyError(template_id)
 
     def append_version(self, previous: VideoTemplate, *, expected_version: int, name: str,
-                       style_instruction: str, user_id: str | None) -> VideoTemplate:
+                       style_instruction: str, user_id: str | None, visual: VisualTemplate | None = None,
+                       write_guard=None) -> VideoTemplate:
         if previous.origin != "user":
             raise VideoTemplateRejected("field_builtin_readonly", "内置模板只读，请从真实任务另存我的模板。")
         if user_id is None or previous.owner_user_id != user_id:
             raise VideoTemplateRejected("field_not_owner", "只有这个模板的所有者可以编辑并保存新版本。")
+        if visual is not None and previous.settings.get('kind') != 'visual_component':
+            raise ValueError('制作结构不能替换为视觉组件，请另存组件模板')
+        if visual is not None:
+            prior = VisualTemplate.model_validate(previous.settings['visual'])
+            if not all(item in visual.provenance for item in prior.provenance):
+                raise ValueError('修改源码必须保留原始来源与许可证记录')
         updated = replace(previous,version=expected_version+1,name=name,created_at=datetime.now(UTC),
-                          settings={**previous.settings,"style_instruction":style_instruction})
-        return self._save(updated, verified_owner_user_id=user_id, local_diagnostic=False)
+                          settings={**previous.settings,"style_instruction":style_instruction,
+                              **({'visual': visual.model_dump()} if visual is not None else {})})
+        return self._save(updated, verified_owner_user_id=user_id, local_diagnostic=False, write_guard=write_guard)
+
+    def save_visual_copy(self, previous, *, template_id, name, visual, user_id, write_guard=None):
+        if user_id is None:
+            raise PermissionError('保存视觉模板需要当前成员身份')
+        prior = VisualTemplate.model_validate(previous.settings.get('visual'))
+        if not all(item in visual.provenance for item in prior.provenance):
+            raise ValueError('另存源码必须保留原始来源与许可证记录')
+        template = VideoTemplate(id=template_id, workspace_id=previous.workspace_id, version=1,
+            name=name, origin='user', settings={**previous.settings, 'visual': visual.model_dump()})
+        try:
+            existing = self.production.video_templates.get_video_template(previous.workspace_id, template_id, 1)
+        except KeyError:
+            return self._save(template, verified_owner_user_id=user_id, local_diagnostic=False, write_guard=write_guard)
+        if (existing.owner_user_id != user_id or existing.name != name or existing.settings != template.settings):
+            raise ValueError('原保存请求已用于其他模板，请查询原模板，不重复覆盖')
+        return existing
 
     def rendered_source(self, workspace_id: str, task_id: str, task: CreationTask) -> CreationTaskMontagePlan:
         try:
@@ -109,7 +142,8 @@ class VideoTemplateUseCase:
             id=template_id or f"template_{uuid4().hex[:12]}", workspace_id=workspace_id,
             version=(expected_version or 0) + 1, name=name.strip(), origin="user",
             source_task_id=task_id, source_timeline_version_id=task.current_timeline_version_id,
-            settings={"language": plan.language, "aspect_ratio": montage.aspect_ratio,
+            settings={"kind": "composition", "visual_components": reusable_components(montage),
+                      "language": plan.language, "aspect_ratio": montage.aspect_ratio,
                       "duration_target_seconds": plan.duration_target_seconds,
                       "presenter_share_target": plan.presenter_share_target,
                       "lipsync_quality": plan.lipsync_quality,
@@ -128,9 +162,9 @@ class VideoTemplateUseCase:
                           local_diagnostic=local_diagnostic)
 
     def _save(self, template: VideoTemplate, *, verified_owner_user_id: str | None,
-              local_diagnostic: bool) -> VideoTemplate:
+              local_diagnostic: bool, write_guard=None) -> VideoTemplate:
         try:
             return self.production.video_templates.save_video_template(template,
-                verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic)
+                verified_owner_user_id=verified_owner_user_id, local_diagnostic=local_diagnostic, write_guard=write_guard)
         except ValueError as exc:
             raise VideoTemplateRejected("persist_conflict", str(exc)) from exc

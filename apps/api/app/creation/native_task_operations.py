@@ -35,6 +35,19 @@ def file_hash(path):
         return hashlib.file_digest(source,'sha256').hexdigest()
 
 
+def native_environment(root, tools):
+    """Same sealed toolchain paths for preparation and ordinary task commands."""
+    directories = [Path(item['path']).parent for item in tools.values() if item['available']]
+    environment = {'PATH':os.pathsep.join(dict.fromkeys([*(str(path) for path in directories),'/usr/bin','/bin','/usr/sbin','/sbin'])),
+        'HOME':str(root/'tmp'),'TMPDIR':str(root/'tmp'),'LANG':'en_US.UTF-8','PYTHONDONTWRITEBYTECODE':'1'}
+    python = tools.get('python',{})
+    if python.get('available'):
+        packages = list((Path(python['runtime_root'])/'lib').glob('python*/site-packages'))
+        if len(packages)==1:
+            environment['PYTHONPATH']=str(packages[0])
+    return environment
+
+
 def actual_mime(path):
     """Inspect bytes before selecting a model-readable text or local media path."""
     with path.open('rb') as source:
@@ -615,14 +628,7 @@ class NativeTaskOperations:
                 result['exit_code']=0
             else:
                 profile = self.sandbox(root,job,event['arguments']['_tools'])
-                tools = [Path(item['path']).parent for item in event['arguments']['_tools'].values() if item['available']]
-                environment = {'PATH':os.pathsep.join(dict.fromkeys([*(str(path) for path in tools),'/usr/bin','/bin','/usr/sbin','/sbin'])),
-                    'HOME':str(root/'tmp'),'TMPDIR':str(root/'tmp'),'LANG':'en_US.UTF-8','PYTHONDONTWRITEBYTECODE':'1'}
-                python = event['arguments']['_tools'].get('python',{})
-                if python.get('available'):
-                    packages = list((Path(python['runtime_root'])/'lib').glob('python*/site-packages'))
-                    if len(packages)==1:
-                        environment['PYTHONPATH']=str(packages[0])
+                environment = native_environment(root,event['arguments']['_tools'])
                 def on_output(stream,data):
                     with (root/'control'/f'{job.id}.jsonl').open('ab') as target:
                         target.write(json.dumps({'stream':stream,'text':data.decode('utf-8',errors='replace')},ensure_ascii=False).encode()+b'\n')
@@ -793,11 +799,11 @@ class NativeTaskOperations:
             if mime.startswith('image/'):
                 from PIL import Image
                 with Image.open(path) as image:
-                    if max(image.size)>8192:
+                    if max(image.size)>8192 or image.width*image.height>24_000_000:
                         raise ValueError('图片超过现有图层来源的尺寸范围')
-                    extra = {'width':image.width,'height':image.height}
+                    extra = {'width':image.width,'height':image.height,'name':path.name[:120]}
                     image.verify()
-                kind='graphic_source'
+                kind='graphic_source' if mime=='image/png' else 'native_image'
             elif mime.startswith(('video/','audio/')):
                 ffprobe = event['arguments']['_tools'].get('ffprobe',{}).get('path')
                 if not ffprobe:
@@ -823,6 +829,9 @@ class NativeTaskOperations:
             if published.sha256!=sha or published.size_bytes!=source_output['size_bytes']:
                 raise ValueError('登记期间工作文件已变化，未采用新内容')
             source_job = self.repository.job_records.get_job_run(job.workspace_id,arguments['execution_job_id'])
+            published_stat = self.store.resolve_file(published.logical_ref).stat()
+            extra['file_revision'] = {'size_bytes': published_stat.st_size,
+                'mtime_ns': published_stat.st_mtime_ns, 'ctime_ns': published_stat.st_ctime_ns}
             source_event = self.repository.execution_records.get_task_event(job.workspace_id,f'event_{source_job.id}_start').payload
             input_refs = [*source_job.output_refs,*source_event['arguments'].get('_input_refs',[])]
             artifact = ArtifactRecord(id=f'artifact_{job.id}_{index}',workspace_id=job.workspace_id,task_id=job.task_id,
@@ -830,7 +839,7 @@ class NativeTaskOperations:
                 producer_job_id=job.id,input_refs=input_refs,created_at=job.created_at)
             now=utc_now()
             transform = TransformRun(id=f'transform_{job.id}_{index}',workspace_id=job.workspace_id,task_id=job.task_id,
-                job_id=job.id,transform_type='graphic_import' if kind=='graphic_source' else 'native_artifact_registration',
+                job_id=job.id,transform_type='native_artifact_registration',
                 input_digest=job.input_digest,input_refs=input_refs,output_refs=[artifact.logical_ref],engine='native_task_command',
                 parameters={'source_execution_job_id':source_job.id,'source_input_digest':source_job.input_digest,'owner_member_id':actor.user_id or actor.member_id,
                     'mime_type':mime,'role':item['role'],**extra},status='succeeded',started_at=job.created_at,finished_at=now)

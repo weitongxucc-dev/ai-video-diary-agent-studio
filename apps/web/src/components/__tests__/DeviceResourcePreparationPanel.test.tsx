@@ -65,14 +65,18 @@ it('persists the complete input before POST and retries an unknown result with e
 });
 
 it('restores unknown submissions after refresh without automatically submitting a replacement', async () => {
-  localStorage.setItem(key(), JSON.stringify({ scope, payload }));
+  const original={...payload,shape:{...payload.shape,overlay_count:3,template_count:1,native_command:true}};
+  localStorage.setItem(key(), JSON.stringify({ scope, payload:original }));
   render(<DeviceResourcePreparationPanel/>);
   await screen.findByRole('button', { name: '继续核对原请求' });
   expect(screen.getByRole('spinbutton', { name: '处理时长（秒）' })).toHaveValue(17);
+  expect(screen.getByRole('spinbutton', { name: '图文与字幕总层数' })).toHaveValue(3);
+  expect(screen.getByRole('spinbutton', { name: '动画模板层数' })).toHaveValue(1);
+  expect(screen.getByRole('checkbox', { name: '同时准备程序化制作' })).toBeChecked();
   expect(api.prepare).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: '继续核对原请求' }));
   await screen.findByText('已排队，等待设备');
-  expect(api.prepare).toHaveBeenCalledWith(payload, scope);
+  expect(api.prepare).toHaveBeenCalledWith(original, scope);
   expect(crypto.randomUUID).not.toHaveBeenCalled();
 });
 

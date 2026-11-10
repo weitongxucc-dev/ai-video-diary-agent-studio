@@ -99,8 +99,6 @@ export function MaterialLibraryWorkspace({
   const [detailError, setDetailError] = useState("");
   const persistentReference = useAssistantMaterialReference();
   const referenceSelection = useAssistantSelection();
-  const setMaterialReference = persistentReference?.setReference;
-  const lastPublishedSelection = useRef<MaterialAssistantSelection | null>(null);
   const [assistantSelection, setAssistantSelection] = useState<MaterialAssistantSelection | null>(null);
   const [assetTagDrafts, setAssetTagDrafts] = useWorkspaceViewState<Record<string, string>>("library.assetTagDrafts", {});
   const [assetTagErrors, setAssetTagErrors] = useState<Record<string, string>>({});
@@ -179,25 +177,9 @@ export function MaterialLibraryWorkspace({
   const tagDraft = tagDrafts[tagScope] ?? "";
   const tagError = tagErrors[tagScope] ?? "";
   const visible = assets;
-  const materialAssistantSelection = assistantSelection && selected?.id === assistantSelection.asset_id
-    && (assistantSelection.scope === "asset"
-      || selected.segments.some((segment) => segment.id === assistantSelection.segment_id))
-    ? assistantSelection
-    : null;
-  const materialAssistantLabel = materialAssistantSelection && selected
-    ? materialAssistantSelection.scope === "asset"
-      ? `整条素材 · ${fileLabel(selected.file_name)}`
-      : `${fileLabel(selected.file_name)} · 片段 ${duration(selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.start_seconds)}–${duration(selected.segments.find((segment) => segment.id === materialAssistantSelection.segment_id)!.end_seconds)}`
-    : null;
-
-  useEffect(() => {
-    if (!materialAssistantSelection || !materialAssistantLabel || !selected) return;
-    // Freeze the actual version at this explicit selection; refresh must not rebind it.
-    if (lastPublishedSelection.current === materialAssistantSelection) return;
-    lastPublishedSelection.current = materialAssistantSelection;
-    const segment = materialAssistantSelection.scope === "segment" ? selected.segments.find(item => item.id === materialAssistantSelection.segment_id) : null;
-    setMaterialReference?.({label: materialAssistantLabel, selection: { ...materialAssistantSelection, expected_updated_at: selected.updated_at, ...(segment ? { expected_segment_updated_at: segment.updated_at } : {}) }});
-  }, [materialAssistantSelection, materialAssistantLabel, selected, setMaterialReference]);
+  // Browsing and editing the library never change the explicitly attached references.
+  const materialAssistantSelection = persistentReference?.reference?.selection ?? null;
+  const materialAssistantLabel = persistentReference?.reference?.label ?? null;
 
   useEffect(() => {
     let active = true;
@@ -214,7 +196,6 @@ export function MaterialLibraryWorkspace({
         const segment = target.scope === "segment" ? asset.segments.find(item => item.id === target.segment_id) : asset.segments[0];
         if (target.scope === "segment" && !segment) throw new Error("引用的片段已不存在，请重新选择。");
         // Locating an existing capsule must not silently freeze a newer version.
-        lastPublishedSelection.current = target;
         setLocatedAsset(asset);
         setAssets(current => current.map(item => item.id === asset.id ? asset : item));
         setSelectedId(asset.id); setSelectedSegmentId(segment?.id ?? "");
@@ -779,6 +760,7 @@ export function MaterialLibraryWorkspace({
         <p className={styles.analysisMessage} role="status">{analysisMessage(selected)}</p>
       ) : null}
       {detailError ? <div className="library-error" role="alert"><AlertCircle size={15} />{detailError}</div> : null}
+      <details className={styles.detailSection}><summary>标签、说明与分类</summary>
       <MaterialAssetTags tags={selected.user_tags} error={assetTagErrors[selected.id]} draft={assetTagDrafts[selected.id] ?? ""} pending={assetTagsPendingId !== null} saving={assetTagsPendingId === selected.id} onRemove={tag => void saveAssetTags(selected, selected.user_tags.filter(entry => entry !== tag))} onDraftChange={value => setAssetTagDrafts(current => ({ ...current, [selected.id]: value }))} onAdd={() => void addAssetTag(selected)} />
       <MaterialNotesEditor draft={noteDraft} uploadContext={selected.upload_context} error={noteErrors[selected.id]} saved={noteSaved[selected.id]} saving={notesPending} disabled={busy !== null} voiceNoteActive={voiceNote?.assetId === selected.id} voiceNoteNotice={voiceNoteNotice} onDraftChange={value => changeAssetNote(selected.id, value)} onStartVoiceNote={() => startVoiceNote(selected.id)} onRecorded={async blob => { if (voiceNote) await receiveVoiceNote(voiceNote, blob); }} onCancelVoiceNote={cancelSpokenNote} onSave={() => void saveNotes([selected])} />
       <MaterialBusinessObjects
@@ -794,6 +776,7 @@ export function MaterialLibraryWorkspace({
         error={objectError || null}
         onDismissError={dismissObjectError}
       />
+      </details>
       <dl className="library-inspector__meta">
         <div>
           <dt>画面建议</dt>
@@ -856,11 +839,13 @@ export function MaterialLibraryWorkspace({
         </Button>
       </div>
       {selectedSegment ? (
+        <details className={styles.detailSection}><summary>整理当前片段与查看证据</summary>
         <MaterialSegmentEditor segment={selectedSegment} speechAnalysis={selected.speech_analysis} descriptionDraft={descriptionDraft} transcriptDraft={transcriptDraft} usageRoleDraft={usageRoleDraft} disabled={busy !== null} saving={busy === "segment"}
           onDescriptionChange={value => { markSegmentDraftChanged(); setDescriptionDraft(value); }} onTranscriptChange={value => { markSegmentDraftChanged(); setTranscriptDraft(value); }} onUsageRoleChange={value => { markSegmentDraftChanged(); setUsageRoleDraft(value); }} onSeekSpeech={seconds => { if (sourceVideo.current) sourceVideo.current.currentTime = seconds; }} onSave={() => void saveSegmentOrganization()}
           usageEvidence={<MaterialUsageEvidence usageRecords={usageRecords} usageRead={usageRead} retryUsageRead={retryUsageRead} />}
           tagsEditor={<MaterialSegmentTags segment={selectedSegment} commonTags={insights.tags} tagDraft={tagDraft} tagError={tagError} disabled={busy !== null} onDraftChange={value => setTagDrafts(current => ({ ...current, [tagScope]: value }))} onAdd={addTag} onRemove={tag => void saveTags(selectedSegment.user_tags.filter(entry => entry !== tag))} />}
           collectionPicker={<MaterialCollectionPicker query={collectionQuery} onQueryChange={setCollectionQuery} collections={collections} collectionDraft={collectionDraft} newCollectionName={newCollectionName} disabled={busy !== null} onChoose={id => { markSegmentDraftChanged(); setCollectionDraft(id); }} onNameChange={setNewCollectionName} onCreate={() => void addCollection()} />} />
+        </details>
       ) : null}
     </div>
   ) : null;

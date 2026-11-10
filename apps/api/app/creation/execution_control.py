@@ -288,6 +288,11 @@ class CreationExecutionControl:
 
     def start(self, workspace_id, task_id, script_id, digest, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:
+            latest = self.execution.latest(workspace_id, task_id)
+            if latest is not None and latest.input_digest == digest:
+                self.execution.validate_input_snapshot(workspace_id, task_id, script_id, digest)
+                return self.resume(workspace_id, task_id, actor, runtime, verify_media=verify_media,
+                    write_guard=write_guard, execution_source=execution_source)
             owner = runtime.registrations["creation_job"].owner
             if owner.task_authorizations is not None:
                 task = self.execution.validate_input_snapshot(workspace_id, task_id, script_id, digest).task
@@ -327,6 +332,13 @@ class CreationExecutionControl:
                         self.repository.creation_execution_jobs.bind_creation_execution_source(
                             current, execution_source, connection=conn)
                 return self.read_bound(workspace_id, task_id, latest.id, actor, verify_media=verify_media)
+            if latest is not None and self.execution.rerender_current(latest,actor,runtime.scheduler,write_guard=write_guard):
+                job = self.repository.job_records.get_job_run(workspace_id,latest.id)
+                if execution_source is not None:
+                    self.repository.creation_execution_jobs.bind_creation_execution_source(job,execution_source,write_guard=write_guard)
+                submit_creation_stage(self.execution, runtime.scheduler, job, actor)
+                runtime.wake()
+                return self.status(workspace_id, task_id, verify_media=verify_media)
             delivery = owner.audio_delivery
             recovered = (delivery.adoption_recovery.continue_adoption(runtime.scheduler, latest, actor,
                 owner=owner, write_guard=write_guard) if latest is not None and delivery is not None else None)
@@ -336,9 +348,7 @@ class CreationExecutionControl:
                         self.repository.job_records.get_job_run(workspace_id, latest.id), execution_source, write_guard=write_guard)
                 runtime.wake()
                 return self.status(workspace_id, task_id, verify_media=verify_media)
-            if latest is not None and self.execution.rerender_current(latest,actor,runtime.scheduler,write_guard=write_guard):
-                job = self.repository.job_records.get_job_run(workspace_id,latest.id)
-            else:
+            if recovered is None:
                 migrated = (migrate_creation_narration_request(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard)
                     if latest is not None else None)
                 resumed = (resume_original_narration(self.repository, runtime.scheduler, latest, actor, write_guard=write_guard,

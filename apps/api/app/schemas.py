@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_fie
 from app.creation.editing.audio_contracts import AudioTimelineEditRequest
 from app.creation.editing.range_contracts import TimelineRangeEdit
 from app.graphic_overlays import TextOverlay, ImageOverlay, ArrowOverlay
+from app.creation.visual_template_contracts import VisualTemplate, VisualTemplateOverlay
 from app.database_migrations import CONTENT_VISIBILITY_DEFAULT, CONTENT_VISIBILITY_LEGACY
 from app.visual_effects import VisualEffects
 from app.audio_timeline import AudioTimeline, TimelineAudioTrack, TimelineAudioClip, AudioGainPoint, visible_gain_points
@@ -68,6 +69,8 @@ class DevicePreparationShapeRequest(BaseModel):
     channels: int = Field(gt=0)
     source_bytes: int | None = Field(default=None, gt=0)
     overlay_count: int = Field(default=0, ge=0)
+    template_count: int = Field(default=0, ge=0)
+    native_command: bool = False
     source_width_px: int | None = Field(default=None, gt=0, multiple_of=2)
     source_height_px: int | None = Field(default=None, gt=0, multiple_of=2)
     visual_effects: VisualEffects | None = None
@@ -1872,7 +1875,7 @@ class KnowledgeSearchResponse(BaseModel):
 
 
 class CreationTaskMontagePlanResponse(BaseModel):
-    graphic_overlays: list[TextOverlay | ImageOverlay | ArrowOverlay] = Field(default_factory=list)
+    graphic_overlays: list[TextOverlay | ImageOverlay | ArrowOverlay | VisualTemplateOverlay] = Field(default_factory=list)
     aspect_ratio: Literal["9:16", "16:9", "1:1"] = "9:16"
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
     presenter_share_actual: float = Field(default=0, ge=0, le=100)
@@ -1970,7 +1973,7 @@ class CreationTaskExactEditRequest(BaseModel):
     expected_timeline_version_id: str | None = None
     expected_timeline_sequence: int | None = Field(default=None, ge=0)
     overlay_action: Literal["add","update","delete"] | None = None
-    graphic_overlay: TextOverlay | ImageOverlay | ArrowOverlay | None = None
+    graphic_overlay: TextOverlay | ImageOverlay | ArrowOverlay | VisualTemplateOverlay | None = None
     overlay_id: str | None = None
     transition_seconds: float | None = Field(default=None, ge=0, le=2, allow_inf_nan=False)
     fit_mode: Literal["fill", "fit"] | None = None
@@ -3062,11 +3065,21 @@ class VideoTemplateVersionRequest(BaseModel):
     expected_version: int = Field(ge=1)
     name: str = Field(min_length=1,max_length=80)
     style_instruction: str = Field(default="",max_length=500)
+    visual: VisualTemplate | None = None
 
     @field_validator("name", "style_instruction", mode="before")
     @classmethod
     def trim_text(cls, value):
         return value.strip() if isinstance(value,str) else value
+
+
+class VisualTemplateCopyRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_id: UUID
+    source_template_id: str = Field(min_length=1, max_length=120)
+    source_template_version: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=80)
+    visual: VisualTemplate
 
 
 class SaveVideoTemplateRequest(BaseModel):

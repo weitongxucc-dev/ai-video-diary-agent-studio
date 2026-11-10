@@ -3,13 +3,20 @@
 .page { height:100%; min-width:0; min-height:0; overflow:auto; }
 .page[hidden] { display:none; }
 .pages { height:100%; min-width:0; min-height:0; }
-.withResource { display:grid; grid-template-rows:minmax(360px, 1.6fr) auto minmax(160px, 1fr); overflow:hidden; }
-.withResource > .page:not(.resourcePage):not([hidden]) { grid-row:1; }
-.withResource > .resourcePage:not([hidden]) { grid-row:3; overscroll-behavior:contain; }
-.resourceHeader { grid-row:2; display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:32px; padding:2px 16px; border-block:1px solid var(--border-1); background:var(--surface-1); font-size:var(--font-size-meta); line-height:18px; color:var(--text-2); }
+.withResource { position:relative; display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,36%); grid-template-rows:36px minmax(0,1fr); overflow:hidden; }
+.withResource > .page:not(.resourcePage):not([hidden]) { grid-column:1; grid-row:1 / -1; }
+.withResource > .resourcePage:not([hidden]) { grid-column:2; grid-row:2; overscroll-behavior:contain; border-left:1px solid var(--border-1); }
+.resourceHeader { grid-column:2; grid-row:1; display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; padding:2px 12px; border-left:1px solid var(--border-1); background:var(--surface-1); color:var(--text-2); }
+.resourceHeader > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@container workbench (max-width:760px) {
+ .withResource { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) 32px minmax(100px,30%); }
+ .withResource > .page:not(.resourcePage):not([hidden]) { grid-column:1; grid-row:1; }
+ .resourceHeader { grid-column:1; grid-row:2; border-left:0; border-top:1px solid var(--border-1); }
+ .withResource > .resourcePage:not([hidden]) { grid-column:1; grid-row:3; border-left:0; border-top:1px solid var(--border-1); }
+}
 .page:has([data-editor-workspace]) { overflow:hidden; }
-.tabScroll { height:40px; width:100%; }
-.tabList { gap:0; height:40px; padding:4px 8px; }
+.tabScroll { height:36px; width:100%; }
+.tabList { gap:2px; height:36px; padding:2px 0; }
 .tab { display:flex; align-items:center; max-width:240px; border:1px solid transparent; border-radius:8px; }
 .tab[data-active] { background:var(--surface-1); border-color:var(--border-1); }
 .tab .tabTrigger { max-width:208px; height:30px; padding:0 8px; border:0; background:transparent; }

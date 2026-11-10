@@ -138,6 +138,14 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     proposal = state.repo.edit_records.get_edit_proposal("ws", operation["proposal_id"])
     typed_source = state.repo.edit_records.get_edit_intent("ws", proposal.intent_id).constraints["request_source"]
     current_task = state.repo.task_records.get_creation_task("ws", state.task.id)
+    # The execution receipt can arrive before the edit receipt advanced the
+    # goal checkpoint. Only the proven same-goal edit chain bridges that gap.
+    original_goal = repo.get_task_goal(turn['id'])
+    own_execution = {'phase':'execution', 'status':'succeeded' if fast_render else 'failed',
+        'job_id':job.id, 'base_version_id':edit_version.id}
+    assert owner.verify_version(original_goal, own_execution, current_task) is None
+    assert owner.verify_version(original_goal, {**own_execution, 'base_version_id':'missing'}, current_task) == {
+        'status':'invalidated', 'reason':'unrelated_timeline_change'}
     if fast_render:
         execution_goal = {**repo.get_task_goal(turn['id']), 'target_snapshot': {
             'timeline_version_id': edit_version.id, 'timeline_sequence': edit_version.sequence}}

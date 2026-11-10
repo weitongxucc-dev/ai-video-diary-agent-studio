@@ -89,3 +89,14 @@ it("keeps one audio controller when shared tracks place the subtitle before impo
   }));
   expect(await screen.findByLabelText("选区音频试听")).toHaveAttribute("src", "/shared-preview.wav");
 });
+
+it("uses an existing import track and requires a new choice when that track disappears",()=>{
+  const original={...track,id:"field-recording",name:"现场原声",role:"original" as const,clips:[]};
+  const props={taskId:"task",versionId:"version",durationSeconds:5,selectedId:null,onSelect:vi.fn(),onPreview:vi.fn(),busy:false};
+  const view=render(<AudioTimelineTracks {...props} audioTimeline={{format_version:1,tracks:[original]}}/>);
+  expect(screen.getByRole("combobox",{name:"音频导入轨道"})).toHaveTextContent("现场原声");
+  expect(screen.getByRole("button",{name:"导入音频"})).toBeEnabled();
+  view.rerender(<AudioTimelineTracks {...props} audioTimeline={{format_version:1,tracks:[{...original,id:"new-recording"}]}}/>);
+  expect(screen.getByRole("combobox",{name:"音频导入轨道"})).toHaveTextContent("选择导入轨道");
+  expect(screen.getByRole("button",{name:"导入音频"})).toBeDisabled();
+});

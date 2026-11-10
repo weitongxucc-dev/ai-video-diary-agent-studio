@@ -47,8 +47,41 @@ test('selected model metadata preserves the OpenAI endpoint and output cap',asyn
       assert.equal(current.session.model.baseUrl,baseUrl);
       assert.equal(current.session.model.maxTokens,4096);
       assert.equal(current.session.model.provider,'ai-video-diary');
+      const compaction=current.session.settingsManager.getCompactionSettings(current.session.model);
+      assert.equal(compaction.enabled,true);
+      assert.ok(current.session.model.contextWindow-compaction.reserveTokens<=128000);
       current.session.dispose();current=undefined;
     }
+  } finally {current?.session.dispose();await rm(options.cwd,{recursive:true,force:true});}
+});
+
+test('a long-window model uses actual Pi threshold compaction before its full window',async()=>{
+  const options=await fixture();let current;
+  try {
+    await writeFile(join(options.cwd,'models.json'),JSON.stringify({providers:{'ai-video-diary':{
+      baseUrl:'http://127.0.0.1:9',api:'openai-completions',apiKey:'synthetic-unused',
+      models:[{id:'synthetic',contextWindow:1000000,maxTokens:4096}]}}}));
+    current=await openCreationSession({...options,tools:[],extensionFactories:[agent=>agent.on('session_before_compact',event=>({
+      compaction:{summary:'COMPACTED_TASK_HISTORY',firstKeptEntryId:event.preparation.firstKeptEntryId,
+        tokensBefore:event.preparation.tokensBefore}}))]});
+    const events=[];current.session.subscribe(event=>events.push(event));
+    let calls=0;
+    current.session.agent.streamFunction=()=>{
+      const answer={...message([{type:'text',text:'已保存原任务回执。'}]),
+        usage:{...usage,input:++calls===2?140000:1000,totalTokens:calls===2?140001:1001}};
+      const stream=new AssistantMessageEventStream();
+      queueMicrotask(()=>{stream.push({type:'done',reason:answer.stopReason,message:answer});stream.end(answer);});return stream;
+    };
+    await current.session.prompt('保留原任务与真实业务回执。'+'历史素材事实。'.repeat(18000),{source:'rpc'});
+    await current.session.prompt('新的素材事实。'.repeat(18000),{source:'rpc'});
+    await current.session.prompt('沿原任务继续。',{source:'rpc'});
+    const compact=events.find(event=>event.type==='compaction_start');
+    assert.equal(compact?.reason,'threshold');
+    assert.ok(events.some(event=>event.type==='compaction_end'&&!event.aborted));
+    const saved=await readFile(current.session.sessionManager.getSessionFile(),'utf8');
+    assert.ok(saved.includes('COMPACTED_TASK_HISTORY'));
+    assert.ok(saved.includes('保留原任务与真实业务回执。'));
+    assert.equal(current.session.model.contextWindow,1000000);
   } finally {current?.session.dispose();await rm(options.cwd,{recursive:true,force:true});}
 });
 

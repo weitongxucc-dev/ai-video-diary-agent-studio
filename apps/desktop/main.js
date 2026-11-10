@@ -1,3 +1,9 @@
+// Isolated frame workers do not start studio services, identity or UI lifecycle.
+if (process.argv.includes('--yaohe-template-renderer')) {
+  require(process.defaultApp ? './runtime/template-renderer.js'
+    : require('path').join(process.resourcesPath, 'template-renderer/template-renderer.js'));
+  return;
+}
 // Startup probes use the already-open stderr descriptor, never a log file.
 // The candidate is unknown until the existing build-identity validation finishes.
 let startupBuildIdentity = null;
@@ -175,7 +181,7 @@ function reportServiceFailure(name, error, label) {
 
 function createWindow() {
   createDesktopWindow({
-    BrowserWindow, ipcMain, shell, preloadPath: path.join(__dirname, 'preload.js'), webOrigin, isDev,
+    app, BrowserWindow, ipcMain, shell, preloadPath: path.join(__dirname, 'preload.js'), webOrigin, isDev,
     onCreated: (window) => { mainWindow = window; },
     onClosed: (window) => { if (mainWindow === window) mainWindow = null; },
   });
