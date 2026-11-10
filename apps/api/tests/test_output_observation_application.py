@@ -117,6 +117,15 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     client=TestClient(main.app,headers={'X-Local-Member-Token':token})
     request={'request_id':str(uuid4()),'expected_timeline_version_id':base.id,
         'expected_timeline_sequence':base.sequence,'target':{'kind':'final'}}
+    def missing_preparation(*args):
+        raise ValueError('实际画面观察的 CPU 执行预算尚未标定')
+    with monkeypatch.context() as patch:
+        patch.setattr(media, 'facts', missing_preparation)
+        refused=client.post('/api/creation-tasks/task/observations',json=request)
+    assert refused.status_code==422 and '尚未标定' in refused.text
+    unresolved=client.get('/api/creation-tasks/task/assistant/edit-requests/'+request['request_id']+'?phase=observation')
+    assert unresolved.status_code==404
+    assert len(repo.job_records.list_job_runs('local','task'))==1
     first=client.post('/api/creation-tasks/task/observations',json=request)
     assert first.status_code==202,first.text
     receipt=first.json()

@@ -1167,8 +1167,8 @@ class TaskMediaJobs:
             return "stale"
         return "ready"
 
-    def submit(self, runtime, actor, task_id, operation, arguments, result_kind, *, write_guard=None):
-        from app.device_scheduler import SchedulePolicy, SubmissionIntent
+    def prepare_submission(self, actor, task_id, operation, arguments, result_kind):
+        """Resolve identity, source facts and resources before a durable request claim."""
         task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id)
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
             raise PermissionError("当前成员不能安排此任务的媒体处理")
@@ -1187,6 +1187,15 @@ class TaskMediaJobs:
         run = JobRun(id=job_id, workspace_id=actor.workspace_id, task_id=task_id, kind=TASK_MEDIA_KIND,
             idempotency_key=f"task-media:{task_id}:{digest}", input_digest=digest)
         payload["input_digest"] = digest
+        return run, payload
+
+    def submit(self, runtime, actor, task_id, operation, arguments, result_kind, *, write_guard=None):
+        run, payload = self.prepare_submission(actor, task_id, operation, arguments, result_kind)
+        return self.submit_prepared(runtime, actor, run, payload, write_guard=write_guard)
+
+    def submit_prepared(self, runtime, actor, run, payload, *, write_guard=None):
+        from app.device_scheduler import SchedulePolicy, SubmissionIntent
+        task_id, arguments = run.task_id, payload['arguments']
         if "_clip_preview" in arguments:
             job = self.repository.task_media_submissions.create_clip_preview_job(run, payload,
                 expected_version_id=arguments["_clip_preview"]["base_version_id"])

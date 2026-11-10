@@ -141,7 +141,7 @@ globalThis.fetch=async(url,init)=>{
  if(path.endsWith('/observations')){value=init?.method==='POST'?input.observation_job:input.observations;
   if(init?.method==='POST'&&input.lost_receipt)throw new TypeError('fixture reply lost');}
  if(path.endsWith('/edits/exact/preview')){value=input.preview;if(input.lost_receipt)throw new TypeError('fixture reply lost');}
- if(path.includes('/assistant/edit-requests/')){const phase=new URL(url).searchParams.get('phase');value={request_id:path.split('/').pop(),phase,status:'recorded',result:phase==='observation'?input.observation_job:input.preview};}
+ if(path.includes('/assistant/edit-requests/')){const phase=new URL(url).searchParams.get('phase');value={task_id:'task-current',request_id:path.split('/').pop(),phase,status:'recorded',result:phase==='observation'?input.observation_job:input.preview,...(phase==='observation'?input.observation_receipt:{})};}
  if(path.includes('/media-jobs/'))value=input.job;
  const failed=Boolean(body&&input.failure&&(!input.failure_once||failedPosts++===0));
  return {ok:!failed,status:failed?(input.failure_status||422):200,json:async()=>failed?{detail:'字段或版本拒绝'}:value};
@@ -184,7 +184,7 @@ def preview():
         "invalidated_refs": ["render:old"], "external_effects": []}}
 
 
-def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, result=None, job=None, pi_module=None, lost_receipt=False, delay_ms=0, knowledge=None, script_context=None, stage="topic", failure_once=False, failure_status=422, observations=None, observation_job=None, execution=None, execution_before=None, references=(), reference_data=None):
+def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, result=None, job=None, pi_module=None, lost_receipt=False, delay_ms=0, knowledge=None, script_context=None, stage="topic", failure_once=False, failure_status=422, observations=None, observation_job=None, observation_receipt=None, execution=None, execution_before=None, references=(), reference_data=None):
     env = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
     env.update(AI_VIDEO_DIARY_AGENT_API_BASE="https://fixture.invalid", AI_VIDEO_DIARY_AGENT_TASK_ID="task-current",
                AI_VIDEO_DIARY_AGENT_STAGE=stage, AI_VIDEO_DIARY_AGENT_LOCAL_MEMBER_TOKEN="fixture-member",
@@ -205,6 +205,7 @@ def invoke(tmp_path, *, steps=(), workspace=None, code=None, failure=False, resu
                                                  "knowledge": knowledge, "script_context": script_context,
                                                  "failure_once": failure_once, "failure_status": failure_status,
                                                  "observations": observations, "observation_job": observation_job,
+                                                 "observation_receipt": observation_receipt,
                                                  "execution": execution, "execution_before": execution_before}),
                                env=env, cwd=tmp_path, text=True, capture_output=True, timeout=45, check=True)
     return json.loads(completed.stdout)
@@ -573,6 +574,22 @@ def test_unknown_observation_receipt_is_queried_without_replaying(tmp_path):
     assert "尚待核验" in json.dumps(blocked, ensure_ascii=False)
     assert seen["results"][2]["result"]["details"]["media_job"] == job
     assert sum(call["method"] == "POST" for call in seen["calls"]) == 1
+
+
+@pytest.mark.parametrize('foreign', [False, True])
+def test_unsettled_observation_query_preserves_its_task_locator(tmp_path, foreign):
+    seen = invoke(tmp_path, observation_receipt={"status":"unknown", "result":None,
+        "task_id":"another-task" if foreign else "task-current"}, steps=[{
+            "tool":"read_task_observation_request", "args":{"request_id":"a9e655e9-1dc2-49b2-a3e0-0429d929413e"}}])
+    result = seen['results'][0]
+    if foreign:
+        assert not result['ok'] and '身份不一致' in result['error']
+    else:
+        from app.assistant.edit_result_binding import AssistantEditResultBinding
+        details = result['result']['details']
+        locator = AssistantEditResultBinding.request_reference('task-current', 'trusted-turn', details)
+        assert locator.phase == 'observation' and details['status'] == 'unknown'
+    assert [call['method'] for call in seen['calls']] == ['GET']
 
 
 def installed_pi():
