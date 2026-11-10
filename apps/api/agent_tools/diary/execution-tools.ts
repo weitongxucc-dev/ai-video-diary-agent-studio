@@ -1,13 +1,16 @@
-import type {BusinessRequest, ToolRegistrar, ActionSource} from './contracts.ts';
+import type {BusinessRequest, ToolRegistrar, ActionSource, TaskVersion} from './contracts.ts';
+import {createExecutionVersionFollower} from './execution-version.ts';
 import {BusinessRequestError, BusinessResultUnknown, RequestNotSubmitted, safeBusinessFailure} from './transport.ts';
 import {boundedText} from '../task_facts.ts';
 import {setTimeout as delay} from 'node:timers/promises';
 
-export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTaskRead, hasCreationAction, markCreationAction, hasEditControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal, readCurrentTaskFacts, typedRequestId}: {
+export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, selectedTaskVersion, isTaskRead, hasCreationAction, markCreationAction, hasEditControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal, readCurrentTaskFacts, typedRequestId}: {
+  selectedTaskVersion?: TaskVersion | null;
   request: BusinessRequest; taskId: string | undefined; isTaskRead: () => boolean; hasCreationAction: () => boolean; markCreationAction: () => void; hasEditControlWrite: () => boolean; directEditUnverified?: () => boolean; hasPreview: () => boolean; readActionSource: () => ActionSource; getSignal: () => AbortSignal | undefined;
   readCurrentTaskFacts: () => Promise<any>; typedRequestId: (turn: string, call: string) => string;
 }) {
   if (taskId) {
+    const versionFollower = createExecutionVersionFollower(taskId, selectedTaskVersion);
     let preparationAttempt: {inputKey: string; shapeKey: string; requestId: string; workId?: string; released?: boolean} | null = null;
     const preparationRoot = '/api/device/resource-preparations';
     const preparationResult = (action: string, receipt: any, preparationKey?: string) => {
@@ -271,6 +274,7 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
             const value = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution?job_id=${encodeURIComponent(params.job_id)}`, {signal});
             if (value.task_id !== taskId || value.job?.id !== params.job_id || value.job.task_id !== taskId) throw new Error("原制作作业响应身份不一致");
             status = value;
+            versionFollower.observe(status);
           } catch (error) {
             if (parentSignal?.aborted || !deadline.aborted || !status) throw error;
             break;
@@ -328,6 +332,7 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
       } else {
         status = await submitExecution(action, binding, {});
       }
+      if (action !== 'cancel') versionFollower.submitted(status);
       return {
         content: [{ type: "text", text: JSON.stringify({ action, status }) }],
         details: { kind: "execution_action", action, status },

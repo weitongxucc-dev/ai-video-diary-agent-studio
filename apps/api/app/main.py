@@ -1945,14 +1945,12 @@ def _prepare_observation_request(task_id, request, payload):
         "expected_timeline_sequence": version.sequence if version else 0,
         "actor_identity": actor.identity_payload(), "request_id": str(payload.request_id) if payload.request_id else None}
     if payload.assistant_turn_id is not None:
+        from app.assistant.goal_versions import observation_turn_origin
         try:
-            origin = conversation_repo.task_turn_source(str(payload.assistant_turn_id), task.workspace_id, member_id, task_id)
+            origin = observation_turn_origin(production_repo, conversation_repo, task, member_id,
+                str(payload.assistant_turn_id), version)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        snapshot = origin["context"].get("target_snapshot", {})
-        if (snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")) != (
-                task.current_timeline_version_id, version.sequence if version else 0):
-            raise HTTPException(status_code=409, detail="观察请求的助手轮次版本已失效")
         source.update(assistant_turn_id=str(payload.assistant_turn_id), conversation_id=origin["conversation_id"],
                       raw_command=origin["raw_command"],
                       **{key: origin[key] for key in ("input_id", "input_turn_id") if key in origin})

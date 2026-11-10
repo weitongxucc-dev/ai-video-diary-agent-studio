@@ -148,6 +148,7 @@ def test_material_observations_round_trip_through_actual_decoder_json_and_respon
     assert response["speech_analysis"] == {
         "status": "ready", "source_fingerprint": "fixture", "model_id": "fixture-only",
         "observations": [{"start_ms": 0, "end_ms": 1000, "text": "测试原文"}], "message": "",
+        "word_observations": [], "timing_granularity": "segment", "audio_present": None,
     }
     assert response["segments"][0]["understanding"]["summary"] == "测试画面"
     assert response["modified_at"] == "2026-10-14T00:00:00Z"

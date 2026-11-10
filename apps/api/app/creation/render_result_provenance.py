@@ -2,6 +2,19 @@
 from app.task_audio import media_digest
 
 
+def rendered_execution_version(repository, task, job_id):
+    if task.current_timeline_version_id is None:
+        return None
+    version = repository.timeline_records.get_timeline_version(task.workspace_id, task.current_timeline_version_id)
+    provenance = rendered_version_provenance(repository, version)
+    if provenance is None or provenance['job_id'] != job_id or provenance['base_version_id'] is None:
+        return None
+    base = repository.timeline_records.get_timeline_version(task.workspace_id, provenance['base_version_id'])
+    return {'job_id': job_id,
+        'base_version': {'timeline_version_id': base.id, 'timeline_sequence': base.sequence},
+        'result_version': {'timeline_version_id': version.id, 'timeline_sequence': version.sequence}}
+
+
 def rendered_version_provenance(repository, version):
     saved = version.snapshot.get('audio_delivery')
     if saved is None:

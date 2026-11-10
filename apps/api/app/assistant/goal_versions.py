@@ -2,6 +2,19 @@
 from app.assistant.task_business_errors import TaskBusinessRejected
 
 
+def observation_turn_origin(production, conversations, task, member_id, turn_id, version):
+    origin = conversations.task_turn_source(turn_id, task.workspace_id, member_id, task.id)
+    snapshot = origin['context'].get('target_snapshot', {})
+    current = {'timeline_version_id': task.current_timeline_version_id,
+        'timeline_sequence': version.sequence if version else 0}
+    expected = {key: snapshot.get(key) for key in current}
+    if expected != current:
+        goal = conversations.get_task_goal(turn_id)
+        if goal is None or owned_version_transition(production, conversations, goal, expected, task) is None:
+            raise ValueError('观察请求的助手轮次版本已失效')
+    return origin
+
+
 def owned_version_transition(production, conversations, goal, expected, task, *, connection=None):
     if expected is None or task.current_timeline_version_id is None:
         return None

@@ -94,12 +94,17 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
         state.repo.timeline_records.create_timeline_version(replace(edit_version, id="render-version", parent_version_id=edit_version.id, sequence=edit_version.sequence+1,
             snapshot={**snapshot, "montage": rendered_montage, "transform_run_id": "declared-render", "creation_render_request_id": "published-render", "render_input_timeline_version_id": edit_version.id}))
         state.repo.job_records.finish_job_run("ws", job.id, status="succeeded")
+    repo.record_task_execution(turn['id'], 'ws', state.member.member_id, state.task.id, actual())
+    if fast_render:
+        finish_render()
+    from app.assistant.goal_versions import observation_turn_origin
+    running_task = state.repo.task_records.get_creation_task('ws', state.task.id)
+    assert observation_turn_origin(state.repo, repo, running_task, state.member.member_id, turn['id'],
+        state.repo.timeline_records.get_timeline_version('ws', running_task.current_timeline_version_id))['conversation_id'] == chat['id']
     repo.finish_turn(turn["id"], "completed", "修改已保存；尚未重新生成视频。", {"kind": "task_turn", "response": {
         "reply": "修改已保存；尚未重新生成视频。", "execution_status": actual(), "edit_request": {"request_id": request_id, "status": "recorded"}},
         "goal_business_actions": [{"kind": "execution_status", "id": job.id}]})
     repo.register_task_goal(turn["id"])
-    if fast_render:
-        finish_render()
     owner = GoalResultProjection(state.repo, repo)
     from app.assistant.goal_versions import effective_goal_version
     owned_task = state.repo.task_records.get_creation_task('ws', state.task.id)
@@ -186,3 +191,6 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     with pytest.raises(TaskBusinessRejected):
         effective_goal_version(state.repo, repo, repo.get_task_goal(turn['id']), expected,
             state.repo.task_records.get_creation_task('ws', state.task.id))
+    with pytest.raises(ValueError, match='当前有效助手轮次'):
+        observation_turn_origin(state.repo, repo, state.repo.task_records.get_creation_task('ws', state.task.id),
+            state.member.member_id, turn['id'], foreign)

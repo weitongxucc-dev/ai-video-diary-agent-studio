@@ -279,6 +279,11 @@ class CreationExecutionControl:
             "cover_status": "ready" if any(cover.status == "valid" for cover in covers) else "pending",
             "cover_message": None if any(cover.status == "valid" for cover in covers) else "尚未生成封面，请单独制作或选择封面。",
         })
+        if job and job['status'] == 'succeeded' and result['video_ready']:
+            from app.creation.render_result_provenance import rendered_execution_version
+            output_version = rendered_execution_version(self.repository, task, job['id'])
+            if output_version is not None:
+                result['output_version'] = output_version
         return result
 
     def start(self, workspace_id, task_id, script_id, digest, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
