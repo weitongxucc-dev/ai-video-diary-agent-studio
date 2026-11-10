@@ -664,6 +664,8 @@ def test_task_turn_exposes_continuation_tools_and_bound_named_actions(monkeypatc
     for stage in ("topic", "script", "narration"):
         run_task_turn(None, workspace_id="local", task_id="task-one", message="用自然语言表达意图",
                       stage=stage, selected_refs=[], playhead_ms=None)
+    for call in calls:
+        assert {"read_video_templates", "read_visual_template"} <= set(call["tool_names"].split(","))
     assert "generate_creation_task_topics" in calls[0]["tool_names"]
     assert "adopt_creation_task_topic" in calls[0]["tool_names"]
     assert "start_creation_execution" in calls[0]["tool_names"]
