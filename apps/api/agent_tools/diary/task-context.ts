@@ -89,6 +89,7 @@ export function createTaskContext({request, taskId, stage, selectedRefs, playhea
           asset_id: plan.source_media.asset_id, asset_updated_at: plan.source_media.asset_updated_at,
           source_start_seconds: plan.source_media.source_start_seconds, source_end_seconds: plan.source_media.source_end_seconds,
           aspect_ratio: plan.source_media.aspect_ratio, preserve_audio: plan.source_media.preserve_audio,
+          source_file_size_bytes: plan.source_media.file_signature?.size_bytes ?? null,
         } : null,
         creation_intent: plan.creation_intent ? {kind: plan.creation_intent.kind, source: plan.creation_intent.source,
           topic_title: plan.creation_intent.topic_title,

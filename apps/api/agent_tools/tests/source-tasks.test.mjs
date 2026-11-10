@@ -104,7 +104,8 @@ test('source task context keeps editor stage and projects the host execution rou
   const workspace={task:{id:'source-task',stage:'montage',confirmed_script_id:null,
     current_timeline_version_id:'source-version',timeline_sequence:1,updated_at:'revision'},
     plan:{id:'source-plan',source_media:{asset_id:'video',asset_updated_at:asset.updated_at,
-      source_start_seconds:0,source_end_seconds:9.234,aspect_ratio:'16:9',preserve_audio:true}},
+      source_start_seconds:0,source_end_seconds:9.234,aspect_ratio:'16:9',preserve_audio:true,
+      file_signature:{size_bytes:'243094130',mtime_ns:'private-nanoseconds',inode:'private-inode'}}},
     montage:{clips:[],cues:[],audio_timeline:{tracks:[]}},scripts:[]};
   const context=createTaskContext({taskId:'source-task',selectedRefs:[],playheadMs:null,
     initialTaskRead:false,initialScriptDraftUpdatedAt:null,verifyTaskVersion:current=>assert.equal(current,workspace),
@@ -119,6 +120,7 @@ test('source task context keeps editor stage and projects the host execution rou
   assert.deepEqual(facts.execution.task_execution,requirements);
   assert.equal(facts.execution.job,null);assert.equal(facts.confirmed_script,null);
   assert.equal(facts.narration_segment_count,0);assert.equal(facts.script_context,undefined);
-  assert.deepEqual(facts.plan.source_media,workspace.plan.source_media);
+  const {file_signature,...source}=workspace.plan.source_media;
+  assert.deepEqual(facts.plan.source_media,{...source,source_file_size_bytes:file_signature.size_bytes});
   assert.equal(paths.length,2);
 });

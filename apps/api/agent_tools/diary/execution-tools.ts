@@ -25,7 +25,7 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
           frame_rate: {type:'integer',minimum:1},duration_seconds: {type:'number',exclusiveMinimum:0},
           clip_count: {type:'integer',minimum:1},audio_input_count: {type:'integer',minimum:1},
           sample_rate: {type:'integer',minimum:1},channels: {type:'integer',minimum:1},
-          source_bytes: {type:'integer',minimum:1},
+          source_bytes: {type:'integer',minimum:1,description:'仅在真实来源字节数已核实时提供；原片任务可读plan.source_media.source_file_size_bytes（采用时封存值）。不是设备limits里的max_input_bytes，不得拿预算上限冒充；未知时省略。'},
           overlay_count: {type:'integer',minimum:0,description:'当前制作单元同时合成的图文和字幕层数量；省略只准备零图层，不能据此输出有图层的作品。'},
         },required:['width_px','height_px','frame_rate','duration_seconds','clip_count','audio_input_count','sample_rate','channels'],additionalProperties:false},
           {type:'object',properties:{
