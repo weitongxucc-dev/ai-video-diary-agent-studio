@@ -108,6 +108,14 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     effective = effective_goal_version(state.repo, repo, repo.get_task_goal(turn['id']), expected, owned_task)
     assert effective['target_snapshot']['timeline_version_id'] == owned_task.current_timeline_version_id
     assert repo.get_task_goal(turn['id'])['request_context'] == context
+    from app.assistant.task_business import TaskBusiness
+    business = object.__new__(TaskBusiness)
+    business.production, business.conversations = state.repo, repo
+    business.workspace_facts = main._task_workspace_response_adapter().response
+    workspace = business.execute('read_task_workspace', {'expected_task_version': expected},
+        CreationExecutionActor('ws', state.member.member_id), owned_task, repo.get_task_goal(turn['id']), {}, {}, None)
+    assert workspace['owned_version_transition']['from'] == expected
+    assert workspace['owned_version_transition']['to']['timeline_version_id'] == owned_task.current_timeline_version_id
     op = state.repo.edit_records.get_edit_operation("ws", operation["id"])
     proposal = state.repo.edit_records.get_edit_proposal("ws", operation["proposal_id"])
     typed_source = state.repo.edit_records.get_edit_intent("ws", proposal.intent_id).constraints["request_source"]

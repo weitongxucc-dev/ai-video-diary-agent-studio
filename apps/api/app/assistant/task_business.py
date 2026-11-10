@@ -593,7 +593,7 @@ class TaskBusiness:
                 {**origin,'assistant_turn_id':goal['current_turn_id']},
                 {k:v for k,v in args['payload'].items() if k not in {'assistant_turn_id','input_id'}},write_guard=guard)
         if operation=='read_task_workspace':
-            facts = self.workspace_facts(ws,task)
+            facts = dict(self.workspace_facts(ws,task))
             transition = owned_version_transition(self.production, self.conversations, goal,
                 args.get('expected_task_version') or goal['target_snapshot'], task)
             return {**facts, **({'owned_version_transition': transition} if transition else {})}

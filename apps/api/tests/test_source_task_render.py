@@ -6,6 +6,8 @@ import json
 import subprocess
 import time
 
+import pytest
+
 import app.main as main
 from app.artifact_store import ArtifactStore
 from app.creation.source_task_use_case import SourceTaskCommand, SourceTaskUseCase
@@ -18,7 +20,8 @@ from test_creation_execution import _render_version_fixture
 from test_host_resource_probes import _render_budget
 
 
-def test_source_video_renders_original_sound_without_script_or_narration(tmp_path, monkeypatch):
+@pytest.mark.parametrize('ripple_cut', [False, True])
+def test_source_video_renders_original_sound_without_script_or_narration(tmp_path, monkeypatch, ripple_cut):
     repo, _, _, _, actor, execution, owner, scheduler, _, members = _render_version_fixture(tmp_path)
     store = ArtifactStore(tmp_path / 'source-artifacts')
     settings = SimpleNamespace(video_output_path=str(tmp_path/'source-output'),
@@ -33,6 +36,17 @@ def test_source_video_renders_original_sound_without_script_or_narration(tmp_pat
     receipt = SourceTaskUseCase(repo, lambda current: 'ready' if current == actor else 'unauthorized').create(
         SourceTaskCommand(str(uuid4()), asset.id, asset.updated_at, 0, 2, '原片真实音轨', '16:9', True), actor)
     task_id = receipt['task_id']
+    expected_duration = 2
+    if ripple_cut:
+        from app.creation.contracts import EditCommand
+        task = repo.task_records.get_creation_task('local', task_id)
+        outcome = main._linked_timeline_use_case().apply(EditCommand('local', task_id,
+            {'member_id': actor.member_id, 'local_diagnostic': False}, task.current_timeline_version_id,
+            'RemoveTimelineRanges', {'range_edit': {'removed_ranges_ms': [[500, 1000]],
+                'reason': '删除已定位停顿，成片须使用实际采用的精剪时钟'}}))
+        expected_duration = 1.5
+        assert outcome.montage.duration_seconds == expected_duration
+        assert repo.plan_records.get_creation_plan('local', task.plan_id).duration_target_seconds == 2
     audio = TaskAudio(repo, store, settings.effective_temporary_root_path)
     cap = CpuAudioBudget(3, 8_000_000, 60, 10, 48000, 2, 4_000_000, 1, 60,
         512*1024**2, 16, .05, 1024**3, 1_000_000)
@@ -70,7 +84,7 @@ def test_source_video_renders_original_sound_without_script_or_narration(tmp_pat
         probe = json.loads(subprocess.run(['ffprobe', '-v', 'error', '-show_streams', '-of', 'json', str(output)],
             check=True, capture_output=True, text=True).stdout)
         assert {stream['codec_type'] for stream in probe['streams']} >= {'video','audio'}
-        assert abs(float(next(s for s in probe['streams'] if s['codec_type']=='video')['duration'])-2) < .04
+        assert abs(float(next(s for s in probe['streams'] if s['codec_type']=='video')['duration'])-expected_duration) < .04
         decoded = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output), '-t', '1', '-vn',
             '-ac', '1', '-ar', '16000', '-f', 's16le', '-'], check=True, capture_output=True).stdout
         assert max(abs(value) for value in array('h', decoded)) > 500

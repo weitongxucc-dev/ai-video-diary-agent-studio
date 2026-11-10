@@ -36,6 +36,15 @@ class DurationRequirement:
         return cls(plan.duration_target_seconds, getattr(plan, "duration_mode", "exact"),
                    tuple(bounds) if bounds is not None else None)
 
+    @classmethod
+    def for_output(cls, plan, montage):
+        # Source selection records an input interval, not an independent promise
+        # to pad that interval back after an adopted ripple edit. The versioned
+        # montage owns its edited output clock; scripted Plans keep their promise.
+        if plan.source_media is not None and montage.script_id is None:
+            return cls(montage.duration_seconds)
+        return cls.from_plan(plan)
+
     def assess(self, video_duration, frame_rate):
         if video_duration is None or frame_rate is None:
             return "unknown"

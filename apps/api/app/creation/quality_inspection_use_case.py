@@ -222,8 +222,8 @@ class QualityInspectionUseCase:
             "artifact_id": record.id, "render_ref": record.sha256, "size_bytes": record.size_bytes,
             "file_identity": file_identity(path), "path": str(path)}
         from app.creation.duration_requirement import DurationRequirement
-        source['duration_requirement'] = DurationRequirement.from_plan(
-            self.production.plan_records.get_creation_plan(workspace_id, task.plan_id)).payload()
+        source['duration_requirement'] = DurationRequirement.for_output(
+            self.production.plan_records.get_creation_plan(workspace_id, task.plan_id), plan).payload()
         return task, plan, source
 
     def resources(self, source, budget):
@@ -386,8 +386,10 @@ class QualityInspectionUseCase:
                 raise ValueError("质检固定版本与登记产物不一致")
         from app.creation.duration_requirement import DurationRequirement
         task = self.production.task_records.get_creation_task(source['workspace_id'], source['task_id'])
-        current_requirement = DurationRequirement.from_plan(
-            self.production.plan_records.get_creation_plan(task.workspace_id, task.plan_id))
+        current_montage = creation_task_montage_plan_from_payload(
+            self.production.get_creation_task_montage_plan(task.workspace_id, task.id))
+        current_requirement = DurationRequirement.for_output(
+            self.production.plan_records.get_creation_plan(task.workspace_id, task.plan_id), current_montage)
         if ('duration_requirement' not in source
                 or DurationRequirement(**source['duration_requirement']) != current_requirement):
             raise ValueError("质检固定的交付时长约定已变化，请重新检查当前成片")
