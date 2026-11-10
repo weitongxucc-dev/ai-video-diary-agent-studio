@@ -101,6 +101,9 @@ export function DeviceResourcePreparationPanel() {
           setResolution(String(Math.min(shape.width_px, shape.height_px)));
           setFps(String(shape.frame_rate)); setDuration(String(shape.duration_seconds));
           setClips(String(shape.clip_count)); setAudioInputs(String(shape.audio_input_count));
+          setOverlays(String(shape.overlay_count??0));
+          setTemplates(String(shape.template_count??0));
+          setNativeCommand(shape.native_command??false);
         }
       }
       catch (cause) { rememberAttempt(null); setStorageError(true); setError(failureDetail(cause)); }
