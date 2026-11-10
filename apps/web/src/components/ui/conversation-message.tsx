@@ -11,11 +11,15 @@ export function ConversationMessage({ children, className, savedOpen = false, on
   useEffect(() => {
     const node = content.current;
     if (!node) return;
-    const measure = () => setTruncated(node.scrollHeight > 170);
+    const measure = () => {
+      const lines = className.includes("assistant-user-message") ? 3 : 6;
+      const lineHeight = Number.parseFloat(getComputedStyle(node).lineHeight) || 21;
+      setTruncated(node.scrollHeight > lines * lineHeight + 1);
+    };
     const observer = new ResizeObserver(measure);
     observer.observe(node); measure();
     return () => observer.disconnect();
-  }, [children]);
+  }, [children, className]);
   return <div className={`assistant-message ${className}`}>
     <div ref={content} className="assistant-message-content" data-expanded={expanded || undefined}>{children}</div>
     {truncated ? <button className="assistant-text-action" type="button" aria-expanded={expanded} onClick={() => {

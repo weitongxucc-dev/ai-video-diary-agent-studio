@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { WorkspaceLayoutMenu } from "./workbench/WorkspaceLayoutMenu";
+import { WorkspaceInspector } from "./workbench/WorkspaceInspector";
 import { DesktopHeader } from "./DesktopHeader";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -10,7 +12,6 @@ import {
   ChevronDown,
   LoaderCircle,
   Clapperboard,
-  Columns2,
   FileStack,
   Home,
   Library,
@@ -274,6 +275,7 @@ export function AppShellFrame({
     if (inspectorOpenKey) { setQuickOpen(false); setDetailsOpen(true); }
   }, [inspectorOpenKey]);
   const quickAvailable = editorLayout && Boolean(quickInspector);
+  const dockInspector = !standalone && Boolean(providedInspector) && detailsOpen && !quickOpen && !panels.workspaceCollapsed;
   useEffect(() => { setQuickOpen(false); }, [quickInspectorKey]);
 
   useEffect(() => {
@@ -397,7 +399,7 @@ export function AppShellFrame({
             </Suspense>}
             {workspaceReady ? <Suspense fallback={null}><PreflightDraftReturn /></Suspense> : null}
       </>} actions={<>
-            {!standalone ? <Button variant="ghost" aria-label={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} title={panels.workspaceCollapsed ? "展开工作区" : "收起工作区"} className="shell-icon-button" onClick={panels.toggleWorkspace} type="button"><Columns2 size={16} /></Button> : null}
+            {!standalone ? <WorkspaceLayoutMenu conversationHidden={panels.chatCollapsed} workspaceHidden={panels.workspaceCollapsed} onConversation={panels.toggleChat} onWorkspace={panels.toggleWorkspace}/> : null}
             {toolbarActions}
             {quickAvailable ? <Button variant="ghost" aria-label="编辑镜头参数" className={editorShell.detailsButton} onClick={() => { setDetailsOpen(false); setQuickOpen(true); }} type="button">镜头参数</Button> : null}
             <Button variant="ghost" aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => { setSearchParentId(undefined); setSearchOpen(true); }} type="button">
@@ -460,7 +462,7 @@ export function AppShellFrame({
       </aside>
 
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
-        <div className={`${editorShell.contentGrid}${standalone ? ` ${editorShell.standalone}` : ""}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed && !standalone ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
+        <div className={`${editorShell.contentGrid}${dockInspector ? ` ${editorShell.withInspector}` : ""}${standalone ? ` ${editorShell.standalone}` : ""}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed && !standalone ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
           <section aria-label="创作助手" className={editorShell.conversation}>
             <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}><div data-assistant-header-actions className="assistant-header-actions"/><Button variant="ghost" aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></Button></div></header>
             <div className={editorShell.conversationBody}>
@@ -471,11 +473,12 @@ export function AppShellFrame({
           <main className="desktop-main-scroll" data-scroll-region="main-y" onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) { setQuickOpen(false); setDetailsOpen(true); } }}>
             {children}
           </main>
+          {providedInspector && !standalone ? <WorkspaceInspector open={dockInspector} title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{dockInspector ? inspectorConfirmation : null}</WorkspaceInspector> : null}
         </div>
 
       </section>
       <KeyboardShortcuts onOpenSearch={target => { setSearchParentId(homeCardParentForTarget(target)); setSearchOpen(true); }} />
-      {providedInspector ? <HomeCardDialog open={detailsOpen && !quickOpen && !panels.workspaceCollapsed} kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>
+      {providedInspector && standalone ? <HomeCardDialog open={detailsOpen && !quickOpen && !panels.workspaceCollapsed} kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>
         {providedInspector}
         {detailsOpen && !quickOpen ? inspectorConfirmation : null}
       </HomeCardDialog> : null}

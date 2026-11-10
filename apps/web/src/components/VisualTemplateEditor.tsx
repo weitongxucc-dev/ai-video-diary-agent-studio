@@ -1,4 +1,6 @@
 "use client";
+import {TemplateKeyframes} from "./TemplateKeyframes";
+import {TemplateParameterFields} from "./TemplateParameterFields";
 import {useEffect, useRef, useState} from 'react';
 import type {VideoTemplate, VisualTemplate, CreationTaskExactEditInput} from '@/lib/types';
 import type {VisualTemplateOverlay, GraphicOverlay} from '@/lib/types/timeline';
@@ -11,9 +13,7 @@ import ui from './VideoEditor.module.css';
 export function VisualTemplateFields({value, onChange, disabled=false}: {value:VisualTemplate;
   onChange:(value:VisualTemplate)=>void; disabled?:boolean}) {
   return <div className={styles.editor}>
-    <div className={styles.fields}>{value.bindings.map(binding => <label key={binding.key}>{binding.label}
-      <textarea rows={2} maxLength={4000} disabled={disabled} value={value.values[binding.key] ?? binding.default}
-        onChange={event => onChange({...value, values:{...value.values, [binding.key]:event.target.value}})}/></label>)}</div>
+    <TemplateParameterFields value={value} onChange={onChange} disabled={disabled}/>
     <VisualTemplatePreview definition={value}/>
     <details><summary>修改动画源码与参数结构</summary>
       <div className={styles.fields}>{(['width','height','duration_seconds'] as const).map(key=><label key={key}>
@@ -122,7 +122,7 @@ export function VisualTemplateLayerEditor({items,duration,busy,selectedId,onSele
         {{start_seconds:'开始（秒）',end_seconds:'结束（秒）',x:'水平位置（0–1）',y:'垂直位置（0–1）',width:'宽度占比（0–1）',opacity:'不透明度（0–1）',z_index:'叠放层级（越大越靠前）'}[key]}
         <input type="number" step={key.includes('seconds')?.1:.01} disabled={busy} value={layer[key]} onChange={e=>change({...layer,[key]:Number(e.target.value)})}/></label>)}</div>
       <VisualTemplateFields value={layer.definition} onChange={definition=>change({...layer,definition})} disabled={busy}/>
-      <TemplateKeyframes value={layer.keyframes} disabled={busy} onChange={keyframes=>change({...layer,keyframes})}/>
+      <TemplateKeyframes duration={layer.end_seconds-layer.start_seconds} value={layer.keyframes} disabled={busy} onChange={keyframes=>change({...layer,keyframes})}/>
       <div className={styles.actions}><button className={ui.button} type="button" disabled={busy} onClick={()=>onPreview({operation_type:'EditGraphicOverlay',
         overlay_action:items.some(item=>item.id===layer.id)?'update':'add',graphic_overlay:layer,
         ...(items.some(item=>item.id===layer.id)?{overlay_id:layer.id}:{})})}>保存动画草稿</button>
@@ -133,18 +133,6 @@ export function VisualTemplateLayerEditor({items,duration,busy,selectedId,onSele
       </div>
       <p>层级越大越靠前；相同层级按添加顺序叠放。保存走作品版本，可用撤销恢复。</p>
     </section>:null}
-    {error?<p role="alert">{error}</p>:null}
-  </details>;
-}
-
-function TemplateKeyframes({value,disabled,onChange}:{value:VisualTemplateOverlay['keyframes'];disabled:boolean;
-  onChange:(value:VisualTemplateOverlay['keyframes'])=>void}) {
-  const [text,setText]=useState(JSON.stringify(value,null,2));
-  const [error,setError]=useState<string|null>(null);
-  return <details><summary>位置、缩放与不透明度关键帧</summary>
-    <textarea aria-label="动画关键帧" className={styles.source} disabled={disabled} value={text} onChange={e=>setText(e.target.value)}/>
-    <p>相对图层起点的秒数，按时间递增；每项包含 seconds、x、y、scale、opacity。关键帧间线性插值。</p>
-    <button className={ui.button} type="button" disabled={disabled} onClick={()=>{try{const parsed=JSON.parse(text);if(!Array.isArray(parsed))throw Error('请输入关键帧数组');onChange(parsed);setError(null);}catch(cause){setError((cause as Error).message);}}}>采用关键帧草稿</button>
     {error?<p role="alert">{error}</p>:null}
   </details>;
 }

@@ -2,6 +2,7 @@ import {fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {beforeEach,expect,it,vi} from 'vitest';
 import type {VideoTemplate} from '@/lib/types';
 import {VisualTemplateLibraryEditor} from '../VisualTemplateEditor';
+import {TemplateKeyframes} from '../TemplateKeyframes';
 import {GraphicOverlayEditor} from '../GraphicOverlayEditor';
 import type {VisualTemplateOverlay} from '@/lib/types/timeline';
 const api=vi.hoisted(()=>({copy:vi.fn(),read:vi.fn(),update:vi.fn()}));
@@ -64,4 +65,18 @@ it('queries the original version after a lost reply without replaying the write'
   await waitFor(()=>expect(saved).toHaveBeenCalled());
   expect(api.copy).toHaveBeenCalledTimes(1);
   expect(api.read).toHaveBeenCalledWith(`template_${submitted.request_id.replaceAll('-','')}`,1);
+});
+
+it('accepts the API defaults in advanced keyframes without dropping the editable values',()=>{
+  const change=vi.fn();
+  render(<TemplateKeyframes value={[]} duration={4} disabled={false} onChange={change}/>);
+  fireEvent.click(screen.getByText('位置、缩放与不透明度关键帧 · 0'));
+  fireEvent.click(screen.getByText('高级关键帧 JSON'));
+  fireEvent.change(screen.getByLabelText('动画关键帧'),{target:{value:'[{"seconds":0},{"seconds":2,"scale":0.005}]'}});
+  fireEvent.click(screen.getByRole('button',{name:'采用关键帧草稿'}));
+  expect(change).toHaveBeenCalledWith([{seconds:0,x:.5,y:.5,scale:1,opacity:1},{seconds:2,x:.5,y:.5,scale:.005,opacity:1}]);
+  fireEvent.change(screen.getByLabelText('动画关键帧'),{target:{value:'[{"seconds":0,"x":null}]'}});
+  fireEvent.click(screen.getByRole('button',{name:'采用关键帧草稿'}));
+  expect(screen.getByRole('alert')).toBeVisible();
+  expect(change).toHaveBeenCalledTimes(1);
 });

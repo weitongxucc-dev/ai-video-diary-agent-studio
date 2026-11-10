@@ -1,4 +1,4 @@
-.page { display:grid;width:min(800px,100%);min-width:0;margin:0;padding:16px;gap:12px;grid-template-columns:minmax(0,1fr);container-type:inline-size; }
+.page { display:grid;width:100%;max-width:840px;min-width:0;margin:0;padding:16px;gap:12px;grid-template-columns:minmax(0,1fr);container-type:inline-size; }
 .categoryPanel { gap:4px; }
 .main { min-width:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;align-content:start; }
 .main :global(.settings-form), .main :global(.settings-product-block), .main :global(.llm-settings-stack) { display:grid;gap:8px; }

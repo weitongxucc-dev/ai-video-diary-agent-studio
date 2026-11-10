@@ -14,7 +14,7 @@
 .auxiliaryBody { display:grid; flex:0 1 auto; min-width:0; min-height:0; max-height:44%; gap:12px; overflow:auto; overscroll-behavior:contain; padding:8px 20px 12px; border-top:1px solid var(--border-1); }
 .editingAuxiliary { display:flex; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:4px 12px; max-height:26%; padding:4px 16px; }
 .editingAuxiliary .jobProgress { padding:0; border:0; }
-.editingAuxiliary .stageRuntime { flex:1 1 auto; }
+.editingAuxiliary .stageRuntime { display:contents; }
 .editingAuxiliary .blocker, .editingAuxiliary > [role="status"], .editingAuxiliary > [role="alert"] { flex-basis:100%; }
 .compactQuality { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; }
 .compactQuality > span { font-size:var(--font-size-meta); line-height:18px; color:var(--text-2); }
@@ -613,3 +613,6 @@
 .visualCandidates article { display:grid; gap:8px; min-width:0; padding:12px; border:1px solid var(--border-1); border-radius:var(--radius-md); }
 .visualCandidates video { width:100%; max-height:220px; background:var(--surface-2); }
 .visualCandidates label { display:flex; gap:8px; align-items:center; }
+
+.editingAuxiliary :global([aria-label="制作状态"]) { display:contents; }
+.editingAuxiliary :global([aria-label="制作状态"] > div:empty) { display:none; }

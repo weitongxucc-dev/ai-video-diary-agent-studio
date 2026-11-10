@@ -15,6 +15,7 @@ class TemplateBinding(BaseModel):
     kind: Literal['text', 'variable']
     target: str = Field(min_length=1, max_length=200)
     default: str = Field(max_length=4000)
+    control: Literal['text', 'multiline', 'number', 'color', 'font'] = 'text'
 
 
 class TemplateProvenance(BaseModel):

@@ -1,4 +1,5 @@
 "use client";
+import { OverlayTimeline } from "./creation-task/OverlayTimeline";
 import { WorkspaceVideo, WorkspaceAudio } from "./workbench/WorkspaceMedia";
 import { useWorkspaceViewState, useWorkspacePage } from "./workbench/context";
 
@@ -254,9 +255,10 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
       <span className={ui.shotLabel}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><small>{editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</small></span>
     </button>)}</div> : null}
     <div className={ui.tracks} aria-label="配音与字幕时间范围">
-    {onSelectOverlay && montage.graphic_overlays?.length ? <div className={ui.overlayList} aria-label="图文叠加层">{montage.graphic_overlays.map((item,index)=><button className={ui.button} type="button" key={item.id} disabled={busy} aria-pressed={selectedOverlayId===item.id} onClick={()=>onSelectOverlay(item.id)}>{item.kind==="image"?"图片":item.kind==="arrow"?"箭头":item.kind==='template'?'动画':"标题"}{index+1} · {'name' in item?item.name:item.text}</button>)}</div> : null}
+
       <div className={ui.ruler}><span>时间</span><div>{Array.from({ length: 5 }, (_, i) => <time key={i}>{editorTime(montage.duration_seconds * i / 4)}</time>)}</div></div>
-      <div className={ui.track}><span>画面</span><div className={ui.videoLane}>{montage.clips.map((clip,index)=><button key={clip.id} type="button" className={ui.videoTimelineClip} style={{left:`${clip.timeline_start_seconds/montage.duration_seconds*100}%`,width:`${(clip.timeline_end_seconds-clip.timeline_start_seconds)/montage.duration_seconds*100}%`}} aria-label={`定位镜头 ${index+1}：${editorTime(clip.timeline_start_seconds)}–${editorTime(clip.timeline_end_seconds)}`} aria-pressed={clip.id===selectedId} onClick={()=>{onSelect(clip.id);seek(clip.timeline_start_seconds);}}>{index+1}</button>)}</div></div>
+      <div className={ui.track}><span>画面</span><div className={ui.videoLane}>{montage.clips.map((clip,index)=><button key={clip.id} type="button" className={ui.videoTimelineClip} style={{left:`${clip.timeline_start_seconds/montage.duration_seconds*100}%`,width:`${(clip.timeline_end_seconds-clip.timeline_start_seconds)/montage.duration_seconds*100}%`}} aria-label={`定位镜头 ${index+1}：${editorTime(clip.timeline_start_seconds)}–${editorTime(clip.timeline_end_seconds)}`} aria-pressed={clip.id===selectedId} onClick={()=>{onSelect(clip.id);seek(clip.timeline_start_seconds);}}><span className={ui.timelineThumbnail}><ClipThumbnail clip={clip} taskId={taskId}/></span><span>镜头 {index+1}</span></button>)}</div></div>
+      {onSelectOverlay && montage.graphic_overlays?.length ? <OverlayTimeline formatTime={editorTime} items={montage.graphic_overlays} duration={montage.duration_seconds} selectedId={selectedOverlayId} disabled={busy} onSelect={onSelectOverlay}/> : null}
       {audioTracks ? audioTracks(subtitleTrack) : <><NarrationWaveformTrack taskId={taskId} narrationCacheKey={narrationCacheKey} clips={montage.clips} cues={montage.cues} selectedId={selectedId} onSelect={onSelect} />{subtitleTrack}</>}
 
     </div>

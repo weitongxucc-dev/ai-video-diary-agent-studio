@@ -20,8 +20,8 @@ def rendercomp_templates():
             {'key':'subtitle', 'label':'副标题', 'kind':'text', 'target':'.subtitle', 'default':subtitle}]
         for index, (label, value) in enumerate(zip(labels, values), 1):
             bindings += [{'key':f'label{index}', 'label':f'项目 {index}', 'kind':'text', 'target':f'.l{index}', 'default':label},
-                {'key':f'value{index}', 'label':f'数值 {index}', 'kind':'text', 'target':f'.v{index}', 'default':value}]
-        bindings += [{'key':key, 'label':label, 'kind':'variable', 'target':'--'+key, 'default':''}
+                {'key':f'value{index}', 'label':f'数值 {index}', 'control':'number', 'kind':'text', 'target':f'.v{index}', 'default':value}]
+        bindings += [{'key':key, 'label':label, 'kind':'variable', 'control':'font' if key == 'font' else 'color', 'target':'--'+key, 'default':''}
             for key, label in [('background','背景颜色'), ('color','文字颜色'), ('accent','强调色'), ('font','字体')]]
         yield identity, name, VisualTemplate.model_validate({
             'category':'data', 'width':1200, 'height':900, 'duration_seconds':5,

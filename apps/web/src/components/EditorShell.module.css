@@ -1,6 +1,6 @@
 .shell { --sidebar-width:var(--editor-left); --inspector-width:var(--editor-right); grid-template-rows:44px minmax(0,1fr); font-family:var(--font-ui); }
 .shell :global(.desktop-sidebar) { grid-row:2; grid-template-rows:minmax(0,1fr) auto; min-height:0; background:var(--sidebar-bg); }
-.shell :global(.desktop-workspace) { grid-row:2; min-width:0; grid-template-rows:minmax(0,1fr); padding:6px 6px 6px 0; }
+.shell :global(.desktop-workspace) { grid-row:2; min-width:0; grid-template-rows:minmax(0,1fr); padding:6px 6px 6px 0; container:workspace-shell / size; }
 .shell :global(.desktop-main-scroll) { grid-column:2; grid-row:1; min-width:0; min-height:0; overflow:auto; scrollbar-gutter:stable; background:var(--surface-1); container:workbench / inline-size; }
 .shell:global(.video-editor-shell) :global(.desktop-main-scroll) { position:relative; overflow:hidden; scrollbar-gutter:auto; }
 .contentGrid { display:grid; grid-template-columns:var(--editor-right) minmax(0,1fr); grid-template-rows:minmax(0,1fr); min-width:0; min-height:0; overflow:hidden; border:1px solid var(--border-1); border-radius:var(--radius-lg); background:var(--surface-1); }
@@ -49,3 +49,16 @@
 .standalone .conversation { display:none; }
 .standalone > :global(.desktop-main-scroll) { grid-column:1; }
 @media (prefers-reduced-motion:reduce) { .shell :global(.desktop-nav-row) { transition:none; } }
+
+.withInspector { grid-template-columns:var(--editor-right) minmax(280px,1fr) 320px; }
+.withInspector.chatCollapsed { grid-template-columns:44px minmax(280px,1fr) 320px; }
+.inspectorDock { display:flex; flex-direction:column; grid-column:3; grid-row:1; min-width:0; min-height:0; overflow:hidden; border-left:1px solid var(--border-1); background:var(--surface-1); }
+.inspectorDock > header { display:flex; align-items:center; justify-content:space-between; flex:0 0 36px; gap:8px; padding:0 12px; border-bottom:1px solid var(--border-1); }
+.inspectorDock h2 { margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:400 13px/21px var(--font-ui); outline:none; }
+.inspectorBody { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:12px; scrollbar-width:thin; }
+@container workspace-shell (max-width:1060px) {
+  .withInspector { grid-template-columns:var(--editor-right) minmax(0,1fr); grid-template-rows:minmax(180px,1fr) minmax(160px,38%); }
+  .withInspector.chatCollapsed { grid-template-columns:44px minmax(0,1fr); }
+  .withInspector .conversation { grid-row:1 / -1; }
+  .withInspector .inspectorDock { grid-column:2; grid-row:2; border-left:0; border-top:1px solid var(--border-1); }
+}

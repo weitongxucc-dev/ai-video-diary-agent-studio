@@ -78,3 +78,12 @@
 
 .resourceFilter { display:flex;align-items:center;gap:8px;padding:8px 0;color:var(--text-2);font-size:13px; }
 .resourceFilter select { max-width:240px;min-height:32px;padding:4px 8px;border:1px solid var(--border-1);border-radius:6px;background:var(--surface-1);color:var(--text-1);font:inherit; }
+
+.templateList[data-gallery] { grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr)); align-items:start; gap:16px; }
+.templateCard { min-width:0; border-bottom:1px solid var(--border-1); }
+.templateCard .templateRow { height:auto; min-height:64px; border:0; padding:8px 0; }
+.templateCard .previewMark { display:none; }
+.templateCard .rowCopy strong { white-space:normal; font-weight:400; line-height:21px; }
+.effectPreview { display:flex; align-items:center; justify-content:center; min-height:150px; padding:8px; border-radius:8px; background:var(--surface-2); }
+.effectPreview > section { width:100%; }
+.effectPreview p { margin:0; font-size:12px; color:var(--text-2); }

@@ -1984,10 +1984,11 @@ it("composes explicit references, preserves other kinds on ordinary selection, a
   expect(final?.kind === "selection" && final.items).toHaveLength(4);
   fireEvent.click(screen.getByRole("button",{name:"查看本轮 4 项引用"}));
   await screen.findByRole("button",{name:"取消素材引用：素材甲"});
-  expect(screen.getByText("人物甲")).toBeVisible();
+  const referenceList=within(screen.getByRole("heading",{name:"本轮引用 · 4"}).parentElement!.parentElement!);
+  expect(referenceList.getByText("人物甲")).toBeVisible();
   fireEvent.click(screen.getByRole("button",{name:"取消素材引用：素材甲"}));
   expect(screen.queryByText("素材甲")).not.toBeInTheDocument();
-  expect(screen.getByText("声音甲")).toBeVisible();expect(screen.getByText("素材乙")).toBeVisible();
+  expect(referenceList.getByText("声音甲")).toBeVisible();expect(referenceList.getByText("素材乙")).toBeVisible();
   act(()=>{
     referenceAssistantSelection([{kind:"shot",task_id:"t",object_id:"c1",version:"v",label:"镜头甲"}]);
     referenceAssistantSelection([{kind:"shot",task_id:"t",object_id:"c2",version:"v",label:"镜头乙"}],true);

@@ -4,7 +4,7 @@ export type VisualTemplate = {
     engine: 'openfilm-html-v1';
     category: 'title' | 'chapter' | 'callout' | 'data' | 'product' | 'ending' | 'social' | 'reaction' | 'chat' | 'news' | 'location' | 'festival';
     width: number; height: number; duration_seconds: number; source: string;
-    bindings: {key: string; label: string; kind: 'text' | 'variable'; target: string; default: string}[];
+    bindings: {key: string; label: string; kind: 'text' | 'variable'; target: string; default: string; control?: 'text' | 'multiline' | 'number' | 'color' | 'font'}[];
     values: Record<string, string>;
     provenance: {repository: string; revision: string; path: string; license: string; source_sha256: string}[];
     dependencies: string[];

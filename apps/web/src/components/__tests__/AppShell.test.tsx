@@ -122,12 +122,12 @@ describe("AppShell", () => {
     expect(screen.queryByText("智能视频日记")).not.toBeInTheDocument();
   });
 
-  it("keeps conversation visible and opens object details only in a dismissible card", () => {
+  it("keeps conversation visible and opens object properties in a dismissible dock", () => {
     const view = render(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="one"><button data-open-details>镜头一</button></AppShell>);
     expect(screen.getByRole("region", { name: "创作助手" })).toHaveTextContent("任务对话");
     expect(screen.getByText("镜头属性")).not.toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "镜头一" }));
-    expect(screen.getByRole("dialog", { name: "镜头详情" })).toHaveTextContent("镜头属性");
+    expect(screen.getByRole("complementary", { name: "镜头详情" })).toHaveTextContent("镜头属性");
     view.rerender(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="two"><p>预览修改</p></AppShell>);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByText("任务对话")).toBeVisible();
@@ -144,9 +144,9 @@ describe("AppShell", () => {
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(within(screen.getByRole("dialog")).getByRole("button", { name: "采用参数提案" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "转到完整详情" }));
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.getByRole("dialog", { name: "镜头详情" })).toHaveTextContent("完整镜头属性");
-    expect(screen.getByRole("dialog")).toHaveTextContent("采用参数提案");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "镜头详情" })).toHaveTextContent("完整镜头属性");
+    expect(screen.getByRole("complementary",{name:"镜头详情"})).toHaveTextContent("采用参数提案");
     expect(screen.getByText("已有对话草稿")).toBeVisible();
   });
 
@@ -182,14 +182,16 @@ describe("AppShell", () => {
     fireEvent.click(screen.getByRole("button", { name: "收起对话栏" }));
     expect(shell).toHaveStyle({ "--editor-right": "44px" });
     expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("chatCollapsed"));
-    fireEvent.click(screen.getByRole("button", { name: "收起工作区" }));
+    fireEvent.click(screen.getByRole("button", { name: "布局" }));
+    fireEvent.click(screen.getByRole("button", { name: "作品区" }));
     expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("workspaceCollapsed"));
     // 三栏全收起后仍能逐个找回，且收起不卸载组件
     expect(screen.getByRole("button", { name: "展开导航栏" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "展开对话栏" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "展开工作区" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "布局" })).toBeInTheDocument();
     expect(screen.getByText("剪辑")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "展开工作区" }));
+    fireEvent.click(screen.getByRole("button", { name: "布局" }));
+    fireEvent.click(screen.getByRole("button", { name: "作品区" }));
     fireEvent.click(screen.getByRole("button", { name: "展开对话栏" }));
     expect(shell).toHaveStyle({ "--editor-right": "380px" });
     expect(grid.className).not.toContain("chatCollapsed");
@@ -232,11 +234,12 @@ describe("AppShell", () => {
     localStorage.clear();
     const first = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
     fireEvent.click(screen.getByRole("button", { name: "收起对话栏" }));
-    fireEvent.click(screen.getByRole("button", { name: "收起工作区" }));
+    fireEvent.click(screen.getByRole("button", { name: "布局" }));
+    fireEvent.click(screen.getByRole("button", { name: "作品区" }));
     first.unmount();
     const second = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
     expect(screen.getByRole("button", { name: "展开对话栏" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "展开工作区" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "布局" })).toBeInTheDocument();
     const grid = second.container.querySelector('[class*="contentGrid"]') as HTMLElement;
     expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("chatCollapsed"));
     expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("workspaceCollapsed"));
@@ -582,7 +585,7 @@ describe("AppShell", () => {
       await waitFor(() => expect(screen.queryByRole("dialog", {name:"镜头参数"})).not.toBeInTheDocument());
       fireEvent.click(screen.getByRole("button", {name:"查看详情"}));
       fireEvent.change(screen.getByLabelText("镜头草稿"), {target:{value:"新草稿"}});
-      fireEvent.click(screen.getByRole("button", {name:"关闭卡片"}));
+      fireEvent.click(screen.getByRole("button", {name:"关闭属性面板"}));
       fireEvent.click(screen.getByRole("button", {name:"查看详情"}));
       expect(screen.getByLabelText("镜头草稿")).toHaveValue("新草稿");
       expect(screen.getByRole("button", {name:"播放"})).toBeInTheDocument();

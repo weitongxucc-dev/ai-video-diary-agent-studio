@@ -1530,6 +1530,8 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
     const editInput = await readyInput("局部修改要求");
     fireEvent.click(openStoryboardClip(1));
+    expect(mocks.saveReference).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button",{name:"引用所选对象到对话"}));
     await waitFor(() => expect(mocks.saveReference).toHaveBeenLastCalledWith(expect.any(String), {
       kind: "selection", items: [expect.objectContaining({kind:"shot",object_id:"clip-1",task_id:"task-1",version:"timeline-version-6"})],
     }, 0));
@@ -2747,7 +2749,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.previewEdit.mockResolvedValue(exactPreview(initial.task,"EditGraphicOverlay"));
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
-    fireEvent.click(screen.getByRole("button",{name:"图片1 · logo.png"}));
+    fireEvent.click(screen.getByRole("button",{name:/^图片1 · logo\.png/}));
     expect(screen.getByRole("complementary",{name:"图片1"})).toBeInTheDocument();
     expect(screen.getByLabelText("图片不透明度")).toHaveValue(1);
     const player=screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
@@ -4178,6 +4180,8 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button",{name:"关闭引用列表"}));
     fireEvent.change(input,{target:{value:"把当前镜头改为完整显示"}});
     fireEvent.click(openStoryboardClip(1));
+    expect(screen.queryByRole("button",{name:"查看本轮 2 项引用"})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button",{name:"引用所选对象到对话"}));
     fireEvent.click(screen.getByRole("button",{name:"查看本轮 2 项引用"}));
     expect(await screen.findByRole("button",{name:"取消素材引用：旧素材参考"})).toBeVisible();
     expect(screen.getByRole("button",{name:/^取消镜头引用：镜头 1/})).toBeVisible();
@@ -4203,7 +4207,7 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.askAssistant).toHaveBeenCalledTimes(1);
   }, 10_000);
 
-  it("does not send a material snapshot if the same task clip is reselected during its draft checkpoint", async () => {
+  it("keeps the frozen material snapshot when the same clip is browsed during its draft checkpoint", async () => {
     mocks.withReferenceProvider = true;
     const initial = subtitleCoverWorkspace();
     initial.montage!.clips = [{id:"clip-selected",cue_id:"cue-1",asset_id:"asset-1",segment_id:"segment-1",source_reference:"workspace://clip.mp4",source_start_seconds:0,source_end_seconds:3,timeline_start_seconds:0,timeline_end_seconds:3,match_score:.9,match_reasons:[],needs_confirmation:false,role:"b_roll",locked:false,manually_selected:false}];
@@ -4212,6 +4216,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
     const input=await readyInput("局部修改要求");
     fireEvent.click(openStoryboardClip(1));
+    fireEvent.click(screen.getByRole("button",{name:"引用所选对象到对话"}));
     await waitFor(()=>expect(mocks.saveReference).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button",{name:/查看本轮 .* 项引用/}));
     fireEvent.click(await screen.findByRole("button",{name:/^取消镜头引用：镜头 1/}));
@@ -4228,10 +4233,11 @@ describe("CreationTaskWorkspace", () => {
     await waitFor(()=>expect(finishCheckpoint).toBeDefined());
     fireEvent.click(openStoryboardClip(1));
     await act(async()=>finishCheckpoint!());
-    expect(mocks.materialTurn).not.toHaveBeenCalled();expect(mocks.askAssistant).not.toHaveBeenCalled();
-    expect(input).toHaveValue("给这条素材添加空镜头");
+    await waitFor(()=>expect(mocks.materialTurn).toHaveBeenCalled());
+    expect(mocks.askAssistant).not.toHaveBeenCalled();
+    expect(mocks.materialTurn.mock.calls[0][2]).toEqual(mocks.seedReference.selection);
     fireEvent.click(screen.getByRole("button",{name:/查看本轮 .* 项引用/}));
-    expect(await screen.findByRole("button",{name:/^取消镜头引用：镜头 1/})).toBeVisible();
+    expect(screen.queryByRole("button",{name:/^取消镜头引用：/})).not.toBeInTheDocument();
   });
 
   it("sends a frozen material reference from the task dialogue without an active editor target", async () => {
@@ -4300,7 +4306,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.previewEdit.mockResolvedValue(exactPreview(initial.task, "EditGraphicOverlay"));
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
-    fireEvent.click(screen.getByRole("button", { name: "箭头1 · 指向数据" }));
+    fireEvent.click(screen.getByRole("button", { name: /^箭头1 · 指向数据/ }));
     // 右侧面板标题用的是同一个编辑上下文标签
     expect(screen.getByRole("complementary", { name: "箭头1" })).toBeInTheDocument();
     expect(screen.queryByRole("complementary", { name: "标题1" })).not.toBeInTheDocument();
@@ -4309,7 +4315,7 @@ describe("CreationTaskWorkspace", () => {
     const player = screen.getByLabelText("剪辑成片预览");
     const tracks = screen.getByLabelText("配音与字幕时间范围");
     for (const [name,selection] of [["标题2 · 片头标题","标题2"],["标题3 · 片尾标题","标题3"]]) {
-      fireEvent.click(within(tracks).getByRole("button",{name}));
+      fireEvent.click(within(tracks).getByRole("button",{name:new RegExp(`^${name}`)}));
       expect(screen.getByRole("complementary",{name:selection})).toBeInTheDocument();
       expect(screen.getByLabelText("剪辑成片预览")).toBe(player);
     }
