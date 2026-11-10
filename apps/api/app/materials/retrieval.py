@@ -24,8 +24,7 @@ from app.materials.contracts import (
     MaterialAsset, MaterialSegment, MaterialSearchResult, MaterialSegmentMatch,
     material_usage_eligibility, selectable_segment_usage_role,
 )
-from app.material_speech import speech_text_for_range
-from app.visual_understanding import searchable_ocr_text
+from app.materials.evidence_text import segment_text_evidence, segment_searchable_text
 from app.visual_semantics import VisualSemanticError, evidence_timestamps, visual_feature_version
 
 
@@ -394,19 +393,7 @@ def _material_query_units(normalized_query: str) -> list[str]:
 
 
 def _material_searchable_corpus(segment: MaterialSegment, asset: MaterialAsset) -> str:
-    """一个片段所有能被人读出来的文字，作为「依据」的取样范围。"""
-    return " ".join(
-        value.casefold()
-        for value in (
-            segment.description,
-            searchable_ocr_text(segment.understanding),
-            segment.transcript,
-            *segment.system_tags,
-            *segment.user_tags,
-            *(asset.user_tags if isinstance(asset, MaterialAsset) else ()),
-        )
-        if value
-    )
+    return segment_searchable_text(asset, segment)
 
 
 def _material_partial_terms(
@@ -433,12 +420,7 @@ def _material_query_reasons(
     normalized_query: str, segment: MaterialSegment, asset: MaterialAsset
 ) -> list[str]:
     reasons: list[str] = []
-    text_fields = (
-        ("片段描述", segment.description),
-        ("本地画面观察", segment.understanding.summary if not segment.description and segment.understanding and segment.understanding.status == "ready" else ""),
-        ("原片画面文字", searchable_ocr_text(segment.understanding)),
-        ("片段转录", segment.transcript or speech_text_for_range(asset.speech_analysis, segment.start_seconds, segment.end_seconds)),
-    )
+    text_fields = segment_text_evidence(asset, segment)
     query_terms = re.findall(r"[^\W_]+", normalized_query)
 
     def contains_text(text: str, phrase: str) -> bool:

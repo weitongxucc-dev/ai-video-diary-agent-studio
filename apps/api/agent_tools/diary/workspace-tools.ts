@@ -1,5 +1,6 @@
 import type {BusinessRequest, ToolRegistrar} from './contracts.ts';
 import {registerMaterialTools} from '../material_tools.ts';
+import {registerMaterialEvidence} from '../materials/evidence.ts';
 
 const safeVoiceReasons = new Set([
   "profile_reference_only", "profile_excluded", "profile_not_for_automation",
@@ -11,6 +12,7 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
   request: BusinessRequest; taskId: string | undefined; stage: string | undefined; selectedRefs: string[]; selectedProfile: any; selectedKnowledge: any; isTaskRead: () => boolean; verifyTaskVersion: (workspace: any) => void; getEditCapabilities: () => any; readMaterialSelection: () => any;
 }) {
   const materialSelection = readMaterialSelection();
+  registerMaterialEvidence(pi, request);
   registerMaterialTools(pi, {
     selection: materialSelection,
     request: async (path, init) => {

@@ -687,7 +687,7 @@ class MetadataEditUseCase:
         audio_edit = operation_payload.get('edit') if operation_type == 'EditAudioTimeline' else None
         if isinstance(audio_edit, dict) and audio_edit.get('action') == 'replace_narration':
             carried_tracks = [replace(track, status='unavailable', artifact_ref=None, transform_id=None, failure_reason='整条旁白已更换，旧字幕时间尚未复核。', impact='原字幕文字已保留，但旧字幕轨不能作为新旁白的有效字幕输出。', repair_action='逐条检查字幕文字和时间，确认后重新生成字幕与成片。') for track in carried_tracks]
-        if operation_type in {'RegenerateNarrationSegment', 'DeleteClip', 'DuplicateClip', 'InsertClip', 'ChangeLinkedSpeed', 'EditCompoundTimeline', 'RemoveSilence', 'AlignSubtitleTiming', 'ReorderClip', 'ReorderTimelineItems'}:
+        if operation_type in {'RegenerateNarrationSegment', 'DeleteClip', 'DuplicateClip', 'InsertClip', 'ChangeLinkedSpeed', 'EditCompoundTimeline', 'RemoveSilence', 'RemoveTimelineRanges', 'AlignSubtitleTiming', 'ReorderClip', 'ReorderTimelineItems'}:
             try:
                 if operation_type == 'RegenerateNarrationSegment':
                     carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)

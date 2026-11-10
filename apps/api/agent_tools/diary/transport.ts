@@ -170,6 +170,12 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   if (method === 'GET') {
     if (pathname === '/api/assistant/memory' && !search) return result('read_creator_memory');
     if (pathname === '/api/media-script-tools/capabilities' && !search) return result('read_media_script_tool_capabilities');
+    const evidence = pathname.match(/^\/api\/production\/materials\/([^/]+)\/evidence$/);
+    if (evidence && only('kind','expected_updated_at','start_seconds','end_seconds','offset','limit')) {
+      const args:Record<string,any> = {asset_id:decodeURIComponent(evidence[1])};
+      for (const [key,value] of query) args[key]=['start_seconds','end_seconds','offset','limit'].includes(key)?Number(value):value;
+      return result('read_material_evidence',args);
+    }
     if (pathname === '/api/production/materials/search' && only('q', 'limit', 'purpose', 'include_eligibility'))
       return result('search_task_materials', {query: query.get('q') || '', limit: Number(query.get('limit') || 8),
         purpose: query.get('purpose') || 'manual', include_eligibility: query.get('include_eligibility') === 'true'});

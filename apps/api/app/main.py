@@ -8,6 +8,7 @@ from app.assistant.stream_response import AssistantStreamTransport
 from app.assistant.task_turn_routes import TaskTurnHTTPAdapter, build_task_turn_router
 from app.assistant.conversation_routes import ConversationHTTPAdapter, build_conversation_router
 from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_material_library_router
+from app.materials.evidence_routes import build_material_evidence_router
 from app.materials.intake_routes import MaterialIntakeHTTPAdapter, build_material_intake_router
 from app.materials.catalog_routes import MaterialCatalogHTTPAdapter, build_material_catalog_router
 from app.materials.link_routes import MaterialLinkHTTPAdapter, build_material_link_router
@@ -4785,6 +4786,8 @@ app.include_router(build_material_intake_router(_material_intake_http_adapter, (
 
 
 app.include_router(build_material_library_router(_material_library_http_adapter, ('get_production_material',)))
+app.include_router(build_material_evidence_router(records_for=lambda: production_repo,
+    workspace_for=current_workspace_id, reader_for=_content_identity_http_adapter().reader))
 
 
 app.include_router(build_material_library_router(_material_library_http_adapter, ('stream_production_material',)))

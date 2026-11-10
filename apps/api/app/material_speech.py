@@ -29,7 +29,7 @@ class LocalMaterialSpeechAnalyzer:
                 digest = hashlib.file_digest(source, "sha256").hexdigest()
             with runtime.open("rb") as source:
                 runtime_digest = hashlib.file_digest(source, "sha256").hexdigest()
-            self._model_id = f"{self.settings.local_whisper_backend}:{digest}:{runtime_digest}:{self.settings.local_whisper_language}:v1"
+            self._model_id = f"{self.settings.local_whisper_backend}:{digest}:{runtime_digest}:{self.settings.local_whisper_language}:alignment-v2"
             self._model_identity = identity
         return self._model_id
 
@@ -46,7 +46,7 @@ class LocalMaterialSpeechAnalyzer:
                 capture_output=True, text=True, check=True, timeout=15,
             )
             if not probe.stdout.strip():
-                return MaterialSpeechAnalysis("ready", fingerprint, "ffprobe:no-audio:v1", message="原片没有音轨。")
+                return MaterialSpeechAnalysis("ready", fingerprint, "ffprobe:no-audio:v1", message="原片没有音轨。", audio_present=False)
             if not self.transcriber.configured:
                 return MaterialSpeechAnalysis("blocked", fingerprint, message="本地转写未配置，未分析原片声音。")
             model_id = self._current_model_id()
@@ -60,7 +60,7 @@ class LocalMaterialSpeechAnalyzer:
                     ["ffmpeg", "-v", "error", "-i", str(path), "-map", "0:a:0", "-ac", "1", "-ar", "16000", str(audio)],
                     capture_output=True, check=True, timeout=120,
                 )
-                transcript = self.transcriber.transcribe(audio)
+                transcript = self.transcriber.transcribe(audio, word_timestamps=True)
             duration_ms = round(duration * 1000)
             observations = [
                 SubtitleSegment(max(0, item.start_ms), min(duration_ms, item.end_ms), item.text)
@@ -68,7 +68,10 @@ class LocalMaterialSpeechAnalyzer:
                 if min(duration_ms, item.end_ms) > max(0, item.start_ms)
             ]
             return MaterialSpeechAnalysis("ready", fingerprint, model_id, observations,
-                                          "本地语音转写完成；时间为语音片段范围，文字可纠正。")
+                "本地语音转写完成；句级与真实对齐时间分别保存，人工纠正不自动继承逐词时间。",
+                word_observations=[SubtitleSegment(max(0, item.start_ms), min(duration_ms, item.end_ms), item.text)
+                    for item in transcript.words if min(duration_ms, item.end_ms) > max(0, item.start_ms)],
+                timing_granularity=transcript.timing_granularity, audio_present=True)
         except (OSError, subprocess.SubprocessError, ASRConfigurationError, ASRTranscriptionError):
             return MaterialSpeechAnalysis("failed", fingerprint, model_id,
                                           message="原片声音分析失败，请检查本地转写程序和音频；画面分析仍可继续。")

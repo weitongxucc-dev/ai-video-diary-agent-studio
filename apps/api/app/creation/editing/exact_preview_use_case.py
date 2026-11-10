@@ -17,7 +17,7 @@ from app.creation.editing.clips import CLIP_SETTING_OPERATIONS
 from app.creation.editing.metadata_use_case import (EditPreviewRejected, metadata_edit_command, effective_audio_timeline, logical_montage_output_refs)
 from app.creation.editing.subtitle_use_case import subtitle_values
 from app.creation.editing.picture import EditConflict
-from app.creation.editing.linked_timeline_use_case import LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError
+from app.creation.editing.linked_timeline_use_case import LINKED_EDIT_OPERATIONS, LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError
 from app.media.clip_preview import ClipPreviewExecutor
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.models import utc_now
@@ -325,7 +325,7 @@ class ExactPreviewUseCase:
             return self.metadata.preview_canvas(workspace_id, task_id, payload, identity=identity, source=source, draft_only=draft_only, execution=execution)
         if operation == 'ConfigureSubtitleTrack' and payload.style is not None and (payload.target_language is None) or operation in {'ReplaceSubtitleText', 'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'} or (operation == 'UpdateSubtitleCue' and payload.track_id is not None):
             return self.subtitles.preview(workspace_id, task_id, payload, identity=identity, source=source, draft_only=draft_only, execution=execution)
-        if operation in {'ChangeLinkedSpeed', 'DeleteClip', 'DuplicateClip', 'InsertClip'}:
+        if operation in LINKED_EDIT_OPERATIONS:
             task, values = self.prepare_linked(workspace_id, task_id, payload)
             command = self.linked_command(task, identity, operation, {'base_version_id': task.current_timeline_version_id, **values}, source=source, reader_identity=reader_identity)
             return self.preview_linked(command, payload)
@@ -398,6 +398,10 @@ class ExactPreviewUseCase:
 
 
     def linked_values(self, payload):
+        if payload.operation_type == 'RemoveTimelineRanges':
+            if payload.range_edit is None or payload.model_fields_set - {'operation_type', 'range_edit'}:
+                raise EditPreviewRejected(422, '区间精剪只接受当前时间线区间与依据')
+            return {'range_edit': payload.range_edit.model_dump(mode='json')}
         if payload.operation_type == 'ChangeLinkedSpeed':
             if not payload.clip_id or payload.playback_rate is None or payload.model_fields_set - {'operation_type', 'clip_id', 'playback_rate'}:
                 raise EditPreviewRejected(status_code=422, detail='关联变速需要镜头和倍速，不混入其他操作')
@@ -645,7 +649,7 @@ class ExactPreviewUseCase:
                 command = metadata_edit_command(task, identity, payload.operation_type, values, source=source)
                 audio_edit = self.audio_request(payload, command.base_version_id) if payload.operation_type == 'EditAudioTimeline' else None
                 outcome = self.metadata.save(task, command, audio_edit=audio_edit, audio_actor=actor)
-            elif payload.operation_type in {'ChangeLinkedSpeed', 'DeleteClip', 'DuplicateClip', 'InsertClip'}:
+            elif payload.operation_type in LINKED_EDIT_OPERATIONS:
                 task, values = self.prepare_linked(task.workspace_id, task.id, payload)
                 command = self.linked_command(task, identity, payload.operation_type,
                     {'base_version_id': task.current_timeline_version_id, **values}, source=source, reader_identity=identity)

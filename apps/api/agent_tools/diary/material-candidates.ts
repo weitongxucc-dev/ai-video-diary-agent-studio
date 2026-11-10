@@ -73,6 +73,9 @@ export function registerMaterialCandidates(pi: ToolRegistrar, {request}: {
           asset_ref: assetRef,
           segment_ref: match.segment_ref,
           score: match.score,
+          evidence_excerpt: match.evidence_excerpt,
+          needs_confirmation: match.needs_confirmation,
+          visual_sample_timestamps: match.visual_sample_timestamps,
           // —— 片段级依据（来自检索响应，schema 已放行）——
           rank: match.rank ?? null,
           match_tier: match.match_tier ?? null,
