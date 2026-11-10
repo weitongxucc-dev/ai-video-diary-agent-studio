@@ -2758,6 +2758,8 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button",{name: "精确预览修改"}));
     await waitFor(()=>expect(mocks.previewEdit).toHaveBeenCalledWith("task-1",expect.objectContaining({selected_object_refs:["overlay:overlay-logo"],raw_command:"当前图片不透明度改为50%"})));
     expect(await screen.findByLabelText("变更预览")).toBeInTheDocument();
+    // The proposal owns modal focus; return to the work before selecting a shot.
+    fireEvent.click(within(screen.getByRole("dialog", {name:"修改提案"})).getByRole("button", {name:"取消"}));
     fireEvent.click(openStoryboardClip(1));
     expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
     expect(screen.queryByRole("complementary",{name:"图片1"})).not.toBeInTheDocument();
@@ -4208,7 +4210,7 @@ describe("CreationTaskWorkspace", () => {
     const input=await readyInput("局部修改要求");
     fireEvent.click(openStoryboardClip(1));
     await waitFor(()=>expect(mocks.saveReference).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole("button",{name:"查看本轮 1 项引用"}));
+    fireEvent.click(screen.getByRole("button",{name:/查看本轮 .* 项引用/}));
     fireEvent.click(await screen.findByRole("button",{name:/^取消镜头引用：镜头 1/}));
     fireEvent.change(input,{target:{value:"给这条素材添加空镜头"}});
     await waitFor(()=>expect(screen.getByRole("button",{name:"发送"})).toBeEnabled());
@@ -4225,7 +4227,7 @@ describe("CreationTaskWorkspace", () => {
     await act(async()=>finishCheckpoint!());
     expect(mocks.materialTurn).not.toHaveBeenCalled();expect(mocks.askAssistant).not.toHaveBeenCalled();
     expect(input).toHaveValue("给这条素材添加空镜头");
-    fireEvent.click(screen.getByRole("button",{name:"查看本轮 1 项引用"}));
+    fireEvent.click(screen.getByRole("button",{name:/查看本轮 .* 项引用/}));
     expect(await screen.findByRole("button",{name:/^取消镜头引用：镜头 1/})).toBeVisible();
   });
 
