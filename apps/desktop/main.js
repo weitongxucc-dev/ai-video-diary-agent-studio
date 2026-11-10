@@ -181,7 +181,7 @@ function reportServiceFailure(name, error, label) {
 
 function createWindow() {
   createDesktopWindow({
-    BrowserWindow, ipcMain, shell, preloadPath: path.join(__dirname, 'preload.js'), webOrigin, isDev,
+    app, BrowserWindow, ipcMain, shell, preloadPath: path.join(__dirname, 'preload.js'), webOrigin, isDev,
     onCreated: (window) => { mainWindow = window; },
     onClosed: (window) => { if (mainWindow === window) mainWindow = null; },
   });

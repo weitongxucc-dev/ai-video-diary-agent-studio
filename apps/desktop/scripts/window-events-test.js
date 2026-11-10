@@ -20,6 +20,7 @@ class BrowserWindow extends EventEmitter {
   }
 }
 const options = {
+  app: { dock: { setIcon: icon => { assert.ok(require('node:fs').existsSync(icon)); } } },
   BrowserWindow, ipcMain, preloadPath: '/fixture/preload.js', webOrigin: 'http://localhost:32101', isDev: false,
   shell: { openExternal: url => external.push(url) },
   onCreated: window => { currentWindow = window; },
@@ -28,6 +29,7 @@ const options = {
 const first = createDesktopWindow(options);
 assert.equal(first.options.webPreferences.contextIsolation, true);
 assert.equal(first.options.webPreferences.nodeIntegration, false);
+assert.ok(require('node:fs').existsSync(first.options.icon), 'the native window uses a shipped brand icon');
 assert.equal(first.url, options.webOrigin);
 let prevented = 0;
 const escape = () => first.webContents.emit('before-input-event', { preventDefault: () => { prevented += 1; } }, { type: 'keyDown', key: 'Escape' });

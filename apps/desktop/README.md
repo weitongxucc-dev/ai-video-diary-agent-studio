@@ -76,9 +76,10 @@ macOS包内主程序、Helper可执行名及`CFBundleName`保持ASCII（`Yaohe S
 
 ## 图标和权限
 
-- `assets/icon.icns`：macOS 构建输入。
-- `assets/icon.png`：通用 512px 源图。
-- `assets/generate_icon.py`：从同一图形规则重新生成上述两份资产。
+- `assets/icon-source.svg`：黑白折叠 Y 母版，沿用 `designs/yaohe-desktop-language-20261020/candidate-v2/public/brand/yaohe-symbol-small-white.svg` 的路径；`icon-source.png` 是其 1024px RGBA 栅格版。
+- `assets/icon.icns`：macOS 构建输入；`assets/icon.ico`：Windows 构建和窗口图标，包含 16–256px 多尺寸。
+- `assets/icon.png`：通用 512px 窗口及 macOS Dock 图标，开发启动也使用产品标识。
+- `assets/generate_icon.py`：使用 Pillow，从 `icon-source.png` 统一生成 PNG、ICNS、ICO 和 Web 品牌／favicon；SVG favicon 直接复制母版。修改 SVG 后先用 SVG 渲染器更新 1024px `icon-source.png`，再运行此脚本。
 - `assets/entitlements.plist`：Hardened Runtime/JIT 权限。
 
 中间尺寸 PNG 不进入仓库；需要时由生成脚本在内存中构造。

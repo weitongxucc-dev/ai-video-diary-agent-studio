@@ -1,11 +1,17 @@
-function createDesktopWindow({ BrowserWindow, ipcMain, shell, preloadPath, webOrigin, isDev, onCreated, onClosed }) {
+const path = require('path');
+
+function createDesktopWindow({ app, BrowserWindow, ipcMain, shell, preloadPath, webOrigin, isDev, onCreated, onClosed }) {
   const isMac = process.platform === 'darwin';
+  const icon = path.join(__dirname, '../assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
+  // electron . otherwise keeps Electron's Dock icon during local development.
+  if (isMac) app.dock.setIcon(icon);
   const window = new BrowserWindow({
     width: 1360,
     height: 840,
     minWidth: 1024,
     minHeight: 700,
     title: '曜核AI剪辑',
+    icon,
     backgroundColor: '#f7f7f5',
     show: true,
     ...(isMac ? {

@@ -26,6 +26,9 @@
     "productName": "Yaohe Studio",
     "artifactName": "智能视频日记 0.11 测试版-${version}-${arch}.${ext}",
     "copyright": "MIT License",
+    "win": {
+      "icon": "assets/icon.ico"
+    },
     "mac": {
       "category": "public.app-category.utilities",
       "target": [
