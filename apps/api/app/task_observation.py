@@ -69,7 +69,7 @@ def observe_output(path: Path, *, sample_times: list[float], temporary_root: Pat
             frames.append((frame_path, 0.0))
         elif path.suffix.lower() == ".mp4":
             probe = run_command(["ffprobe", "-v", "error", "-show_entries",
-                "format=duration:stream=codec_type,codec_name,width,height,duration", "-of", "json", str(path)])
+                "format=duration:stream=codec_type,codec_name,width,height,duration,avg_frame_rate", "-of", "json", str(path)])
             probe = json.loads(probe.stdout)
             streams = probe.get("streams", [])
             videos = [item for item in streams if item.get("codec_type") == "video"]
@@ -83,6 +83,7 @@ def observe_output(path: Path, *, sample_times: list[float], temporary_root: Pat
                 raise ValueError("实际视频时长不可验证")
             metadata = {"width": int(video["width"]), "height": int(video["height"]),
                         "duration_seconds": duration, "video_codec": video["codec_name"],
+                        "video_frame_rate": video.get("avg_frame_rate"),
                         "audio_stream_count": sum(item.get("codec_type") == "audio" for item in streams)}
             times = sample_times or [round(duration * fraction, 6) for fraction in (.15, .5, .85)]
             if any(timestamp >= duration for timestamp in times):

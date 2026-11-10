@@ -125,6 +125,24 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     proposal = state.repo.edit_records.get_edit_proposal("ws", operation["proposal_id"])
     typed_source = state.repo.edit_records.get_edit_intent("ws", proposal.intent_id).constraints["request_source"]
     current_task = state.repo.task_records.get_creation_task("ws", state.task.id)
+    from app.task_audio import media_digest
+    observed_version = state.repo.timeline_records.get_timeline_version('ws', current_task.current_timeline_version_id)
+    observed_source = {**typed_source, 'expected_timeline_version_id': observed_version.id,
+        'expected_timeline_sequence': observed_version.sequence}
+    observed_start = {'operation': 'output_observation', 'result_kind': 'observation',
+        'member_id': state.member.member_id, 'arguments': {'_typed_source': observed_source}}
+    observed_job = state.repo.job_records.create_job_run(JobRun('declared-observation', 'ws', state.task.id,
+        main.TASK_MEDIA_KIND, 'declared-observation', media_digest(observed_start)))
+    state.repo.job_records.claim_job_run('ws', observed_job.id)
+    state.repo.job_records.finish_job_run('ws', observed_job.id, status='failed', failure_reason='metadata-only fixture',
+        impact='No media was executed', repair_action='Use the real observation worker for media acceptance')
+    state.repo.execution_records.append_task_event(TaskEvent(f'event_{observed_job.id}_start', 'ws', state.task.id,
+        observed_job.id, 'task_media_submitted', {**observed_start, 'input_digest': observed_job.input_digest}))
+    observed_candidate = {'kind': 'job', 'id': observed_job.id, 'workspace_id': 'ws', 'task_id': state.task.id,
+        'source': observed_source, 'status': 'failed', 'event_id': 'declared-observation-result',
+        'created_at': observed_job.created_at.isoformat()}
+    observed_context = owner.business_candidate(observed_candidate, media_available=True)
+    assert observed_context.job.id == observed_job.id  # Own advanced observations reach result projection.
     projection = owner.business_projection(SimpleNamespace(
         candidate={"kind": "proposal", "event_id": "proposal-applied", "workspace_id": "ws", "task_id": state.task.id, "status": "confirmed"},
         source=typed_source, binding={"status": "completed"}, task=current_task, proposal=proposal, job=None, start=None), media=None, outputs=None)

@@ -1078,17 +1078,22 @@ class GoalResultProjection:
             return True
         if binding["status"] == "running":
             return False
-        snapshot = binding["context"].get("target_snapshot", {})
-        if (source["workspace_id"], source["task_id"], source["expected_timeline_version_id"], source["expected_timeline_sequence"]) != (
-                workspace_id, task_id, snapshot.get("timeline_version_id"), snapshot.get("timeline_sequence")):
-            self.mark(candidate)
-            return True
         proposal = job = start = media_result = None
-        if candidate["kind"] == "job":
+        if candidate['kind'] == 'job':
             if not media_available:
                 return False
-            job = self.production.job_records.get_job_run(workspace_id, candidate["id"])
-            start = self.production.execution_records.get_task_event(workspace_id, f"event_{job.id}_start").payload
+            job = self.production.job_records.get_job_run(workspace_id, candidate['id'])
+            start = self.production.execution_records.get_task_event(workspace_id, f'event_{job.id}_start').payload
+        task = self.production.task_records.get_creation_task(workspace_id, task_id)
+        from app.assistant.goal_versions import observation_source_is_owned
+        snapshot = binding["context"].get("target_snapshot", {})
+        if ((source['workspace_id'], source['task_id']) != (workspace_id, task_id)
+                or (source['expected_timeline_version_id'], source['expected_timeline_sequence']) != (
+                    snapshot.get('timeline_version_id'), snapshot.get('timeline_sequence'))
+                and not observation_source_is_owned(self.production, self.conversations, task, source, snapshot, start)):
+            self.mark(candidate)
+            return True
+        if candidate["kind"] == "job":
             if media_digest({key: value for key, value in start.items() if key != "input_digest"}) != job.input_digest:
                 self.mark(candidate)
                 return True
@@ -1108,7 +1113,6 @@ class GoalResultProjection:
                 self.mark(candidate)
                 return True
             actor = CreationExecutionActor.from_event(workspace_id, source["actor_identity"])
-        task = self.production.task_records.get_creation_task(workspace_id, task_id)
         if (actor.user_id or actor.member_id) != member_id:
             self.mark(candidate)
             return True

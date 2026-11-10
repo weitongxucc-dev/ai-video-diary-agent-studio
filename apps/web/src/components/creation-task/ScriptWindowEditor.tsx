@@ -99,6 +99,8 @@ function WindowEditorBody({ taskId, script, onSaved }: WindowEditorProps) {
         await recovery.clear(receipt);
         if (!active.current) return;
         setError(null);
+        setReading(true);
+        setPage(null);
         setForm({ edit: null, append: null });
         readRevision.current += 1;
         currentVersion.current = receipt.updated_at;
