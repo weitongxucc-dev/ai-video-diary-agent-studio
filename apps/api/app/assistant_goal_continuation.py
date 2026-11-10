@@ -535,8 +535,8 @@ class GoalResultProjection:
         }[kind]
         return {"status": status, "reason": reason}
 
-    def bound_execution(self, goal, base_version):
-        matches = []
+    def bound_execution(self, goal, base_version, *, job_id=None):
+        matches = {}
         for event in self.production.execution_records.list_task_events(goal["workspace_id"], goal["task_id"]):
             if event.event_type != "assistant_execution_located":
                 continue
@@ -546,14 +546,14 @@ class GoalResultProjection:
                     or source.get("expected_timeline_version_id") != base_version or not self.source_belongs_to_goal(goal, source)):
                 continue
             job = self.production.job_records.get_job_run(goal["workspace_id"], event.payload["job_id"])
-            if job.task_id == goal["task_id"] and job.kind == "creation_task_execution":
-                matches.append((source, job))
-        return matches[0] if len(matches) == 1 else None
+            if job.task_id == goal["task_id"] and job.kind == "creation_task_execution" and (job_id is None or job.id == job_id):
+                matches[job.id] = (source, job)
+        return next(iter(matches.values())) if len(matches) == 1 else None
 
     def owned_render_version(self, goal, version):
         from app.creation.render_result_provenance import rendered_version_provenance
-        bound = self.bound_execution(goal, version.parent_version_id)
         provenance = rendered_version_provenance(self.production, version)
+        bound = self.bound_execution(goal, version.parent_version_id, job_id=provenance['job_id']) if provenance else None
         return bool(bound and provenance and provenance['job_id'] == bound[1].id)
 
     def owned_edit_version(self, goal, version):
@@ -781,20 +781,24 @@ class GoalResultProjection:
         return None
 
     def output_observation(self, goal, event, facts, task, version):
-        if event.get("phase") != "observation" or event.get("status") != "succeeded" or version is None:
+        if version is None:
             return None
-        receipt = facts.get("media_job", {})
-        result = receipt.get("result") or {}
-        if (receipt.get("status") != "succeeded" or result.get("target", {}).get("kind") != "final"
-                or result.get("output_role") != "composed_output"
-                or result.get("timeline_version_id") != version.id or result.get("timeline_sequence") != version.sequence
-                or result.get("measurement_scope") != "actual_output_bounded_frames"):
-            return None
-        observed = self.production.execution_records.get_task_event(task.workspace_id, f"event_{receipt['job_id']}_start").payload
-        source = observed["arguments"].get("_typed_source", {})
-        if not source.get("assistant_turn_id") or not self.source_belongs_to_goal(goal, source):
-            return None
-        return {"receipt": receipt, "result": result, "observed_start": observed}
+        receipts = ([facts.get('media_job', {})] if event.get('phase') == 'observation' else [])
+        # A late execution receipt may follow an already completed observation.
+        # Recheck its real owner facts instead of clearing a valid checkpoint.
+        receipts += facts.get('observations', {}).get('observations', [])
+        for receipt in receipts:
+            result = receipt.get("result") or {}
+            if (receipt.get("status") != "succeeded" or receipt.get('stale')
+                    or result.get("target", {}).get("kind") != "final" or result.get("output_role") != "composed_output"
+                    or result.get("timeline_version_id") != version.id or result.get("timeline_sequence") != version.sequence
+                    or result.get("measurement_scope") != "actual_output_bounded_frames"):
+                continue
+            observed = self.production.execution_records.get_task_event(task.workspace_id, f"event_{receipt['job_id']}_start").payload
+            source = observed["arguments"].get("_typed_source", {})
+            if source.get("assistant_turn_id") and self.source_belongs_to_goal(goal, source):
+                return {"receipt": receipt, "result": result, "observed_start": observed}
+        return None
 
     def output_sources(self, goal, task, version, observation, output):
         from app.task_audio import TASK_MEDIA_KIND

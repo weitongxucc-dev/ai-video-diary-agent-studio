@@ -224,6 +224,25 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     stored = repo.get_task_goal(turn["id"])["request_context"]
     assert stored == context, "the original user snapshot must stay immutable"
     assert repo.get(chat["id"], "ws", state.member.member_id)["selected_reference"] == selected
+    if fast_render:
+        observed_version = state.repo.timeline_records.get_timeline_version('ws', 'render-version')
+        failed_job = state.repo.job_records.create_job_run(JobRun('prior-failed-render', 'ws', state.task.id,
+            'creation_task_execution', 'prior-failed-render', 'declared-input'))
+        state.repo.job_records.claim_job_run('ws', failed_job.id)
+        state.repo.job_records.finish_job_run('ws', failed_job.id, status='failed', failure_reason='prior attempt',
+            impact='No media was executed', repair_action='Keep the prior failure and use the adopted producer')
+        state.repo.execution_records.append_task_event(TaskEvent('prior-failed-locator', 'ws', state.task.id,
+            failed_job.id, 'assistant_execution_located', {'source': source, 'job_id': failed_job.id}))
+        goal = repo.get_task_goal(turn['id'])
+        assert owner.bound_execution(goal, edit_version.id) is None  # No guessed winner without adoption proof.
+        assert owner.owned_render_version(goal, observed_version)  # The actual producer resolves the retry chain.
+        from app.assistant.goal_versions import observation_source_is_owned
+        current_observation_source = {**typed_source, 'expected_timeline_version_id': observed_version.id,
+            'expected_timeline_sequence': observed_version.sequence}
+        assert observation_source_is_owned(state.repo, repo,
+            state.repo.task_records.get_creation_task('ws', state.task.id), current_observation_source,
+            {'timeline_version_id': edit_version.id, 'timeline_sequence': edit_version.sequence},
+            {'operation': 'output_observation', 'result_kind': 'observation'})
     foreign = replace(state.repo.timeline_records.get_timeline_version("ws", "render-version"), id="unrelated", parent_version_id="render-version", sequence=edit_version.sequence+2, snapshot={})
     state.repo.timeline_records.create_timeline_version(foreign)
     owner = GoalResultProjection(state.repo, repo)

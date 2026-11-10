@@ -906,6 +906,16 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
             duration_target_seconds=16))
     checkpoint=main._goal_readiness_use_case().output_checkpoint(goal,{'phase':'observation','status':'succeeded'},
         {'media_job':{'job_id':'observation','status':'succeeded','result':result}},task,version,None,business)
+    if mutation == 'none':
+        saved_observation = {'job_id': 'observation', 'status': 'succeeded', 'stale': False, 'result': result}
+        late_execution = main._goal_readiness_use_case().output_checkpoint(goal,
+            {'phase': 'execution', 'status': 'succeeded'},
+            {'observations': {'observations': [saved_observation]}}, task, version, None, business)
+        assert late_execution == checkpoint
+        saved_observation['stale'] = True
+        assert main._goal_readiness_use_case().output_checkpoint(goal,
+            {'phase': 'execution', 'status': 'succeeded'},
+            {'observations': {'observations': [saved_observation]}}, task, version, None, business) is None
     if mutation in {'none','watched_input','older_goal_locator','source_trimmed','scripted_short'}:
         assert checkpoint['scope']=='production_and_output_observation' and checkpoint['sha256']=='a'*64
         assert checkpoint['unavailable']==result['unavailable']
