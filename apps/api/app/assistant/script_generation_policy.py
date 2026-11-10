@@ -3,6 +3,8 @@ SCRIPT_GENERATION_TOOL_OPERATIONS = {
     'read_current_task': 'read_task_workspace',
     'read_preference_memory': 'read_creator_memory',
     'find_knowledge': 'read_assistant_script_context',
+    'find_materials': 'search_task_materials',
+    'read_material_evidence': 'read_material_evidence',
     'read_script_sections': 'read_script_sections',
     'read_execution_capabilities': 'read_execution_capabilities',
     'start_script_window': 'start_script_window',

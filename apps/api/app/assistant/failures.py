@@ -9,6 +9,8 @@ FAILURE_TIMEOUT = "timeout"                        # 超时
 FAILURE_RUNTIME_MISSING = "runtime_missing"        # 运行环境缺失
 FAILURE_TOOL_FAILED = "tool_failed"                # 业务工具失败
 FAILURE_OVERLOADED = "overloaded"
+FAILURE_QUOTA_EXHAUSTED = "quota_exhausted"
+FAILURE_RATE_LIMITED = "rate_limited"
 FAILURE_UNKNOWN = "unknown"                        # 拿不到更具体的原因
 
 # service_contacted=True 的分类有实际模型服务访问证据，结论可以写进
@@ -44,6 +46,16 @@ _FAILURES: dict[str, dict[str, object]] = {
         "service_contacted": True,
         "explanation": "模型服务当前过载（529），本轮未取得完整回复；请以已返回的业务回执判断已完成的修改。",
         "next_step": "稍后重试；若已有编辑或制作回执，先查询其结果，不要重复提交。",
+    },
+    FAILURE_QUOTA_EXHAUSTED: {
+        "service_contacted": True,
+        "explanation": "模型服务返回用量额度已耗尽，本轮未取得完整回复；已保存的任务与业务回执保留。",
+        "next_step": "在当前服务商核对套餐额度或余额，恢复后沿原任务继续；不会自动更换服务或重复提交制作。",
+    },
+    FAILURE_RATE_LIMITED: {
+        "service_contacted": True,
+        "explanation": "模型服务返回请求限流（429），本轮未取得完整回复；已保存的任务与业务回执保留。",
+        "next_step": "待服务商限流解除后沿原任务继续；已有编辑或制作先查询原回执，不重复提交。",
     },
     FAILURE_UNKNOWN: {
         "service_contacted": False,
@@ -114,7 +126,7 @@ def _tool_error_seen(output: str) -> bool:
     return False
 
 
-def _provider_overloaded(output: str) -> bool:
+def _provider_failure(output: str) -> str | None:
     for line in output.splitlines():
         try:
             event = json.loads(line)
@@ -128,17 +140,26 @@ def _provider_overloaded(output: str) -> bool:
             message = event.get("message") or {}
             if message.get("role") == "assistant" and message.get("stopReason") == "error":
                 failure = message.get("errorMessage")
-        if isinstance(failure, str) and (re.match(r"^(?:HTTP\s+)?529\b", failure)
-                                           or '"type":"overloaded_error"' in failure.replace(" ", "")):
-            return True
-    return False
+        if not isinstance(failure, str):
+            continue
+        lowered = failure.lower()
+        if any(marker in lowered for marker in ("token plan 用量上限", "insufficient_quota", "credit balance is too low")):
+            return FAILURE_QUOTA_EXHAUSTED
+        if (re.match(r"^(?:HTTP\s+)?429\b", failure)
+                or '"type":"rate_limit_error"' in failure.replace(" ", "")):
+            return FAILURE_RATE_LIMITED
+        if (re.match(r"^(?:HTTP\s+)?529\b", failure)
+                or '"type":"overloaded_error"' in failure.replace(" ", "")):
+            return FAILURE_OVERLOADED
+    return None
 
 
 def _classify_output(stdout: str, stderr: str = "") -> str:
     """Read one Pi run's logs and name the failure class, or admit we can't."""
     text = f"{stdout}\n{stderr}".lower()
-    if _provider_overloaded(stdout):
-        return FAILURE_OVERLOADED
+    provider_failure = _provider_failure(stdout)
+    if provider_failure is not None:
+        return provider_failure
     if _tool_error_seen(stdout):
         return FAILURE_TOOL_FAILED
     if any(pattern in text for pattern in _KEY_REJECTED_PATTERNS) or re.search(r"\b401\b", text):

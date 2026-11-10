@@ -7,7 +7,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Protocol
@@ -37,6 +37,8 @@ class ASRTranscription:
     provider: str
     text: str
     segments: list[SubtitleSegment]
+    words: list[SubtitleSegment] = field(default_factory=list)
+    timing_granularity: str = "segment"
 
 
 class ASRTranscriber(Protocol):
@@ -174,7 +176,7 @@ class LocalWhisperTranscriber:
     def configured(self) -> bool:
         return self._settings.local_whisper_configured
 
-    def transcribe(self, audio_path: str | Path) -> ASRTranscription:
+    def transcribe(self, audio_path: str | Path, *, word_timestamps=False) -> ASRTranscription:
         if not self.configured:
             raise ASRConfigurationError("Local Whisper is not configured")
         path = Path(audio_path).expanduser()
@@ -207,6 +209,12 @@ class LocalWhisperTranscriber:
                            "-osrt", "-of", str(srt_path.with_suffix(""))]
             elif language != "auto":
                 command.extend(["--language", language])
+            if word_timestamps:
+                if self._settings.local_whisper_backend == "whisper_cpp":
+                    command += ["-ojf"]
+                else:
+                    command[command.index("--output_format") + 1] = "all"
+                    command += ["--word_timestamps", "True"]
             try:
                 self._runner(command)
             except (OSError, subprocess.SubprocessError) as exc:
@@ -215,12 +223,20 @@ class LocalWhisperTranscriber:
             if not srt_path.is_file():
                 raise ASRTranscriptionError("Local Whisper did not generate SRT output")
             segments = _segments_from_srt(srt_path.read_text(encoding="utf-8"))
+            words, granularity = [], "segment"
+            if word_timestamps:
+                from app.asr_alignment import read_whisper_alignment
+                try:
+                    words, granularity = read_whisper_alignment(srt_path.with_suffix('.json'), self._settings.local_whisper_backend)
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    raise ASRTranscriptionError("本地 Whisper 未返回有效的对齐文件，未推算逐词时间") from exc
         if not segments:
             raise ASRTranscriptionError("Local Whisper generated empty subtitles")
         return ASRTranscription(
             provider="local_whisper",
             text="\n".join(segment.text for segment in segments),
             segments=segments,
+            words=words, timing_granularity=granularity,
         )
 
     def _run_command(self, command: list[str]) -> None:

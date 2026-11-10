@@ -1530,7 +1530,10 @@ class ConversationRepository:
                     registered.append(root_id)
                     continue
                 receipt = {**adoption, "turn_id": source_turn_id}
-                snapshot = task_context["target_snapshot"]
+                snapshot = {**task_context["target_snapshot"], "selected_references": [
+                    item for item in context.get('target_snapshot', {}).get('selected_references', [])
+                    if item['kind'] == 'material']}
+                task_context = {**task_context, "target_snapshot": snapshot}
                 event_id = "creation-adopted:" + root_id
                 event = {"type": "business_result", "event_id": event_id, "phase": "creation",
                     "status": "confirmed", "task_id": task_id, "request_id": adoption["request_id"],
@@ -1738,7 +1741,12 @@ class ConversationRepository:
                         continue
                     if turn["status"] == "running":
                         continue
-                    for event in json.loads(turn["events_json"]):
+                    # One model turn can finish editing, rendering and observing
+                    # before the projector runs. Consume those facts in causal
+                    # order, independent of asynchronous receipt arrival.
+                    events = sorted(json.loads(turn["events_json"]), key=lambda item:
+                        {'execution': 1, 'observation': 2}.get(item.get('phase'), 0))
+                    for event in events:
                         if event.get("phase") == "script_adoption":
                             # Once this input submitted execution, its real
                             # execution result owns the next wakeup.

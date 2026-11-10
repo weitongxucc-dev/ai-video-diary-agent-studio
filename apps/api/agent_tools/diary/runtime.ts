@@ -32,7 +32,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
     selectedTaskVersion, readCredentials, readActionSource, readMaterialSelection,
     initialTaskRead, initialScriptDraftUpdatedAt,
     initialEditCapabilities, initialMediaScriptCapabilities, initialScriptToolCapabilities} = readAgentContext(environment);
-  const verifyTaskVersion = (workspace: any) => verifyVersion(workspace, selectedTaskVersion);
+  const verifyTaskVersion = (workspace: any) => verifyVersion(workspace, selectedTaskVersion, Boolean(businessCall));
   const typedRequestId = (turn: string, call: string) => requestIdentity(taskId, turn, call);
   const callScope = createToolCallScope(readActionSource);
   const failures = new AsyncLocalStorage<{first?: BusinessFailure}>();
@@ -126,7 +126,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
     }
     registerTopicTools(pi, {request, taskId, readActionSource, verifyTaskVersion, isTaskRead, hasPreview, markPreview});
     registerScriptTools(pi, {request, taskId, readActionSource, readCurrentTaskFacts, isTaskRead, hasPreview, markPreview, getScriptDraftUpdatedAt, setScriptDraftUpdatedAt});
-    registerExecutionTools(pi, {request, taskId, isTaskRead, hasCreationAction, markCreationAction,
+    registerExecutionTools(pi, {request, taskId, selectedTaskVersion, isTaskRead, hasCreationAction, markCreationAction,
       hasEditControlWrite: hasHistoryControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal,
       readCurrentTaskFacts, typedRequestId});
     return registerControlledCodemode(pi);

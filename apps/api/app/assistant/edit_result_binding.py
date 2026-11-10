@@ -54,6 +54,30 @@ class AssistantEditResultBinding:
         self.production = production
         self.conversations = conversations
 
+    def completed_background_edit(self, task, actor, turn_id, input_id, events, *, read_source, read_original):
+        """Read the committed direct edit, independent of the model's final reply."""
+        sources = [event for event in events if event.event_type == 'edit_request_source'
+            and event.payload['source'].get('assistant_turn_id') == turn_id
+            and event.payload['source'].get('input_id') == input_id]
+        for event in reversed(sources):
+            claim = next(item for item in events if item.id == event.payload['request_event_id'])
+            if claim.payload['phase'] != 'apply':
+                continue
+            source = read_source(task, event.payload['request_event_id'], actor)
+            member = actor.user_id or actor.member_id
+            actual = read_original(task, actor, source['request_id'], 'apply')
+            if (actual['status'] != 'recorded' or actual['result_status_code'] != 200
+                    or 'operation_type' not in (actual['submitted_input'] or {})):
+                continue
+            details = {'task_id': task.id, 'request_id': source['request_id'], 'phase': 'apply',
+                'query_url': f"/api/creation-tasks/{quote(task.id, safe='')}/assistant/edit-requests/{source['request_id']}?phase=apply"}
+            reference = self.request_reference(task.id, turn_id, details)
+            locator = self.locator(task.id, reference, actual)
+            prepared = self.prepare_binding(task.workspace_id, task.id, member, turn_id, locator, details)
+            self.require_applied(task.workspace_id, task.id, turn_id, locator)
+            return self.record_locator(prepared, actor)
+        return None
+
     @staticmethod
     def request_reference(task_id: str, turn_id: str, details: dict) -> EditRequestReference:
         try:

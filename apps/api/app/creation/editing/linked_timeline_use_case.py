@@ -22,13 +22,14 @@ from app.creation.editing.metadata_use_case import (
 )
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.sources import EditSourceVerifier
+from app.creation.editing.ranges import apply_range_edit, prepare_range_edit
 from app.montage import creation_task_montage_plan_from_payload, MontageClip
 from app.source_policy import knowledge_item_readable as content_readable
 from app.production import material_segment_eligible, effective_segment_usage_role
 from uuid import uuid4
 from app.task_audio import media_digest
 
-LINKED_EDIT_OPERATIONS = frozenset({'ChangeLinkedSpeed', 'DeleteClip', 'DuplicateClip', 'InsertClip'})
+LINKED_EDIT_OPERATIONS = frozenset({'ChangeLinkedSpeed', 'DeleteClip', 'DuplicateClip', 'InsertClip', 'RemoveTimelineRanges'})
 
 
 @dataclass(frozen=True)
@@ -95,7 +96,10 @@ class LinkedTimelineEditUseCase:
         operation = command.operation_type
         if operation not in LINKED_EDIT_OPERATIONS:
             raise LinkedEditInputError('提案不是关联时轴编辑')
-        if operation == 'ChangeLinkedSpeed':
+        if operation == 'RemoveTimelineRanges':
+            if not command.values.get('range_edit') or command.values.keys() - {'base_version_id', 'range_edit'}:
+                raise LinkedEditInputError('区间精剪只接受当前时间线区间和取舍依据')
+        elif operation == 'ChangeLinkedSpeed':
             if (not command.values.get('clip_id') or command.values.get('playback_rate') is None
                     or command.values.keys() - {'base_version_id', 'clip_id', 'playback_rate'}):
                 raise ValueError('关联变速需要镜头和倍速，不混入其他操作')
@@ -115,7 +119,10 @@ class LinkedTimelineEditUseCase:
         command = replace(command, base_version_id=base.id, values={**command.values, 'base_version_id': base.id})
         tracks = self.montage_edits.current_subtitle_tracks(command.workspace_id, task, current_version=base, montage=plan)
         verifier = EditSourceVerifier(self.repository, identity=command.actor_identity)
-        if operation == 'ChangeLinkedSpeed':
+        if operation == 'RemoveTimelineRanges':
+            prepared = prepare_range_edit(task, plan, tracks, effective_audio_timeline(plan), command,
+                verifier=verifier, output_refs=logical_montage_output_refs(plan))
+        elif operation == 'ChangeLinkedSpeed':
             prepared = prepare_linked_speed(task, plan, tracks, effective_audio_timeline(plan), command,
                 verifier=verifier, output_refs=logical_montage_output_refs(plan),
                 validate_audio=lambda audio, duration: self.montage_edits.audio_service.validate(
@@ -260,7 +267,12 @@ class LinkedTimelineEditUseCase:
         base = self.repository.timeline_records.get_timeline_version(control.workspace_id, base_id)
         plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(control.workspace_id, control.task_id))
         tracks = self.montage_edits.current_subtitle_tracks(control.workspace_id, task, current_version=base, montage=plan)
-        if operation == 'ChangeLinkedSpeed':
+        if operation == 'RemoveTimelineRanges':
+            updated, tracks = apply_range_edit(task, plan, tracks, effective_audio_timeline(plan), command)
+            self.montage_edits.audio_service.validate(control.workspace_id, task.id, updated.audio_timeline,
+                updated.duration_seconds, draft_only=True)
+            message = '区间精剪已保存，声音、字幕、图层与画面同步；请检查实际预览。'
+        elif operation == 'ChangeLinkedSpeed':
             updated, tracks = apply_linked_speed(task, plan, tracks, effective_audio_timeline(plan), command,
                 validate_audio=lambda audio, duration: self.montage_edits.audio_service.validate(
                     control.workspace_id, control.task_id, audio, duration, draft_only=True))

@@ -16,6 +16,7 @@ from app.creation.editing.sources import EditSourceVerifier
 from app.creation.editing.picture import EditConflict
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.task_audio import TaskMediaRequired, media_digest, audio_mix_resources
+from app.creation.audio_source_limits import validate_audio_source_specs
 
 class AudioEditRejected(ValueError):
     def __init__(self, status_code, detail):
@@ -310,12 +311,7 @@ class AudioEditUseCase:
                 raise ValueError('CPU 音频处理预算尚未标定，未启动媒体')
             if not inputs:
                 raise ValueError('没有固定的音频输入，未启动媒体')
-            for source in inputs:
-                for field, cap in (('duration_seconds', budget.max_source_duration_seconds),
-                                   ('sample_rate', budget.max_sample_rate), ('channels', budget.max_channels)):
-                    value = source[field]
-                    if value is not None and (not isinstance(value, (int, float)) or value <= 0 or value > cap):
-                        raise ValueError('已保存的音频源规格超出标定预算')
+            validate_audio_source_specs(inputs, budget)
             start = arguments['payload'].get('start_seconds', 0)
             end = arguments['payload'].get('end_seconds', plan.duration_seconds)
             if not 0 <= start < end <= plan.duration_seconds:

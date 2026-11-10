@@ -12,7 +12,7 @@ from starlette.requests import Request
 import app.main as main
 from app.conversation_repository import ConversationRepository
 from app.assistant.result_projection import project_business_result, read_sdk_result
-from app.assistant.failures import AssistantUnavailable, FAILURE_OVERLOADED
+from app.assistant.failures import AssistantUnavailable, FAILURE_OVERLOADED, FAILURE_QUOTA_EXHAUSTED, FAILURE_RATE_LIMITED
 from test_typed_assistant_edits_api import metadata_http_state as metadata_http_state  # noqa: F401
 
 
@@ -98,6 +98,26 @@ def test_529_error_retains_safe_service_classification():
         read_sdk_result(json.dumps(value))
     assert error.value.cause == FAILURE_OVERLOADED and error.value.service_contacted
     assert "529" in str(error.value) and "没有留下" not in str(error.value)
+
+
+@pytest.mark.parametrize('failure,cause', [
+    ('429: {"type":"rate_limit_error","message":"已达到 Token Plan 用量上限 (2056)"}', FAILURE_QUOTA_EXHAUSTED),
+    ('429: {"type":"rate_limit_error","message":"Too many requests"}', FAILURE_RATE_LIMITED),
+    ('400: {"error":{"type":"insufficient_quota","message":"private provider details"}}', FAILURE_QUOTA_EXHAUSTED),
+])
+def test_provider_quota_and_rate_limits_have_distinct_safe_recovery(failure, cause):
+    value = {'type': 'creation_session_result', 'protocol': 1, 'owner': 'pi-coding-agent-sdk',
+        'status': 'settled', 'answer': '', 'tool_results': [], 'failure': failure}
+    with pytest.raises(AssistantUnavailable) as error:
+        read_sdk_result(json.dumps(value))
+    assert error.value.cause == cause and error.value.service_contacted
+    assert '原任务' in str(error.value) and 'private provider details' not in str(error.value)
+
+    # User/assistant prose or a tool result cannot impersonate a provider refusal.
+    value.pop('failure')
+    value['answer'] = failure
+    from app.assistant.failures import _classify_output
+    assert _classify_output(json.dumps(value)) not in {FAILURE_QUOTA_EXHAUSTED, FAILURE_RATE_LIMITED}
 
 
 TOOL_RUNNER = r"""

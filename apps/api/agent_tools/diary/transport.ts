@@ -170,6 +170,12 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   if (method === 'GET') {
     if (pathname === '/api/assistant/memory' && !search) return result('read_creator_memory');
     if (pathname === '/api/media-script-tools/capabilities' && !search) return result('read_media_script_tool_capabilities');
+    const evidence = pathname.match(/^\/api\/production\/materials\/([^/]+)\/evidence$/);
+    if (evidence && only('kind','expected_updated_at','start_seconds','end_seconds','offset','limit')) {
+      const args:Record<string,any> = {asset_id:decodeURIComponent(evidence[1])};
+      for (const [key,value] of query) args[key]=['start_seconds','end_seconds','offset','limit'].includes(key)?Number(value):value;
+      return result('read_material_evidence',args);
+    }
     if (pathname === '/api/production/materials/search' && only('q', 'limit', 'purpose', 'include_eligibility'))
       return result('search_task_materials', {query: query.get('q') || '', limit: Number(query.get('limit') || 8),
         purpose: query.get('purpose') || 'manual', include_eligibility: query.get('include_eligibility') === 'true'});
@@ -208,6 +214,9 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     if (suffix === '/segments' && only('offset', 'limit')) return result('read_narration_segments',
       {...args, offset: Number(query.get('offset') || 0), limit: Number(query.get('limit') || 24)});
     if (!suffix && !search) return result('read_task_workspace', args);
+    const clipCandidates = suffix.match(/^\/montage\/clips\/([^/]+)\/candidates$/);
+    if (clipCandidates && only('for_automation') && query.get('for_automation') === 'true')
+      return result('read_clip_candidates', {...args, clip_id: decodeURIComponent(clipCandidates[1])});
     if (suffix === '/execution' && only('job_id')) return result('read_creation_execution',
       {...args, ...(query.has('job_id') ? {job_id: query.get('job_id')} : {})});
     const scriptSections = suffix.match(/^\/scripts\/([^/]+)\/sections$/);
@@ -339,6 +348,8 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     const notSubmitted = (error: string, reason: string, stage: string) => reject(new RequestNotSubmitted(reason,
       {...locators, error, reason, repair_action: "重新读取当前对象和原请求，处理阻断后再提交。", stage, submission_effect: "not_submitted"}));
     const operation = businessCall ? hostOperation(path, (init?.method || 'GET').toUpperCase(), requestBody) : null;
+    if (operation?.operation === 'read_task_workspace' && selectedTaskVersion)
+      operation.arguments.expected_task_version = {...selectedTaskVersion};
     if (businessCall && !operation) return notSubmitted('business_operation_not_supported', '该操作未接入原目标后台执行，请求未提交。', 'capability');
     if (!businessCall && !apiBase) return notSubmitted("business_service_unavailable", "本地业务服务不可用，请求未提交。", "connection");
     const taskRoot = `/api/creation-tasks/${encodeURIComponent(taskId || '')}`;

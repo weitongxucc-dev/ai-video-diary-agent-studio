@@ -87,6 +87,8 @@ node scripts/yaohe.mjs material search --query "城市街景" --role b_roll --li
 
 全局能力读取 `/api/assistant/capabilities`；任务能力读取 `/api/creation-tasks/TASK/assistant/edit-capabilities`。`describe` 返回指定动作的实际可用性、参数 schema 和单位。素材读取沿 `/api/production/materials/ASSET` 和 `/api/production/materials/search`，仍受原成员与用途规则约束。
 
+局部证据读取 `/api/production/materials/ASSET/evidence`：`kind=segments|speech|words`，按源时钟 `start_seconds/end_seconds` 和 `offset/limit` 分页；后续页携带返回的 `updated_at` 作为 `expected_updated_at`。人工纠正、原ASR文字和实际逐词/词元对齐分开；句级转写不提供猜测的逐词时间。`RemoveTimelineRanges` 使用 `range_edit.removed_ranges_ms`（当前时间线毫秒删除区间）和 `reason` 沿共同精确编辑入口提交，音画、字幕与图层在同一作品版本联动，可整组撤销；源时间须先按实际镜头速度映射。
+
 脚本仅接入当前API的Python/Pillow单PNG来源预览；可复用图片工具使用下方已冻结API；个人扩展加载和导出尚未接入，本CLI不猜这些路由。服务端能力目录中的其他入口也不代表本 CLI 已实现对应命令。
 
 ## Python/Pillow 图片来源程序

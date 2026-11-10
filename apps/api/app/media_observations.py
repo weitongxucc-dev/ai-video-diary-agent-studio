@@ -22,6 +22,9 @@ class MaterialSpeechAnalysis:
     model_id: str = ""
     observations: list[SubtitleSegment] = field(default_factory=list)
     message: str = ""
+    word_observations: list[SubtitleSegment] = field(default_factory=list)
+    timing_granularity: Literal["segment", "word", "token"] = "segment"
+    audio_present: bool | None = None
 
 
 @dataclass

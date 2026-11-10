@@ -127,6 +127,10 @@ export function registerMaterialReads(pi: ToolRegistrar, {request, boundSelectio
         }),
         segment_page: { total_count: segments.length, offset, limit, has_more: offset + selected.length < segments.length },
         speech: { status: speech?.status ?? "not_recorded", message: materialText(speech?.message ?? ""),
+          audio_present:speech?.audio_present ?? null,timing_granularity:speech?.timing_granularity ?? 'segment',
+          alignment_count:speech?.word_observations?.length ?? 0,
+          alignment_read:{tool:'read_material_evidence',asset_id:asset.id,expected_updated_at:asset.updated_at,kind:'words',
+            instruction:'已有实际word/token对齐须按源区间分页读取；不能因本窗口只返回句段而认定没有对齐。人工纠正与原ASR对齐分开。'},
           observations: speech?.status === "ready" ? speech.observations.filter(item => ranges.some(([start, end]) => item.end_ms > start * 1000 && item.start_ms < end * 1000))
             .map(item => ({ start_ms: item.start_ms, end_ms: item.end_ms, text: materialText(item.text) })) : [] },
         instruction: "review_status是实际审核状态，approved表示已确认；usage_role是用途：b_roll就是界面‘用作配图’，a_roll为主画面，exclude为不使用，unassigned为未指定。用途与标签分开，不因没有‘配图’标签否认已确认用途。description为已存片段描述，user_description为空不代表片段描述或人工审核不存在。画面观察、声音陈述、OCR文字、已存片段转录和用户补充分别表达；blocked或failed只表示对应识别未完成，不否定人工记录。OCR retrieval_eligible=false仅为低置信线索。不得把推断当作观察，也不能仅凭标签宣称用途。" });

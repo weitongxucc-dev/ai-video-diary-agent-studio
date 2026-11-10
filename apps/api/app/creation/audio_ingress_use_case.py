@@ -16,6 +16,7 @@ from app.audio_waveform import AudioWaveformError, audio_waveform
 from app.creation.editing.metadata_use_case import effective_audio_timeline
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.task_audio import media_digest, audio_mix_resources
+from app.creation.audio_source_limits import validate_audio_source_specs
 
 AUDIO_INGRESS_ACTIONS = frozenset({'audio_import','recording_save','audio_waveform','audio_listen','narration_waveform'})
 
@@ -384,12 +385,7 @@ class AudioIngressUseCase:
             raise ValueError('CPU 音频处理预算尚未标定，未启动媒体')
         if not audio_inputs and operation != 'audio_listen':
             raise ValueError('没有固定的音频输入，未启动媒体')
-        for source in audio_inputs:
-            for field, cap in (('duration_seconds',budget.max_source_duration_seconds),
-                               ('sample_rate',budget.max_sample_rate),('channels',budget.max_channels)):
-                value = source[field]
-                if value is not None and (not isinstance(value,(int,float)) or value <= 0 or value > cap):
-                    raise ValueError('已保存的音频源规格超出标定预算')
+        validate_audio_source_specs(audio_inputs, budget)
         known_duration = max((item['duration_seconds'] or 0 for item in audio_inputs),default=0)
         if operation in {'audio_import','recording_save'}:
             output_duration = budget.max_output_duration_seconds

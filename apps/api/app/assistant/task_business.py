@@ -10,6 +10,8 @@ from app.creation.editing.metadata_use_case import EditPreviewRejected
 from app.assistant.task_business_errors import TaskBusinessRejected, TaskOperationRejected, TaskInvocation
 from app.assistant.script_generation_policy import SCRIPT_GENERATION_OPERATIONS, is_script_generation
 from app.creation.intent_use_case import CreationIntentUseCase
+from app.assistant.material_reads import MATERIAL_READ_OPERATIONS, read_goal_materials
+from app.assistant.goal_versions import effective_goal_version, owned_version_transition
 from app.creation.output_observation_use_case import read_original_observation_request
 from app.creation_execution import CreationExecutionActor, ExecutionStartRequest
 from app.schemas import CreationTaskScriptDraftRequest, CreationTaskScriptConfirmRequest, CreationTaskTopicConfirmRequest
@@ -137,11 +139,8 @@ class TaskBusiness:
                     or self.authorizations.verdict(actor,task_id,'task_goal',connection=conn,check_scope=False)!='ready'):
                 raise TaskBusinessRejected('原任务授权已到期或撤销')
             task=self.production.task_records.get_creation_task(ws,task_id,connection=conn)
-            version=conn.execute('SELECT sequence FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=?',
-                (ws,task_id,task.current_timeline_version_id)).fetchone() if task.current_timeline_version_id else None
-            snapshot=binding.get('task_version')
-            if check_version and snapshot is not None and (snapshot.get('timeline_version_id'),snapshot.get('timeline_sequence',0)) != (task.current_timeline_version_id,version[0] if version else 0):
-                raise TaskBusinessRejected('原目标的预期作品版本已变化',kind='conflict')
+            goal = (effective_goal_version(self.production, self.conversations, root['goal'],
+                binding.get('task_version'), task, connection=conn) if check_version else root['goal'])
             sealed=self.production.execution_records.get_task_event(ws,self.authorizations.business_context_id(root['goal']),connection=conn).payload
             if sealed['authorization_id']!=authorization.id or sealed['identity']!=authorization.identity:
                 raise TaskBusinessRejected('原目标封存范围不匹配')
@@ -152,7 +151,7 @@ class TaskBusiness:
             if self.production.task_authorization_records.task_source_revisions(ws,[item['id'] for item in sealed['knowledge']],
                     [item['id'] for item in sealed['sources']],connection=conn)!=sealed['source_revisions']:
                 raise TaskBusinessRejected('原目标固定资料或本地读取权限已变化',kind='conflict')
-        return actor,task,root['goal'],origin,sealed
+        return actor,task,goal,origin,sealed
 
     def _check_generation(self, binding, *, connection):
         if (binding.get('intent_kind') != 'script_generation' or not binding.get('generation_request_id')
@@ -398,6 +397,14 @@ class TaskBusiness:
         events=self.production.execution_records.list_task_events(ws,task_id)
         response={'reply':reply,'turn_id':claim['turn_id'],'draft_version':1}
         proofs=[]
+        from app.assistant.edit_result_binding import AssistantEditResultBinding
+        edit = AssistantEditResultBinding(self.production, self.conversations).completed_background_edit(
+            task, actor, claim['turn_id'], goal.get('source_input_id'), events,
+            read_source=lambda task, event_id, actor: self.exact_case_for().read_request_source(task, event_id, actor),
+            read_original=self.request_result)
+        if edit is not None:
+            response.update(edit_request=edit.model_dump(mode='json'), timeline_action='apply')
+            proofs.append({'kind': 'edit_request', 'id': str(edit.request_id)})
         if quality_continuation is not None:
             from app.assistant.result_projection import resolve_quality_continuation, quality_continuation_message
             try:
@@ -594,7 +601,12 @@ class TaskBusiness:
                 {**origin,'assistant_turn_id':goal['current_turn_id']},
                 {k:v for k,v in args['payload'].items() if k not in {'assistant_turn_id','input_id'}},write_guard=guard)
         if operation=='read_task_workspace':
-            return self.workspace_facts(ws,task)
+            facts = dict(self.workspace_facts(ws,task))
+            if generation:
+                return facts
+            transition = owned_version_transition(self.production, self.conversations, goal,
+                args.get('expected_task_version') or goal['target_snapshot'], task)
+            return {**facts, **({'owned_version_transition': transition} if transition else {})}
         if operation=='read_creator_memory':
             if generation:
                 if self.creator_memory is None:
@@ -678,26 +690,10 @@ class TaskBusiness:
                     raise TaskBusinessRejected('任务制作摘要读取尚未装配',kind='unavailable')
                 return self.execution_status(ws,task_id,actor=actor)
             return self.read_execution(goal,actor,job_id=args.get('job_id'))
-        if operation in {'search_task_materials','read_task_material'}:
-            allowed=self.authorizations.material_asset_ids(ws,task_id)
-            if operation=='read_task_material':
-                if args['asset_id'] not in allowed:
-                    raise TaskBusinessRejected('素材不在原目标固定范围内')
-                return self.material_facts(self.production.get_asset(ws,args['asset_id']))
-            query=str(args.get('query','')).casefold()
-            limit=int(args.get('limit',8))
-            if not 1<=limit<=20:
-                raise ValueError('素材搜索范围须为1至20')
-            if args.get('include_eligibility'):
-                purpose=args.get('purpose','manual')
-                if purpose not in {'manual','automatic'}:
-                    raise ValueError('镜头检索用途无效')
-                return self.production.material_search.search_material_segments(ws,query=query,asset_ids=sorted(allowed),
-                    usage_roles=['a_roll','b_roll'],limit=limit,viewer_user_id=actor.user_id or actor.member_id,
-                    purpose=purpose,include_eligibility=True)
-            assets=[asset for asset in self.production.list_assets(ws,viewer_user_id=actor.user_id or actor.member_id)
-                    if asset.id in allowed and (not query or query in (asset.file_name+' '+asset.user_description+' '+' '.join(asset.user_tags)).casefold())]
-            return {"assets":[self.material_facts(asset) for asset in assets[:limit]],"total_count":len(assets),"has_more":len(assets)>limit}
+        if operation in MATERIAL_READ_OPERATIONS:
+            return read_goal_materials(self.production, self.authorizations, actor, task_id,
+                operation, args, material_facts=self.material_facts, sealed=sealed,
+                montage_edits=self.exact_case_for().metadata if operation == 'read_clip_candidates' else None)
         if operation in {'start_script_window','patch_script_sections','confirm_saved_script','read_script_window_request'}:
             from app.schemas import (CreationTaskScriptWindowStartRequest, CreationTaskScriptSectionsPatchRequest,
                                      CreationTaskScriptConfirmSavedRequest)

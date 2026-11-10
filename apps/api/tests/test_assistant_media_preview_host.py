@@ -33,14 +33,19 @@ def events(details, model_reply="预览已完成，修改已应用。", *, faile
 
 
 @pytest.mark.parametrize("status", ["queued", "running", "interrupted", "succeeded"])
-def test_pending_media_job_overrides_model_success_claim_and_preserves_receipt(status):
+def test_media_job_state_overrides_model_success_claim_and_preserves_receipt(status):
     job = receipt(status)
     if status == "succeeded":
         job["result"] = {"proposal":{"id":"stored-result"}}
     details = {"kind":"task_media_job","media_job":job}
     reply, result = project_event_fixture(events(details))
     assert result == {"kind":"media_job","media_job":job}
-    assert "已安排，预览尚未完成" in reply
+    if status in {'queued', 'running'}:
+        assert '预览尚未完成' in reply
+    elif status == 'interrupted':
+        assert '未成功完成' in reply
+    else:
+        assert '已回读' in reply and '采用关系' in reply
     assert "修改已应用" not in reply and "预览已完成" not in reply
     assert pi._safe_tool_result_summary("preview_typed_edit", {"details":details}, False) == reply
 

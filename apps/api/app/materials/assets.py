@@ -44,6 +44,10 @@ class MaterialVersionConflict(ValueError):
 
 
 class MaterialAssetStore:
+    def read_evidence(self, workspace_id, asset_id, **window):
+        from app.materials.evidence import MaterialEvidenceReader
+        return MaterialEvidenceReader(self._connect).read(workspace_id, asset_id, **window)
+
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
         self._connect = connection_factory
 
@@ -510,6 +514,8 @@ class MaterialAssetStore:
         if query:
             clauses.append("""(
                 LOWER(json_extract(payload, '$.file_name')) LIKE ?
+                OR LOWER(json_extract(payload, '$.user_description')) LIKE ?
+                OR LOWER(json_extract(payload, '$.upload_context')) LIKE ?
                 OR EXISTS (SELECT 1 FROM json_each(material_assets.payload, '$.user_tags') AS tag WHERE LOWER(tag.value) LIKE ?)
                 OR EXISTS (
                     SELECT 1 FROM json_each(material_assets.payload, '$.segments') AS segment
@@ -534,7 +540,7 @@ class MaterialAssetStore:
                         AND json_extract(observation.value, '$.confidence') >= ?))
                 )
             )""")
-            parameters.extend([*[f"%{query.strip().lower()}%"] * 7, OCR_RETRIEVAL_MIN_CONFIDENCE])
+            parameters.extend([*[f"%{query.strip().lower()}%"] * 9, OCR_RETRIEVAL_MIN_CONFIDENCE])
         if tag:
             # Clicking a tag is an exact choice, not a search: "红烧肉" must not
             # drag in "红烧肉特写", and the tag's own spelling is the whole test —
@@ -955,8 +961,9 @@ class MaterialAssetStore:
         ]
         speech = data.pop("speech_analysis", None)
         speech_analysis = MaterialSpeechAnalysis(
-            **{key: value for key, value in speech.items() if key != "observations"},
+            **{key: value for key, value in speech.items() if key not in {"observations", "word_observations"}},
             observations=[SpeechObservation(**item) for item in speech.get("observations", [])],
+            word_observations=[SpeechObservation(**item) for item in speech.get("word_observations", [])],
         ) if isinstance(speech, dict) else None
         asset = MaterialAsset(**data, segments=segments, speech_analysis=speech_analysis)
         for segment in asset.segments:

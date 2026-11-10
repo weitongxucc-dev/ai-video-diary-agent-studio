@@ -5,6 +5,8 @@ its facts and claim the next event with their original CAS and transactions.
 """
 from app.assistant.references import (AssistantReferenceConflict, normalize_selection,
     validate_timeline_reference, timeline_object_refs)
+from app.creation.duration_requirement import DurationRequirement
+from app.montage import creation_task_montage_plan_from_payload
 
 
 class GoalEvidenceUnavailable(Exception):
@@ -174,8 +176,10 @@ class GoalReadinessUseCase:
         if source is None:
             return None
         actual = self.read_execution(business,goal,actor,job_id=source["job_id"])
-        duration_target = (self.read_plan(task).duration_target_seconds
-            if goal.get("creation_adoption") else None)
+        duration_target = None
+        if goal.get("creation_adoption"):
+            montage = creation_task_montage_plan_from_payload(version.snapshot["montage"])
+            duration_target = DurationRequirement.for_output(self.read_plan(task), montage).target_seconds
         checkpoint = owner.completed_output(observation, output, version, source, actual,
             goal=goal, duration_target_seconds=duration_target)
         if checkpoint is not None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from app.assistant.projection import _business_event_lines
+from app.assistant.projection import _business_event_lines, media_processing_state_message
 from app.assistant.business_failure import _safe_business_failure
 from app.assistant.catalogue import SCRIPT_WINDOW_TOOL_OPERATIONS
 from app.assistant.script_window_receipts import project_script_window_request, script_window_message
@@ -515,7 +515,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
             else:
                 answer = "实际输出检查已安排；尚未取得成功检查结果，排队或运行不能视为已经检查。"
         else:
-            answer = "已安排，预览尚未完成；完成后请在工作台查看实际预览，再确认是否应用。"
+            answer = media_processing_state_message(media_job)
         preview = {"kind": "media_job", "media_job": media_job}
     elif kind == "edit_preview" and preview is not None:
         # The proposal is the business result; the model's final text stays in

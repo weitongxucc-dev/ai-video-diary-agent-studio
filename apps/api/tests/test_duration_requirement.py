@@ -33,6 +33,21 @@ def test_exact_delivery_uses_video_frame_clock(duration, result):
     assert DurationRequirement(30).assess(duration, '30/1') == result
 
 
+def test_source_output_follows_adopted_edit_clock_without_relaxing_scripted_delivery():
+    plan = SimpleNamespace(source_media={'source_start_seconds': 0, 'source_end_seconds': 16},
+        duration_target_seconds=16, duration_mode='exact', duration_range_seconds=None)
+    montage = SimpleNamespace(script_id=None, duration_seconds=15.64)
+    requirement = DurationRequirement.for_output(plan, montage)
+    assert requirement == DurationRequirement(15.64)
+    assert requirement.assess(15.633333, 30) == 'met'
+    assert requirement.assess(16, 30) == 'mismatch'
+    plan.source_media = None
+    assert DurationRequirement.for_output(plan, montage).assess(15.64, 30) == 'mismatch'
+    plan.source_media = {'source_start_seconds': 0, 'source_end_seconds': 16}
+    montage.script_id = 'adopted-script'
+    assert DurationRequirement.for_output(plan, montage).assess(15.64, 30) == 'mismatch'
+
+
 def test_approximate_requires_an_explicit_range_and_unknown_is_not_met():
     requirement = DurationRequirement(30, 'approximate', (29, 31))
     assert [requirement.assess(n, 30) for n in (29, 29.92, 31, 31.01)] == ['met', 'met', 'met', 'mismatch']

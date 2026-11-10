@@ -68,7 +68,8 @@ def _prepared_proposal(
     # source. The same bound command is rechecked by the joint commit later.
     command = verifier.bind_affected(command, before, after)
     now = utc_now()
-    refs = [f"clip:{command.values['clip_id']}"]
+    refs = ([f"clip:{command.values['clip_id']}"] if command.values.get('clip_id') else
+            [f"clip:{clip_id}" for clip_id in command.affected_clip_ids or ()])
     intent = EditIntent(
         id=f"intent_{uuid4().hex}", workspace_id=command.workspace_id, task_id=command.task_id,
         raw_command=raw_command, context_stage="montage", selected_object_refs=refs,

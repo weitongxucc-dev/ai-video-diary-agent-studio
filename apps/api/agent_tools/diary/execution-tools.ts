@@ -1,29 +1,35 @@
-import type {BusinessRequest, ToolRegistrar, ActionSource} from './contracts.ts';
+import type {BusinessRequest, ToolRegistrar, ActionSource, TaskVersion} from './contracts.ts';
+import {createExecutionVersionFollower} from './execution-version.ts';
 import {BusinessRequestError, BusinessResultUnknown, RequestNotSubmitted, safeBusinessFailure} from './transport.ts';
 import {boundedText} from '../task_facts.ts';
 import {setTimeout as delay} from 'node:timers/promises';
 
-export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTaskRead, hasCreationAction, markCreationAction, hasEditControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal, readCurrentTaskFacts, typedRequestId}: {
+export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, selectedTaskVersion, isTaskRead, hasCreationAction, markCreationAction, hasEditControlWrite, directEditUnverified, hasPreview, readActionSource, getSignal, readCurrentTaskFacts, typedRequestId}: {
+  selectedTaskVersion?: TaskVersion | null;
   request: BusinessRequest; taskId: string | undefined; isTaskRead: () => boolean; hasCreationAction: () => boolean; markCreationAction: () => void; hasEditControlWrite: () => boolean; directEditUnverified?: () => boolean; hasPreview: () => boolean; readActionSource: () => ActionSource; getSignal: () => AbortSignal | undefined;
   readCurrentTaskFacts: () => Promise<any>; typedRequestId: (turn: string, call: string) => string;
 }) {
   if (taskId) {
+    const versionFollower = createExecutionVersionFollower(taskId, selectedTaskVersion);
     let preparationAttempt: {inputKey: string; shapeKey: string; requestId: string; workId?: string; released?: boolean} | null = null;
     const preparationRoot = '/api/device/resource-preparations';
     const preparationResult = (action: string, receipt: any, preparationKey?: string) => {
-      const details = {kind: 'device_preparation', action, receipt,
+      const details = {kind: 'device_preparation', action, receipt, preparation_id: receipt.id,
+        instruction: '查询和核验使用preparation_id（队列id）；preparation_key仅是提交幂等UUID。新输入首次准备省略request_id，由宿主分配；不要从历史借用其他准备的键。',
         ...(preparationKey ? {preparation_key: preparationKey} : {})};
       return {content: [{type: 'text', text: JSON.stringify(details)}], details};
     };
     pi.registerTool({name: 'prepare_device_resources', label: '提交有界设备准备',
       description: '按当前授权目标提交cpu媒体形状、narration真实声音版本或montage故事板的有界准备。montage仅传空shape，由宿主绑定当前任务并读取真实文案与素材形状；narration须给实际有限样本文案、目标语言、输出单元时长及原词典id/version引用；当前任务由宿主绑定，不传词典正文。只提交既有准备owner，不运行旧作品或normal制作；不得传路径、env或许可阈值。首次请求键由宿主生成；回应未知只沿原键和原shape对账，不换ID重做。收到id后查询原队列；终态且finalize明确释放后，可因实际需要显式新键再次准备，默认重调仍只查原结果。',
       parameters: {type: 'object', properties: {
-        request_id: {type: 'string',format: 'uuid',description: '用于已知原键恢复，或原队列终态经finalize释放后明确新一轮准备；未知或active不可换键。不是队列id。'},
+        request_id: {type: 'string',format: 'uuid',description: '新输入首次准备省略，由宿主生成新键；不借用历史准备的UUID。仅恢复本输入的已知原键，或本输入原队列终态经finalize释放后显式新一轮准备时提供；未知或active不可换键。不是查询/核验使用的preparation_id。'},
         kind: {type:'string',enum:['cpu','narration','montage'],default:'cpu'},
         shape: {oneOf: [{type: 'object',properties: {
           width_px: {type:'integer',minimum:2,multipleOf:2},height_px: {type:'integer',minimum:2,multipleOf:2},
-          frame_rate: {type:'integer',minimum:1},duration_seconds: {type:'number',exclusiveMinimum:0},
-          clip_count: {type:'integer',minimum:1},audio_input_count: {type:'integer',minimum:1},
+          frame_rate: {type:'integer',minimum:1},duration_seconds: {type:'number',exclusiveMinimum:0,
+            description:'当前有限单元真实需要处理的时长，须覆盖画面从原镜头起点解码的范围及声音单元；不是仅看输出窗口长度。设备准备可能被其他任务更新，先回读现档，按实际形状准备，不传更高资源阈值。'},
+          clip_count: {type:'integer',minimum:1},audio_input_count: {type:'integer',minimum:1,
+            description:'有限混音单元的输入槽位数，按实际音频片段而不是不同文件数计算；同一原片经精剪分为多个声音片段也分别占槽。多个片段需要归约时至少准备两个槽位，更多片段沿现有有界归约，不把整片片段数当设备资源阈值。'},
           sample_rate: {type:'integer',minimum:1},channels: {type:'integer',minimum:1},
           source_bytes: {type:'integer',minimum:1,description:'本单元媒体输入按实际打开次数累计的字节数。原片大小可读plan.source_media.source_file_size_bytes（采用时封存值）；同文件两个音频片段各打开一次须计两次，不只是单文件大小。不是设备limits里的max_input_bytes，不得拿预算上限冒充；未知时省略。'},
           overlay_count: {type:'integer',minimum:0,description:'当前制作单元同时合成的图文和字幕层数量；省略只准备零图层，不能据此输出有图层的作品。'},
@@ -87,21 +93,23 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
       }});
     pi.registerTool({name:'read_device_preparation',label:'查询原设备准备',
       description:'只读已返回的设备队列id状态，不启动runtime、不finalize或准备新请求；原准备键不等于队列id。',
-      parameters:{type:'object',properties:{request_id:{type:'string',minLength:1}},required:['request_id'],additionalProperties:false},
-      execute:async(_id:string,params:{request_id:string})=>{
-        const receipt=await request(`${preparationRoot}/${encodeURIComponent(params.request_id)}`);
-        if(receipt.id!==params.request_id)throw new Error('设备准备回执身份不一致');
+      parameters:{type:'object',properties:{preparation_id:{type:'string',minLength:1,
+        description:'提交回执返回的preparation_id或receipt.id，即实际队列id；不是提交幂等UUID/preparation_key。'}},required:['preparation_id'],additionalProperties:false},
+      execute:async(_id:string,params:{preparation_id:string})=>{
+        const receipt=await request(`${preparationRoot}/${encodeURIComponent(params.preparation_id)}`);
+        if(receipt.id!==params.preparation_id)throw new Error('设备准备回执身份不一致');
         return preparationResult('status',receipt);
       }});
     pi.registerTool({name:'finalize_device_preparation',label:'核验原设备准备结果',
       description:'对原队列核验完整回执并发布设备档，失败或未完按实际回执处理；成功不启动normal制作、不自动恢复旧作品，也不代表全目标能力已验证。',
-      parameters:{type:'object',properties:{request_id:{type:'string',minLength:1}},required:['request_id'],additionalProperties:false},
-      execute:async(_id:string,params:{request_id:string})=>{
-        const receipt=await request(`${preparationRoot}/${encodeURIComponent(params.request_id)}/finalize`,{method:'POST',body:'{}'});
-        if(receipt.id!==params.request_id || receipt.normal_work_started!==false || typeof receipt.profile_published!=='boolean'
+      parameters:{type:'object',properties:{preparation_id:{type:'string',minLength:1,
+        description:'原回执中的实际队列id（preparation_id或receipt.id），不是提交幂等UUID。'}},required:['preparation_id'],additionalProperties:false},
+      execute:async(_id:string,params:{preparation_id:string})=>{
+        const receipt=await request(`${preparationRoot}/${encodeURIComponent(params.preparation_id)}/finalize`,{method:'POST',body:'{}'});
+        if(receipt.id!==params.preparation_id || receipt.normal_work_started!==false || typeof receipt.profile_published!=='boolean'
             || !['done','failed','cancelled'].includes(receipt.state))
           throw new Error('设备准备发布回执不完整，未宣称已发布或已启动制作');
-        if (preparationAttempt?.workId===params.request_id) preparationAttempt.released=true;
+        if (preparationAttempt?.workId===params.preparation_id) preparationAttempt.released=true;
         return preparationResult('finalize',receipt);
       }});
     pi.registerTool({name: "read_execution_capabilities", label: "读取执行单元能力",
@@ -271,6 +279,7 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
             const value = await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/execution?job_id=${encodeURIComponent(params.job_id)}`, {signal});
             if (value.task_id !== taskId || value.job?.id !== params.job_id || value.job.task_id !== taskId) throw new Error("原制作作业响应身份不一致");
             status = value;
+            versionFollower.observe(status);
           } catch (error) {
             if (parentSignal?.aborted || !deadline.aborted || !status) throw error;
             break;
@@ -328,6 +337,7 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
       } else {
         status = await submitExecution(action, binding, {});
       }
+      if (action !== 'cancel') versionFollower.submitted(status);
       return {
         content: [{ type: "text", text: JSON.stringify({ action, status }) }],
         details: { kind: "execution_action", action, status },

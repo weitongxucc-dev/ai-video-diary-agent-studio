@@ -687,7 +687,7 @@ class MetadataEditUseCase:
         audio_edit = operation_payload.get('edit') if operation_type == 'EditAudioTimeline' else None
         if isinstance(audio_edit, dict) and audio_edit.get('action') == 'replace_narration':
             carried_tracks = [replace(track, status='unavailable', artifact_ref=None, transform_id=None, failure_reason='整条旁白已更换，旧字幕时间尚未复核。', impact='原字幕文字已保留，但旧字幕轨不能作为新旁白的有效字幕输出。', repair_action='逐条检查字幕文字和时间，确认后重新生成字幕与成片。') for track in carried_tracks]
-        if operation_type in {'RegenerateNarrationSegment', 'DeleteClip', 'DuplicateClip', 'InsertClip', 'ChangeLinkedSpeed', 'EditCompoundTimeline', 'RemoveSilence', 'AlignSubtitleTiming', 'ReorderClip', 'ReorderTimelineItems'}:
+        if operation_type in {'RegenerateNarrationSegment', 'DeleteClip', 'DuplicateClip', 'InsertClip', 'ChangeLinkedSpeed', 'EditCompoundTimeline', 'RemoveSilence', 'RemoveTimelineRanges', 'AlignSubtitleTiming', 'ReorderClip', 'ReorderTimelineItems'}:
             try:
                 if operation_type == 'RegenerateNarrationSegment':
                     carried_tracks = retime_subtitle_tracks(carried_tracks, source_plan.cues, updated_plan.cues)
@@ -1091,14 +1091,16 @@ class MetadataEditUseCase:
         return (intent, proposal)
 
 
-    def montage_candidates(self, workspace_id, plan, clip, *, automation_only=False, viewer_user_id=None, local_diagnostic=False):
+    def montage_candidates(self, workspace_id, plan, clip, *, automation_only=False, viewer_user_id=None, local_diagnostic=False, assets=None):
         cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
         cue_tokens = set((cue.text if cue else '').lower())
         slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
         rate = clip_playback_rate(clip)
         source_need = slot_duration * rate
         candidates: list[MontageClipCandidateResponse] = []
-        for asset in self.repository.list_assets(workspace_id, include_private=viewer_user_id is not None or local_diagnostic, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic):
+        if assets is None:
+            assets = self.repository.list_assets(workspace_id, include_private=viewer_user_id is not None or local_diagnostic, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+        for asset in assets:
             for segment in asset.segments:
                 if not material_segment_eligible(asset, segment, workspace_id, automation_only=automation_only):
                     continue

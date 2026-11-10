@@ -19,6 +19,7 @@ def test_actual_video_samples_are_bounded_measurements_not_semantic_claims(tmp_p
                             max_output_bytes=1024 * 1024, expected_size=(160, 120))
     assert len(result["samples"]) == 3
     assert result["media"]["duration_seconds"] == 1
+    assert result["media"]["video_frame_rate"] == '10/1'
     assert all(frame["pixel_mean_rgb"][0] > 240 and frame["pixel_mean_rgb"][1] < 10 for frame in result["samples"])
     assert {item["scope"] for item in result["unavailable"]} == {"ocr", "visual_semantics", "speech_and_listening"}
     assert not any("path" in frame or "bytes" in frame for frame in result["samples"])

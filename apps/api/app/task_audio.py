@@ -15,6 +15,7 @@ import threading
 import time
 from collections import Counter
 from app.creation.render_generation import current_render_generation, render_namespace, render_generation_fields, stored_render_scope
+from app.creation.audio_source_limits import validate_audio_source_specs
 
 
 def audio_mix_resources(inputs, timelines, duration_seconds, *, normalize_voice_sources, budget, apply_master=True,
@@ -50,12 +51,7 @@ def audio_mix_resources(inputs, timelines, duration_seconds, *, normalize_voice_
         ('输出采样率', 48000, budget.max_sample_rate), ('输出声道', 2, budget.max_channels)) if actual > cap]
     if exceeded:
         raise ValueError("当前音轨组合输入或临时输出超出已标定 CPU 音频预算：" + '；'.join(exceeded))
-    for source in inputs:
-        for field, cap in (("duration_seconds", budget.max_source_duration_seconds),
-                           ("sample_rate", budget.max_sample_rate), ("channels", budget.max_channels)):
-            value = source[field]
-            if value is not None and (type(value) not in {int, float} or not 0 < value <= cap):
-                raise ValueError("已保存的音频源规格超出标定预算")
+    validate_audio_source_specs(inputs, budget)
     return resources
 
 

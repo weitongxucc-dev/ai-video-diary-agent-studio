@@ -38,7 +38,7 @@ test('narration preparation sends only versioned references and retains the thre
   assert.equal(repeated.details.action,'status');assert.equal(calls.length,2);
   await assert.rejects(()=>prepare.execute('active-kind-change',{kind:'cpu',shape:cpuShape,request_id:randomUUID()}));
   assert.equal(calls.length,2);
-  await tools.get('finalize_device_preparation').execute('finalize',{request_id:'model-work'});
+  await tools.get('finalize_device_preparation').execute('finalize',{preparation_id:'model-work'});
   const next=await prepare.execute('cpu-after-release',{shape:cpuShape,request_id:randomUUID()});
   assert.equal(next.details.receipt.id,'cpu-work');
   assert.deepEqual(calls.filter(c=>c.options?.method==='POST'&&!c.path.endsWith('/finalize')).map(c=>JSON.parse(c.options.body).kind),['narration','cpu']);

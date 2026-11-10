@@ -98,7 +98,7 @@ class RenderStageUseCase:
         except KeyError as exc:
             raise RenderRejected(status_code=404, detail="creation task montage plan not found") from exc
         creation_plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
-        requirement = DurationRequirement.from_plan(creation_plan)
+        requirement = DurationRequirement.for_output(creation_plan, plan)
         try:
             requirement.require(plan.duration_seconds, 30)
         except DurationConflict as exc:
@@ -768,8 +768,8 @@ class RenderStageUseCase:
             )
             _validate_rendered_media(path, expected_size=canvas_size(str(plan["aspect_ratio"])),
                                      expected_duration_seconds=float(plan["duration_seconds"]),
-                                     duration_requirement=DurationRequirement.from_plan(
-                                         self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)),
+                                     duration_requirement=DurationRequirement.for_output(
+                                         self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id), input_plan),
                                      **media_options)
             return True
         except (KeyError, FileNotFoundError, ValueError, OSError):
@@ -824,8 +824,8 @@ class RenderStageUseCase:
     def render_montage(self, workspace_id, plan, narration_audio_path, *, job_staging_path=None, subtitle_tracks=None, render_context=None):
         original_requirement = plan.duration_requirement
         task = self.repository.task_records.get_creation_task(workspace_id, plan.task_id)
-        plan.duration_requirement = DurationRequirement.from_plan(
-            self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)).payload()
+        plan.duration_requirement = DurationRequirement.for_output(
+            self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id), plan).payload()
         try:
             return self.metadata.picture_renderer.render_montage(workspace_id, plan, narration_audio_path, job_staging_path=job_staging_path, subtitle_tracks=subtitle_tracks, render_context=render_context)
         except PicturePreviewRejected as exc:

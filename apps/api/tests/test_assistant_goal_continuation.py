@@ -357,6 +357,35 @@ def test_bounded_output_checkpoint_does_not_certify_all_instruction_steps(repo):
     assert "PNG中文与边框" in goal["original_instruction"]
 
 
+def test_same_turn_observation_arriving_before_edit_and_execution_preserves_the_goal(repo):
+    _, turn, _, _ = original(repo, message='局部修改后制作并检查')
+    emit(repo, turn, phase='observation', result_kind='observation',
+        base_version_id='version:render', job_id='observation:one')
+    emit(repo, turn, phase='apply', status='confirmed', base_version_id='version:one',
+        result_version_id='version:edit', operation_id='operation:one')
+    emit(repo, turn, phase='execution', base_version_id='version:edit',
+        result_version_id='version:render', job_id='execution:one', video_ready=True)
+    checkpoint = {'status': 'completed', 'scope': 'production_and_output_observation',
+        'timeline_version_id': 'version:render', 'sha256': 'a' * 64}
+    svc, calls = service(repo, response={})
+    def verify(goal, event):
+        if event['base_version_id'] != goal['target_snapshot']['timeline_version_id']:
+            return {'status': 'invalidated', 'reason': 'unrelated_timeline_change'}
+        if event['phase'] == 'observation':
+            return {'status': 'ready', 'task_version': {'timeline_version_id': 'version:render',
+                'timeline_sequence': 3}, 'completed_output_checkpoint': checkpoint}
+        version = event['result_version_id']
+        return {'status': 'waiting_result', 'reason': 'read_original_request_result', 'consume_event': True,
+            'task_version': {'timeline_version_id': version, 'timeline_sequence': 2 if version == 'version:edit' else 3}}
+    svc.verify_current_goal = verify
+    svc.reconcile()
+    svc.reconcile()
+    assert svc.reconcile() == 1 and len(calls) == 1
+    goal = repo.get_task_goal(turn['id'])
+    assert goal['status'] == 'output_checked' and goal['completed_output_checkpoint'] == checkpoint
+    assert svc.reconcile() == 0
+
+
 @pytest.mark.parametrize("succeeded", [True, False])
 def test_verified_production_settles_separately_from_output_check(repo, succeeded):
     _, turn, _, _ = original(repo)

@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
 from app.creation.editing.audio_contracts import AudioTimelineEditRequest
+from app.creation.editing.range_contracts import TimelineRangeEdit
 from app.graphic_overlays import TextOverlay, ImageOverlay, ArrowOverlay
 from app.database_migrations import CONTENT_VISIBILITY_DEFAULT, CONTENT_VISIBILITY_LEGACY
 from app.visual_effects import VisualEffects
@@ -512,6 +513,9 @@ class MaterialSpeechAnalysisResponse(BaseModel):
     model_id: str
     observations: list[MaterialSpeechObservationResponse]
     message: str
+    word_observations: list[MaterialSpeechObservationResponse] = Field(default_factory=list)
+    timing_granularity: Literal["segment", "word", "token"] = "segment"
+    audio_present: bool | None = None
 
 
 class MaterialAssetResponse(BaseModel):
@@ -1911,6 +1915,7 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
 
 
 EXACT_EDIT_FIELDS = {
+    "RemoveTimelineRanges": {"range_edit"},
     "EditAudioTimeline": {"audio_edit"},
     "AdjustVisualEffects": {"clip_ids", "effects"},
     "ReplaceClip": {"clip_id", "asset_id", "segment_id", "source_start_seconds"},
@@ -1934,6 +1939,7 @@ EXACT_EDIT_FIELDS = {
     "GenerateCoverFromFrame": {"frame_time_seconds", "title", "title_position"},
 }
 EXACT_MONTAGE_REQUIRED_FIELDS = {
+    "RemoveTimelineRanges": {"range_edit"},
     "EditAudioTimeline": {"audio_edit"}, "AdjustVisualEffects": {"clip_ids", "effects"},
     "ChangeCrop": {"fit_mode", "crop_x", "crop_y"}, "ReplaceClip": {"asset_id", "segment_id"},
     "TrimClip": {"source_start_seconds"}, "SplitClip": {"split_time_seconds"},
@@ -1954,6 +1960,7 @@ class StoryboardRegenerationRequest(BaseModel):
 
 
 class CreationTaskExactEditRequest(BaseModel):
+    range_edit: TimelineRangeEdit | None = None
     audio_edit: AudioTimelineEditRequest | None = None
     clip_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
     effects: VisualEffects | None = Field(default=None,
@@ -1975,6 +1982,7 @@ class CreationTaskExactEditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     operation_type: Literal[
+        "RemoveTimelineRanges",
         "EditAudioTimeline",
         "AdjustVisualEffects",
         "ReplaceClip",
@@ -2142,6 +2150,7 @@ class TypedEditOperationDraftResponse(BaseModel):
         "EditAudioTimeline",
     "EditCompoundTimeline",
         "RemoveSilence",
+        "RemoveTimelineRanges",
         "AdjustVisualEffects",
         "ChangeCanvas",
         "SetClipTransition",
@@ -2746,6 +2755,7 @@ class EditOperationResponse(BaseModel):
         "EditAudioTimeline",
     "EditCompoundTimeline",
         "RemoveSilence",
+        "RemoveTimelineRanges",
         "AdjustVisualEffects",
         "ChangeCanvas",
         "SetClipTransition",

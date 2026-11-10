@@ -203,6 +203,9 @@ def test_window_finish_persists_public_original_receipt_without_legacy_full_scri
     business.production=production
     business.original=lambda _:(actor,task,None)
     business.script_case=lambda _:case
+    def forbidden_edit_read(*args):
+        raise AssertionError('draft-only finish must not query edits')
+    business.request_result=forbidden_edit_read
     value={'kind':'script_window_request','operation':'patch','task_id':'task','script_id':'script',
            'request_id':request_id,'status':'unknown','submission_effect':'unknown'}
     response=business.finish({'turn_id':turn,'goal':dict(goal)},'模型说已全部完成',script_window_request=value)
