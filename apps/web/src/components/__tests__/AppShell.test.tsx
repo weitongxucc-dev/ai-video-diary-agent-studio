@@ -154,6 +154,8 @@ describe("AppShell", () => {
     localStorage.clear();
     const first = render(<AppShell editorLayout><p>剪辑</p></AppShell>);
     const divider = screen.getByRole("separator", { name: "调整导航栏宽度" });
+    fireEvent.click(divider);
+    expect(divider).toHaveFocus();
     fireEvent.keyDown(divider, { key: "ArrowRight" });
     expect(divider).toHaveAttribute("aria-valuenow", "216");
     fireEvent.keyDown(divider, { key: "ArrowLeft" });

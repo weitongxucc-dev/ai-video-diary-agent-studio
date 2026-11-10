@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type MouseEvent } from "react";
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 export function useEditorPanels(enabled: boolean) {
@@ -54,10 +54,11 @@ export function useEditorPanels(enabled: boolean) {
       "aria-valuemax": side === "left" ? 280 : maxRight,
       "aria-valuenow": Math.round(side === "left" ? leftWidth : chatWidth),
       title: "拖动或方向键调整；双击或 Home 恢复默认宽度",
+      onClick(event: MouseEvent<HTMLDivElement>) { event.currentTarget.focus(); },
       onDoubleClick() { if (side === "left") setLeft(200); else { setRight(null); localStorage.removeItem("video-workspace-chat-width"); } },
       onPointerDown(event: PointerEvent<HTMLDivElement>) {
         if (event.button !== 0) return;
-        event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
+        event.preventDefault(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId);
         drag.current = { side, x: event.clientX, width: side === "left" ? left : chatWidth };
       },
       onPointerMove(event: PointerEvent<HTMLDivElement>) {
