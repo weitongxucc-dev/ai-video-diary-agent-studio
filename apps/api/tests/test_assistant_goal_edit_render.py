@@ -73,6 +73,19 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
         "assistant_turn_id": turn["id"], "request_id": request_id, "expected_timeline_version_id": state.base.id, "expected_timeline_sequence": state.base.sequence})
     assert changed.status_code == 200, changed.text
     operation = changed.json()["operation"]
+    from app.assistant.edit_result_binding import AssistantEditResultBinding
+    binding = AssistantEditResultBinding(state.repo, repo)
+    actor = CreationExecutionActor('ws', state.member.member_id)
+    events = state.repo.execution_records.list_task_events('ws', state.task.id)
+    def completed_background_edit(turn_id, input_id=None):
+        return binding.completed_background_edit(state.task, actor, turn_id, input_id, events,
+            read_source=main._exact_preview_use_case().read_request_source,
+            read_original=main._public_goal_request_metadata)
+    located_edit = completed_background_edit(turn['id'])
+    assert str(located_edit.request_id) == request_id
+    assert located_edit.result['operation']['result_version_id'] == operation['result_version_id']
+    assert completed_background_edit('another-turn') is None
+    assert completed_background_edit(turn['id'], 'another-input') is None
     edit_version = state.repo.timeline_records.get_timeline_version("ws", operation["result_version_id"])
     job = state.repo.job_records.create_job_run(JobRun("render", "ws", state.task.id, "creation_task_execution", "render", "declared-input"))
     state.repo.job_records.claim_job_run("ws", job.id)

@@ -397,6 +397,14 @@ class TaskBusiness:
         events=self.production.execution_records.list_task_events(ws,task_id)
         response={'reply':reply,'turn_id':claim['turn_id'],'draft_version':1}
         proofs=[]
+        from app.assistant.edit_result_binding import AssistantEditResultBinding
+        edit = AssistantEditResultBinding(self.production, self.conversations).completed_background_edit(
+            task, actor, claim['turn_id'], goal.get('source_input_id'), events,
+            read_source=lambda task, event_id, actor: self.exact_case_for().read_request_source(task, event_id, actor),
+            read_original=self.request_result)
+        if edit is not None:
+            response.update(edit_request=edit.model_dump(mode='json'), timeline_action='apply')
+            proofs.append({'kind': 'edit_request', 'id': str(edit.request_id)})
         if quality_continuation is not None:
             from app.assistant.result_projection import resolve_quality_continuation, quality_continuation_message
             try:
