@@ -1,3 +1,4 @@
+import gc
 import json
 import os
 from pathlib import Path
@@ -58,6 +59,8 @@ def pytest_sessionfinish(session, exitstatus):
     from app.main import stop_creation_execution_worker
 
     stop_creation_execution_worker()
+    # sqlite3 connection cycles must release file handles before Windows unlink.
+    gc.collect()
     _test_directory.cleanup()
 
 

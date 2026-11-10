@@ -4,7 +4,7 @@
 
 1. 工作区配置快照：非密钥字段（provider / base_url / model 等）存到每个工作区
    自己的 JSON 文件，不再共用一份全局 .env。
-2. 文字服务密钥：LLM 与旧 DeepSeek 两把密钥放进系统钥匙串（macOS `security`），
+2. 文字服务密钥：LLM 与旧 DeepSeek 两把密钥放进系统安全存储（macOS 钥匙串、Windows 凭据管理器），
    条目名按工作区分开。没有明文兜底：钥匙串写失败就是失败，绝不退回 dotenv。
 
 旧全局 .env 里已有的明文密钥不在这单范围内：它们没有工作区归属，不自动分配、
@@ -17,6 +17,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -35,6 +36,7 @@ WORKSPACE_CONFIG_FIELDS = (
 _CONFIG_ROOT_ENV = "AI_VIDEO_DIARY_WORKSPACE_CONFIG_ROOT"
 _KEYCHAIN_ENV = "AI_VIDEO_DIARY_KEYCHAIN_PATH"
 _SERVICE_PREFIX = "ai-video-diary.workspace-secret"
+_WINDOWS_CREDENTIALS = sys.platform == "win32"
 
 # `security` 用 44 报「钥匙串里没这条」，这和「钥匙串锁了/拒绝访问」是两件事：
 # 前者是正常的「没存过」，后者必须报出来，不能装作没有。
@@ -115,16 +117,31 @@ def save_workspace_secret(workspace_id: str, field: str, value: str) -> None:
         raise ValueError(f"不是本单范围内的文字服务密钥：{field}")
     if not value.strip():
         raise WorkspaceSecretStoreError("密钥内容为空，没有保存。")
-    result = _run_security([
-        "add-generic-password",
-        "-a", workspace_id,
-        "-s", _service_name(workspace_id, field),
-        "-w", value,
-        "-U",
-        *_keychain_args(),
-    ])
-    if result.returncode != 0:
-        _require_write(result, "保存")
+    if _WINDOWS_CREDENTIALS:
+        import pywintypes
+        import win32cred
+
+        try:
+            win32cred.CredWrite({
+                "Type": win32cred.CRED_TYPE_GENERIC,
+                "TargetName": _service_name(workspace_id, field),
+                "UserName": workspace_id,
+                "CredentialBlob": value,
+                "Persist": win32cred.CRED_PERSIST_LOCAL_MACHINE,
+            }, 0)
+        except pywintypes.error as exc:
+            raise WorkspaceSecretStoreError("密钥保存失败：Windows 凭据管理器拒绝了这次操作。") from exc
+    else:
+        result = _run_security([
+            "add-generic-password",
+            "-a", workspace_id,
+            "-s", _service_name(workspace_id, field),
+            "-w", value,
+            "-U",
+            *_keychain_args(),
+        ])
+        if result.returncode != 0:
+            _require_write(result, "保存")
     with _lock:
         _secret_cache.pop((workspace_id, field), None)
 
@@ -148,6 +165,24 @@ def read_workspace_secret_fresh(workspace_id: str, field: str, *, recoverable: b
     """Read the owned backend without using or populating the cache."""
     if field not in WORKSPACE_SECRET_FIELDS:
         raise ValueError(f"不是本单范围内的文字服务密钥：{field}")
+    if _WINDOWS_CREDENTIALS:
+        import pywintypes
+        import win32cred
+
+        try:
+            credential = win32cred.CredRead(_service_name(workspace_id, field), win32cred.CRED_TYPE_GENERIC)
+        except pywintypes.error as exc:
+            if exc.winerror == 1168:  # ERROR_NOT_FOUND, not a store-access failure.
+                return None
+            raise WorkspaceSecretStoreError("密钥读取失败：Windows 凭据管理器拒绝了这次操作。") from exc
+        try:
+            # pywin32 writes Unicode blobs as UTF-16LE and returns raw bytes.
+            value = credential["CredentialBlob"].decode("utf-16-le")
+        except UnicodeError as exc:
+            raise WorkspaceSecretStoreError("系统凭据编码无效，无法读取原密钥。") from exc
+        if recoverable and not value.strip():
+            raise WorkspaceSecretStoreError("无法确认可恢复的原密钥，配置未保存。")
+        return value
     result = _run_security([
         "find-generic-password",
         "-a", workspace_id,
@@ -171,6 +206,21 @@ def delete_workspace_secret(workspace_id: str, field: str) -> bool:
     """
     if field not in WORKSPACE_SECRET_FIELDS:
         raise ValueError(f"不是本单范围内的文字服务密钥：{field}")
+    if _WINDOWS_CREDENTIALS:
+        import pywintypes
+        import win32cred
+
+        try:
+            win32cred.CredDelete(_service_name(workspace_id, field), win32cred.CRED_TYPE_GENERIC)
+        except pywintypes.error as exc:
+            if exc.winerror != 1168:
+                raise WorkspaceSecretStoreError("密钥删除失败：Windows 凭据管理器拒绝了这次操作。") from exc
+            deleted = False
+        else:
+            deleted = True
+        with _lock:
+            _secret_cache.pop((workspace_id, field), None)
+        return deleted
     result = _run_security([
         "delete-generic-password",
         "-a", workspace_id,

@@ -63,6 +63,8 @@ def workspace_secrets_tool_double(tmp_path_factory, monkeypatch):
     monkeypatch.delenv(workspace_settings_module._KEYCHAIN_ENV, raising=False)
     tool = _InMemorySecretTool()
     monkeypatch.setattr(workspace_settings_module, "_run_security", tool.run)
+    # Ordinary tests keep their isolated in-memory backend on Windows too.
+    monkeypatch.setattr(workspace_settings_module, "_WINDOWS_CREDENTIALS", False)
     with workspace_settings_module._lock:
         workspace_settings_module._secret_cache.clear()
     yield tool

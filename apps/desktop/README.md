@@ -57,7 +57,7 @@ apps\api\.venv\Scripts\python.exe scripts\windows_backend_probe.py `
   -- E:\path\to\backend.exe --help
 ```
 
-这是有限实验入口，不替代正式设备许可、崩溃恢复和硬件校准。当前 MLX worker 与模型目录不能直接用于 Windows；须使用经过实测的独立后端及对应权重，再接入原有业务链。采样中的分页指标仍为 unknown，不据此推断系统没有分页。完整支持的验收边界仍遵循上方架构链接。
+这是有限实验入口，不替代正式设备许可、崩溃恢复和硬件校准。默认采用低于普通进程的优先级；CPU 满载时构建可指定 `--priority normal`，仍保留 CPU 核数、内存和余量边界。当前 MLX worker 与模型目录不能直接用于 Windows；须使用经过实测的独立后端及对应权重，再接入原有业务链。采样中的分页指标仍为 unknown，不据此推断系统没有分页。完整支持的验收边界仍遵循上方架构链接。
 
 ### Windows 本机内测安装包
 
@@ -72,6 +72,17 @@ corepack pnpm --dir apps/desktop build:win
 该命令依次构建 Web、API、CLI/MCP，再生成 `apps/desktop/dist-windows/Yaohe-Studio-<version>-windows-x64-setup.exe`。下载、临时文件和缓存使用上述 E 盘环境；Web 构建在 Windows 上使用两个工作进程，独立资源中的目录链接通过 junction 生成后物化。Python 构建中间文件位于 `apps/desktop/build-api/`。
 
 Windows API 使用 PyInstaller onedir，连同依赖放入包内 `resources/api-service/`，由桌面壳直接管理 `api-server.exe`。这样避免 onefile 启动器被停止后遗留 Python 子进程，也省去每次启动的临时解压；整个服务目录进入构建标识。macOS 仍使用原来的单文件 API。
+
+文字模型 Key 按工作区保存到 Windows 凭据管理器，设置页只返回是否已配置；不写入源码、dotenv 或工作区 JSON。Mac 继续使用系统钥匙串。Windows 本机内测包采用无压缩归档并关闭差分更新，以缩短本机构建时间，安装器体积相应增大。
+
+构建标识按文件分块读取资源，避免把整个 Web/API 包同时保留在内存中；输入顺序、字节数和摘要格式保持一致。
+
+内存紧张时，完成 `build:services` 后可把应用打包与安装器生成分成两个进程，释放可执行文件编辑阶段的内存后再生成安装器：
+
+```powershell
+corepack pnpm --dir apps/desktop exec electron-builder --win --x64 --dir --config electron-builder.windows.cjs --publish never
+corepack pnpm --dir apps/desktop exec electron-builder --prepackaged dist-windows/win-unpacked --win --x64 --config electron-builder.windows.cjs --publish never
+```
 
 安装器允许选择 E 盘安装位置，使用独立的 Windows Preview 应用身份，不发布 Release。此包未签名，身份模式 `local` 仅用于本机受控内测。可用绝对 `--user-data-dir=E:\path\profile` 和固定 `--local-web-port=13100` 启动，将测试配置和运行数据放在 E 盘；`.env` 中的数据库、模型、素材与输出路径也须指向 E 盘。卸载不删除用户数据。
 

@@ -1,7 +1,9 @@
+import {pathToFileURL} from 'node:url';
+
 export async function registerControlledCodemode(agent: any) {
   const module = process.env.AI_VIDEO_DIARY_AGENT_PI_MODULE;
   if (!module) return;
-  const { createCodemodeExtension } = await import(module);
+  const { createCodemodeExtension } = await import(pathToFileURL(module).href);
   const allowed = new Set([process.env.AI_VIDEO_DIARY_AGENT_BUSINESS_TOOLS,process.env.AI_VIDEO_DIARY_AGENT_NATIVE_TOOLS]
     .filter(Boolean).join(',').split(",").filter(name => name && name !== "codemode"));
   const proxy = new Proxy(agent, { get(target, property) {

@@ -78,7 +78,7 @@ function collectInputFiles(repositoryRoot) {
       const relativePath = relativePosix(root, filePath);
       records.push({
         path: rootIsFile ? source.identityPath : `${source.identityPath}/${relativePath}`,
-        content: fs.readFileSync(filePath),
+        filePath,
       });
     }
   }
@@ -92,13 +92,32 @@ function collectInputFiles(repositoryRoot) {
 function createMetadata(records) {
   const ordered = [...records].sort((left, right) => compareIdentityPaths(left.path, right.path));
   const candidate = crypto.createHash('sha256');
+  const buffer = Buffer.allocUnsafe(256 * 1024);
   const inputs = ordered.map((record) => {
-    const content = Buffer.isBuffer(record.content) ? record.content : Buffer.from(record.content);
+    const fileHash = crypto.createHash('sha256');
+    let bytes = 0;
+    const consume = (content) => {
+      candidate.update(content);
+      fileHash.update(content);
+      bytes += content.length;
+    };
     candidate.update(record.path, 'utf8');
     candidate.update('\0');
-    candidate.update(content);
+    if (record.filePath !== undefined) {
+      const descriptor = fs.openSync(record.filePath, 'r');
+      try {
+        let length;
+        while ((length = fs.readSync(descriptor, buffer, 0, buffer.length, null)) !== 0) {
+          consume(buffer.subarray(0, length));
+        }
+      } finally {
+        fs.closeSync(descriptor);
+      }
+    } else {
+      consume(Buffer.isBuffer(record.content) ? record.content : Buffer.from(record.content));
+    }
     candidate.update('\0');
-    return { path: record.path, sha256: sha256Buffer(content), bytes: content.length };
+    return { path: record.path, sha256: fileHash.digest('hex'), bytes };
   });
   const manifestDigest = sha256Buffer(Buffer.from(JSON.stringify(inputs)));
   return {

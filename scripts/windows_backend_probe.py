@@ -36,7 +36,7 @@ def run(args):
     started = time.monotonic()
     result = {"command": args.command, "memory_limit_bytes": memory_limit,
               "reserve_bytes": reserve, "commit_reserve_bytes": commit_reserve,
-              "timeout_seconds": args.timeout, "status": "starting",
+              "timeout_seconds": args.timeout, "priority": args.priority, "status": "starting",
               "peak_working_set_bytes": 0, "peak_processes": 0,
               "peak_threads": 0, "returncode": None, "released": False}
     job = win32job.CreateJobObject(None, "")
@@ -50,7 +50,9 @@ def run(args):
             win32job.JOB_OBJECT_LIMIT_PRIORITY_CLASS |
             win32job.JOB_OBJECT_LIMIT_AFFINITY)
         limits["BasicLimitInformation"]["ActiveProcessLimit"] = 8
-        limits["BasicLimitInformation"]["PriorityClass"] = win32process.BELOW_NORMAL_PRIORITY_CLASS
+        limits["BasicLimitInformation"]["PriorityClass"] = (
+            win32process.NORMAL_PRIORITY_CLASS if args.priority == "normal"
+            else win32process.BELOW_NORMAL_PRIORITY_CLASS)
         available_cpus = psutil.Process().cpu_affinity()
         limits["BasicLimitInformation"]["Affinity"] = sum(1 << cpu for cpu in available_cpus[:args.cpus])
         limits["JobMemoryLimit"] = memory_limit
@@ -156,6 +158,8 @@ def main():
     parser.add_argument("--reserve-mib", type=int, default=1536)
     parser.add_argument("--commit-reserve-mib", type=int, default=2048)
     parser.add_argument("--cpus", type=int, default=4)
+    parser.add_argument("--priority", choices=("below-normal", "normal"), default="below-normal",
+                        help="Use normal for builds on a busy host; background experiments remain below-normal")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.command[:1] == ["--"]:

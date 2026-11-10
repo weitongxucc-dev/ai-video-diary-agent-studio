@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { compareIdentityPaths, generateBuildIdentity } = require('./generate-build-identity');
+const { compareIdentityPaths, createMetadata, generateBuildIdentity } = require('./generate-build-identity');
 
 function write(root, relativePath, content) {
   const filePath = path.join(root, relativePath);
@@ -36,6 +36,15 @@ function isStrictlyOrdered(inputs, compare) {
 function main() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-video-diary-build-identity-'));
   try {
+    const binary = Buffer.alloc(256 * 1024 + 17);
+    for (let index = 0; index < binary.length; index++) binary[index] = index % 251;
+    const binaryPath = path.join(root, 'identity-chunks.bin');
+    fs.writeFileSync(binaryPath, binary);
+    assert.deepEqual(
+      createMetadata([{ path: 'web/样本.bin', filePath: binaryPath }]),
+      createMetadata([{ path: 'web/样本.bin', content: binary }]),
+      'streamed files must retain the candidate/manifest digest, byte count and per-file hash',
+    );
     write(root, 'apps/desktop/main.js', 'main-v1');
     write(root, 'apps/desktop/device-identity.js', 'device-identity-v1');
     write(root, 'apps/desktop/runtime/supervisor.js', 'runtime-v1');
