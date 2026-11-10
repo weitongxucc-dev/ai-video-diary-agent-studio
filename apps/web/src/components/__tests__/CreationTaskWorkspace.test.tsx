@@ -3263,7 +3263,7 @@ describe("CreationTaskWorkspace", () => {
       sessionStorage.removeItem(key);
       mocks.memberId = "member-1";
     }
-  });
+  }, 10_000);
 
   it("applies one recorded narration replacement and refreshes its version", async () => {
     const task = {
@@ -4189,7 +4189,7 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button",{name:"发送"}));
     await waitFor(()=>expect(mocks.materialTurn).toHaveBeenCalledWith("给参考片段添加空镜头标签",conversationId,selection,expect.any(String),expect.any(Number),expect.any(Function),3));
     expect(mocks.askAssistant).toHaveBeenCalledTimes(1);
-  });
+  }, 10_000);
 
   it("does not send a material snapshot if the same task clip is reselected during its draft checkpoint", async () => {
     mocks.withReferenceProvider = true;

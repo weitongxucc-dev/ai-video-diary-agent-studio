@@ -247,8 +247,8 @@ class ExactPreviewUseCase:
 
     def source_facts(self, task, payload, identity, actor):
         if payload.operation_type == 'EditAudioTimeline':
-            graph = self.audio_source_graph(task, payload)
-            return self.audio_source_facts(task, graph, actor)
+            graphs = self.audio_source_graph(task, payload)
+            return self.audio_source_facts(task, graphs, actor)
         ids = payload.clip_ids if payload.operation_type == 'AdjustVisualEffects' else [payload.clip_id] if payload.clip_id else []
         if not ids:
             return []
@@ -266,16 +266,16 @@ class ExactPreviewUseCase:
         graph = effective_audio_timeline(montage)
         edit = self.audio_request(payload, task.current_timeline_version_id)
         try:
-            apply_audio_edit(graph, edit, round(montage.duration_seconds * 1000))
+            after = apply_audio_edit(graph, edit, round(montage.duration_seconds * 1000))
         except PermissionError as exc:
             raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
         except (KeyError, ValueError, OSError) as exc:
             raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc
-        return graph
-    def audio_source_facts(self, task, graph, actor):
+        return graph, after
+    def audio_source_facts(self, task, graphs, actor):
         try:
             facts = []
-            for reference in sorted({clip.source_ref for track in graph.tracks for clip in track.clips}):
+            for reference in sorted({clip.source_ref for graph in graphs for track in graph.tracks for clip in track.clips}):
                 stat = self.metadata.audio_service.source(task.workspace_id, task.id, reference, actor=actor).stat()
                 facts.append({'reference': reference, 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns, 'ctime_ns': stat.st_ctime_ns, 'inode': stat.st_ino, 'device': stat.st_dev})
             return facts
@@ -632,7 +632,7 @@ class ExactPreviewUseCase:
                 self._seal_request_origin(task,event_id,provenance,actor)
             payload, source = self._source(task, payload, identity, actor, origin, expected_input_id)
             if (payload.operation_type in PICTURE_METADATA_OPERATIONS | CLIP_METADATA_OPERATIONS
-                    or payload.operation_type == 'EditAudioTimeline' and payload.audio_edit.action in {'update', 'track'}
+                    or payload.operation_type == 'EditAudioTimeline'
                     or payload.operation_type == 'ConfigureSubtitleTrack' and payload.subtitle_display is not None
                     or payload.operation_type == 'UpdateSubtitleCue' and payload.track_id is None):
                 values = payload.action_values()

@@ -63,7 +63,8 @@ def test_preparation_expected_actor_scope_rejects_before_read_or_submission(meta
         assert response.status_code == 409 and '身份已变化' in response.text
 
 
-def test_preparation_http_reuses_request_and_never_resumes_old_work(metadata_http_state, monkeypatch, tmp_path):
+@pytest.mark.parametrize('overlay_count', [0, 2])
+def test_preparation_http_reuses_request_and_never_resumes_old_work(metadata_http_state, monkeypatch, tmp_path, overlay_count):
     state = metadata_http_state
     monkeypatch.setattr(main, "LEGACY_WORKSPACE_ID", "ws")
     monkeypatch.setenv("DEVICE_ID", "isolated-device")
@@ -111,6 +112,8 @@ def test_preparation_http_reuses_request_and_never_resumes_old_work(metadata_htt
     payload = {"request_id": str(uuid4()), "shape": {"width_px": 64, "height_px": 64,
         "frame_rate": 24, "duration_seconds": 1.0, "clip_count": 2,
         "audio_input_count": 2, "sample_rate": 8000, "channels": 1}}
+    if overlay_count:
+        payload['shape']['overlay_count'] = overlay_count
     url = "/api/device/resource-preparations"
     first = state.client.post(url, json=payload)
     assert first.status_code == 200, first.text
@@ -130,6 +133,10 @@ def test_preparation_http_reuses_request_and_never_resumes_old_work(metadata_htt
     assert len(actions) == 3  # Waiting/unknown cannot publish or release an active driver.
     with state.repo._connect() as connection:
         assert connection.execute("SELECT count(*) FROM device_work_requests").fetchone()[0] == 1
+        import json
+        resources = json.loads(connection.execute('SELECT resources_json FROM device_work_requests WHERE id=?',
+            (receipt['id'],)).fetchone()[0])
+        assert resources['overlay_count'] == overlay_count
         connection.execute("UPDATE device_work_requests SET state='failed' WHERE id=?", (receipt["id"],))
     failure_replay = state.client.post(url, json=payload)
     assert failure_replay.status_code == 200 and failure_replay.json()["state"] == "failed"

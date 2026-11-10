@@ -25,7 +25,11 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
           frame_rate: {type:'integer',minimum:1},duration_seconds: {type:'number',exclusiveMinimum:0},
           clip_count: {type:'integer',minimum:1},audio_input_count: {type:'integer',minimum:1},
           sample_rate: {type:'integer',minimum:1},channels: {type:'integer',minimum:1},
-          source_bytes: {type:'integer',minimum:1},
+          source_bytes: {type:'integer',minimum:1,description:'本单元媒体输入按实际打开次数累计的字节数。原片大小可读plan.source_media.source_file_size_bytes（采用时封存值）；同文件两个音频片段各打开一次须计两次，不只是单文件大小。不是设备limits里的max_input_bytes，不得拿预算上限冒充；未知时省略。'},
+          overlay_count: {type:'integer',minimum:0,description:'当前制作单元同时合成的图文和字幕层数量；省略只准备零图层，不能据此输出有图层的作品。'},
+          source_width_px: {type:'integer',minimum:2,multipleOf:2,description:'需测量源画幅上的颜色处理时，使用已核实且考虑旋转后的实际源宽高，两项一起提供；不是目标画幅。'},
+          source_height_px: {type:'integer',minimum:2,multipleOf:2},
+          visual_effects: {type:'object',description:'从当前镜头读取的已有画面效果，复用编辑能力schema；在实际源画幅上测颜色处理，再缩放及合成，不是放大时间或内存阈值。'},
         },required:['width_px','height_px','frame_rate','duration_seconds','clip_count','audio_input_count','sample_rate','channels'],additionalProperties:false},
           {type:'object',properties:{
             voice_profile_id:{type:'string',minLength:1},voice_version:{type:'string',minLength:1},

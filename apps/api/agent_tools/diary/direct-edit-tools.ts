@@ -35,9 +35,6 @@ export function registerDirectEdit(pi: ToolRegistrar, {request, taskId, selected
         if (typeof params.overlay_id !== "string" || !params.overlay_id || overlay?.id !== params.overlay_id)
           throw new Error("更新图文叠加层必须显式提供完全一致的 overlay_id 与 graphic_overlay.id；请读取现有完整图层，仅修改用户指定字段后重试，未提交");
       }
-      if (params.operation_type === "EditAudioTimeline"
-          && !["update","track"].includes((params.audio_edit as {action?:string})?.action ?? ""))
-        throw new Error("直接音频编辑仅支持修改现有片段或音轨；其他操作需准备提案");
       const source=readActionSource();
       if (!source.turnId || !source.userInstruction || !callId) throw new Error("本次输入的明确要求或调用身份缺失，未提交");
       const requestId=typedRequestId(source.turnId,callId);

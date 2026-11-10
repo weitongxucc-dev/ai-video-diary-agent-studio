@@ -160,8 +160,7 @@ class AudioEditUseCase:
             raise AudioEditRejected(409,'原音频提案未绑定完整来源，请重新预览')
         command = EditCommand(task.workspace_id,task.id,self.identity(actor),task.current_timeline_version_id,
             'EditAudioTimeline',{'base_version_id':task.current_timeline_version_id,'audio_edit':edit.model_dump(),**payload},source)
-        before_refs = {clip.source_ref for track in before.tracks for clip in track.clips}
-        command = replace(command,input_source_facts=[fact for fact in expected if fact['reference'] in before_refs],
+        command = replace(command,input_source_facts=expected,
             affected_clip_ids=(),affected_source_facts=[],affected_clip_facts=[])
         verifier = EditSourceVerifier(self.repository,identity=command.actor_identity,audio_service=self.audio,audio_actor=actor)
         try:

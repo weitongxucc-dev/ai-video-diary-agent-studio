@@ -541,6 +541,7 @@ def test_normal_execution_locator_terminal_event_is_consumed_once_and_fences_ver
         if kwargs.get("continuation_context"):
             assert kwargs["continuation_context"]["business_event"]["phase"] == "execution"
             assert kwargs["continuation_context"]["current_facts"]["execution_status"]["job"]["status"] == "succeeded"
+            json.dumps(kwargs["continuation_context"])
             return "已读取原作业与实际登记输出。", None
         current = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
         script = state.production.script_records.get_creation_task_script(state.workspace_id, current.confirmed_script_id)

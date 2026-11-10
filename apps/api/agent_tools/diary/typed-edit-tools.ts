@@ -187,7 +187,7 @@ export function createTypedEditTools({request, taskId, selectedTaskVersion, isTa
       const parameters = typedEditSchema(getDeclaredCapabilities());
       pi.registerTool({
         name: "preview_typed_edit", label: "预览类型化修改",
-        description: "使用 API 真实 schema 提交类型化编辑；任务、用户原句、身份和基础版本由宿主绑定。音频EditAudioTimeline的audio_edit指定真实target_id、update片段或track音轨、非空values patch；画面AdjustVisualEffects指定真实clip_ids和非空effects patch。先读当前对象，降低6dB须用当前gain_db计算新绝对值，只传指定字段，遗漏保留、重置显式提交；淡入淡出音频用毫秒，画面用秒。duck_under_voice只音乐轨；本轮不开放音量关键点写入、solo持久化或独立音频变速。不绕过人像/资源许可。只生成提案/实际预览，不应用或宣称成片。按当前授权、实际成本与进展有限探索；同输入、未知结果或授权/版本拒绝不重放，无进展不盲循环。",
+        description: "使用 API 真实 schema 提交类型化编辑；任务、用户原句、身份和基础版本由宿主绑定。音频EditAudioTimeline的audio_edit指定真实target_id；update修改片段、track修改音轨、add添加、split分割、duplicate复制、delete删除，values按action schema；画面AdjustVisualEffects指定真实clip_ids和非空effects patch。先读当前对象，降低6dB须用当前gain_db计算新绝对值，只传指定字段，遗漏保留、重置显式提交；淡入淡出音频用毫秒，画面用秒。duck_under_voice只音乐轨；gain_points从editor_gain_points读取，局部毫秒坐标，完整替换所选片段点列表；锁定对象先单独解锁。solo持久化与独立音频变速未开放。不绕过人像/资源许可。只生成提案/实际预览，不应用或宣称成片。按当前授权、实际成本与进展有限探索；同输入、未知结果或授权/版本拒绝不重放，无进展不盲循环。",
         parameters,
         execute: async (_id: string, params: Record<string, unknown>) => {
           if (!isTaskRead() || !selectedTaskVersion) throw new Error("请先读取本轮可信任务与版本");

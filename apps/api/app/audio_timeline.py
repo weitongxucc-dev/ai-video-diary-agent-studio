@@ -145,7 +145,8 @@ def visible_gain_points(clip: TimelineAudioClip) -> list[AudioGainPoint]:
     return [AudioGainPoint(offset_ms=offset-start,gain_db=value_at(offset)) for offset in offsets]
 
 
-def apply_audio_edit(timeline: AudioTimeline, edit: AudioEditRequest, duration_ms: int) -> AudioTimeline:
+def apply_audio_edit(timeline: AudioTimeline, edit: AudioEditRequest, duration_ms: int,
+                     *, new_clip_id: str | None = None) -> AudioTimeline:
     result = timeline.model_copy(deep=True)
     track = next((item for item in result.tracks if item.id == edit.target_id or any(clip.id == edit.target_id for clip in item.clips)), None)
     if track is None:
@@ -159,7 +160,7 @@ def apply_audio_edit(timeline: AudioTimeline, edit: AudioEditRequest, duration_m
     elif edit.action == "add":
         if edit.target_id != track.id:
             raise ValueError("请先选择要加入的音轨")
-        track.clips.append(TimelineAudioClip.model_validate({**edit.values, "id": f"audio-{uuid4().hex[:16]}"}))
+        track.clips.append(TimelineAudioClip.model_validate({**edit.values, "id": new_clip_id or f"audio-{uuid4().hex[:16]}"}))
     else:
         clip = next((item for item in track.clips if item.id == edit.target_id), None)
         if clip is None:
@@ -189,7 +190,7 @@ def apply_audio_edit(timeline: AudioTimeline, edit: AudioEditRequest, duration_m
             if set(edit.values) != {"timeline_start_ms"} or type(edit.values["timeline_start_ms"]) is not int:
                 raise ValueError("复制音频需要具体的时间线位置")
             track.clips.insert(index+1, TimelineAudioClip.model_validate({**clip.model_dump(),
-                "id": f"audio-{uuid4().hex[:16]}", "timeline_start_ms": edit.values["timeline_start_ms"]}))
+                "id": new_clip_id or f"audio-{uuid4().hex[:16]}", "timeline_start_ms": edit.values["timeline_start_ms"]}))
         elif edit.action == "update":
             if not edit.values.keys() <= {"source_start_ms", "source_end_ms", "timeline_start_ms", "gain_db", "fade_in_ms", "fade_out_ms", "muted", "locked", "denoise_db", "loudness_target_lufs", "gain_points"}:
                 raise ValueError("音频修改参数无效")
@@ -211,7 +212,7 @@ def apply_audio_edit(timeline: AudioTimeline, edit: AudioEditRequest, duration_m
                 raise ValueError("分割位置必须位于音频片段内部")
             base = {**clip.model_dump(), "envelope_duration_ms": clip.envelope_duration_ms or clip.duration_ms}
             left = {**base, "source_end_ms": clip.source_start_ms + round(offset * clip.playback_rate)}
-            right = {**base, "id": f"audio-{uuid4().hex[:16]}", "source_start_ms": clip.source_start_ms + round(offset * clip.playback_rate),
+            right = {**base, "id": new_clip_id or f"audio-{uuid4().hex[:16]}", "source_start_ms": clip.source_start_ms + round(offset * clip.playback_rate),
                      "envelope_offset_ms": clip.envelope_offset_ms + offset,
                      "timeline_start_ms": edit.values["at_ms"]}
             track.clips[index:index+1] = [TimelineAudioClip.model_validate(left), TimelineAudioClip.model_validate(right)]

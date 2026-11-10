@@ -15,7 +15,7 @@ from app.montage import creation_task_montage_plan_from_payload
 
 EditCapabilityReason = Literal[
     "no_storyboard", "no_timeline_version", "no_clip", "no_visual_clip",
-    "no_audio_clip", "no_subtitle_tracks",
+    "no_audio_track", "no_subtitle_tracks",
 ]
 
 
@@ -52,9 +52,19 @@ class EditCapabilityReadUseCase:
             reason = "no_clip"
         elif operation == "AdjustVisualEffects" and not clips:
             reason = "no_visual_clip"
-        elif operation == "EditAudioTimeline" and not any(track.clips for track in
-                effective_audio_timeline(creation_task_montage_plan_from_payload(payload)).tracks):
-            reason = "no_audio_clip"
+        elif operation == "EditAudioTimeline" and not effective_audio_timeline(
+                creation_task_montage_plan_from_payload(payload)).tracks:
+            reason = "no_audio_track"
         elif operation in {"UpdateSubtitleCue", "ReplaceSubtitleText", "SplitSubtitleCue", "MergeSubtitleCue", "DeleteSubtitleCue", "ConfigureSubtitleTrack"} and not tracks:
             reason = "no_subtitle_tracks"
         return reason
+
+    @staticmethod
+    def audio_actions(facts: EditCapabilityFacts) -> list[dict]:
+        tracks = effective_audio_timeline(creation_task_montage_plan_from_payload(
+            facts.payload)).tracks if facts.payload else []
+        has_clips = any(track.clips for track in tracks)
+        return [{"action": action, "target_kind": "audio_track" if action in {"add", "track"} else "audio_clip",
+                 "available": bool(tracks) if action in {"add", "track"} else has_clips,
+                 "requires_target_validation": True}
+                for action in ("update", "track", "add", "split", "duplicate", "delete")]
