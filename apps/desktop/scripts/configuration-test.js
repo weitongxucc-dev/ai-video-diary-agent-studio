@@ -40,6 +40,11 @@ try {
   assert.equal(api.API_HOST, '127.0.0.1');
   assert.equal(api.API_PORT, '32101');
   assert.equal(api.TMPDIR, path.join(userDataPath, 'temporary'));
+  if (process.platform === 'win32') {
+    assert.equal(api.TEMP, api.TMPDIR, 'the frozen API must unpack on the selected profile disk');
+    assert.equal(api.TMP, api.TMPDIR);
+    assert.equal(api.PATH, environment.PATH);
+  }
   assert.equal(api.AI_VIDEO_DIARY_PI_EXTENSION, path.join(resourcesPath, 'agent-tools', 'diary_tools.ts'));
   assert.ok(api.PATH.endsWith('/fixture/bin'));
 

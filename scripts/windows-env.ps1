@@ -16,6 +16,7 @@ $developmentPaths = @{
     HF_HUB_CACHE = 'cache\huggingface\hub'; TORCH_HOME = 'cache\torch'
     XDG_CACHE_HOME = 'cache'; npm_config_cache = 'cache\npm'
     ELECTRON_CACHE = 'cache\electron'; ELECTRON_BUILDER_CACHE = 'cache\electron-builder'
+    PYINSTALLER_CONFIG_DIR = 'cache\pyinstaller'
     PLAYWRIGHT_BROWSERS_PATH = 'cache\playwright'; COREPACK_HOME = 'cache\corepack'
 }
 foreach ($entry in $developmentPaths.GetEnumerator()) {
