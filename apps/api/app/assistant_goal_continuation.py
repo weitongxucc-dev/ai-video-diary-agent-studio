@@ -599,9 +599,14 @@ class GoalResultProjection:
             return {"status": "invalidated", "reason": "unrelated_timeline_change"}
         if task.current_timeline_version_id != event_version:
             version = self.production.timeline_records.get_timeline_version(goal["workspace_id"], task.current_timeline_version_id)
-            if (event.get("phase") != "apply" or version.parent_version_id != event_version
+            if (event.get("phase") not in {"apply", "execution"} or version.parent_version_id != event_version
                     or not self.owned_render_version(goal, version)):
                 return {"status": "invalidated", "reason": "unrelated_timeline_change"}
+            if event.get("phase") == "execution":
+                from app.creation.render_result_provenance import rendered_version_provenance
+                provenance = rendered_version_provenance(self.production, version)
+                if provenance is None or event.get("status") != "succeeded" or event.get("job_id") != provenance['job_id']:
+                    return {"status": "invalidated", "reason": "unrelated_timeline_change"}
         return None
 
     def deferred_edit_execution(self, goal, event):

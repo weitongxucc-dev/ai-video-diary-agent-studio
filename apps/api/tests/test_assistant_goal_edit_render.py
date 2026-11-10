@@ -125,6 +125,16 @@ def test_same_edit_waits_for_own_render_then_rebases_only_derived_selection(meta
     proposal = state.repo.edit_records.get_edit_proposal("ws", operation["proposal_id"])
     typed_source = state.repo.edit_records.get_edit_intent("ws", proposal.intent_id).constraints["request_source"]
     current_task = state.repo.task_records.get_creation_task("ws", state.task.id)
+    if fast_render:
+        execution_goal = {**repo.get_task_goal(turn['id']), 'target_snapshot': {
+            'timeline_version_id': edit_version.id, 'timeline_sequence': edit_version.sequence}}
+        execution_event = {'phase': 'execution', 'status': 'succeeded', 'job_id': job.id,
+            'base_version_id': edit_version.id}
+        assert owner.verify_version(execution_goal, execution_event, current_task) is None
+        for patch in ({'job_id': 'foreign'}, {'status': 'failed'}, {'phase': 'observation'},
+                      {'base_version_id': state.base.id}):
+            assert owner.verify_version(execution_goal, {**execution_event, **patch}, current_task) == {
+                'status': 'invalidated', 'reason': 'unrelated_timeline_change'}
     from app.task_audio import media_digest
     observed_version = state.repo.timeline_records.get_timeline_version('ws', current_task.current_timeline_version_id)
     observed_source = {**typed_source, 'expected_timeline_version_id': observed_version.id,
