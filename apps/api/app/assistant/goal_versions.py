@@ -2,6 +2,24 @@
 from app.assistant.task_business_errors import TaskBusinessRejected
 
 
+def event_follows_owned_version(owner, goal, event):
+    """An execution result may follow this same turn's already committed edit."""
+    expected = goal['target_snapshot'].get('timeline_version_id')
+    base = event.get('base_version_id')
+    if base == expected:
+        return True
+    if base is None:
+        return False
+    try:
+        version = owner.production.timeline_records.get_timeline_version(goal['workspace_id'], base)
+    except KeyError:
+        return False
+    if version.task_id != goal['task_id']:
+        return False
+    chain = owner.selection_version_chain(goal, version)
+    return chain is not None and expected in chain
+
+
 def observation_turn_origin(production, conversations, task, member_id, turn_id, version):
     origin = conversations.task_turn_source(turn_id, task.workspace_id, member_id, task.id)
     snapshot = origin['context'].get('target_snapshot', {})
