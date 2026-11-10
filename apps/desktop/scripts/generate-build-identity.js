@@ -20,7 +20,8 @@ const INPUT_SOURCES = [
   { identityPath: 'desktop/preload.js', relativePath: 'apps/desktop/preload.js' },
   { identityPath: 'desktop/package.json', relativePath: 'apps/desktop/package.json' },
   { identityPath: 'desktop/assets', relativePath: 'apps/desktop/assets' },
-  { identityPath: 'api-server', relativePath: 'apps/desktop/dist/api-server' },
+  { identityPath: process.platform === 'win32' ? 'api-service' : 'api-server',
+    relativePath: 'apps/desktop/dist/api-server' },
   { identityPath: 'programmatic', relativePath: 'apps/desktop/dist/programmatic' },
   { identityPath: 'model-workers', relativePath: 'apps/api/model_workers', include: (relativePath) => relativePath.endsWith('.py') },
   { identityPath: 'agent-tools', relativePath: 'apps/api/agent_tools', include: (relativePath) => relativePath.endsWith('.ts') },
@@ -66,7 +67,10 @@ function listFiles(root, include = () => true) {
 
 function collectInputFiles(repositoryRoot) {
   const records = [];
-  for (const source of INPUT_SOURCES) {
+  const sources = process.platform === 'win32'
+    ? [...INPUT_SOURCES, { identityPath: 'desktop/electron-builder.windows.cjs', relativePath: 'apps/desktop/electron-builder.windows.cjs' }]
+    : INPUT_SOURCES;
+  for (const source of sources) {
     const root = path.join(repositoryRoot, source.relativePath);
     const files = listFiles(root, source.include);
     const rootIsFile = fs.lstatSync(root).isFile();

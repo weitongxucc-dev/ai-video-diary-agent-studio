@@ -5,7 +5,7 @@ Build::
     cd apps/api
     pyinstaller pyinstaller.spec
 
-Output:  dist/api-server  (single-file executable)
+Output: dist/api-server (single executable on macOS; service directory on Windows)
 
 Size optimisations:
   * Exclude CPython test suite, tkinter, unittest, numpy, pillow, ruff
@@ -20,6 +20,7 @@ app itself rely on dynamic import discovery that PyInstaller cannot trace.
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import Any
 from PyInstaller.utils.hooks import collect_all
 
@@ -164,17 +165,22 @@ pyz = PYZ(a.pure, a.zipped_data)  # type: ignore[name-defined]  # noqa: F821
 exe = EXE(  # type: ignore[name-defined]  # noqa: F821
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
-    [],
+    [] if sys.platform == 'win32' else a.binaries,
+    [] if sys.platform == 'win32' else a.datas,
+    [('X utf8', None, 'OPTION')] if sys.platform == 'win32' else [],
     name="api-server",
+    # A Windows onefile bootloader leaves its Python child alive when the
+    # supervised launcher is terminated. Onedir runs the API in that process.
+    exclude_binaries=sys.platform == 'win32',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    # Windows' windowed bootloader replaces stdout/stderr with None. The API
+    # is a piped child service; Electron hides its console and owns its logs.
+    console=sys.platform == 'win32',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -183,5 +189,7 @@ exe = EXE(  # type: ignore[name-defined]  # noqa: F821
     icon=None,
 )
 
-# ── COLLECT (optional, for debugging) ────────────────────────────────────────
-# coll = COLLECT(exe, name="api-server")
+if sys.platform == 'win32':
+    coll = COLLECT(  # type: ignore[name-defined]  # noqa: F821
+        exe, a.binaries, a.datas, name="api-server", strip=False, upx=True,
+    )

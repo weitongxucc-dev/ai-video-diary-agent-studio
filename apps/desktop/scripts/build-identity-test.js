@@ -42,7 +42,9 @@ function main() {
     write(root, 'apps/desktop/preload.js', 'preload-v1');
     write(root, 'apps/desktop/package.json', '{"build":{"files":["main.js"]}}');
     write(root, 'apps/desktop/assets/runtime.json', '{"mode":"local"}');
-    write(root, 'apps/desktop/dist/api-server', 'api-v1');
+    write(root, `apps/desktop/dist/api-server${process.platform === 'win32' ? '/api-server.exe' : ''}`, 'api-v1');
+    if (process.platform === 'win32') write(root, 'apps/desktop/dist/api-server/_internal/python311.dll', 'python-v1');
+    if (process.platform === 'win32') write(root, 'apps/desktop/electron-builder.windows.cjs', 'windows-preview-config-v1');
     write(root, 'apps/desktop/dist/programmatic/yaohe.mjs', 'cli-v1');
     write(root, 'apps/desktop/dist/programmatic/yaohe-mcp.mjs', 'mcp-v1');
     write(root, 'apps/api/model_workers/voice.py', 'worker-v1');
@@ -59,7 +61,7 @@ function main() {
     fs.mkdirSync(pnpmElectronTarget, { recursive: true });
     fs.writeFileSync(path.join(pnpmElectronTarget, 'package.json'), '{"name":"electron"}');
     fs.mkdirSync(path.join(root, 'apps/desktop/node_modules'), { recursive: true });
-    fs.symlinkSync('../.pnpm/electron@33/node_modules/electron', path.join(root, 'apps/desktop/node_modules/electron'));
+    fs.symlinkSync(pnpmElectronTarget, path.join(root, 'apps/desktop/node_modules/electron'), process.platform === 'win32' ? 'junction' : 'dir');
 
     const first = generate(root);
     const firstMetadata = fs.readFileSync(path.join(root, 'apps/desktop/build-identity.generated.json'), 'utf8');
@@ -92,11 +94,14 @@ function main() {
       'apps/desktop/preload.js',
       'apps/desktop/runtime/supervisor.js',
       'apps/desktop/package.json',
+      `apps/desktop/dist/api-server${process.platform === 'win32' ? '/api-server.exe' : ''}`,
       'apps/desktop/assets/runtime.json',
       'apps/api/agent_tools/diary_tools.ts',
       'apps/api/agent_runtime/host.mjs',
       'apps/api/agent_runtime/skills/local-edit/SKILL.md',
     ]) assertChangesDigest(root, first, relativePath);
+    if (process.platform === 'win32') assertChangesDigest(root, first, 'apps/desktop/electron-builder.windows.cjs');
+    if (process.platform === 'win32') assertChangesDigest(root, first, 'apps/desktop/dist/api-server/_internal/python311.dll');
 
     write(root, 'apps/web/.next/standalone-bundled/apps/web/server.js', 'web-v2');
     const changedIncluded = generate(root);
@@ -113,10 +118,16 @@ function main() {
     assert.equal(changedExcluded.candidateInputDigest, changedIncluded.candidateInputDigest, 'credentials and output directories must not change identity');
 
     write(root, 'external-asset.txt', 'must-not-follow');
-    fs.symlinkSync('../../../external-asset.txt', path.join(root, 'apps/desktop/assets/external-link.txt'));
+    if (process.platform === 'win32') {
+      fs.mkdirSync(path.join(root, 'external-assets'));
+      write(root, 'external-assets/payload.txt', 'must-not-follow');
+      fs.symlinkSync(path.join(root, 'external-assets'), path.join(root, 'apps/desktop/assets/external-link.txt'), 'junction');
+    } else {
+      fs.symlinkSync('../../../external-asset.txt', path.join(root, 'apps/desktop/assets/external-link.txt'));
+    }
     assert.throws(
       () => generate(root),
-      /Packaged identity input must not contain a symlink: .*assets\/external-link\.txt/,
+      /Packaged identity input must not contain a symlink: .*assets[\\/]external-link\.txt/,
       'a symlink inside a declared packaged input must fail closed',
     );
 

@@ -47,10 +47,12 @@ function copyTree(source, destination) {
 }
 
 function packageInstallRoot(packagePath) {
-  const parts = path.resolve(packagePath).split(path.sep);
+  const absolute = path.resolve(packagePath);
+  const root = path.parse(absolute).root;
+  const parts = path.relative(root, absolute).split(path.sep);
   const marker = parts.lastIndexOf('node_modules');
   if (marker < 0) throw new Error(`Cannot find node_modules ancestor for ${packagePath}`);
-  return path.join(path.sep, ...parts.slice(1, marker + 1));
+  return path.join(root, ...parts.slice(0, marker + 1));
 }
 
 function materialisePackage(source, destination, activePackages) {

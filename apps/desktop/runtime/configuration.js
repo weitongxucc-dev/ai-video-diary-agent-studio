@@ -45,9 +45,12 @@ function createServiceConfiguration({ userDataPath, resourcesPath, desktopDirect
 
   function localModelEnv() {
     const resourcePath = resourcesPath || path.join(desktopDirectory, '..');
+    const temporary = path.join(userDataPath, 'temporary');
     return {
-      PATH: ['/opt/homebrew/bin', '/usr/local/bin', environment.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'].join(path.delimiter),
-      TMPDIR: path.join(userDataPath, 'temporary'),
+      PATH: process.platform === 'win32' ? (environment.PATH || '')
+        : ['/opt/homebrew/bin', '/usr/local/bin', environment.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'].join(path.delimiter),
+      TMPDIR: temporary,
+      ...(process.platform === 'win32' ? { TEMP: temporary, TMP: temporary } : {}),
       VISUAL_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'chinese_clip_worker.py'),
       VOICE_MODEL_WORKER_PATH: path.join(resourcePath, 'model-workers', 'qwen3_tts_worker.py'),
       UNDERSTANDING_WORKER_PATH: path.join(resourcePath, 'model-workers', 'qwen3_vl_worker.py'),

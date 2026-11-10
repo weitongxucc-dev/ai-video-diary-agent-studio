@@ -1,8 +1,8 @@
-# macOS 桌面应用
+# 桌面应用
 
 Electron 负责启动本地 Next.js 和 FastAPI API，并管理窗口、端口、日志和子进程生命周期。
 
-本文件的现有构建命令针对macOS；Windows适配与独立实机验收已列入[开发清单§1.1.3](../../.project-control/0.11-development-plan.md#113-资源与平台验收)。不能仅增加electron-builder目标就宣称支持：媒体执行与进程回收、平台内存监测及模型后端必须满足[架构§3.12.1](../../docs/system-architecture.md#3121-内存压力任务预算与平台适配)，并取得本平台真实产物和恢复证据。
+本文件包含 macOS 构建与 Windows 本机内测安装包命令；Windows 完整适配与独立实机验收见[开发清单§1.1.3](../../.project-control/0.11-development-plan.md#113-p0必修与p7-windows适配的实施顺序)。基础安装启动不代表完整制作能力可用：媒体执行与进程回收、平台内存监测及模型后端必须满足[架构§3.12.1](../../docs/system-architecture.md#3121-内存压力任务预算与平台适配)，并取得本平台真实产物和恢复证据。
 
 0.11 的对话助手通过本机 Pi 1.5.2 的 coding-agent SDK 运行（需要 Node.js 22.19+）。开发和当前测试包会从 PATH 或当前用户的 nvm 安装中寻找 `pi`；也可在私密运行配置中设置 `AI_VIDEO_DIARY_PI_EXECUTABLE`。业务工具、`agent_runtime` 会话桥、创作 Skills 和提示词模板随桌面包提供并进入构建标识，Pi 和 Node.js 尚未随包分发；缺失时对话入口会明确报错，原有精确编辑入口仍可使用。对话会话写在所配置模型盘的同级 `agent/` 目录。
 
@@ -35,6 +35,51 @@ corepack pnpm --dir apps/desktop dev
 
 ## 本地构建
 
+### Windows 开发与后端实测
+
+Windows 适配在独立分支推进，与 Mac 功能分支通过 Git 合并；不互相复制 `.venv`、`node_modules`、模型运行环境或用户数据库。同步前先检查本地差异，保留未提交改动。Windows 内测包先验证安装和基础启动；API 健康响应不代表本地模型执行已可用。
+
+在仓库根目录的 PowerShell 中先执行以下环境脚本，再安装或启动服务。默认把下载缓存、Python 运行时和临时文件放在 E 盘；目录可通过 `-DataRoot` 指定，设置仅影响当前终端及其子进程。
+
+```powershell
+. .\scripts\windows-env.ps1
+corepack pnpm install --frozen-lockfile --store-dir E:\yaohe-dev\cache\pnpm-store
+uv sync --directory apps/api --locked --group dev --python 3.11
+```
+
+API、Web、Electron 的开发命令与上文相同，分别在加载过环境脚本的终端运行。应用中的模型、素材、输出与数据库目录仍须显式选择数据盘，缓存设置不替代应用数据配置。
+
+Windows 的 Pi 体检从所选 npm 安装目录解析 SDK 和声明的 CLI 入口，由 Node 直接执行版本检查。隔离体检子进程保留必要系统目录和数据盘临时目录，不继承未选入的密钥或 Node 启动选项。对话宿主使用独占 Windows Job Object 管理子孙进程，在分配完成前暂停执行，并核验整组退出后才确认停止；这不替代媒体执行器的设备许可与模型资源校准。
+
+单点后端实验可用 `scripts/windows_backend_probe.py` 包裹真实命令。它在恢复子进程执行前加入 Windows Job Object，限制整组进程的提交内存、CPU 亲和性和优先级，采样系统物理/提交余量，并在超时或余量不足时回收所有子孙进程。输出目录必须尚不存在，里面保存标准输出、错误及实测 JSON。
+
+```powershell
+apps\api\.venv\Scripts\python.exe scripts\windows_backend_probe.py `
+  --output E:\yaohe-dev\validation\sample --timeout 600 --memory-mib 5120 `
+  -- E:\path\to\backend.exe --help
+```
+
+这是有限实验入口，不替代正式设备许可、崩溃恢复和硬件校准。当前 MLX worker 与模型目录不能直接用于 Windows；须使用经过实测的独立后端及对应权重，再接入原有业务链。采样中的分页指标仍为 unknown，不据此推断系统没有分页。完整支持的验收边界仍遵循上方架构链接。
+
+### Windows 本机内测安装包
+
+在 Windows x64 的 PowerShell 中，从仓库根目录构建：
+
+```powershell
+. .\scripts\windows-env.ps1
+$env:NEXT_PUBLIC_AUTH_MODE = 'local'
+corepack pnpm --dir apps/desktop build:win
+```
+
+该命令依次构建 Web、API、CLI/MCP，再生成 `apps/desktop/dist-windows/Yaohe-Studio-<version>-windows-x64-setup.exe`。下载、临时文件和缓存使用上述 E 盘环境；Web 构建在 Windows 上使用两个工作进程，独立资源中的目录链接通过 junction 生成后物化。Python 构建中间文件位于 `apps/desktop/build-api/`。
+
+Windows API 使用 PyInstaller onedir，连同依赖放入包内 `resources/api-service/`，由桌面壳直接管理 `api-server.exe`。这样避免 onefile 启动器被停止后遗留 Python 子进程，也省去每次启动的临时解压；整个服务目录进入构建标识。macOS 仍使用原来的单文件 API。
+
+安装器允许选择 E 盘安装位置，使用独立的 Windows Preview 应用身份，不发布 Release。此包未签名，身份模式 `local` 仅用于本机受控内测。可用绝对 `--user-data-dir=E:\path\profile` 和固定 `--local-web-port=13100` 启动，将测试配置和运行数据放在 E 盘；`.env` 中的数据库、模型、素材与输出路径也须指向 E 盘。卸载不删除用户数据。
+
+验收范围是安装、工作台、退出和再次启动。模型后端、Windows 媒体资源校准和完整制作流程另行验证；Node.js 与 Pi 仍需在本机安装，不随此包提供。Mac 构建和签名发布配置保持原入口。
+
+### macOS 安装包
 ```bash
 corepack pnpm --dir apps/desktop build:mac
 ```

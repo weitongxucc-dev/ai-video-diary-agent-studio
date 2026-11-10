@@ -18,7 +18,7 @@ function makePackage(storeRoot, storeName, packageName) {
 function linkPackage(parentNodeModules, packageName, packagePath) {
   const link = path.join(parentNodeModules, ...packageName.split('/'));
   fs.mkdirSync(path.dirname(link), { recursive: true });
-  fs.symlinkSync(path.relative(path.dirname(link), packagePath), link, 'dir');
+  fs.symlinkSync(packagePath, link, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
 function fixture(root, { omit } = {}) {
@@ -88,7 +88,7 @@ try {
   }
 
   const brokenPaths = fixture(path.join(temporaryRoot, 'broken-link'));
-  fs.symlinkSync(path.join(brokenPaths.storeRoot, 'not-present'), path.join(brokenPaths.nextInstallRoot, 'broken-peer'), 'dir');
+  fs.symlinkSync(path.join(brokenPaths.storeRoot, 'not-present'), path.join(brokenPaths.nextInstallRoot, 'broken-peer'), process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => materialiseStandalone(brokenPaths), /Broken standalone dependency link/);
   console.log('PASS: traced subset, transitive module resolution, required roots, broken links, static/public, zero symlinks');
 } finally {

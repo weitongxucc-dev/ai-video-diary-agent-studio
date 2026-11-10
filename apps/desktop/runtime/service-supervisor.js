@@ -47,7 +47,9 @@ function createServiceSupervisor({ isDev, webPort, resourcesPath, apiEnvironment
   function findApiBinary() {
     if (isDev) return null;
     return requiredPackagedFile('打包的 API 服务', [
-      path.join(resourcesPath, 'api-server'),
+      process.platform === 'win32'
+        ? path.join(resourcesPath, 'api-service', 'api-server.exe')
+        : path.join(resourcesPath, 'api-server'),
     ], fs.constants.X_OK);
   }
 
@@ -101,6 +103,7 @@ function createServiceSupervisor({ isDev, webPort, resourcesPath, apiEnvironment
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
+      windowsHide: true,
     });
 
     apiProcess.on('error', (err) => {

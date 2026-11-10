@@ -22,6 +22,9 @@ supabase/.temp/
 output/
 /build/
 /build-identity.generated.json
+apps/desktop/build-identity.generated.json
+apps/desktop/build-api/
+apps/desktop/dist-windows/
 *.sqlite
 *.sqlite3
 *.db
