@@ -27,7 +27,7 @@ def runtime_bundle(extension: Path) -> Path:
 
 def runtime_bundle_readable(extension: Path) -> bool:
     root = runtime_bundle(extension)
-    names = ["host.mjs", "session.mjs", "result.mjs", "input-delivery.mjs", "prompts/review-result.md",
+    names = ["host.mjs", "session.mjs", "context-policy.mjs", "result.mjs", "input-delivery.mjs", "prompts/review-result.md",
              *(f"skills/{name}/SKILL.md" for name in ("source-speech", "narration-materials", "local-edit", "visual-template"))]
     return all((root / name).is_file() and os.access(root / name, os.R_OK) for name in names)
 

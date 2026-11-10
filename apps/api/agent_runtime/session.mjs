@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {createNativeTaskTools} from './native-tools.mjs';
+import {configureContextCompaction} from './context-policy.mjs';
 
 export const PI_VERSION = "1.5.0";
 const resources = dirname(fileURLToPath(import.meta.url));
@@ -72,6 +73,7 @@ ${nativeEnabled?'原生工具通过当前任务宿主执行。先读 open_task_w
     model = {...model,contextWindow:configured.contextWindow ?? known.contextWindow,
       reasoning:configured.reasoning ?? known.reasoning};
   }
+  configureContextCompaction(settingsManager, model);
   const previous = sdk.SessionManager.findById(cwd, sessionId, sessionDir);
   const sessionManager = previous
     ? sdk.SessionManager.open(previous, sessionDir, cwd)
