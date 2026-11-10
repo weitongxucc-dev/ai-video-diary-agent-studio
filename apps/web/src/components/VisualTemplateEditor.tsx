@@ -96,7 +96,7 @@ export function VisualTemplateLayerEditor({items,duration,busy,selectedId,onSele
     template_id:template.id,template_version:template.version,definition:{...structuredClone(template.settings.visual!),
       values:Object.fromEntries(template.settings.visual!.bindings.map(binding=>[binding.key,template.settings.visual!.values[binding.key]??binding.default]))},
     start_seconds:0,end_seconds:Math.min(duration,template.settings.visual!.duration_seconds),x:.5,y:.5,width:.8,opacity:1,keyframes:[],z_index:0,animation_offset_seconds:0});}
-  return <details className={styles.editor}><summary>可编辑动画模板</summary>
+  return <details open={Boolean(selected)} className={styles.editor}><summary>可编辑动画模板</summary>
     <button className={ui.button} type="button" disabled={busy} onClick={()=>void readVisualTemplates().then(value=>{setTemplates(value);setLoaded(true);setError(null);}).catch(cause=>setError(cause.message))}>读取模板库</button>
     {loaded?<AppSelect value="" aria-label="选择动画模板" onValueChange={key=>{const value=templates.find(item=>`${item.id}:${item.version}`===key);if(value)choose(value);}}>
       <AppSelectOption value="">选择模板版本…</AppSelectOption>{templates.map(item=><AppSelectOption key={`${item.id}:${item.version}`} value={`${item.id}:${item.version}`}>{item.name} · 第{item.version}版</AppSelectOption>)}
