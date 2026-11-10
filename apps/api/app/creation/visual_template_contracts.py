@@ -37,7 +37,8 @@ class VisualTemplate(BaseModel):
     bindings: list[TemplateBinding] = Field(default_factory=list, max_length=100)
     values: dict[str, str] = Field(default_factory=dict)
     provenance: list[TemplateProvenance] = Field(min_length=1, max_length=20)
-    dependencies: list[str] = Field(default_factory=list, max_length=30)
+    dependencies: list[str] = Field(default_factory=list, max_length=30,
+        description='自包含源码使用空数组 []；不可填空字符串。外部依赖不会自动安装或联网加载。')
 
     @model_validator(mode='after')
     def valid_bindings(self):

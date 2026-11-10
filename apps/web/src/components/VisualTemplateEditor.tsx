@@ -24,9 +24,22 @@ export function VisualTemplateFields({value, onChange, disabled=false}: {value:V
       <p>源码实现 window.film.frame(t)，t 为秒；可修改结构、样式和动画。外部依赖需改为自包含文件。</p>
       <BindingEditor key={JSON.stringify(value.bindings)} value={value.bindings} disabled={disabled}
         onChange={bindings=>onChange({...value,bindings})}/>
+      <DependencyEditor key={JSON.stringify(value.dependencies)} value={value.dependencies} disabled={disabled}
+        onChange={dependencies=>onChange({...value,dependencies})}/>
     </details>
     <p>{value.provenance.map(item => `${item.license} · ${item.repository} @ ${item.revision.slice(0,8)}`).join('；')}</p>
   </div>;
+}
+
+function DependencyEditor({value,disabled,onChange}:{value:string[];disabled:boolean;onChange:(value:string[])=>void}){
+  const [text,setText]=useState(JSON.stringify(value));
+  const [error,setError]=useState<string|null>(null);
+  return <><label>依赖声明（JSON数组）<textarea aria-label="模板依赖声明" value={text} disabled={disabled} onChange={e=>setText(e.target.value)}/></label>
+    <p>自包含源码使用空数组 []。依赖名称不能留空；外部库不会自动安装或联网加载。</p>
+    <button className={ui.button} type="button" disabled={disabled} onClick={()=>{try{const parsed=JSON.parse(text);
+      if(!Array.isArray(parsed)||parsed.some(item=>typeof item!=='string'||!item.trim()))throw Error('请输入字符串数组；自包含源码请填写 []');
+      onChange(parsed);setError(null);}catch(cause){setError((cause as Error).message);}}}>采用依赖声明草稿</button>
+    {error?<p role="alert">{error}</p>:null}</>;
 }
 
 function BindingEditor({value,disabled,onChange}:{value:VisualTemplate['bindings'];disabled:boolean;onChange:(value:VisualTemplate['bindings'])=>void}){

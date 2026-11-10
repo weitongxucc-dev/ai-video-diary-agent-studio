@@ -131,6 +131,9 @@ def test_source_errors_dependencies_and_clock_are_explicit(tmp_path):
     with pytest.raises(ValueError,match='依赖'):
         frame_command(overlay.model_dump(),tmp_path/'unstarted',size=(1080,1920),first_frame=0,frame_count=30)
     assert not (tmp_path/'unstarted').exists()
+    overlay.definition.dependencies=['']
+    with pytest.raises(ValueError,match='空项目.*空数组'):
+        template_document(overlay.definition)
 
 
 def test_authored_code_uses_granted_task_preview_not_the_workbench_renderer(state):

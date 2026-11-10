@@ -10,9 +10,15 @@ POLICY = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inl
     "worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'")
 
 
-def template_document(definition: VisualTemplate):
+def require_self_contained_template(definition: VisualTemplate):
+    if any(not item.strip() for item in definition.dependencies):
+        raise ValueError('模板依赖声明含空项目，请在“修改动画源码与参数结构”中修正依赖声明；自包含源码使用空数组 []')
     if definition.dependencies:
         raise ValueError('模板依赖尚不可用：' + '、'.join(definition.dependencies))
+
+
+def template_document(definition: VisualTemplate):
+    require_self_contained_template(definition)
     clock = json.loads(CLOCK_PATH.read_text())['clock']
     before = f'<meta http-equiv="Content-Security-Policy" content="{POLICY}"><script>window.filmHost={{}};{clock}'
     before += "let templateFailure=null;addEventListener('error',e=>{templateFailure=e.message});addEventListener('unhandledrejection',e=>{templateFailure=String(e.reason)});</script>"

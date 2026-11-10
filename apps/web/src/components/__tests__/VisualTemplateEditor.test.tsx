@@ -40,6 +40,17 @@ it('saves human parameter and source changes with the original fixed provenance'
     visual:expect.objectContaining({values:{name:'中文嘉宾姓名'},source:expect.stringContaining('revised animation'),
       provenance:template.settings.visual!.provenance})}));
 });
+it('repairs an explicit invalid dependency declaration while preserving the source',async()=>{
+  const saved=vi.fn();api.copy.mockResolvedValue({...template,id:'mine',origin:'user'});
+  render(<VisualTemplateLibraryEditor template={{...template,settings:{...template.settings,
+    visual:{...template.settings.visual!,dependencies:['']}}}} onSaved={saved}/>);
+  fireEvent.change(screen.getByLabelText('模板依赖声明'),{target:{value:'[]'}});
+  fireEvent.click(screen.getByRole('button',{name:'采用依赖声明草稿',hidden:true}));
+  fireEvent.click(screen.getByRole('button',{name:'另存我的视觉模板'}));
+  await waitFor(()=>expect(saved).toHaveBeenCalled());
+  expect(api.copy).toHaveBeenCalledWith(expect.objectContaining({visual:expect.objectContaining({
+    dependencies:[],source:template.settings.visual!.source,provenance:template.settings.visual!.provenance})}));
+});
 it('queries the original version after a lost reply without replaying the write',async()=>{
   const saved=vi.fn();api.copy.mockRejectedValue(Error('reply lost'));
   render(<VisualTemplateLibraryEditor template={template} onSaved={saved}/>);

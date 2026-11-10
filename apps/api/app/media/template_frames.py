@@ -37,8 +37,8 @@ def renderer_identity():
 
 def frame_command(value, directory, *, size, first_frame, frame_count, fps=30):
     overlay = VisualTemplateOverlay.model_validate(value)
-    if overlay.definition.dependencies:
-        raise ValueError('模板依赖未安装：' + '、'.join(overlay.definition.dependencies) + '。请改为自包含源码；未联网加载或替换模板')
+    from app.media.template_document import require_self_contained_template
+    require_self_contained_template(overlay.definition)
     executable, runner = renderer_paths()
     directory = Path(directory)
     directory.mkdir(exist_ok=False)
