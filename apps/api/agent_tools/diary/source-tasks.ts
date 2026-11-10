@@ -15,7 +15,7 @@ export function registerSourceTasks(pi: ToolRegistrar, {request, readActionSourc
   }
   const render = (receipt: any) => {
     const details = {kind: 'source_task_created', receipt,
-      instruction: '这是已持久创建的原片任务回执，尚不是成片；后续制作沿此任务、原素材和设备许可执行。'};
+      instruction: '这是已持久创建的原片任务回执，尚不是成片。首页本回合回报此回执后结束；宿主会把原要求自动接续到此任务，届时提供镜头、图层、制作及检查工具，不需用户再次确认。不要在首页搜索无关图片工具代替任务编辑或要求用户重新下制作指令。后续沿此任务、原素材和设备许可执行。'};
     return {content: [{type: 'text', text: JSON.stringify(details)}], details};
   };
   pi.registerTool({name: 'read_source_task', label: '核对原片任务',

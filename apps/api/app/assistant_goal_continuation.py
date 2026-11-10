@@ -802,10 +802,13 @@ class GoalResultProjection:
         provenance = rendered_version_provenance(self.production, version)
         if provenance is None:
             return None
-        rendered, located, pending, unknown = self.production.execution_records.goal_output_provenance_rows(
+        rendered, locators, pending, unknown = self.production.execution_records.goal_output_provenance_rows(
             task.workspace_id, task.id, provenance["request_id"],
             goal["conversation_id"], goal["member_id"], TASK_MEDIA_KIND,
+            base_version_id=version.parent_version_id,
             input_id=goal.get("source_input_id"),input_turn_id=goal.get("source_input_turn_id"))
+        located = next((row for row in locators
+            if self.source_belongs_to_goal(goal, json.loads(row['payload_json'])['source'])), None)
         for row in pending:
             source = json.loads(row["payload_json"])["arguments"]["_typed_source"]
             if self.source_belongs_to_goal(goal, source):
