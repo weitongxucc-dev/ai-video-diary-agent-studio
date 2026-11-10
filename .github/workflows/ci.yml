@@ -60,6 +60,8 @@ jobs:
       - name: Install FFmpeg
         run: |
           # Keep package downloads on Ubuntu's HTTPS archive, outside the Azure mirror.
+          # New runner images select mirrors through this file rather than a direct URI.
+          printf '%s\n' 'https://archive.ubuntu.com/ubuntu' | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
           sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
           sudo apt-get install --yes ffmpeg fonts-noto-cjk
