@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFile(new URL(path, root), "utf8");
-const [design, globals, overrides, shell, home, homeWorkspace, composer, api, library, production, people, templates, publishing, knowledge, sources, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot, intakeHook, intakePanel, desktopWindow, materialResults, materialPreview] = await Promise.all([
+const [design, globals, overrides, shell, home, homeWorkspace, composer, api, library, production, people, templates, publishing, knowledge, sources, desktop, apiSpec, desktopPackage, layout, signin, routeIcon, mascot, intakeHook, intakePanel, desktopWindow, materialResults, materialPreview, desktopHeader] = await Promise.all([
   read("../../DESIGN.md"),
   read("src/app/globals.css"),
   read("src/app/modern-overrides.css"),
@@ -30,6 +30,7 @@ const [design, globals, overrides, shell, home, homeWorkspace, composer, api, li
   read("../desktop/runtime/desktop-window.js"),
   read("src/components/material-library/MaterialResults.tsx"),
   read("src/components/material-library/MaterialAssetPreview.tsx"),
+  read("src/components/DesktopHeader.tsx"),
 ]);
 
 const failures = [];
@@ -45,6 +46,8 @@ for (const token of [
   "--border-1",
   "--accent",
   "--focus",
+  "--sidebar-width",
+  "--inspector-width",
 ]) {
   if (!css.includes(`${token}:`)) failures.push(`modern theme token is missing: ${token}`);
 }
@@ -52,8 +55,6 @@ for (const token of [
 for (const required of [
   ':root[data-theme="dark"]',
   "prefers-reduced-motion",
-  "--sidebar-width: 160px",
-  "--inspector-width: 360px",
   "min-width: 1024px",
 ]) {
   if (!css.includes(required)) failures.push(`modern desktop CSS is missing: ${required}`);
@@ -61,7 +62,7 @@ for (const required of [
 
 for (const required of [
   "desktop-sidebar",
-  "desktop-toolbar",
+  "DesktopHeader",
   "HomeCardDialog",
   'aria-label="创作助手"',
   'href: "/"',
@@ -72,6 +73,10 @@ for (const required of [
   "HomeCommandComposer",
 ]) {
   if (!shell.includes(required)) failures.push(`AppShell is missing: ${required}`);
+}
+
+for (const required of ["<header", 'aria-label="新建视频"', "曜核AI剪辑"]) {
+  if (!desktopHeader.includes(required)) failures.push(`desktop header owner is missing: ${required}`);
 }
 
 for (const forbidden of ["RetroChrome", "PixelIcon", "PixelPrimitives", "retro-desktop-shell"] ) {
@@ -183,7 +188,7 @@ if (!signin.includes('pattern="[A-Za-z0-9._-]{3,32}"')) {
   failures.push("sign-in must reject email-shaped identifiers and enforce account names");
 }
 
-if (!design.includes("# 曜核1.0桌面客户端设计规范") || !design.includes("status: approved-requirements-visual-implementation-pending") || design.includes('visual_direction: "A precise local AI content production workstation: Windows')) {
+if (!design.includes("# 曜核 AI 剪辑桌面设计规范") || !design.includes("status: principles-current-specific-solutions-subject-to-review") || !design.includes("authority_rule:") || design.includes('visual_direction: "A precise local AI content production workstation: Windows')) {
   failures.push("DESIGN.md is not the modern desktop source of truth");
 }
 
