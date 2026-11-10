@@ -55,7 +55,10 @@ def metadata_preparation(tmp_path, monkeypatch):
 @pytest.mark.parametrize('clip_count,overlay_count', [(2, 0), (6, 2)])
 def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_without_rerun(tmp_path, clip_count, overlay_count):
     repository, actor, access, service, paths = preparation(tmp_path)
-    shape = CpuPreparationShape(64, 64, 24, 1.0, clip_count, 2, 8000, 1, overlay_count=overlay_count)
+    treatment = {'source_width_px': 128, 'source_height_px': 72,
+        'visual_effects': {'exposure': .15}} if overlay_count else {}
+    shape = CpuPreparationShape(64, 64, 24, 1.0, clip_count, 2, 8000, 1,
+        overlay_count=overlay_count, **treatment)
     plan_id, budget = service.prepare(shape, actor, request_id=str(uuid4()))
     assert budget.max_disk_io_bytes_per_second is None
     assert not service.profile_path.exists()

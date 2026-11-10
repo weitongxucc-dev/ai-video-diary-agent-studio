@@ -31,6 +31,7 @@ from app.device_runtime import OwnerRegistration
 from app.host_memory import MemoryPolicy, sample_host_memory
 from app.host_resource_probes import HostBudget, CpuRenderBudget, CpuAudioBudget, RuntimeCpuPolicy
 from app.granted_subprocess import run_granted_command, GrantedCommandError
+from app.visual_effects import VisualEffects
 
 
 OWNER_TYPE = 'device_preparation'
@@ -53,14 +54,25 @@ class CpuPreparationShape:
     channels: int
     source_bytes: int | None = None
     overlay_count: int = 0
+    source_width_px: int | None = None
+    source_height_px: int | None = None
+    visual_effects: dict | None = None
 
     def __post_init__(self):
-        if any(type(value) is not int or value <= 0 for name, value in vars(self).items() if name not in {'duration_seconds', 'source_bytes', 'overlay_count'}):
+        if any(type(value) is not int or value <= 0 for value in (
+                self.width_px, self.height_px, self.frame_rate, self.clip_count,
+                self.audio_input_count, self.sample_rate, self.channels)):
             raise ValueError('CPU preparation shape needs positive integer dimensions/counts')
         if type(self.overlay_count) is not int or self.overlay_count < 0:
             raise ValueError('Overlay count must be a nonnegative integer')
         if self.source_bytes is not None and (type(self.source_bytes) is not int or self.source_bytes <= 0):
             raise ValueError('Known source bytes must be a positive exact file size')
+        if (self.source_width_px, self.source_height_px) != (None, None) and any(
+                type(value) is not int or value <= 0 or value % 2
+                for value in (self.source_width_px, self.source_height_px)):
+            raise ValueError('Source dimensions must be a complete even YUV width/height pair')
+        if self.visual_effects is not None:
+            VisualEffects.model_validate(self.visual_effects)
         if (type(self.duration_seconds) not in (float, int) or not math.isfinite(self.duration_seconds)
                 or self.duration_seconds <= 0 or self.width_px % 2 or self.height_px % 2):
             raise ValueError('CPU preparation needs finite duration and even YUV dimensions')
@@ -184,6 +196,9 @@ class DeviceResourcePreparation:
         # Zero remains the original durable request shape.
         if shape.overlay_count == 0:
             values.pop('overlay_count')
+        for key in ('source_width_px', 'source_height_px', 'visual_effects'):
+            if values[key] is None:
+                values.pop(key)
         return values
 
     def prepare(self, shape: CpuPreparationShape, actor, *, request_id: str):

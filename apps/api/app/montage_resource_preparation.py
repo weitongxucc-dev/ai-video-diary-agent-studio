@@ -128,6 +128,9 @@ class _RssObservation:
 
 
 class MontageResourcePreparation(DeviceResourcePreparation):
+    def _shape_payload(self, shape):
+        return asdict(shape)
+
     def __init__(self, *, repository, montage_stage, task_authorizations,
                  policy=MontagePreparationPolicy(), **kwargs):
         super().__init__(policy=policy, **kwargs)

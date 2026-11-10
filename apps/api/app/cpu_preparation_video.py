@@ -3,6 +3,8 @@ import math
 
 from PIL import Image
 
+from app.visual_effects import color_filters, framing_filter, geometry_filters
+
 
 def preparation_video_command(plan, shape, video):
     duration, count = plan['probe_seconds'], shape.clip_count
@@ -20,10 +22,20 @@ def preparation_video_command(plan, shape, video):
             command += ['-threads', '1', '-loop', '1', '-framerate', str(shape.frame_rate), '-i', str(overlay)]
     total_frames = math.ceil(duration * shape.frame_rate)
     frame_counts = [total_frames // count + (index < total_frames % count) for index in range(count)]
+    source_width = shape.source_width_px or shape.width_px
+    source_height = shape.source_height_px or shape.height_px
+    treatments = []
+    if shape.visual_effects is not None:
+        treatments.extend(color_filters(shape.visual_effects))
+    if (source_width, source_height) != (shape.width_px, shape.height_px):
+        treatments.append(framing_filter('fill', .5, .5, shape.width_px, shape.height_px))
+    if shape.visual_effects is not None:
+        treatments.extend(geometry_filters(shape.visual_effects, shape.width_px, shape.height_px))
+    treatment = ','.join([*treatments, 'setsar=1']) + ',' if treatments else ''
     # Synthetic sources stay in the explicitly bounded complex graph, avoiding
     # one automatic graph thread pool per lavfi input.
-    graph = ''.join(f'testsrc2=size={shape.width_px}x{shape.height_px}:rate={shape.frame_rate}:'
-        f'duration={frames / shape.frame_rate},trim=end_frame={frames},setpts=PTS-STARTPTS[v{i}];'
+    graph = ''.join(f'testsrc2=size={source_width}x{source_height}:rate={shape.frame_rate}:'
+        f'duration={frames / shape.frame_rate},{treatment}trim=end_frame={frames},setpts=PTS-STARTPTS[v{i}];'
         for i, frames in enumerate(frame_counts))
     label = 'base' if shape.overlay_count else 'v'
     graph += ''.join(f'[v{i}]' for i in range(count)) + f'concat=n={count}:v=1:a=0[{label}]'

@@ -67,6 +67,9 @@ class DevicePreparationShapeRequest(BaseModel):
     channels: int = Field(gt=0)
     source_bytes: int | None = Field(default=None, gt=0)
     overlay_count: int = Field(default=0, ge=0)
+    source_width_px: int | None = Field(default=None, gt=0, multiple_of=2)
+    source_height_px: int | None = Field(default=None, gt=0, multiple_of=2)
+    visual_effects: VisualEffects | None = None
 
 
 class NarrationPreparationPronunciationReference(BaseModel):
