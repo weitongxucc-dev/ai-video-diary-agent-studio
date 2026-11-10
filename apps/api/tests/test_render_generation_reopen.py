@@ -112,3 +112,56 @@ def test_known_failed_scope_retries_without_transferring_scope_but_unknown_stays
         assert current_render_generation(case.repo, retried) is None
         assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
         assert current_render_generation(case.repo, case.job) == generation
+
+
+@pytest.mark.parametrize('status', ['succeeded', 'failed'])
+@pytest.mark.parametrize('unknown', [False, True])
+def test_edited_output_reopens_original_settled_job_and_preserves_previous_scope(reopened, status, unknown):
+    case = reopened
+    assert case.execution.rerender_current(case.job, case.actor, case.scheduler)
+    previous = current_render_generation(case.repo, case.job)
+    with case.repo._connect() as conn:
+        conn.execute('UPDATE job_runs SET status=? WHERE id=?', (status, case.job.id))
+        if unknown:
+            case.repo.execution_records.append_task_event(TaskEvent('unsettled-output', 'local', case.task.id,
+                case.job.id, 'task_execution_unit_started', {'usage_id':'output:1'}), connection=conn)
+    case.job = case.repo.job_records.get_job_run('local', case.job.id)
+    advance_head(case, 'repaired-animation')
+    before = database(case)
+    if unknown:
+        with pytest.raises(RecoveryBlocked, match='结清'):
+            case.execution.rerender_current(case.job, case.actor, case.scheduler)
+        assert database(case) == before
+        return
+    assert case.execution.rerender_current(case.job, case.actor, case.scheduler)
+    queued = case.repo.job_records.get_job_run('local', case.job.id)
+    assert queued.status == 'queued' and queued.input_digest == case.job.input_digest
+    assert current_render_generation(case.repo, queued)['input_timeline_version_id'] == 'repaired-animation'
+    old = case.repo.execution_records.get_task_event('local',
+        f"event_{case.job.id}_render_generation_{previous['render_generation_id']}")
+    assert old.payload == previous
+    assert len(case.execution.jobs('local', case.task.id)) == 1
+    intent = next_creation_intent(case.repo, case.scheduler, queued)
+    assert case.owner.verify_submission(intent, case.actor).resources['render_input_timeline_version_id'] == 'repaired-animation'
+
+
+def test_start_after_an_earlier_retry_uses_latest_original_job(reopened, monkeypatch):
+    from app.creation.execution_control import CreationExecutionControl
+    import app.creation.execution_control as controls
+    case = reopened
+    with case.repo._connect() as conn:
+        conn.execute("UPDATE job_runs SET status='failed' WHERE id=?", (case.job.id,))
+    latest = case.execution.retry('local', case.task.id, member_id=case.actor.member_id)
+    with case.repo._connect() as conn:
+        conn.execute("UPDATE job_runs SET status='succeeded' WHERE id=?", (latest.id,))
+    control = CreationExecutionControl(case.repo, case.execution, None, None)
+    monkeypatch.setattr(control, 'render_valid', lambda *a, **kw: False)
+    monkeypatch.setattr(control, 'status', lambda *a, **kw: case.execution.latest('local', case.task.id))
+    submitted = []
+    monkeypatch.setattr(controls, 'submit_creation_stage', lambda execution, scheduler, job, actor: submitted.append(job.id))
+    runtime = SimpleNamespace(registrations={'creation_job':SimpleNamespace(owner=case.owner)},
+        scheduler=case.scheduler, wake=lambda: None)
+    result = control.start('local', case.task.id, None, latest.input_digest, case.actor, runtime, verify_media=False)
+    assert result.id == latest.id and result.status == 'queued'
+    assert submitted == [latest.id]
+    assert len(case.execution.jobs('local', case.task.id)) == 2

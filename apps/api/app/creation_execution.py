@@ -3792,60 +3792,8 @@ class CreationExecution:
             validate_input=self.validate_input_snapshot, stage_facts=stage_facts)
 
     def rerender_current(self, job, actor, scheduler, *, write_guard=None) -> bool:
-        """Queue only a new current-timeline render on the original completed Job."""
-        if job.kind != KIND or job.status != 'succeeded':
-            return False
-        owner = scheduler.owners
-        if hasattr(owner, 'registrations'):
-            owner = owner.registrations[DEVICE_OWNER_TYPE].owner
-        with self.repository._connect() as reader:
-            current, task, start, _script, _plan = owner._facts(reader, job.workspace_id, job.id)
-        if current != job or actor != CreationExecutionActor.from_event(job.workspace_id, start):
-            raise PermissionError('不能重新输出其他身份的原作业')
-        if self.render_is_valid(job.workspace_id, job.task_id):
-            return False
-        if self.repository.narration_units.creation_narration_usage(job.workspace_id, job.id)['unsettled']:
-            raise RecoveryBlocked('原配音消耗尚未核实，不能重开输出')
-        version_id = task.current_timeline_version_id
-        if not version_id:
-            raise ValueError('当前作品尚不能仅重新输出；配音或剪辑仍未就绪')
-        progressive = owner.picture_fragments is not None and not _plan.presenter_share_target
-        if not progressive:
-            with self.repository._connect() as reader:
-                key, _resources = owner.render_facts(reader, task, _plan, actor=actor)
-        with self.repository._connect() as conn:
-            conn.execute('BEGIN IMMEDIATE')
-            if write_guard is not None:
-                write_guard(conn)
-            generation = None
-            current = job
-            if progressive:
-                from app.creation.render_generation import render_generation_event
-                current, target, original, _script, current_plan = owner._facts(conn, job.workspace_id, job.id)
-                if current != job or target.current_timeline_version_id != version_id:
-                    raise PermissionError('原完成作业或重新输出的时间线已变化')
-                start_event = self.repository.execution_records.get_task_event(job.workspace_id,
-                    f'event_{job.id}_start', connection=conn)
-                scope = render_generation_event(job, target, start_event, actor)
-                current = self.repository.creation_execution_jobs.begin_creation_render_generation(job, scope,
-                    expected_timeline_version_id=version_id, connection=conn)
-                generation = scope.payload
-                key, _resources = owner.render_facts(conn, target, current_plan, actor=actor, job=current,
-                    prepare_assembly=True)
-            from app.creation.render_generation import render_generation_fields
-            intent = SubmissionIntent(job.workspace_id, DEVICE_OWNER_TYPE, job.id, job.input_digest, key, SchedulePolicy())
-            identity = hashlib.sha256(json.dumps([version_id, intent.unit_key]).encode()).hexdigest()
-            event = TaskEvent(id=f'event_{job.id}_render_requested_{identity}', workspace_id=job.workspace_id,
-                task_id=job.task_id, job_id=job.id, event_type='creation_execution_stage',
-                payload={'stage': 'render', 'status': 'pending', 'input_timeline_version_id': version_id,
-                    'unit_key': intent.unit_key, 'input_digest': job.input_digest,
-                    'execution_purpose': 'render_current', 'script_id': task.confirmed_script_id,
-                    'start_event_id': f'event_{job.id}_start', **actor.identity_payload(),
-                    **render_generation_fields(generation)})
-            self.repository.creation_execution_jobs.reopen_creation_execution_for_render(current, event,
-                expected_timeline_version_id=version_id, connection=conn)
-            owner.verify_submission(intent, actor, connection=conn)
-        return True
+        from app.creation.render_reopen import rerender_current
+        return rerender_current(self, job, actor, scheduler, write_guard=write_guard)
 
     def retry(self, workspace_id: str, task_id: str, *, member_id: str | None = None, write_guard=None, execution_source=None,
               admission_recheck=None) -> JobRun:

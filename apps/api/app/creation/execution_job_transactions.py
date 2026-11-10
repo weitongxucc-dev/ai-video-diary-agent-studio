@@ -247,7 +247,7 @@ class CreationExecutionJobTransactions:
 
     def begin_creation_render_generation(self, run, event, *, expected_timeline_version_id, connection):
         """Prepare one new output inside the caller's atomic reopen transaction."""
-        from app.creation.render_generation import render_generation_event
+        from app.creation.render_generation import read_render_generation, render_generation_event
         from app.creation_execution import CreationExecutionActor
         if not connection.in_transaction:
             raise ValueError('重新输出范围必须与原作业重新安排处于同一事务')
@@ -256,7 +256,9 @@ class CreationExecutionJobTransactions:
         start = self.execution_records.get_task_event(run.workspace_id, f'event_{run.id}_start', connection=connection)
         actor = CreationExecutionActor.from_event(run.workspace_id, start.payload)
         expected = render_generation_event(run, task, start, actor)
-        if (current != run or run.status != 'succeeded' or run.kind != 'creation_task_execution'
+        prior = read_render_generation(connection, run, self.execution_records, require_current_head=False)
+        recoverable = run.status == 'failed' and prior is not None and prior['input_timeline_version_id'] != expected_timeline_version_id
+        if (current != run or (run.status != 'succeeded' and not recoverable) or run.kind != 'creation_task_execution'
                 or task.current_timeline_version_id != expected_timeline_version_id
                 or (event.id, event.workspace_id, event.task_id, event.job_id, event.event_type, event.payload) != (
                     expected.id, expected.workspace_id, expected.task_id, expected.job_id, expected.event_type, expected.payload)):
@@ -266,6 +268,13 @@ class CreationExecutionJobTransactions:
                 (run.workspace_id, run.id)).fetchone():
             from app.device_scheduler import RecoveryBlocked
             raise RecoveryBlocked('原作业仍有未结清请求，不能重开输出')
+        if connection.execute("SELECT 1 FROM task_events s WHERE s.workspace_id=? AND s.job_id=? "
+                "AND s.event_type='task_execution_unit_started' AND NOT EXISTS (SELECT 1 FROM task_events e "
+                "WHERE e.workspace_id=s.workspace_id AND e.job_id=s.job_id AND e.event_type='task_execution_unit_settled' "
+                "AND json_extract(e.payload_json,'$.usage_id')=json_extract(s.payload_json,'$.usage_id')) LIMIT 1",
+                (run.workspace_id, run.id)).fetchone():
+            from app.device_scheduler import RecoveryBlocked
+            raise RecoveryBlocked('原作业消耗尚未结清，不能重开输出')
         self.execution_records.append_task_event(event, connection=connection)
         connection.execute("UPDATE job_runs SET status='queued',progress=66,failure_reason=NULL,impact=NULL,repair_action=NULL,"
             "finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=?",
