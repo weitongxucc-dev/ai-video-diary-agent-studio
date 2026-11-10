@@ -224,9 +224,10 @@ describe("actual goal progress", () => {
       failure: {reason: "曝光数值超出允许范围（-2 到 2）。", repair_action: "请使用范围内的曝光值重新准备修改。"}}];
     render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    expect(screen.getByText(/工具记录/).closest("details")).toHaveAttribute("open");
-    expect(screen.getByText("曝光数值超出允许范围（-2 到 2）。")).toBeVisible();
-    expect(screen.getByText("请使用范围内的曝光值重新准备修改。")).toBeVisible();
+    expect(screen.getByText(/工具记录/).closest("details")).not.toHaveAttribute("open");
+    expect(within(screen.getByText(/工具记录/)).getByText("曝光数值超出允许范围（-2 到 2）。")).toBeVisible();
+    expect(within(screen.getByText(/工具记录/)).getByText("请使用范围内的曝光值重新准备修改。")).toBeVisible();
+    fireEvent.click(screen.getByText(/工具记录/));
     expect(screen.getByText("调整画面 · 未完成")).toBeVisible();
     expect(screen.queryByText("这一步没有完成。")).not.toBeInTheDocument();
   });
@@ -1046,7 +1047,7 @@ describe("AssistantConversationPanel", () => {
       next.rerender(<AssistantConversationPanel state={{ ...hook.result.current,
         conversation: { ...saved, id: "another-conversation" } }} input="" onInput={vi.fn()}
         onSend={vi.fn()} busy={false} configured scopeLabel="另一段对话" />);
-      expect([...next.container.querySelectorAll<HTMLDetailsElement>("details[data-reading-key]")].every(detail => detail.open === detail.classList.contains("assistant-turn-tools"))).toBe(true);
+      expect([...next.container.querySelectorAll<HTMLDetailsElement>("details[data-reading-key]")].every(detail => !detail.open)).toBe(true);
       act(paint);
       expect(scroll).toBe(0);
       next.unmount();
@@ -1075,7 +1076,7 @@ describe("AssistantConversationPanel", () => {
     expect(screen.queryByText("先确认制作方案和选题；这条回复只作为文案来源，不代替资料事实。")).not.toBeInTheDocument();
   });
 
-  it("renders one final Markdown body and one ordered tool summary with failures expanded", async () => {
+  it("renders one final Markdown body and one ordered tool summary with discoverable failures", async () => {
     const { container } = render(<AssistantConversationPanel state={state()} input="" onInput={vi.fn()} onSend={vi.fn()}
       busy={false} configured scopeLabel="首页创作" />);
 
@@ -1086,7 +1087,8 @@ describe("AssistantConversationPanel", () => {
     const assistantText = screen.getByText("真实方案");
     expect(tools.compareDocumentPosition(assistantText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const toolDetails = tools.closest("details")!;
-    expect(toolDetails).toHaveAttribute("open");
+    expect(toolDetails).not.toHaveAttribute("open");
+    fireEvent.click(tools);
     expect(within(toolDetails).getAllByRole("listitem")).toHaveLength(2);
     expect(within(toolDetails).getByText("读取当前方案 · 已返回")).toBeInTheDocument();
     expect(within(toolDetails).getByText("检查新建方案 · 未完成")).toBeInTheDocument();
@@ -1829,8 +1831,8 @@ describe("persistent workbench conversation and command completion", () => {
     act(() => referenceAssistantKnowledge({knowledge_item_id:"knowledge-real",version:"1",label:"第一版资料"}));
     act(() => referenceAssistantMaterial({selection:{scope:"asset",asset_id:"asset-real",expected_updated_at:"2026-10-10T00:00:00Z"},label:"明确素材"}));
     fireEvent.click(screen.getByRole("button", {name:/查看本轮 .* 项引用/}));
-    expect(await screen.findByText(/第一版资料/)).toBeVisible();
-    expect(await screen.findByText(/明确素材/)).toBeVisible();
+    expect(await screen.findByRole("button", {name:/定位资料 · 第一版资料/})).toBeVisible();
+    expect(await screen.findByRole("button", {name:/定位素材 · 明确素材/})).toBeVisible();
   });
 
   it("restores saved reference after full Provider remount and persists explicit cancel", async () => {

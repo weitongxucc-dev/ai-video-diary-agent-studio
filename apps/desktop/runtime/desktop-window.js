@@ -5,7 +5,7 @@ function createDesktopWindow({ BrowserWindow, ipcMain, shell, preloadPath, webOr
     height: 840,
     minWidth: 1024,
     minHeight: 700,
-    title: '曜核1.0',
+    title: '曜核AI剪辑',
     backgroundColor: '#f7f7f5',
     show: true,
     ...(isMac ? {

@@ -199,6 +199,7 @@ describe("source and output playback identity", () => {
     mediaState(retried, 2);
     fireEvent.seeked(retried);
     expect(screen.queryByText("正在读取原片…")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name:"展开镜头列表"}));
     expect(screen.getByRole("button", { name: "选择镜头 1" })).toHaveAccessibleDescription("读取缩略图…");
     expect(view.container.querySelector("button button")).toBeNull();
     expect(view.container.querySelector('[data-editor-player]')).toHaveAttribute("data-editor-aspect-ratio", "9:16");

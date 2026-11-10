@@ -17,7 +17,7 @@ export function ReferenceChips({ items, onRemove }: { items: SelectedAssistantRe
   return <div className="assistant-reference-chips" aria-label="本轮选中引用">
     <Popover open={expanded} onOpenChange={setExpanded}>
       <PopoverTrigger render={<Button variant="ghost"/>} className="assistant-reference-summary" aria-label={`查看本轮 ${items.length} 项引用`}>
-        <Paperclip size={16} aria-hidden/><span>{items.length === 1 ? items[0].label : `${items.length} 项引用`}</span>
+        <Paperclip size={16} aria-hidden/><span>{items.slice(0, 2).map(item => item.label).join("、") + (items.length > 2 ? ` 等 ${items.length} 项` : "")}</span>
       </PopoverTrigger>
       <PopoverContent className="assistant-reference-popover">
         <div className="assistant-reference-heading"><PopoverTitle>本轮引用 · {items.length}</PopoverTitle><PopoverClose render={<Button variant="ghost" size="icon"/>} aria-label="关闭引用列表"><X size={16}/></PopoverClose></div>

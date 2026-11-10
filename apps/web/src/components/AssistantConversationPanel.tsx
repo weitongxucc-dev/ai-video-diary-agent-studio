@@ -3,6 +3,7 @@ import { InputGroup, InputGroupTextarea } from "./ui/input-group";
 import { Button } from "./ui/button";
 import { segmentRevisionStatus, segmentAdoptionReason, editExecutionReadinessMessage } from './creation-task/stage-labels';
 
+import { ConversationMessage } from "./ui/conversation-message";
 import { ReferenceChips } from "./ui/reference-chips";
 
 import { useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
@@ -199,15 +200,16 @@ function TurnContent({ turn, reading }: { turn: AssistantConversationTurn; readi
   const tools = turnTools(turn);
   const runningTools = tools.some((tool) => tool.state === "running");
   const failedTools = tools.some((tool) => tool.state === "failed" || tool.state === "unreturned");
+  const failure = [...tools].reverse().find(tool => tool.state === "failed")?.failure;
   return <div className="assistant-markdown-wrap">
-    {tools.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:tools`} className="assistant-turn-tools" defaultOpen={turn.status === "running" || failedTools}>
-      <summary>工具记录 · {tools.length} 项 · {runningTools ? "进行中" : failedTools ? "含失败记录" : "调用已结束"}</summary>
+    {tools.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:tools`} className="assistant-turn-tools" defaultOpen={turn.status === "running"}>
+      <summary>工具记录 · {tools.length} 项 · {runningTools ? "进行中" : failedTools ? "含失败记录" : "调用已结束"}{failure ? <span className="assistant-tool-summary-failure"><span>{failure.reason}</span>{failure.repair_action ? <span>{failure.repair_action}</span> : null}</span> : null}</summary>
       <ol>{tools.map((tool, index) => <li data-state={tool.state} key={`${tool.tool_id}-${index}`}>
         <strong>{tool.label} · {toolStateLabels[tool.state]}</strong>
         <ToolResult tool={tool} reading={reading} readingKey={`${turn.id}:tool:${tool.tool_id}:diagnostic`}/>
       </li>)}</ol>
     </ReadingDetails> : null}
-    {turn.assistant_text ? <div className="assistant-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.assistant_text}</ReactMarkdown></div> : null}
+    {turn.assistant_text ? <ConversationMessage className="assistant-markdown" savedOpen={reading?.get(`${turn.id}:message`, false)} onOpenChange={open => reading?.save(`${turn.id}:message`, open)}><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.assistant_text}</ReactMarkdown></ConversationMessage> : null}
   </div>;
 }
 
@@ -450,7 +452,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
           ? result.message
           : null);
   return <article className="assistant-persisted-turn" data-turn-status={turn.status} data-turn-id={turn.id}>
-    {turn.user_message.trim() ? <p className="assistant-user-message">{turn.user_message}</p> : null}
+    {turn.user_message.trim() ? <ConversationMessage className="assistant-user-message" savedOpen={reading?.get(`${turn.id}:user`, false)} onOpenChange={open => reading?.save(`${turn.id}:user`, open)}>{turn.user_message}</ConversationMessage> : null}
     {businessContinuation ? <p className="assistant-stream-status">继续完成原要求</p> : null}
     <TurnContent turn={turn} reading={reading} />
     {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
