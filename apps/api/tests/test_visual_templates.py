@@ -30,17 +30,46 @@ def visual_overlay(**changes):
         template_version=1, definition=definition, start_seconds=1, end_seconds=4, **changes)
 
 
-def test_catalog_pins_real_source_and_six_distinct_use_cases():
+def test_catalog_pins_real_source_and_all_bundled_use_cases():
     items = list(visual_templates())
-    assert {item[2].category for item in items} == {'title','chapter','callout','data','product','ending'}
+    assert len(items) == 60
+    assert {item[2].category for item in items} == {'title','chapter','callout','data','product','ending','social','reaction','chat','news','location','festival'}
     manifest = json.loads((ASSETS/'provenance.json').read_text())
     for identity, _name, definition in items:
+        if definition.provenance[0].license != 'CC0-1.0':
+            from app.creation.rendercomp_template_catalog import ASSETS as rc_assets
+            source = rc_assets / 'upstream' / Path(definition.provenance[0].path).name
+            assert hashlib.sha256(source.read_bytes()).hexdigest() == definition.provenance[0].source_sha256
+            assert definition.provenance[0].license == 'MIT'
+            continue
         original = (ASSETS/f'{identity}.html').read_bytes()
         expected = next(item for item in manifest['files'] if item['file']==f'{identity}.html')
         assert hashlib.sha256(original).hexdigest() == expected['sha256'] == definition.provenance[0].source_sha256
         assert definition.source.encode() == original
         assert definition.provenance[0].license == 'CC0-1.0'
         assert all(binding.default for binding in definition.bindings if binding.kind=='text')
+
+
+@pytest.mark.skipif(not os.environ.get('YAOHE_TEMPLATE_ELECTRON'), reason='requires actual desktop renderer')
+def test_bundled_catalog_renders_real_frames_with_bound_chinese_text(tmp_path):
+    """Every imported program must execute, not only parse its metadata."""
+    import subprocess
+    from PIL import Image
+    for identity, name, definition in visual_templates():
+        # Preserve numeric/date fields and replace an actual prose binding.
+        prose = next(item for item in definition.bindings if item.kind=='text'
+            and len(item.default)>1 and not any(char.isdigit() for char in item.default))
+        definition.values[prose.key] = '科大分享'
+        overlay = VisualTemplateOverlay(name=name, template_id='builtin_visual_'+identity,
+            template_version=1, definition=definition, start_seconds=0, end_seconds=4)
+        directory = tmp_path / identity
+        command, environment = frame_command(overlay.model_dump(), directory,
+            size=(480,640), first_frame=45, frame_count=1)
+        result = subprocess.run(command,env=environment,capture_output=True,timeout=15)
+        assert result.returncode == 0, (identity,result.stderr.decode(errors='replace'))
+        frame_manifest(directory,1)
+        with Image.open(directory/'frame-0000000.png') as frame:
+            assert frame.size == (480,640) and frame.getbbox(), identity
 
 
 def test_visual_copy_unknown_reconciliation_cas_and_original_version(state):
@@ -102,6 +131,19 @@ def test_source_errors_dependencies_and_clock_are_explicit(tmp_path):
     with pytest.raises(ValueError,match='依赖'):
         frame_command(overlay.model_dump(),tmp_path/'unstarted',size=(1080,1920),first_frame=0,frame_count=30)
     assert not (tmp_path/'unstarted').exists()
+
+
+def test_authored_code_uses_granted_task_preview_not_the_workbench_renderer(state):
+    _repository,_template,client=state
+    visual=next(visual_templates())[2].model_dump()
+    stock=client.post('/api/video-templates/visual-preview',json=visual)
+    assert stock.status_code==200 and stock.json()['document']
+    visual['source']+='\n<script>while(true){}</script>'
+    authored=client.post('/api/video-templates/visual-preview',json=visual)
+    assert authored.status_code==200 and authored.json()['document'] is None
+    visual=next(visual_templates())[2].model_dump()
+    visual['bindings'][0]['target']='body'
+    assert client.post('/api/video-templates/visual-preview',json=visual).json()['document'] is None
 
 
 def test_frame_manifest_never_adopts_missing_or_partial_frames(tmp_path):

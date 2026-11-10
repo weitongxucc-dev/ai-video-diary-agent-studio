@@ -75,3 +75,6 @@
 .editForm textarea { min-height:100px;resize:vertical; }
 .editForm p { margin:0;font-size:12px;line-height:1.6;color:var(--text-2); }
 .detailFooter button:disabled, .toolbar button:disabled { color:var(--text-3);background:var(--surface-2);border-color:var(--border-1);cursor:default; }
+
+.resourceFilter { display:flex;align-items:center;gap:8px;padding:8px 0;color:var(--text-2);font-size:13px; }
+.resourceFilter select { max-width:240px;min-height:32px;padding:4px 8px;border:1px solid var(--border-1);border-radius:6px;background:var(--surface-1);color:var(--text-1);font:inherit; }

@@ -219,7 +219,8 @@ def presenter_budgets_from_env(env: Mapping[str, str] | None = None):
     budgets = []
     for kind, prefix in ((PresenterBudget, "DEVICE_PRESENTER_"),
                          (CpuRenderBudget, "DEVICE_PRESENTER_CPU_RENDER_")):
-        names = {item.name: prefix + item.name.upper() for item in fields(kind) if item.name != "running_cpu_policy"}
+        names = {item.name: prefix + item.name.upper() for item in fields(kind) if item.name != "running_cpu_policy"
+            and (item.name != "max_template_count" or environment.get(prefix + "MAX_TEMPLATE_COUNT", "").strip())}
         if not any(environment.get(name, "").strip() for name in names.values()):
             budgets.append(None)
             continue

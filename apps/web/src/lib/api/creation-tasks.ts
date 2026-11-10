@@ -176,8 +176,8 @@ export function generateCreationTaskPersonRender(taskId: string, input: {
 export function applyCreationTaskExactEdit(taskId: string, input: CreationTaskExactEditInput | CreationTaskMetadataSaveInput): Promise<CreationTaskEditResult> {
     return creationPlanRequest<CreationTaskEditResult>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact`, { method: "POST", body: JSON.stringify(input) });
 }
-export function previewCreationTaskExactEdit(taskId: string, input: CreationTaskExactEditInput): Promise<CreationTaskEditPreviewResponse | TaskMediaJob> {
-    return creationPlanRequest<CreationTaskEditPreviewResponse | TaskMediaJob>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact/preview?draft=true`, { method: "POST", body: JSON.stringify(input) });
+export function previewCreationTaskExactEdit(taskId: string, input: CreationTaskExactEditInput, options?:{draftOnly:boolean}): Promise<CreationTaskEditPreviewResponse | TaskMediaJob> {
+    return creationPlanRequest<CreationTaskEditPreviewResponse | TaskMediaJob>(`/api/creation-tasks/${encodeURIComponent(taskId)}/edits/exact/preview?draft=${options?.draftOnly??true}`, { method: "POST", body: JSON.stringify(input) });
 }
 export function getCreationTaskMontageClipCandidates(taskId: string, clipId: string): Promise<MontageClipCandidate[]> {
     return creationPlanRequest<MontageClipCandidate[]>(`/api/creation-tasks/${encodeURIComponent(taskId)}/montage/clips/${encodeURIComponent(clipId)}/candidates`);

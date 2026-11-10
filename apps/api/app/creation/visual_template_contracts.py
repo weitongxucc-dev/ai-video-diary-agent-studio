@@ -29,7 +29,7 @@ class TemplateProvenance(BaseModel):
 class VisualTemplate(BaseModel):
     model_config = ConfigDict(extra='forbid')
     engine: Literal['openfilm-html-v1'] = 'openfilm-html-v1'
-    category: Literal['title', 'chapter', 'callout', 'data', 'product', 'ending']
+    category: Literal['title', 'chapter', 'callout', 'data', 'product', 'ending', 'social', 'reaction', 'chat', 'news', 'location', 'festival']
     width: int = Field(ge=64, le=4096)
     height: int = Field(ge=64, le=4096)
     duration_seconds: float = Field(gt=0, le=300, allow_inf_nan=False)

@@ -34,8 +34,8 @@ export async function readVisualTemplates(): Promise<VideoTemplate[]> {
 export async function readVideoTemplateVersion(id:string,version:number):Promise<VideoTemplate> {
   return templateRequest(`/api/video-templates/${encodeURIComponent(id)}?version=${version}`);
 }
-export async function visualTemplateDocument(visual: VisualTemplate): Promise<string> {
-  return (await templateRequest('/api/video-templates/visual-preview', visual)).document;
+export async function visualTemplateDocument(visual: VisualTemplate): Promise<{document:string|null;reason?:string}> {
+  return templateRequest('/api/video-templates/visual-preview', visual);
 }
 export async function saveVisualTemplateCopy(input: {request_id: string; source_template_id: string;
   source_template_version: number; name: string; visual: VisualTemplate}): Promise<VideoTemplate> {

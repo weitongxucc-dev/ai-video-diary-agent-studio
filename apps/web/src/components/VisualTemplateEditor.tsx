@@ -81,9 +81,9 @@ export function VisualTemplateLibraryEditor({template,onSaved}: {template:VideoT
   </section>;
 }
 
-export function VisualTemplateLayerEditor({items,duration,busy,selectedId,onSelect,onPreview,onDraftChange}: {
+export function VisualTemplateLayerEditor({items,duration,busy,selectedId,onSelect,onPreview,onMediaPreview,onDraftChange}: {
   items:GraphicOverlay[];duration:number;busy:boolean;selectedId?:string|null;onSelect?:(id:string|null)=>void;
-  onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void}) {
+  onPreview:(input:CreationTaskExactEditInput)=>void;onMediaPreview?:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void}) {
   const [templates,setTemplates]=useState<VideoTemplate[]>([]);
   const [error,setError]=useState<string|null>(null);
   const [draft,setDraft]=useState<VisualTemplateOverlay|null>(null);
@@ -113,6 +113,9 @@ export function VisualTemplateLayerEditor({items,duration,busy,selectedId,onSele
       <div className={styles.actions}><button className={ui.button} type="button" disabled={busy} onClick={()=>onPreview({operation_type:'EditGraphicOverlay',
         overlay_action:items.some(item=>item.id===layer.id)?'update':'add',graphic_overlay:layer,
         ...(items.some(item=>item.id===layer.id)?{overlay_id:layer.id}:{})})}>保存动画草稿</button>
+        {onMediaPreview?<button className={ui.button} type="button" disabled={busy} onClick={()=>onMediaPreview({operation_type:'EditGraphicOverlay',
+          overlay_action:items.some(item=>item.id===layer.id)?'update':'add',graphic_overlay:layer,
+          ...(items.some(item=>item.id===layer.id)?{overlay_id:layer.id}:{})})}>运行动画预览</button>:null}
         {items.some(item=>item.id===layer.id)?<button className={ui.button} type="button" disabled={busy} onClick={()=>onPreview({operation_type:'EditGraphicOverlay',overlay_action:'delete',overlay_id:layer.id})}>移除动画图层</button>:null}
       </div>
       <p>层级越大越靠前；相同层级按添加顺序叠放。保存走作品版本，可用撤销恢复。</p>

@@ -375,14 +375,14 @@ export function VideoClipQuickEditor({ clip, index, busy, draft, onDraftStateCha
   </div>;
 }
 
-export function VideoClipInspector({ clip, index, count, taskId, versionId, subtitleTracks, personRender, personRenderCapability, portraitAvailable, graphicOverlays, durationSeconds, allClipIds, hasOutput, busy, initialDraft, onDraftStateChange, onPreview, onDraftChange, onReplace, candidates, replacing, onAddSegment, inserting, onPerson, onAddOriginal, onVisualPreview, getPlayhead, onSelectOverlay }: {
+export function VideoClipInspector({ clip, index, count, taskId, versionId, subtitleTracks, personRender, personRenderCapability, portraitAvailable, graphicOverlays, durationSeconds, allClipIds, hasOutput, busy, initialDraft, onDraftStateChange, onPreview, onDraftChange, onReplace, candidates, replacing, onAddSegment, inserting, onPerson, onAddOriginal, onVisualPreview, getPlayhead, onSelectOverlay, onTemplatePreview }: {
   clip: CreationTaskMontageClip; index: number; count: number; taskId: string; versionId: string | null; subtitleTracks: CreationTaskSubtitleTrack[];
   personRender: CreationTaskPersonRender | undefined; personRenderCapability: CreationTaskPersonRenderCapability; portraitAvailable: boolean | undefined;
   graphicOverlays: GraphicOverlay[] | undefined; durationSeconds: number; allClipIds: string[]; hasOutput: boolean; busy: boolean;
   initialDraft?: VideoClipDraft; onDraftStateChange?: (draft: VideoClipDraft) => void;
   getPlayhead?: () => number | null;
   onSelectOverlay?: (id:string|null)=>void;
-  onPreview: (input: CreationTaskExactEditInput) => void; onDraftChange: (changed: boolean) => void; onReplace: () => void;
+  onPreview: (input: CreationTaskExactEditInput) => void; onTemplatePreview?: (input: CreationTaskExactEditInput) => void; onDraftChange: (changed: boolean) => void; onReplace: () => void;
   candidates: MontageClipCandidate[]; replacing: boolean; onAddSegment?: () => void; inserting?: boolean; onPerson: (command: string) => void; onAddOriginal?: () => void; onVisualPreview?: (input: import("@/lib/types").VisualEditInput) => void;
 }) {
   const [tab, setTab] = useState("properties");
@@ -438,7 +438,7 @@ export function VideoClipInspector({ clip, index, count, taskId, versionId, subt
         <label className={ui.field}>过渡秒数<input aria-label="叠化时长（秒）" type="number" min="0" max="2" step="0.1" value={Number.isFinite(transitionSeconds) ? transitionSeconds : ""} disabled={busy||clip.locked} onChange={event=>{onDraftChange(true);setTransitionSeconds(event.target.value === "" ? Number.NaN : Number(event.target.value));}} onBlur={() => { if (Number.isFinite(transitionSeconds) && transitionSeconds >= 0 && transitionSeconds <= 2 && !busy && !clip.locked && transitionSeconds !== (clip.transition_in_seconds ?? 0)) onPreview({operation_type:"SetClipTransition",clip_id:clip.id,transition_seconds:transitionSeconds}); }} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); if (Number.isFinite(transitionSeconds) && transitionSeconds >= 0 && transitionSeconds <= 2 && !busy && !clip.locked && transitionSeconds !== (clip.transition_in_seconds ?? 0)) onPreview({operation_type:"SetClipTransition",clip_id:clip.id,transition_seconds:transitionSeconds}); } }} /></label>
         <p>0 为硬切；从切点开始混合两段画面，需要前镜头的结尾素材余量。声音与字幕不移动。</p>
       </details>:null}
-      <GraphicOverlayEditor onSelect={onSelectOverlay} taskId={taskId} items={graphicOverlays ?? []} duration={durationSeconds} busy={busy} onPreview={onPreview} onDraftChange={()=>onDraftChange(true)}/>
+      <GraphicOverlayEditor onMediaPreview={onTemplatePreview} versionId={versionId} onSelect={onSelectOverlay} taskId={taskId} items={graphicOverlays ?? []} duration={durationSeconds} busy={busy} onPreview={onPreview} onDraftChange={()=>onDraftChange(true)}/>
       {onVisualPreview ? <VisualEffectsInspector portraitAvailable={portraitAvailable} clip={clip} allClipIds={allClipIds} versionId={versionId} busy={busy} onPreview={onVisualPreview} onDraftChange={()=>onDraftChange(true)} />:null}
       {onAddOriginal && !clip.person_render_id ? <button className={ui.button} type="button" disabled={busy || clip.locked || audioTimingDirty} title={audioTimingDirty ? "请先确认裁切或变速修改" : undefined} onClick={onAddOriginal}>试听原声</button> : null}
       <section className={ui.propertySection}><h3>这段声音</h3>{captions.length ? <p>{captions.map(cue => cue.text).join(" ")}</p> : null}<ClipTimelineAudioPreview key={`${versionId}:${clip.id}`} taskId={taskId} versionId={versionId} start={clip.timeline_start_seconds} end={clip.timeline_end_seconds} busy={busy} /></section>

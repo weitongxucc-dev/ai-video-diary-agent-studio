@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/RenderComp/free-remotion-templates",
+  "revision": "f648980e528defb7594e24c6447055f0540f340b",
+  "license": "MIT",
+  "files": [
+    {
+      "file": "upstream/BarChartAnim.tsx",
+      "path": "src/components/bar-chart-anim/BarChartAnim.tsx",
+      "blob_sha": "0c1ade05bc87ab69170ff5f724cebb537e91e440",
+      "sha256": "7616e6752a242cfee13d46b16f78236382c0d8c6e854b89c7f1b3a525e705dee"
+    },
+    {
+      "file": "upstream/KpiCounter.tsx",
+      "path": "src/components/kpi-counter/KpiCounter.tsx",
+      "blob_sha": "bcc40a2f42b21730d26a6fdf7ce4a734aaa04407",
+      "sha256": "0ddc52f49062e1570487f531f3e4589701d7616b5e73ec70071abc25d35b1a9c"
+    }
+  ]
+}

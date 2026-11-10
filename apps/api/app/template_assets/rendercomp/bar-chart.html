@@ -1,0 +1,28 @@
+<!-- Adapted from RenderComp BarChartAnim, MIT, copyright 2026 Trimora Inc.
+     Yaohe HTML adaptation: no React or Remotion runtime required. -->
+<!doctype html><html><head><meta charset="utf-8"><style>
+:root{--background:#0f172a;--color:#ffffff;--accent:#60a5fa;--font:-apple-system,"Segoe UI","PingFang SC",sans-serif}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}
+body{background:var(--background);color:var(--color);font-family:var(--font);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:46px;padding:65px}
+header{text-align:center}.title{font-size:58px;font-weight:900;letter-spacing:2px}.subtitle{font-size:28px;color:var(--accent);margin-top:12px}
+.chart{height:370px;display:flex;align-items:flex-end;gap:28px}.item{width:125px;display:flex;flex-direction:column;align-items:center;gap:8px}
+.bar{width:100%;border-radius:8px 8px 0 0}.label,.value{font-size:23px;font-weight:600}.bar,.value{transform-origin:bottom}
+.n{display:none}
+</style></head><body><header><div class="title">季度营收</div><div class="subtitle">同比增长 28%</div></header>
+<div class="chart"><div class="item" style="color:#60a5fa"><div class="value"></div><div class="bar" style="background:currentColor"></div><div class="label l1">第一季度</div><span class="n v1">120</span></div>
+<div class="item" style="color:#34d399"><div class="value"></div><div class="bar" style="background:currentColor"></div><div class="label l2">第二季度</div><span class="n v2">180</span></div>
+<div class="item" style="color:#fbbf24"><div class="value"></div><div class="bar" style="background:currentColor"></div><div class="label l3">第三季度</div><span class="n v3">240</span></div>
+<div class="item" style="color:#f472b6"><div class="value"></div><div class="bar" style="background:currentColor"></div><div class="label l4">第四季度</div><span class="n v4">320</span></div></div>
+<script>
+const clamp=x=>Math.max(0,Math.min(1,x));
+// Analytic damped spring owned by this adapter, evaluated at the requested time.
+function enter(seconds){return seconds<=0?0:1-Math.exp(-8*seconds)*(Math.cos(11.66*seconds)+8/11.66*Math.sin(11.66*seconds))}
+window.film={frame(t){
+ const frame=t*30,progress=1-(1-clamp(frame/14))**3;
+ const header=document.querySelector('header');header.style.opacity=progress;header.style.transform=`translateY(${-20*(1-progress)}px)`;
+ const items=[...document.querySelectorAll('.item')],values=items.map(item=>Number(item.querySelector('.n').textContent));
+ if(values.some(v=>!Number.isFinite(v)||v<0||v>1e12))throw Error('图表数据须为0至一万亿之间的数字');
+ const maximum=Math.max(...values,1);
+ items.forEach((item,i)=>{const p=enter((frame-20-i*8)/30);item.querySelector('.bar').style.height=`${values[i]/maximum*370*p}px`;item.style.opacity=clamp(p);item.querySelector('.value').textContent=String(values[i]);});
+}};
+</script></body></html>

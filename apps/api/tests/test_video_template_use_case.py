@@ -55,7 +55,7 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
 
     def observe_save(template, **kwargs):
         trace.append("template.save")
-        assert kwargs == {"verified_owner_user_id": owner, "local_diagnostic": False}
+        assert kwargs == {"verified_owner_user_id": owner, "local_diagnostic": False, "write_guard": None}
         return save_template(template, **kwargs)
 
     monkeypatch.setattr(main, "production_repo", repository)
@@ -151,7 +151,7 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     task_trace = list(trace)
     assert task_trace == ["workspace", "task", "plan", "montage", "qualified-output-port", "nonempty-stat",
         "subtitles", "scripts", "workspace", "reader:" + owner, "workspace", "reader:" + owner, "template.save"]
-    expected_settings = {"language": "en-US", "aspect_ratio": "16:9", "duration_target_seconds": 45,
+    expected_settings = {"kind":"composition", "visual_components":[], "language": "en-US", "aspect_ratio": "16:9", "duration_target_seconds": 45,
         "presenter_share_target": 20, "lipsync_quality": "high",
         "voice": {"profile_id": "voice-fixed", "version": "v8"}, "script_section_count": 2,
         "style_instruction": "新任务风格", "fit_mode": "fit", "color_style": effects, "subtitle_style": source_style}
@@ -165,7 +165,8 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     trace.clear()
     builtins = VideoTemplateUseCase(main.production_repo).builtin_templates(workspace)
     catalog = list_content_templates()
-    assert trace == [] and len(builtins) == len(catalog) and builtins
+    structures = [item for item in builtins if not item.settings.get("visual")]
+    assert trace == [] and len(structures) == len(catalog) and structures
     first = builtins[0]
     assert (first.id, first.name, first.version, first.workspace_id, first.origin) == (
         "builtin_" + catalog[0].template_id, catalog[0].name, 1, workspace, "built_in")

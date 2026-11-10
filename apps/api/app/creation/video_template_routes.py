@@ -175,8 +175,11 @@ def build_video_template_router(adapter_for, route_names: tuple[str, ...] | None
     @router.post('/api/video-templates/visual-preview')
     def visual_template_preview(payload: VisualTemplate, request: Request):
         from app.media.template_document import template_document
+        from app.creation.visual_template_catalog import trusted_inline_visual
         adapter = adapter_for()
         adapter._reader_for(request, adapter._workspace_for(request))
+        if not trusted_inline_visual(payload):
+            return {'document': None, 'reason': '自定义源码请保存为模板，在作品中通过预览或重新输出运行；草稿已保留。'}
         try:
             return {'document': template_document(payload)}
         except ValueError as exc:

@@ -2,7 +2,7 @@ import type { ContentVisibility } from './common';
 import type { CreationPlanInput } from './creation-plans';
 export type VisualTemplate = {
     engine: 'openfilm-html-v1';
-    category: 'title' | 'chapter' | 'callout' | 'data' | 'product' | 'ending';
+    category: 'title' | 'chapter' | 'callout' | 'data' | 'product' | 'ending' | 'social' | 'reaction' | 'chat' | 'news' | 'location' | 'festival';
     width: number; height: number; duration_seconds: number; source: string;
     bindings: {key: string; label: string; kind: 'text' | 'variable'; target: string; default: string}[];
     values: Record<string, string>;

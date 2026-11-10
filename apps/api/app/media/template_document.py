@@ -27,7 +27,7 @@ def template_document(definition: VisualTemplate):
     templateMeasure.font=style.fontStyle+' '+style.fontWeight+' '+base.size+'px '+style.fontFamily;
     const width=Math.max(...value.split('\\n').map(line=>templateMeasure.measureText(line).width+Math.max(0,[...line].length-1)*base.spacing),1);
     const size=Math.min(base.size,base.size*innerWidth*.86/width);
-    if(size<14)throw Error('模板文字放不下，请缩短文字、分行或修改源码布局');
+    if(size<14)throw Error('模板文字放不下（'+target.className+'），请缩短文字、分行或修改源码布局');
     target.style.fontSize=size+'px';
   }
   addEventListener('message',async e=>{

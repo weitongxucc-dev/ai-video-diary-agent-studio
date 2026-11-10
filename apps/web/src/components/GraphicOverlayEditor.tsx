@@ -8,7 +8,7 @@ import ui from "./VideoEditor.module.css";
 import {VisualTemplateLayerEditor} from './VisualTemplateEditor';
 
 type GraphicEditorProps={taskId:string;versionId?:string|null;items:GraphicOverlay[];duration:number;busy:boolean;
- onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void;selectedId?:string|null;onSelect?:(id:string|null)=>void};
+ onPreview:(input:CreationTaskExactEditInput)=>void;onMediaPreview?:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void;selectedId?:string|null;onSelect?:(id:string|null)=>void};
 export function GraphicOverlayEditor(props:GraphicEditorProps){
  return <><VisualTemplateLayerEditor key={props.versionId} {...props}/><StaticGraphicOverlayEditor {...props}
   items={props.items.filter((item):item is TextOverlay|ImageOverlay|ArrowOverlay=>item.kind!=='template')}/></>;

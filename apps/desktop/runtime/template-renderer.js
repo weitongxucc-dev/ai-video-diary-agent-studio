@@ -10,6 +10,9 @@ const output = path.dirname(input);
 app.setPath('userData', path.join(output, 'browser-profile'));
 app.setPath('sessionData', path.join(output, 'browser-session'));
 app.enableSandbox();
+// Offscreen output is a bitmap sequence; use Chromium's software compositor
+// so sandboxed child frames are present in captures without a display GPU.
+app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('disable-background-networking');
 app.commandLine.appendSwitch('disable-component-update');
 app.commandLine.appendSwitch('disable-crash-reporter');
@@ -42,21 +45,23 @@ async function render() {
   const window=new BrowserWindow({show:false,width:spec.width,height:spec.height,
     useContentSize:true,frame:false,transparent:true,backgroundColor:'#00000000',
     webPreferences:{session:isolated,sandbox:true,contextIsolation:true,nodeIntegration:false,
-      webSecurity:true,webviewTag:false,backgroundThrottling:false,offscreen:true}});
+      webSecurity:true,webviewTag:false,backgroundThrottling:false}});
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.webContents.on('will-attach-webview',event=>event.preventDefault());
   window.webContents.on('will-navigate',event=>event.preventDefault());
-  const child=spec.document;
-  const host=`<!doctype html><style>html,body{margin:0;overflow:hidden;background:transparent}iframe{position:absolute;border:0;transform-origin:center}</style><iframe sandbox="allow-scripts" allow="camera 'none';microphone 'none';geolocation 'none'"></iframe><script>
+  const child=spec.document,definition=spec.overlay.definition;
+  // Set the source viewport before its scripts run: upstream autofit programs
+  // measure their initial layout and must not see the iframe's 300x150 default.
+  const host=`<!doctype html><style>html,body{margin:0;overflow:hidden;background:transparent}iframe{position:absolute;border:0;transform-origin:center;width:${definition.width}px;height:${definition.height}px}</style><iframe sandbox="allow-scripts" allow="camera 'none';microphone 'none';geolocation 'none'"></iframe><script>
     const f=document.querySelector('iframe');let pending=new Map();let ready;
     const loaded=new Promise(r=>ready=r);
     addEventListener('message',e=>{if(e.source!==f.contentWindow)return;if(e.data?.kind==='loaded')ready();if(e.data?.kind==='drawn'){const p=pending.get(e.data.ticket);if(p){pending.delete(e.data.ticket);e.data.error?p.reject(Error(e.data.error)):p.resolve()}}});
     f.srcdoc=${JSON.stringify(child).replaceAll('<', '\\u003c')};
-    window.draw=async function(data){await loaded;Object.assign(f.style,data.style);await new Promise((resolve,reject)=>{pending.set(data.ticket,{resolve,reject});f.contentWindow.postMessage(data,'*')})};
+    window.draw=async function(data){await loaded;Object.assign(f.style,data.style);await new Promise((resolve,reject)=>{pending.set(data.ticket,{resolve,reject});f.contentWindow.postMessage(data,'*')});await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))};
     </script>`;
   await window.loadURL('data:text/html;charset=utf-8,'+encodeURIComponent(host));
   window.setBackgroundColor('#00000000');
-  const overlay=spec.overlay,definition=overlay.definition;
+  const overlay=spec.overlay;
   const frames=[];
   for(let i=0;i<spec.frame_count;i++){
     const global=(spec.first_frame+i)/spec.fps;
@@ -70,8 +75,13 @@ async function render() {
     await window.webContents.executeJavaScript(`window.draw(${JSON.stringify(data)})`);
     if(networkFailure)throw Error(networkFailure);
     const file=`frame-${String(i).padStart(7,'0')}.png`;
-    const picture=await window.webContents.capturePage();
-    fs.writeFileSync(path.join(output,file),picture.toPNG(),{flag:'wx'});
+    const picture=await window.webContents.capturePage(undefined,{stayHidden:true,stayAwake:true});
+    // capturePage follows the display's native scale (2x on Retina). Media
+    // frames must use the exact requested pixel size on every display.
+    const png=picture.resize({width:spec.width,height:spec.height,quality:'best'}).toPNG();
+    if(png.readUInt32BE(16)!==spec.width||png.readUInt32BE(20)!==spec.height)
+      throw Error('Template pixel dimensions differ from the requested media size');
+    fs.writeFileSync(path.join(output,file),png,{flag:'wx'});
     frames.push(file);
   }
   fs.writeFileSync(path.join(output,'frames.json'),JSON.stringify({frames,width:spec.width,height:spec.height}),{flag:'wx'});

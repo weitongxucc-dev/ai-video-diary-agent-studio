@@ -75,10 +75,10 @@ export type Props = {
   initialTasks: CreationTask[];
 };
 
-type MetadataEditInput = CreationTaskClipMetadataInput | Extract<CreationTaskExactEditInput, { operation_type: "UpdateSubtitleCue" }>;
+type MetadataEditInput = CreationTaskClipMetadataInput | Extract<CreationTaskExactEditInput, { operation_type: "UpdateSubtitleCue" | "EditGraphicOverlay" }>;
 
 function isMetadataSaveInput(input: CreationTaskExactEditInput): input is MetadataEditInput {
-  return ["UpdateSubtitleCue", "ChangeCrop", "ChangeClipSpeed", "SetClipLock", "ConfirmClip", "ReplaceClip", "TrimClip", "SplitClip", "ReorderClip"].includes(input.operation_type);
+  return (input.operation_type==='EditGraphicOverlay'&&input.graphic_overlay?.kind==='template') || ["UpdateSubtitleCue", "ChangeCrop", "ChangeClipSpeed", "SetClipLock", "ConfirmClip", "ReplaceClip", "TrimClip", "SplitClip", "ReorderClip"].includes(input.operation_type);
 }
 
 type PendingMetadataSave = {
@@ -1381,7 +1381,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       return false;
     }
     if (receipt.result_status_code < 200 || receipt.result_status_code >= 300 || !receipt.result || !("operation" in receipt.result)) {
-      const target = pending.input.operation_type === "UpdateSubtitleCue" ? "字幕" : "镜头";
+      const target = pending.input.operation_type === "UpdateSubtitleCue" ? "字幕" : pending.input.operation_type==='EditGraphicOverlay'?'动画图层':"镜头";
       setNotice(`原${target}保存返回 ${receipt.result_status_code}，可能已有写入。请保留原请求，核对版本和${target}；未自动重试。`);
       await refresh(true, () => owns());
       return false;
@@ -1391,11 +1391,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     sessionStorage.removeItem(`subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`);
     pendingMetadataSaveRef.current = null;
     setPendingMetadataSave(null);
-    if (pending.input.operation_type !== "UpdateSubtitleCue") {
+    if ('clip_id' in pending.input) {
       const draftKey = `${pending.taskId}:${pending.input.clip_id}`;
       setClipDrafts(current => { const next = { ...current }; delete next[draftKey]; return next; });
     }
-    setNotice((pending.input.operation_type === "UpdateSubtitleCue" ? "字幕修改" : "镜头修改") + "已保存，可撤销。" + (editExecutionReadinessMessage(receipt.result.execution_readiness) ?? ""));
+    setNotice((pending.input.operation_type === "UpdateSubtitleCue" ? "字幕修改" : pending.input.operation_type==='EditGraphicOverlay'?'动画修改':"镜头修改") + "已保存，可撤销。" + (editExecutionReadinessMessage(receipt.result.execution_readiness) ?? ""));
     return true;
   }
 
@@ -1479,16 +1479,18 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
-  async function previewExactEdit(input: CreationTaskExactEditInput) {
-    if (isMetadataSaveInput(input)) return saveMetadataEdit(input);
+  async function previewExactEdit(input: CreationTaskExactEditInput, media = false) {
+    if (isMetadataSaveInput(input) && !media) return saveMetadataEdit(input);
     if (busy !== null) return false;
     setBusy("edit-confirm"); setError(null); setNotice(null); invalidateEditPreview();
     const revision = editContextRevision.current;
     const sequence = ++previewRequestSequence.current;
     let saved = false;
     try {
-      if (input.operation_type.startsWith("Delete") || (input.operation_type === "EditGraphicOverlay" && input.overlay_action === "delete")) {
-        const response = await previewCreationTaskExactEdit(task.id, input);
+      if (media || input.operation_type.startsWith("Delete") || (input.operation_type === "EditGraphicOverlay" && input.overlay_action === "delete")) {
+        const submitted = media ? {...input,request_id:crypto.randomUUID(),
+          expected_timeline_version_id:task.current_timeline_version_id,expected_timeline_sequence:task.timeline_sequence} : input;
+        const response = await (media ? previewCreationTaskExactEdit(task.id, submitted, {draftOnly:false}) : previewCreationTaskExactEdit(task.id, submitted));
         const preview = await resolveEditMedia(response, revision);
         if (currentTaskId.current !== task.id || revision !== editContextRevision.current) return false;
         setEditPreview(preview);
@@ -1659,9 +1661,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     />
     : undefined;
   const inspector = isEditor
-    ? selectedOverlay ? <GraphicOverlayEditor taskId={task.id} versionId={task.current_timeline_version_id} items={workspace.montage!.graphic_overlays??[]} selectedId={selectedOverlay.id} onSelect={selectOverlay} duration={workspace.montage!.duration_seconds} busy={busy!==null} onPreview={input=>void previewExactEdit(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
+    ? selectedOverlay ? <GraphicOverlayEditor onMediaPreview={input=>void previewExactEdit(input,true)} taskId={task.id} versionId={task.current_timeline_version_id} items={workspace.montage!.graphic_overlays??[]} selectedId={selectedOverlay.id} onSelect={selectOverlay} duration={workspace.montage!.duration_seconds} busy={busy!==null} onPreview={input=>void previewExactEdit(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
     : selectedAudioTrack ? <AudioTimelineInspector track={selectedAudioTrack} clip={selectedAudioClip} versionId={task.current_timeline_version_id} playhead={audioPlayhead} busy={busy !== null} onPreview={input=>void previewAudio(input)} onDraftChange={()=>{invalidateEditPreview();setEditorDraft(true);}} />
-    : selectedClip ? <VideoClipInspector onSelectOverlay={selectOverlay} getPlayhead={() => playheadRef.current} onVisualPreview={input=>void previewVisual(input)} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} taskId={task.id} versionId={task.current_timeline_version_id} subtitleTracks={workspace.subtitle_tracks} personRender={workspace.person_renders.find(item => item.id === selectedClip.person_render_id)} personRenderCapability={workspace.person_render_capability} portraitAvailable={workspace.portrait_available} graphicOverlays={workspace.montage!.graphic_overlays} durationSeconds={workspace.montage!.duration_seconds} allClipIds={workspace.montage!.clips.map(item => item.id)} hasOutput={Boolean(workspace.montage!.output_url)} busy={busy !== null} initialDraft={clipDraft} onDraftStateChange={updateClipDraft} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => { setInserting(false); void showReplacementCandidates(selectedClip.id); }} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onAddSegment={() => { setReplacementClipId(null); void showInsertCandidates(selectedClip.id); }} inserting={inserting} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewEdit("提取当前镜头原声")} /> : undefined
+    : selectedClip ? <VideoClipInspector onTemplatePreview={input=>void previewExactEdit(input,true)} onSelectOverlay={selectOverlay} getPlayhead={() => playheadRef.current} onVisualPreview={input=>void previewVisual(input)} clip={selectedClip} index={selectedClipIndex} count={workspace.montage!.clips.length} taskId={task.id} versionId={task.current_timeline_version_id} subtitleTracks={workspace.subtitle_tracks} personRender={workspace.person_renders.find(item => item.id === selectedClip.person_render_id)} personRenderCapability={workspace.person_render_capability} portraitAvailable={workspace.portrait_available} graphicOverlays={workspace.montage!.graphic_overlays} durationSeconds={workspace.montage!.duration_seconds} allClipIds={workspace.montage!.clips.map(item => item.id)} hasOutput={Boolean(workspace.montage!.output_url)} busy={busy !== null} initialDraft={clipDraft} onDraftStateChange={updateClipDraft} onPreview={input => void previewExactEdit(input)} onDraftChange={changed => { invalidateEditPreview(); setEditorDraft(changed); }} onReplace={() => { setInserting(false); void showReplacementCandidates(selectedClip.id); }} candidates={replacementCandidates} replacing={replacementClipId === selectedClip.id} onAddSegment={() => { setReplacementClipId(null); void showInsertCandidates(selectedClip.id); }} inserting={inserting} onPerson={command => preparePersonEdit(selectedClip.id, command)} onAddOriginal={() => void previewEdit("提取当前镜头原声")} /> : undefined
     : activeView === "subtitle_cover"
     ? selectedSubtitleCue || selectedCover
       ? <SubtitleCoverInspector selectedCover={selectedCover} selectedCue={selectedSubtitleCue} selectedTrack={activeSubtitleTrack} cover={workspace.cover_asset} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} imageCapability={workspace.image_generation_capability} />
@@ -1738,7 +1740,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         <header className={hasTimeline ? styles.stageRuntime : styles.stageHeading} data-timeline-version={task.timeline_sequence}>
           {!hasTimeline ? <div><h2>{productStages.find(stage => stage.id === activeView)?.title}</h2><span className={styles.stateBadge}>{activeView === task.stage ? creationTaskStatusPresentation(task.stage_status, task.stage).label : productStageState(activeView, workspace, workspace.subtitle_tracks.some(track => track.status === "valid") && workspace.cover_asset?.status === "valid").detail}</span></div> : null}
           {execution?.job && ["queued", "running"].includes(execution.job.status) ? <span className={styles.runtimeState} role="status">连续制作：{execution.job.status === "queued" ? "已排队" : "后台制作中"}{execution.current_stage ? ` · ${executionStageLabels[execution.current_stage]}` : ""}</span> : null}
-          <JobProgressPanel graphicEditor={<GraphicOverlayEditor taskId={task.id} versionId={task.current_timeline_version_id} items={workspace.montage?.graphic_overlays ?? []}
+          <JobProgressPanel graphicEditor={<GraphicOverlayEditor onMediaPreview={input=>void previewExactEdit(input,true)} taskId={task.id} versionId={task.current_timeline_version_id} items={workspace.montage?.graphic_overlays ?? []}
             selectedId={null} duration={workspace.montage?.duration_seconds ?? 0} busy={busy !== null}
             onPreview={input => void previewExactEdit(input)} onDraftChange={() => {invalidateEditPreview(); setEditorDraft(true);}} />}
             selectedRefs={selectedTaskReference ? [selectedTaskReference.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : []} restoreBusy={busy !== null} onRestoreMedia={candidate => void restoreMediaPreview(candidate)} recoveredMedia={recoveredMedia?.taskId === task.id && recoveredMedia.job.base_version_id === task.current_timeline_version_id ? recoveredMedia : null} mediaJob={pendingMediaJob?.taskId === task.id ? pendingMediaJob.value : null} onCancelMedia={() => void cancelMediaPreview()} showLiveStatus={!execution?.job || !["queued", "running"].includes(execution.job.status)} key={task.id} task={task} taskId={task.id} pendingEditJobId={pendingLocalEdit?.taskId === task.id ? pendingLocalEdit.jobId : null} onEditSettled={localEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} />
