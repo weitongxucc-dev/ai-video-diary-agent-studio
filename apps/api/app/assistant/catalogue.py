@@ -30,7 +30,7 @@ ASSISTANT_BUSINESS_TOOLS = {
 SCRIPT_WINDOW_TOOL_OPERATIONS = {'start_script_window':'start','patch_script_sections':'patch',
     'confirm_saved_script':'confirm','read_script_window_request':None}
 
-TASK_READ_PREVIEW_TOOLS = ("start_script_window", "patch_script_sections", "confirm_saved_script", "read_script_window_request", "prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
+TASK_READ_PREVIEW_TOOLS = ("read_visual_template", "save_visual_template", "update_visual_template", "start_script_window", "patch_script_sections", "confirm_saved_script", "read_script_window_request", "prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_storyboard_regeneration",
                            "select_narration_voice", "read_narration_voice_selection",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit", "apply_typed_edit",
@@ -58,6 +58,9 @@ _PI_TOOL_LABELS = {
     "read_narration_voice_selection": "查询原声音选择",
     "read_workspace_context": "读取当前工作区",
     "read_video_templates": "读取可用模板",
+    "read_visual_template": "读取动画源码",
+    "save_visual_template": "另存视觉模板",
+    "update_visual_template": "更新视觉模板版本",
     "find_materials": "查找素材",
     "read_preference_memory": "读取制作偏好",
     "update_preference_memory": "保存或忘记创作偏好",

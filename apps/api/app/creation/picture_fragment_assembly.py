@@ -104,6 +104,9 @@ class PictureFragmentAssembly:
             # Declare the full original input interval, including its prefix.
             decode_seconds = window.clip.source_end_seconds-window.clip.source_start_seconds
             overlay_count = graphics_count + caption_count
+            template_count = sum(layer.kind == 'graphic' and layer.value.get('kind') == 'template' for layer in layers)
+            if template_count > self.budget.max_template_count:
+                raise ValueError(f'当前单元含 {template_count} 个HTML动画图层；请按真实动画图层数准备媒体能力')
             input_bytes = source['file_identity']['size_bytes'] + sum(facts['size_bytes'] for facts in images.values())
             if width > self.budget.max_width_px or height > self.budget.max_height_px:
                 raise ValueError(f'当前设备准备覆盖 {self.budget.max_width_px}×{self.budget.max_height_px}，'
@@ -122,7 +125,7 @@ class PictureFragmentAssembly:
             unit = {'id': identity, 'artifact_id': f'artifact_picture_fragment_{identity}',
                 'window': asdict(window), 'layers': [asdict(layer) for layer in layers], 'recipe': recipe,
                 'source': source, 'decode_seconds': decode_seconds, 'input_bytes': input_bytes,
-                'overlay_count': overlay_count, 'graphics': graphics_count, 'captions': caption_count}
+                'overlay_count': overlay_count, 'template_count': template_count, 'graphics': graphics_count, 'captions': caption_count}
             units.append(unit)
         if not units:
             raise ValueError('画面窗口没有完整输出单元')
@@ -204,6 +207,7 @@ class PictureFragmentAssembly:
                     'packet_count': window.frame_count, 'contract': 'h264-crf20-b0-fmp4/v1'},
                 'duration_seconds': unit['decode_seconds'], 'width_px': width, 'height_px': height,
                 'input_bytes': unit['input_bytes'], 'clip_count': 1, 'overlay_count': unit['overlay_count'],
+                'template_count': unit.get('template_count', 0),
                 'max_output_bytes': self.budget.max_output_bytes, 'threads': self.budget.max_threads,
                 'timeout_seconds': self.budget.max_timeout_seconds,
                 'picture_fragment_manifest_digest': manifest['digest'],

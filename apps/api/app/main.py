@@ -1025,7 +1025,7 @@ app.include_router(build_video_template_router(_video_template_http_adapter, ('s
 app.include_router(build_video_template_router(_video_template_http_adapter, ('list_video_templates',)))
 
 
-app.include_router(build_video_template_router(_video_template_http_adapter, ('create_video_template_version',)))
+app.include_router(build_video_template_router(_video_template_http_adapter, ('create_video_template_version', 'read_video_template', 'save_visual_template', 'visual_template_preview')))
 
 
 app.include_router(build_video_template_router(_video_template_http_adapter, ('save_creation_task_template',)))

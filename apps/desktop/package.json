@@ -62,6 +62,7 @@
     ],
     "beforePack": "./scripts/generate-build-identity.js",
     "extraResources": [
+      { "from": "runtime/template-renderer.js", "to": "template-renderer/template-renderer.js" },
       { "from": "dist/api-server", "to": "api-server" },
       { "from": "dist/programmatic", "to": "programmatic", "filter": ["**/*.mjs", "**/*.txt"] },
       { "from": "../api/model_workers", "to": "model-workers", "filter": ["**/*.py"] },

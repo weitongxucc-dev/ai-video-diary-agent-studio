@@ -294,6 +294,8 @@ class MontageStageUseCase:
         if grant_context is not None:
             montage.message += " 本次受许可编排仅使用已授权素材元数据，未运行视觉语义模型。"
         montage.aspect_ratio = creation_plan.aspect_ratio
+        from app.creation.visual_template_reuse import instantiate_components
+        montage.graphic_overlays = instantiate_components(creation_plan.template_settings, montage.duration_seconds)
         for clip in montage.clips:
             clip.fit_mode = creation_plan.template_settings.get("fit_mode", "fill")
             if creation_plan.template_settings.get("color_style") is not None:

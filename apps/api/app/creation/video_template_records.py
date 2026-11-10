@@ -98,11 +98,14 @@ class VideoTemplateRecordStore:
         *,
         verified_owner_user_id: str | None = None,
         local_diagnostic: bool = False,
+        write_guard=None,
     ) -> VideoTemplate:
         if template.origin != "user" or template.version < 1 or not template.name.strip():
             raise ValueError("用户模板必须有名称和有效版本。")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
             prior_owner = conn.execute(
                 "SELECT payload FROM video_templates WHERE workspace_id=? AND id=? ORDER BY version DESC LIMIT 1",
                 (template.workspace_id, template.id),

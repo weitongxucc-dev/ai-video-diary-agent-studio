@@ -11,7 +11,8 @@ from typing import Callable, Protocol
 from fastapi import APIRouter, HTTPException, Request
 from app.creation.video_template_use_case import VideoTemplateRejected, VideoTemplateUseCase
 from app.creation.video_template_records import VideoTemplate
-from app.schemas import ContentVisibilityRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest
+from app.schemas import ContentVisibilityRequest, SaveVideoTemplateRequest, VideoTemplateVersionRequest, VisualTemplateCopyRequest
+from app.creation.visual_template_contracts import VisualTemplate
 
 
 class VideoTemplateHTTPRecords(Protocol):
@@ -81,13 +82,32 @@ class VideoTemplateHTTPAdapter:
         previous = self.read_template(request, workspace_id, template_id, payload.expected_version)
         case = self._case_for()
         try:
-            saved = case.append_version(previous, expected_version=payload.expected_version, name=payload.name, style_instruction=payload.style_instruction, user_id=user_id)
+            saved = case.append_version(previous, expected_version=payload.expected_version, name=payload.name, style_instruction=payload.style_instruction, user_id=user_id, visual=payload.visual)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         except VideoTemplateRejected as exc:
             status = {'field_builtin_readonly': 409, 'field_not_owner': 403, 'persist_conflict': 409}[exc.code]
             failure = HTTPException(status_code=status, detail=exc.message)
             if exc.__cause__ is not None:
                 raise failure from exc.__cause__
             raise failure from None
+        return {**asdict(saved), 'can_edit': True}
+
+    def save_visual_copy(self, request, payload):
+        denied = self._write_guard(request)
+        if denied is not None:
+            return denied
+        workspace_id = self._workspace_for(request)
+        user_id, _ = self._reader_for(request, workspace_id)
+        previous = self.read_template(request, workspace_id, payload.source_template_id, payload.source_template_version)
+        try:
+            saved = self._case_for().save_visual_copy(previous,
+                template_id=f'template_{payload.request_id.hex}', name=payload.name.strip(),
+                visual=payload.visual, user_id=user_id)
+        except (ValueError, VideoTemplateRejected) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
         return {**asdict(saved), 'can_edit': True}
 
     def save_creation_task_template(self, task_id: str, request: Request, payload: SaveVideoTemplateRequest) -> dict[str, object]:
@@ -138,6 +158,29 @@ def build_video_template_router(adapter_for, route_names: tuple[str, ...] | None
     @router.post('/api/video-templates/{template_id}/versions')
     def create_video_template_version(template_id: str, request: Request, payload: VideoTemplateVersionRequest) -> dict[str, object]:
         return adapter_for().create_video_template_version(template_id, request, payload)
+
+    @router.get('/api/video-templates/{template_id}')
+    def read_video_template(template_id: str, version: int, request: Request):
+        adapter = adapter_for()
+        workspace = adapter._workspace_for(request)
+        item = adapter.read_template(request, workspace, template_id, version)
+        user, _ = adapter._reader_for(request, workspace)
+        return {**asdict(item), 'can_edit': item.origin == 'user' and user is not None and item.owner_user_id == user,
+            'visual_schema': VisualTemplate.model_json_schema()}
+
+    @router.post('/api/video-templates')
+    def save_visual_template(payload: VisualTemplateCopyRequest, request: Request):
+        return adapter_for().save_visual_copy(request, payload)
+
+    @router.post('/api/video-templates/visual-preview')
+    def visual_template_preview(payload: VisualTemplate, request: Request):
+        from app.media.template_document import template_document
+        adapter = adapter_for()
+        adapter._reader_for(request, adapter._workspace_for(request))
+        try:
+            return {'document': template_document(payload)}
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @router.post('/api/creation-tasks/{task_id}/templates')
     def save_creation_task_template(task_id: str, request: Request, payload: SaveVideoTemplateRequest) -> dict[str, object]:

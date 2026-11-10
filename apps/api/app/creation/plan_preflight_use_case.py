@@ -66,6 +66,8 @@ class CreationPlanPreflightUseCase:
     @staticmethod
     def inherit_template(payload: CreationPlanPreflightInput, template: VideoTemplate | None) -> CreationPlanPreflightInput:
         if payload.template_id is not None:
+            if template.settings.get('kind') == 'visual_component':
+                raise CreationPlanPreflightRejected('visual_component_requires_task', '这是视觉组件，请在作品的图文与动画中使用；新建作品请选择制作结构或整片组合。')
             inherited = {key: template.settings[key] for key in ("language", "aspect_ratio", "duration_target_seconds") if key not in payload.provided_fields and key in template.settings}
             if "presenter_share_target" not in payload.provided_fields and "presenter_share_target" in template.settings:
                 inherited["presenter_share_target"] = template.settings["presenter_share_target"]

@@ -5,6 +5,14 @@ import {useWorkspaceViewState} from "./workbench/context";
 import {getCreationTaskGraphicSources,importCreationTaskGraphic} from "@/lib/api";
 import type {CreationTaskExactEditInput,TextOverlay,ImageOverlay,ArrowOverlay,GraphicOverlay,GraphicSource} from "@/lib/types";
 import ui from "./VideoEditor.module.css";
+import {VisualTemplateLayerEditor} from './VisualTemplateEditor';
+
+type GraphicEditorProps={taskId:string;versionId?:string|null;items:GraphicOverlay[];duration:number;busy:boolean;
+ onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void;selectedId?:string|null;onSelect?:(id:string|null)=>void};
+export function GraphicOverlayEditor(props:GraphicEditorProps){
+ return <><VisualTemplateLayerEditor key={props.versionId} {...props}/><StaticGraphicOverlayEditor {...props}
+  items={props.items.filter((item):item is TextOverlay|ImageOverlay|ArrowOverlay=>item.kind!=='template')}/></>;
+}
 
 type Draft=(Omit<TextOverlay,"id">|Omit<ImageOverlay,"id">|Omit<ArrowOverlay,"id">)&{id?:string};
 type ArrowDraft=Omit<ArrowOverlay,"id">&{id?:string};
@@ -18,7 +26,7 @@ function arrowProblem(draft:ArrowDraft):string|null{
  if(!/^#[0-9a-fA-F]{6}$/.test(draft.color))return"箭头颜色需为 #RRGGBB 六位十六进制";
  return null;
 }
-export function GraphicOverlayEditor({taskId,versionId,items,duration,busy,onPreview,onDraftChange,selectedId,onSelect}:{taskId:string;versionId?:string|null;items:GraphicOverlay[];duration:number;busy:boolean;
+function StaticGraphicOverlayEditor({taskId,versionId,items,duration,busy,onPreview,onDraftChange,selectedId,onSelect}:{taskId:string;versionId?:string|null;items:(TextOverlay|ImageOverlay|ArrowOverlay)[];duration:number;busy:boolean;
  onPreview:(input:CreationTaskExactEditInput)=>void;onDraftChange:()=>void;selectedId?:string|null;onSelect?:(id:string|null)=>void}) {
  const blank=():Draft=>({text:"",start_seconds:0,end_seconds:Math.min(3,duration),x:.5,y:.15,width:.8,font_size:64,font_family:"PingFang SC",color:"#FFFFFF"});
  const blankArrow=():ArrowDraft=>({kind:"arrow",x:Number.NaN,y:Number.NaN,name:"",purpose:"",start_seconds:0,end_seconds:Math.min(3,duration),position:"right-top",color:"#FFFFFF"});

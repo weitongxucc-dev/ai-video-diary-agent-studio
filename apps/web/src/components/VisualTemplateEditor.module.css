@@ -1,0 +1,11 @@
+.preview,.editor {display:grid;gap:12px;min-width:0;font-size:13px;}
+.viewport {position:relative;overflow:hidden;width:100%;border:1px solid var(--border-1);}
+.viewport iframe {position:absolute;inset:0;border:0;transform-origin:top left;pointer-events:none;}
+.actions {display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.fields {display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;}
+.editor label {display:grid;gap:4px;min-width:0;}
+.editor input,.editor textarea {width:100%;min-height:32px;font:inherit;background:var(--surface-1);color:var(--text-1);border:1px solid var(--border-1);border-radius:6px;padding:6px 8px;}
+.source {font-family:ui-monospace,monospace!important;min-height:240px;}
+.editor details {min-width:0;}
+.editor summary {cursor:pointer;padding:6px 0;}
+.editor p {margin:0;overflow-wrap:anywhere;}

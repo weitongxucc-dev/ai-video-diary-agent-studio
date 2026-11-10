@@ -46,7 +46,7 @@ export async function openCreationSession({ modulePath, cwd, sessionDir, session
     additionalPromptTemplatePaths: [join(resources, "prompts")],
     extensionFactories: [...(productExtension ? [productExtension.extension] : []), ...extensionFactories, taskContextExtension],
     systemPrompt: `${systemPrompt}
-创作方法按需用 read_creation_skill 读取：原声口播 source-speech、旁白配素材 narration-materials、局部修改 local-edit。
+创作方法按需用 read_creation_skill 读取：原声口播 source-speech、旁白配素材 narration-materials、局部修改 local-edit、动画模板与程序化制作 visual-template。
 ${await readFile(join(resources,"prompts/review-result.md"),"utf8")}
 ${nativeEnabled?'原生工具通过当前任务宿主执行。先读 open_task_working_context；文件API的 /task 是虚拟路径，Shell从work执行并使用相对路径（../inputs、../outputs），不把虚拟绝对路径当真实磁盘位置。可按真实错误改程序；产物先登记，再沿现有编辑入口预览和采用，不能把执行成功说成作品已采用。文字模型不直接接收原始图片/音视频；必要观察沿已授权局部分析取得。':''}`,
   });

@@ -1,6 +1,18 @@
 import type { ContentVisibility } from './common';
 import type { CreationPlanInput } from './creation-plans';
+export type VisualTemplate = {
+    engine: 'openfilm-html-v1';
+    category: 'title' | 'chapter' | 'callout' | 'data' | 'product' | 'ending';
+    width: number; height: number; duration_seconds: number; source: string;
+    bindings: {key: string; label: string; kind: 'text' | 'variable'; target: string; default: string}[];
+    values: Record<string, string>;
+    provenance: {repository: string; revision: string; path: string; license: string; source_sha256: string}[];
+    dependencies: string[];
+};
 export type VideoTemplateSettings = {
+    kind?: 'visual_component' | 'composition';
+    visual?: VisualTemplate;
+    visual_components?: Record<string, unknown>[];
     language: CreationPlanInput["language"];
     aspect_ratio: "9:16" | "16:9" | "1:1";
     duration_target_seconds: number;

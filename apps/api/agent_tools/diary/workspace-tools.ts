@@ -138,6 +138,8 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
       const templates = [...allTemplates.filter((item) => item.origin === "user"), ...allTemplates.filter((item) => item.origin !== "user")]
         .slice(0, 50).map((item: Record<string, unknown>) => ({
         id: item.id, name: item.name, version: item.version, origin: item.origin,
+        kind:(item.settings as any)?.kind ?? 'production_structure',
+        category:(item.settings as any)?.visual?.category,
       }));
       const truncated = allTemplates.length > templates.length;
       return { content: [{ type: "text", text: JSON.stringify({ templates, truncated }) }], details: { templates, truncated } };

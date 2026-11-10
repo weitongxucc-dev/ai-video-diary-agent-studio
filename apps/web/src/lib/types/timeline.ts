@@ -55,7 +55,15 @@ export type ArrowOverlay = {
     position: "left-top" | "right-top" | "right-bottom" | "left-bottom";
     color: string;
 };
-export type GraphicOverlay = TextOverlay | ImageOverlay | ArrowOverlay;
+export type VisualTemplateOverlay = {
+    kind: 'template'; id: string; name: string; template_id: string; template_version: number;
+    definition: import('./templates').VisualTemplate;
+    z_index: number;
+    animation_offset_seconds: number;
+    start_seconds: number; end_seconds: number; x: number; y: number; width: number; opacity: number;
+    keyframes: {seconds: number; x: number; y: number; scale: number; opacity: number}[];
+};
+export type GraphicOverlay = TextOverlay | ImageOverlay | ArrowOverlay | VisualTemplateOverlay;
 export type GraphicSource = {
     source_ref: string;
     artifact_id: string;

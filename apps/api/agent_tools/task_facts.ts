@@ -145,7 +145,9 @@ export function overlayFacts(overlay: any) {
   return {...fields(overlay, ["id", "kind", "start_seconds", "end_seconds", "x", "y", "width", "font_size",
     "font_family", "color", "opacity", "position"]), object_ref: `overlay:${overlay.id}`,
     ...(overlay.kind === "text" ? {text: boundedText(overlay.text, 200)} : {}),
-    ...(overlay.kind === "image" || overlay.kind === "arrow" ? {name: boundedText(overlay.name, 120)} : {}),
+    ...(overlay.kind === "image" || overlay.kind === "arrow" || overlay.kind === 'template' ? {name: boundedText(overlay.name, 120)} : {}),
+    ...(overlay.kind === 'template' ? {template_id:overlay.template_id,template_version:overlay.template_version,
+      definition:overlay.definition,keyframes:overlay.keyframes,z_index:overlay.z_index,animation_offset_seconds:overlay.animation_offset_seconds} : {}),
     ...(overlay.kind === "image" ? {source_ref: logicalReference(overlay.source_ref)} : {}),
     ...(overlay.kind === "arrow" ? {purpose: boundedText(overlay.purpose, 64)} : {}),
     units: {time: "seconds", position: "normalized 0–1", width: "canvas fraction", font_size: "pixels"}};

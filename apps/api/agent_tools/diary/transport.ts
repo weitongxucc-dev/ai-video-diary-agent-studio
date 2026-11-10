@@ -168,6 +168,10 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   const only = (...keys: string[]) => [...query.keys()].every(key => keys.includes(key) && query.getAll(key).length === 1);
   const result = (operation: string, args: Record<string, any> = {}) => ({operation, arguments: args});
   if (method === 'GET') {
+    if (pathname === '/api/video-templates' && !search) return result('read_video_templates');
+    const template = pathname.match(/^\/api\/video-templates\/([^/]+)$/);
+    if (template && only('version') && /^[1-9]\d*$/.test(query.get('version') || ''))
+      return result('read_visual_template', {template_id:decodeURIComponent(template[1]),version:Number(query.get('version'))});
     if (pathname === '/api/assistant/memory' && !search) return result('read_creator_memory');
     if (pathname === '/api/media-script-tools/capabilities' && !search) return result('read_media_script_tool_capabilities');
     const evidence = pathname.match(/^\/api\/production\/materials\/([^/]+)\/evidence$/);
@@ -185,6 +189,11 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   if (pathname === '/api/device/resource-preparations' && method === 'POST' && !search
       && payload && typeof payload === 'object' && !Array.isArray(payload))
     return result('prepare_device_resources',{payload});
+  if (pathname === '/api/video-templates' && method === 'POST' && !search)
+    return result('save_visual_template',{payload});
+  const templateVersion=pathname.match(/^\/api\/video-templates\/([^/]+)\/versions$/);
+  if (templateVersion && method === 'POST' && !search)
+    return result('update_visual_template',{template_id:decodeURIComponent(templateVersion[1]),payload});
   const preparation=pathname.match(/^\/api\/device\/resource-preparations\/([^/]+)(\/finalize)?$/);
   if (preparation && !search) {
     if (method==='GET' && !preparation[2]) return result('read_device_preparation',{request_id:decodeURIComponent(preparation[1])});

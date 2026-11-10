@@ -1,0 +1,79 @@
+{
+  "repository": "https://github.com/openfilm/openfilm",
+  "revision": "758b1a3888819bf191db191f690c4ca2fcb292af",
+  "license": "CC0-1.0",
+  "files": [
+    {
+      "file": "lower-corporate.html",
+      "path": "packages/openfilm/library/text/lower-corporate/files/lower-corporate.html",
+      "blob_sha": "d5e4f12ca96e6ddb967e405360414147c4c7559d",
+      "sha256": "051aaa9e86f226467b6b8069cbde9f5736c2380d9cc3d0126036de61a92cc5c9"
+    },
+    {
+      "file": "lower-corporate.json",
+      "path": "packages/openfilm/library/text/lower-corporate/saved.json",
+      "blob_sha": "99861325d5cab901dfe64b436adfc42d6cb4acd5",
+      "sha256": "4d01e23650e066ea995e870bb05898e1357f8bb6d8e8c86d79029d6e000be16a"
+    },
+    {
+      "file": "chapter-number.html",
+      "path": "packages/openfilm/library/text/chapter-number/files/chapter-number.html",
+      "blob_sha": "c095051a2e2e8268417fd6476d6ab34bf5c529c1",
+      "sha256": "d11029a9c73b664bfdebc1dd392e738d5291c665559a003083e5d3e489f4ba1c"
+    },
+    {
+      "file": "chapter-number.json",
+      "path": "packages/openfilm/library/text/chapter-number/saved.json",
+      "blob_sha": "574282ac72a66390f241402ffa6d5a807e197db5",
+      "sha256": "347e795190cf56f004841e38bbaf5dfdeab83fd7d2c03613a6a496888c567edd"
+    },
+    {
+      "file": "callout-leader.html",
+      "path": "packages/openfilm/library/text/callout-leader/files/callout-leader.html",
+      "blob_sha": "e4f018ec0ac364317c623370417e61dcd71641f6",
+      "sha256": "93f525d2737c708c7a5d9a0193e47a669d0ab904454d4bbbc58164656ff76759"
+    },
+    {
+      "file": "callout-leader.json",
+      "path": "packages/openfilm/library/text/callout-leader/saved.json",
+      "blob_sha": "b6d08daf1b1b43924c77dfaf22c08e5d967f28c3",
+      "sha256": "2b6766f39e181df1e1b221632104b55b9b11fc5ee599f4ded489d6a22a958823"
+    },
+    {
+      "file": "info-count.html",
+      "path": "packages/openfilm/library/text/info-count/files/info-count.html",
+      "blob_sha": "a46e651594e20db0220a3e022306f7b496bd4fc6",
+      "sha256": "7f95ff33a4e7b8283ae752f9aa5addca7a1d18dcc6b38c94ecb9646aa73d393e"
+    },
+    {
+      "file": "info-count.json",
+      "path": "packages/openfilm/library/text/info-count/saved.json",
+      "blob_sha": "16366a3ebf456e660bde7691bdcf38701eb3d5e1",
+      "sha256": "17cf77996956125546913f1b77cc64de8956574434d774e68df31f6bd55e8c33"
+    },
+    {
+      "file": "shop-specs.html",
+      "path": "packages/openfilm/library/text/shop-specs/files/shop-specs.html",
+      "blob_sha": "602124e9e08a9859aa54f2591a68304e736f67f2",
+      "sha256": "3b1de67440e366feec5309a1f89e6b0807d08bbb6c29e46b89ce4d49a87aceb4"
+    },
+    {
+      "file": "shop-specs.json",
+      "path": "packages/openfilm/library/text/shop-specs/saved.json",
+      "blob_sha": "d6963c775ca9a71019c79d3d45786dcaf474393f",
+      "sha256": "4c978d86cd84d784229f1b3cff4487bbb9d2808f8a584cf87957c0884a254059"
+    },
+    {
+      "file": "end-thanks.html",
+      "path": "packages/openfilm/library/text/end-thanks/files/end-thanks.html",
+      "blob_sha": "56305fdcaffc70d8e760f7c6c66e4e4a7537ab30",
+      "sha256": "573d4e84663aeecaf213d95ec4a6985f021d3dcb1ab4112529cc81948ef1778a"
+    },
+    {
+      "file": "end-thanks.json",
+      "path": "packages/openfilm/library/text/end-thanks/saved.json",
+      "blob_sha": "8a27cf8166cf8169f4f5ad24c54d707521b5b3aa",
+      "sha256": "5c28198f34b6afde5cf741bbe3f1a0125f548861a654b93dfe2c165786e8926a"
+    }
+  ]
+}

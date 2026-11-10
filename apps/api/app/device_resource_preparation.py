@@ -23,6 +23,8 @@ import psutil
 
 from app.audio_timeline import PCM_CONTAINER_ALLOWANCE_BYTES
 from app.cpu_preparation_video import preparation_video_command
+from app.artwork_resource_preparation import (extend_render_budget, measure_template_inputs,
+    measure_native_inputs, extend_native_budget)
 from app.device_resource_configuration import backend_identity
 from app.device_resource_profile import DeviceProfileIdentity, DeviceProfileUnavailable, _BUDGET_TYPES, _digest, load_device_resource_profile
 from app.device_resource_volumes import sample_write_volumes
@@ -54,6 +56,8 @@ class CpuPreparationShape:
     channels: int
     source_bytes: int | None = None
     overlay_count: int = 0
+    template_count: int = 0
+    native_command: bool = False
     source_width_px: int | None = None
     source_height_px: int | None = None
     visual_effects: dict | None = None
@@ -65,6 +69,10 @@ class CpuPreparationShape:
             raise ValueError('CPU preparation shape needs positive integer dimensions/counts')
         if type(self.overlay_count) is not int or self.overlay_count < 0:
             raise ValueError('Overlay count must be a nonnegative integer')
+        if type(self.template_count) is not int or not 0 <= self.template_count <= self.overlay_count:
+            raise ValueError('HTML动画图层数必须属于总叠加图层数')
+        if type(self.native_command) is not bool:
+            raise ValueError('程序化执行准备需要明确的布尔选择')
         if self.source_bytes is not None and (type(self.source_bytes) is not int or self.source_bytes <= 0):
             raise ValueError('Known source bytes must be a positive exact file size')
         if (self.source_width_px, self.source_height_px) != (None, None) and any(
@@ -198,6 +206,10 @@ class DeviceResourcePreparation:
         # Zero remains the original durable request shape.
         if shape.overlay_count == 0:
             values.pop('overlay_count')
+        if shape.template_count == 0:
+            values.pop('template_count')
+        if not shape.native_command:
+            values.pop('native_command')
         for key in ('source_width_px', 'source_height_px', 'visual_effects'):
             if values[key] is None:
                 values.pop(key)
@@ -267,6 +279,7 @@ class DeviceResourcePreparation:
             self.policy.timeout_seconds, memory_limit, output_limit, max((psutil.cpu_count() or 1) + 2,
                 max(shape.clip_count, shape.audio_input_count, shape.overlay_count) * self.policy.probe_threads_per_input
                 + self.policy.probe_controller_threads), cpu)
+        render = extend_render_budget(shape, render, output_limit)
         cadence = self.policy.poll_seconds + self.policy.sample_seconds
         budget = HostBudget(100, reserve, None, output_limit, None, output_limit,
             sample_seconds=self.policy.sample_seconds, cpu_render=render,
@@ -282,6 +295,10 @@ class DeviceResourcePreparation:
             raise DeviceProfileUnavailable('实际输出卷或临时卷空间不足；请释放对应卷空间或更改该目录后重新准备。')
         identities = {name: backend_identity(name, render, settings=self.settings)
                       for name in ('cpu_render', 'cpu_audio', 'clip_preview')}
+        if shape.native_command:
+            from app.native_preparation_probe import require_native_dependencies
+            require_native_dependencies(self.settings)
+            identities['native_command'] = backend_identity('native_command', None, settings=self.settings)
         if not all(identities.values()):
             raise DeviceProfileUnavailable('基础媒体工具身份无法核验；请修复应用工具后重新准备。')
         plan = {'format_version': 1, 'id': plan_id, 'device': asdict(self.device),
@@ -390,11 +407,12 @@ class DeviceResourcePreparation:
         started = time.monotonic()
         deadline = started + plan['policy']['timeout_seconds']
         observations = []
+        native_receipt = None
         limit = plan['bootstrap_budget']['cpu_render']['max_output_bytes']
-        def run(argv, paths=()):
+        def run(argv, paths=(), *, env=None):
             result = run_granted_command(scheduler, grant, argv,
                 timeout_seconds=deadline - time.monotonic(), max_stdout_bytes=65536, max_stderr_bytes=65536,
-                output_paths=paths, max_output_file_bytes=limit)
+                output_paths=paths, max_output_file_bytes=limit, env=env)
             if result.returncode:
                 raise ValueError('CPU preparation command failed')
             observed = result.observed_resources
@@ -407,6 +425,7 @@ class DeviceResourcePreparation:
             with tempfile.TemporaryDirectory(prefix='cpu-preparation-', dir=self.write_paths['temporary']) as temporary:
                 video, audio = Path(temporary) / 'sample.mp4', Path(temporary) / 'sample.wav'
                 command, graphic_paths = preparation_video_command(plan, shape, video)
+                measure_template_inputs(shape, video, duration, command, run)
                 run(command, (video, *graphic_paths))
                 command = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-filter_complex_threads', '1']
                 graph = ''.join(f'sine=frequency={440 + index}:sample_rate={shape.sample_rate}:'
@@ -415,6 +434,7 @@ class DeviceResourcePreparation:
                 command += ['-filter_complex', graph, '-map', '[a]', '-t', str(duration), '-ar', str(shape.sample_rate),
                     '-ac', str(shape.channels), '-threads', '1', '-c:a', 'pcm_f32le', str(audio)]
                 run(command, (video, audio))
+                native_receipt = measure_native_inputs(shape, video, duration, self.settings, run)
                 media = {}
                 for name, path in (('video', video), ('audio', audio)):
                     result = run([plan['ffprobe'], '-v', 'error', '-show_entries',
@@ -437,6 +457,8 @@ class DeviceResourcePreparation:
                     'device': plan['device'], 'backends': plan['backends'], 'shape': plan['shape'],
                     'policy': plan['policy'], 'probe_seconds': duration, 'media': media,
                     'elapsed_seconds': time.monotonic() - started, 'observed_resources': observations}
+                if native_receipt is not None:
+                    receipt['native_command'] = native_receipt
                 receipt_path = self.root / 'receipts' / f'{grant.request_id}-{grant.generation}.json'
                 digest = _atomic_json(receipt_path, receipt)
             scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
@@ -527,12 +549,16 @@ class DeviceResourcePreparation:
             max_input_bytes=input_bytes, max_output_bytes=output_bytes,
             max_timeout_seconds=timeout, additional_memory_bytes=rss, additional_disk_bytes=math.ceil(output_bytes * policy.measured_margin),
             max_process_threads=threads)
+        if shape.template_count:
+            raw_frames = math.ceil(shape.width_px*shape.height_px*4*30*delivery_duration)*shape.template_count
+            render = replace(render, additional_disk_bytes=render.additional_disk_bytes+raw_frames)
         audio = CpuAudioBudget(shape.audio_input_count, max(audio_bytes * shape.audio_input_count, shape.source_bytes or 0), delivery_duration,
             delivery_duration, shape.sample_rate, shape.channels, audio_bytes, 1, timeout, rss, threads,
             policy.sample_seconds, rss, math.ceil(audio_bytes * policy.measured_margin))
         budget = replace(original, cpu_render=render, cpu_audio=audio,
             clip_preview=replace(render, max_pixel_seconds=render.max_pixel_seconds * 2),
             max_unit_input_bytes=max(original.max_unit_input_bytes, render.max_input_bytes))
+        budget = extend_native_budget(shape, budget, receipt, plan, delivery_duration, original, policy)
         with _profile_lock(self.profile_path):
             old = _read(self.profile_path) if self.profile_path.exists() else None
             if old and old['profile_id'] == plan['id']:
@@ -544,6 +570,8 @@ class DeviceResourcePreparation:
             document = deepcopy(old) if old else {'format_version': 1, 'device': asdict(self.device), 'backends': {}, 'evidence': {}, 'budget': {}}
             document.update(profile_id=plan['id'], revision=(old['revision'] + 1 if old else 1))
             owned = {'cpu_render', 'cpu_audio', 'clip_preview'}
+            if shape.native_command:
+                owned.add('native_command')
             prepared_budget = asdict(budget)
             # Only the prepared operation budgets and per-unit input capacity
             # change. Existing host policy is inherited before the probe itself;
@@ -559,13 +587,17 @@ class DeviceResourcePreparation:
                            if name == 'host' else document['budget'][name])
                 evidence = {'format_version': 1, 'device': asdict(self.device),
                     'backend_identity': None if name == 'host' else identities[name], 'budget_digest': _digest(payload),
-                    'method': policy.id + ':synthetic-granted-cpu',
+                    'method': ('native-task-shell-preparation/v1' if name == 'native_command'
+                        else policy.id + ':synthetic-granted-cpu'),
                     'input_range': {'requested_unit': plan['shape'], 'sample_seconds': plan['probe_seconds'],
                         'scope': 'synthetic_cpu_only', 'policy': plan['policy'], 'host_observation': plan['host_observation'],
                         'host_policy_source': plan.get('host_policy_source')},
                     'observations': {'request_id': receipt['request_id'], 'permit_generation': receipt['generation'],
                         'input_digest': receipt['input_digest'], 'media': receipt['media'],
                         'elapsed_seconds': receipt['elapsed_seconds'], 'process_samples': samples}}
+                if name == 'native_command':
+                    evidence['input_range']['scope'] = 'synthetic_native_task_shell'
+                    evidence['observations']['native_command'] = receipt['native_command']
                 record_id = f"{plan['id']}_{name}"
                 digest = _atomic_json(self.profile_path.parent / 'resource-profile-evidence' / f'{record_id}.json', evidence)
                 document['evidence'][name] = {'record_id': record_id, 'sha256': digest}

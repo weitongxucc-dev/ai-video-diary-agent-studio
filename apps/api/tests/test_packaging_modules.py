@@ -49,11 +49,21 @@ def declared_data_inputs():
 def test_media_script_bare_sources_have_exact_frozen_layout_and_bytes(tmp_path):
     inputs = declared_data_inputs()
     assert [(source.relative_to(Path(__file__).parents[1]), destination) for source, destination in inputs] == [
+        (Path('app/template_assets'), Path('app/template_assets')),
         (Path("app/media_script.py"), Path("app")),
         (Path("model_workers/media_script_worker.py"), Path("model_workers")),
     ]
     frozen = tmp_path / "_MEIPASS"
     for source, relative in inputs:
+        if source.is_dir():
+            target = frozen / relative
+            shutil.copytree(source, target)
+            for original in source.rglob('*'):
+                if original.is_file():
+                    assert (target/original.relative_to(source)).read_bytes() == original.read_bytes()
+            assert (target/'openfilm/provenance.json').is_file()
+            assert (target/'openfilm-clock.json').is_file()
+            continue
         target = frozen / relative / source.name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)

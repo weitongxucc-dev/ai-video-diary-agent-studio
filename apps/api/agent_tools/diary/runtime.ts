@@ -11,6 +11,7 @@ import {createPreferenceTools} from './preference-tools.ts';
 import {registerRecipeTools} from './recipe-tools.ts';
 import {registerEditControls} from './edit-controls.ts';
 import {registerWorkspaceTools} from './workspace-tools.ts';
+import {registerVisualTemplateTools} from './visual-template-tools.ts';
 import {registerMaterialCandidates} from './material-candidates.ts';
 import {registerCreationPlans} from './creation-plans.ts';
 import {registerSourceTasks} from './source-tasks.ts';
@@ -105,6 +106,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
       hasPreview, markPreview, hasCreationAction, hasEditControlWrite, markEditControlWrite, releaseNotSubmittedEditControl, markTaskRead, typedRequestId});
     registerWorkspaceTools(pi, {request, taskId, stage, selectedRefs, selectedProfile, selectedKnowledge,
       isTaskRead, verifyTaskVersion, getEditCapabilities, readMaterialSelection});
+    registerVisualTemplateTools(pi,{request,readActionSource,typedRequestId});
     preferences.register(pi);
     registerMaterialCandidates(pi, {request});
     registerCreationPlans(pi, {request, readActionSource, hasPreview, markPreview});

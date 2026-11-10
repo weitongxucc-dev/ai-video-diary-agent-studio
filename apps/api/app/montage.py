@@ -36,6 +36,7 @@ from app.canvas import AspectRatio, canvas_size
 from app.visual_effects import clip_video_filters
 from app.transitions import dissolve_frames, extend_dissolve_sources, join_picture_filters
 from app.graphic_overlays import validate_overlays, write_graphic_overlay
+from app.media.picture_layers import picture_window_layer_arguments
 from app.subtitle_schedule import subtitle_schedule, schedule_srt, narration_schedule
 from app.material_speech import speech_text_for_range
 from app.models import Episode, EpisodeStatus, ScriptPackage, utc_now
@@ -913,6 +914,18 @@ class MontageRenderer:
                     graphic_paths=[]
                     overlay_positions=[]
                     for index,graphic in enumerate(graphics):
+                        if graphic.kind == 'template':
+                            from app.creation_execution import CpuRenderGrantContext
+                            from app.media.template_frames import render_template_frames
+                            context = CpuRenderGrantContext(scheduler, grant, deadline_monotonic,
+                                max_output_bytes, threads, cancel_event)
+                            path = render_template_frames(graphic.model_dump(),
+                                Path(overlay_dir)/f'template-{index}', context,
+                                size=canvas_size(plan.aspect_ratio), first_frame=0,
+                                frame_count=round(plan.duration_seconds*30))
+                            overlay_positions.append((0, 0))
+                            graphic_paths.append(path)
+                            continue
                         path=Path(overlay_dir)/f"graphic-{index}.png"
                         overlay_positions.append(_write_cropped_graphic_input(
                             graphic.model_dump(),path,canvas_size(plan.aspect_ratio)))
@@ -1070,7 +1083,10 @@ class MontageRenderer:
                 output_label = "[vbase]"
                 filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[vbase]")
         for overlay_path in subtitle_overlays:
-            command.extend(["-loop", "1", "-framerate", "30", "-i", str(overlay_path)])
+            if overlay_path.suffix == '.ffconcat':
+                command.extend(['-f', 'concat', '-safe', '0', '-protocol_whitelist', 'file', '-i', str(overlay_path)])
+            else:
+                command.extend(["-loop", "1", "-framerate", "30", "-i", str(overlay_path)])
         intervals=subtitle_intervals if subtitle_intervals is not None else [(clip.timeline_start_seconds,clip.timeline_end_seconds) for clip in plan.clips]
         positions = overlay_positions if overlay_positions is not None else [(0, 0)] * len(subtitle_overlays)
         for index, ((start,end), _overlay_path, (left,top)) in enumerate(zip(intervals,subtitle_overlays,positions,strict=True)):
@@ -2067,58 +2083,12 @@ def _picture_window_input(window, source: Path, context):
         '-threads', str(context.threads), '-i', str(source)], (width, height), filters)
 
 
-def _picture_window_layers(window, output, context, layers, filters, size):
-    if not layers:
-        return ['-vf', filters]
-    directory = output.parent / f'.{output.stem}-layers'
-    directory.mkdir(exist_ok=False)
-    arguments = []
-    def check_layers():
-        context.check()
-        request = context.scheduler._get(context.grant.request_id)
-        cap = request.resources.get('picture_temporary_limit_bytes')
-        if cap is not None and sum(path.stat().st_size for path in directory.iterdir() if path.is_file()) > cap:
-            raise ValueError('画面窗口PNG与字幕manifest超过原临时卷许可分配')
-    graph = [f'[0:v]{filters}[windowbase]']
-    label = '[windowbase]'
-    captions, caption_paths = [], []
-    input_index = 1
-    for index, layer in enumerate(layers):
-        check_layers()
-        if not 0 <= layer.first_frame < layer.last_frame <= window.frame_count:
-            raise ValueError('烧录图层不属于当前完整画面帧窗口')
-        path = directory / f'layer-{index}.png'
-        if layer.kind == 'subtitle':
-            _write_subtitle_image(layer.value, path, size=size)
-            captions.append((layer.first_frame, layer.last_frame))
-            caption_paths.append(path)
-        elif layer.kind == 'graphic':
-            left, top = _write_cropped_graphic_input(layer.value, path, size)
-            arguments.extend(['-loop', '1', '-framerate', '30', '-threads', str(context.threads), '-i', str(path)])
-            following = f'[graphic{input_index}]'
-            graph.append(f"{label}[{input_index}:v]overlay={left}:{top}:shortest=1:"
-                f"enable='gte(n,{layer.first_frame})*lt(n,{layer.last_frame})'{following}")
-            label = following
-            input_index += 1
-        else:
-            raise ValueError('画面窗口图层类型无效')
-    if captions:
-        manifest, position = _write_frame_subtitle_input(captions, caption_paths, directory,
-            size=size, frame_count=window.frame_count, crop_to_content=False, check=check_layers)
-        arguments.extend(['-f', 'concat', '-safe', '0', '-protocol_whitelist', 'file',
-            '-threads', str(context.threads), '-i', str(manifest)])
-        graph.append(f'[{input_index}:v]setpts=PTS-STARTPTS,format=rgba[subtitleclock]')
-        graph.append(f'{label}[subtitleclock]overlay={position[0]}:{position[1]}:'
-            'shortest=0:eof_action=pass:repeatlast=0[windowcaptioned]')
-        label = '[windowcaptioned]'
-    check_layers()
-    return arguments + ['-filter_complex', ';'.join(graph), '-map', label]
 
 
 def render_granted_picture_window(window, source: Path, output: Path, context, *, frame_layers=()):
     """Select a lossless diagnostic window on the original clip's filter clock."""
     command, (width, height), filters = _picture_window_input(window, source, context)
-    command += _picture_window_layers(window, output, context, frame_layers, filters, (width, height))
+    command += picture_window_layer_arguments(window, output, context, frame_layers, filters, (width, height))
     command += ['-an', '-c:v', 'ffv1', '-level', '3', '-coder', '0', '-context', '0', '-g', '1',
         '-slices', '4', '-slicecrc', '1', '-pix_fmt', 'yuv420p', '-frames:v', str(window.frame_count),
         '-threads:v', str(context.threads), '-fs', str(context.max_output_bytes), '-f', 'nut', str(output)]
@@ -2143,7 +2113,7 @@ def render_granted_picture_fragment(window, source: Path, output: Path, context,
         if request.resources.get('picture_fragment_recipe') != picture_fragment_recipe(window, frame_layers):
             raise PermissionError('烧录窗口的实际图层内容或栅格合同不属于原许可配方')
     command, size, filters = _picture_window_input(window, source, context)
-    command += _picture_window_layers(window, output, context, frame_layers, filters, size)
+    command += picture_window_layer_arguments(window, output, context, frame_layers, filters, size)
     command += ['-an', '-map_metadata', '-1', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
         '-bf', '0', '-pix_fmt', 'yuv420p', '-frames:v', str(window.frame_count),
         '-threads:v', str(context.threads), '-video_track_timescale', '90000',

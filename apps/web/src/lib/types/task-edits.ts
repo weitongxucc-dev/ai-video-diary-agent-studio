@@ -84,7 +84,7 @@ export type CreationTaskExactEditInput = {
 } | {
     operation_type: "EditGraphicOverlay";
     overlay_action: "add" | "update" | "delete";
-    graphic_overlay?: (Omit<TextOverlay, "id"> | Omit<ImageOverlay, "id"> | Omit<ArrowOverlay, "id">) & {
+    graphic_overlay?: (Omit<TextOverlay, "id"> | Omit<ImageOverlay, "id"> | Omit<ArrowOverlay, "id"> | Omit<import('./timeline').VisualTemplateOverlay, "id">) & {
         id?: string;
     };
     overlay_id?: string;

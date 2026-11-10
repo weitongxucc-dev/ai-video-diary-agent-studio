@@ -33,6 +33,8 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, sele
           sample_rate: {type:'integer',minimum:1},channels: {type:'integer',minimum:1},
           source_bytes: {type:'integer',minimum:1,description:'本单元媒体输入按实际打开次数累计的字节数。原片大小可读plan.source_media.source_file_size_bytes（采用时封存值）；同文件两个音频片段各打开一次须计两次，不只是单文件大小。不是设备limits里的max_input_bytes，不得拿预算上限冒充；未知时省略。'},
           overlay_count: {type:'integer',minimum:0,description:'当前制作单元同时合成的图文和字幕层数量；省略只准备零图层，不能据此输出有图层的作品。'},
+          template_count:{type:'integer',minimum:0,description:'总叠加层中HTML动画的数量；实际测量隔离Chromium绘制及合成，不借用静态PNG准备。'},
+          native_command:{type:'boolean',description:'需要用Pi原生bash制作文件时明确为true；独立测量真实OS隔离的Python/Pillow/FFmpeg过程，不借用编码预算。'},
           source_width_px: {type:'integer',minimum:2,multipleOf:2,description:'需测量源画幅上的颜色处理时，使用已核实且考虑旋转后的实际源宽高，两项一起提供；不是目标画幅。'},
           source_height_px: {type:'integer',minimum:2,multipleOf:2},
           visual_effects: {type:'object',description:'从当前镜头读取的已有画面效果，复用编辑能力schema；在实际源画幅上测颜色处理，再缩放及合成，不是放大时间或内存阈值。'},
