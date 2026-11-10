@@ -3500,7 +3500,7 @@ describe("CreationTaskWorkspace", () => {
     }));
   });
 
-  it("uses typed operations for replace, reorder, lock, confirmation, and undo", async () => {
+  it.each(["reorder, lock and confirmation", "replacement, insertion, undo and crop"] as const)("uses typed operations for %s", async (scenario) => {
     const task = {
       ...baseTask,
       stage: "montage" as const,
@@ -3545,14 +3545,17 @@ describe("CreationTaskWorkspace", () => {
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
 
     fireEvent.click(openStoryboardClip(1));
-    for (const [label, operation] of [
-      ["向后移动", { operation_type: "ReorderClip", clip_id: "clip-1", position: 1 }],
-      ["锁定镜头", { operation_type: "SetClipLock", clip_id: "clip-1", locked: true }],
-      ["确认镜头", { operation_type: "ConfirmClip", clip_id: "clip-1" }],
-    ] as const) {
-      fireEvent.click(screen.getByRole("button", { name: label }));
-      await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledWith("task-1", { ...operation, request_id: expect.any(String), expected_timeline_version_id: task.current_timeline_version_id, expected_timeline_sequence: task.timeline_sequence }));
-      expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
+    if (scenario === "reorder, lock and confirmation") {
+      for (const [label, operation] of [
+        ["向后移动", { operation_type: "ReorderClip", clip_id: "clip-1", position: 1 }],
+        ["锁定镜头", { operation_type: "SetClipLock", clip_id: "clip-1", locked: true }],
+        ["确认镜头", { operation_type: "ConfirmClip", clip_id: "clip-1" }],
+      ] as const) {
+        fireEvent.click(screen.getByRole("button", { name: label }));
+        await waitFor(() => expect(mocks.exactEdit).toHaveBeenCalledWith("task-1", { ...operation, request_id: expect.any(String), expected_timeline_version_id: task.current_timeline_version_id, expected_timeline_sequence: task.timeline_sequence }));
+        expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
+      }
+      return;
     }
 
     fireEvent.click(screen.getAllByRole("button", { name: "换素材" })[0]);
