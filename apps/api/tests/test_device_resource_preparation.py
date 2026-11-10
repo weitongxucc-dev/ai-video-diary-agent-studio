@@ -432,3 +432,9 @@ def test_repeated_source_reads_report_the_total_bytes_without_claiming_an_input_
     actual = audio_mix_resources([source], [AudioTimeline()], 1, normalize_voice_sources=False,
         budget=replace(budget, max_input_bytes=2000000))
     assert actual['input_count'] == 2 and actual['input_bytes'] == 2000000
+
+
+@pytest.mark.parametrize('field', ['beauty_strength', 'skin_exposure'])
+def test_cpu_video_probe_does_not_claim_unmeasured_portrait_processing(field):
+    with pytest.raises(ValueError, match='人像局部处理'):
+        CpuPreparationShape(64, 64, 30, 1, 1, 1, 48000, 2, visual_effects={field: .1})

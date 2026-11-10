@@ -72,7 +72,9 @@ class CpuPreparationShape:
                 for value in (self.source_width_px, self.source_height_px)):
             raise ValueError('Source dimensions must be a complete even YUV width/height pair')
         if self.visual_effects is not None:
-            VisualEffects.model_validate(self.visual_effects)
+            effects = VisualEffects.model_validate(self.visual_effects)
+            if effects.beauty_strength or effects.skin_exposure:
+                raise ValueError('人像局部处理需要对应模型许可，不能用基础CPU准备代替')
         if (type(self.duration_seconds) not in (float, int) or not math.isfinite(self.duration_seconds)
                 or self.duration_seconds <= 0 or self.width_px % 2 or self.height_px % 2):
             raise ValueError('CPU preparation needs finite duration and even YUV dimensions')
