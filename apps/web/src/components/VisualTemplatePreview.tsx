@@ -53,7 +53,7 @@ export function VisualTemplatePreview({definition, compact = false}: {definition
   return <section aria-label="视觉模板预览" className={styles.preview}>
     {document && active ? <div ref={viewport} className={`${ui.player} ${styles.viewport}`} style={{aspectRatio: `${definition.width}/${definition.height}`}}>
       <iframe ref={frame} title="视觉模板画面" sandbox="allow-scripts" referrerPolicy="no-referrer"
-        loading={compact ? "lazy" : "eager"} srcDoc={document} width={definition.width} height={definition.height}
+        srcDoc={document} width={definition.width} height={definition.height}
         style={{width: definition.width, height: definition.height, transform: `scale(${scale})`}}/>
       {!drawn && !error ? <span className={styles.previewPending} role="status">正在读取效果…</span> : null}
     </div> : <p>{error || notice || '正在准备预览…'}</p>}
