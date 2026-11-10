@@ -26,6 +26,7 @@ export function registerExecutionTools(pi: ToolRegistrar, {request, taskId, isTa
           clip_count: {type:'integer',minimum:1},audio_input_count: {type:'integer',minimum:1},
           sample_rate: {type:'integer',minimum:1},channels: {type:'integer',minimum:1},
           source_bytes: {type:'integer',minimum:1},
+          overlay_count: {type:'integer',minimum:0,description:'当前制作单元同时合成的图文和字幕层数量；省略只准备零图层，不能据此输出有图层的作品。'},
         },required:['width_px','height_px','frame_rate','duration_seconds','clip_count','audio_input_count','sample_rate','channels'],additionalProperties:false},
           {type:'object',properties:{
             voice_profile_id:{type:'string',minLength:1},voice_version:{type:'string',minLength:1},

@@ -22,6 +22,7 @@ import time
 import psutil
 
 from app.audio_timeline import PCM_CONTAINER_ALLOWANCE_BYTES
+from app.cpu_preparation_video import preparation_video_command
 from app.device_resource_configuration import backend_identity
 from app.device_resource_profile import DeviceProfileIdentity, DeviceProfileUnavailable, _BUDGET_TYPES, _digest, load_device_resource_profile
 from app.device_resource_volumes import sample_write_volumes
@@ -51,10 +52,13 @@ class CpuPreparationShape:
     sample_rate: int
     channels: int
     source_bytes: int | None = None
+    overlay_count: int = 0
 
     def __post_init__(self):
-        if any(type(value) is not int or value <= 0 for name, value in vars(self).items() if name not in {'duration_seconds', 'source_bytes'}):
+        if any(type(value) is not int or value <= 0 for name, value in vars(self).items() if name not in {'duration_seconds', 'source_bytes', 'overlay_count'}):
             raise ValueError('CPU preparation shape needs positive integer dimensions/counts')
+        if type(self.overlay_count) is not int or self.overlay_count < 0:
+            raise ValueError('Overlay count must be a nonnegative integer')
         if self.source_bytes is not None and (type(self.source_bytes) is not int or self.source_bytes <= 0):
             raise ValueError('Known source bytes must be a positive exact file size')
         if (type(self.duration_seconds) not in (float, int) or not math.isfinite(self.duration_seconds)
@@ -176,7 +180,11 @@ class DeviceResourcePreparation:
         self.verify_identity, self.policy = verify_identity, policy
 
     def _shape_payload(self, shape):
-        return asdict(shape)
+        values = asdict(shape)
+        # Zero remains the original durable request shape.
+        if shape.overlay_count == 0:
+            values.pop('overlay_count')
+        return values
 
     def prepare(self, shape: CpuPreparationShape, actor, *, request_id: str):
         if not isinstance(request_id, str) or not request_id.strip() or len(request_id) > 200:
@@ -238,9 +246,9 @@ class DeviceResourcePreparation:
         output_limit = raw_video + raw_audio
         cpu = RuntimeCpuPolicy(mode='darwin_nice', nice=self.policy.cpu_nice, evidence_reference=self.policy.id)
         render = CpuRenderBudget(probe_seconds, shape.width_px * shape.height_px * probe_seconds,
-            shape.width_px, shape.height_px, output_limit, shape.clip_count, 0, output_limit, 1,
+            shape.width_px, shape.height_px, output_limit, shape.clip_count, shape.overlay_count, output_limit, 1,
             self.policy.timeout_seconds, memory_limit, output_limit, max((psutil.cpu_count() or 1) + 2,
-                max(shape.clip_count, shape.audio_input_count) * self.policy.probe_threads_per_input
+                max(shape.clip_count, shape.audio_input_count, shape.overlay_count) * self.policy.probe_threads_per_input
                 + self.policy.probe_controller_threads), cpu)
         cadence = self.policy.poll_seconds + self.policy.sample_seconds
         budget = HostBudget(100, reserve, None, output_limit, None, output_limit,
@@ -304,7 +312,7 @@ class DeviceResourcePreparation:
         shape, limits = plan['shape'], plan['bootstrap_budget']['cpu_render']
         return {'kind': 'creation_render', 'execution_mode': 'cpu_ffmpeg', 'duration_seconds': plan['probe_seconds'],
             'width_px': shape['width_px'], 'height_px': shape['height_px'], 'input_bytes': 0,
-            'clip_count': shape['clip_count'], 'overlay_count': 0, 'max_output_bytes': limits['max_output_bytes'],
+            'clip_count': shape['clip_count'], 'overlay_count': shape.get('overlay_count', 0), 'max_output_bytes': limits['max_output_bytes'],
             'threads': limits['max_threads'], 'timeout_seconds': limits['max_timeout_seconds']}
 
     def verify_submission(self, intent, actor):
@@ -361,7 +369,7 @@ class DeviceResourcePreparation:
     def execute(self, grant, scheduler):
         plan = self._plan(grant.owner_id)
         shape = CpuPreparationShape(**plan['shape'])
-        duration, count = plan['probe_seconds'], shape.clip_count
+        duration = plan['probe_seconds']
         started = time.monotonic()
         deadline = started + plan['policy']['timeout_seconds']
         observations = []
@@ -381,19 +389,8 @@ class DeviceResourcePreparation:
         try:
             with tempfile.TemporaryDirectory(prefix='cpu-preparation-', dir=self.write_paths['temporary']) as temporary:
                 video, audio = Path(temporary) / 'sample.mp4', Path(temporary) / 'sample.wav'
-                command = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-filter_complex_threads', '1']
-                total_frames = math.ceil(duration * shape.frame_rate)
-                frame_counts = [total_frames // count + (index < total_frames % count) for index in range(count)]
-                # Each lavfi input creates its own automatic graph thread pool.
-                # Keep the synthetic sources in the explicitly bounded complex
-                # graph so preparation obeys the same declared thread policy.
-                graph = ''.join(f'testsrc2=size={shape.width_px}x{shape.height_px}:rate={shape.frame_rate}:'
-                    f'duration={frames / shape.frame_rate},trim=end_frame={frames},setpts=PTS-STARTPTS[v{i}];'
-                    for i, frames in enumerate(frame_counts))
-                graph += ''.join(f'[v{i}]' for i in range(count)) + f'concat=n={count}:v=1:a=0[v]'
-                command += ['-filter_complex', graph, '-map', '[v]', '-t', str(duration), '-c:v', plan['policy']['encoder'],
-                    '-threads', '1', '-preset', plan['policy']['encoder_preset'], '-crf', str(plan['policy']['encoder_crf']), '-pix_fmt', 'yuv420p', str(video)]
-                run(command, (video,))
+                command, graphic_paths = preparation_video_command(plan, shape, video)
+                run(command, (video, *graphic_paths))
                 command = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-filter_complex_threads', '1']
                 graph = ''.join(f'sine=frequency={440 + index}:sample_rate={shape.sample_rate}:'
                     f'duration={duration}[a{index}];' for index in range(shape.audio_input_count))

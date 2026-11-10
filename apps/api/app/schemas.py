@@ -66,6 +66,7 @@ class DevicePreparationShapeRequest(BaseModel):
     sample_rate: int = Field(gt=0)
     channels: int = Field(gt=0)
     source_bytes: int | None = Field(default=None, gt=0)
+    overlay_count: int = Field(default=0, ge=0)
 
 
 class NarrationPreparationPronunciationReference(BaseModel):

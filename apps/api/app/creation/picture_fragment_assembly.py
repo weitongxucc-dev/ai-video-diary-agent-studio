@@ -108,8 +108,11 @@ class PictureFragmentAssembly:
             if width > self.budget.max_width_px or height > self.budget.max_height_px:
                 raise ValueError(f'当前设备准备覆盖 {self.budget.max_width_px}×{self.budget.max_height_px}，'
                     f'成片需要 {width}×{height}；请在设备设置按目标画幅重新准备 1080p 成片。')
+            if overlay_count > self.budget.max_overlay_count:
+                raise ValueError(f'当前设备准备覆盖 {self.budget.max_overlay_count} 个合成图层，'
+                    f'本单元需要 {overlay_count} 个；请按实际图层数重新准备基础媒体能力。')
             if (decode_seconds > max_seconds
-                    or input_bytes > self.budget.max_input_bytes or overlay_count > self.budget.max_overlay_count
+                    or input_bytes > self.budget.max_input_bytes
                     or self.budget.max_clip_count < 1):
                 raise ValueError('真实原来源字节、decode prefix、图层或画幅超出当前有限编码单元，未缩报或抬帽')
             unit = {'id': identity, 'artifact_id': f'artifact_picture_fragment_{identity}',
