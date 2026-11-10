@@ -44,6 +44,14 @@ def _sdk_parameter_failure(tool_name: str, result: dict) -> dict | None:
     return None
 
 
+def media_processing_state_message(media_job: dict) -> str:
+    if media_job.get('status') == 'succeeded':
+        return '媒体处理结果已回读；产物及其采用关系以该作业记录为准。'
+    if media_job.get('status') in {'failed', 'cancelled', 'interrupted'}:
+        return '媒体处理未成功完成，请查看原作业的实际原因与恢复方式。'
+    return '已安排，预览尚未完成；完成后请在工作台查看实际预览，再确认是否应用。'
+
+
 def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> str:
     if failed:
         if tool_name in {"start_creation_execution", "resume_creation_execution"}:
@@ -61,7 +69,7 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
         media_job = details.get("media_job") or {}
         if media_job.get("result_kind") == "observation":
             return "实际输出检查已返回；排队或运行不能视为已检查，结论以真实结果为准。"
-        return "已安排，预览尚未完成；完成后请在工作台查看实际预览，再确认是否应用。"
+        return media_processing_state_message(media_job)
     if tool_name == "read_task_observations":
         return "已读取当前结果检查与历史检查；可用能力、当前性和缺少的证据分别保留。"
     if tool_name == "read_material_library_status":
