@@ -297,11 +297,14 @@ def test_topic_route_snapshot_reads_the_requesting_workspace():
     assert unconfigured["availability"] == "unconfigured"
 
 
-def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch):
+def test_plan_turn_reports_the_requesting_workspace_provider(monkeypatch, request):
     """响应里的 provider/model 必须是本次工作区的配置，且不靠网络。"""
     import app.main as main_module
     from app.auth import AuthPrincipal
     from app.schemas import AssistantConversationUpdateRequest, WorkspaceAssistantPlanTurnRequest
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+
+    isolate_assistant_turn_control(monkeypatch, request)
 
     module.save_workspace_config("ws-a", {"llm_provider": "minimax", "llm_model": "MiniMax-M3"})
     module.save_workspace_secret("ws-a", "llm_api_key", "key-a")
