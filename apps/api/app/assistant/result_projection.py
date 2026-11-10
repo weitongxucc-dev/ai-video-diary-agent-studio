@@ -514,6 +514,10 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                 answer = "实际输出检查已完成；请按分项证据查看结果，未提供的语义或听感不能当作已通过。"
             else:
                 answer = "实际输出检查已安排；尚未取得成功检查结果，排队或运行不能视为已经检查。"
+        elif media_job.get('status') == 'succeeded':
+            answer = '媒体处理结果已回读；产物及其采用关系以该作业记录为准。'
+        elif media_job.get('status') in {'failed', 'cancelled', 'interrupted'}:
+            answer = '媒体处理未成功完成，请查看原作业的实际原因与恢复方式。'
         else:
             answer = "已安排，预览尚未完成；完成后请在工作台查看实际预览，再确认是否应用。"
         preview = {"kind": "media_job", "media_job": media_job}

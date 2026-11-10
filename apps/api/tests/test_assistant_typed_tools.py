@@ -15,6 +15,16 @@ from app.schemas import CreationTaskExactEditRequest, EXACT_EDIT_FIELDS
 import app.assistant_pi as host
 
 
+def test_reading_completed_waveform_does_not_claim_a_pending_preview_or_completed_film():
+    from app.assistant.result_projection import project_business_result
+    job = {'job_id': 'waveform-original', 'status': 'succeeded', 'result_kind': 'waveform', 'result': {}}
+    answer, result = project_business_result({'answer': '整片已经检查通过', 'status': 'settled',
+        'tool_results': [{'type': 'tool_execution_end', 'toolName': 'read_task_media_job',
+            'isError': False, 'result': {'details': {'kind': 'task_media_job', 'media_job': job}}}]})
+    assert result['media_job'] == job
+    assert '已回读' in answer and '预览尚未完成' not in answer and '整片已经检查通过' not in answer
+
+
 @pytest.mark.parametrize('status', ['not_ready', 'authorization_ready', None])
 def test_edit_and_restore_projection_keep_the_saved_authorization_receipt(status):
     from app.assistant.result_projection import project_business_result, timeline_restore_message

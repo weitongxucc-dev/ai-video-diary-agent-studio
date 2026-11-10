@@ -1741,7 +1741,12 @@ class ConversationRepository:
                         continue
                     if turn["status"] == "running":
                         continue
-                    for event in json.loads(turn["events_json"]):
+                    # One model turn can finish editing, rendering and observing
+                    # before the projector runs. Consume those facts in causal
+                    # order, independent of asynchronous receipt arrival.
+                    events = sorted(json.loads(turn["events_json"]), key=lambda item:
+                        {'execution': 1, 'observation': 2}.get(item.get('phase'), 0))
+                    for event in events:
                         if event.get("phase") == "script_adoption":
                             # Once this input submitted execution, its real
                             # execution result owns the next wakeup.
