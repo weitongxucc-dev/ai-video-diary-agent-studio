@@ -1310,6 +1310,22 @@ def execution_binding_state(execution_http_state, monkeypatch):
 
 
 @pytest.mark.parametrize('execution_http_state', [pytest.param(False, id='metadata-no-voice')], indirect=True)
+def test_preparation_only_runtime_keeps_persisted_goal_authority(execution_binding_state, monkeypatch):
+    """Device preparation may exist before media owners have been assembled."""
+    from datetime import datetime, timezone
+    state = execution_binding_state
+    authority = main._task_authorizations_for_goal()
+    authority.ensure(state.task, state.actor, interactive=True)
+    monkeypatch.setattr(main, 'device_runtime', SimpleNamespace(task_authorizations=None))
+    observed = main._task_authorizations_for_goal()
+    assert observed.verdict(state.actor, state.task.id, 'task_goal', check_scope=False) == 'ready'
+    saved = state.production.task_authorization_records.get_task_authorization(state.workspace_id, state.task.id)
+    state.production.task_authorization_records.save_task_authorization(
+        replace(saved, revision=saved.revision+1, revoked_at=datetime.now(timezone.utc)), expected_revision=saved.revision)
+    assert observed.verdict(state.actor, state.task.id, 'task_goal', check_scope=False) == 'unauthorized'
+
+
+@pytest.mark.parametrize('execution_http_state', [pytest.param(False, id='metadata-no-voice')], indirect=True)
 @pytest.mark.parametrize('authorization_revoked', [False, True], ids=['valid', 'revoked'])
 def test_execution_projection_rechecks_persisted_authority_and_keeps_stale_history(execution_binding_state, monkeypatch, authorization_revoked):
     from datetime import datetime, timezone
