@@ -187,7 +187,7 @@ export function CreateProductionTaskForm({
   const [targetCount, setTargetCount] = useState("1");
   const [language, setLanguage] = useState<CreationPlanInput["language"]>(template?.settings.language ?? "zh-CN");
   const [aspectRatio, setAspectRatio] = useState<CreationPlanInput["aspect_ratio"]>(template?.settings.aspect_ratio ?? "9:16");
-  const [duration, setDuration] = useState(String(template?.settings.duration_target_seconds ?? 60));
+  const [duration, setDuration] = useState(String(Math.ceil(template?.settings.duration_target_seconds ?? 60)));
   const [presenterShare, setPresenterShare] = useState<PresenterShare>(template?.settings.presenter_share_target ?? 20);
   const [lipsyncQuality, setLipsyncQuality] = useState<LipSyncQuality>(template?.settings.lipsync_quality ?? (template ? "fast" : "high"));
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
@@ -206,7 +206,7 @@ export function CreateProductionTaskForm({
     setCreationRequestId(null);
     creationRequestKey.current = null;
     setError(null);
-    setDuration(String(template?.settings.duration_target_seconds ?? 60));
+    setDuration(String(Math.ceil(template?.settings.duration_target_seconds ?? 60)));
     setLanguage(template?.settings.language ?? "zh-CN"); setAspectRatio(template?.settings.aspect_ratio ?? "9:16");
   }, [template?.id, template?.version]);
 
@@ -223,7 +223,7 @@ export function CreateProductionTaskForm({
     }
     if (draftId || previousDraftId.current !== draftId) {
       setGoal(draftId ? "" : initialGoal); setName(""); setTargetCount("1");
-      setDuration(String(template?.settings.duration_target_seconds ?? 60));
+      setDuration(String(Math.ceil(template?.settings.duration_target_seconds ?? 60)));
       setLanguage(template?.settings.language ?? "zh-CN"); setAspectRatio(template?.settings.aspect_ratio ?? "9:16");
       setPresenterShare(template?.settings.presenter_share_target ?? 20); setLipsyncQuality(template?.settings.lipsync_quality ?? (template ? "fast" : "high"));
       voiceSelectionEdited.current = false; setVoicePin(undefined); setPersonPin(undefined); setKnowledgePin(initialKnowledgePin);
@@ -399,7 +399,7 @@ export function CreateProductionTaskForm({
           <label><span>任务名称（可选）</span><input disabled={isPending} name="name" onChange={(event) => { setName(event.target.value); invalidatePreview(); }} placeholder="例如：本周 AI 工具观察" value={name} /></label>
           <label><span>成片数量</span><input disabled={isPending} max={Number.MAX_SAFE_INTEGER} min="1" name="target_count" onChange={(event) => { setTargetCount(event.target.value); invalidatePreview(); }} required type="number" value={targetCount} /></label>
           <label><span>语言</span><AppSelect disabled name="language" value={language}><AppSelectOption value="zh-CN">中文（当前版本）</AppSelectOption></AppSelect></label>
-          <label><span>目标时长（秒）</span><input aria-label="目标时长（秒）" aria-describedby={template ? `${formId}-duration-default` : undefined} disabled={isPending} min="1" step="1" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} />{template ? <small id={`${formId}-duration-default`}>模板默认 {template.settings.duration_target_seconds ?? 60} 秒，可调整本次时长。</small> : null}</label>
+          <label><span>目标时长（秒）</span><input aria-label="目标时长（秒）" aria-describedby={template ? `${formId}-duration-default` : undefined} disabled={isPending} min="1" step="1" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} />{template ? <small id={`${formId}-duration-default`}>模板原时长 {template.settings.duration_target_seconds ?? 60} 秒，新方案按整数秒设置，可调整本次时长。</small> : null}</label>
         </div>
         <p className="creation-plan-form__ratio">画幅：{aspectRatio}（{template ? "继承所选模板" : "当前本地服务支持的画幅"}）</p>
         {profilesError ? <p role="alert">{profilesError}</p> : null}

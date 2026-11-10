@@ -138,6 +138,19 @@ describe("CreateProductionTaskForm", () => {
     expect(mocks.confirmCreationPlan).not.toHaveBeenCalled();
   });
 
+  it("accepts a fractional source template as an integer-second new plan", async () => {
+    const template = { id:"source-template", workspace_id:"workspace-a", version:1, name:"活动图表", origin:"user" as const,
+      created_at:"2026-11-10", settings:{ language:"zh-CN" as const, aspect_ratio:"9:16" as const,
+        duration_target_seconds:4.833, voice:null, style_instruction:"", fit_mode:"fit" as const, subtitle_style:{} } };
+    render(<CreateProductionTaskForm template={template} initialGoal="新的活动复盘" />);
+    const duration = screen.getByRole("spinbutton", { name:"目标时长（秒）" }) as HTMLInputElement;
+    expect(duration).toHaveValue(5);
+    expect(duration.checkValidity()).toBe(true);
+    await waitFor(() => expect(screen.getByRole("button", { name:"检查可用内容" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name:"检查可用内容" }));
+    await waitFor(() => expect(mocks.previewCreationPlan).toHaveBeenCalledWith(expect.objectContaining({ duration_target_seconds:5 })));
+  });
+
   it("does not submit an invalid target duration even when native form validation is bypassed", async () => {
     renderForm();
     const duration = screen.getByRole("spinbutton", { name: "目标时长（秒）" });
