@@ -192,11 +192,13 @@ await request(base+'/narration/voice',{method:'POST',body:JSON.stringify({reques
 await request(base+'/narration/voice/requests/voice-original');
 await request(base+'/media-jobs?limit=2&cursor=job-original');
 await request(base+'/edits/exact/preview?draft=true',{method:'POST',body:JSON.stringify(payload)});
-assert.deepEqual(calls.map(c=>c.operation),['apply_task_edit','preview_task_edit','read_task_edit_request','read_task_edit_request','select_narration_voice','read_narration_voice_request','read_task_media_jobs','preview_task_edit']);
+await request(base+'/montage/clips/clip%3Aoriginal/candidates?for_automation=true');
+assert.deepEqual(calls.map(c=>c.operation),['apply_task_edit','preview_task_edit','read_task_edit_request','read_task_edit_request','select_narration_voice','read_narration_voice_request','read_task_media_jobs','preview_task_edit','read_clip_candidates']);
 assert.deepEqual(calls[0].args.payload,payload);assert.deepEqual(calls[1].args.payload,payload);
 assert.deepEqual(calls[2].args,{task_id:'task',request_id:'original',phase:'apply'});
 assert.deepEqual(calls[6].args,{task_id:'task',cursor:'job-original',limit:2});
 assert.equal(calls[7].args.draft_only,true);
+assert.deepEqual(calls[8].args,{task_id:'task',clip_id:'clip:original'});
 console.log('common host calls: PASS');`, pathToFileURL(join(tree.root,'Resources','agent-tools','diary','transport.ts')).href],
     {cwd:tree.root,env:tree.environment,timeout:10000});
   assert.match(stdout,/common host calls: PASS/);

@@ -57,6 +57,26 @@ def complete(case):
         result={'kind': 'source_task', 'receipt': case.receipt})
 
 
+def test_source_adoption_keeps_only_consumed_material_references(goal_case):
+    case = goal_case
+    materials = [{'kind': 'material', 'selection': {'scope': 'asset', 'asset_id': key,
+        'expected_updated_at': case.asset.updated_at.isoformat()}} for key in [case.asset.id, 'referenced-b-roll']]
+    case.home_context = {'kind': 'home', 'target_snapshot': {'selected_references': [*materials,
+        {'kind': 'shot', 'task_id': 'another-task', 'object_id': 'other-clip', 'version': 'other-version'}]}}
+    adopt_steered_source(case)
+    case.conversations.finish_turn(case.turn['id'], 'failed')
+    roots = register(case)
+    assert register(case) == roots and len(roots) == 1
+    goal = case.conversations.get_task_goal(roots[0])
+    assert goal['target_snapshot']['selected_references'] == materials
+    assert goal['request_context']['target_snapshot']['selected_references'] == materials
+    case.authorizations.bind_business_context(case.task, case.actor, goal, memory={},
+        references={'selected_references': goal['target_snapshot']['selected_references']})
+    sealed = case.repo.execution_records.get_task_event('local', case.authorizations.business_context_id(goal)).payload
+    assert sealed['selected_references'] == materials
+    assert 'referenced-b-roll' not in case.authorizations.material_asset_ids('local', case.task.id)
+
+
 def register(case):
     return case.service.register_source_task(case.turn['id'], 'local', case.actor.member_id,
         case.event, case.task, case.plan)
@@ -329,3 +349,34 @@ def test_home_resume_keeps_original_source_and_scope_without_inventing_a_window(
         assert current['revision'] == 1
     else:
         assert 'creation_resume' not in current
+
+
+def test_background_candidates_reuse_editor_ranking_with_only_task_and_frozen_assets(goal_case):
+    from app.assistant.material_reads import read_goal_materials
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase
+    from app.materials.contracts import MaterialSegment
+    from app.montage import creation_task_montage_plan_from_payload
+    case = goal_case
+    broll_path = case.path.with_name('b-roll.mp4')
+    broll_path.write_bytes(case.path.read_bytes())
+    import os
+    os.utime(broll_path, ns=(case.path.stat().st_atime_ns, case.path.stat().st_mtime_ns))
+    outside_path = case.path.with_name('outside.mp4')
+    outside_path.write_bytes(case.path.read_bytes())
+    os.utime(outside_path, ns=(case.path.stat().st_atime_ns, case.path.stat().st_mtime_ns))
+    extra = case.repo._save_asset(replace(case.asset, id='referenced-b-roll',
+        path=str(broll_path), usage_role='b_roll',
+        segments=[MaterialSegment('b-roll-segment', 'referenced-b-roll', 0, 9.25, usage_role='b_roll')]))
+    # An equally suitable unreferenced asset must never reach the candidate list.
+    case.repo._save_asset(replace(extra, id='outside', path=str(outside_path), segments=[
+        MaterialSegment('outside-segment', 'outside', 0, 9.25, usage_role='b_roll')]))
+    case.authorizations.ensure(case.task, case.actor, interactive=True)
+    plan = creation_task_montage_plan_from_payload(case.repo.get_creation_task_montage_plan('local', case.task.id))
+    editor = MetadataEditUseCase(case.repo, None, output_root=None, audio_service=None)
+    sealed = {'selected_references': [{'kind': 'material', 'selection': {'scope': 'asset',
+        'asset_id': extra.id, 'expected_updated_at': extra.updated_at.isoformat()}}]}
+    result = read_goal_materials(case.repo, case.authorizations, case.actor, case.task.id,
+        'read_clip_candidates', {'clip_id': plan.clips[0].id}, sealed=sealed,
+        montage_edits=editor, material_facts=lambda value: value)
+    assert [(item['asset_id'], item['segment_id']) for item in result] == [(extra.id, 'b-roll-segment')]
+    assert extra.id not in case.authorizations.material_asset_ids('local', case.task.id)

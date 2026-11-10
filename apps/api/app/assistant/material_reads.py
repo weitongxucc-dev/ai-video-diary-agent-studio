@@ -1,13 +1,51 @@
 """Fixed-goal material reads shared by ordinary and draft-generation turns."""
+from datetime import datetime
+
 from app.assistant.task_business_errors import TaskBusinessRejected, TaskOperationRejected
 from app.materials.evidence import MaterialEvidenceConflict
 
-MATERIAL_READ_OPERATIONS = frozenset({'search_task_materials', 'read_task_material', 'read_material_evidence'})
+MATERIAL_READ_OPERATIONS = frozenset({'search_task_materials', 'read_task_material', 'read_material_evidence', 'read_clip_candidates'})
 
 
-def read_goal_materials(production, authorizations, actor, task_id, operation, args, *, material_facts):
+def goal_material_ids(production, authorizations, actor, task_id, sealed):
+    """Explicit frozen references permit reads, never enrollment of the whole library."""
+    allowed = set(authorizations.material_asset_ids(actor.workspace_id, task_id))
+    for item in sealed.get('selected_references', []):
+        if item['kind'] != 'material':
+            continue
+        selection = item['selection']
+        try:
+            evidence = production.material_assets.read_evidence(actor.workspace_id, selection['asset_id'],
+                member_id=actor.user_id or actor.member_id, expected_updated_at=selection['expected_updated_at'], limit=1)
+            if evidence.get('content_withheld'):
+                raise TaskBusinessRejected('原目标引用的素材已排除')
+            if selection['scope'] == 'segment':
+                asset = production.get_asset(actor.workspace_id, selection['asset_id'])
+                segment = next((part for part in asset.segments if part.id == selection['segment_id']), None)
+                if segment is None or segment.updated_at != datetime.fromisoformat(selection['expected_segment_updated_at'].replace('Z', '+00:00')):
+                    raise MaterialEvidenceConflict('原目标引用的素材片段已变化')
+        except MaterialEvidenceConflict as exc:
+            raise TaskOperationRejected(str(exc), kind='conflict') from exc
+        allowed.add(selection['asset_id'])
+    return allowed
+
+
+def read_goal_materials(production, authorizations, actor, task_id, operation, args, *, material_facts, sealed=None, montage_edits=None):
     ws = actor.workspace_id
-    allowed = authorizations.material_asset_ids(ws, task_id)
+    allowed = goal_material_ids(production, authorizations, actor, task_id, sealed or {})
+    if operation == 'read_clip_candidates':
+        from app.montage import creation_task_montage_plan_from_payload
+        from app.source_policy import knowledge_item_readable
+        plan = creation_task_montage_plan_from_payload(production.get_creation_task_montage_plan(ws, task_id))
+        clip = next((item for item in plan.clips if item.id == args['clip_id']), None)
+        if clip is None:
+            raise TaskBusinessRejected('当前任务没有该镜头')
+        assets = [production.get_asset(ws, key) for key in sorted(allowed)]
+        assets = [asset for asset in assets if knowledge_item_readable(
+            user_id=actor.user_id or actor.member_id, local_diagnostic=False,
+            visibility=asset.visibility, owner_user_id=asset.owner_user_id)]
+        return [item.model_dump(mode='json') for item in montage_edits.montage_candidates(
+            ws, plan, clip, automation_only=True, assets=assets)]
     if operation in {'read_task_material', 'read_material_evidence'}:
         if args['asset_id'] not in allowed:
             raise TaskBusinessRejected('素材不在原目标固定范围内')

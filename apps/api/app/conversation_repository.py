@@ -1530,7 +1530,10 @@ class ConversationRepository:
                     registered.append(root_id)
                     continue
                 receipt = {**adoption, "turn_id": source_turn_id}
-                snapshot = task_context["target_snapshot"]
+                snapshot = {**task_context["target_snapshot"], "selected_references": [
+                    item for item in context.get('target_snapshot', {}).get('selected_references', [])
+                    if item['kind'] == 'material']}
+                task_context = {**task_context, "target_snapshot": snapshot}
                 event_id = "creation-adopted:" + root_id
                 event = {"type": "business_result", "event_id": event_id, "phase": "creation",
                     "status": "confirmed", "task_id": task_id, "request_id": adoption["request_id"],

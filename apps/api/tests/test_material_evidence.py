@@ -74,3 +74,34 @@ def test_background_evidence_keeps_fixed_goal_scope_and_classifies_revision_conf
         read({'asset_id': 'asset', 'expected_updated_at': 'old'})
     assert conflict.value.kind == 'conflict'
     assert read({'asset_id': 'asset'})['asset_id'] == 'asset'
+
+
+def test_frozen_material_reference_allows_reads_without_enrolling_library_and_rechecks_revision(database):
+    from types import SimpleNamespace
+    from app.assistant.material_reads import read_goal_materials
+    from app.assistant.task_business_errors import TaskBusinessRejected, TaskOperationRejected
+    connect, _ = database
+    asset = _asset()
+    with connect() as conn:
+        _insert(conn, asset)
+        _insert(conn, _asset('outside'))
+    store = MaterialAssetStore(connect)
+    production = SimpleNamespace(material_assets=store)
+    authorization = SimpleNamespace(material_asset_ids=lambda ws, task: frozenset())
+    actor = SimpleNamespace(workspace_id='workspace-a', user_id='owner-a', member_id='owner-a')
+    sealed = {'selected_references': [{'kind': 'material', 'selection': {'scope': 'asset',
+        'asset_id': asset.id, 'expected_updated_at': asset.updated_at.isoformat()}}]}
+    def read(key):
+        return read_goal_materials(production, authorization, actor, 'task', 'read_material_evidence',
+            {'asset_id': key}, material_facts=lambda value: value, sealed=sealed)
+    assert read('asset')['asset_id'] == 'asset'
+    with pytest.raises(TaskBusinessRejected):
+        read('outside')
+    sealed['selected_references'][0]['selection']['expected_updated_at'] = '2020-01-01T00:00:00+00:00'
+    with pytest.raises(TaskOperationRejected) as conflict:
+        read('asset')
+    assert conflict.value.kind == 'conflict'
+    sealed['selected_references'][0]['selection']['expected_updated_at'] = asset.updated_at.isoformat()
+    actor.user_id = 'revoked-reader'
+    with pytest.raises(KeyError):
+        read('asset')

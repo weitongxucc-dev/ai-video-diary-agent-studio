@@ -684,7 +684,8 @@ class TaskBusiness:
             return self.read_execution(goal,actor,job_id=args.get('job_id'))
         if operation in MATERIAL_READ_OPERATIONS:
             return read_goal_materials(self.production, self.authorizations, actor, task_id,
-                operation, args, material_facts=self.material_facts)
+                operation, args, material_facts=self.material_facts, sealed=sealed,
+                montage_edits=self.exact_case_for().metadata if operation == 'read_clip_candidates' else None)
         if operation in {'start_script_window','patch_script_sections','confirm_saved_script','read_script_window_request'}:
             from app.schemas import (CreationTaskScriptWindowStartRequest, CreationTaskScriptSectionsPatchRequest,
                                      CreationTaskScriptConfirmSavedRequest)

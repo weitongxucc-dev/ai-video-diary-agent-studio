@@ -214,6 +214,9 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     if (suffix === '/segments' && only('offset', 'limit')) return result('read_narration_segments',
       {...args, offset: Number(query.get('offset') || 0), limit: Number(query.get('limit') || 24)});
     if (!suffix && !search) return result('read_task_workspace', args);
+    const clipCandidates = suffix.match(/^\/montage\/clips\/([^/]+)\/candidates$/);
+    if (clipCandidates && only('for_automation') && query.get('for_automation') === 'true')
+      return result('read_clip_candidates', {...args, clip_id: decodeURIComponent(clipCandidates[1])});
     if (suffix === '/execution' && only('job_id')) return result('read_creation_execution',
       {...args, ...(query.has('job_id') ? {job_id: query.get('job_id')} : {})});
     const scriptSections = suffix.match(/^\/scripts\/([^/]+)\/sections$/);
