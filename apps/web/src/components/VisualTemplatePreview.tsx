@@ -24,7 +24,7 @@ export function VisualTemplatePreview({definition, compact = false}: {definition
     if(!viewport.current)return;
     const observer=new ResizeObserver(entries=>setScale(entries[0].contentRect.width/definition.width));
     observer.observe(viewport.current);return()=>observer.disconnect();
-  },[document,definition.width]);
+  },[document,definition.width,active]);
   useEffect(() => {
     let active = true; setDocument(''); setError(null);setNotice(null);setDrawn(false);
     void visualTemplateDocument(definition).then(value => {if (active) {setDocument(value.document??'');setNotice(value.reason??null);}})
@@ -45,7 +45,7 @@ export function VisualTemplatePreview({definition, compact = false}: {definition
     return () => window.removeEventListener('message', receive);
   }, [document, time, definition, active]);
   useEffect(() => {
-    if (!active) { setPlaying(false); return; }
+    if (!active) { setPlaying(false); setDrawn(false); return; }
     if (!playing) return;
     const timer = setInterval(() => setTime(value => (value + .1) % definition.duration_seconds), 100);
     return () => clearInterval(timer);
