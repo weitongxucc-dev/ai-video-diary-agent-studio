@@ -158,6 +158,38 @@ def test_native_png_keeps_real_execution_lineage_and_is_usable_graphic_source(tm
         graphic_source_facts(case.repo,case.native.store,'local',case.task_id,artifact['source_ref'],actor=case.actor)
 
 
+def test_native_preparation_covers_authorized_media_and_work_files_together(tmp_path,monkeypatch):
+    from dataclasses import replace
+    from app.artwork_resource_preparation import extend_native_budget
+    from app.creation.native_task_operations import NativeTaskOperations
+    from app.device_resource_preparation import CpuPreparationShape
+    from test_device_resource_preparation import metadata_preparation
+    _repository,actor,_access,service,_paths=metadata_preparation(tmp_path,monkeypatch)
+    source_bytes=10*1024*1024
+    shape=CpuPreparationShape(64,64,30,1.,1,1,8000,1,source_bytes=source_bytes)
+    _identity,original=service.prepare(shape,actor,request_id=str(uuid4()))
+    sample={'output_capacity_bytes':64*64*4*30,'actual_output_bytes':2048,'frames':30,
+        'elapsed_seconds':1.,'observed_resources':{'rss_sample_complete':True,'threads_sample_complete':True,
+            'peak_rss_bytes':24*1024*1024,'peak_threads':3}}
+    budget=extend_native_budget(replace(shape,native_command=True),original,{'native_command':sample},
+        {'probe_seconds':1.},1.,original,service.policy)
+    root=tmp_path/'native'
+    for name in ('control','work','inputs','outputs'):
+        (root/name).mkdir(parents=True)
+    source=tmp_path/'source.bin'
+    with source.open('wb') as handle:
+        handle.truncate(source_bytes)
+    stat=source.stat()
+    (root/'inputs'/'source').symlink_to(source)
+    (root/'control'/'inputs.json').write_text(json.dumps({'source':{'path':str(source),
+        'file_revision':[stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns]}}))
+    (root/'work'/'program.py').write_text('x'*1000)
+    case=NativeTaskOperations(None,None,root,budget=budget.native_command)
+    facts=case.resources(root,{})
+    assert facts['input_bytes']==source_bytes+1000
+    assert budget.max_unit_input_bytes>=facts['input_bytes']
+
+
 @pytest.mark.skipif(sys.platform!='darwin' or not os.environ.get('YAOHE_TEMPLATE_ELECTRON'),
     reason='requires desktop Electron and native macOS sandbox')
 def test_real_granted_html_and_native_preparation_share_no_fake_calibration(tmp_path,monkeypatch):

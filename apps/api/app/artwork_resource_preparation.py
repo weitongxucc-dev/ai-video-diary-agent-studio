@@ -63,10 +63,11 @@ def extend_native_budget(shape, budget, receipt, plan, delivery_duration, origin
         ratio = delivery_duration/plan['probe_seconds']
         capacity = math.ceil(max(measured['output_capacity_bytes'], measured['actual_output_bytes'])*ratio*policy.measured_margin)
         native_rss = min(original.cpu_render.additional_memory_bytes, math.ceil(observed['peak_rss_bytes']*policy.measured_margin))
-        native = NativeCommandBudget(max(capacity, shape.source_bytes or 0), capacity,
+        native = NativeCommandBudget((shape.source_bytes or 0)+capacity, capacity,
             math.ceil(measured['frames']*ratio)+16, 65536, 262144, 1,
             measured['elapsed_seconds']*max(1,ratio)*policy.measured_margin,
             native_rss, math.ceil(observed['peak_threads']*policy.measured_margin), policy.sample_seconds,
             native_rss, 2*capacity)
-        budget = replace(budget, native_command=native)
+        budget = replace(budget, native_command=native,
+            max_unit_input_bytes=max(budget.max_unit_input_bytes, native.max_input_bytes))
     return budget
