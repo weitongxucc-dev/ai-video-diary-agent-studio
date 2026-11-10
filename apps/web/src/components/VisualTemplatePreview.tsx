@@ -13,7 +13,9 @@ export function VisualTemplatePreview({definition, compact = false}: {definition
   const active = visible && (page?.active ?? true);
   const frame = useRef<HTMLIFrameElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
-  const [scale,setScale]=useState(1);
+  const [viewportWidth,setViewportWidth]=useState(0);
+  const scale=viewportWidth/definition.width;
+  const [frameReady,setFrameReady]=useState(false);
   const [document, setDocument] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice,setNotice]=useState<string|null>(null);
@@ -21,31 +23,35 @@ export function VisualTemplatePreview({definition, compact = false}: {definition
   const [drawn,setDrawn]=useState(false);
   const [playing, setPlaying] = useState(false);
   useEffect(()=>{
+    if(!active){setViewportWidth(0);return;}
     if(!viewport.current)return;
-    const observer=new ResizeObserver(entries=>setScale(entries[0].contentRect.width/definition.width));
+    const observer=new ResizeObserver(entries=>setViewportWidth(entries[0].contentRect.width));
     observer.observe(viewport.current);return()=>observer.disconnect();
   },[document,definition.width,active]);
   useEffect(() => {
-    let active = true; setDocument(''); setError(null);setNotice(null);setDrawn(false);
+    let active = true; setDocument(''); setError(null);setNotice(null);setDrawn(false);setFrameReady(false);
     void visualTemplateDocument(definition).then(value => {if (active) {setDocument(value.document??'');setNotice(value.reason??null);}})
       .catch(cause => {if (active) setError(String(cause.message));});
     return () => {active = false;};
   }, [definition]);
   useEffect(() => {
     if (!active) return;
-    const draw = () => frame.current?.contentWindow?.postMessage({kind: 'draw', ticket: time,
-      t: time, bindings: definition.bindings, values: definition.values}, '*');
     const receive = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow) return;
-      if (event.data?.kind === 'loaded') draw();
+      if (event.data?.kind === 'loaded') setFrameReady(true);
       if (event.data?.kind === 'drawn' && !event.data.error) setDrawn(true);
       if (event.data?.kind === 'drawn' && typeof event.data.error==='string') {setError(event.data.error.slice(0,2000)); setPlaying(false);}
     };
-    window.addEventListener('message', receive); draw();
+    window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);
-  }, [document, time, definition, active]);
+  }, [document, active]);
   useEffect(() => {
-    if (!active) { setPlaying(false); setDrawn(false); return; }
+    if (!active || !frameReady || viewportWidth <= 0) return;
+    frame.current?.contentWindow?.postMessage({kind:'draw',ticket:time,t:time,
+      bindings:definition.bindings,values:definition.values},'*');
+  }, [active,frameReady,viewportWidth,time,definition]);
+  useEffect(() => {
+    if (!active) { setPlaying(false); setDrawn(false); setFrameReady(false); return; }
     if (!playing) return;
     const timer = setInterval(() => setTime(value => (value + .1) % definition.duration_seconds), 100);
     return () => clearInterval(timer);
@@ -53,7 +59,7 @@ export function VisualTemplatePreview({definition, compact = false}: {definition
   return <section aria-label="视觉模板预览" className={styles.preview}>
     {document && active ? <div ref={viewport} className={`${ui.player} ${styles.viewport}`} style={{aspectRatio: `${definition.width}/${definition.height}`}}>
       <iframe ref={frame} title="视觉模板画面" sandbox="allow-scripts" referrerPolicy="no-referrer"
-        srcDoc={document} width={definition.width} height={definition.height}
+        onLoad={()=>setFrameReady(true)} srcDoc={document} width={definition.width} height={definition.height}
         style={{width: definition.width, height: definition.height, transform: `scale(${scale})`}}/>
       {!drawn && !error ? <span className={styles.previewPending} role="status">正在读取效果…</span> : null}
     </div> : <p>{error || notice || '正在准备预览…'}</p>}
