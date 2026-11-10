@@ -8,11 +8,13 @@ function setup() {
   const operation = {id: 'operation', task_id: 'task', status: 'applied', base_version_id: 'base', result_version_id: 'edited'};
   let attempts = 0, verified = 0;
   const declaration = {schema: {properties: {operation_type: {type: 'string'}, overlay_action: {type: 'string'},
-    overlay_id: {type: 'string'}, graphic_overlay: {type: 'object'}, cue_id: {type: 'string'}, text: {type: 'string'}},
+    overlay_id: {type: 'string'}, graphic_overlay: {type: 'object'}, cue_id: {type: 'string'}, text: {type: 'string'},
+    audio_edit: {type: 'object'}},
     required: ['operation_type']}, direct_apply: {endpoint: '/api/creation-tasks/task/edits/exact', operations: [
       {operation_type: 'EditGraphicOverlay', available: true,
         parameter_fields: ['overlay_action', 'overlay_id', 'graphic_overlay'], required_fields: ['overlay_action']},
       {operation_type: 'UpdateSubtitleCue', available: true, parameter_fields: ['cue_id', 'text'], required_fields: ['cue_id', 'text']},
+      {operation_type: 'EditAudioTimeline', available: true, parameter_fields: ['audio_edit'], required_fields: ['audio_edit']},
     ]}};
   const request = async (path, init) => {
     calls.push({path, method: init?.method || 'GET', body: init?.body ? JSON.parse(init.body) : null});
@@ -33,6 +35,24 @@ function setup() {
 
 const overlay = {id: 'opening-tag-text-overlay', kind: 'text', text: '片头', start_seconds: 0, end_seconds: 3,
   x: 0.5, y: 0.12, width: 0.8, font_size: 44, font_family: 'sans-serif', color: '#fff2aa'};
+
+test('declared structural audio actions use the same original receipt and version fence', async () => {
+  for (const [action, values] of [
+    ['add', {source_ref: 'artifacts/audio.wav', name: '音乐', source_start_ms: 0, source_end_ms: 1000, timeline_start_ms: 0}],
+    ['split', {at_ms: 500}], ['duplicate', {timeline_start_ms: 1000}], ['delete', {}],
+    ['update', {gain_points: [{offset_ms: 0, gain_db: -6}], locked: false}],
+  ]) {
+    const state = setup();
+    const params = {operation_type: 'EditAudioTimeline', audio_edit: {action, target_id: 'audio-target', values}};
+    const result = await state.tool.execute('audio-call', params);
+    assert.equal(result.details.kind, 'edit_applied');
+    assert.equal(state.verified(), 1);
+    assert.deepEqual(state.calls[0].body.audio_edit, params.audio_edit);
+    assert.deepEqual(state.version, {timeline_version_id: 'edited', timeline_sequence: 8});
+    await assert.rejects(state.tool.execute('duplicate-call', params), /已有执行或编辑动作/);
+    assert.equal(state.calls.filter(call => call.method === 'POST').length, 1);
+  }
+});
 
 test('missing or mismatched update IDs do not submit or consume the write; correction succeeds once', async () => {
   const {id, ...withoutId} = overlay;

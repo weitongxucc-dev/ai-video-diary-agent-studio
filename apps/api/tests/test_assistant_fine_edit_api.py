@@ -82,7 +82,7 @@ def test_catalog_exposes_shared_schema_units_and_true_nested_targets(fine_state)
     assert "受许可" in cap["units"]["effects.beauty_strength"]
     limits = cap["schema"]["$defs"]["AudioMixPatch"]["properties"]
     assert limits["gain_db"]["minimum"] == -60 and limits["gain_db"]["maximum"] == 12
-    assert "gain_points" not in limits and "playback_rate" not in limits
+    assert "gain_points" in limits and "playback_rate" not in limits
 
 
 @pytest.mark.parametrize("action,target,values", [("update", "fine-music-clip", {"gain_db": -8, "fade_out_ms": 300}),

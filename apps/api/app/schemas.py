@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import date, datetime
 from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
@@ -8,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
+from app.creation.editing.audio_contracts import AudioTimelineEditRequest
 from app.graphic_overlays import TextOverlay, ImageOverlay, ArrowOverlay
 from app.database_migrations import CONTENT_VISIBILITY_DEFAULT, CONTENT_VISIBILITY_LEGACY
 from app.visual_effects import VisualEffects
@@ -1906,39 +1906,6 @@ class CreationTaskMontageClipUpdateRequest(BaseModel):
     confirmed: bool | None = None
 
 
-class AudioMixPatch(BaseModel):
-    """Only explicitly supplied existing-domain controls enter the audio patch."""
-    model_config = ConfigDict(extra="forbid")
-    gain_db: float = deepcopy(TimelineAudioClip.model_fields["gain_db"])
-    muted: bool = deepcopy(TimelineAudioClip.model_fields["muted"])
-    fade_in_ms: int = deepcopy(TimelineAudioClip.model_fields["fade_in_ms"])
-    fade_out_ms: int = deepcopy(TimelineAudioClip.model_fields["fade_out_ms"])
-    denoise_db: float = deepcopy(TimelineAudioClip.model_fields["denoise_db"])
-    loudness_target_lufs: float | None = deepcopy(TimelineAudioClip.model_fields["loudness_target_lufs"])
-    duck_under_voice: bool = deepcopy(TimelineAudioTrack.model_fields["duck_under_voice"])
-
-    @model_validator(mode="after")
-    def nonempty_patch(self):
-        if not self.model_fields_set:
-            raise ValueError("音频混音修改须指定至少一个参数")
-        return self
-
-
-class AudioMixEditRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    action: Literal["update", "track"]
-    target_id: str = Field(min_length=1, max_length=120)
-    values: AudioMixPatch
-
-    @model_validator(mode="after")
-    def target_controls(self):
-        allowed = ({"gain_db", "muted", "duck_under_voice"} if self.action == "track" else
-            {"gain_db", "muted", "fade_in_ms", "fade_out_ms", "denoise_db", "loudness_target_lufs"})
-        if not self.values.model_fields_set <= allowed:
-            raise ValueError("该混音参数不适用于所选音轨或片段动作")
-        return self
-
-
 EXACT_EDIT_FIELDS = {
     "EditAudioTimeline": {"audio_edit"},
     "AdjustVisualEffects": {"clip_ids", "effects"},
@@ -1983,7 +1950,7 @@ class StoryboardRegenerationRequest(BaseModel):
 
 
 class CreationTaskExactEditRequest(BaseModel):
-    audio_edit: AudioMixEditRequest | None = None
+    audio_edit: AudioTimelineEditRequest | None = None
     clip_ids: list[str] | None = Field(default=None, min_length=1, max_length=100)
     effects: VisualEffects | None = Field(default=None,
         description="只修改明确提交的字段；遗漏字段保留每个镜头既有效果。重置字段须显式提交其默认值。")

@@ -165,7 +165,7 @@ node scripts/yaohe.mjs request query TASK APPLY_UUID --phase apply
 
 应用先 GET 原提案的 `/edits/PROPOSAL/result`，从该回执读取 `base_version_id` 和 `input_digest`，再 POST `/edits/PROPOSAL/confirm`。它不会用任务的新版本替换原提案基础，也不会重新编译提案。
 
-音量和画面效果复用这组命令。`EditAudioTimeline` 的 `audio_edit` 使用实际 `action:update|track`、`target_id`、非空 `values`；`AdjustVisualEffects` 使用实际 `clip_ids` 和非空 `effects`。两者只写指定字段，遗漏保持。`gain_db` 是绝对值：原音量 −9dB 降低6dB应提交 −15dB。音频淡入淡出单位是毫秒，画面淡入淡出单位是秒。可用字段、边界与当前可用条件以 `capabilities describe` 返回的共同 schema 为准。
+音量和画面效果复用这组命令。`EditAudioTimeline` 的 `audio_edit` 使用实际 `action:update|track|add|split|duplicate|delete`、`target_id` 与对应 `values`；`AdjustVisualEffects` 使用实际 `clip_ids` 和非空 `effects`。参数修改只写指定字段，遗漏保持；add/track定位音轨，其余音频动作定位片段。delete的values为空对象，split使用整条时间线的at_ms，duplicate显式给timeline_start_ms，单位毫秒。gain_points使用从editor_gain_points读取的片段局部坐标，提交完整点列表，空列表清除。add使用已读取的受权source_ref、name、源起止与时间线起点；不能用update替换来源。`gain_db` 是绝对值：原音量 −9dB 降低6dB应提交 −15dB。音频淡入淡出单位是毫秒，画面淡入淡出单位是秒。可用字段、边界与当前可用条件以 `capabilities describe` 返回的共同 schema 为准。
 
 ```json
 {"operation_type":"EditAudioTimeline","audio_edit":{"action":"update","target_id":"actual_audio_clip","values":{"gain_db":-15,"fade_out_ms":1000}}}

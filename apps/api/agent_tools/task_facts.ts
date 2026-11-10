@@ -125,7 +125,7 @@ export function audioClipFacts(clip: any, track: any, task: any) {
     linked_clip_ids: linkedClips.slice(0, 24).map((shot: any) => shot.id), linked_clip_count: linkedClips.length,
     linked_clips_truncated: linkedClips.length > 24,
     association_source: "matching_recorded_source_reference", units: {time: "milliseconds", gain: "dB", loudness: "LUFS",
-      editor_gain_point_offset: "milliseconds from current clip start; read-only in the current typed mix action"}};
+      editor_gain_point_offset: "milliseconds from current clip start; submit the complete local point list as audio_edit.values.gain_points"}};
 }
 
 export function audioTrackFacts(track: any, task: any, clipLimit = 24) {

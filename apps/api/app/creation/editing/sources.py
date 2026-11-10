@@ -158,9 +158,9 @@ class EditSourceVerifier:
                 command.workspace_id, command.task_id, connection=connection))
             graph = plan.audio_timeline or narration_audio_timeline(plan.narration_audio_path or '', plan.duration_seconds)
             edit = action['audio_edit']
-            apply_audio_edit(graph, AudioEditRequest(base_version_id=command.base_version_id,
+            after = apply_audio_edit(graph, AudioEditRequest(base_version_id=command.base_version_id,
                 action=edit['action'], target_id=edit['target_id'], values=edit['values']), round(plan.duration_seconds*1000))
-            return self.audio_facts(command, graph)
+            return self.audio_facts(command, graph, after)
         if action['operation_type'] == 'EditCompoundTimeline' and clip_ids is None:
             plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(
                 command.workspace_id, command.task_id, connection=connection))
@@ -175,9 +175,9 @@ class EditSourceVerifier:
             replacement=replacement, user_id=self.identity['member_id'],
             local_diagnostic=self.identity['local_diagnostic'], connection=connection)
 
-    def audio_facts(self, command, graph):
+    def audio_facts(self, command, *graphs):
         facts = []
-        for reference in sorted({clip.source_ref for track in graph.tracks for clip in track.clips}):
+        for reference in sorted({clip.source_ref for graph in graphs for track in graph.tracks for clip in track.clips}):
             stat = self.audio_service.source(command.workspace_id, command.task_id, reference, actor=self.audio_actor).stat()
             facts.append({'reference':reference, 'size':stat.st_size, 'mtime_ns':stat.st_mtime_ns,
                 'ctime_ns':stat.st_ctime_ns, 'inode':stat.st_ino, 'device':stat.st_dev})
