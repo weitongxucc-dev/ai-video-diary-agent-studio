@@ -2,7 +2,7 @@
 
 Electron 负责启动本地 Next.js 和 FastAPI API，并管理窗口、端口、日志和子进程生命周期。
 
-本文件的现有构建命令针对macOS；Windows适配与独立实机验收已列入[开发清单§1.1.3](../../.project-control/0.11-development-plan.md#113-p0必修与p7-windows适配的实施顺序)。不能仅增加electron-builder目标就宣称支持：媒体执行与进程回收、平台内存监测及模型后端必须满足[架构§3.12.1](../../docs/system-architecture.md#3121-内存压力任务预算与平台适配)，并取得本平台真实产物和恢复证据。
+本文件的现有构建命令针对macOS；Windows适配与独立实机验收已列入[开发清单§1.1.3](../../.project-control/0.11-development-plan.md#113-资源与平台验收)。不能仅增加electron-builder目标就宣称支持：媒体执行与进程回收、平台内存监测及模型后端必须满足[架构§3.12.1](../../docs/system-architecture.md#3121-内存压力任务预算与平台适配)，并取得本平台真实产物和恢复证据。
 
 0.11 的对话助手通过本机 Pi 1.5.2 的 coding-agent SDK 运行（需要 Node.js 22.19+）。开发和当前测试包会从 PATH 或当前用户的 nvm 安装中寻找 `pi`；也可在私密运行配置中设置 `AI_VIDEO_DIARY_PI_EXECUTABLE`。业务工具、`agent_runtime` 会话桥、创作 Skills 和提示词模板随桌面包提供并进入构建标识，Pi 和 Node.js 尚未随包分发；缺失时对话入口会明确报错，原有精确编辑入口仍可使用。对话会话写在所配置模型盘的同级 `agent/` 目录。
 
