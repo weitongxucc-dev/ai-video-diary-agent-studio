@@ -1,0 +1,36 @@
+/* Shared settings form grammar. Page containers own navigation, not field geometry. */
+.surface { container:settings / inline-size; min-width:0; color:var(--text-1); font:400 13px/21px var(--font-ui); }
+.surface :global(.settings-form), .surface :global(.settings-product-block), .surface :global(.llm-settings-stack) { display:grid;gap:20px;min-width:0; }
+.surface :global(.settings-grid) { display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-width:0; }
+.surface :global(.settings-section) { display:grid;gap:16px;min-width:0;padding:0;margin:0;border:0; }
+.surface :global(.settings-section-legend) { padding:0 0 12px; }
+.surface :global(.settings-section-legend strong) { font:inherit;color:var(--text-1); }
+.surface :global(.settings-section-description), .surface :global(.settings-field-helper), .surface :global(.settings-actions > span) { margin:0;color:var(--text-2);font:400 12px/18px var(--font-ui);overflow-wrap:anywhere; }
+.surface :global(.settings-section-header), .surface :global(.settings-product-heading) { display:grid;gap:8px; }
+.surface :global(.settings-section-header h2), .surface :global(.settings-product-heading h2) { margin:0;font:inherit; }
+.surface :global(.settings-section-header p), .surface :global(.settings-product-heading p) { margin:4px 0 0;color:var(--text-2);font:400 12px/18px var(--font-ui); }
+.field, .surface :global(.settings-field) { display:grid;grid-template-columns:var(--settings-label-width,120px) minmax(0,1fr);align-items:start;gap:4px 16px;min-width:0;padding:0; }
+.field > span, .surface :global(.settings-field > span) { display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-height:32px;color:var(--text-2);font:inherit; }
+.field > :is(input,textarea,button,div,small,details), .field > [data-app-select-trigger],
+.surface :global(.settings-field > :is(input,textarea,button,div,small,details)), .surface :global(.settings-field > [data-app-select-trigger]) { grid-column:2;min-width:0; }
+.field input:not([type=checkbox]), .field textarea, .surface :global(.settings-field input:not([type=checkbox])), .surface :global(.settings-field textarea) { width:100%;min-width:0;min-height:32px;padding:5px 8px;border:1px solid var(--border-2);border-radius:8px;background:var(--surface-1);color:var(--text-1);font:inherit; }
+.field textarea, .surface :global(.settings-field textarea) { min-height:80px;resize:vertical; }
+.field input:focus-visible, .field textarea:focus-visible, .surface :global(.settings-field input:focus-visible), .surface :global(.settings-field textarea:focus-visible) { outline:2px solid var(--focus);outline-offset:2px; }
+.field > [data-app-select-trigger], .surface :global(.settings-field > [data-app-select-trigger]), .surface :global(.settings-field > button) { width:100%;min-height:32px; }
+.surface :global(.settings-field-row) { display:flex;align-items:flex-start;gap:8px;min-width:0; }
+.surface :global(.settings-field-row > input) { flex:1;min-width:0; }
+.surface :global(.settings-secret-badge) { color:var(--text-3);font:400 12px/18px var(--font-ui); }
+.surface :global(.settings-connection-state) { font:inherit; }
+.surface :global(.settings-actions) { display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0;padding:4px 0 0 calc(var(--settings-label-width,120px) + 16px); }
+.surface :global(.settings-advanced) { border-top:1px solid var(--border-1);padding-top:8px; }
+.surface :global(.settings-advanced > summary) { width:fit-content;min-height:32px;color:var(--text-2);cursor:pointer; }
+.surface :global(.settings-advanced[open] > summary) { margin-bottom:12px; }
+.choice { display:flex;align-items:flex-start;gap:8px;min-width:0; }
+.choice input:is([type=checkbox],[type=radio]) { flex:0 0 auto;width:16px;height:16px;margin:3px 0 0;accent-color:var(--accent); }
+@container settings (max-width:460px) {
+ .field, .surface :global(.settings-field) { grid-template-columns:minmax(0,1fr);gap:4px; }
+ .field > :is(input,textarea,button,div,small,details), .field > [data-app-select-trigger], .surface :global(.settings-field > :is(input,textarea,button,div,small,details)), .surface :global(.settings-field > [data-app-select-trigger]) { grid-column:1; }
+ .surface :global(.settings-field-row) { flex-wrap:wrap; }
+ .surface :global(.settings-field-row > input) { flex-basis:100%; }
+ .surface :global(.settings-actions) { padding-left:0; }
+}

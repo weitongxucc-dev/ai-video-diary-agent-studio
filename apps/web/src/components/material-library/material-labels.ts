@@ -8,6 +8,12 @@ export function duration(value: number | null) {
     const fraction = (milliseconds % 1000).toString().padStart(3, "0").replace(/0+$/, "");
     return `${minutes}:${seconds}${fraction ? `.${fraction}` : ""}`;
 }
+// Collection scanning uses tenths; source/segment ranges retain millisecond precision via duration().
+export function assetDuration(value: number | null) {
+    if (value === null) return "时长未知";
+    const tenths = Math.round(value * 10);
+    return `${Math.floor(tenths / 600)}:${Math.floor(tenths % 600 / 10).toString().padStart(2, "0")}.${tenths % 10}`;
+}
 export function roleLabel(asset: MaterialAsset) {
     const suggestion = asset.usage_role === "unassigned" ? "建议：" : "";
     const role = asset.usage_role === "unassigned"

@@ -5,7 +5,7 @@ status: principles-current-specific-solutions-subject-to-review
 updated_at: "2026-11-10"
 applies_to: "apps/web, apps/desktop, product screenshots, UI acceptance"
 references:
-  candidate: "本机设计交接：yaohe-desktop-language-20261020/candidate-v2；不随本分支分发"
+  candidate: "docs/design/desktop-reference/README.md"
   components: "https://ui.shadcn.com/docs/components"
   ai_elements: "https://ui.shadcn.com/docs/ai-elements"
 authority_rule: "Design principles govern presentation; current product and domain contracts govern capabilities and behavior. Candidates are evidence, not a feature ceiling."
@@ -23,7 +23,7 @@ authority_rule: "Design principles govern presentation; current product and doma
 | 对象、会话、版本、采用、撤销与状态语义 | [领域模型](docs/domain-model.md) |
 | 身份、工作区、权限与数据访问 | [安全边界](docs/auth-workspace-boundary.md) |
 | 执行、持久化、接口与跨进程责任 | [系统架构](docs/system-architecture.md) |
-| 具体样式方案、原件比较与候选验证 | 候选入口（本机设计交接参考，未随本分支分发） |
+| 具体样式方案、原件比较与候选验证 | [参考来源与生产落点](docs/design/desktop-reference/README.md) |
 | 当前实现和交付事实 | 当前 checkout 的代码、服务、Git/CI/Release 与对应实际验收 |
 
 **设计重构必须覆盖当前产品的真实能力，不能把产品退回候选的功能规模。** 保留已有功能、用户数据、业务逻辑、状态归属和授权边界；可以按使用习惯调整功能排布、分组和入口形式，不能用隐藏入口、删功能或假成功换取简洁。本文的场景举例不是完整功能清单，新增业务能力沿同一原则设计。
@@ -48,7 +48,7 @@ authority_rule: "Design principles govern presentation; current product and doma
 
 ### 1.3 原组件与开源研究
 
-上传的 590 项及其变体需逐项比较，不能只看截图、分类样本或已选的少数组件。逐项研究记录（本机设计交接参考，未随本分支分发）复用已有证据，保留来源、适用对象、差距、取舍与验证范围；源码阅读、原件运行、候选适配和生产接入分别说明，不冒称全部状态已验收。实施时优先复查相关项，有更合适的组件继续替换，不冻结既有选型，也不把重新跑完全部参考作为每次修改的前置条件。
+上传组件及其变体的既有研究按相关项复用；[参考来源与生产落点](docs/design/desktop-reference/README.md)提供随仓库分发的源码样本、许可与对应组件。源码阅读、原件运行、候选适配和生产接入分别说明，不以历史590项研究数量宣称当前状态全部验收。需要新方案时复查相关原件，有更合适的组件继续替换，不冻结选型，不以恢复临时服务或重跑全部研究作为开发前置。
 
 主动研究 GitHub 上职责匹配的优秀 Agent 客户端、编辑器和组件库，结合源码与真实流程，学习输入、过程、结果、编辑和恢复的完整关系。核对版本、许可证、维护、兼容性和接入成本；star、宣传截图或本机安装不代表可复用授权。Linear 可参考外壳与层级，ChatCut、OpenFilm 等可参考创作交互；产品间的差异必须按本产品用户任务取舍。
 
@@ -238,6 +238,6 @@ authority_rule: "Design principles govern presentation; current product and doma
 
 视觉、交互、真实媒体、业务持久化、目标桌面运行和生产接入分别说明。构建通过、组件依赖存在、原型截图、单测和实际用户流程不能互相替代；候选与真实页面明确区分，不在产品主体堆“mock/本地预演”等研发说明，也不能移走标记后伪称服务已实现。审阅入口与必要不可用反馈保留真实范围。
 
-当前候选（本机设计交接参考，未随本分支分发）、具体方案（本机设计交接参考，未随本分支分发）及其验证记录是参考证据。历史段落描述当时实现，不覆盖本文；候选未连接的功能不表示生产应当删除，也不能照搬其演示状态和割裂的资源上下文。[旧原型](docs/design/desktop-ui-20261008/README.md)只保留来源和追溯价值。
+[参考入口](docs/design/desktop-reference/README.md)说明可携带源码、生产对应关系与完整候选的获取边界。具体方案及历史验证记录是参考证据。历史段落描述当时实现，不覆盖本文；候选未连接的功能不表示生产应当删除，也不能照搬其演示状态和割裂的资源上下文。[旧原型](docs/design/desktop-ui-20261008/README.md)只保留来源和追溯价值。
 
 实施者据当前产品、领域与代码自行完成符合这些原则的排布和组件选择，并给出可操作结果、关键取舍及实测证据；具体未确认视觉方案不擅自升级为全局规则。文档更新本身不等于生产已改或允许发布，执行范围遵循当前用户授权与[开发规则](docs/development-workflow.md)。

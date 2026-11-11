@@ -1,5 +1,6 @@
 "use client";
 
+import formStyles from "./SettingsForm.module.css";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -70,9 +71,8 @@ export function ModelInstallPanel({ models, modelRootPath }: Props) {
   }
 
   return (
-    <fieldset className="settings-section purple" aria-labelledby="local-models-title">
+    <fieldset className={`settings-section ${formStyles.surface}`} aria-labelledby="local-models-title">
       <legend className="settings-section-legend">
-        <span className="settings-section-light purple" />
         <strong id="local-models-title">本地模型安装</strong>
       </legend>
       <p className="settings-section-description">
@@ -111,8 +111,8 @@ export function ModelInstallPanel({ models, modelRootPath }: Props) {
                 </>
               ) : null}
               {!model.ready ? (
-                <div className="settings-field">
-                  <label>
+                <div className="settings-grid">
+                  <label className={formStyles.choice}>
                     <input
                       checked={Boolean(accepted[model.model.id])}
                       disabled={Boolean(active)}
