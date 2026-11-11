@@ -1005,7 +1005,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       requestLocalTurnId = turn.localTurnId;
       const onStreamEvent = assistantConversation.bindTurnEvents(turn.conversationId, turn.localTurnId);
       const expectedDraftVersion = await turn.draftCheckpoint;
-      if (!ownsRequest() || revision !== editContextRevision.current || referenceSnapshot !== latestSelectionSnapshot.current || !assistantConversation.isCurrentConversation(turn.conversationId)) {
+      // Browsing a clip cannot retarget a frozen material-only request. Changes
+      // to the explicit reference CAS or conversation still reject the send.
+      if (!ownsRequest() || (!materialSnapshot && revision !== editContextRevision.current) || referenceSnapshot !== latestSelectionSnapshot.current || !assistantConversation.isCurrentConversation(turn.conversationId)) {
         await assistantConversation.failUnpersistedTurn(turn.conversationId, turn.localTurnId,
           "编辑范围已切换；本轮没有发送，原要求已保留为草稿。");
         releaseBusy();
