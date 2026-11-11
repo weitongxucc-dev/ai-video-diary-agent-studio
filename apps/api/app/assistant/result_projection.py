@@ -509,11 +509,6 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                 answer = "图片来源程序已安排，后台尚未返回成功来源；未应用图层或生成成片。"
             else:
                 answer = "图片来源程序尚无可用成功结果，请按实际作业状态与原因处理；未应用图层或生成成片。"
-        elif media_job.get("result_kind") == "observation":
-            if media_job.get("status") == "succeeded" and isinstance(media_job.get("result"), dict):
-                answer = "实际输出检查已完成；请按分项证据查看结果，未提供的语义或听感不能当作已通过。"
-            else:
-                answer = "实际输出检查已安排；尚未取得成功检查结果，排队或运行不能视为已经检查。"
         else:
             answer = media_processing_state_message(media_job)
         preview = {"kind": "media_job", "media_job": media_job}

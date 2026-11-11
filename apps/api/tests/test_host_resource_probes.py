@@ -382,13 +382,21 @@ def test_render_process_group_rss_and_total_threads_use_actual_cap(monkeypatch,r
             return 100
         monkeypatch.setattr(os,'getpgid',group)
         _check_scene_runtime(process,child,limits,observation)
-        assert observation["last_attempt"]["sample_complete"] is False
-        assert observation["last_attempt"]["reason"] == "process_disappeared_during_enumeration"
+        assert observation["last_attempt"]["sample_complete"] is True
         assert observation["latest"]["rss_bytes"] == before["rss_bytes"]
         assert observation["latest"]["threads"] == before["threads"]
-        assert observation["latest"]["is_lower_bound"] is True
-        assert observation["latest"]["sample_complete"] is False
+        assert observation["latest"]["is_lower_bound"] is False
+        assert observation["latest"]["sample_complete"] is True
         assert observation["observed_peak_rss"]["rss_bytes"] == rss
+        def unreadable_group(pid):
+            if pid == 101:
+                raise PermissionError()
+            return 100
+        monkeypatch.setattr(os,'getpgid',unreadable_group)
+        _check_scene_runtime(process,child,limits,observation)
+        assert observation['last_attempt']['sample_complete'] is False
+        assert observation['last_attempt']['reason'] == 'process_identity_unreadable_during_enumeration'
+        assert observation['latest']['is_lower_bound'] is True
         def missing_threads():
             raise psutil.NoSuchProcess(101)
         disappearing=SimpleNamespace(pid=101,memory_info=lambda:SimpleNamespace(rss=256),num_threads=missing_threads)

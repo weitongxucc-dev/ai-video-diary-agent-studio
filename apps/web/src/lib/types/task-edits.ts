@@ -172,6 +172,22 @@ export type CreationTaskEditPreviewResponse = {
     proposal: CreationTaskEditProposal;
 };
 export type TaskMediaResultMap = {
+    observation: {
+        observation_id: string;
+        task_id: string;
+        timeline_version_id: string;
+        timeline_sequence: number;
+        observed_at: string;
+        target: Record<string, unknown>;
+        output: Record<string, unknown>;
+        output_role: string;
+        measurement_scope: string;
+        media: Record<string, unknown>;
+        samples: Record<string, unknown>[];
+        ocr_execution: Record<string, unknown>;
+        ocr_model_id: string | null;
+        unavailable: unknown[];
+    };
     graphic_source: {
         source_ref: string;
         artifact_id: string;

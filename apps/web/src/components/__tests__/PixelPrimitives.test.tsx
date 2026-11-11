@@ -46,11 +46,7 @@ describe("PixelPrimitives", () => {
     const button = screen.getByRole("button", { name: "正在保存" });
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute("aria-busy", "true");
-    expect(button).toHaveClass(
-      "ui-button",
-      "ui-button--secondary",
-    );
-    expect(button).not.toHaveClass("pixel-button");
+    expect(button).toHaveAttribute("type", "button");
   });
 
   it("keeps the input label visible and associates its error", () => {
@@ -97,9 +93,7 @@ describe("PixelPrimitives", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
     expect(onClick).toHaveBeenCalledOnce();
-    expect(screen.getByRole("button", { name: "重新检查" })).toHaveClass(
-      "ui-button--primary",
-    );
+    expect(screen.getByRole("button", { name: "重新检查" })).toBeEnabled();
   });
 
   it("renders state links through the controlled action union", () => {
@@ -120,9 +114,7 @@ describe("PixelPrimitives", () => {
       "href",
       "/health",
     );
-    expect(screen.getByRole("button", { name: "稍后重试" })).toHaveClass(
-      "ui-button--secondary",
-    );
+    expect(screen.getByRole("button", { name: "稍后重试" })).toBeEnabled();
   });
 
   it("makes local horizontal overflow labelled and keyboard reachable", () => {

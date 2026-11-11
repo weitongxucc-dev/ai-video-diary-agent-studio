@@ -16,6 +16,7 @@ export const WorkspacePanelContext = createContext<{
 }>({ inspectorOpen: false, resourceOpen: false, revealTaskPanel: () => {} });
 export const WorkbenchRegistry = createContext<{ register: (page: Omit<WorkspacePage, "open">) => void } | null>(null);
 export const WorkspacePageContext = createContext<WorkspacePageSlot | null>(null);
+export const WorkbenchAssistantTargetContext = createContext<AppShellProps["assistantContext"]>(undefined);
 
 export const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates"];
 export function isWorkbenchManagedPath(pathname: string) {

@@ -178,9 +178,7 @@ describe("RouteError", () => {
     render(<RouteError error={error} reset={resetFn} />);
     screen.getByText("重新加载页面").click();
     expect(resetFn).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "重新加载页面" })).toHaveClass(
-      "ui-button--primary",
-    );
+    expect(screen.getByRole("button", { name: "重新加载页面" })).toBeEnabled();
   });
 
   it("renders link back to workspace", () => {

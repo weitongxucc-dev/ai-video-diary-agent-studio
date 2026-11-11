@@ -102,7 +102,7 @@ def test_assistant_capabilities_describes_product_sdk_runtime(tmp_path, monkeypa
     monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "workspace-one")
     monkeypatch.setattr(main_module, "pi_runtime_checks", lambda: [{
-        "id": "pi", "status": "ready", "version": "1.5.0", "reason": "隔离版本检查已通过。",
+        "id": "pi", "status": "ready", "version": "1.5.2", "reason": "隔离版本检查已通过。",
     }])
     prepared_metadata = assistant_capability_metadata_guard.prepare()
     response = TestClient(main_module.app).get(
@@ -114,7 +114,7 @@ def test_assistant_capabilities_describes_product_sdk_runtime(tmp_path, monkeypa
     assert capability["commands"] == []
     assert "inventory_version" not in capability
     assert response.json()["runtime"] == {
-        "owner": "pi-coding-agent-sdk", "version": "1.5.0", "status": "ready",
+        "owner": "pi-coding-agent-sdk", "version": "1.5.2", "status": "ready",
         "reason": "隔离版本检查已通过。",
     }
     assert response.json()["skills"]["names"] == ["source-speech", "narration-materials", "local-edit", "visual-template"]

@@ -1,4 +1,5 @@
 "use client";
+import { compactObjectName } from "@/lib/object-display-name";
 
 import Link from "next/link";
 import { createPortal } from "react-dom";
@@ -30,7 +31,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
-  useCallback,
+  useCallback, useContext,
   useMemo,
   useRef,
   useState,
@@ -43,7 +44,9 @@ import {
 import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components/HomeCommandComposer";
 import { Button } from "./ui/button";
 import { IconButton } from "./ui/icon-button";
-import { WorkspacePanelContext, useWorkspacePage } from "./workbench/context";
+import { WorkbenchAssistantTargetContext, WorkspacePanelContext, useWorkspacePage } from "./workbench/context";
+import { useWorkbenchTarget } from "./workbench/WorkbenchTarget";
+import { ConversationTarget } from "./workbench/ConversationTarget";
 import { useWorkspaceBoot } from "./WorkspaceBootContext";
 import { PreflightDraftReturn } from "@/components/PreflightDraftReturn";
 import { HomeCardDialog, homeCardParentForTarget } from "@/components/HomeCardDialog";
@@ -65,16 +68,7 @@ type NavItem = { href: string; label: string; icon: Icon; activePath?: string };
 export type ThemeMode = "system" | "light" | "dark";
 
 function displayTaskName(name?: string) {
-  return (name || "未命名创作任务")
-    .replace(/\bb-?roll\b/gi, "补充画面")
-    .replace(/\bbatch\b/gi, "创作任务")
-    .replace(/批次/g, "创作任务")
-    .replace(/\bepisode\b/gi, "内容")
-    .replace(/\brecipe\b/gi, "制作方案")
-    .replace(/\bprovider\b/gi, "服务")
-    .replace(/\bagent\b/gi, "智能助手")
-    .replace(/混剪/g, "视频剪辑")
-    .replace(/\bSRT\s+字幕/gi, "字幕");
+  return name || "未命名创作任务";
 }
 
 export type AppShellCreationTask = CreationTask;
@@ -114,6 +108,7 @@ export type AppShellWorkspaceStatus = {
 export type AppShellProps = {
   children: ReactNode;
   creationTasks?: AppShellCreationTask[];
+  activeCreationTaskId?: string;
   inspector?: ReactNode;
   inspectorConfirmation?: ReactNode;
   inspectorConfirmationKey?: string;
@@ -214,6 +209,7 @@ export function AppShell(props: AppShellProps) {
 export function AppShellFrame({
   children,
   creationTasks,
+  activeCreationTaskId,
   inspector: providedInspector,
   inspectorConfirmation,
   inspectorConfirmationKey,
@@ -221,7 +217,7 @@ export function AppShellFrame({
   quickInspector,
   quickInspectorKey,
   quickInspectorLabel,
-  conversation, conversationActions,
+  conversation, conversationActions, assistantContext,
   autoFocus = false,
   inspectorDismissKey,
   inspectorTitle = "当前任务详情",
@@ -233,6 +229,9 @@ export function AppShellFrame({
   resourceOpen = false,
   onReleaseResourcePane,
 }: AppShellProps) {
+  const sharedAssistantTarget = useContext(WorkbenchAssistantTargetContext);
+  const assistantTarget = assistantContext ?? sharedAssistantTarget;
+  const { clearTarget } = useWorkbenchTarget();
   const panels = useEditorPanels(true);
   const contentGrid = useRef<HTMLDivElement>(null);
   const [contentWidth, setContentWidth] = useState(0);
@@ -258,7 +257,7 @@ export function AppShellFrame({
   const showMembersNav = localMemberRole !== "member";
   const localAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE === "local";
   const pathname = usePathname() ?? "";
-  const standalone = ["/settings", "/onboarding", "/privacy", "/terms", "/members"].some(route => pathname.startsWith(route));
+  const standalone = ["/settings", "/health", "/onboarding", "/privacy", "/terms", "/members"].some(route => pathname.startsWith(route));
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
@@ -464,10 +463,10 @@ export function AppShellFrame({
             {workspaceReady && recentTasks.length ? recentTasks.map((task) => {
               const statusLabel = creationTaskShortStatus(task.stage_status, task.stage);
               return (
-                <Link aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className={`desktop-creation-task ${shellUi.task}`} aria-label={`${displayTaskName(task.name)} · ${statusLabel}`} title={`${displayTaskName(task.name)} · ${statusLabel}`} href={creationTaskHref(task)} key={task.id}>
+                <Link data-active-work={task.id === activeCreationTaskId || undefined} aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className={`desktop-creation-task ${shellUi.task}`} aria-label={`${displayTaskName(task.name)} · ${statusLabel}`} title={`${displayTaskName(task.name)} · ${statusLabel}`} href={creationTaskHref(task)} key={task.id}>
                   <CreationTaskStageIcon stage={task.stage} className={shellUi.stageIcon} />
                   <span className="desktop-creation-task__copy">
-                    <strong>{displayTaskName(task.name)}</strong>
+                    <strong>{compactObjectName(displayTaskName(task.name), 10)}</strong>
                     <small className={shellUi.taskState} data-status={task.stage_status}>{task.stage_status === "running" ? <LoaderCircle aria-hidden="true" className="is-spinning" size={12} strokeWidth={1.7} /> : null}{statusLabel}</small>
                   </span>
                 </Link>
@@ -495,9 +494,9 @@ export function AppShellFrame({
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
         <div ref={contentGrid} data-inspector-open={dockInspector && !editorAuxiliaryHost || undefined} className={`${editorShell.contentGrid}${inspectorReplacesChat ? ` ${editorShell.inspectorReplacesChat}` : ""}${resourceReplacesChat ? ` ${editorShell.resourceReplacesChat}` : ""}${dockInspector && !editorAuxiliaryHost ? ` ${editorShell.withInspector}` : ""}${standalone ? ` ${editorShell.standalone}` : ""}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed && !standalone ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
           <section ref={conversationNode} onPlayCapture={event => { if (!chatVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} aria-label="创作助手" hidden={inspectorReplacesChat || resourceReplacesChat} className={editorShell.conversation}>
-            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}>{conversationActions}<div data-assistant-header-actions className="assistant-header-actions"/><Button variant="ghost" aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></Button></div></header>
+            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}>{conversationActions ?? (assistantTarget?.task ? <ConversationTarget name={assistantTarget.task.name} onReturn={() => router.push(creationTaskHref(assistantTarget.task!))} onClear={clearTarget} /> : null)}<div data-assistant-header-actions className="assistant-header-actions"/><Button variant="ghost" aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></Button></div></header>
             <div className={editorShell.conversationBody}><MediaVisibility visible={chatVisible}>
-              {!workspaceReady ? <div className="assistant-conversation-empty"><p role="status">{workspaceBoot.message}</p>{workspaceBoot.href ? <Link href={workspaceBoot.href}>{workspaceBoot.href === '/onboarding' ? '完成首次设置' : '登录账号'}</Link> : null}{workspaceBoot.retry ? <Button variant="outline" onClick={workspaceBoot.retry}>重新核验</Button> : null}</div> : conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={{ pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
+              {!workspaceReady ? <div className="assistant-conversation-empty"><p role="status">{workspaceBoot.message}</p>{workspaceBoot.href ? <Link href={workspaceBoot.href}>{workspaceBoot.href === '/onboarding' ? '完成首次设置' : '登录账号'}</Link> : null}{workspaceBoot.retry ? <Button variant="outline" onClick={workspaceBoot.retry}>重新核验</Button> : null}</div> : conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={assistantTarget?.task ? undefined : { pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} {...assistantTarget} />}
             </MediaVisibility></div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>

@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { LoaderCircle } from "lucide-react";
+import { buttonClassName } from "./ui/button-styles";
 import {
   forwardRef,
   useCallback,
@@ -97,12 +99,12 @@ export const PixelButton = forwardRef<HTMLButtonElement, PixelButtonProps>(
       <button
         {...props}
         aria-busy={loading || undefined}
-        className={`ui-button ui-button--${variant} ui-button--${size}${className ? ` ${className}` : ""}`}
+        className={buttonClassName({ variant: variant === "primary" ? "default" : variant === "danger" ? "destructive" : "outline", size, className })}
         disabled={disabled || loading}
         ref={ref}
         type={type}
       >
-        {loading ? <span aria-hidden="true" className="ui-button__busy" /> : null}
+        {loading ? <LoaderCircle aria-hidden="true" size={16} /> : null}
         <span>{children}</span>
       </button>
     );
@@ -210,7 +212,7 @@ function PixelStateActionControl({
   if (action.kind === "link") {
     return (
       <Link
-        className={`ui-button ui-button--${tone} ui-button--default`}
+        className={buttonClassName({ variant: tone === "primary" ? "default" : tone === "danger" ? "destructive" : "outline" })}
         href={action.href}
       >
         {action.label}

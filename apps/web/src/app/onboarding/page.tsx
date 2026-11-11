@@ -1,3 +1,4 @@
+import { buttonClassName } from "@/components/ui/button-styles";
 import Link from "next/link";
 import { completeOnboardingAction } from "./actions";
 import { AppShell } from "@/components/AppShell";
@@ -81,7 +82,7 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
               </p>
             </div>
             {snapshot.ready ? (
-              <Link className="ui-button secondary" href="/">
+              <Link className={buttonClassName({ variant: "outline" })} href="/">
                 进入工作台
               </Link>
             ) : null}

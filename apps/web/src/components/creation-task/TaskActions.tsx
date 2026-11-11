@@ -22,7 +22,7 @@ export function TaskOutputActions({ onShare, onSave, shareOpen, canSave, busy }:
   return <>
     <IconButton label="共享设置" description="设置任务与方案的共享范围" aria-haspopup="dialog" aria-expanded={shareOpen} onClick={onShare}><Share2 /></IconButton>
     {onSave ? <Tooltip label={busy ? "请等待当前操作完成" : canSave ? "将当前成片保存到本机" : "当前版本还没有可保存的成片"}>
-      <Button variant="outline" aria-label="保存视频" disabled={busy || !canSave} onClick={onSave}><Download /><span>导出</span></Button>
+      <Button variant="ghost" aria-label="保存视频" disabled={busy || !canSave} onClick={onSave}><Download /><span>导出</span></Button>
     </Tooltip> : null}
   </>;
 }

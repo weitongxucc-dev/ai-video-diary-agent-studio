@@ -5,12 +5,8 @@
 .toolbarTitle span { color: var(--text-3); font-size: 12px; white-space: nowrap; }
 .toolbarTitle button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .toolbarActions { display: flex; flex-wrap:wrap; gap: 4px; }
-.primary, .iconButton { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 6px; min-height: 32px; width: auto; padding: 0 10px; border: 1px solid var(--border-2); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font-family: inherit; font-size: 13px; font-weight: 400; line-height: 1.3; cursor: pointer; white-space: nowrap; }
-.primary { min-height: 36px; padding: 0 14px; border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); font-weight: 500; }
-.iconButton { width: 32px; padding: 0; border-color: transparent; background: transparent; }
-.iconButton:hover:not(:disabled) { background: var(--surface-2); }
-.primary:hover:not(:disabled) { filter: brightness(.96); }
-.button:disabled, .primary:disabled, .iconButton:disabled { opacity: .42; cursor: default; }
+.primary { composes: button from "./ui/workbench-controls.module.css"; }
+.iconButton { composes: button ghost icon from "./ui/workbench-controls.module.css"; }
 .workspace button:focus-visible, .inspector button:focus-visible, .toolbarActions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stage { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; padding: 0 16px; overflow: hidden; container: editor-stage / size; }
 .editorBody { flex: 1 1 0; min-height: 0; min-width: 0; overflow-y: auto; overscroll-behavior: contain; }
@@ -63,7 +59,7 @@
 .shotLabel { display: flex; flex-direction: column; gap: 0; }
 .shotLabel strong { font-size: 12px; font-weight: 500; }
 .shotLabel small { font-size:12px; line-height:18px; color:var(--text-3); font-variant-numeric:tabular-nums; }
-.timelinePanel { --timeline-label-width:64px; --timeline-column-gap:8px; display:flex; flex-direction:column; flex:0 0 auto; min-height:100px; max-height:44%; min-width:0; border-top:1px solid var(--border-1); }
+.timelinePanel { --timeline-label-width:64px; --timeline-column-gap:8px; display:flex; flex-direction:column; flex:0 1 38%; min-height:164px; max-height:52%; min-width:0; border-top:1px solid var(--border-1); }
 .timelineToolbar { display:flex; flex:0 0 auto; align-items:center; gap:12px; min-height:34px; font-size:13px; }
 .timelineToolbar > time { color:var(--text-2); font-size:12px; font-variant-numeric:tabular-nums; }
 .timelineZoom { display:flex; align-items:center; gap:2px; margin-left:auto; }
@@ -97,8 +93,14 @@
   .shotImage { display:none; }
   .shot[aria-pressed="true"] { border-color:var(--focus); }
   .shotLabel { line-height:18px; }
-  .timelinePanel { max-height:48%; }
+  .timelinePanel { min-height:116px; max-height:52%; }
 }
+.subtitleLane > button { container-type:inline-size; }
+.timelineCaption { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@container (max-width:48px) { .timelineCaption { visibility:hidden; } }
+.timelineSelection { position:sticky; left:0; display:flex; align-items:flex-start; gap:8px; width:var(--timeline-viewport-width,100%); padding:4px 8px; background:var(--surface-1); font-size:13px; line-height:21px; }
+.timelineSelection > span { flex:1; min-width:0; overflow-wrap:anywhere; }
+.timelineSelection > button { flex:0 0 auto; height:28px; }
 .ruler, .track { display: grid; grid-template-columns: var(--timeline-label-width,64px) minmax(0, 1fr); align-items: center; gap: var(--timeline-column-gap,8px); font-size: 12px; color: var(--text-2); }
 .ruler > div time { white-space:nowrap; }
 .ruler > div { display: flex; justify-content: space-between; color: var(--text-3); font-size:12px; border-bottom: 1px solid var(--border-1); padding-bottom: 3px; }

@@ -12,6 +12,10 @@ import styles from "../CreationTaskWorkspace.module.css";
 import { errorDetails } from './request-errors';
 import { formatDuration, jobStatusLabel, jobKindLabel } from './execution-labels';
 import { Button } from '../ui/button';
+import { IconButton } from '../ui/icon-button';
+import { Activity } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { useActiveEditorDock } from '../workbench/EditorDock';
 import { readCreationTaskNativeOperations, readCreationTaskNativeArtifact } from '@/lib/api/task-media';
 import type { CreationTaskNativeArtifact, CreationTaskNativeOperations } from '@/lib/types/creation-tasks';
 
@@ -108,6 +112,7 @@ export function JobProgressPanel({ graphicEditor, task, taskId, refreshToken, pe
     onEditSettled: (jobId: string, status: string) => Promise<void>;
 }) {
     const viewActive = useWorkspacePage()?.active ?? true;
+    const toolsHost = useActiveEditorDock("tools");
     const settledCallback = useRef(onEditSettled);
     settledCallback.current = onEditSettled;
     const [progress, setProgress] = useState<TaskJobProgress | null>(null);
@@ -191,7 +196,7 @@ export function JobProgressPanel({ graphicEditor, task, taskId, refreshToken, pe
     {mediaJob && mediaJob.status !== "succeeded" ? <span role="status">{taskMediaJobLabel(mediaJob)}{["queued", "running", "interrupted"].includes(mediaJob.status) ? <button type="button" onClick={onCancelMedia}>取消预览</button> : null}</span> : null}
     {showLiveStatus && live ? <span>{jobKindLabel(current.kind)} · {jobStatusLabel(current.status)} · 进度 {current.progress}%</span> : showLiveStatus && (current?.status === "failed" || current?.status === "interrupted") ? <span>后台有步骤需要处理</span> : null}
     {readError ? <span role="status">后台记录更新未完成</span> : null}
-    <button type="button" aria-haspopup="dialog" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}>运行详情</button>
+    {toolsHost && viewActive ? createPortal(<IconButton label="运行详情" description="查看后台作业、预览与原请求" aria-haspopup="dialog" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}><Activity/></IconButton>, toolsHost) : <button type="button" aria-haspopup="dialog" aria-expanded={detailsOpen} onClick={() => setDetailsOpen(true)}>运行详情</button>}
     <HomeCardDialog kind="detail" title="运行详情" open={detailsOpen} onClose={() => setDetailsOpen(false)}>
       {readError ? <p role="alert" className={styles.jobRefreshError}>最新一次刷新失败：{readError} <button onClick={() => setRetryTick(value => value + 1)} type="button">重试</button></p> : null}
       <section aria-label="可恢复的媒体预览">
@@ -200,7 +205,7 @@ export function JobProgressPanel({ graphicEditor, task, taskId, refreshToken, pe
         {mediaReadError ? <p role="alert">预览记录未读取：{mediaReadError}<button type="button" onClick={() => setMediaRetry(value => value + 1)}>重读预览记录</button></p> : null}
         {!mediaLoading && !mediaReadError && mediaPage ? <>
           {recoveryCandidates.length ? <ol>{recoveryCandidates.map(item => <li key={item.job_id}>
-            <span>{({ edit_preview: "修改预览", audio_listen: "音频试听", waveform: "音频波形", recording: "本机录音", audio_source: "导入音频", graphic_source: "图片来源" })[item.result_kind]} · <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString("zh-CN")}</time> · {taskMediaJobLabel(mediaJob?.job_id === item.job_id ? mediaJob : item)}</span>
+            <span>{({ edit_preview: "修改预览", audio_listen: "音频试听", waveform: "音频波形", recording: "本机录音", audio_source: "导入音频", graphic_source: "图片来源", observation: "输出检查" })[item.result_kind]} · <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString("zh-CN")}</time> · {taskMediaJobLabel(mediaJob?.job_id === item.job_id ? mediaJob : item)}</span>
             <button type="button" disabled={restoreBusy} onClick={() => onRestoreMedia(item)}>恢复这次预览</button>
           </li>)}</ol> : <p>这一页没有符合当前版本与选择的预览记录。</p>}
           {mediaPage.next_cursor ? <button type="button" onClick={() => setMediaCursor(mediaPage.next_cursor)}>查看更多预览记录</button> : null}

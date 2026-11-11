@@ -351,15 +351,21 @@ def test_failure_recovery_restores_when_the_checkpoint_never_committed(tmp_path)
     assert current["draft_text"] == "较新的输入"
 
 
-def test_workspace_pointer_restores_history_without_changing_scope_or_other_members(tmp_path):
+def test_task_history_selection_survives_restart_without_changing_other_scope_or_members(tmp_path):
     repository = ConversationRepository(tmp_path / "persistent.sqlite3")
     home = repository.current_or_create("workspace", "member", "home", "home")
     history = repository.create("workspace", "member", "task", "task-old", "旧任务会话")
+    latest = repository.create("workspace", "member", "task", "task-old", "后续对话")
+    other_task = repository.current_or_create("workspace", "member", "task", "task-other")
     other = repository.create("workspace", "other", "task", "task-old", "其他成员")
-    assert repository.select_current(history["id"], "workspace", "member", workspace_session=True)["scope_kind"] == "task"
-    assert repository.current_or_create("workspace", "member", "home", "home")["id"] == history["id"]
-    assert {row["id"] for row in repository.list_for_scope("workspace", "member", "home", "home")} == {home["id"], history["id"]}
-    assert repository.select_current(other["id"], "workspace", "member", workspace_session=True) is None
+    assert repository.current_or_create("workspace", "member", "task", "task-old")["id"] == latest["id"]
+    assert repository.select_current(history["id"], "workspace", "member")["scope_kind"] == "task"
+    restarted = ConversationRepository(tmp_path / "persistent.sqlite3")
+    assert restarted.current_or_create("workspace", "member", "task", "task-old")["id"] == history["id"]
+    assert restarted.current_or_create("workspace", "member", "task", "task-other")["id"] == other_task["id"]
+    assert restarted.current_or_create("workspace", "member", "home", "home")["id"] == home["id"]
+    assert {row["id"] for row in repository.list_for_scope("workspace", "member", "home", "home")} == {home["id"], history["id"], latest["id"], other_task["id"]}
+    assert repository.select_current(other["id"], "workspace", "member") is None
     assert repository.get(history["id"], "workspace", "member")["scope_id"] == "task-old"
 
 
@@ -396,5 +402,5 @@ def test_reference_metadata_restart_cancel_cas_and_owner_isolation(tmp_path):
     b=restarted.create("workspace-a","member-a","home","home")
     assert b["selected_reference"] is None and b["reference_version"]==0
     restarted.save_reference(a["id"],"workspace-a","member-a",reference,2)
-    assert restarted.select_current(b["id"],"workspace-a","member-a",workspace_session=True)["selected_reference"] is None
-    assert restarted.select_current(a["id"],"workspace-a","member-a",workspace_session=True)["selected_reference"]==reference
+    assert restarted.select_current(b["id"],"workspace-a","member-a")["selected_reference"] is None
+    assert restarted.select_current(a["id"],"workspace-a","member-a")["selected_reference"]==reference

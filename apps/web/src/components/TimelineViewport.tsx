@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Maximize2, Minus, Plus } from "lucide-react";
 import { useEditorDockHost } from "./workbench/EditorDock";
 import { IconButton } from "./ui/icon-button";
@@ -22,7 +22,7 @@ export function TimelineViewport({ duration, time, playing, selectedTime, select
   const viewport = useRef<HTMLDivElement>(null);
   const ruler = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, label: 72 });
-  const [density, setDensity] = useWorkspaceViewState<number | null>("timeline.pixels-per-second", 12);
+  const [density, setDensity] = useWorkspaceViewState<number | null>("timeline.pixels-per-second", null);
   const [scroll, setScroll] = useWorkspaceViewState("timeline.scroll", 0);
   const initialScroll = useRef(scroll);
   const restored = useRef(false);
@@ -75,7 +75,7 @@ export function TimelineViewport({ duration, time, playing, selectedTime, select
     const rect = ruler.current!.getBoundingClientRect();
     onSeek(Math.max(0, Math.min(duration, (clientX - rect.left) / rect.width * duration)));
   }
-  return <section className={ui.timelinePanel} aria-label="配音与字幕时间范围">
+  return <section style={{ "--timeline-viewport-width": `${size.width}px` } as CSSProperties} className={ui.timelinePanel} aria-label="配音与字幕时间范围">
     <div className={ui.timelineToolbar}>
       {actions}<span className={ui.timelineName}>时间线</span><div ref={toolsRef} className={ui.timelineToolSlot} />
       <div className={ui.timelineZoom}>

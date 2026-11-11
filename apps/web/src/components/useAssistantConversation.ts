@@ -892,8 +892,10 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     return () => { active = false; clearInterval(timer); };
   }, [conversation?.id, running, pendingKey, hasPendingResults, loading, refresh, scopeKey, businessRefreshWake]);
 
+  const scopeReady = loadedScope.current === scopeKey && matchesScope(conversation);
   return {
-    conversation, conversations, draftText, setDraftText, loading, error, setError,
+    conversation: scopeReady ? conversation : null, conversations: scopeReady ? conversations : [],
+    draftText: loadedScope.current === scopeKey ? draftText : "", setDraftText, loading: loading || (!scopeReady && !error), error, setError,
     beginTurn, bindTurnEvents, isCurrentConversation, failUnpersistedTurn, sendInput, withdrawInput,
     flushDraft, refresh, scriptWindowReadErrors, refreshAfterTaskAdoption, createNew, resume, rename, stop, loadList, historyScrollPositions, historyExpandedDetails, historyFollowBottom,
     businessRefreshPaused,

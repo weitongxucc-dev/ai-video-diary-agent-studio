@@ -6,13 +6,15 @@ import { assistantReferenceKey, locateAssistantReference, type SelectedAssistant
 import { Button } from "./button";
 import { Tooltip } from "./tooltip";
 import { ReferencePreview } from "./reference-preview";
+import { compactObjectName } from "@/lib/object-display-name";
+import { MaterialUsage, type MaterialUsageContext } from "./material-usage";
 import { Popover, PopoverContent, PopoverTrigger, PopoverTitle, PopoverClose } from "./popover";
 
 const labels = { shot: "镜头", narration: "配音", audio: "音轨", subtitle: "字幕", effect: "效果", material: "素材", person: "人物", voice: "声音", knowledge: "资料" };
 const icons = { shot: Clapperboard, narration: AudioLines, audio: AudioLines, subtitle: Captions, effect: Sparkles, material: Film, person: UserRound, voice: AudioLines, knowledge: FileText };
 function time(ms: number) { return `${Math.floor(ms / 60000).toString().padStart(2,"0")}:${Math.floor(ms / 1000 % 60).toString().padStart(2,"0")}`; }
 
-export function ReferenceChips({ items, onRemove }: { items: SelectedAssistantReference[]; onRemove: (item: SelectedAssistantReference)=>void }) {
+export function ReferenceChips({ items, onRemove, usage }: { items: SelectedAssistantReference[]; onRemove: (item: SelectedAssistantReference)=>void; usage?: MaterialUsageContext }) {
   const [expanded, setExpanded] = useState(false);
   useEffect(() => { if (!items.length) setExpanded(false); }, [items.length]);
   if (!items.length) return null;
@@ -21,8 +23,9 @@ export function ReferenceChips({ items, onRemove }: { items: SelectedAssistantRe
       const Icon = icons[item.kind];
       return <div className="assistant-reference-capsule" key={assistantReferenceKey(item)}>
         <Button variant="ghost" className="assistant-reference-open" title={`查看${labels[item.kind]}：${item.label}`} aria-label={`查看${labels[item.kind]}：${item.label}`} onClick={() => locateAssistantReference(item)}>
-          {item.kind === "material" ? <ReferencePreview assetId={item.selection.asset_id}/> : <Icon size={16} aria-hidden/>}<span>{item.label}</span>
+          {item.kind === "material" ? <ReferencePreview assetId={item.selection.asset_id}/> : <Icon size={16} aria-hidden/>}<span>{compactObjectName(item.label)}</span>
         </Button>
+        <MaterialUsage reference={item} context={usage}/>
         <Button variant="ghost" size="icon" aria-label={`移除引用：${item.label}`} title="移除引用" onClick={()=>onRemove(item)}><X size={12}/></Button>
       </div>;
     })}</div>

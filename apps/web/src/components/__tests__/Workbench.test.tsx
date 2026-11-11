@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Workbench } from "../workbench/Workbench";
+import { WorkbenchTargetProvider } from "../workbench/WorkbenchTarget";
 import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import { useWorkspacePage, useWorkspaceViewState } from "../workbench/context";
 import { WorkspaceRoute } from "../workbench/WorkspaceRoute";
@@ -35,7 +36,7 @@ function route() {
   const path = navigation.path;
   return <WorkspaceRoute label={path === "/library" ? "素材库" : `作品 ${path.at(-1)}`}><Page id={path} /></WorkspaceRoute>;
 }
-function fixture(children: ReactNode) { return <Workbench>{children}</Workbench>; }
+function fixture(children: ReactNode) { return <WorkbenchTargetProvider><Workbench>{children}</Workbench></WorkbenchTargetProvider>; }
 beforeEach(() => {
   vi.clearAllMocks(); navigation.path = "/tasks/a";
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);

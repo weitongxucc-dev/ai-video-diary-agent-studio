@@ -48,7 +48,7 @@ def isolated_host_preflight(monkeypatch):
 def _install_model_stream(monkeypatch, stream):
     def version(cmd, **_kwargs):
         assert cmd[-1] == "--version"
-        return sdk_completed(cmd, 0, stdout=("1.5.0" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
+        return sdk_completed(cmd, 0, stdout=("1.5.2" if Path(cmd[0]).name == "pi" else "v24.16.0"), stderr="")
     monkeypatch.setattr(pi_module.subprocess, "run", version)
     monkeypatch.setattr(pi_module, "_run_pi_streaming", stream)
 
@@ -700,6 +700,14 @@ def test_observation_job_is_an_actual_receipt_and_never_a_completed_visual_judgm
     answer, preview = project_event_fixture(output, "edit_preview")
     assert preview == {"kind": "media_job", "media_job": job}
     assert "尚未取得成功检查结果" in answer and "画面完全正确" not in answer
+
+
+@pytest.mark.parametrize('status,expected', [('stale','已失效'),('failed','未完成'),('cancelled','未完成'),('interrupted','未完成')])
+def test_output_observation_terminal_failure_never_claims_newly_arranged(status, expected):
+    from app.assistant.projection import media_processing_state_message
+    reply = media_processing_state_message({'result_kind':'observation','status':status})
+    assert expected in reply
+    assert '已安排' not in reply and '已完成' not in reply
 
 
 def test_pi_events_keep_plan_preview_separate_from_edit_preview():

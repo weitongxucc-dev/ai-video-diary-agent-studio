@@ -578,7 +578,7 @@ describe("HomeCommandComposer", () => {
     });
     const finalBody = await screen.findByText("已读到当前制作条件。", { exact: true });
     const toolSummary = screen.getByLabelText("工具记录 · 1 项 · 调用已结束");
-    expect(toolSummary.compareDocumentPosition(finalBody) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(finalBody.compareDocumentPosition(toolSummary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(toolSummary);
     expect(screen.getByText("已读取 1 项任务摘要。")).toBeInTheDocument();
     await waitFor(() => expect(input).toHaveFocus());
@@ -646,7 +646,7 @@ describe("HomeCommandComposer", () => {
     expect(onTaskUpdated).toHaveBeenCalledOnce();
   });
 
-  it.each(["draft", "confirmed"])("refreshes the targeted task after a home conversation returns a %s script receipt", async selectionStatus => {
+  it.each(["draft", "confirmed"])("refreshes the targeted task after its conversation returns a %s script receipt", async selectionStatus => {
     configuredModel();
     const task = { id: "task-1", stage: "script", name: "产品介绍" } as CreationTask;
     const onTaskUpdated = vi.fn();
@@ -662,7 +662,7 @@ describe("HomeCommandComposer", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(onTaskUpdated).toHaveBeenCalledOnce());
     const payload = mocks.editAsk.mock.calls[0][1];
-    expect(mocks.saved.get(payload.conversation_id)).toMatchObject({ scope_kind: "home", scope_id: "home" });
+    expect(mocks.saved.get(payload.conversation_id)).toMatchObject({ scope_kind: "task", scope_id: task.id });
     expect(mocks.editAsk).toHaveBeenCalledWith(task.id, expect.objectContaining({ context_stage: "script" }), expect.any(Function));
     expect(mocks.ask).not.toHaveBeenCalled();
   });
@@ -914,7 +914,7 @@ describe("HomeCommandComposer", () => {
     expect(onTaskUpdated).not.toHaveBeenCalled();
   });
 
-  it("keeps the old turn in the same conversation after switching tasks without opening its preview", async () => {
+  it("keeps a completed old turn in its task conversation after switching without opening its preview", async () => {
     configuredModel();
     let finish: (value: unknown) => void = () => undefined;
     mocks.editAsk.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
@@ -926,9 +926,13 @@ describe("HomeCommandComposer", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(mocks.editAsk).toHaveBeenCalledTimes(1));
     view.rerender(<HomeCommandComposer task={second} />);
-    finish({ reply: "第一条已处理", provider: "minimax", model: "MiniMax-M3", edit_preview: null });
-    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeDisabled());
-    expect(await screen.findByText("第一条已处理")).toBeInTheDocument();
+    const firstConversationId = mocks.sendTaskTurn.mock.calls[0][1].conversation_id;
+    fireEvent.change(await readyInput("任务对话要求"), { target: { value: "B 的独立草稿" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    await act(async () => finish({ reply: "第一条已处理", provider: "minimax", model: "MiniMax-M3", edit_preview: null }));
+    expect(screen.getByRole("textbox", { name: "任务对话要求" })).toHaveValue("B 的独立草稿");
+    expect(screen.queryByText("第一条已处理")).not.toBeInTheDocument();
+    expect(mocks.saved.get(firstConversationId)?.turns.at(-1)?.assistant_text).toBe("第一条已处理");
     expect(screen.queryByRole("dialog", { name: "修改预览" })).not.toBeInTheDocument();
   });
 

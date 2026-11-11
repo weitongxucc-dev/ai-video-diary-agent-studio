@@ -36,5 +36,6 @@ export function useEditorDockHost(slot: Slot) {
 
 export function useActiveEditorDock(slot: Slot) {
   const dock = useContext(EditorDock);
-  return dock?.activePageId ? dock.hosts[dock.activePageId]?.[slot] ?? null : null;
+  const page = useWorkspacePage();
+  return page?.active !== false && dock?.activePageId ? dock.hosts[dock.activePageId]?.[slot] ?? null : null;
 }

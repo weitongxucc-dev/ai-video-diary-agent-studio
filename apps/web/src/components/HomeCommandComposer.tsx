@@ -18,6 +18,8 @@ import { assistantTaskTurnResult, useAssistantConversation } from "@/components/
 import { AssistantConversationPanel, AssistantFailureMessage } from "@/components/AssistantConversationPanel";
 import { editExecutionReadinessMessage } from './creation-task/stage-labels';
 
+import type { MaterialUsageContext } from "./ui/material-usage";
+
 export type HomeCommandComposerProps = {
   assignLocation?: (url: string) => void;
   autoFocus?: boolean;
@@ -26,6 +28,8 @@ export type HomeCommandComposerProps = {
   pageContext?: { pathname: string };
   taskContext?: {
     stage: string;
+    materialUsage?: MaterialUsageContext;
+    timelinePresent?: boolean;
     selectedObjectRefs: string[];
     getPlayheadMs: () => number | null;
     onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void;
@@ -107,7 +111,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     : null;
   const scopeKind = task ? "task" as const : "home" as const;
   const scopeId = task?.id ?? "home";
-  const assistant = useAssistantConversation({ scope_kind: "home", scope_id: "home" });
+  const assistant = useAssistantConversation({ scope_kind: scopeKind, scope_id: scopeId });
   const persistedConversation = assistant.conversation;
   const isCurrentConversation = assistant.isCurrentConversation;
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
@@ -140,6 +144,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const restoredPlanKey = useRef<string | null>(null);
   const replyPlanRequests = useRef(new Map<string, string>());
   const appliedTaskReads = useRef(new Set<string>());
+  useEffect(() => { setPending(null); }, [scopeKind, scopeId, assistant.conversation?.id]);
   useEffect(() => {
     scopeRevision.current += 1;
     setPreview(null); setPreviewOpen(false);
@@ -470,10 +475,11 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
 
       <AssistantConversationPanel
         autoFocus={autoFocus}
+        materialUsage={taskContext?.materialUsage}
         busy={pending !== null || awaitingVersionRead}
         configured={modelConfigured}
         composerActions={<>
-          {task && undoAvailable ? <Button variant="ghost" size="icon" className="assistant-icon-action" disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button" aria-label={pending === "undo" ? "撤销中" : "撤销修改"} title={pending === "undo" ? "正在撤销修改" : "撤销上一次已保存的修改"}>{pending === "undo" ? <LoaderCircle size={15} aria-hidden className="is-spinning"/> : <Undo2 size={15} aria-hidden/>}</Button> : null}
+          {task && undoAvailable && !taskContext?.timelinePresent ? <Button variant="ghost" size="icon" className="assistant-icon-action" disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button" aria-label={pending === "undo" ? "撤销中" : "撤销修改"} title={pending === "undo" ? "正在撤销修改" : "撤销上一次已保存的修改"}>{pending === "undo" ? <LoaderCircle size={15} aria-hidden className="is-spinning"/> : <Undo2 size={15} aria-hidden/>}</Button> : null}
           {task && restoreRequest ? <Button variant="ghost" className="assistant-recovery-action" disabled={pending !== null} onClick={() => void queryTaskRestore()} type="button" aria-label="查询原撤销结果" title="查询原请求的结果，不重复提交撤销">{pending === "undo" ? <LoaderCircle size={14} aria-hidden className="is-spinning"/> : <RotateCcw size={14} aria-hidden/>}查询原撤销结果</Button> : null}
         </>}
         input={assistant.draftText}

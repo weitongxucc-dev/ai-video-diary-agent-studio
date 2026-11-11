@@ -1,3 +1,4 @@
+import { buttonClassName } from "@/components/ui/button-styles";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
@@ -86,10 +87,10 @@ export default function TermsPage() {
           ))}
 
           <footer className="legal-footer">
-            <Link className="ui-button" href="/">
+            <Link className={buttonClassName({ variant: "default" })} href="/">
               返回工作台
             </Link>
-            <Link className="ui-button secondary" href="/privacy">
+            <Link className={buttonClassName({ variant: "outline" })} href="/privacy">
               阅读隐私政策
             </Link>
           </footer>

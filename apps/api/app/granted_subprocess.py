@@ -193,8 +193,9 @@ def _check_scene_runtime(process: subprocess.Popen[bytes], child: ProcessIdentit
                 if os.getpgid(current.pid) == child.pid:
                     processes.append(current)
             except ProcessLookupError:
-                enumeration_complete = False
-                incomplete_reason = "process_disappeared_during_enumeration"
+                # ESRCH proves this PID is no longer a live group member. A
+                # short-lived unrelated process must not invalidate every scene
+                # sample; disappearing *sampled* members remain incomplete below.
                 continue
             except PermissionError:
                 # An unrelated process cannot be in our own accessible group.

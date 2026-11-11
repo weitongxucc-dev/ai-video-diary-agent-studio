@@ -58,7 +58,7 @@ function healthRows(items: RuntimeHealthItem[]): RuntimeHealthItem[] {
 export default async function HealthPage() {
   const { health, offline } = await loadRuntimeHealth();
   return <AppShell><div className={styles.page}>
-    <header className={styles.header}><h2>运行情况</h2><Link href="/settings">打开设置</Link></header>
+    <header className={styles.header}><h2>运行情况</h2><Link href="/settings?section=runtime">返回运行与诊断</Link></header>
     <p className={styles.scope}>这里检查配置、文件与运行条件；生成仍需通过模型和设备资源检查。</p>
     {offline ? <p className={styles.offline} role="alert"><AlertCircle size={16}/>暂时连不上本机服务，请恢复服务后刷新。</p> : health ? <ul className={styles.list} aria-label="本机检查项">
       {healthRows(health.items).map(item => <li className={styles.row} key={item.id}>

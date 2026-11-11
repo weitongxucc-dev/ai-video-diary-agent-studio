@@ -562,6 +562,16 @@ describe("persisted business result cards", () => {
     expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
   });
 
+  it("describes an expired observation as a check rather than an unapplied edit", () => {
+    const saved = projectedTaskConversation("queued");
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    response.media_job = {...response.media_job as Record<string, unknown>, status:"stale", result_kind:"observation"};
+    render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    expect(screen.getByText("原输出检查已失效，仅保留历史；请按当前条件重新检查。")).toBeVisible();
+    expect(screen.queryByText(/原修改结果已过期/)).not.toBeInTheDocument();
+  });
+
   it.each([
     ["cancelled", "cancelled", "后台处理已取消，未据此应用修改。"],
     ["stale", "expired", "原修改结果已过期，仅保留为历史，不能沿旧版本应用。"],
@@ -1100,7 +1110,7 @@ describe("AssistantConversationPanel", () => {
     const tools = container.querySelector(".assistant-turn-tools summary")!;
     expect(tools).toHaveAccessibleName("工具记录 · 2 项 · 含失败记录");
     const assistantText = screen.getByText("真实方案");
-    expect(tools.compareDocumentPosition(assistantText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(assistantText.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const toolDetails = tools.closest("details")!;
     expect(toolDetails).not.toHaveAttribute("open");
     fireEvent.click(tools);

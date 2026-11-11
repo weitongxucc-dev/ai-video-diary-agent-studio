@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {createNativeTaskTools} from './native-tools.mjs';
 import {configureContextCompaction} from './context-policy.mjs';
 
-export const PI_VERSION = "1.5.0";
+export const PI_VERSION = "1.5.2";
 const resources = dirname(fileURLToPath(import.meta.url));
 
 /** One SDK session owns the model loop, history, compaction and input queues.

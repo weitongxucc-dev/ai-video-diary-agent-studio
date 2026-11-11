@@ -7,10 +7,11 @@ import { createClient } from '@/lib/supabase/client';
 import { readWorkspaceSession, type WorkspaceSessionSnapshot } from '@/app/auth/workspace-session';
 import { AssistantConversationProvider } from './AssistantConversationProvider';
 import { Workbench } from './workbench/Workbench';
+import { WorkbenchTargetProvider } from './workbench/WorkbenchTarget';
 import { WorkspaceBootContext } from './WorkspaceBootContext';
 
 function ReadyWorkbench({ children }: { children: ReactNode }) {
-  return <AssistantConversationProvider><Workbench>{children}</Workbench></AssistantConversationProvider>;
+  return <WorkbenchTargetProvider><AssistantConversationProvider><Workbench>{children}</Workbench></AssistantConversationProvider></WorkbenchTargetProvider>;
 }
 
 export function WorkspaceSessionBoundary({ children }: { children: ReactNode }) {

@@ -16,7 +16,7 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const props = { duration:115.8,time:0,playing:false,selectionKey:"clip-1",selectedTime:0,formatTime:(n:number)=>n.toFixed(1),onSeek:vi.fn() };
 
 it("keeps 21 shots on one scalable canvas, fits on request and restores scroll", () => {
-  const cache = new Map<string, unknown>([["timeline.scroll", 200]]);
+  const cache = new Map<string, unknown>([["timeline.scroll", 200], ["timeline.pixels-per-second", 12]]);
   const page = {id:"task",href:"/tasks/task",active:true,viewState:cache} as WorkspacePageSlot;
   const view=render(<WorkspacePageContext.Provider value={page}><TimelineViewport {...props}>{Array.from({length:21},(_,i)=><button key={i}>镜头 {i+1}</button>)}</TimelineViewport></WorkspacePageContext.Provider>);
   const viewport=view.container.querySelector('[data-workspace-scroll="timeline"]') as HTMLDivElement;

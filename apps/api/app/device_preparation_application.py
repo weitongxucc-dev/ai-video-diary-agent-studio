@@ -67,12 +67,17 @@ class DevicePreparationApplication:
             if result['state'] not in {'done', 'failed', 'cancelled'}:
                 raise DevicePreparationConflict('设备准备尚未完成，请观察原请求；不创建替代任务。')
             runtime = self.current_runtime()
+            if result['state'] != 'done':
+                # Closing a failed receipt publishes no profile. After restart
+                # the normal driver can already own unrelated work; leave it
+                # untouched rather than trapping the old preparation in the UI.
+                if runtime is not None and runtime.scheduler.dispatch_owner == (OWNER_TYPE, result['plan_id']):
+                    self.stop_runtime()
+                return {**result, 'profile_published': False, 'normal_work_started': False}
             if runtime is not None:
                 if runtime.scheduler.dispatch_owner != (OWNER_TYPE, result['plan_id']):
                     raise DevicePreparationConflict('当前设备驱动仍绑定其他工作，暂不能切换资源档。')
                 self.stop_runtime()
-            if result['state'] != 'done':
-                return {**result, 'profile_published': False, 'normal_work_started': False}
             profile = self.service.finalize(database_path=self.database_path, request_id=request_id, actor=actor)
             # Normal work stays stopped until its next authorized operation.
             return {**result, 'profile_published': True, 'profile_id': profile.profile_id,

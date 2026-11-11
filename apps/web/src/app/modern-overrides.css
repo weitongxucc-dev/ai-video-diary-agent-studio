@@ -1499,11 +1499,6 @@ h4 {
 /* Shared controls use semantic ui-* classes. They deliberately do not inherit
    legacy pixel borders, hard shadows, or Windows-style fills. */
 .ui-panel { border: 1px solid var(--border-1) !important; border-radius: 10px !important; background: var(--surface-1) !important; box-shadow: none !important; }
-.ui-button { display: inline-flex; min-height: 28px; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border: 1px solid var(--border-2) !important; border-radius: 8px !important; background: var(--surface-1) !important; color: var(--text-1) !important; font-size: 13px !important; font-weight: 500 !important; line-height: 1.2; text-decoration: none; }
-.ui-button:not(.secondary):not(.ui-button--secondary):not(.danger):not(.ui-button--danger), .ui-button--primary { min-height: 32px; border-color: var(--accent) !important; background: var(--accent) !important; color: var(--accent-contrast) !important; }
-.ui-button.secondary, .ui-button--secondary { border-color: var(--border-2) !important; background: var(--surface-1) !important; color: var(--text-1) !important; }
-.ui-button.danger, .ui-button--danger { border-color: color-mix(in srgb, var(--danger) 45%, var(--border-1)) !important; background: var(--surface-1) !important; color: var(--danger) !important; }
-.ui-button:disabled { cursor: not-allowed; opacity: .5; }
 .ui-form-error { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: start; padding: 12px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border-1)); border-radius: 10px; background: var(--surface-1); color: var(--text-1); }
 .ui-form-error-light { width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--danger); }.ui-form-error-body strong, .ui-form-error-body span { display: block; font-size: 12px; }.ui-form-error-body span { margin-top: 2px; color: var(--text-2); }.ui-form-error-close { width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2); font-size: 16px; }
 .ui-input, .ui-field input { min-height: 28px; border: 1px solid var(--border-2) !important; border-radius: 8px !important; background: var(--surface-1) !important; color: var(--text-1) !important; font-size:var(--font-size-body)!important;box-shadow:none!important; }
