@@ -488,7 +488,7 @@ export default async function SettingsPage({
           {activeCategory === "model" ? (
             <FormErrorBanner
               action={updateRuntimeSettingsAction}
-              className="settings-form settings-focused-form"
+              className={`settings-form settings-focused-form ${own.modelForm}`}
               emptyMessage="请检查模型连接配置"
             >
               <input name="settings_section" type="hidden" value="model" />

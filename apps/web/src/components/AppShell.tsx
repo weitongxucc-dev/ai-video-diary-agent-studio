@@ -257,7 +257,7 @@ export function AppShellFrame({
   const showMembersNav = localMemberRole !== "member";
   const localAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE === "local";
   const pathname = usePathname() ?? "";
-  const standalone = ["/settings", "/onboarding", "/privacy", "/terms", "/members"].some(route => pathname.startsWith(route));
+  const standalone = ["/settings", "/health", "/onboarding", "/privacy", "/terms", "/members"].some(route => pathname.startsWith(route));
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [quickOpen, setQuickOpen] = useState(false);
