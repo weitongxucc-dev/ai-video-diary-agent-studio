@@ -702,6 +702,14 @@ def test_observation_job_is_an_actual_receipt_and_never_a_completed_visual_judgm
     assert "尚未取得成功检查结果" in answer and "画面完全正确" not in answer
 
 
+@pytest.mark.parametrize('status,expected', [('stale','已失效'),('failed','未完成'),('cancelled','未完成'),('interrupted','未完成')])
+def test_output_observation_terminal_failure_never_claims_newly_arranged(status, expected):
+    from app.assistant.projection import media_processing_state_message
+    reply = media_processing_state_message({'result_kind':'observation','status':status})
+    assert expected in reply
+    assert '已安排' not in reply and '已完成' not in reply
+
+
 def test_pi_events_keep_plan_preview_separate_from_edit_preview():
     output = "\n".join(json.dumps(item) for item in [
         {"type": "tool_execution_end", "toolName": "preview_creation_plan", "isError": False,

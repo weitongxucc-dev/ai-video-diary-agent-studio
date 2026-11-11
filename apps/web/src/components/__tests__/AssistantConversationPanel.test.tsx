@@ -562,6 +562,16 @@ describe("persisted business result cards", () => {
     expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
   });
 
+  it("describes an expired observation as a check rather than an unapplied edit", () => {
+    const saved = projectedTaskConversation("queued");
+    const response = saved.turns[0].result!.response as Record<string, unknown>;
+    response.media_job = {...response.media_job as Record<string, unknown>, status:"stale", result_kind:"observation"};
+    render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+    expect(screen.getByText("原输出检查已失效，仅保留历史；请按当前条件重新检查。")).toBeVisible();
+    expect(screen.queryByText(/原修改结果已过期/)).not.toBeInTheDocument();
+  });
+
   it.each([
     ["cancelled", "cancelled", "后台处理已取消，未据此应用修改。"],
     ["stale", "expired", "原修改结果已过期，仅保留为历史，不能沿旧版本应用。"],
