@@ -213,8 +213,9 @@ function AssistantText({ text }: { text: string }) {
   return <Button variant="ghost" className="assistant-copy assistant-icon-action" aria-label={label} title={label} onClick={() => void copy()} type="button">{copied ? <Check size={14}/> : <Copy size={14}/>}</Button>;
 }
 
-function TurnContent({ turn, reading, latest }: { turn: AssistantConversationTurn; reading?: ReadingState; latest: boolean }) {
+function TurnTools({ turn, reading }: { turn: AssistantConversationTurn; reading?: ReadingState }) {
   const tools = turnTools(turn);
+  if (!tools.length) return null;
   const runningTool = tools.find((tool) => tool.state === "running");
   const failedTools = tools.some((tool) => tool.state === "failed" || tool.state === "unreturned");
   const failure = [...tools].reverse().find(tool => tool.state === "failed")?.failure;
@@ -226,7 +227,11 @@ function TurnContent({ turn, reading, latest }: { turn: AssistantConversationTur
         <ToolResult tool={tool} reading={reading} readingKey={`${turn.id}:tool:${tool.tool_id}:diagnostic`}/>
       </li>)}</ol>
     </ReadingDetails> : null}
-    {turn.assistant_text ? <ConversationMessage className="assistant-markdown" savedOpen={reading?.get(`${turn.id}:message`, latest) ?? latest} onOpenChange={open => reading?.save(`${turn.id}:message`, open)}><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.assistant_text}</ReactMarkdown></ConversationMessage> : null}
+  </div>;
+}
+
+function TurnContent({ turn, reading, latest }: { turn: AssistantConversationTurn; reading?: ReadingState; latest: boolean }) {
+  return <div className="assistant-markdown-wrap">{turn.assistant_text ? <ConversationMessage className="assistant-markdown" savedOpen={reading?.get(`${turn.id}:message`, latest) ?? latest} onOpenChange={open => reading?.save(`${turn.id}:message`, open)}><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.assistant_text}</ReactMarkdown></ConversationMessage> : null}
   </div>;
 }
 
@@ -479,6 +484,7 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
   return <article className="assistant-persisted-turn" data-turn-status={turn.status} data-turn-id={turn.id}>
     {turn.user_message.trim() ? <ConversationMessage className="assistant-user-message" savedOpen={reading?.get(`${turn.id}:user`, false)} onOpenChange={open => reading?.save(`${turn.id}:user`, open)}>{turn.user_message}</ConversationMessage> : null}
     {businessContinuation ? <p className="assistant-stream-status">继续完成原要求</p> : null}
+    {turn.status === "running" ? <TurnTools turn={turn} reading={reading}/> : null}
     <TurnContent turn={turn} reading={reading} latest={latest} />
     {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
     {inputReceipts.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:inputs`} defaultOpen={inputReceipts.some(item => item.status === "rejected" || item.status === "interrupted")} className="assistant-turn-inputs"><summary>追加要求记录 · {inputReceipts.length}</summary>{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</ReadingDetails> : null}
@@ -503,6 +509,7 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
       {job?.resource_wait ? <ResourceWaitReceipt receipt={job.resource_wait} reading={reading} readingKey={`${turn.id}:resource:${job.resource_wait.observation_id}:${job.resource_wait.context}`}/> : null}
       {refreshPaused && pendingResult ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
     </TurnResult> : null}
+    {turn.status !== "running" ? <TurnTools turn={turn} reading={reading}/> : null}
     <div className="assistant-result-actions">
       {onOpenEditProposal && canOpenTurnProposal(turn) ? <Button variant="ghost" type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</Button> : null}
       {pendingResult || unknownRequest || job?.status === "interrupted" ? <Button variant="ghost" type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</Button> : null}

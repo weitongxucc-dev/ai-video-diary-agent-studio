@@ -1100,7 +1100,7 @@ describe("AssistantConversationPanel", () => {
     const tools = container.querySelector(".assistant-turn-tools summary")!;
     expect(tools).toHaveAccessibleName("工具记录 · 2 项 · 含失败记录");
     const assistantText = screen.getByText("真实方案");
-    expect(tools.compareDocumentPosition(assistantText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(assistantText.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const toolDetails = tools.closest("details")!;
     expect(toolDetails).not.toHaveAttribute("open");
     fireEvent.click(tools);

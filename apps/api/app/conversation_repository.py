@@ -177,7 +177,7 @@ class ConversationRepository:
                 "WHERE current.workspace_id=? AND current.member_id=? "
                 "AND current.scope_kind=? AND current.scope_id=? "
                 "AND c.workspace_id=current.workspace_id AND c.member_id=current.member_id "
-                "AND (current.scope_kind='home' AND current.scope_id='home' OR (c.scope_kind=current.scope_kind AND c.scope_id=current.scope_id))",
+                "AND c.scope_kind=current.scope_kind AND c.scope_id=current.scope_id",
                 (workspace_id, member_id, scope_kind, scope_id),
             ).fetchone()
             if row is not None:
@@ -245,7 +245,7 @@ class ConversationRepository:
             ).fetchone()
         return self._conversation(row) if row else None
 
-    def select_current(self, conversation_id: str, workspace_id: str, member_id: str, *, workspace_session: bool = False) -> dict | None:
+    def select_current(self, conversation_id: str, workspace_id: str, member_id: str) -> dict | None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -260,7 +260,7 @@ class ConversationRepository:
                 "(workspace_id,member_id,scope_kind,scope_id,conversation_id,selected_at) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(workspace_id,member_id,scope_kind,scope_id) DO UPDATE SET "
                 "conversation_id=excluded.conversation_id,selected_at=excluded.selected_at",
-                (workspace_id, member_id, "home" if workspace_session else row["scope_kind"], "home" if workspace_session else row["scope_id"], conversation_id, now),
+                (workspace_id, member_id, row["scope_kind"], row["scope_id"], conversation_id, now),
             )
         return self._conversation(row)
 

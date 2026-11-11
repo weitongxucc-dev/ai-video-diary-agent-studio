@@ -1,5 +1,6 @@
 "use client";
 
+import { buttonClassName } from "@/components/ui/button-styles";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -52,13 +53,13 @@ export default function WelcomePage() {
       {step === "welcome" ? <>
         <h2>先进入工作区，再逐项设置</h2><p>可以浏览、导入和剪辑已有素材。需要对话模型、自己的声音或人物形象时，再连接对应能力。</p>
         <label className={styles.consent}><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)} />我已阅读并同意 <Link href="/privacy" target="_blank">隐私政策</Link>与<Link href="/terms" target="_blank">使用条款</Link></label>
-        <div className={styles.actions}><button type="button" className="ui-button" disabled={busy || !consent} onClick={() => void initialize(false)}>{busy ? "正在打开工作区…" : "开始设置"}</button><button type="button" className="ui-button secondary" disabled={busy || !consent} onClick={() => void initialize(true)}>全部跳过，开始使用</button></div>
+        <div className={styles.actions}><button type="button" className={buttonClassName({ variant: "default" })} disabled={busy || !consent} onClick={() => void initialize(false)}>{busy ? "正在打开工作区…" : "开始设置"}</button><button type="button" className={buttonClassName({ variant: "outline" })} disabled={busy || !consent} onClick={() => void initialize(true)}>全部跳过，开始使用</button></div>
       </> : null}
-      {step === "materials" ? <><MaterialDiscoveryPanel /><div className={styles.actions}><button className="ui-button secondary" type="button" onClick={() => go("voice")}>稍后设置</button><button className="ui-button" type="button" onClick={() => go("voice")}>继续</button></div></> : null}
-      {step === "voice" ? <><VoiceSamplingSetup onSkip={() => go("person")} onReceived={() => go("person")} /><button className="ui-button secondary" type="button" onClick={() => go("person")}>继续设置人物</button></> : null}
-      {step === "person" ? <><h2>人物形象（可选）</h2><p>在“人物与声音”中添加和预览形象。不设置人物也可以用已有画面完成视频。</p><Link className="ui-button secondary" href="/profiles">打开人物与声音</Link><div className={styles.actions}><button className="ui-button secondary" type="button" onClick={() => go("preferences")}>稍后设置</button><button className="ui-button" type="button" onClick={() => go("preferences")}>继续</button></div></> : null}
-      {step === "preferences" ? <><h2>偏好与模型（可选）</h2><p>模型连接、常用表达和创作偏好可以在设置中按需补齐。未配置的能力会在使用时说明原因。</p><Link className="ui-button secondary" href="/settings">打开设置</Link><div className={styles.actions}><button className="ui-button secondary" type="button" onClick={finish}>稍后设置</button><button className="ui-button" type="button" onClick={finish}>进入工作台</button></div></> : null}
+      {step === "materials" ? <><MaterialDiscoveryPanel /><div className={styles.actions}><button className={buttonClassName({ variant: "outline" })} type="button" onClick={() => go("voice")}>稍后设置</button><button className={buttonClassName({ variant: "default" })} type="button" onClick={() => go("voice")}>继续</button></div></> : null}
+      {step === "voice" ? <><VoiceSamplingSetup onSkip={() => go("person")} onReceived={() => go("person")} /><button className={buttonClassName({ variant: "outline" })} type="button" onClick={() => go("person")}>继续设置人物</button></> : null}
+      {step === "person" ? <><h2>人物形象（可选）</h2><p>在“人物与声音”中添加和预览形象。不设置人物也可以用已有画面完成视频。</p><Link className={buttonClassName({ variant: "outline" })} href="/profiles">打开人物与声音</Link><div className={styles.actions}><button className={buttonClassName({ variant: "outline" })} type="button" onClick={() => go("preferences")}>稍后设置</button><button className={buttonClassName({ variant: "default" })} type="button" onClick={() => go("preferences")}>继续</button></div></> : null}
+      {step === "preferences" ? <><h2>偏好与模型（可选）</h2><p>模型连接、常用表达和创作偏好可以在设置中按需补齐。未配置的能力会在使用时说明原因。</p><Link className={buttonClassName({ variant: "outline" })} href="/settings">打开设置</Link><div className={styles.actions}><button className={buttonClassName({ variant: "outline" })} type="button" onClick={finish}>稍后设置</button><button className={buttonClassName({ variant: "default" })} type="button" onClick={finish}>进入工作台</button></div></> : null}
     </section>
-    {step !== "welcome" ? <footer className={styles.actions}><button className="ui-button secondary" type="button" onClick={() => go(steps[Math.max(0, steps.findIndex(item => item.id === step) - 1)].id)}>上一步</button><button className="ui-button secondary" type="button" onClick={finish}>跳过剩余设置，开始使用</button><span>以后可从素材库、人物与声音或设置继续。</span></footer> : null}
+    {step !== "welcome" ? <footer className={styles.actions}><button className={buttonClassName({ variant: "outline" })} type="button" onClick={() => go(steps[Math.max(0, steps.findIndex(item => item.id === step) - 1)].id)}>上一步</button><button className={buttonClassName({ variant: "outline" })} type="button" onClick={finish}>跳过剩余设置，开始使用</button><span>以后可从素材库、人物与声音或设置继续。</span></footer> : null}
   </main>;
 }

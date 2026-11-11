@@ -9,9 +9,8 @@
 .tabsTrigger:focus-visible,.button:focus-visible,.scrollViewport:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 .tabsContent { min-width:0; min-height:0; outline:none; }
 .tabsContent[hidden] { display:none; }
-.button { --button-bg:var(--accent); --button-fg:var(--accent-contrast); --button-hover-bg:color-mix(in srgb,var(--accent) 85%,var(--surface-1)); --button-pressed-bg:color-mix(in srgb,var(--accent) 75%,var(--surface-1)); display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 10px; border:1px solid transparent; border-radius:8px; font-family:var(--font-ui); font-size:var(--font-size-body); line-height:var(--line-body); font-weight:400; white-space:nowrap; user-select:none; cursor:pointer; transition:background-color 140ms,color 140ms,border-color 140ms; }
-.button[data-variant] { background:var(--button-bg); color:var(--button-fg); }
-.button[data-size="icon"] { width:32px; padding:0; }
+.button { --button-bg:var(--accent); --button-fg:var(--accent-contrast); --button-hover-bg:color-mix(in srgb,var(--accent) 85%,var(--surface-1)); --button-pressed-bg:color-mix(in srgb,var(--accent) 75%,var(--surface-1)); display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 10px; border:1px solid transparent; border-radius:8px; background:var(--button-bg); color:var(--button-fg); text-decoration:none; font-family:var(--font-ui); font-size:var(--font-size-body); line-height:var(--line-body); font-weight:400; white-space:nowrap; user-select:none; cursor:pointer; transition:background-color 140ms,color 140ms,border-color 140ms; }
+.button[data-size="icon"], .icon { width:32px; padding:0; }
 .tooltipPositioner { z-index:150; pointer-events:none; }
 .tooltipAnchor { display:inline-flex; flex-shrink:0; }
 .tooltipAnchor:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:6px; }
@@ -19,11 +18,11 @@
 .tooltip[data-starting-style],.tooltip[data-ending-style] { opacity:0; }
 .tooltip kbd { flex-shrink:0; color:inherit; opacity:.7; font:inherit; }
 @media (prefers-reduced-motion:reduce) { .tooltip { transition:none; } }
-.button[data-variant="outline"] { --button-bg:var(--surface-1); --button-fg:var(--text-1); --button-hover-bg:var(--surface-2); --button-pressed-bg:var(--surface-3); border-color:var(--border-2); }
-.button[data-variant="secondary"] { --button-bg:var(--surface-2); --button-fg:var(--text-1); --button-hover-bg:var(--surface-3); --button-pressed-bg:color-mix(in srgb,var(--text-1) 8%,var(--surface-3)); }
-.button[data-variant="ghost"] { --button-bg:transparent; --button-fg:var(--text-2); --button-hover-fg:var(--text-1); --button-hover-bg:var(--surface-2); --button-pressed-bg:var(--surface-3); }
-.button[data-variant="destructive"] { --button-bg:color-mix(in srgb,var(--danger) 10%,var(--surface-1)); --button-fg:var(--danger); --button-hover-bg:color-mix(in srgb,var(--danger) 20%,var(--surface-1)); --button-pressed-bg:color-mix(in srgb,var(--danger) 28%,var(--surface-1)); }
-.button[data-variant="link"] { --button-bg:transparent; --button-fg:var(--accent); --button-hover-bg:transparent; --button-pressed-bg:transparent; --button-pressed-fg:var(--text-2); text-underline-offset:4px; }
+.button[data-variant="outline"], .outline { --button-bg:var(--surface-1); --button-fg:var(--text-1); --button-hover-bg:var(--surface-2); --button-pressed-bg:var(--surface-3); border-color:var(--border-2); }
+.button[data-variant="secondary"], .secondary { --button-bg:var(--surface-2); --button-fg:var(--text-1); --button-hover-bg:var(--surface-3); --button-pressed-bg:color-mix(in srgb,var(--text-1) 8%,var(--surface-3)); }
+.button[data-variant="ghost"], .ghost { --button-bg:transparent; --button-fg:var(--text-2); --button-hover-fg:var(--text-1); --button-hover-bg:var(--surface-2); --button-pressed-bg:var(--surface-3); }
+.button[data-variant="destructive"], .destructive { --button-bg:color-mix(in srgb,var(--danger) 10%,var(--surface-1)); --button-fg:var(--danger); --button-hover-bg:color-mix(in srgb,var(--danger) 20%,var(--surface-1)); --button-pressed-bg:color-mix(in srgb,var(--danger) 28%,var(--surface-1)); }
+.button[data-variant="link"], .link { --button-bg:transparent; --button-fg:var(--accent); --button-hover-bg:transparent; --button-pressed-bg:transparent; --button-pressed-fg:var(--text-2); text-underline-offset:4px; }
 .button:hover:not(:disabled):not([data-disabled]):not([aria-disabled="true"]) { background:var(--button-hover-bg); color:var(--button-hover-fg,var(--button-fg)); }
 .button:active:not(:disabled):not([data-disabled]):not([aria-disabled="true"]) { background:var(--button-pressed-bg); color:var(--button-pressed-fg,var(--button-hover-fg,var(--button-fg))); }
 .button[data-variant="ghost"][aria-pressed="true"],.button[data-variant="outline"][aria-expanded="true"],.button[data-variant="ghost"][aria-expanded="true"] { --button-bg:var(--surface-3); --button-hover-bg:var(--surface-3); --button-fg:var(--text-1); background:var(--button-bg); color:var(--button-fg); }
@@ -55,3 +54,5 @@
 .inputControl:focus-visible { outline:none; box-shadow:none; }
 .inputControl:disabled { opacity:.5; }
 @media (prefers-reduced-motion:reduce) { .tabsTrigger,.button { transition:none; } }
+
+.compact { height:28px; padding:0 8px; }

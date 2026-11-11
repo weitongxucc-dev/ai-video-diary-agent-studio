@@ -1,5 +1,6 @@
 "use client";
 
+import { buttonClassName } from "@/components/ui/button-styles";
 import { useEffect, useState, type MouseEvent } from "react";
 import {
   hasDirectoryPicker,
@@ -71,7 +72,7 @@ export function DirectoryPickerButton(props: DirectoryPickerButtonProps) {
   return (
     <span className="settings-pick-wrap">
       <button
-        className="ui-button secondary settings-pick-button"
+        className={buttonClassName({ variant: "outline", className: "settings-pick-button" })}
         onClick={handleClick}
         type="button"
       >

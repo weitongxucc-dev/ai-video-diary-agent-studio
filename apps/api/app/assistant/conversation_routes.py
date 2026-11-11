@@ -133,7 +133,7 @@ class ConversationHTTPAdapter:
 
     def resume(self, conversation_id: str, request: Request):
         workspace_id, member_id, row = self._owned_conversation(request, conversation_id)
-        selected = self._conversations_for().select_current(conversation_id, workspace_id, member_id, workspace_session=True)
+        selected = self._conversations_for().select_current(conversation_id, workspace_id, member_id)
         assert selected is not None
         return AssistantConversationResponse.model_validate(self.history(selected, request))
 

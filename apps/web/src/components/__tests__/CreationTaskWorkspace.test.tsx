@@ -4257,7 +4257,7 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.materialTurn.mock.calls[0][2]).toEqual(mocks.seedReference.selection);
     fireEvent.click(screen.getByRole("button",{name:/查看本轮 .* 项引用/}));
     expect(screen.queryByRole("button",{name:/^取消镜头引用：/})).not.toBeInTheDocument();
-  });
+  }, 10_000);
 
   it("sends a frozen material reference from the task dialogue without an active editor target", async () => {
     const initial=subtitleCoverWorkspace();

@@ -1,5 +1,6 @@
 "use client";
 
+import { buttonClassName } from "@/components/ui/button-styles";
 import { useCallback, useEffect, useState, useTransition } from "react";
 import {
   getRuntimeHealth,
@@ -129,7 +130,7 @@ export function OnboardingChecklist({ initialSnapshot }: OnboardingChecklistProp
       <div className="onboarding-checklist-actions">
         <button
           aria-busy={isPending || refresh.kind === "loading"}
-          className="ui-button"
+          className={buttonClassName({ variant: "default" })}
           disabled={isPending || refresh.kind === "loading"}
           onClick={handleRefresh}
           type="button"
@@ -199,12 +200,12 @@ export function OnboardingChecklist({ initialSnapshot }: OnboardingChecklistProp
                     {entry.statusLabel}
                   </span>
                   {entry.fixHref.startsWith("/") ? (
-                    <a className="ui-button secondary" href={entry.fixHref}>
+                    <a className={buttonClassName({ variant: "outline" })} href={entry.fixHref}>
                       {entry.fixLabel}
                     </a>
                   ) : (
                     <a
-                      className="ui-button secondary"
+                      className={buttonClassName({ variant: "outline" })}
                       href={entry.fixHref}
                       rel="noreferrer"
                       target="_blank"

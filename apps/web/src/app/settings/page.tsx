@@ -1,3 +1,4 @@
+import { buttonClassName } from "@/components/ui/button-styles";
 import Link from "next/link";
 import { PeopleAndVoiceWorkspace } from "@/components/PeopleAndVoiceWorkspace";
 import {
@@ -526,7 +527,7 @@ export default async function SettingsPage({
               />
               <div className="settings-actions">
                 <button
-                  className="ui-button"
+                  className={buttonClassName({ variant: "default" })}
                   disabled={offline}
                   type="submit"
                 >
@@ -683,7 +684,7 @@ export default async function SettingsPage({
                   />
                 ) : null}
                 <div className="settings-actions">
-                  <button className="ui-button" type="submit">
+                  <button className={buttonClassName({ variant: "default" })} type="submit">
                     保存生产默认值
                   </button>
                   <span>后续可在单个内容中临时覆盖时长。</span>
@@ -745,7 +746,7 @@ export default async function SettingsPage({
 
               <div className="settings-actions">
                 <button
-                  className="ui-button"
+                  className={buttonClassName({ variant: "default" })}
                   disabled={offline}
                   type="submit"
                 >

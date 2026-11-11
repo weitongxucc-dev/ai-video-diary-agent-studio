@@ -1,4 +1,5 @@
 "use client";
+import { buttonClassName } from "@/components/ui/button-styles";
 import { WorkspaceVideo, WorkspaceAudio } from "../workbench/WorkspaceMedia";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -91,21 +92,21 @@ export function MaterialDiscoveryPanel({ onReceived }: { onReceived?: () => void
   return <section className={styles.panel} aria-label="扫描电脑素材">
     <header><h2>扫描电脑素材</h2><p>主动查找本机和已连接磁盘中的视频、图片与音频。先预览和勾选，加入素材库后才开始接收与分析。</p></header>
     {loading ? <p role="status">正在读取扫描位置…</p> : null}
-    {error ? <div role="alert"><p>{error}</p>{!roots ? <button type="button" className="ui-button secondary" onClick={() => void load()}>重新读取</button> : null}</div> : null}
+    {error ? <div role="alert"><p>{error}</p>{!roots ? <button type="button" className={buttonClassName({ variant: "outline" })} onClick={() => void load()}>重新读取</button> : null}</div> : null}
     {roots ? <>
       <fieldset disabled={busy || !canStart}><legend>扫描位置</legend>
         {roots.roots.map(root => <label className={styles.root} key={root.id}><input type="checkbox" checked={rootIds.includes(root.id)} disabled={!root.available} onChange={e => setRootIds(ids => e.target.checked ? [...ids, root.id] : ids.filter(id => id !== root.id))} /><span>{root.label}<small>{root.display_path}{!root.available ? " · 当前不可访问" : ""}</small></span></label>)}
       </fieldset>
       <details><summary>排除目录</summary><p>默认跳过系统、应用、依赖、缓存和本软件产物。新增排除立即阻止后续读取，已入库的素材保留。</p>
         <label>每行一个完整目录路径<textarea rows={3} value={exclusions} onChange={e => setExclusions(e.target.value)} /></label>
-        {session ? <button className="ui-button secondary" type="button" disabled={busy} onClick={() => { setPreview(null); setSelected([]); void action(() => controlMaterialDiscovery(session.id, "exclude", excludedPaths())); }}>保存排除目录</button> : null}
+        {session ? <button className={buttonClassName({ variant: "outline" })} type="button" disabled={busy} onClick={() => { setPreview(null); setSelected([]); void action(() => controlMaterialDiscovery(session.id, "exclude", excludedPaths())); }}>保存排除目录</button> : null}
       </details>
       <div className={styles.actions}>
-        {canStart ? <button type="button" className="ui-button" disabled={busy || !rootIds.length} onClick={() => void action(() => startMaterialDiscovery(rootIds, excludedPaths()), () => { setSelected([]); setPreview(null); setAutoAdvance(true); })}>{session ? "重新扫描" : "开启扫描"}</button> : null}
-        {session?.state === "scanning" && !autoAdvance ? <button className="ui-button" type="button" disabled={busy} onClick={() => setAutoAdvance(true)}>继续本次扫描</button> : null}
-        {session?.state === "scanning" && autoAdvance ? <button className="ui-button secondary" type="button" disabled={busy} onClick={() => { setAutoAdvance(false); void action(() => controlMaterialDiscovery(session.id, "pause")); }}>暂停</button> : null}
-        {session?.state === "paused" ? <button className="ui-button" type="button" disabled={busy} onClick={() => void action(() => controlMaterialDiscovery(session.id, "resume"), () => setAutoAdvance(true))}>恢复扫描</button> : null}
-        {session && session.state !== "cancelled" ? <button className="ui-button secondary" type="button" onClick={() => { setAutoAdvance(false); void action(() => controlMaterialDiscovery(session.id, "cancel")); }}>取消本次扫描</button> : null}
+        {canStart ? <button type="button" className={buttonClassName({ variant: "default" })} disabled={busy || !rootIds.length} onClick={() => void action(() => startMaterialDiscovery(rootIds, excludedPaths()), () => { setSelected([]); setPreview(null); setAutoAdvance(true); })}>{session ? "重新扫描" : "开启扫描"}</button> : null}
+        {session?.state === "scanning" && !autoAdvance ? <button className={buttonClassName({ variant: "default" })} type="button" disabled={busy} onClick={() => setAutoAdvance(true)}>继续本次扫描</button> : null}
+        {session?.state === "scanning" && autoAdvance ? <button className={buttonClassName({ variant: "outline" })} type="button" disabled={busy} onClick={() => { setAutoAdvance(false); void action(() => controlMaterialDiscovery(session.id, "pause")); }}>暂停</button> : null}
+        {session?.state === "paused" ? <button className={buttonClassName({ variant: "default" })} type="button" disabled={busy} onClick={() => void action(() => controlMaterialDiscovery(session.id, "resume"), () => setAutoAdvance(true))}>恢复扫描</button> : null}
+        {session && session.state !== "cancelled" ? <button className={buttonClassName({ variant: "outline" })} type="button" onClick={() => { setAutoAdvance(false); void action(() => controlMaterialDiscovery(session.id, "cancel")); }}>取消本次扫描</button> : null}
       </div>
     </> : null}
     {session ? <>
@@ -115,15 +116,15 @@ export function MaterialDiscoveryPanel({ onReceived }: { onReceived?: () => void
       {session.total_count === 0 ? <p>还没有发现候选素材。未扫描或排除的位置不会出现在这里。</p> : <>
         {!intakeReady ? <><p>候选已保留。先确认素材接收位置，再把勾选文件加入素材库。</p><MaterialIntakePanel intake={intake} intakeError={intakeError} intakeBusy={intakeBusy} busy={null} importBusy={importBusy} importResult={importResult} onRefresh={() => void refreshIntakeStatus()} onBind={() => void bindIntake()} onLocalImport={() => void runImport()} onScan={() => void action(async () => { await scanMaterialIntake(); return getMaterialDiscovery(session.id); })} onConfirmCopy={file => void confirmCopy(file)} mediaLinkImport={null} /></> : null}
         <div className={styles.actions}><label><input type="checkbox" checked={selectable.length > 0 && selectable.every(c => selected.includes(c.id))} disabled={busy || !selectable.length || session.state === "cancelled"} onChange={e => setSelected(e.target.checked ? selectable.map(c => c.id) : [])} />选择本页可接收素材</label>
-          <button type="button" className="ui-button" disabled={busy || !intakeReady || !selectedVisible.length || session.state === "paused" || session.state === "cancelled"} onClick={() => { setAutoAdvance(false); void action(() => receiveDiscoveryCandidates(session.id, selectedVisible), () => { setSelected([]); onReceived?.(); }); }}>{busy ? "正在处理…" : `加入素材库${selectedVisible.length ? `（${selectedVisible.length}）` : ""}`}</button>
+          <button type="button" className={buttonClassName({ variant: "default" })} disabled={busy || !intakeReady || !selectedVisible.length || session.state === "paused" || session.state === "cancelled"} onClick={() => { setAutoAdvance(false); void action(() => receiveDiscoveryCandidates(session.id, selectedVisible), () => { setSelected([]); onReceived?.(); }); }}>{busy ? "正在处理…" : `加入素材库${selectedVisible.length ? `（${selectedVisible.length}）` : ""}`}</button>
         </div>
         <ul className={styles.candidates}>{session.candidates.map(candidate => <li key={candidate.id}>
           <label><input type="checkbox" aria-label={`选择 ${candidate.file_name}`} checked={selected.includes(candidate.id)} disabled={busy || candidate.excluded || candidate.state === "received" || session.state === "cancelled"} onChange={e => setSelected(ids => e.target.checked ? [...ids, candidate.id] : ids.filter(id => id !== candidate.id))} /><span><strong>{candidate.file_name}</strong><small>{candidate.location}</small><small>{{video:"视频", audio:"音频", image:"图片"}[candidate.media_type]} · {size(candidate.size_bytes)}{candidate.media_type !== "image" ? " · 时长在预览后显示" : ""}</small></span></label>
-          <div><button type="button" className="ui-button secondary" disabled={candidate.excluded} onClick={() => setPreview(candidate)}>预览</button><small>{candidate.excluded ? "已排除" : candidate.state === "received" ? "已接收" : candidate.state === "receiving" ? "接收未完成，可重新提交核对" : candidate.state === "failed" ? candidate.error : candidate.duplicate_asset_id ? "曾接收过，选中后核对去重" : "未入库"}</small></div>
+          <div><button type="button" className={buttonClassName({ variant: "outline" })} disabled={candidate.excluded} onClick={() => setPreview(candidate)}>预览</button><small>{candidate.excluded ? "已排除" : candidate.state === "received" ? "已接收" : candidate.state === "receiving" ? "接收未完成，可重新提交核对" : candidate.state === "failed" ? candidate.error : candidate.duplicate_asset_id ? "曾接收过，选中后核对去重" : "未入库"}</small></div>
         </li>)}</ul>
-        <div className={styles.actions}><button type="button" className="ui-button secondary" disabled={busy || session.offset === 0} onClick={() => { setAutoAdvance(false); setSelected([]); void action(() => getMaterialDiscovery(session.id, Math.max(0, session.offset - 100))); }}>上一页</button><span>{session.offset + 1}–{session.offset + session.candidates.length} / {session.total_count}</span><button type="button" className="ui-button secondary" disabled={busy || !session.has_more} onClick={() => { setAutoAdvance(false); setSelected([]); void action(() => getMaterialDiscovery(session.id, session.offset + 100)); }}>下一页</button></div>
+        <div className={styles.actions}><button type="button" className={buttonClassName({ variant: "outline" })} disabled={busy || session.offset === 0} onClick={() => { setAutoAdvance(false); setSelected([]); void action(() => getMaterialDiscovery(session.id, Math.max(0, session.offset - 100))); }}>上一页</button><span>{session.offset + 1}–{session.offset + session.candidates.length} / {session.total_count}</span><button type="button" className={buttonClassName({ variant: "outline" })} disabled={busy || !session.has_more} onClick={() => { setAutoAdvance(false); setSelected([]); void action(() => getMaterialDiscovery(session.id, session.offset + 100)); }}>下一页</button></div>
       </>}
-      {preview ? <div className={styles.preview} aria-label={`预览 ${preview.file_name}`}><div className={styles.actions}><strong>{preview.file_name}</strong><button type="button" className="ui-button secondary" onClick={() => setPreview(null)}>关闭预览</button></div><CandidatePreview key={preview.id} candidate={preview} sessionId={session.id} /></div> : null}
+      {preview ? <div className={styles.preview} aria-label={`预览 ${preview.file_name}`}><div className={styles.actions}><strong>{preview.file_name}</strong><button type="button" className={buttonClassName({ variant: "outline" })} onClick={() => setPreview(null)}>关闭预览</button></div><CandidatePreview key={preview.id} candidate={preview} sessionId={session.id} /></div> : null}
     </> : null}
   </section>;
 }

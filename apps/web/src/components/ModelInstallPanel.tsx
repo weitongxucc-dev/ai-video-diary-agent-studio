@@ -1,5 +1,6 @@
 "use client";
 
+import { buttonClassName } from "@/components/ui/button-styles";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getModelInstallJob, installLocalModel } from "@/lib/api";
@@ -129,7 +130,7 @@ export function ModelInstallPanel({ models, modelRootPath }: Props) {
                     </a>
                   </label>
                   <button
-                    className="ui-button secondary"
+                    className={buttonClassName({ variant: "outline" })}
                     disabled={!accepted[model.model.id] || Boolean(active)}
                     onClick={() => void start(model)}
                     type="button"
