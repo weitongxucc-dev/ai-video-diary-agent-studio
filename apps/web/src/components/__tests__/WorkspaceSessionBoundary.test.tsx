@@ -48,11 +48,11 @@ it('does not initialize before login or onboarding, then restores the real curre
   expect(await screen.findByDisplayValue('server-draft-a')).toBeVisible(); expect(screen.getByLabelText('会话消息')).toHaveTextContent('private-message-a'); expect(mocks.current).toHaveBeenCalledTimes(1);
 });
 
-it('keeps the same conversation, unsent draft and references across business tabs and token refresh', async () => {
+it('keeps the same conversation, unsent draft and references across resource browsing and token refresh', async () => {
   mocks.path = '/'; const view = render(content()); await screen.findByDisplayValue('server-draft-a');
   fireEvent.change(screen.getByLabelText('会话草稿'), { target: { value: 'unsent-private-draft-a' } }); fireEvent.click(screen.getByRole('button', { name: '引用当前声音' }));
   await waitFor(() => expect(screen.getByLabelText('当前引用')).toHaveTextContent('private-reference-a'));
-  mocks.path = '/library'; view.rerender(content()); mocks.path = '/tasks/task-a'; view.rerender(content());
+  mocks.path = '/library'; view.rerender(content()); mocks.path = '/knowledge'; view.rerender(content());
   act(() => mocks.authChange?.('TOKEN_REFRESHED', { user: { id: 'a' } }));
   expect(screen.getByLabelText('会话草稿')).toHaveValue('unsent-private-draft-a'); expect(screen.getByLabelText('当前引用')).toHaveTextContent('private-reference-a');
   expect(mocks.readSession).toHaveBeenCalledTimes(1); expect(mocks.current).toHaveBeenCalledTimes(1);
