@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { createPortal } from "react-dom";
 import { useActiveEditorDock } from "./workbench/EditorDock";
 import { IconButton } from "./ui/icon-button";
@@ -73,7 +74,7 @@ function AudioTimelineClip({ taskId, versionId, clip, duration, selected, muted,
     }
     waveform = <svg viewBox="0 0 240 32" preserveAspectRatio="none" aria-hidden><path d={points.join(" ")} vectorEffect="non-scaling-stroke" /></svg>;
   }
-  const state = currentError ? "波形未加载" : currentJob ? taskMediaJobLabel(currentJob) : "读取波形…";
+  const state = currentError ? "波形不可用" : currentJob ? taskMediaJobLabel(currentJob) : "读取波形…";
   return <div className={ui.audioClip} data-selected={selected || undefined}
     style={{left:`${clip.timeline_start_ms/1000/duration*100}%`,width:`${((clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000/duration*100}%`,opacity:muted || clip.muted ? .45 : 1}}>
     <button type="button" className={ui.audioClipSelect} aria-label={`选择音频：${clip.name}`} aria-pressed={selected}
@@ -86,7 +87,8 @@ function AudioTimelineClip({ taskId, versionId, clip, duration, selected, muted,
     {currentError ? <button ref={detailsAnchor} className={ui.audioWaveDetails} type="button" aria-label={`查看波形问题：${clip.name}`} title="查看波形问题" onClick={() => setDetails(true)}><CircleAlert size={13}/></button> : null}
     {details ? <HomeCardDialog kind="selection" title="波形未加载" anchor={detailsAnchor} onClose={() => setDetails(false)}>
       <p role="alert">{currentError}</p>
-      {currentJob ? <><button className={ui.button} disabled={reading} type="button" onClick={() => void reread()}>{reading ? "读取中…" : "重新读取波形"}</button><p>读取原请求的结果，不会重新生成配音。</p></> : <p>未取得原波形请求，请在运行详情中核对。</p>}
+      {currentJob ? <><button className={ui.button} disabled={reading} type="button" onClick={() => void reread()}>{reading ? "读取中…" : "重新读取波形"}</button><p>读取原请求的结果，不会重新生成配音。</p></> : <p>尚未取得可读取的波形作业；先核对本机媒体准备与运行详情，保留当前音轨。</p>}
+      <Link href="/settings">检查本机媒体准备</Link>
     </HomeCardDialog> : null}
   </div>;
 }

@@ -23,7 +23,7 @@ def test_pi_executable_alone_does_not_enable_sdk(tmp_path, monkeypatch):
     pi.chmod(0o755)
     monkeypatch.setattr("app.assistant.runtime_checks.shutil.which", lambda *args, **kwargs: "/fixture/node")
     monkeypatch.setattr("app.assistant.runtime_checks.subprocess.run", lambda cmd, **kwargs:
-                        subprocess.CompletedProcess(cmd, 0, "1.5.0" if cmd[0] == str(pi) else "v24.16.0", ""))
+                        subprocess.CompletedProcess(cmd, 0, "1.5.2" if cmd[0] == str(pi) else "v24.16.0", ""))
     check = runtime_checks(Path(__file__).parents[1] / "agent_tools/diary_tools.ts", lambda: str(pi))[0]
     assert check["status"] == "missing"
     assert "SDK" in check["reason"]

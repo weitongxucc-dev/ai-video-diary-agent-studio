@@ -6,6 +6,7 @@ import { segmentRevisionStatus, segmentAdoptionReason, editExecutionReadinessMes
 
 import { ConversationMessage } from "./ui/conversation-message";
 import { ReferencePicker } from "./ui/reference-picker";
+import type { MaterialUsageContext } from "./ui/material-usage";
 import { ReferenceChips } from "./ui/reference-chips";
 
 import { Children, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
@@ -212,7 +213,7 @@ function AssistantText({ text }: { text: string }) {
   return <Button variant="ghost" className="assistant-copy assistant-icon-action" aria-label={label} title={label} onClick={() => void copy()} type="button">{copied ? <Check size={14}/> : <Copy size={14}/>}</Button>;
 }
 
-function TurnContent({ turn, reading }: { turn: AssistantConversationTurn; reading?: ReadingState }) {
+function TurnContent({ turn, reading, latest }: { turn: AssistantConversationTurn; reading?: ReadingState; latest: boolean }) {
   const tools = turnTools(turn);
   const runningTool = tools.find((tool) => tool.state === "running");
   const failedTools = tools.some((tool) => tool.state === "failed" || tool.state === "unreturned");
@@ -225,7 +226,7 @@ function TurnContent({ turn, reading }: { turn: AssistantConversationTurn; readi
         <ToolResult tool={tool} reading={reading} readingKey={`${turn.id}:tool:${tool.tool_id}:diagnostic`}/>
       </li>)}</ol>
     </ReadingDetails> : null}
-    {turn.assistant_text ? <ConversationMessage className="assistant-markdown" savedOpen={reading?.get(`${turn.id}:message`, false)} onOpenChange={open => reading?.save(`${turn.id}:message`, open)}><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.assistant_text}</ReactMarkdown></ConversationMessage> : null}
+    {turn.assistant_text ? <ConversationMessage className="assistant-markdown" savedOpen={reading?.get(`${turn.id}:message`, latest) ?? latest} onOpenChange={open => reading?.save(`${turn.id}:message`, open)}><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.assistant_text}</ReactMarkdown></ConversationMessage> : null}
   </div>;
 }
 
@@ -390,7 +391,7 @@ function InputReceipt({ item, reading, onWithdraw }: { item: AssistantInputRecei
   </div>;
 }
 
-function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, windowReadError, taskScopeId, outputRecovered = false, productionRecovered = false, inputReceipts = [] }: { inputReceipts?: AssistantInputReceipt[]; turn: AssistantConversationTurn; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; windowReadError?: string; taskScopeId?: string; outputRecovered?: boolean; productionRecovered?: boolean }) {
+function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, windowReadError, taskScopeId, outputRecovered = false, productionRecovered = false, inputReceipts = [] }: { inputReceipts?: AssistantInputReceipt[]; turn: AssistantConversationTurn; latest?: boolean; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; windowReadError?: string; taskScopeId?: string; outputRecovered?: boolean; productionRecovered?: boolean }) {
   const businessContinuation = turn.events.some((event: unknown) => typeof event === "object" && event !== null
     && "type" in event && event.type === "goal_continuation_started"
     && "source_kind" in event && event.source_kind === "business_event");
@@ -478,7 +479,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
   return <article className="assistant-persisted-turn" data-turn-status={turn.status} data-turn-id={turn.id}>
     {turn.user_message.trim() ? <ConversationMessage className="assistant-user-message" savedOpen={reading?.get(`${turn.id}:user`, false)} onOpenChange={open => reading?.save(`${turn.id}:user`, open)}>{turn.user_message}</ConversationMessage> : null}
     {businessContinuation ? <p className="assistant-stream-status">继续完成原要求</p> : null}
-    <TurnContent turn={turn} reading={reading} />
+    <TurnContent turn={turn} reading={reading} latest={latest} />
     {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
     {inputReceipts.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:inputs`} defaultOpen={inputReceipts.some(item => item.status === "rejected" || item.status === "interrupted")} className="assistant-turn-inputs"><summary>追加要求记录 · {inputReceipts.length}</summary>{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</ReadingDetails> : null}
     {turn.status === "running" ? <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={12} className="is-spinning"/>正在回复…</p> : null}
@@ -517,7 +518,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
 }
 
 export function AssistantConversationPanel({
-  state, input, onInput, onSend, onConversationChange, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState = "none", busy, configured, scopeLabel, inputLabel = "对话要求", placeholder, compact = false, autoFocus = false, legacyHistory, composerActions,
+  state, input, onInput, onSend, onConversationChange, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState = "none", busy, configured, scopeLabel, inputLabel = "对话要求", placeholder, compact = false, autoFocus = false, legacyHistory, composerActions, materialUsage,
 }: {
   state: Conversation;
   input: string;
@@ -537,6 +538,7 @@ export function AssistantConversationPanel({
   autoFocus?: boolean;
   legacyHistory?: ReactNode;
   composerActions?: ReactNode;
+  materialUsage?: MaterialUsageContext;
 }) {
   const selectedProfile = useAssistantProfileReference();
   const selectedMaterial = useAssistantMaterialReference();
@@ -597,6 +599,7 @@ export function AssistantConversationPanel({
   const currentRunning = conversation?.turns.at(-1)?.status === "running";
   const lastTurnId = conversation?.turns.at(-1)?.id;
   const turns = conversation?.turns ?? [];
+  const latestReplyId = turns.slice().reverse().find(turn => turn.assistant_text.trim())?.id;
   // The receipt identifies its original turn. Collapse repeated projections by
   // input ID without inferring a new turn or a business completion from the text.
   const inputs = new Map<string, { item: AssistantInputReceipt; owner: string }>();
@@ -820,7 +823,7 @@ export function AssistantConversationPanel({
         state.historyScrollPositions?.current.set(conversation.id, node.scrollTop);
       }}>
       {turns.length ? <div className="assistant-transcript" role="log" aria-live="polite" aria-relevant="additions" aria-busy={currentRunning}>
-        {turns.map((turn) => <TurnView key={turn.id} inputReceipts={[...inputs.values()].filter(({ item, owner }) => owner === turn.id && item.status !== "accepted" && item.status !== "consumed").map(({ item }) => item)} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} taskScopeId={conversation?.scope_kind === "task" ? conversation.scope_id : undefined} refreshPaused={state.businessRefreshPaused} windowReadError={conversation ? state.scriptWindowReadErrors?.[assistantScriptWindowReadKey(conversation.id, turn)] : undefined}
+        {turns.map((turn) => <TurnView latest={turn.id === latestReplyId} key={turn.id} inputReceipts={[...inputs.values()].filter(({ item, owner }) => owner === turn.id && item.status !== "accepted" && item.status !== "consumed").map(({ item }) => item)} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} taskScopeId={conversation?.scope_kind === "task" ? conversation.scope_id : undefined} refreshPaused={state.businessRefreshPaused} windowReadError={conversation ? state.scriptWindowReadErrors?.[assistantScriptWindowReadKey(conversation.id, turn)] : undefined}
           productionRecovered={Boolean(goalProgress?.goal.status === "production_completed" && goalProgress.goal.production_result?.status === "succeeded" && goalProgress.goal.production_result.video_ready && goalProgress.turns.some(item => item.id === turn.id))}
           outputRecovered={Boolean(goalProgress && completedGoalOutput(goalProgress) && goalProgress.turns.some(item => item.id === turn.id))}/>)}
       </div> : !state.loading ? <div className="assistant-empty" aria-label="空对话"><div className="assistant-empty-icon"><MessageCircleDashed aria-hidden="true" size={22}/></div><h2>想聊点什么？</h2><p title={scopeLabel}>说说你的想法，或告诉我想怎么改。</p></div> : null}
@@ -831,14 +834,14 @@ export function AssistantConversationPanel({
     {referenceStatus.reason ? <div role="alert"><p>引用核验未通过。固定版本保持原值，请重新查看或取消引用后发送。</p><Button variant="ghost" type="button" onClick={referenceStatus.cancel}>清除不可用引用</Button><details><summary>引用诊断</summary><p>{referenceStatus.reason}</p></details></div> : null}
     {pendingInputs.length ? <section className="assistant-pending-inputs" aria-label="待处理追加要求">{pendingInputs.map(({ item }) => <InputReceipt key={item.input_id} item={item} reading={reading} onWithdraw={id => void state.withdrawInput(id).catch(cause => setError(cause.message))}/>)}</section> : null}
     <form ref={entryRef} className="assistant-conversation-entry" onSubmit={(event) => void submit(event)}><InputGroup data-composer aria-label="对话输入">
-      {selection ? <ReferenceChips items={selection.items} onRemove={item => { selection.remove(item); if (selection.items.length === 1) focus?.focus(); }}/> : null}
+      {selection ? <ReferenceChips usage={materialUsage} items={selection.items} onRemove={item => { selection.remove(item); if (selection.items.length === 1) focus?.focus(); }}/> : null}
       {menuOpen ? <div className="assistant-slash-menu" role="listbox" aria-label="对话命令" id={`${diagnosticsId}-commands`} style={{ maxHeight: menuMaxHeight }}>
         {filteredCommands.length ? filteredCommands.map((item, index) => { const Icon = item.icon; return <Button variant="ghost" role="option" aria-selected={activeCommand === index} key={item.name} type="button" onPointerDown={event => event.preventDefault()} onClick={() => chooseCommand(index)} disabled={commandDisabled} aria-disabled={commandDisabled}>
           <Icon size={16}/><span><strong>{item.title}</strong><small>{item.description}</small></span><code>{item.syntax}</code>
         </Button>; }) : <p>{capabilities ? "没有匹配的已接通命令" : "正在读取可用命令…"}</p>}
         {busy || currentRunning ? <p>本轮运行中，可以编辑草稿，暂不能执行命令。</p> : null}
       </div> : null}
-      <InputGroupTextarea ref={setFocus} aria-autocomplete="list" aria-controls={menuOpen ? `${diagnosticsId}-commands` : undefined} aria-describedby={`${diagnosticsId}-input-help`} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => { onInput(event.target.value); if (event.target.value.endsWith("@") && !composing) setReferencePickerOpen(true); }} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={placeholder ?? "想做什么，或想怎么改？"} rows={2} />
+      <InputGroupTextarea ref={setFocus} aria-autocomplete="list" aria-controls={menuOpen ? `${diagnosticsId}-commands` : undefined} aria-describedby={`${diagnosticsId}-input-help`} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => { onInput(event.target.value); if (event.target.value.endsWith("@") && !composing) setReferencePickerOpen(true); }} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={placeholder ?? "想做什么，或想怎么改？"} rows={1} />
       <div className="assistant-conversation-actions">
         <div className="assistant-input-tools">
           <ReferencePicker open={referencePickerOpen} onOpenChange={setReferencePickerOpen} onAdded={()=>{if(input.endsWith("@"))onInput(input.slice(0,-1));focus?.focus();}}/>

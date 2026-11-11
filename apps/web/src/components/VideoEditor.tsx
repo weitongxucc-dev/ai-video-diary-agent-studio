@@ -5,6 +5,7 @@ import { WorkspacePanelContext } from "./workbench/context";
 import { IconButton } from "./ui/icon-button";
 import { Tooltip } from "./ui/tooltip";
 import { Button } from "./ui/button";
+import { SubtitleTimelineTrack } from "./SubtitleTimelineTrack";
 import { TimelineViewport } from "./TimelineViewport";
 import { OverlayTimeline } from "./creation-task/OverlayTimeline";
 import { WorkspaceVideo, WorkspaceAudio } from "./workbench/WorkspaceMedia";
@@ -177,8 +178,8 @@ function CanvasControls({ ratio, fitMode, versionId, editError, busy, onPreview,
 }
 
 type VideoStageMontage = Pick<CreationTaskMontage, "clips" | "cues" | "duration_seconds" | "output_url" | "low_confidence_clip_count" | "aspect_ratio" | "graphic_overlays">;
-export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montage, planAspectRatio, subtitleTracks, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, timelineActions, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay, editError }:  {
-  editError?: string;
+export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montage, planAspectRatio, subtitleTracks, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, timelineActions, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay, editError, onEditSubtitle }:  {
+  editError?: string; onEditSubtitle?: (cueId: string) => void;
   selectedOverlayId?: string|null; onSelectOverlay?: (id:string)=>void;
   taskId: string; versionId: string | null; narrationCacheKey: string | null; montage: VideoStageMontage;
   planAspectRatio: NonNullable<CreationTaskMontage["aspect_ratio"]>; subtitleTracks: CreationTaskSubtitleTrack[];
@@ -230,10 +231,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
   function outputEvent(video: HTMLVideoElement, state: "loading" | "ready" | "error") {
     if (video === videoRef.current) setOutputState({ identity: outputIdentity, state });
   }
-  const subtitleTrack = (
-<div className={ui.track}><span>字幕</span><div className={ui.subtitleLane}>{(subtitleTracks.find(track => track.language === "zh-CN" && track.status === "valid" && track.style.enabled !== false) ?? subtitleTracks.find(track => track.status === "valid" && track.style.enabled !== false))?.cues.map(cue => { const clip = montage.clips.find(item => cue.start_seconds >= item.timeline_start_seconds && cue.start_seconds < item.timeline_end_seconds); return clip ? <button title={cue.text} key={cue.id} type="button" style={{ left: `${cue.start_seconds / montage.duration_seconds * 100}%`, width: `${(cue.end_seconds - cue.start_seconds) / montage.duration_seconds * 100}%` }} aria-label={`定位字幕：${cue.text}`} aria-pressed={clip.id === selectedId} onClick={() => { onSelect(clip.id); seek(cue.start_seconds); }}>{cue.text}</button> : null; })}</div></div>
-  );
-  if (!viewActive) return null;
+  const subtitleTrack = <SubtitleTimelineTrack track={subtitleTracks.find(track => track.language === "zh-CN" && track.status === "valid" && track.style.enabled !== false) ?? subtitleTracks.find(track => track.status === "valid" && track.style.enabled !== false)} montage={montage} selectedClipId={selectedId} onSelect={(id, time) => { onSelect(id); seek(time); }} onEdit={onEditSubtitle}/>;
   const previewTools = <div className={ui.previewActions}>
     {!montage.output_url ? <span className={ui.previewKind}>源片预览 · 尚未出片</span> : null}
     {montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}

@@ -8,7 +8,7 @@
 .assistant-message-scroller { position:relative; flex:1 1 auto; min-height:0; overflow:hidden; }
 .assistant-conversation-panel .assistant-conversation-history { height:100%; min-height:0; min-width:0; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--border-1) transparent; }
 .assistant-conversation-history:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; border-radius:8px; }
-.assistant-transcript { display:flex; flex-direction:column; gap:20px; padding:8px 0 12px; }
+.assistant-transcript { display:flex; flex-direction:column; gap:16px; padding:8px 0 12px; }
 .assistant-empty { display:flex; min-height:100%; box-sizing:border-box; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:24px 12px; text-align:center; }
 .assistant-empty-icon { display:grid; place-items:center; width:44px; height:44px; margin-bottom:8px; border-radius:12px; background:var(--surface-3); color:var(--text-2); }
 .assistant-empty h2 { margin:0; font-size:13px; line-height:21px; font-weight:400; }
@@ -53,9 +53,9 @@
 .assistant-turn-tools :is(li[data-state="failed"],li[data-state="unreturned"]) > strong { color:var(--danger); }
 .assistant-conversation-panel .assistant-conversation-entry { position:relative; flex:0 0 auto; display:flex; flex-direction:column; gap:0; padding:0; border:1px solid var(--border-1); border-radius:12px; background:var(--surface-1); box-shadow:none; }
 .assistant-conversation-panel .assistant-conversation-entry:focus-within { border-color:var(--focus); outline:2px solid var(--focus); outline-offset:1px; box-shadow:none; }
-.assistant-conversation-panel .assistant-conversation-entry textarea { box-sizing:border-box; width:100%; min-width:0; max-width:100%; min-height:48px; max-height:126px; resize:none; border:0; border-radius:0; padding:10px 12px 4px; margin:0; background:transparent; color:var(--text-1); font:inherit; line-height:21px; outline:none; }
+.assistant-conversation-panel .assistant-conversation-entry textarea { box-sizing:border-box; width:100%; min-width:0; max-width:100%; min-height:35px; max-height:126px; resize:none; border:0; border-radius:0; padding:8px 10px 2px; margin:0; background:transparent; color:var(--text-1); font:inherit; line-height:21px; outline:none; }
 .assistant-conversation-panel .assistant-conversation-entry textarea::placeholder { color:var(--text-3); opacity:1; }
-.assistant-conversation-panel .assistant-conversation-actions { display:flex; flex-wrap:nowrap; align-items:center; justify-content:space-between; min-height:32px; gap:6px; padding:2px 8px 8px; }
+.assistant-conversation-panel .assistant-conversation-actions { display:flex; flex-wrap:nowrap; align-items:center; justify-content:space-between; min-height:30px; gap:6px; padding:2px 6px 5px; }
 .assistant-input-tools { display:flex; flex:1; flex-wrap:wrap; align-items:center; gap:5px; min-width:0; }
 .assistant-recovery-action { min-height:28px; height:auto; padding:3px 6px; gap:5px; white-space:normal; text-align:left; font:inherit; }
 .assistant-input-status { display:inline-flex; align-items:center; gap:4px; color:var(--text-2); font-size:12px; text-decoration:none; }
@@ -96,10 +96,10 @@
 .assistant-text-action:disabled { opacity: .5; cursor: default; }
 
 /* Reference details share one Base UI popover outside the composer's height. */
-.assistant-reference-chips { display:flex; flex-wrap:wrap; align-items:center; gap:5px; min-width:0; max-height:90px; overflow:auto; padding:8px 8px 0; }
-.assistant-reference-attached { display:contents; }
+.assistant-reference-chips { display:flex; align-items:flex-start; gap:4px; min-width:0; max-height:104px; overflow:auto; padding:6px 6px 0; }
+.assistant-reference-attached { display:grid; flex:1; gap:4px; min-width:0; }
 .assistant-reference-capsule { display:flex; align-items:center; gap:0; max-width:100%; min-width:0; border-radius:6px; background:var(--surface-2); }
-.assistant-reference-capsule .assistant-reference-open { justify-content:flex-start; min-width:0; max-width:168px; height:28px; padding:2px 4px; gap:6px; }
+.assistant-reference-capsule .assistant-reference-open { justify-content:flex-start; flex:1; min-width:0; max-width:none; height:28px; padding:2px 4px; gap:6px; }
 .assistant-reference-open > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
 .assistant-reference-capsule >button:last-child { flex:0 0 24px; width:24px; height:28px; }
 .assistant-reference-thumbnail { display:grid; place-items:center; flex:0 0 36px; width:36px; height:26px; border-radius:3px; overflow:hidden; background:var(--surface-3); }
@@ -158,3 +158,12 @@
 .assistant-tool-state { display:inline-flex; vertical-align:middle; margin-right:5px; color:var(--text-2); }
 .assistant-tool-state[data-failed] { color:var(--danger); }
 .assistant-tool-count { margin-left:6px; color:var(--text-3); font-variant-numeric:tabular-nums; }
+.conversation-work-target { min-width:0; max-width:140px; padding:0 5px; height:28px; gap:5px; }
+.conversation-work-target > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.conversation-workspace-target { color:var(--text-2); font-size:12px; white-space:nowrap; }
+.assistant-material-uses { flex:0 0 auto; gap:3px; min-height:28px; height:28px; padding:0 4px; font-size:12px; color:var(--text-2); }
+.assistant-source-scope { margin:3px 0 8px; color:var(--text-2); font-size:12px; }
+.assistant-material-use-list { padding:0; margin:0; list-style:none; overflow:auto; min-height:0; }
+.assistant-material-use-list button { display:flex; flex-direction:column; align-items:flex-start; width:100%; min-height:44px; height:auto; padding:6px 8px; }
+.assistant-material-use-list small { font-size:12px; color:var(--text-2); }
+.assistant-material-use-list button[aria-pressed="true"] { background:var(--accent-muted); }

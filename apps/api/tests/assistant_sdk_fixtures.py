@@ -34,10 +34,10 @@ def install_sdk_fixture(root):
     """Layout only; tests replace the host process instead of loading this module."""
     package = root / "node_modules/@earendil-works/pi-coding-agent"
     (package / "dist").mkdir(parents=True)
-    (package / "package.json").write_text('{"version":"1.5.0"}')
+    (package / "package.json").write_text('{"version":"1.5.2"}')
     (package / "dist/index.js").write_text("// synthetic SDK installation fixture\n")
     cli = package / "dist/cli.js"
-    cli.write_text("#!/bin/sh\necho 1.5.0\n")
+    cli.write_text("#!/bin/sh\necho 1.5.2\n")
     cli.chmod(0o700)
     executable = root / "pi"
     executable.symlink_to(cli)

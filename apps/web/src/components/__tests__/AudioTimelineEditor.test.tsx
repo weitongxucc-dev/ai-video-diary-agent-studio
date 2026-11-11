@@ -115,7 +115,7 @@ it("separates the source name from waveform failure and rereads only the origina
   vi.stubGlobal("fetch",fetcher);
   vi.mocked(getCreationTaskMediaJob).mockResolvedValue({...failed,status:"succeeded",result:{peaks:[.1,.5],seconds_per_peak:1}});
   render(<AudioTimelineTracks taskId="task" versionId="version" durationSeconds={10} audioTimeline={{format_version:1,tracks:[{...track,clips:[{...track.clips[0],name:"当前配音"}]}]}} selectedId={null} onSelect={vi.fn()} onPreview={vi.fn()} busy={false}/>);
-  expect(await screen.findByText("波形未加载")).toBeInTheDocument();
+  expect(await screen.findByText("波形不可用")).toBeInTheDocument();
   const selection=screen.getByRole("button",{name:"选择音频：当前配音"});
   expect(selection).toHaveTextContent("当前配音");
   const problem=screen.getByRole("button",{name:"查看波形问题：当前配音"});
@@ -135,5 +135,5 @@ it("keeps the original request error without offering an unbound resubmission", 
   fireEvent.click(await screen.findByRole("button",{name:"查看波形问题：背景音乐"}));
   expect(await screen.findByRole("alert")).toHaveTextContent("本地服务未接通。");
   expect(screen.queryByRole("button",{name:"重新读取波形"})).not.toBeInTheDocument();
-  expect(screen.getByText("未取得原波形请求，请在运行详情中核对。")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "检查本机媒体准备" })).toHaveAttribute("href", "/settings");
 });

@@ -8,6 +8,7 @@ export function ConversationMessage({ children, className, savedOpen = false, on
   const content = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(savedOpen);
   const [truncated, setTruncated] = useState(false);
+  useEffect(() => setExpanded(savedOpen), [savedOpen]);
   useEffect(() => {
     const node = content.current;
     if (!node) return;

@@ -13,10 +13,6 @@
 .runDetails .workSection { padding:0; border:0; background:transparent; }
 .auxiliaryBody { display:grid; align-content:start; flex:0 1 auto; min-width:0; min-height:0; max-height:44%; gap:12px; overflow:auto; overscroll-behavior:contain; padding:12px 16px; border-top:1px solid var(--border-1); }
 /* One editing companion beside the persistent preview, never a second bottom pane. */
-.timelineWorkspace[data-task-panel] { display:grid; grid-template-columns:minmax(260px,34%) minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); }
-.timelineWorkspace[data-task-panel] > .viewNavigation { grid-column:1 / -1; grid-row:1; }
-.timelineWorkspace[data-task-panel] > .persistentStage { grid-column:2; grid-row:2; }
-.timelineWorkspace[data-task-panel] .auxiliaryBody { grid-column:1; grid-row:2; max-height:none; border-top:0; border-right:1px solid var(--border-1); }
 
 .editingAuxiliary { display:flex; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:4px 12px; max-height:26%; padding:4px 16px; }
 .editingAuxiliary .jobProgress { padding:0; border:0; }
@@ -637,3 +633,8 @@
 .statusContents .auxiliaryBody { display:grid; max-height:none; padding:12px 16px; border:0; gap:12px; }
 
 .statusFlow { display:contents; }
+.stageRuntime:not(:has(:is(span,button))) { display:none; }
+.taskPaneHome { display:contents; }
+.taskPaneHome[hidden],.taskPaneDock[hidden] { display:none; }
+.taskPaneDock { display:flex; flex-direction:column; height:100%; min-width:0; min-height:0; overflow:hidden; }
+.taskPaneDock .auxiliaryBody { flex:1; max-height:none; min-height:0; border:0; padding:8px 12px; gap:10px; }

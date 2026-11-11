@@ -10,8 +10,8 @@ function EditingSurface() {
   const host = useEditorDockHost("auxiliary");
   return <><div ref={host} data-testid="preview-host"/><section aria-label="时间线">完整时间线</section></>;
 }
-function Workbench({ inspectorOpen = false, docked = true, active = true, surface = true }: { inspectorOpen?: boolean; docked?: boolean; active?: boolean; surface?: boolean }) {
-  return <EditorDockProvider activePageId={page.id}><WorkspacePageContext.Provider value={page}>
+function Workbench({ inspectorOpen = false, docked = true, active = true, surface = true, pageActive = true }: { inspectorOpen?: boolean; docked?: boolean; active?: boolean; surface?: boolean; pageActive?: boolean }) {
+  return <EditorDockProvider activePageId={page.id}><WorkspacePageContext.Provider value={{ ...page, active: pageActive }}>
     <WorkspacePanelContext.Provider value={{ inspectorOpen, resourceOpen: true, revealTaskPanel() {} }}>
       {surface ? <EditingSurface/> : null}
       <EditorResourcePane title="素材库" active={active} docked={docked} onClose={() => {}}><input aria-label="素材筛选" defaultValue="原筛选"/></EditorResourcePane>
@@ -42,6 +42,11 @@ it("retains an unsubmitted local draft across resource switches and preview host
   view.rerender(<Workbench/>);
   expect(screen.getByRole("textbox", { name: "素材筛选" })).toBe(input);
   expect(input).toHaveValue("https://example.com/unsubmitted-video");
+  view.rerender(<Workbench pageActive={false}/>);
+  expect(input).not.toBeVisible();
+  expect(screen.getByTestId("preview-host")).not.toContainElement(input);
+  view.rerender(<Workbench/>);
+  expect(screen.getByRole("textbox", { name: "素材筛选" })).toBe(input);
   view.rerender(<Workbench surface={false}/>);
   expect(screen.getByRole("textbox", { name: "素材筛选" })).toBe(input);
   view.rerender(<Workbench/>);

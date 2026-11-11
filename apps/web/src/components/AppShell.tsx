@@ -1,4 +1,5 @@
 "use client";
+import { compactObjectName } from "@/lib/object-display-name";
 
 import Link from "next/link";
 import { createPortal } from "react-dom";
@@ -65,16 +66,7 @@ type NavItem = { href: string; label: string; icon: Icon; activePath?: string };
 export type ThemeMode = "system" | "light" | "dark";
 
 function displayTaskName(name?: string) {
-  return (name || "未命名创作任务")
-    .replace(/\bb-?roll\b/gi, "补充画面")
-    .replace(/\bbatch\b/gi, "创作任务")
-    .replace(/批次/g, "创作任务")
-    .replace(/\bepisode\b/gi, "内容")
-    .replace(/\brecipe\b/gi, "制作方案")
-    .replace(/\bprovider\b/gi, "服务")
-    .replace(/\bagent\b/gi, "智能助手")
-    .replace(/混剪/g, "视频剪辑")
-    .replace(/\bSRT\s+字幕/gi, "字幕");
+  return name || "未命名创作任务";
 }
 
 export type AppShellCreationTask = CreationTask;
@@ -114,6 +106,7 @@ export type AppShellWorkspaceStatus = {
 export type AppShellProps = {
   children: ReactNode;
   creationTasks?: AppShellCreationTask[];
+  activeCreationTaskId?: string;
   inspector?: ReactNode;
   inspectorConfirmation?: ReactNode;
   inspectorConfirmationKey?: string;
@@ -214,6 +207,7 @@ export function AppShell(props: AppShellProps) {
 export function AppShellFrame({
   children,
   creationTasks,
+  activeCreationTaskId,
   inspector: providedInspector,
   inspectorConfirmation,
   inspectorConfirmationKey,
@@ -464,10 +458,10 @@ export function AppShellFrame({
             {workspaceReady && recentTasks.length ? recentTasks.map((task) => {
               const statusLabel = creationTaskShortStatus(task.stage_status, task.stage);
               return (
-                <Link aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className={`desktop-creation-task ${shellUi.task}`} aria-label={`${displayTaskName(task.name)} · ${statusLabel}`} title={`${displayTaskName(task.name)} · ${statusLabel}`} href={creationTaskHref(task)} key={task.id}>
+                <Link data-active-work={task.id === activeCreationTaskId || undefined} aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className={`desktop-creation-task ${shellUi.task}`} aria-label={`${displayTaskName(task.name)} · ${statusLabel}`} title={`${displayTaskName(task.name)} · ${statusLabel}`} href={creationTaskHref(task)} key={task.id}>
                   <CreationTaskStageIcon stage={task.stage} className={shellUi.stageIcon} />
                   <span className="desktop-creation-task__copy">
-                    <strong>{displayTaskName(task.name)}</strong>
+                    <strong>{compactObjectName(displayTaskName(task.name), 10)}</strong>
                     <small className={shellUi.taskState} data-status={task.stage_status}>{task.stage_status === "running" ? <LoaderCircle aria-hidden="true" className="is-spinning" size={12} strokeWidth={1.7} /> : null}{statusLabel}</small>
                   </span>
                 </Link>

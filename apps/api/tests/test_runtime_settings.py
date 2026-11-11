@@ -371,4 +371,4 @@ def test_conversation_dependencies_do_not_disable_direct_model_features(tmp_path
     assert gates["generate-topics"]["available"]
     assert gates["generate-script"]["available"]
     assert "isolated-synthetic-key" not in str(health)
-    assert pi_runtime_checks()[0]["fix_command"] == "npm install -g @earendil-works/pi-coding-agent@1.5.0"
+    assert pi_runtime_checks()[0]["fix_command"] == "npm install -g @earendil-works/pi-coding-agent@1.5.2"

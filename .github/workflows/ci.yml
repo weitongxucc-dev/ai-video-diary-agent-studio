@@ -76,7 +76,7 @@ jobs:
           node-version: "22"
 
       - name: Install pinned Pi SDK
-        run: npm install --global @earendil-works/pi-coding-agent@1.5.0
+        run: npm install --global @earendil-works/pi-coding-agent@1.5.2
 
       - name: Run backend tests
         working-directory: apps/api
