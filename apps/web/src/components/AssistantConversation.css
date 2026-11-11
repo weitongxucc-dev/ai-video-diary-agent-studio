@@ -135,8 +135,8 @@
 
 .assistant-message { position:relative; min-width:0; --message-lines:6; }
 .assistant-user-message { --message-lines:3; }
-.assistant-message-content { max-height:calc(var(--message-lines) * 21px); overflow:hidden; overflow-wrap:anywhere; }
-.assistant-message-content[data-expanded] { max-height:none; }
+.assistant-message-content { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:var(--message-lines); overflow:hidden; overflow-wrap:anywhere; }
+.assistant-message-content[data-expanded] { display:block; -webkit-line-clamp:unset; }
 .assistant-message > .assistant-text-action { position:static; display:flex; align-items:center; min-height:21px; margin:4px 0 0 auto; padding:0; background:transparent; }
 .assistant-result-summary { margin:0; overflow-wrap:anywhere; }
 .assistant-result-details { padding:4px 0 2px 12px; border-left:1px solid var(--border-1); margin:4px 0 0 3px; overflow-wrap:anywhere; }
