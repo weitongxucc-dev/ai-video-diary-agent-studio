@@ -865,8 +865,8 @@ export function MaterialLibraryWorkspace({
       }} />}
     >
       <div className={`modern-library ${styles.workspace}`}>
-        <MaterialLibraryToolbar auxiliary={Boolean(page?.auxiliary)} filtered={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)}
-          search={<InputGroup data-input-group aria-label="素材检索" className={`library-search ${styles.search}`}>
+        <MaterialLibraryToolbar summary={`已载入 ${assets.length} / ${totalCount} · 最近更新在前`} auxiliary={Boolean(page?.auxiliary)} filtered={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)}
+          search={<InputGroup data-input-group aria-label="素材检索" className="library-search">
             <InputGroupAddon><Search size={16} /></InputGroupAddon>
             <InputGroupInput
               aria-label="搜索素材"
@@ -896,7 +896,6 @@ export function MaterialLibraryWorkspace({
           </div>
           <Button variant="ghost" className={styles.iconButton} aria-label="刷新素材列表" title="刷新素材列表" disabled={busy !== null} onClick={() => void refreshLibrary()} type="button"><RefreshCw size={16} /></Button><IconButton label="查看素材统计" onClick={() => setStatisticsOpen(true)}><Info/></IconButton></>}
           actions={page?.auxiliary ? <IconButton label="导入素材" onClick={() => setImportOpen(true)}><Plus/></IconButton> : <Button variant="outline" className={styles.importButton} onClick={() => setImportOpen(true)} type="button"><Plus size={16}/>导入素材</Button>} />
-        <div className={styles.summaryLine}><span>已载入 {assets.length} / {totalCount} · 最近更新在前</span></div>
         {intakeError || intake?.pending_files.length || (intake && intake.bound_to_current_workspace && intake.directory_state !== "ready") ? <div className={styles.intakeNotice} role={intakeError ? "alert" : "status"}><span>{intakeError ? "素材接入暂不可用" : intake?.pending_files.length ? `${intake.pending_files.length} 个外部文件等待确认复制完成` : "素材目录需要检查"}</span><Button variant="ghost" onClick={() => setImportOpen(true)} type="button">查看接入</Button></div> : null}
 
         {error ? (

@@ -1,0 +1,55 @@
+{
+  "origin": "User-provided design-live-app-audited-source (2).zip, candidate-v2 adapted source snapshot",
+  "captured": "2026-11-11",
+  "scope": "Reference source only. Not production runtime, approved geometry, capability, or acceptance.",
+  "files": [
+    {
+      "reference": "registry/base-nova/ui/button.tsx",
+      "file": "sources/button.tsx.txt",
+      "sha256": "5772032e0dea252ec0f1624602661ceacb682e5fc4163f83a252cc8d9d284c77",
+      "bytes": 3230
+    },
+    {
+      "reference": "registry/base-nova/ui/input-group.tsx",
+      "file": "sources/input-group.tsx.txt",
+      "sha256": "76c928a1191cd8fb3fdb1e82ae642a3b1e8567971087241e44b28dfaccf25515",
+      "bytes": 5387
+    },
+    {
+      "reference": "registry/base-nova/ui/tabs.tsx",
+      "file": "sources/tabs.tsx.txt",
+      "sha256": "dc6a5600a4329425eea23cd03388d7946eb96fc2836d9f8dd60bdcabcec121a0",
+      "bytes": 3435
+    },
+    {
+      "reference": "registry/base-nova/ui/dialog.tsx",
+      "file": "sources/dialog.tsx.txt",
+      "sha256": "025aaae5994490a4be6107d4e98d691b0c9f3c7827387a33c586cf6e19508c5e",
+      "bytes": 4186
+    },
+    {
+      "reference": "registry/base-nova/ui/popover.tsx",
+      "file": "sources/popover.tsx.txt",
+      "sha256": "031f68390047c2a1ca19e9764c8fb1071b1876e80acece8150677726a6dce090",
+      "bytes": 2579
+    },
+    {
+      "reference": "registry/base-nova/ui/message.tsx",
+      "file": "sources/message.tsx.txt",
+      "sha256": "4bd0da2b253cf1eddd3b26e58a904efc990c523903af89667f69ef83521b3eae",
+      "bytes": 2231
+    },
+    {
+      "reference": "components/kokonutui/ai-citations.tsx",
+      "file": "sources/ai-citations.tsx.txt",
+      "sha256": "78fdd842e325e9ad1c40460e867ce7fa79ca178d1a225870c563193b7479dde4",
+      "bytes": 17812
+    },
+    {
+      "reference": "components/kokonutui/ai-diff-review.tsx",
+      "file": "sources/ai-diff-review.tsx.txt",
+      "sha256": "ebac3c8a8598ef3ce84cda342351dcfdfd36136019b4a460ec535f783c05361d",
+      "bytes": 18918
+    }
+  ]
+}

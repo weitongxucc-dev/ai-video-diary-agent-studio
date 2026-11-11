@@ -1,4 +1,5 @@
 "use client";
+import { Button } from "../ui/button";
 import Link from "next/link";
 import { FolderPlus, FolderSearch, LoaderCircle } from "lucide-react";
 import type { ReactNode } from "react";
@@ -28,7 +29,7 @@ export function MaterialIntakePanel({ intake, intakeError, intakeBusy, busy, imp
             <span>{intake ? directoryStateLabel[intake.directory_state] : "正在核对目录"}</span>
           </div>
           {intakeError ? (<p className={styles.intakeError} role="alert">{intakeError}
-              <button disabled={intakeBusy !== null} onClick={onRefresh} type="button">重新检查</button>
+              <Button variant="outline" disabled={intakeBusy !== null} onClick={onRefresh} type="button">重新检查</Button>
             </p>) : null}
           {!intake ? (<p className={styles.intakeDescription}>{intakeError ? "暂时无法确认目录状态，请重新检查。" : "正在确认素材目录与当前工作区的关系…"}</p>) : !intake.binding_available ? (<p className={styles.intakeDescription}>该目录已接入其他工作区。请切换到所属工作区处理，当前工作区不能直接接入。</p>) : intake.directory_state === "changed" ? (<>
               <p className={styles.intakeDescription}>素材目录状态已变化。请到<Link href="/settings">设置</Link>核对后再继续；工作区归属不会自动更改。</p>

@@ -172,7 +172,7 @@ it("keeps browsing separate from explicit asset and segment references", async (
   function Probe() { const selection=useAssistantSelection();return <output aria-label="草稿引用">{JSON.stringify(selection?.items)}</output>; }
   render(<AssistantConversationProvider><MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}}/><Probe/></AssistantConversationProvider>);
   await screen.findByRole("button",{name:"引用到对话：local.mp4"});
-  fireEvent.click(screen.getByRole("button",{name:/^0:04local\.mp4/}));
+  fireEvent.click(screen.getByRole("button",{name:/^0:04\.0\s*local\.mp4/}));
   fireEvent.click(screen.getByRole("button",{name:/^0:01.*0:03/}));
   expect(screen.getByLabelText("草稿引用")).toHaveTextContent("[]");
   fireEvent.click(screen.getByRole("button",{name:"引用到对话：local.mp4 · 片段 0:01–0:03"}));
@@ -216,7 +216,7 @@ it("shows asset labels and applies assistant readback only to the exact selected
   });
   vi.mocked(updateMaterialAssetTags).mockResolvedValue({ ...taggedAsset, user_tags: ["整条标签"] });
   render(<AssistantConversationProvider><MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} /></AssistantConversationProvider>);
-  fireEvent.click(screen.getByRole("button", { name: /^0:04local\.mp4/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^0:04\.0\s*local\.mp4/ }));
   expect(screen.getByText("整条素材还没有我的标签。")).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("添加到整条素材"), { target: { value: "整条标签" } });
   fireEvent.keyDown(screen.getByLabelText("添加到整条素材"), { key: "Enter" });
@@ -232,7 +232,7 @@ it("shows asset labels and applies assistant readback only to the exact selected
     "给片段加上产品演示", expect.any(String), expect.objectContaining({ scope: "segment", asset_id: "asset", segment_id: "segment", expected_updated_at:asset.updated_at, expected_segment_updated_at:segment.updated_at }),
     expect.any(String), expect.any(Number), expect.any(Function), expect.any(Number),
   ));
-  fireEvent.click(screen.getByRole("button", { name: /^0:04自造素材B\.mp4/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^0:04\.0\s*自造素材B\.mp4/ }));
   resolveTurn({
     reply: "已按你的要求更新这个片段。", provider: "test", model: "test",
     material_result: {
@@ -240,9 +240,9 @@ it("shows asset labels and applies assistant readback only to the exact selected
       user_tags: ["旧标签", "产品演示"], system_tags: [], action: "add", changed: true,
     },
   });
-  await waitFor(() => expect(screen.getByRole("button", { name: /^0:04自造素材B\.mp4/ })).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByRole("button", { name: /^0:04\.0\s*自造素材B\.mp4/ })).toBeInTheDocument());
   expect(screen.queryByLabelText("移除标签 产品演示")).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: /^0:04local\.mp4/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^0:04\.0\s*local\.mp4/ }));
   fireEvent.click(screen.getByRole("button", { name: /^0:01.*0:03/ }));
   await waitFor(() => expect(screen.getByLabelText("移除标签 产品演示")).toBeInTheDocument());
   expect(screen.getByLabelText("移除整条素材标签 整条标签")).toBeInTheDocument();
@@ -254,7 +254,7 @@ it("shows asset labels and applies assistant readback only to the exact selected
       user_tags: ["整条标签", "整条AI标签"], action: "add", changed: true,
     },
   });
-  fireEvent.click(screen.getByRole("button", { name: /^0:04local\.mp4/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^0:04\.0\s*local\.mp4/ }));
   fireEvent.click(screen.getByRole("button", { name: /移除引用.*片段/ }));
   fireEvent.click(screen.getByRole("button", { name: "引用到对话：local.mp4" }));
   fireEvent.change(screen.getByRole("textbox", { name: "素材对话" }), { target: { value: "给整条素材添加整条AI标签" } });
@@ -471,8 +471,8 @@ it("blocks new selection during search and does not let its late response replac
   fireEvent.click(screen.getByRole("button", { name: /自造素材B\.mp4/ }));
   fireEvent.change(screen.getByRole("textbox", { name: "搜索素材" }), { target: { value: "延迟搜索" } });
   await waitFor(() => expect(getProductionMaterials).toHaveBeenCalled());
-  expect(screen.getByRole("button", { name: /^0:04local\.mp4/ })).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: /^0:04local\.mp4/ }));
+  expect(screen.getByRole("button", { name: /^0:04\.0\s*local\.mp4/ })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: /^0:04\.0\s*local\.mp4/ }));
   await act(async () => resolveSearch({ ...library, assets: [taggedAsset], total_count: 1 }));
   await screen.findByText(/选中的素材已不在当前列表/);
   expect(screen.getByText(/素材说明不会写入其他素材|未保存的说明不会写入其他素材/)).toBeInTheDocument();
@@ -1621,7 +1621,7 @@ it("refreshes immediately on tab activation and blocks stale selections without 
   const view = render(page(true));
   await screen.findByRole("button", {name:"引用到对话：local.mp4"});
   expect(getProductionMaterials).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", {name:/^0:04local\.mp4/}));
+  fireEvent.click(screen.getByRole("button", {name:/^0:04\.0\s*local\.mp4/}));
   fireEvent.click(screen.getByRole("button", {name:/^0:01.*0:03/}));
   fireEvent.click(screen.getByRole("button", {name:"引用到对话：local.mp4 · 片段 0:01–0:03"}));
   const frozen = screen.getByLabelText("当前固定引用").textContent;
@@ -1631,7 +1631,7 @@ it("refreshes immediately on tab activation and blocks stale selections without 
   view.rerender(page(true));
   expect(getProductionMaterials).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({offset:0, limit:24}));
   expect(screen.getByText("正在更新素材列表…")).toBeInTheDocument();
-  expect(screen.getByRole("button", {name:/^0:04自造素材B\.mp4/})).toBeDisabled();
+  expect(screen.getByRole("button", {name:/^0:04\.0\s*自造素材B\.mp4/})).toBeDisabled();
   expect(screen.getByRole("button", {name:/^0:01.*0:03/})).toBeDisabled();
   expect(screen.getByRole("button", {name:"切回整条素材"})).toBeDisabled();
   for (const name of ["引用到对话：local.mp4", "引用到对话：local.mp4 · 片段 0:01–0:03"]) {
@@ -1639,16 +1639,16 @@ it("refreshes immediately on tab activation and blocks stale selections without 
     expect(button).toBeDisabled();
     fireEvent.click(button);
   }
-  fireEvent.click(screen.getByRole("button", {name:/^0:04自造素材B\.mp4/}));
+  fireEvent.click(screen.getByRole("button", {name:/^0:04\.0\s*自造素材B\.mp4/}));
   expect(screen.getByLabelText("当前固定引用")).toHaveTextContent(frozen!);
   expect(screen.getByLabelText("已追加引用")).toHaveTextContent(appended!);
   const updated = {...taggedAsset, duration_seconds:25.578, updated_at:"2026-10-18T05:10:58Z"};
   await act(async () => resolveRead({...twoAssetLibrary, assets:[updated, otherAsset]}));
   expect(screen.queryByText("正在更新素材列表…")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", {name:/^0:25\.578local\.mp4/})).toBeEnabled();
+  expect(screen.getByRole("button", {name:/^0:25\.6\s*local\.mp4/})).toBeEnabled();
   expect(screen.getByLabelText("当前固定引用")).toHaveTextContent(frozen!);
   expect(screen.getByLabelText("已追加引用")).toHaveTextContent(appended!);
-  fireEvent.click(screen.getByRole("button", {name:/^0:25\.578local\.mp4/}));
+  fireEvent.click(screen.getByRole("button", {name:/^0:25\.6\s*local\.mp4/}));
   expect(screen.getByLabelText("当前固定引用")).toHaveTextContent(frozen!);
   expect(screen.getByLabelText("已追加引用")).toHaveTextContent(appended!);
   fireEvent.click(screen.getByRole("button",{name:"引用到对话：local.mp4"}));
@@ -1666,10 +1666,10 @@ it("keeps stale selection blocked after activation refresh failure and allows an
   view.rerender(page(true));
   await screen.findByText("素材列表暂不可用");
   expect(screen.getByText("请刷新素材列表后再选择或引用。")).toBeInTheDocument();
-  expect(screen.getByRole("button", {name:/^0:04local\.mp4/})).toBeDisabled();
+  expect(screen.getByRole("button", {name:/^0:04\.0\s*local\.mp4/})).toBeDisabled();
   expect(screen.getByRole("button", {name:"刷新素材列表"})).toBeEnabled();
   fireEvent.click(screen.getByRole("button", {name:"刷新素材列表"}));
-  await waitFor(() => expect(screen.getByRole("button", {name:/^0:04local\.mp4/})).toBeEnabled());
+  await waitFor(() => expect(screen.getByRole("button", {name:/^0:04\.0\s*local\.mp4/})).toBeEnabled());
   expect(getProductionMaterials).toHaveBeenCalledTimes(2);
   expect(screen.queryByText("请刷新素材列表后再选择或引用。")).not.toBeInTheDocument();
 });
@@ -1689,9 +1689,9 @@ it("ignores a late activation read after hiding and waits for the current tab re
   await act(async () => resolveOld({...library, assets:[{...asset, file_name:"过期回包.mp4"}]}));
   expect(screen.queryByRole("button", {name:/过期回包/})).not.toBeInTheDocument();
   expect(screen.getByText("正在更新素材列表…")).toBeInTheDocument();
-  expect(screen.getByRole("button", {name:/^0:04local\.mp4/})).toBeDisabled();
+  expect(screen.getByRole("button", {name:/^0:04\.0\s*local\.mp4/})).toBeDisabled();
   await act(async () => resolveCurrent({...library, assets:[{...asset, duration_seconds:25.578}]}));
-  expect(screen.getByRole("button", {name:/^0:25\.578local\.mp4/})).toBeEnabled();
+  expect(screen.getByRole("button", {name:/^0:25\.6\s*local\.mp4/})).toBeEnabled();
   expect(getProductionMaterials).toHaveBeenCalledTimes(2);
 });
 
@@ -1737,7 +1737,7 @@ it("publishes only explicit material references with actual versions and leaves 
   }
   render(<AssistantConversationProvider><MaterialLibraryWorkspace initialLibrary={{...library, assets:[fractional]}} initialInsights={insights} initialCollections={{collections:[],total_count:0}} /><ReferenceProbe /></AssistantConversationProvider>);
   expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null");
-  fireEvent.click(screen.getByRole("button", { name:/^0:04local\.mp4/ }));
+  fireEvent.click(screen.getByRole("button", { name:/^0:04\.0\s*local\.mp4/ }));
   expect(screen.getByLabelText("共享素材引用")).toHaveTextContent("null");
   fireEvent.click(await screen.findByRole("button",{name:"引用到对话：local.mp4"}));
   await waitFor(() => expect(JSON.parse(screen.getByLabelText("共享素材引用").textContent!)).toEqual({label:"整条素材 · local.mp4", selection:{scope:"asset", asset_id:"asset", expected_updated_at:fractional.updated_at}}));
@@ -2003,6 +2003,6 @@ it("preserves every explicit asset, segment and voice reference while browsing a
   fireEvent.click(screen.getByRole("button", { name:"引用到对话：local.mp4" }));
   await waitFor(() => expect(read()).toHaveLength(4));
   const beforeBrowse=read();
-  fireEvent.click(screen.getByRole("button", { name:/0:04自造素材B\.mp4/ }));
+  fireEvent.click(screen.getByRole("button", { name:/0:04\.0\s*自造素材B\.mp4/ }));
   expect(read()).toEqual(beforeBrowse);
 });

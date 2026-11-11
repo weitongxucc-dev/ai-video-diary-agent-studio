@@ -618,8 +618,8 @@
 .visualCandidates video { width:100%; max-height:220px; background:var(--surface-2); }
 .visualCandidates label { display:flex; gap:8px; align-items:center; }
 
-.editingAuxiliary :global([aria-label="制作状态"]) { display:contents; }
-.editingAuxiliary :global([aria-label="制作状态"] > div:empty) { display:none; }
+.editingAuxiliary :global([data-production-summary]) { display:contents; }
+.editingAuxiliary :global([data-production-summary] > div:empty) { display:none; }
 
 .statusTray { position:relative; flex:0 0 auto; min-width:0; border-top:1px solid var(--border-1); background:var(--surface-1); }
 .statusSummary { display:flex; width:100%; min-height:34px; padding:4px 16px; gap:8px; border-radius:0; font-weight:400; color:var(--text-2); }

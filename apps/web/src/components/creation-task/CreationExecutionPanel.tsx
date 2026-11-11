@@ -195,7 +195,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
     if (!compact)
         return <>{content}{storyboardControls}{visualControls}</>;
     return <>
-    <section aria-label="制作状态" className={editorUi.productionSummary}>
+    <section data-production-summary aria-label="制作状态" className={editorUi.productionSummary}>
       <div>{job && job.status !== "succeeded" ? <strong>连续制作 · {statusText}{execution?.current_stage ? ` · ${stageLabels[execution.current_stage]}` : ""}</strong> : !job ? <strong>制作要求</strong> : null}
         {execution?.waiting_reason ? <p>{creationTaskFailureReason(execution.waiting_reason, taskStage)}</p> : null}
         {failureReason ? <p>{creationTaskFailureReason(failureReason, taskStage)}</p> : null}

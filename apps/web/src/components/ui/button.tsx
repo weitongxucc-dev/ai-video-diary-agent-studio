@@ -2,7 +2,7 @@
 
 // shadcn/ui Base Nova Button (MIT); reviewed source:
 // https://ui.shadcn.com/r/styles/base-nova/button.json
-// designs/yaohe-desktop-language-20261020/candidate-v2/src/registry/base-nova/ui/button.tsx
+// docs/design/desktop-reference/sources/button.tsx.txt
 // Keep the existing Base UI props; map variant states to DESIGN.md tokens and 13/21 typography.
 import { Button as ButtonPrimitive } from "@base-ui/react/button";
 import { buttonClassName, type ButtonVariant } from "./button-styles";

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import formStyles from "./SettingsForm.module.css";
 import styles from "./LlmProviderFields.module.css";
 import { CardSelect, HomeCardDialog } from "./HomeCardDialog";
 
@@ -96,7 +97,7 @@ export function LlmProviderFields({
   const keyConfigured = apiKeyConfigured && provider === initialProvider;
 
   return (
-    <div className="llm-settings-stack">
+    <div className={`llm-settings-stack ${formStyles.surface}`}>
       <label className="settings-field wide">
           <span>服务商</span>
         <CardSelect label="模型服务" name="llm_provider" onChange={selectProvider} value={provider} options={PROVIDERS.map(item => ({ value:item.id, label:item.label }))} />
@@ -120,7 +121,7 @@ export function LlmProviderFields({
             autoComplete="off"
             maxLength={512}
             name="llm_api_key"
-            placeholder={keyConfigured ? "已配置 · 留空不修改" : "粘贴服务商提供的密钥"}
+            placeholder={keyConfigured ? "留空保留当前密钥" : "粘贴服务商提供的密钥"}
             type="password"
           />
           {keyConfigured ? (

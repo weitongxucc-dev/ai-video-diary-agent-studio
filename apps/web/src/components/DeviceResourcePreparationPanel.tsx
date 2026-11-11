@@ -7,6 +7,9 @@ import {
   type CpuPreparationRequest, type CpuPreparationShape, type DevicePreparationReceipt,
   type DeviceResourceStatus,
 } from '@/lib/api/device-preparation';
+import { Button } from './ui/button';
+import { IconButton } from './ui/icon-button';
+import { RefreshCw } from 'lucide-react';
 import styles from './DeviceResourcePreparationPanel.module.css';
 import { ApiRequestError } from '@/lib/api/transport';
 
@@ -236,7 +239,7 @@ export function DeviceResourcePreparationPanel() {
   const closed = attempt?.finalized;
 
   return <section className={styles.panel} aria-label="基础媒体准备">
-    <header className={styles.header}><h3>基础媒体准备</h3><span className={recorded ? styles.ready : undefined}>{profileLabel}</span></header>
+    <header className={styles.header}><div><h3>基础媒体准备</h3><span className={recorded ? styles.ready : styles.secondary}>{profileLabel}</span></div><IconButton label="重新读取状态" disabled={busy} onClick={() => void refresh()}><RefreshCw/></IconButton></header>
     <p className={styles.secondary}>按你使用的视频规格检查本机画面与音频处理条件，不会制作已有作品。配音模型等能力另行检查。</p>
     {status && !status.preparation_configured ? <p>请从桌面应用打开设置，绑定本机设备配置后再准备。</p>
       : status && !status.cpu_preparation_supported ? <p>当前系统尚不支持基础媒体准备；请使用已适配的 macOS 桌面版本。</p> : null}
@@ -252,12 +255,17 @@ export function DeviceResourcePreparationPanel() {
         <AppSelectOption value="24">24 帧/秒</AppSelectOption><AppSelectOption value="25">25 帧/秒</AppSelectOption><AppSelectOption value="30">30 帧/秒</AppSelectOption>
       </AppSelect></label>
       <label><span>处理时长（秒）</span><input aria-label="处理时长（秒）" type="number" min="0" step="any" value={duration} onChange={event => setDuration(event.target.value)}/></label>
+    </fieldset>
+    <details className={styles.workload}>
+      <summary>工作负载<span>{clips} 个镜头 · {audioInputs} 路声音 · {overlays} 层图文{Number(templates) ? ` · ${templates} 层动画` : ''}{nativeCommand ? ' · 程序化制作' : ''}</span></summary>
+      <fieldset className={styles.fields} disabled={locked}><legend>按作品的实际复杂度准备</legend>
       <label><span>镜头数量</span><input aria-label="镜头数量" type="number" min="1" step="1" value={clips} onChange={event => setClips(event.target.value)}/></label>
       <label><span>同时使用的声音</span><input aria-label="同时使用的声音" type="number" min="1" step="1" value={audioInputs} onChange={event => setAudioInputs(event.target.value)}/></label>
       <label><span>图文与字幕总层数</span><input aria-label="图文与字幕总层数" type="number" min="0" step="1" value={overlays} onChange={e=>setOverlays(e.target.value)}/></label>
       <label><span>其中的动画模板层数</span><input aria-label="动画模板层数" type="number" min="0" step="1" value={templates} onChange={e=>setTemplates(e.target.value)}/></label>
       <label className={styles.nativeChoice}><input type="checkbox" checked={nativeCommand} onChange={e=>setNativeCommand(e.target.checked)}/>同时准备程序化制作</label>
-    </fieldset>
+      </fieldset>
+    </details>
     <p className={styles.secondary}>音频使用 48 kHz 立体声。准备结果只记录所选规格的条件，不代表整条视频制作已通过。</p>
     {attempt && !closed ? <p role="status">{attempt.inputRejected ? '输入尚未被接受，未开始准备。请修改规格后再提交。' : receipt ? receiptLabel(receipt) : '尚未取得原请求的队列回执，请沿原输入继续核对。'}</p> : null}
     {closed ? <p role="status">{receipt?.state === 'done' ? '已取得核验启用回执，已有作品没有自动开始制作。' : '原准备已收束，资源档是否可用以当前读取结果为准。'}</p> : null}
@@ -266,11 +274,10 @@ export function DeviceResourcePreparationPanel() {
       {receipt.repair_action ? <p>{receipt.repair_action}</p> : null}
     </div> : null}
     <div className={styles.actions}>
-      {attempt?.workId && receipt && terminal.has(receipt.state) && !closed ? <button type="button" disabled={busy} onClick={() => void finalize()}>{busy ? '正在核验…' : receipt.state === 'done' ? '核验并启用' : '收束原准备'}</button>
-        : <button type="button" disabled={busy || !status?.cpu_preparation_supported || !status.preparation_configured || storageError} onClick={() => void (attempt?.inputRejected ? correctInput() : submit())}>
+      {attempt?.workId && receipt && terminal.has(receipt.state) && !closed ? <Button type="button" disabled={busy} onClick={() => void finalize()}>{busy ? '正在核验…' : receipt.state === 'done' ? '核验并启用' : '收束原准备'}</Button>
+        : <Button type="button" disabled={busy || !status?.cpu_preparation_supported || !status.preparation_configured || storageError} onClick={() => void (attempt?.inputRejected ? correctInput() : submit())}>
           {busy ? '正在处理…' : attempt && !closed ? attempt.inputRejected ? '修改准备规格' : attempt.workId ? '刷新原准备进度' : '继续核对原请求' : recorded || closed ? '重新准备基础媒体' : '开始准备基础媒体'}
-        </button>}
-      <button type="button" disabled={busy} onClick={() => void refresh()}>重新读取状态</button>
+        </Button>}
     </div>
     {error ? <div role="alert"><p className={styles.error}>本次操作未完成，原准备记录保留。</p><details className={styles.details}><summary>原因与处理</summary><p>{error}</p></details></div> : null}
     {attempt ? <details className={styles.details}><summary>本次准备记录</summary>

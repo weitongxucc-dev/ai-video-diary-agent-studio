@@ -469,7 +469,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
 
   return (
     <div className="home-composer">
-      {!materialReference && materialContext?.selection ? <p className="home-composer__context" aria-label="当前素材对话范围">
+      {!materialReference && materialContext?.selection ? <p className="home-composer__context" aria-label="当前素材对话范围" data-material-context>
         {materialContext.selection ? `当前范围：${materialContext.label ?? (materialContext.selection.scope === "asset" ? "整条素材" : "当前片段")}` : "当前未选中素材或片段。"}
       </p> : null}
 
