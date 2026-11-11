@@ -5,5 +5,5 @@
 .filters > h2 { margin:0; font:inherit; }
 .filters > [data-app-select-trigger] { width:100%; }
 .viewActions { display:flex; align-items:center; justify-content:space-between; gap:4px; border-top:1px solid var(--border-1); padding-top:8px; }
-.filterDot { width:4px; height:4px; border-radius:50%; background:var(--focus); position:absolute; right:4px; top:4px; }
+.filterDot { flex:0 0 4px; width:4px; height:4px; margin-left:-4px; align-self:flex-start; margin-top:5px; border-radius:50%; background:var(--focus); }
 .filterDot[hidden] { display:none; }
