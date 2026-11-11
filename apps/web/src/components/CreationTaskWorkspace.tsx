@@ -859,13 +859,16 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectPlayingClip(video: HTMLVideoElement) {
-    playheadRef.current = video.currentTime; setAudioPlayhead(video.currentTime);
+    const montage = workspace.montage;
+    if (!montage) return;
+    const time = Math.min(video.currentTime, montage.duration_seconds);
+    playheadRef.current = time; setAudioPlayhead(time);
     if (!["montage", "review"].includes(activeView) || selectedOverlayId || editorDraft) return;
-    if (selectedAudioId) { setAudioPlayhead(video.currentTime); return; }
-    const clips = workspace.montage?.clips ?? [];
-    const clip = clips.find((item, index) => video.currentTime >= item.timeline_start_seconds
-      && (video.currentTime < item.timeline_end_seconds
-        || (index === clips.length - 1 && video.currentTime === item.timeline_end_seconds)));
+    if (selectedAudioId) return;
+    const clips = montage.clips;
+    const clip = clips.find((item, index) => time >= item.timeline_start_seconds
+      && (time < item.timeline_end_seconds
+        || (index === clips.length - 1 && time === item.timeline_end_seconds)));
     if (!clip) return;
     if (selectedClipId !== clip.id) { setEditorDraft(false); invalidateEditPreview(); }
     setSelectedClipId(clip.id);

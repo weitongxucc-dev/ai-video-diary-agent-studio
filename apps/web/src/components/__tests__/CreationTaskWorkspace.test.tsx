@@ -4226,6 +4226,21 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.askAssistant).toHaveBeenCalledTimes(1);
   }, 10_000);
 
+  it("keeps editing at the logical timeline end when the media container has trailing milliseconds", async () => {
+    const initial = subtitleCoverWorkspace();
+    initial.montage!.duration_seconds = 3;
+    initial.montage!.clips = [{id:"clip-end",cue_id:"cue-1",asset_id:"asset-1",segment_id:"segment-1",source_reference:"workspace://clip.mp4",source_start_seconds:0,source_end_seconds:3,timeline_start_seconds:0,timeline_end_seconds:3,match_score:.9,match_reasons:[],needs_confirmation:false,role:"b_roll",locked:false,manually_selected:false}];
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+    fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
+    fireEvent.click(openStoryboardClip(1));
+    const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+    player.currentTime = 3.001;
+    fireEvent.timeUpdate(player);
+    fireEvent.change(await readyInput("局部修改要求"), {target:{value:"完整显示当前镜头"}});
+    fireEvent.click(screen.getByRole("button", {name:"精确预览修改"}));
+    await waitFor(() => expect(mocks.previewEdit).toHaveBeenCalledWith("task-1", expect.objectContaining({playhead_ms:3000,selected_object_refs:["clip:clip-end"]})));
+  });
+
   it("keeps the frozen material snapshot when the same clip is browsed during its draft checkpoint", async () => {
     mocks.withReferenceProvider = true;
     const initial = subtitleCoverWorkspace();

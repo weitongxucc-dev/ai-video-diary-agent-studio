@@ -58,5 +58,5 @@ it("reports an unavailable service without leftover successful rows", async () =
   render(await HealthPage());
   expect(screen.getByRole("alert")).toHaveTextContent("暂时连不上本机服务");
   expect(screen.queryByRole("list", { name: "本机检查项" })).toBeNull();
-  expect(screen.getByRole("link", { name: "打开设置" })).toHaveAttribute("href", "/settings");
+  expect(screen.getByRole("link", { name: "返回运行与诊断" })).toHaveAttribute("href", "/settings?section=runtime");
 });
