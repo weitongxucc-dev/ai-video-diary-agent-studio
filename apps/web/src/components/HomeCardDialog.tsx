@@ -1,8 +1,9 @@
 "use client";
 
 import { ChevronDown } from "lucide-react";
-import { useRef, useState, type ReactNode, type RefObject } from "react";
+import { useContext, useRef, useState, type ReactNode, type RefObject } from "react";
 import { AlertDialog, Dialog, Popover, Sheet } from "./ui/overlay";
+import { WorkspacePageContext } from "./workbench/context";
 import styles from "./SideCards.module.css";
 
 type Kind = "detail" | "config" | "confirmation" | "selection" | "modal" | "navigation";
@@ -16,8 +17,9 @@ export function HomeCardDialog({ kind = "modal", open = true, parentLayerId: _pa
   title: string; children: ReactNode; onClose: () => void; kind?: Kind;
   anchor?: RefObject<HTMLElement | null>; footer?: ReactNode; open?: boolean; parentLayerId?: string;
 }) {
+  const page = useContext(WorkspacePageContext);
   const Component = kind === "selection" ? Popover : kind === "confirmation" ? AlertDialog : kind === "detail" ? Sheet : Dialog;
-  return <Component {...props} open={open}/>;
+  return <Component {...props} open={open && page?.active !== false}/>;
 }
 
 export function CardSelect({ label, value, options, onChange, disabled = false, name }: {

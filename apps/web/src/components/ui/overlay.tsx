@@ -35,9 +35,9 @@ function useMediaEscape(open: boolean, onClose: () => void) {
 }
 
 export function Dialog({ title, children, footer, open, onClose, anchor, sheet = false }: OverlayProps & { sheet?: boolean }) {
+  const { id, node } = useMediaEscape(open, onClose);
   const visible = useContext(MediaVisibilityContext) && open;
-  const { id, node } = useMediaEscape(visible, onClose);
-  return <BaseDialog.Root open={visible} modal={!sheet} disablePointerDismissal={sheet} onOpenChange={(next, details) => {
+  return <BaseDialog.Root open={open} modal={!sheet} disablePointerDismissal={sheet} onOpenChange={(next, details) => {
     if (document.fullscreenElement && details.reason === "escape-key") { details.cancel(); return; }
     if (!next) onClose();
   }}>
@@ -57,7 +57,7 @@ export function Sheet(props: OverlayProps) { return <Dialog {...props} sheet/>; 
 export function AlertDialog({ title, children, footer, open, onClose, anchor }: OverlayProps) {
   const popup = useRef<HTMLDivElement>(null);
   const visible = useContext(MediaVisibilityContext) && open;
-  return <BaseAlertDialog.Root open={visible} onOpenChange={(next, details) => {
+  return <BaseAlertDialog.Root open={open} onOpenChange={(next, details) => {
     if (details.reason === "escape-key" || details.reason === "outside-press") { details.cancel(); return; }
     if (!next) onClose();
   }}>
@@ -75,7 +75,7 @@ export function AlertDialog({ title, children, footer, open, onClose, anchor }: 
 
 export function Popover({ title, children, footer, open, onClose, anchor }: OverlayProps) {
   const visible = useContext(MediaVisibilityContext) && open;
-  return <BasePopover.Root open={visible} onOpenChange={next => { if (!next) onClose(); }}>
+  return <BasePopover.Root open={open} onOpenChange={next => { if (!next) onClose(); }}>
     <BasePopover.Portal keepMounted>
       <BasePopover.Positioner anchor={anchor} side="bottom" align="end" sideOffset={6} collisionPadding={12} className={styles.positioner}>
         <BasePopover.Popup className={`${styles.card} ${styles.selection}`} finalFocus={anchor}>
