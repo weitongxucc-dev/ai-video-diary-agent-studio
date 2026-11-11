@@ -411,15 +411,6 @@ const SETTINGS_CATEGORIES: Array<{
   { id: "about", label: "关于与隐私", description: "帮助、法律和使用说明" },
 ];
 
-const SETTINGS_GROUPS: Array<{ id: string; label: string; sections: SettingsCategory[] }> = [
-  { id: "mine", label: "我的", sections: ["creators"] },
-  { id: "appearance", label: "外观", sections: ["appearance"] },
-  { id: "creation", label: "创作", sections: ["model", "production", "voices", "asr"] },
-  { id: "files", label: "文件与资料", sections: ["paths", "sources"] },
-  { id: "runtime", label: "运行", sections: ["runtime"] },
-  { id: "about", label: "关于", sections: ["about"] },
-];
-
 export default async function SettingsPage({
   searchParams,
 }: {
@@ -432,7 +423,6 @@ export default async function SettingsPage({
   )
     ? (requestedSection as SettingsCategory)
     : "model";
-  const activeGroup = SETTINGS_GROUPS.find(group => group.sections.includes(activeCategory))!;
   const { runtime, models, foundation, offline } = await loadSettings();
   const profile = foundation?.profile;
   const settingItems = runtime?.settings ?? [];
@@ -479,18 +469,14 @@ export default async function SettingsPage({
       inspectorTitle="设置状态"
     >
       <div className={`workspace-page ${own.page}`}>
-        <header className={`settings-category-panel ${own.categoryPanel}`}>
-          <nav className="settings-category-nav" aria-label="设置分类">
-            {SETTINGS_GROUPS.map(group => <Link
-              aria-current={activeGroup.id === group.id ? "page" : undefined}
-              className={activeGroup.id === group.id ? "is-active" : undefined}
-              href={`/settings?section=${activeGroup.id === group.id ? activeCategory : group.sections[0]}`}
-              key={group.id}
-            >{group.label}</Link>)}
-          </nav>
-        </header>
+        <nav className={own.categoryNav} aria-label="设置分类">
+          {SETTINGS_CATEGORIES.map(category => <Link
+            aria-current={activeCategory === category.id ? "page" : undefined}
+            href={`/settings?section=${category.id}`}
+            key={category.id}
+          >{category.label}</Link>)}
+        </nav>
         <section className={own.main}>
-          {activeGroup.sections.length > 1 ? <nav className={own.subnav} aria-label="设置项目">{activeGroup.sections.map(section => <Link key={section} href={`/settings?section=${section}`} aria-current={activeCategory === section ? "page" : undefined}>{SETTINGS_CATEGORIES.find(item => item.id === section)!.label}</Link>)}</nav> : null}
           {offline ? <p role="alert">暂时无法连接本地服务。</p> : null}
           {activeCategory === "creators" ? <SettingsCreators selectedMemberId={params.member} /> : null}
           {activeCategory === "appearance" ? <section className={own.auxiliary} aria-label="外观设置"><h2>外观</h2><SettingsAppearance /></section> : null}

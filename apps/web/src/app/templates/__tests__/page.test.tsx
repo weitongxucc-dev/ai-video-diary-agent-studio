@@ -13,12 +13,14 @@ it("passes both real versioned templates and input requirements to the workspace
   api.listVideoTemplates.mockResolvedValue({ items: [template] });
   api.getContentTemplates.mockResolvedValue({ templates: [catalog] });
   const page = await TemplatesPage();
-  expect(page.props).toEqual({ templates: [template], catalog: [catalog], offline: false });
+  expect(page.props.label).toBe("视频模板");
+  expect(page.props.children.props).toEqual({ templates: [template], catalog: [catalog], offline: false });
 });
 
 it("reports service failure instead of manufacturing a selectable catalog", async () => {
   api.listVideoTemplates.mockResolvedValue({ items: [] });
   api.getContentTemplates.mockRejectedValue(new Error("不可访问"));
   const page = await TemplatesPage();
-  expect(page.props).toEqual({ templates: [], catalog: [], offline: true });
+  expect(page.props.label).toBe("视频模板");
+  expect(page.props.children.props).toEqual({ templates: [], catalog: [], offline: true });
 });

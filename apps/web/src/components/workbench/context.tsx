@@ -10,8 +10,14 @@ export type WorkspacePageSlot = {
   updateShell: (id: string, props: AppShellProps) => void;
   viewState: Map<string, unknown>;
 };
+export const WorkspacePanelContext = createContext({ inspectorOpen: false, resourceOpen: false, revealTaskPanel: () => {} });
 export const WorkbenchRegistry = createContext<{ register: (page: Omit<WorkspacePage, "open">) => void } | null>(null);
 export const WorkspacePageContext = createContext<WorkspacePageSlot | null>(null);
+
+export const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates"];
+export function isWorkbenchManagedPath(pathname: string) {
+  return pathname === "/" || workspaceResourcePaths.includes(pathname) || pathname.startsWith("/tasks/");
+}
 
 export function useWorkspacePage() { return useContext(WorkspacePageContext); }
 /** Unsaved view inputs only; never a task, conversation or media receipt store. */

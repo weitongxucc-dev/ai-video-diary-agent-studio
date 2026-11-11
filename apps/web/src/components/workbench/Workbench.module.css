@@ -8,11 +8,11 @@
 .withResource > .resourcePage:not([hidden]) { grid-column:2; grid-row:2; overscroll-behavior:contain; border-left:1px solid var(--border-1); }
 .resourceHeader { grid-column:2; grid-row:1; display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; padding:2px 12px; border-left:1px solid var(--border-1); background:var(--surface-1); color:var(--text-2); }
 .resourceHeader > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* The resource list and its inspector share one auxiliary slot. */
+.withResource:not(:has(> .resourcePage:not([hidden]))) { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
+.withResource:not(:has(> .resourcePage:not([hidden]))) > .resourceHeader { display:none; }
 @container workbench (max-width:760px) {
- .withResource { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) 32px minmax(100px,30%); }
- .withResource > .page:not(.resourcePage):not([hidden]) { grid-column:1; grid-row:1; }
- .resourceHeader { grid-column:1; grid-row:2; border-left:0; border-top:1px solid var(--border-1); }
- .withResource > .resourcePage:not([hidden]) { grid-column:1; grid-row:3; border-left:0; border-top:1px solid var(--border-1); }
+ .withResource { grid-template-columns:minmax(0,1fr) minmax(240px,40%); }
 }
 .page:has([data-editor-workspace]) { overflow:hidden; }
 .tabScroll { height:36px; width:100%; }

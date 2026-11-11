@@ -48,13 +48,27 @@
 .shotLabel { display: flex; flex-direction: column; gap: 0; }
 .shotLabel strong { font-size: 12px; font-weight: 500; }
 .shotLabel small { font-size:12px; line-height:18px; color:var(--text-3); font-variant-numeric:tabular-nums; }
-.tracks { display:flex; flex-direction:column; flex:0 0 auto; min-height:72px; max-height:42%; gap:5px; padding:8px 0 4px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+.timelinePanel { --timeline-label-width:80px; --timeline-column-gap:8px; display:flex; flex-direction:column; flex:0 0 auto; min-height:100px; max-height:44%; min-width:0; border-top:1px solid var(--border-1); }
+.timelineToolbar { display:flex; flex:0 0 auto; align-items:center; gap:12px; min-height:34px; font-size:13px; }
+.timelineToolbar > time { color:var(--text-2); font-size:12px; font-variant-numeric:tabular-nums; }
+.timelineZoom { display:flex; align-items:center; gap:2px; margin-left:auto; }
+.timelineZoom input { width:72px; min-width:40px; accent-color:var(--accent); }
+.timelineZoom .iconButton { width:28px; min-height:28px; }
+.timelineScroll { min-height:0; min-width:0; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; }
+.tracks { position:relative; display:flex; flex-direction:column; min-height:72px; min-width:100%; gap:5px; padding:0 0 4px; }
+.timelinePlayhead { position:absolute; top:0; bottom:0; width:1px; z-index:3; background:var(--accent); pointer-events:none; }
+.timelinePlayhead::before { content:""; position:absolute; top:0; left:-3px; width:7px; height:7px; border-radius:2px; background:var(--accent); }
+.tracks .track > span, .tracks .ruler > span, .tracks .audioTrackLabel { position:sticky; left:0; z-index:4; height:100%; display:flex; align-items:center; background:var(--surface-1); box-shadow:var(--timeline-column-gap) 0 var(--surface-1); }
+.tracks .audioTrackLabel { flex-wrap:wrap; align-content:center; gap:0 4px; }
+.ruler > .timeRuler { position:relative; display:block; height:25px; padding:0; cursor:col-resize; touch-action:none; }
+.timeRuler time { position:absolute; top:1px; padding-left:3px; border-left:1px solid var(--border-2); font-variant-numeric:tabular-nums; pointer-events:none; }
+.timeRuler:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
 .tracks > * { flex-shrink:0; }
 .ruler { position:sticky; top:0; z-index:2; background:var(--surface-1); }
 .overlayTracks { display:grid; gap:4px; }
 .track > .overlayLane { position:relative; display:block; height:28px; background:var(--surface-2); border-radius:4px; }
 .overlayLane > button { position:absolute; top:1px; height:26px; text-align:left; border-color:color-mix(in srgb,var(--accent) 24%,var(--border-1)); }
-.timelineThumbnail { display:block; flex:0 0 30px; width:30px; height:22px; overflow:hidden; border-radius:2px; }
+.timelineThumbnail { display:block; flex:0 1 48px; min-width:0; width:48px; height:32px; overflow:hidden; border-radius:2px; }
 .timelineThumbnail > span { display:block; height:100%; }
 @container editor-stage (max-height:460px) {
   .playerViewport { min-height:48px; }
@@ -63,14 +77,14 @@
   .shotImage { display:none; }
   .shot[aria-pressed="true"] { border-color:var(--focus); }
   .shotLabel { line-height:18px; }
-  .tracks { max-height:48%; }
+  .timelinePanel { max-height:48%; }
 }
 .ruler, .track { display: grid; grid-template-columns: var(--timeline-label-width,64px) minmax(0, 1fr); align-items: center; gap: var(--timeline-column-gap,8px); font-size: 12px; color: var(--text-2); }
 .ruler > div time { white-space:nowrap; }
 .ruler > div { display: flex; justify-content: space-between; color: var(--text-3); font-size:12px; border-bottom: 1px solid var(--border-1); padding-bottom: 3px; }
 .track > div { display: flex; min-width: 0; gap: 2px; }
-.track > .videoLane { position:relative; display:block; height:34px; overflow:hidden; border-block:1px solid var(--border-1); background:var(--surface-2); }
-.track .videoTimelineClip { display:flex; align-items:center; gap:5px; position:absolute; top:2px; height:28px; min-width:0; overflow:hidden; padding:0 3px; border:1px solid var(--border-1); border-radius:4px; background:var(--surface-1); color:var(--text-2); font-size:12px; text-align:left; text-overflow:clip; }
+.track > .videoLane { position:relative; display:block; height:44px; overflow:hidden; border-block:1px solid var(--border-1); background:var(--surface-2); }
+.track .videoTimelineClip { display:flex; align-items:center; gap:5px; position:absolute; top:2px; height:38px; min-width:0; overflow:hidden; padding:0 3px; border:1px solid var(--border-1); border-radius:4px; background:var(--surface-1); color:var(--text-2); font-size:12px; text-align:left; text-overflow:clip; }
 .track .videoTimelineClip[aria-pressed="true"] { z-index:1; border-color:var(--focus); box-shadow:inset 0 0 0 1px var(--focus); background:color-mix(in srgb,var(--focus) 12%,var(--surface-1)); color:var(--text-1); }
 .track button { min-width: 0; height: 26px; padding: 0 5px; overflow: hidden; border: 1px solid var(--border-1); border-radius: 4px; background: var(--surface-2); color: var(--text-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .track button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface-1)); }
@@ -149,9 +163,15 @@
 .audioTrackLabel button[aria-pressed=true] { color: var(--accent); background: var(--accent-muted); }
 .audioLane { position: relative; min-height: 48px; border-block: 1px solid var(--border-1); background: var(--surface-2); }
 .audioClip { position: absolute; top: 2px; height: 42px; min-width: 4px; overflow: hidden; border: 1px solid var(--border-2); border-radius: 4px; background: color-mix(in srgb,var(--accent) 6%,var(--surface-1)); color: var(--accent); cursor: pointer; padding: 0; text-align: left; }
-.audioClip[aria-pressed=true] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.audioClip[data-selected=true] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .audioClip svg { width: 100%; height: 30px; stroke: currentColor; stroke-width: 1px; fill: none; }
-.audioClip > span { position: absolute; left: 5px; top: 1px; max-width: calc(100% - 10px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-2); background: var(--surface-1); }
+.audioClipSelect { position:absolute; inset:0; width:100%; border:0; padding:0; background:transparent; color:inherit; text-align:left; cursor:pointer; }
+.audioClipName { position:absolute; left:5px; top:0; max-width:calc(100% - 10px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; line-height:18px; color:var(--text-2); }
+.audioWaveState { position:absolute; left:5px; right:22px; bottom:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; line-height:18px; color:var(--text-3); }
+.audioClipSelect svg { position:absolute; left:0; bottom:0; height:22px; }
+.audioWaveDetails { position:absolute; right:1px; bottom:1px; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:3px; background:var(--surface-1); color:var(--text-2); cursor:pointer; }
+.audioWaveDetails svg { width:13px; height:13px; }
+.audioWaveDetails:hover { background:var(--surface-2); }
 .audioTimeline audio, .previewDiff audio { width: 100%; min-width: 0; height: 32px; }
 .audioPlayhead { position: absolute; inset-block: 0; width: 1px; background: var(--text-1); pointer-events: none; }
 
@@ -196,3 +216,12 @@
 }
 
 .button { composes: button from "./ui/workspace-controls.module.css"; }
+
+.timelineClipLabel { flex:0 0 auto; margin-left:auto; padding:0 2px; font-variant-numeric:tabular-nums; }
+.audioToolAccess { position:sticky; left:0; display:flex; align-items:center; width:fit-content; max-width:100%; gap:8px; min-height:30px; background:var(--surface-1); z-index:4; }
+.audioToolAccess > span { color:var(--text-2); font-size:12px; }
+.audioToolAccess .button { min-height:28px; }
+.audioToolPanel { display:grid; gap:12px; min-width:0; width:min(360px,calc(100vw - 48px)); }
+.audioToolPanel audio { width:100%; height:32px; }
+.track > .narrationLane { display:block; position:relative; height:26px; }
+.narrationLane > .waveformClip { position:absolute; top:0; }

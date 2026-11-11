@@ -1,4 +1,5 @@
 "use client";
+import { TimelineViewport } from "./TimelineViewport";
 import { OverlayTimeline } from "./creation-task/OverlayTimeline";
 import { WorkspaceVideo, WorkspaceAudio } from "./workbench/WorkspaceMedia";
 import { useWorkspaceViewState, useWorkspacePage } from "./workbench/context";
@@ -216,7 +217,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
     return () => observer.disconnect();
   }, [viewActive, previewRatio]);
   function position(video: HTMLVideoElement) { setTime(video.currentTime); onPosition(video); }
-  function seek(value: number) { if (videoRef.current) { videoRef.current.currentTime = value; position(videoRef.current); } }
+  function seek(value: number) { setTime(value); if (videoRef.current) { videoRef.current.currentTime = value; position(videoRef.current); } }
   function outputEvent(video: HTMLVideoElement, state: "loading" | "ready" | "error") {
     if (video === videoRef.current) setOutputState({ identity: outputIdentity, state });
   }
@@ -254,14 +255,11 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
       <span className={ui.shotImage}><ClipThumbnail clip={clip} taskId={taskId} statusId={`${storyboardId}-thumbnail-${index}`} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
       <span className={ui.shotLabel}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><small>{editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</small></span>
     </button>)}</div> : null}
-    <div className={ui.tracks} aria-label="配音与字幕时间范围">
-
-      <div className={ui.ruler}><span>时间</span><div>{Array.from({ length: 5 }, (_, i) => <time key={i}>{editorTime(montage.duration_seconds * i / 4)}</time>)}</div></div>
-      <div className={ui.track}><span>画面</span><div className={ui.videoLane}>{montage.clips.map((clip,index)=><button key={clip.id} type="button" className={ui.videoTimelineClip} style={{left:`${clip.timeline_start_seconds/montage.duration_seconds*100}%`,width:`${(clip.timeline_end_seconds-clip.timeline_start_seconds)/montage.duration_seconds*100}%`}} aria-label={`定位镜头 ${index+1}：${editorTime(clip.timeline_start_seconds)}–${editorTime(clip.timeline_end_seconds)}`} aria-pressed={clip.id===selectedId} onClick={()=>{onSelect(clip.id);seek(clip.timeline_start_seconds);}}><span className={ui.timelineThumbnail}><ClipThumbnail clip={clip} taskId={taskId}/></span><span>镜头 {index+1}</span></button>)}</div></div>
+    <TimelineViewport duration={montage.duration_seconds} time={time} playing={playing} selectedTime={selected?.timeline_start_seconds} selectionKey={selectedId} formatTime={editorTime} onSeek={value => { const clip = montage.clips.find(item => value >= item.timeline_start_seconds && value < item.timeline_end_seconds); if (clip && clip.id !== selectedId) onSelect(clip.id); seek(value); }}>
+      <div className={ui.track}><span>画面</span><div className={ui.videoLane}>{montage.clips.map((clip,index)=><button key={clip.id} type="button" className={ui.videoTimelineClip} style={{left:`${clip.timeline_start_seconds/montage.duration_seconds*100}%`,width:`${(clip.timeline_end_seconds-clip.timeline_start_seconds)/montage.duration_seconds*100}%`}} aria-label={`定位镜头 ${index+1}：${editorTime(clip.timeline_start_seconds)}–${editorTime(clip.timeline_end_seconds)}`} aria-pressed={clip.id===selectedId} onClick={()=>{onSelect(clip.id);seek(clip.timeline_start_seconds);}}><span className={ui.timelineThumbnail}><ClipThumbnail clip={clip} taskId={taskId}/></span><span className={ui.timelineClipLabel}>{String(index+1).padStart(2,"0")}</span></button>)}</div></div>
       {onSelectOverlay && montage.graphic_overlays?.length ? <OverlayTimeline formatTime={editorTime} items={montage.graphic_overlays} duration={montage.duration_seconds} selectedId={selectedOverlayId} disabled={busy} onSelect={onSelectOverlay}/> : null}
-      {audioTracks ? audioTracks(subtitleTrack) : <><NarrationWaveformTrack taskId={taskId} narrationCacheKey={narrationCacheKey} clips={montage.clips} cues={montage.cues} selectedId={selectedId} onSelect={onSelect} />{subtitleTrack}</>}
-
-    </div>
+      {audioTracks ? audioTracks(subtitleTrack) : <><NarrationWaveformTrack durationSeconds={montage.duration_seconds} taskId={taskId} narrationCacheKey={narrationCacheKey} clips={montage.clips} cues={montage.cues} selectedId={selectedId} onSelect={onSelect} />{subtitleTrack}</>}
+    </TimelineViewport>
   </div>;
 }
 

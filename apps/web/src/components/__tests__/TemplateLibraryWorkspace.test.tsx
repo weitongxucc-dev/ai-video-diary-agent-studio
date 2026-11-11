@@ -9,6 +9,7 @@ vi.mock("@/lib/preflight-draft", async importOriginal => ({ ...await importOrigi
 beforeEach(() => { sessionStorage.clear(); createVersion.mockReset(); });
 vi.mock("@/lib/api", () => ({ setVideoTemplateVisibility: (...args: unknown[]) => setVisibility(...args) }));
 vi.mock("@/components/AppShell", () => ({ AppShell: ({ children, inspector }: { children: React.ReactNode; inspector: React.ReactNode }) => <>{children}{inspector}</> }));
+import { WorkspacePageContext } from "@/components/workbench/context";
 import { TemplateLibraryWorkspace } from "@/components/TemplateLibraryWorkspace";
 const template: VideoTemplate = {
   visibility: "private", can_edit: true,
@@ -240,4 +241,22 @@ describe("template version editing", () => {
     expect(screen.getByText("此模板只读；可用固定版本创作。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "收回为仅自己可见" })).toBeNull();
   });
+});
+
+
+it("hides both template dialogs without discarding the unsaved version draft", async () => {
+  const slot = { id: "/templates", href: "/templates", updateShell: vi.fn(), viewState: new Map<string, unknown>() };
+  const content = (active: boolean) => <WorkspacePageContext.Provider value={{ ...slot, active }}><TemplateLibraryWorkspace offline={false} templates={[template]} /></WorkspacePageContext.Provider>;
+  const view = render(content(true));
+  fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
+  fireEvent.click(screen.getByRole("button", { name: "编辑名称与文案风格" }));
+  fireEvent.change(screen.getByLabelText("模板名称"), { target: { value: "保留未保存名称" } });
+  fireEvent.change(screen.getByLabelText("新文案的风格要求"), { target: { value: "保留未保存风格" } });
+  view.rerender(content(false));
+  await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  view.rerender(content(true));
+  const dialog = await screen.findByRole("dialog", { name: "编辑模板" });
+  expect(within(dialog).getByLabelText("模板名称")).toHaveValue("保留未保存名称");
+  expect(within(dialog).getByLabelText("新文案的风格要求")).toHaveValue("保留未保存风格");
+  expect(createVersion).not.toHaveBeenCalled();
 });

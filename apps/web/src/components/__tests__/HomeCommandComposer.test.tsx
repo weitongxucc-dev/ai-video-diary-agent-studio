@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import { AssistantConversationContext } from "../AssistantConversationContext";
@@ -818,7 +818,9 @@ describe("HomeCommandComposer", () => {
     const input = await readyInput("任务对话要求");
     fireEvent.change(input, { target: { value: "下一轮草稿保持" } });
     const reads = mocks.saved.size;
-    expect(screen.getByRole("button", { name: "撤销修改" })).toBeEnabled();
+    const undo = within(screen.getByRole("group", { name: "对话输入" })).getByRole("button", { name: "撤销修改" });
+    expect(undo).toBeEnabled();
+    expect(undo).toHaveAttribute("title", "撤销上一次已保存的修改");
     view.rerender(<HomeCommandComposer task={{ ...task, current_timeline_version_id: "v2", timeline_sequence: 2, can_undo: false }} />);
     expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
     expect(input).toHaveValue("下一轮草稿保持");
@@ -882,7 +884,9 @@ describe("HomeCommandComposer", () => {
     const requestId=mocks.undoEdit.mock.calls[0][1].request_id;
     view.rerender(<HomeCommandComposer task={{...task}} onTaskUpdated={onTaskUpdated}/>);
     expect(screen.queryByRole('button',{name:'撤销修改'})).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button',{name:'查询原撤销结果'}));
+    const recovery = within(screen.getByRole('group',{name:'对话输入'})).getByRole('button',{name:'查询原撤销结果'});
+    expect(recovery).toHaveTextContent('查询原撤销结果');
+    fireEvent.click(recovery);
     await waitFor(()=>expect(restoreApi.read).toHaveBeenLastCalledWith(task.id,requestId));
     expect(mocks.undoEdit).toHaveBeenCalledTimes(1);
   });

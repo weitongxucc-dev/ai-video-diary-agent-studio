@@ -11,6 +11,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { getScriptLibraryEntry, getScriptLibrarySections, getScriptLibraryRequest, isScriptLibraryWriteRejected } from "@/lib/api/script-library";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
 import type { ScriptLibraryEntryHeader, ScriptLibraryCursor, ScriptLibrarySectionWindow, ScriptLibraryReuseInput, ScriptLibraryReuseReceipt } from "@/lib/types/script-library";
+import { Button } from "@/components/ui/button";
 import { AppShell } from "@/components/AppShell";
 import { CardSelect, HomeCardDialog } from "@/components/HomeCardDialog";
 import type { KnowledgeItem, KnowledgeItemDetail, KnowledgeItemVersion } from "@/lib/source-api";
@@ -157,10 +158,10 @@ function KnowledgeWorkspaceContent({ items, loading, error, onRefresh, exampleMo
       </div>
       {error ? <section className={styles.error} role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>{items.length ? "以下为上次成功读取的资料；刷新成功后更新。" : "恢复服务或确认工作区授权后重试。"}</p><button onClick={onRefresh} type="button">重试</button></div></section> : null}
       <section className={styles.card}>
-          <div className={styles.cardHeading}><div><h2>资料集合</h2><small>{loading ? "正在读取" : error ? "读取失败" : visibleItems.length + " 条" + (exampleMode ? "示例" : "当前工作区") + "结果"} · 选择资料查看正文</small></div><DisplayModeToggle label="资料列表" value={sourcesView} onChange={setSourcesView} /></div>
+          <div className={styles.cardHeading}><div><h2>资料集合</h2><small>{loading ? "正在读取" : error ? "读取失败" : visibleItems.length + " 条" + (exampleMode ? "示例" : "当前工作区") + "结果"}</small></div><DisplayModeToggle label="资料列表" value={sourcesView} onChange={setSourcesView} /></div>
           {loading && !items.length ? <div className={styles.empty}><LoaderCircle className={styles.spinning} size={18} />正在读取知识库…</div>
             : visibleItems.length ? <div className={`${styles.grid} ${styles.sourceList}${sourcesView === "list" ? ` ${styles.list}` : ""}`}>{visibleItems.map((item) => <button className={styles.cover} aria-pressed={selectedId === item.id} data-open-details key={item.id} onClick={() => setSelectedId(item.id)} type="button">
-                <span className={styles.coverArt}>{itemIcon(item.content_type)}<small>{itemType(item.content_type)}</small></span>
+                <span className={styles.coverArt}>{itemIcon(item.content_type)}</span>
                 <strong>{item.title}</strong><small>{exampleMode ? item.exampleCategory : itemType(item.content_type)} · 版本 {item.version}</small>
                 <span className={styles.coverStatus}>{exampleMode ? item.exampleIssue ?? "示例状态" : visibilityLabel(item.visibility)}</span>
               </button>)}</div>
@@ -270,10 +271,10 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
   return <div className={styles.inspector}>
     {exampleMode ? <div className={styles.exampleBanner}>示例详情 · 不会保存或引用到任务</div> : null}
     <header><strong>{shown.title}</strong><small>{itemType(item.content_type)} · 版本 {shown.version ?? item.version} · {formatTime(item.created_at)}</small></header>
-    {!exampleMode ? <button type="button" disabled={!detail || Boolean(detailError)} onClick={() => referenceShown()}>引用当前查看版本到对话</button> : null}
-    {versions.length ? <div className={styles.detailSection}><h3>版本与出处</h3><button onClick={() => setVersionCardOpen(true)} type="button">选择查看版本</button>{isHistorical ? <p>正在查看历史版本 {selectedVersion?.version}：正文、出处和参数都来自这一版，不是当前版本。<button onClick={() => onViewVersion(null)} type="button">回到当前版本</button></p> : null}</div> : null}
+    {!exampleMode ? <div className={styles.inspectorActions}><Button variant="outline" type="button" disabled={!detail || Boolean(detailError)} onClick={() => referenceShown()}>引用当前查看版本到对话</Button><Button variant="ghost" type="button" onClick={() => setGrantCardOpen(true)}>工作空间授权</Button></div> : null}
+    {versions.length ? <div className={styles.detailSection}><h3>版本与出处</h3><Button variant="outline" onClick={() => setVersionCardOpen(true)} type="button">选择查看版本</Button>{isHistorical ? <p>正在查看历史版本 {selectedVersion?.version}：正文、出处和参数都来自这一版，不是当前版本。<Button variant="ghost" onClick={() => onViewVersion(null)} type="button">回到当前版本</Button></p> : null}</div> : null}
     {versionCardOpen ? <HomeCardDialog kind="config" title="版本与出处" onClose={() => setVersionCardOpen(false)}><div className={styles.inspector}><CardSelect label="查看版本" value={viewVersion ?? ""} options={[{ value: "", label: `当前版本 ${detail?.version}` }, ...versions.map(version => ({ value: version.version, label: `版本 ${version.version} · ${formatTime(version.saved_at)}` }))]} onChange={version => onViewVersion(version || null)} /><p>只切换查看版本，不修改资料或引用已绑定的版本。</p><p>原网址：{shownWebUrl ?? "无网页来源"}</p><p>抓取时间：{formatFetchTime(shownFetchedAt)}</p></div></HomeCardDialog> : null}
-    {!exampleMode ? <button type="button" onClick={() => setGrantCardOpen(true)}>工作空间授权</button> : null}
+
     {!exampleMode && grantCardOpen ? <HomeCardDialog kind="config" title="工作空间授权" onClose={() => setGrantCardOpen(false)}><section className={styles.detailSection}><h3>授权给其他工作空间</h3>
       <p>保留原工作空间、所有者和版本。授权允许目标空间读取和引用；撤销后停止新访问与后续引用。</p>
       {grantState && grantState.target_resolution !== "resolved" ? <><p role="status">{grantState.target_resolution === "same_workspace" ? "当前只有同一工作空间的本地成员，无法授权其他工作空间。" : "暂时无法确定可授权的工作空间，请检查成员连接。"}</p><details><summary>授权诊断</summary><p>{grantState.target_resolution_message} · {grantState.cross_workspace_status}</p></details></> : null}
@@ -300,7 +301,7 @@ function KnowledgeInspector({ item, detail, detailError, exampleMode, viewVersio
     </HomeCardDialog> : null}
 
     <div className={styles.compare}>
-      <section><h3>{exampleMode ? "原始来源片段 · 示例" : "已保存正文"}</h3>{!sections.length ? <p>{shown.body || "这个条目没有可显示的正文。"}</p> : null}{sections.length ? <ol>{sections.map(section => <li key={section.locator}><strong>{section.locator}{section.title ? ` ${section.title}` : ""}</strong><pre>{section.text}</pre>{!exampleMode ? <button type="button" disabled={!detail || Boolean(detailError)} onClick={() => referenceShown(section.locator)}>引用{section.locator}</button> : null}</li>)}</ol> : null}</section>
+      <section><h3>{exampleMode ? "原始来源片段 · 示例" : "已保存正文"}</h3>{!sections.length ? <p>{shown.body || "这个条目没有可显示的正文。"}</p> : null}{sections.length ? <ol>{sections.map(section => <li key={section.locator}><strong>{section.locator}{section.title ? ` ${section.title}` : ""}</strong><pre>{section.text}</pre>{!exampleMode ? <Button variant="outline" type="button" disabled={!detail || Boolean(detailError)} onClick={() => referenceShown(section.locator)}>引用{section.locator}</Button> : null}</li>)}</ol> : null}</section>
       {exampleMode ? <section><h3>AI 摘要 · 示例</h3><p>{item.exampleSummary ?? "示例暂无摘要"}</p></section> : null}
     </div>
     <section className={styles.detailSection}><h3>参数与出处</h3>{detailError ? <p role="alert">{detailError}</p> : parameters.length ? <table><thead><tr><th>参数</th><th>值</th><th>单位</th><th>出处</th></tr></thead><tbody>{parameters.map(parameter => <tr key={`${parameter.locator}-${parameter.key}`}><td>{parameter.key}</td><td>{parameter.value}</td><td>{parameter.unit ?? "—"}</td><td>{parameter.locator}</td></tr>)}</tbody></table> : <p>{exampleMode ? item.exampleParameters ?? "示例暂无参数" : "此版本未记录结构化参数。"}</p>}<details><summary>资料记录</summary><dl><div><dt>来源</dt><dd>{item.source_item_id ? "已关联信息源" : "当前条目无信息源关联"}</dd></div><div><dt>文件引用</dt><dd>{shown.file_reference || "无"}</dd></div><div><dt>{isHistorical ? "该版来源条目" : "内容指纹"}</dt><dd>{isHistorical ? (selectedVersion?.source_item_id ?? "无") : ((detail?.content_hash ?? item.content_hash) ?? "无")}</dd></div><div><dt>原网址</dt><dd>{shownWebUrl ? <a href={shownWebUrl} rel="noreferrer" target="_blank">{shownWebUrl}</a> : "无网页来源"}</dd></div><div><dt>{isHistorical ? "该版抓取时间" : "抓取时间"}</dt><dd>{formatFetchTime(shownFetchedAt)}</dd></div><div><dt>可见范围</dt><dd>{visibility === "shared" ? "团队共享" : "仅自己"}</dd></div><div><dt>归属</dt><dd>{item.ownership || "未记录"}</dd></div><div><dt>授权范围</dt><dd>{item.authorization || "未记录"}</dd></div><div><dt>版本</dt><dd>{shown.version ?? item.version}</dd></div></dl>{versions.length > 1 ? <ol>{versions.map(version => <li key={version.version}>版本 {version.version} · {formatTime(version.saved_at)} · {version.content_hash ?? "无指纹"}</li>)}</ol> : null}</details></section>

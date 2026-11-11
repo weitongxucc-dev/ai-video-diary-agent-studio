@@ -1,3 +1,4 @@
+import { WorkspaceRoute } from "@/components/workbench/WorkspaceRoute";
 import { TemplateLibraryWorkspace } from "@/components/TemplateLibraryWorkspace";
 import { getContentTemplates, listVideoTemplates } from "@/lib/api.server";
 import type { ContentTemplate, VideoTemplate } from "@/lib/types";
@@ -15,5 +16,5 @@ async function loadTemplates(): Promise<{ templates: VideoTemplate[]; catalog: C
 
 export default async function TemplatesPage() {
   const state = await loadTemplates();
-  return <TemplateLibraryWorkspace {...state} />;
+  return <WorkspaceRoute label="视频模板"><TemplateLibraryWorkspace {...state} /></WorkspaceRoute>;
 }

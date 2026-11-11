@@ -13,7 +13,7 @@ export function TaskViewNavigation({ workspace, activeView, onOpen }: { workspac
     <TabsList variant="line" aria-label="作品视图">{views.map(view => {
       const stage = productStages.find(stage => stage.id === view.id)!;
       const fact = productStageState(view.id, workspace, workspace.subtitle_tracks.some(track => track.status === "valid") && workspace.cover_asset?.status === "valid");
-      return <TabsTrigger key={view.id} value={view.id} title={fact.detail} data-stage-state={fact.state} aria-label={`${stage.title}：${fact.detail}`} disabled={!canOpenStage(view.id, workspace)}>{view.label}</TabsTrigger>;
+      return <TabsTrigger key={view.id} value={view.id} onClick={() => { if (activeView === view.id) onOpen(view.id); }} title={fact.detail} data-stage-state={fact.state} aria-label={`${stage.title}：${fact.detail}`} disabled={!canOpenStage(view.id, workspace)}>{view.label}</TabsTrigger>;
     })}</TabsList>
     <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" />}><ListChecks />制作进度<ChevronDown /></DropdownMenuTrigger>
       <DropdownMenuContent align="end" aria-label="制作进度与恢复">

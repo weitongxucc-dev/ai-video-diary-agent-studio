@@ -11,7 +11,13 @@
 .runDetails > summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .runDetails[open] > summary { margin-bottom:8px; }
 .runDetails .workSection { padding:0; border:0; background:transparent; }
-.auxiliaryBody { display:grid; flex:0 1 auto; min-width:0; min-height:0; max-height:44%; gap:12px; overflow:auto; overscroll-behavior:contain; padding:8px 20px 12px; border-top:1px solid var(--border-1); }
+.auxiliaryBody { display:grid; align-content:start; flex:0 1 auto; min-width:0; min-height:0; max-height:44%; gap:12px; overflow:auto; overscroll-behavior:contain; padding:12px 16px; border-top:1px solid var(--border-1); }
+/* One editing companion beside the persistent preview, never a second bottom pane. */
+.timelineWorkspace[data-task-panel] { display:grid; grid-template-columns:minmax(260px,34%) minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); }
+.timelineWorkspace[data-task-panel] > .viewNavigation { grid-column:1 / -1; grid-row:1; }
+.timelineWorkspace[data-task-panel] > .persistentStage { grid-column:2; grid-row:2; }
+.timelineWorkspace[data-task-panel] .auxiliaryBody { grid-column:1; grid-row:2; max-height:none; border-top:0; border-right:1px solid var(--border-1); }
+
 .editingAuxiliary { display:flex; flex:0 0 auto; flex-wrap:wrap; align-items:center; gap:4px 12px; max-height:26%; padding:4px 16px; }
 .editingAuxiliary .jobProgress { padding:0; border:0; }
 .editingAuxiliary .stageRuntime { display:contents; }
@@ -616,3 +622,16 @@
 
 .editingAuxiliary :global([aria-label="制作状态"]) { display:contents; }
 .editingAuxiliary :global([aria-label="制作状态"] > div:empty) { display:none; }
+
+.statusTray { position:relative; flex:0 0 auto; min-width:0; border-top:1px solid var(--border-1); background:var(--surface-1); }
+.statusSummary { display:flex; width:100%; min-height:34px; padding:4px 16px; gap:8px; border-radius:0; font-weight:400; color:var(--text-2); }
+.statusSummary > span:nth-child(2) { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.statusDot { flex:0 0 6px; width:6px; height:6px; border-radius:50%; background:var(--text-3); }
+.statusDot[data-attention] { background:var(--warning); }
+.statusAction { display:flex; align-items:center; flex-shrink:0; gap:6px; margin-left:auto; }
+.statusSummary[aria-expanded="true"] .statusAction svg { transform:rotate(180deg); }
+.statusContents { position:absolute; bottom:100%; inset-inline:0; z-index:40; max-height:min(480px,70vh); overflow:auto; border-block:1px solid var(--border-1); background:var(--surface-1); box-shadow:0 -8px 24px #0000000a; }
+.statusContents > header { position:sticky; top:0; display:flex; align-items:center; justify-content:space-between; padding:4px 12px 4px 16px; background:var(--surface-1); z-index:1; border-bottom:1px solid var(--border-1); }
+.statusContents .auxiliaryBody { display:grid; max-height:none; padding:12px 16px; border:0; gap:12px; }
+
+.statusFlow { display:contents; }
