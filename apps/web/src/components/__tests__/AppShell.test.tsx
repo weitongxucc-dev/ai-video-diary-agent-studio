@@ -48,7 +48,8 @@ vi.mock("@/lib/api", () => ({
 }));
 
 
-import { WorkspacePanelContext } from "../workbench/context";
+import { WorkbenchAssistantTargetContext, WorkspacePanelContext } from "../workbench/context";
+import { getCurrentAssistantConversation } from "@/lib/api";
 function QuickInspectorLauncher() { const panel = useContext(WorkspacePanelContext); return <button onClick={panel.openQuickInspector}>编辑镜头参数</button>; }
 
 import { AppShell } from "@/components/AppShell";
@@ -97,6 +98,15 @@ beforeEach(() => {
     configurable: true,
     value: () => ({ addEventListener: vi.fn(), matches: false, removeEventListener: vi.fn() }),
   });
+});
+
+it.each(["/production", "/history"])("keeps the visible target and task send scope on %s", async path => {
+  pathname = path;
+  const task = creationTask({ name: "仍在编辑的作品" });
+  render(<WorkbenchAssistantTargetContext.Provider value={{ task }}><AppShell><p>独立管理页面</p></AppShell></WorkbenchAssistantTargetContext.Provider>);
+  expect(screen.getByRole("button", { name: "当前作品：仍在编辑的作品" })).toBeVisible();
+  await screen.findByRole("textbox", { name: "任务对话要求" });
+  await waitFor(() => expect(getCurrentAssistantConversation).toHaveBeenCalledWith({ scope_kind: "task", scope_id: task.id }));
 });
 
 afterEach(() => {

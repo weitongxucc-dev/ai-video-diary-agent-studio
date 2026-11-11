@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 import {
   useEffect,
-  useCallback,
+  useCallback, useContext,
   useMemo,
   useRef,
   useState,
@@ -44,7 +44,9 @@ import {
 import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components/HomeCommandComposer";
 import { Button } from "./ui/button";
 import { IconButton } from "./ui/icon-button";
-import { WorkspacePanelContext, useWorkspacePage } from "./workbench/context";
+import { WorkbenchAssistantTargetContext, WorkspacePanelContext, useWorkspacePage } from "./workbench/context";
+import { useWorkbenchTarget } from "./workbench/WorkbenchTarget";
+import { ConversationTarget } from "./workbench/ConversationTarget";
 import { useWorkspaceBoot } from "./WorkspaceBootContext";
 import { PreflightDraftReturn } from "@/components/PreflightDraftReturn";
 import { HomeCardDialog, homeCardParentForTarget } from "@/components/HomeCardDialog";
@@ -215,7 +217,7 @@ export function AppShellFrame({
   quickInspector,
   quickInspectorKey,
   quickInspectorLabel,
-  conversation, conversationActions,
+  conversation, conversationActions, assistantContext,
   autoFocus = false,
   inspectorDismissKey,
   inspectorTitle = "当前任务详情",
@@ -227,6 +229,9 @@ export function AppShellFrame({
   resourceOpen = false,
   onReleaseResourcePane,
 }: AppShellProps) {
+  const sharedAssistantTarget = useContext(WorkbenchAssistantTargetContext);
+  const assistantTarget = assistantContext ?? sharedAssistantTarget;
+  const { clearTarget } = useWorkbenchTarget();
   const panels = useEditorPanels(true);
   const contentGrid = useRef<HTMLDivElement>(null);
   const [contentWidth, setContentWidth] = useState(0);
@@ -489,9 +494,9 @@ export function AppShellFrame({
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
         <div ref={contentGrid} data-inspector-open={dockInspector && !editorAuxiliaryHost || undefined} className={`${editorShell.contentGrid}${inspectorReplacesChat ? ` ${editorShell.inspectorReplacesChat}` : ""}${resourceReplacesChat ? ` ${editorShell.resourceReplacesChat}` : ""}${dockInspector && !editorAuxiliaryHost ? ` ${editorShell.withInspector}` : ""}${standalone ? ` ${editorShell.standalone}` : ""}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed && !standalone ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
           <section ref={conversationNode} onPlayCapture={event => { if (!chatVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} aria-label="创作助手" hidden={inspectorReplacesChat || resourceReplacesChat} className={editorShell.conversation}>
-            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}>{conversationActions}<div data-assistant-header-actions className="assistant-header-actions"/><Button variant="ghost" aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></Button></div></header>
+            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}>{conversationActions ?? (assistantTarget?.task ? <ConversationTarget name={assistantTarget.task.name} onReturn={() => router.push(creationTaskHref(assistantTarget.task!))} onClear={clearTarget} /> : null)}<div data-assistant-header-actions className="assistant-header-actions"/><Button variant="ghost" aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></Button></div></header>
             <div className={editorShell.conversationBody}><MediaVisibility visible={chatVisible}>
-              {!workspaceReady ? <div className="assistant-conversation-empty"><p role="status">{workspaceBoot.message}</p>{workspaceBoot.href ? <Link href={workspaceBoot.href}>{workspaceBoot.href === '/onboarding' ? '完成首次设置' : '登录账号'}</Link> : null}{workspaceBoot.retry ? <Button variant="outline" onClick={workspaceBoot.retry}>重新核验</Button> : null}</div> : conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={{ pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
+              {!workspaceReady ? <div className="assistant-conversation-empty"><p role="status">{workspaceBoot.message}</p>{workspaceBoot.href ? <Link href={workspaceBoot.href}>{workspaceBoot.href === '/onboarding' ? '完成首次设置' : '登录账号'}</Link> : null}{workspaceBoot.retry ? <Button variant="outline" onClick={workspaceBoot.retry}>重新核验</Button> : null}</div> : conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={assistantTarget?.task ? undefined : { pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} {...assistantTarget} />}
             </MediaVisibility></div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>

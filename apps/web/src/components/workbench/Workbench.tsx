@@ -13,7 +13,7 @@ import { Button } from "../ui/button";
 import { ConversationTarget } from "./ConversationTarget";
 import { MediaVisibility } from "../ui/media-visibility";
 import { ScrollArea } from "../ui/scroll-area";
-import { WorkbenchRegistry, WorkspacePanelContext, WorkspacePageContext, workspacePageId, workspaceResourcePaths, isWorkbenchManagedPath, type WorkspacePage } from "./context";
+import { WorkbenchAssistantTargetContext, WorkbenchRegistry, WorkspacePanelContext, WorkspacePageContext, workspacePageId, workspaceResourcePaths, isWorkbenchManagedPath, type WorkspacePage } from "./context";
 import { EditorDockProvider } from "./EditorDock";
 import { EditorResourcePane } from "./EditorResourcePane";
 import styles from "./Workbench.module.css";
@@ -145,7 +145,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
       <Button variant="ghost" size="icon" className={styles.close} aria-label={`关闭${page.label}页签`} title={`关闭${page.label}页签`} onClick={() => close(page.id)}><X /></Button>
     </div>)}
   </TabsList></ScrollArea> : undefined;
-  return <WorkbenchRegistry.Provider value={registry}><WorkbenchViewStates.Provider value={viewStates.current}><EditorDockProvider activePageId={shellPage?.id}>
+  return <WorkbenchAssistantTargetContext.Provider value={target}><WorkbenchRegistry.Provider value={registry}><WorkbenchViewStates.Provider value={viewStates.current}><EditorDockProvider activePageId={shellPage?.id}>
     {children}
     <div hidden={!managed} className={styles.host} onPlayCapture={event => {
       if (!(event.target instanceof HTMLMediaElement)) return;
@@ -168,7 +168,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
         </AppShellFrame>
       </Tabs>
     </div>
-  </EditorDockProvider></WorkbenchViewStates.Provider></WorkbenchRegistry.Provider>;
+  </EditorDockProvider></WorkbenchViewStates.Provider></WorkbenchRegistry.Provider></WorkbenchAssistantTargetContext.Provider>;
 }
 
 export function Workbench({ children }: { children: ReactNode }) {

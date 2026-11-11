@@ -386,7 +386,7 @@ function InputReceipt({ item, reading, onWithdraw }: { item: AssistantInputRecei
         {item.business_effect ? <p>修改回执：{item.business_effect.status}</p> : null}
       </div>
     </ReadingDetails>
-    {item.reason && item.reason !== "waiting_agent" ? <p>{item.reason}</p> : null}
+    {item.reason && item.reason !== "waiting_agent" ? <p>{item.reason === "turn_ended_before_input_receipt" ? "本轮已结束，这条追加要求尚未确认处理；原文已保留。" : item.reason}</p> : null}
     {item.status === "accepted" && onWithdraw ? <Button variant="ghost" type="button" onClick={() => onWithdraw(item.input_id)}>撤回</Button> : null}
   </div>;
 }
