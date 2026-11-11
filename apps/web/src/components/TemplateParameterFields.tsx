@@ -15,7 +15,7 @@ export function TemplateParameterFields({value, onChange, disabled}: {
       return <label key={binding.key} className={control === "multiline" ? styles.wideField : undefined}>{binding.label}
         {control === "multiline" || control === "text" && text.includes("\n") ? <textarea rows={3} maxLength={4000} disabled={disabled} value={text} onChange={event=>change(binding.key,event.target.value)}/>
           : <span className={styles.parameterInput}>
-            {control === "color" ? <input aria-label={`选择${binding.label}颜色`} type="color" disabled={disabled} value={/^#[0-9a-f]{6}$/i.test(text) ? text : "#000000"} onChange={event=>change(binding.key,event.target.value)}/> : null}
+            {control === "color" ? <span className={styles.colorPicker} data-inherited={!text || undefined} style={text ? {background:text} : undefined}><input aria-label={`选择${binding.label}颜色`} title={text || "沿用模板，点击自定义颜色"} type="color" disabled={disabled} value={/^#[0-9a-f]{6}$/i.test(text) ? text : "#000000"} onChange={event=>change(binding.key,event.target.value)}/></span> : null}
             <input aria-label={binding.label} type={control === "number" ? "number" : "text"} step={control === "number" ? "any" : undefined} disabled={disabled} value={text} placeholder={control === "color" || control === "font" ? "沿用模板" : undefined} onChange={event=>change(binding.key,event.target.value)}/>
           </span>}
       </label>;

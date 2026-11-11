@@ -76,7 +76,7 @@
 .blockedEditor strong { color: var(--text-1); font-size: 13px; font-weight: 400; }
 .blockedEditor p { margin: 4px 0 0; color: var(--text-2); font-size: 12px; }
 
-.empty { display: flex; align-items: flex-start; gap: 9px; padding: 18px 12px; color: var(--text-3); }
+.empty { display: flex; flex-direction:column; align-items: flex-start; gap: 4px; padding: 18px 0; color: var(--text-3); }
 .empty strong { color: var(--text-1); font-size: 13px; font-weight: 400; }
 .empty p { margin: 3px 0 0; color: var(--text-2); font-size:12px; }
 .fullStage { margin-top: 14px; padding: 18px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
@@ -139,7 +139,7 @@
 
 /* Profiles share the same compact object rows and side-card form. */
 .page { font-size:13px; }
-.sectionHeader { align-items:center; justify-content:flex-start; flex-wrap:wrap; gap:10px; padding:12px 0; }
+.sectionHeader { align-items:flex-end; justify-content:flex-start; flex-wrap:wrap; gap:10px; padding:12px 0; }
 .sectionHeader h2 { margin-right:auto; }
 .sectionHeader button, .importActions button { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:32px; }
 .sectionHeader button { flex-shrink:0; white-space:nowrap; }
@@ -182,12 +182,10 @@
 .intakeRepair p { margin:0; overflow-wrap:anywhere; line-height:21px; color:var(--text-2); }
 .intakeRepair button { min-height:32px; padding:6px 10px; border:1px solid var(--border-2); border-radius:8px; color:var(--text-1); background:var(--surface-1); }
 
-.profileSearch { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:12px; color:var(--text-2); margin-top:12px; white-space:nowrap; }
-.profileSearch input { width:min(100%,260px); min-width:0; height:32px; padding:6px 10px; border:1px solid var(--border-2); border-radius:8px; color:var(--text-1); background:var(--surface-1); font-size:13px; }
+.profileSearch { display:flex; flex-direction:column; align-items:stretch; gap:5px; min-width:0; font-size:12px; color:var(--text-2); white-space:nowrap; }
+.profileSearch input { width:100%; min-width:0; height:32px; padding:6px 10px; border:1px solid var(--border-2); border-radius:8px; color:var(--text-1); background:var(--surface-1); font-size:13px; }
 @container (max-width:440px) {
   .sectionHeader > h2, .sectionHeader > div { flex-basis:100%; }
-  .profileSearch { display:grid; grid-template-columns:minmax(0,1fr); gap:6px; }
-  .profileSearch input { width:100%; }
 }
 .stage { padding:0; }
 .objectRail > button { height:56px; }
@@ -204,4 +202,5 @@
 .usageHelp p { margin:6px 0; }
 
 .srOnly { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
-.sectionHeader .profileSearch { flex:1; margin:0 auto 0 0; }
+.sectionHeader .profileSearch { flex:1 1 220px; margin:0 auto 0 0; }
+@container (max-width:440px) { .sectionHeader .profileSearch { flex-basis:100%; } }

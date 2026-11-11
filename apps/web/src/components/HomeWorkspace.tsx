@@ -181,8 +181,8 @@ export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets 
   function taskRow(item: HomeTaskItem) {
     return <button className={view === "board" ? styles.taskCard : styles.taskRow} key={item.id} onClick={() => setSelectedTaskId(item.id)} type="button" title={taskName(item.title)}>
       <span className={styles.taskName}><CreationTaskStageIcon stage={item.stage} className={styles.taskStatusIcon} /><strong>{taskName(item.title)}</strong><ChevronRight aria-hidden size={14} /></span>
-      <span className={styles.taskState} data-status={item.status}>{item.status === "running" ? <LoaderCircle aria-hidden="true" className="is-spinning" size={12} strokeWidth={1.7} /> : null}{creationTaskShortStatus(item.status, item.stage)}</span>
-      <span className={styles.taskNext}>{taskNextAction(item)}<ArrowRight aria-hidden size={12} /></span>
+      <span className={styles.taskMeta}><span className={styles.taskState} data-status={item.status}>{item.status === "running" ? <LoaderCircle aria-hidden="true" className="is-spinning" size={12} strokeWidth={1.7} /> : null}{creationTaskShortStatus(item.status, item.stage)}</span>
+      <span className={styles.taskNext}>{taskNextAction(item)}</span></span>
     </button>;
   }
   const trendRangePicker = <div aria-label="趋势范围" className={styles.range}>{([7, 30] as const).map(days => <button aria-pressed={range === days} key={days} onClick={() => { setRange(days); live?.onDays(days); }} type="button">{days} 天</button>)}</div>;

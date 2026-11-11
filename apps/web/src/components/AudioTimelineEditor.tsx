@@ -4,39 +4,88 @@ import { useWorkspaceViewState } from "./workbench/context";
 
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { apiUrl, importCreationTaskAudio, listenCreationTaskAudio, getCreationTaskAudioWaveform, resolveCreationTaskMediaResponse, cancelCreationTaskMediaJob, taskMediaJobLabel, TaskMediaJobError } from "@/lib/api";
+import { apiUrl, importCreationTaskAudio, listenCreationTaskAudio, getCreationTaskAudioWaveform, getCreationTaskMediaJob, resolveCreationTaskMediaResponse, cancelCreationTaskMediaJob, taskMediaJobLabel, TaskMediaJobError } from "@/lib/api";
 import type { AudioEditInput, AudioTimeline, TimelineAudioClip, TimelineAudioTrack, TaskMediaJob } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
+import { HomeCardDialog } from "./HomeCardDialog";
+import { AudioLines, CircleAlert } from "lucide-react";
 
-function AudioWave({ taskId, versionId, clip }: { taskId: string; versionId: string | null; clip: TimelineAudioClip }) {
+function AudioTimelineClip({ taskId, versionId, clip, duration, selected, muted, onSelect }: {
+  taskId: string; versionId: string | null; clip: TimelineAudioClip; duration: number;
+  selected: boolean; muted: boolean; onSelect: (time: number) => void;
+}) {
   const identity = JSON.stringify([taskId, versionId, clip.id, clip.source_ref]);
   const [wave, setWave] = useState<{ identity: string; peaks: number[]; seconds_per_peak: number } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const data = wave?.identity === identity ? wave : null;
+  const [error, setError] = useState<{ identity: string; message: string } | null>(null);
   const [job, setJob] = useState<{ identity: string; value: TaskMediaJob } | null>(null);
+  const [details, setDetails] = useState(false);
+  const [reading, setReading] = useState(false);
+  const controllerRef = useRef<AbortController | null>(null);
+  const detailsAnchor = useRef<HTMLButtonElement>(null);
+  const data = wave?.identity === identity ? wave : null;
+  const currentError = error?.identity === identity ? error.message : null;
+  const currentJob = job?.identity === identity ? job.value : null;
   useEffect(() => {
+    controllerRef.current?.abort();
     const controller = new AbortController();
+    controllerRef.current = controller;
+    setReading(false);
+    setDetails(false);
     getCreationTaskAudioWaveform(taskId, clip.id, controller.signal)
       .then(response => resolveCreationTaskMediaResponse(taskId, response, "waveform", {
         signal: controller.signal, baseVersionId: versionId,
         onUpdate: value => { if (!controller.signal.aborted) setJob({ identity, value }); },
       }))
       .then(value => { if (!controller.signal.aborted) { setWave({ ...value, identity }); setError(null); } })
-      .catch(cause => { if (!controller.signal.aborted && !(cause instanceof TaskMediaJobError && ["cancelled", "stale"].includes(cause.job.status))) setError(identity); });
+      .catch(cause => { if (!controller.signal.aborted) setError({ identity, message: cause instanceof Error ? cause.message : "波形读取失败" }); });
     return () => controller.abort();
   }, [taskId, versionId, clip.id, clip.source_ref, identity]);
-  if (error === identity) return <span>波形读取失败</span>;
-  if (!data) return <span role="status">{job?.identity === identity ? taskMediaJobLabel(job.value) : "读取波形…"}</span>;
-  const first = Math.floor(clip.source_start_ms / 1000 / data.seconds_per_peak);
-  const last = Math.min(data.peaks.length, Math.ceil(clip.source_end_ms / 1000 / data.seconds_per_peak));
-  const stride = Math.max(1, Math.ceil((last-first)/240));
-  const points = [];
-  for (let i=first; i<last; i+=stride) {
-    const peak = Math.max(...data.peaks.slice(i, Math.min(i+stride,last)));
-    const x = (i-first) / Math.max(1,last-first) * 240;
-    points.push(`M${x},${16-peak*15}V${16+peak*15}`);
+  async function reread() {
+    if (!currentJob) return;
+    const controller = new AbortController();
+    controllerRef.current?.abort(); controllerRef.current = controller;
+    setReading(true);
+    try {
+      const receipt = await getCreationTaskMediaJob(taskId, currentJob.job_id, controller.signal);
+      const value = await resolveCreationTaskMediaResponse(taskId, receipt, "waveform", {
+        signal: controller.signal, baseVersionId: versionId,
+        onUpdate: next => { if (!controller.signal.aborted) setJob({ identity, value: next }); },
+      });
+      if (!controller.signal.aborted) { setWave({ ...value, identity }); setError(null); setDetails(false); }
+    } catch (cause) {
+      if (!controller.signal.aborted) setError({ identity, message: cause instanceof Error ? cause.message : "波形读取失败" });
+    } finally { if (!controller.signal.aborted) setReading(false); }
   }
-  return <svg viewBox="0 0 240 32" preserveAspectRatio="none" aria-hidden><path d={points.join(" ")} vectorEffect="non-scaling-stroke" /></svg>;
+  useEffect(() => () => controllerRef.current?.abort(), []);
+  let waveform = null;
+  if (data) {
+    const first = Math.floor(clip.source_start_ms / 1000 / data.seconds_per_peak);
+    const last = Math.min(data.peaks.length, Math.ceil(clip.source_end_ms / 1000 / data.seconds_per_peak));
+    const stride = Math.max(1, Math.ceil((last-first)/240));
+    const points = [];
+    for (let i=first; i<last; i+=stride) {
+      const peak = Math.max(...data.peaks.slice(i, Math.min(i+stride,last)));
+      const x = (i-first) / Math.max(1,last-first) * 240;
+      points.push(`M${x},${16-peak*15}V${16+peak*15}`);
+    }
+    waveform = <svg viewBox="0 0 240 32" preserveAspectRatio="none" aria-hidden><path d={points.join(" ")} vectorEffect="non-scaling-stroke" /></svg>;
+  }
+  const state = currentError ? "波形未加载" : currentJob ? taskMediaJobLabel(currentJob) : "读取波形…";
+  return <div className={ui.audioClip} data-selected={selected || undefined}
+    style={{left:`${clip.timeline_start_ms/1000/duration*100}%`,width:`${((clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000/duration*100}%`,opacity:muted || clip.muted ? .45 : 1}}>
+    <button type="button" className={ui.audioClipSelect} aria-label={`选择音频：${clip.name}`} aria-pressed={selected}
+      onClick={event => { const bounds=event.currentTarget.getBoundingClientRect();
+        const fraction=event.detail && bounds.width ? Math.max(0,Math.min(1,(event.clientX-bounds.left)/bounds.width)) : 0;
+        onSelect((clip.timeline_start_ms+fraction*((clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1)))/1000); }}>
+      <span className={ui.audioClipName}>{clip.name}{clip.locked ? " · 已锁定" : ""}</span>
+      {waveform ?? <span className={ui.audioWaveState} role="status" title={currentError ?? state}>{state}</span>}
+    </button>
+    {currentError ? <button ref={detailsAnchor} className={ui.audioWaveDetails} type="button" aria-label={`查看波形问题：${clip.name}`} title="查看波形问题" onClick={() => setDetails(true)}><CircleAlert size={13}/></button> : null}
+    {details ? <HomeCardDialog kind="selection" title="波形未加载" anchor={detailsAnchor} onClose={() => setDetails(false)}>
+      <p role="alert">{currentError}</p>
+      {currentJob ? <><button className={ui.button} disabled={reading} type="button" onClick={() => void reread()}>{reading ? "读取中…" : "重新读取波形"}</button><p>读取原请求的结果，不会重新生成配音。</p></> : <p>未取得原波形请求，请在运行详情中核对。</p>}
+    </HomeCardDialog> : null}
+  </div>;
 }
 
 export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, durationSeconds: duration, selectedId, onSelect, onPreview, busy, playhead = 0, onListenPosition, sharedTimeScale = false, subtitleTrack }: {
@@ -44,6 +93,8 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
   selectedId: string | null; playhead?: number; onSelect: (id: string, time?: number) => void;
   onPreview: (input: AudioEditInput) => void; busy: boolean; onListenPosition?: (time: number) => void; sharedTimeScale?: boolean; subtitleTrack?: ReactNode;
 }) {
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const toolsAnchor = useRef<HTMLButtonElement>(null);
   const [zoom, setZoom] = useWorkspaceViewState("audio.zoom", 1);
   const [role, setRole] = useWorkspaceViewState("audio.role", graph.tracks.find(track => track.role === "music")?.id ?? graph.tracks[0]?.id ?? "");
   const importTrackId = graph.tracks.some(track => track.id === role) ? role : "";
@@ -127,15 +178,12 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
     <div data-workspace-scroll="audio-tracks" className={sharedTimeScale ? undefined : ui.audioScroll}><div style={{ width: `${(sharedTimeScale ? 1 : zoom)*100}%` }}>{graph.tracks.filter(track => track.clips.length).map(track => <div className={ui.audioTrack} key={track.id}>
       <div className={ui.audioTrackLabel}><button type="button" aria-pressed={selectedId === track.id} onClick={() => onSelect(track.id)}>{track.name}{track.muted ? " · 静音" : ""}</button>
         <button type="button" aria-label={`独听${track.name}`} aria-pressed={solo.includes(track.id)} onClick={() => { setSolo(solo.includes(track.id) ? solo.filter(id => id !== track.id) : [...solo,track.id]); setAudio(null); }}>独听</button></div>
-      <div className={ui.audioLane}>{track.clips.map(clip => <button type="button" key={`${clip.id}:${clip.source_ref}`} className={ui.audioClip} aria-label={`选择音频：${clip.name}`} aria-pressed={selectedId === clip.id}
-        style={{ left: `${clip.timeline_start_ms/1000/duration*100}%`, width: `${((clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000/duration*100}%`, opacity: clip.muted || track.muted ? .45 : 1 }}
-        onClick={event => { const bounds=event.currentTarget.getBoundingClientRect();
-          const fraction=event.detail && bounds.width ? Math.max(0,Math.min(1,(event.clientX-bounds.left)/bounds.width)) : 0;
-          onSelect(clip.id,(clip.timeline_start_ms+fraction*((clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1)))/1000); setStart(clip.timeline_start_ms/1000); setEnd(Math.min(duration,(clip.timeline_start_ms+(clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000)); setAudio(null); }}>
-        <AudioWave taskId={taskId} versionId={versionId} clip={clip} /><span>{clip.name}{clip.locked ? " · 已锁定" : ""}</span>
-      </button>)}<span className={ui.audioPlayhead} style={{left:`${playhead/duration*100}%`}} aria-hidden /></div>
+      <div className={ui.audioLane}>{track.clips.map(clip => <AudioTimelineClip key={`${clip.id}:${clip.source_ref}`} taskId={taskId} versionId={versionId} clip={clip} duration={duration} selected={selectedId === clip.id} muted={track.muted}
+        onSelect={time => { onSelect(clip.id,time); setStart(clip.timeline_start_ms/1000); setEnd(Math.min(duration,(clip.timeline_start_ms+(clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000)); setAudio(null); }}/>) }<span className={ui.audioPlayhead} style={{left:`${playhead/duration*100}%`}} aria-hidden /></div>
     </div>)}</div></div>
     {subtitleTrack}
+    <div className={ui.audioToolAccess}><button ref={toolsAnchor} className={ui.button} type="button" aria-expanded={toolsOpen} aria-haspopup="dialog" onClick={() => setToolsOpen(value => !value)}><AudioLines size={14}/>音频工具</button>{working ? <span role="status">处理中…</span> : error ? <span>音频处理未完成</span> : null}</div>
+    {toolsOpen ? <HomeCardDialog kind="selection" title="音频工具" anchor={toolsAnchor} onClose={() => setToolsOpen(false)}><div className={ui.audioToolPanel}>
     <div className={ui.audioControls} role="group" aria-label="音频导入与试听">
       {importControls}
       {listenControls}
@@ -143,6 +191,7 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
     {job?.context === listenContext && job.value.status !== "succeeded" ? <p role="status">{taskMediaJobLabel(job.value)}{["queued", "running", "interrupted"].includes(job.value.status) ? <button className={ui.button} type="button" onClick={() => void cancelListen()}>{job.value.result_kind === "audio_source" ? "取消音频处理" : "取消试听"}</button> : null}</p> : null}
     {audio && audio.context===listenContext && audio.start===start && audio.end===end && audio.soloKey===solo.join(",") ? <WorkspaceAudio aria-label="选区音频试听" controls src={apiUrl(audio.url)} onPlay={event=>onListenPosition?.(audio.start+event.currentTarget.currentTime)} onTimeUpdate={event=>onListenPosition?.(audio.start+event.currentTarget.currentTime)} /> : null}
     {error ? <p role="alert">{error}</p> : null}
+    </div></HomeCardDialog> : null}
   </section>;
 }
 

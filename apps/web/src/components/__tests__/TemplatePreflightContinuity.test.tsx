@@ -8,6 +8,7 @@ vi.mock("@/components/AppShell", () => ({ AppShell: ({ children }: { children: R
 vi.mock("@/lib/preflight-draft", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/preflight-draft")>(), readPreflightDraftScope: mocks.scope }));
 vi.mock("@/lib/api", () => ({ setVideoTemplateVisibility: vi.fn(), previewCreationPlan: mocks.preview, confirmCreationPlan: mocks.confirm, CreationPlanApiError: class extends Error {} }));
 vi.mock("@/lib/media-profiles-api", () => ({ listVoiceProfiles: vi.fn().mockResolvedValue({ items: [] }), listPersonProfiles: vi.fn().mockResolvedValue({ items: [] }), getDefaultVoice: vi.fn().mockResolvedValue({ id: "late-default", version: "v9" }) }));
+import { WorkspacePageContext } from "@/components/workbench/context";
 import { TemplateLibraryWorkspace } from "@/components/TemplateLibraryWorkspace";
 import { CreateProductionTaskForm } from "@/components/CreateProductionTaskForm";
 import { loadPreflightDraft, preflightReturnUrl, resolvePreflightRepairContext, savePreflightDraft, savePreflightRepairContext, type PreflightDraftFields } from "@/lib/preflight-draft";
@@ -67,4 +68,25 @@ it("does not apply a late identity reply after leaving templates", async () => {
   seed(); const view = render(<TemplateLibraryWorkspace offline={false} templates={[selected]} />); await screen.findByRole("button", { name: "换用此模板并返回创作" });
   let resolve!: (value: typeof scope) => void; mocks.scope.mockReturnValueOnce(new Promise(done => { resolve = done; }));
   fireEvent.click(screen.getByRole("button", { name: "换用此模板并返回创作" })); view.unmount(); await act(async () => resolve(scope)); expect(loadPreflightDraft(sessionStorage, scope, id)).toEqual(fields); expect(mocks.push).not.toHaveBeenCalled();
+});
+
+
+it("keeps the template page return target frozen and cancels a late repair after it is hidden", async () => {
+  seed();
+  const slot = { id: "/templates", href: `/templates?return_to=${encodeURIComponent(preflightReturnUrl(id, fields.template!))}`, updateShell: vi.fn(), viewState: new Map<string, unknown>() };
+  const content = (active: boolean) => <WorkspacePageContext.Provider value={{ ...slot, active }}><TemplateLibraryWorkspace offline={false} templates={[selected]} /></WorkspacePageContext.Provider>;
+  const view = render(content(true));
+  await screen.findByRole("button", { name: "换用此模板并返回创作" });
+  mocks.raw = "return_to=https%3A%2F%2Fevil.test";
+  view.rerender(content(true));
+  expect(screen.queryByRole("alert")).toBeNull();
+  let resolve!: (value: typeof scope) => void;
+  mocks.scope.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+  fireEvent.click(screen.getByRole("button", { name: "换用此模板并返回创作" }));
+  view.rerender(content(false));
+  await act(async () => resolve(scope));
+  expect(loadPreflightDraft(sessionStorage, scope, id)).toEqual(fields);
+  expect(mocks.push).not.toHaveBeenCalled();
+  view.rerender(content(true));
+  expect(screen.getByRole("button", { name: "换用此模板并返回创作" })).toBeEnabled();
 });

@@ -56,9 +56,11 @@
 .inspectorDock > header { display:flex; align-items:center; justify-content:space-between; flex:0 0 36px; gap:8px; padding:0 12px; border-bottom:1px solid var(--border-1); }
 .inspectorDock h2 { margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:400 13px/21px var(--font-ui); outline:none; }
 .inspectorBody { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; padding:12px; scrollbar-width:thin; }
-@container workspace-shell (max-width:1060px) {
-  .withInspector { grid-template-columns:var(--editor-right) minmax(0,1fr); grid-template-rows:minmax(180px,1fr) minmax(160px,38%); }
-  .withInspector.chatCollapsed { grid-template-columns:44px minmax(0,1fr); }
-  .withInspector .conversation { grid-row:1 / -1; }
-  .withInspector .inspectorDock { grid-column:2; grid-row:2; border-left:0; border-top:1px solid var(--border-1); }
-}
+.inspectorReplacesChat { grid-template-columns:320px minmax(0,1fr); }
+.inspectorReplacesChat.chatCollapsed { grid-template-columns:320px minmax(0,1fr); }
+.inspectorReplacesChat .inspectorDock { grid-column:1; grid-row:1; border-left:0; border-right:1px solid var(--border-1); }
+.inspectorReplacesChat .conversation { display:none; }
+
+.resourceReplacesChat, .resourceReplacesChat.chatCollapsed { grid-template-columns:minmax(0,1fr); }
+.resourceReplacesChat > :global(.desktop-main-scroll) { grid-column:1; }
+.resourceReplacesChat .conversation { display:none; }

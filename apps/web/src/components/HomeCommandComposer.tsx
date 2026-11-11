@@ -1,6 +1,7 @@
 "use client";
 
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, LoaderCircle, RotateCcw, Undo2 } from "lucide-react";
+import { Button } from "./ui/button";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
@@ -471,6 +472,10 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         autoFocus={autoFocus}
         busy={pending !== null || awaitingVersionRead}
         configured={modelConfigured}
+        composerActions={<>
+          {task && undoAvailable ? <Button variant="ghost" size="icon" className="assistant-icon-action" disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button" aria-label={pending === "undo" ? "撤销中" : "撤销修改"} title={pending === "undo" ? "正在撤销修改" : "撤销上一次已保存的修改"}>{pending === "undo" ? <LoaderCircle size={15} aria-hidden className="is-spinning"/> : <Undo2 size={15} aria-hidden/>}</Button> : null}
+          {task && restoreRequest ? <Button variant="ghost" className="assistant-recovery-action" disabled={pending !== null} onClick={() => void queryTaskRestore()} type="button" aria-label="查询原撤销结果" title="查询原请求的结果，不重复提交撤销">{pending === "undo" ? <LoaderCircle size={14} aria-hidden className="is-spinning"/> : <RotateCcw size={14} aria-hidden/>}查询原撤销结果</Button> : null}
+        </>}
         input={assistant.draftText}
         inputLabel={task ? "任务对话要求" : materialContext ? "素材对话" : "制作要求"}
         onInput={(value) => { assistant.setDraftText(value); setPreview(null); setPreviewOpen(false); }}
@@ -525,8 +530,6 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         ? "作品版本已变化，正在重新读取；原要求与引用保持原值，暂不发送。"
         : "当前作品已重新读取，请核对内容与引用后再发送；原要求已保留。"}</p> : null}
       {awaitingTaskRead ? <p role="status">正在回读当前草稿，撤销暂不可用。</p> : null}
-      {task && undoAvailable ? <div className="home-composer__footer"><button disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button">{pending === "undo" ? "撤销中" : "撤销修改"}</button></div> : null}
-      {task && restoreRequest?<div className="home-composer__footer"><button disabled={pending!==null} onClick={()=>void queryTaskRestore()} type="button">查询原撤销结果</button></div>:null}
     </div>
   );
 }

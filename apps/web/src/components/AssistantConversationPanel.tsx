@@ -7,7 +7,7 @@ import { ConversationMessage } from "./ui/conversation-message";
 import { ReferencePicker } from "./ui/reference-picker";
 import { ReferenceChips } from "./ui/reference-chips";
 
-import { useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { Children, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference, useAssistantReferenceStatus, useAssistantSelection } from "./AssistantConversationProvider";
 import { HomeCardDialog } from "./HomeCardDialog";
 import "./AssistantConversation.css";
@@ -38,6 +38,20 @@ function ReadingDetails({ reading, readingKey, defaultOpen = false, className, c
 }) {
   return <details className={className} data-reading-key={readingKey} open={reading?.get(readingKey, defaultOpen) ?? defaultOpen}
     onToggle={event => reading?.save(readingKey, event.currentTarget.open)}>{children}</details>;
+}
+
+function TurnResult({ summary, summaryInHeading, reading, readingKey, defaultOpen, children }: {
+  summary: string; summaryInHeading: boolean; reading?: ReadingState; readingKey: string;
+  defaultOpen: boolean; children: ReactNode;
+}) {
+  const details = Children.toArray(children);
+  if (summaryInHeading && !details.length) return <div className="assistant-turn-result">
+    <span className="assistant-visually-hidden">本轮结果</span><p className="assistant-result-summary">{summary}</p>
+  </div>;
+  return <ReadingDetails reading={reading} readingKey={readingKey} defaultOpen={defaultOpen} className="assistant-turn-result">
+    <summary><span className={summaryInHeading ? "assistant-visually-hidden" : undefined}>本轮结果</span>{summaryInHeading ? <span>{summary}</span> : null}</summary>
+    <div className="assistant-result-details">{!summaryInHeading ? <AssistantFailureMessage reading={reading} readingKey={`${readingKey}:diagnostic`} message={summary}/> : null}{details}</div>
+  </ReadingDetails>;
 }
 
 type TurnBlock = { kind: "tool"; tool_id: number; label: string; state: "running" | "succeeded" | "failed" | "unreturned"; summary: string; failure?: AssistantToolFailure };
@@ -199,12 +213,12 @@ function AssistantText({ text }: { text: string }) {
 
 function TurnContent({ turn, reading }: { turn: AssistantConversationTurn; reading?: ReadingState }) {
   const tools = turnTools(turn);
-  const runningTools = tools.some((tool) => tool.state === "running");
+  const runningTool = tools.find((tool) => tool.state === "running");
   const failedTools = tools.some((tool) => tool.state === "failed" || tool.state === "unreturned");
   const failure = [...tools].reverse().find(tool => tool.state === "failed")?.failure;
   return <div className="assistant-markdown-wrap">
-    {tools.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:tools`} className="assistant-turn-tools" defaultOpen={turn.status === "running"}>
-      <summary>工具记录 · {tools.length} 项 · {runningTools ? "进行中" : failedTools ? "含失败记录" : "调用已结束"}{failure ? <span className="assistant-tool-summary-failure"><span>{failure.reason}</span>{failure.repair_action ? <span>{failure.repair_action}</span> : null}</span> : null}</summary>
+    {tools.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:tools`} className="assistant-turn-tools">
+      <summary>工具记录 · {tools.length} 项 · {runningTool ? `正在${runningTool.label}` : failedTools ? "含失败记录" : "调用已结束"}{failure ? <span className="assistant-tool-summary-failure"><span>{failure.reason}</span>{failure.repair_action ? <span>{failure.repair_action}</span> : null}</span> : null}</summary>
       <ol>{tools.map((tool, index) => <li data-state={tool.state} key={`${tool.tool_id}-${index}`}>
         <strong>{tool.label} · {toolStateLabels[tool.state]}</strong>
         <ToolResult tool={tool} reading={reading} readingKey={`${turn.id}:tool:${tool.tool_id}:diagnostic`}/>
@@ -407,7 +421,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
   const storyboardFailure = storyboard?.kind === "storyboard_regeneration_receipt"
     ? storyboard.receipt.failure_reason : storyboard?.failure.reason;
   const outcomeStatus = continuation?.status ?? job?.status;
-  const mediaJobLabel = job && (job.status === "queued" || job.status === "cancelled")
+  const mediaJobLabel = job && job.status === "queued"
     ? taskMediaJobLabel(job) : null;
   const unknownRequest = assistantTurnHasUnknownRequest(turn, taskScopeId);
   const pendingResult = assistantTurnNeedsResultRefresh(turn, taskScopeId);
@@ -454,6 +468,12 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
         : result?.kind === "failure" && typeof result.message === "string"
           ? result.message
           : null);
+  const resultNeedsAttention = pendingResult || unknownRequest || Boolean(windowReadError || readinessMessage
+    || segment?.failure || segment?.revision?.adoption?.reason || restore?.failure || restore?.receipt?.failure || storyboardFailure
+    || scriptWindow?.failure || job?.failure_reason && job.status !== "cancelled" || job?.repair_action
+    || job?.resource_wait?.context === "pending_request")
+    || ["failed", "interrupted", "rejected"].includes(outcomeStatus ?? "");
+  const summaryInHeading = Boolean(taskResult && resultSummary);
   return <article className="assistant-persisted-turn" data-turn-status={turn.status} data-turn-id={turn.id}>
     {turn.user_message.trim() ? <ConversationMessage className="assistant-user-message" savedOpen={reading?.get(`${turn.id}:user`, false)} onOpenChange={open => reading?.save(`${turn.id}:user`, open)}>{turn.user_message}</ConversationMessage> : null}
     {businessContinuation ? <p className="assistant-stream-status">继续完成原要求</p> : null}
@@ -461,7 +481,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
     {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
     {inputReceipts.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:inputs`} defaultOpen={inputReceipts.some(item => item.status === "rejected" || item.status === "interrupted")} className="assistant-turn-inputs"><summary>追加要求记录 · {inputReceipts.length}</summary>{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</ReadingDetails> : null}
     {turn.status === "running" ? <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={12} className="is-spinning"/>正在回复…</p> : null}
-    {resultSummary ? <ReadingDetails reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult) && (pendingResult || turn.assistant_text.trim() !== resultSummary)} className="assistant-turn-result"><summary>本轮结果</summary><div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:result:diagnostic`} message={resultSummary}/>
+    {resultSummary ? <TurnResult summary={resultSummary} summaryInHeading={summaryInHeading} reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult) && (resultNeedsAttention || !turn.assistant_text.trim())}>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
       {storyboardSummary && storyboardSummary !== resultSummary ? <p>{storyboardSummary}</p> : null}
       {segment?.failure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:segment:diagnostic`} message={segment.failure.reason}/>{segment.failure.repair_action ? <p>{segment.failure.repair_action}</p> : null}</div> : null}
@@ -475,14 +495,16 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
       {storyboardFailure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:storyboard:diagnostic`} message={storyboardFailure}/></div> : null}
       {storyboard && storyboard.kind !== "storyboard_regeneration_receipt" && storyboard.failure.repair_action ? <p>{storyboard.failure.repair_action}</p> : null}
       {unknownRequest && graphicSourceReady ? <p>{graphicSourceSummary}</p> : null}
-      {mediaJobLabel ? <p>{mediaJobLabel}</p> : continuation?.waiting_reason || job?.waiting_reason
+      {mediaJobLabel ? <p>{mediaJobLabel}</p> : outcomeStatus !== "cancelled" && (continuation?.waiting_reason || job?.waiting_reason)
         ? <p>{continuation?.waiting_reason ?? job?.waiting_reason}</p> : null}
       {job?.status !== "cancelled" && job?.failure_reason ? <p>{job.failure_reason}</p> : null}{job?.repair_action ? <p>{job.repair_action}</p> : null}
       {job?.resource_wait ? <ResourceWaitReceipt receipt={job.resource_wait} reading={reading} readingKey={`${turn.id}:resource:${job.resource_wait.observation_id}:${job.resource_wait.context}`}/> : null}
       {refreshPaused && pendingResult ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
+    </TurnResult> : null}
+    <div className="assistant-result-actions">
       {onOpenEditProposal && canOpenTurnProposal(turn) ? <Button variant="ghost" type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</Button> : null}
       {pendingResult || unknownRequest || job?.status === "interrupted" ? <Button variant="ghost" type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</Button> : null}
-    </div></ReadingDetails> : null}
+    </div>
     {onOpenCreationRequest && turn.status !== "running" && result?.kind === "creation_request" && typeof result.creation_request_id === "string" ? <Button variant="ghost" className="assistant-text-action" type="button" disabled={Boolean(continueReason)} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</Button> : null}
     {turn.status === "failed" ? <p role="status">{outputRecovered ? "本轮回复曾中断；制作与技术检查已恢复完成，历史失败保留。"
       : productionRecovered ? "本轮回复曾中断；成片已生成，输出尚未检查，历史记录保留。"
@@ -494,7 +516,7 @@ function TurnView({ turn, reading, onTransferReply, onCreatePlanFromReply, onOpe
 }
 
 export function AssistantConversationPanel({
-  state, input, onInput, onSend, onConversationChange, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState = "none", busy, configured, scopeLabel, inputLabel = "对话要求", placeholder, compact = false, autoFocus = false, legacyHistory,
+  state, input, onInput, onSend, onConversationChange, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, transferDraftState = "none", busy, configured, scopeLabel, inputLabel = "对话要求", placeholder, compact = false, autoFocus = false, legacyHistory, composerActions,
 }: {
   state: Conversation;
   input: string;
@@ -513,6 +535,7 @@ export function AssistantConversationPanel({
   compact?: boolean;
   autoFocus?: boolean;
   legacyHistory?: ReactNode;
+  composerActions?: ReactNode;
 }) {
   const selectedProfile = useAssistantProfileReference();
   const selectedMaterial = useAssistantMaterialReference();
@@ -683,10 +706,23 @@ export function AssistantConversationPanel({
   }
 
   useEffect(() => { void getAssistantCapabilities().then(setCapabilities).catch(() => undefined); }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!focus) return;
-    focus.style.height = "0px";
-    focus.style.height = `${Math.max(50, Math.min(150, focus.scrollHeight))}px`;
+    const resize = () => {
+      // CSS owns the min/max height; recalculate wrapping when the panel narrows.
+      focus.style.height = "0px";
+      focus.style.height = `${focus.scrollHeight}px`;
+    };
+    resize();
+    let width = focus.getBoundingClientRect().width;
+    const observer = new ResizeObserver(() => {
+      const nextWidth = focus.getBoundingClientRect().width;
+      if (nextWidth === width) return;
+      width = nextWidth;
+      resize();
+    });
+    observer.observe(focus);
+    return () => observer.disconnect();
   }, [input, focus]);
   useEffect(() => {
     if (autoFocus && !state.loading && conversation) focus?.focus();
@@ -802,10 +838,11 @@ export function AssistantConversationPanel({
         {busy || currentRunning ? <p>本轮运行中，可以编辑草稿，暂不能执行命令。</p> : null}
       </div> : null}
       <InputGroupTextarea ref={setFocus} aria-autocomplete="list" aria-controls={menuOpen ? `${diagnosticsId}-commands` : undefined} aria-describedby={`${diagnosticsId}-input-help`} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => { onInput(event.target.value); if (event.target.value.endsWith("@") && !composing) setReferencePickerOpen(true); }} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={placeholder ?? "想做什么，或想怎么改？"} rows={2} />
-      {acceptsQueuedInput ? <label className="assistant-input-mode">追加要求<select aria-label="追加要求处理方式" value={inputMode} onChange={event=>setInputMode(event.target.value as "steer"|"follow_up")}><option value="steer">安全点调整当前目标</option><option value="follow_up">本轮完成后处理</option></select></label> : null}
       <div className="assistant-conversation-actions">
         <div className="assistant-input-tools">
           <ReferencePicker open={referencePickerOpen} onOpenChange={setReferencePickerOpen} onAdded={()=>{if(input.endsWith("@"))onInput(input.slice(0,-1));focus?.focus();}}/>
+          {composerActions}
+          {acceptsQueuedInput ? <label className="assistant-input-mode"><span className="assistant-visually-hidden">追加要求</span><select aria-label="追加要求处理方式" title="选择在安全点调整当前目标，或在本轮完成后处理" value={inputMode} onChange={event=>setInputMode(event.target.value as "steer"|"follow_up")}><option value="steer">安全点追加</option><option value="follow_up">完成后处理</option></select></label> : null}
           {!configured ? <a className="assistant-input-status" href="/settings" aria-label="连接文字模型" title="在设置中连接对话服务"><CircleHelp size={14}/>对话未连接</a> : referenceStatus.pending ? <span className="assistant-input-status" role="status">正在核验引用</span> : null}</div>
         {currentRunning && lastTurnId && !lastTurnId.startsWith("pending-") ? <Button variant="ghost" className="assistant-stop" type="button" aria-label="停止本轮" title="停止本轮回复；已提交的业务动作不撤销" onClick={() => void state.stop().catch((cause) => setError(cause.message))}><Square aria-hidden="true" size={14}/></Button>
           : null}

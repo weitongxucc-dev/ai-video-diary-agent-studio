@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useState } from "react";
+import { useContext, useState } from "react";
 import type { AnchorHTMLAttributes, ImgHTMLAttributes } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTask } from "@/lib/types";
@@ -50,6 +50,7 @@ vi.mock("@/lib/api", () => ({
 
 import { AppShell } from "@/components/AppShell";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
+import { MediaVisibilityContext } from "@/components/ui/media-visibility";
 
 function creationTask(overrides: Partial<CreationTask> = {}): CreationTask {
   return {
@@ -623,5 +624,90 @@ describe("AppShell", () => {
       expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"396px"});
       view.unmount();localStorage.clear();
     });
+  });
+});
+
+describe("hidden workspace media", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
+
+  it("allows standalone page media after the work area was collapsed", () => {
+    function Media() {
+      const visible = useContext(MediaVisibilityContext);
+      return <video aria-label="页面试听" data-media-visible={visible} controls src="/preview.mp4"/>;
+    }
+    const view = render(<AppShell editorLayout conversation={<p>对话</p>}><Media/></AppShell>);
+    const video = screen.getByLabelText("页面试听") as HTMLVideoElement;
+    const pause = vi.spyOn(video, "pause").mockImplementation(() => {});
+    fireEvent.click(screen.getByRole("button", {name:"布局"}));
+    fireEvent.click(screen.getByRole("button", {name:"作品区"}));
+    expect(video).toHaveAttribute("data-media-visible", "false");
+    expect(pause).toHaveBeenCalledOnce();
+    pathname = "/settings";
+    view.rerender(<AppShell editorLayout conversation={<p>对话</p>}><Media/></AppShell>);
+    expect(screen.getByLabelText("页面试听")).toBe(video);
+    expect(video).toHaveAttribute("data-media-visible", "true");
+    pause.mockClear();
+    fireEvent.play(video);
+    expect(pause).not.toHaveBeenCalled();
+  });
+
+  it("pauses a collapsed conversation and preserves its draft and media position on return", () => {
+    render(<AppShell conversation={<><input aria-label="未发送草稿" defaultValue="保留这个要求"/><audio aria-label="对话试听" controls src="/chat.wav"/></>}><p>作品</p></AppShell>);
+    const audio = screen.getByLabelText("对话试听") as HTMLAudioElement;
+    const pause = vi.spyOn(audio, "pause").mockImplementation(() => {});
+    audio.currentTime = 7;
+    fireEvent.play(audio);
+    expect(pause).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name:"收起对话栏" }));
+    expect(pause).toHaveBeenCalledOnce();
+    fireEvent.play(audio);
+    expect(pause).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button", { name:"展开对话栏" }));
+    expect(screen.getByLabelText("对话试听")).toBe(audio);
+    expect(audio.currentTime).toBe(7);
+    expect(screen.getByLabelText("未发送草稿")).toHaveValue("保留这个要求");
+  });
+
+  it.each(["resource", "inspector"])("pauses the conversation when a narrow %s pane replaces it", kind => {
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(node: Element) { if (node.hasAttribute("data-editor-toolbar-parent")) this.callback([{ target:node, contentRect:{width:900} } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      unobserve() {} disconnect() {}
+    });
+    function Subject() {
+      const [resource, setResource] = useState(false);
+      return <AppShell editorLayout resourceOpen={resource} conversation={<audio aria-label="对话试听" src="/chat.wav"/>} inspector={<p>媒体属性</p>} inspectorTitle="媒体属性">
+        <button onClick={() => setResource(true)}>打开资源</button><button data-open-details>打开属性</button><button onClick={() => setResource(false)}>返回作品</button>
+      </AppShell>;
+    }
+    render(<Subject/>);
+    const audio=screen.getByLabelText("对话试听") as HTMLAudioElement;
+    const pause=vi.spyOn(audio,"pause").mockImplementation(()=>{});
+    fireEvent.click(screen.getByRole("button",{name:kind === "resource" ? "打开资源" : "打开属性"}));
+    expect(audio.closest("section[aria-label='创作助手']")).toHaveAttribute("hidden");
+    expect(pause).toHaveBeenCalledOnce();
+    fireEvent.play(audio);
+    expect(pause).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button",{name:kind === "resource" ? "返回作品" : "关闭属性面板"}));
+    expect(screen.getByRole("region",{name:"创作助手"})).toContainElement(audio);
+    expect(pause).toHaveBeenCalledTimes(2);
+  });
+
+  it("pauses the collapsed work area and blocks late native playback without resetting its media", () => {
+    render(<AppShell editorLayout conversation={<p>对话</p>}><video aria-label="剪辑成片" controls src="/output.mp4"/></AppShell>);
+    const video=screen.getByLabelText("剪辑成片") as HTMLVideoElement;
+    const pause=vi.spyOn(video,"pause").mockImplementation(()=>{});
+    video.currentTime=42;
+    fireEvent.click(screen.getByRole("button",{name:"布局"}));
+    fireEvent.click(screen.getByRole("button",{name:"作品区"}));
+    expect(pause).toHaveBeenCalledOnce();
+    fireEvent.play(video);
+    expect(pause).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button",{name:"布局"}));
+    fireEvent.click(screen.getByRole("button",{name:"作品区"}));
+    expect(screen.getByLabelText("剪辑成片")).toBe(video);
+    expect(video.currentTime).toBe(42);
+    expect(pause).toHaveBeenCalledTimes(2);
   });
 });

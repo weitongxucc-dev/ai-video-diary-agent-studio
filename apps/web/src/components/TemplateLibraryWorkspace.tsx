@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { ArrowRight, ChevronRight, History, Layers3, Library, Pencil, Search, WifiOff } from "lucide-react";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { boundedPreflightReturn, readPreflightDraftScope, resolvePreflightRepairContext, replacePreflightDraftTemplate, sameDraftScope, savePreflightRepairContext, type PreflightRepairContext } from "@/lib/preflight-draft";
+import { useWorkspacePage, useWorkspaceSearchParams } from "./workbench/context";
 import { AppShell } from "@/components/AppShell";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { createVideoTemplateVersion } from "@/lib/video-template-api";
@@ -45,7 +46,10 @@ const emptyCopy: Record<TemplateView, { title: string; hint: string; href: strin
 
 export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: { offline: boolean; templates: VideoTemplate[]; catalog?: ContentTemplate[] }) {
   const router = useRouter();
-  const rawReturn = useSearchParams()?.get("return_to") ?? null;
+  const pageActive = useWorkspacePage()?.active ?? true;
+  const activeRef = useRef(pageActive);
+  useLayoutEffect(() => { activeRef.current = pageActive; }, [pageActive]);
+  const rawReturn = useWorkspaceSearchParams().get("return_to");
   const repairRevision = useRef(0);
   const [repairContext, setRepairContext] = useState<PreflightRepairContext | null>(null);
   const [repairReady, setRepairReady] = useState(false);
@@ -64,12 +68,12 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
     return () => { active = false; repairRevision.current = request + 1; };
   }, [rawReturn]);
   async function handleUseDraftTemplate(item: VideoTemplate) {
-    if (!repairContext || !repairReady || repairBusy) return;
+    if (!activeRef.current || !repairContext || !repairReady || repairBusy) return;
     const request = repairRevision.current;
     setRepairBusy(true); setRepairError(null);
     try {
       const scope = await readPreflightDraftScope();
-      if (request !== repairRevision.current) return;
+      if (request !== repairRevision.current || !activeRef.current) return;
       if (!sameDraftScope(scope, repairContext.scope)) throw new Error("成员或工作区已变化，没有修改原草稿。");
       const href = replacePreflightDraftTemplate(window.sessionStorage, repairContext, { id: item.id, version: item.version }, window.location.origin);
       router.push(href);
@@ -155,7 +159,7 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
     </dl>
     {selected.origin === "user" ? selected.can_edit === true ? <button type="button" className={own.editButton} onClick={() => { ++editorRevision.current; setEditing(selected); setSaveNotice(null); }}><Pencil size={15}/>编辑名称与文案风格</button> : <p className={own.readOnly}>此模板只读；可用固定版本创作。</p> : null}
     {saveNotice ? <p role="status">{saveNotice}</p> : null}
-    {editing ? <TemplateVersionEditor key={`${editing.id}:${editing.version}`} template={editing} onClose={() => { ++editorRevision.current;setEditing(null); }} onSaved={(saved, ticket) => {
+    {editing ? <TemplateVersionEditor key={`${editing.id}:${editing.version}`} open={pageActive && detailsOpen} template={editing} onClose={() => { ++editorRevision.current;setEditing(null); }} onSaved={(saved, ticket) => {
       setSavedVersions(current => [...current.filter(item => !(item.id === saved.id && item.version === saved.version)), saved]);
       if (ticket === editorRevision.current) { setSelectedKey(`${saved.id}:${saved.version}`);setSaveNotice(`已保存「${saved.name}」第${saved.version}版。`);setEditing(null); }
     }} ticket={editorRevision.current}/> : null}
@@ -191,7 +195,7 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
     {repairContext ? <p>换用模板保留原目标、时长和人物声音选择，返回后重新检查；不会自动创建任务。</p> : null}
     {empty ? (offline ? null : emptyStage) : grid}
   </div>
-    <HomeCardDialog kind="detail" title="模板详情" open={detailsOpen && canAct && Boolean(selected)} onClose={() => { ++editorRevision.current;setEditing(null);setDetailsOpen(false); }} footer={selected ? <div className={own.detailFooter}><span>第{selected.version}版</span>{useAction}</div> : null}>{inspector}</HomeCardDialog>
+    <HomeCardDialog kind="detail" title="模板详情" open={pageActive && detailsOpen && canAct && Boolean(selected)} onClose={() => { ++editorRevision.current;setEditing(null);setDetailsOpen(false); }} footer={selected ? <div className={own.detailFooter}><span>第{selected.version}版</span>{useAction}</div> : null}>{inspector}</HomeCardDialog>
   </AppShell>;
 }
 
@@ -217,8 +221,8 @@ function TemplateStructurePreview({ template, contentTemplate }: { template: Vid
   </section>;
 }
 
-function TemplateVersionEditor({ template, ticket, onClose, onSaved }: {
-  template: VideoTemplate; ticket: number; onClose: () => void; onSaved: (saved: VideoTemplate, ticket: number) => void;
+function TemplateVersionEditor({ template, ticket, open, onClose, onSaved }: {
+  open: boolean; template: VideoTemplate; ticket: number; onClose: () => void; onSaved: (saved: VideoTemplate, ticket: number) => void;
 }) {
   const formId = useId();
   const [name,setName] = useState(template.name);
@@ -232,7 +236,7 @@ function TemplateVersionEditor({ template, ticket, onClose, onSaved }: {
     catch(cause) { setError(cause instanceof Error ? cause.message : "模板新版本没有保存，请重试。"); }
     finally { setPending(false); }
   }
-  return <HomeCardDialog kind="config" title="编辑模板" onClose={onClose} footer={<><button type="button" onClick={onClose}>取消</button><button className={styles.primaryButton} type="submit" form={formId} disabled={pending || !name.trim() || name.trim().length > 80}>{pending ? "正在保存…" : "保存新版本"}</button></>}>
+  return <HomeCardDialog kind="config" title="编辑模板" open={open} onClose={onClose} footer={<><button type="button" onClick={onClose}>取消</button><button className={styles.primaryButton} type="submit" form={formId} disabled={pending || !name.trim() || name.trim().length > 80}>{pending ? "正在保存…" : "保存新版本"}</button></>}>
     <form id={formId} onSubmit={submit} className={own.editForm} aria-label="编辑模板字段">
       <label>模板名称<input aria-label="模板名称" required maxLength={80} disabled={pending} value={name} onChange={event=>setName(event.target.value)}/></label>
       <label>新文案的风格要求<textarea aria-label="新文案的风格要求" maxLength={500} disabled={pending} value={style} onChange={event=>setStyle(event.target.value)}/></label>

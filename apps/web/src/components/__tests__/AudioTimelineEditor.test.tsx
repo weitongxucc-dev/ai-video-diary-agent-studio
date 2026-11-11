@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CreationTaskWorkspace, TimelineAudioTrack } from "@/lib/types";
-import { listenCreationTaskAudio } from "@/lib/api";
+import { listenCreationTaskAudio, getCreationTaskMediaJob } from "@/lib/api";
 import { AudioTimelineInspector, AudioTimelineTracks } from "../AudioTimelineEditor";
 
-vi.mock("@/lib/api", async importOriginal => ({ ...(await importOriginal<typeof import("@/lib/api")>()), apiUrl:(value:string)=>value, importCreationTaskAudio:vi.fn(),listenCreationTaskAudio:vi.fn() }));
+vi.mock("@/lib/api", async importOriginal => ({ ...(await importOriginal<typeof import("@/lib/api")>()), apiUrl:(value:string)=>value, importCreationTaskAudio:vi.fn(),listenCreationTaskAudio:vi.fn(),getCreationTaskMediaJob:vi.fn() }));
 afterEach(()=>vi.unstubAllGlobals());
 const track: TimelineAudioTrack={ id:"music",name:"音乐",role:"music",gain_db:0,muted:false,locked:false,duck_under_voice:true,
   clips:[{id:"clip",name:"背景音乐",source_ref:"artifacts/music",source_start_ms:1000,source_end_ms:3000,timeline_start_ms:4000,
@@ -19,6 +19,7 @@ it("selects an actual audio range and keeps solo in listening requests",async()=
   fireEvent.click(screen.getByRole("button",{name:"选择音频：背景音乐"}));
   expect(select).toHaveBeenCalledWith("clip",4);
   fireEvent.click(screen.getByRole("button",{name:"独听音乐"}));
+  fireEvent.click(screen.getByRole("button",{name:"音频工具"}));
   fireEvent.click(screen.getByRole("button",{name:"试听独听轨道"}));
   await waitFor(()=>expect(listenCreationTaskAudio).toHaveBeenCalledWith("task",{base_version_id:"version",start_seconds:4,end_seconds:6,solo_track_ids:["music"]}));
   expect(preview).not.toHaveBeenCalled();
@@ -43,6 +44,7 @@ it("does not present a late mix after the selected audio changes", async () => {
   const workspace = { task: { id: "task", current_timeline_version_id: "version" }, montage: { duration_seconds: 10, audio_timeline: { format_version: 1, tracks: [track] } } } as unknown as CreationTaskWorkspace;
   const props = { taskId: workspace.task.id, versionId: workspace.task.current_timeline_version_id, audioTimeline: workspace.montage!.audio_timeline!, durationSeconds: workspace.montage!.duration_seconds, onSelect: vi.fn(), onPreview: vi.fn(), busy: false };
   const { rerender } = render(<AudioTimelineTracks {...props} selectedId="clip" />);
+  fireEvent.click(screen.getByRole("button", { name: "音频工具" }));
   fireEvent.click(screen.getByRole("button", { name: "试听混音" }));
   rerender(<AudioTimelineTracks {...props} selectedId="music" />);
   await act(async () => finish({ audio_url: "/old-mix.wav" }));
@@ -72,16 +74,20 @@ it("keeps one audio controller when shared tracks place the subtitle before impo
 
   const audioClip = screen.getByRole("button", { name: "选择音频：背景音乐" });
   const subtitle = screen.getByRole("button", { name: "定位测试字幕" });
+  expect(screen.queryByRole("group", { name: "音频导入与试听" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "音频工具" }));
   const tools = screen.getByRole("group", { name: "音频导入与试听" });
   expect(audioClip.compareDocumentPosition(subtitle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(subtitle.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await waitFor(() => expect(tools).toBeVisible());
   expect(screen.getAllByLabelText("试听起点")).toHaveLength(1);
   expect(screen.getAllByRole("button", { name: "导入音频" })).toHaveLength(1);
 
   fireEvent.click(audioClip);
   fireEvent.click(screen.getByRole("button", { name: "独听音乐" }));
+  fireEvent.click(screen.getByRole("button", { name: "音频工具" }));
   fireEvent.change(screen.getByLabelText("试听起点"), { target: { value: "4.5" } });
   fireEvent.click(subtitle);
+  fireEvent.click(screen.getByRole("button", { name: "音频工具" }));
   expect(screen.getByLabelText("试听起点")).toHaveValue(4.5);
   fireEvent.click(screen.getByRole("button", { name: "试听独听轨道" }));
   await waitFor(() => expect(listenCreationTaskAudio).toHaveBeenLastCalledWith("task", {
@@ -94,9 +100,40 @@ it("uses an existing import track and requires a new choice when that track disa
   const original={...track,id:"field-recording",name:"现场原声",role:"original" as const,clips:[]};
   const props={taskId:"task",versionId:"version",durationSeconds:5,selectedId:null,onSelect:vi.fn(),onPreview:vi.fn(),busy:false};
   const view=render(<AudioTimelineTracks {...props} audioTimeline={{format_version:1,tracks:[original]}}/>);
+  fireEvent.click(screen.getByRole("button",{name:"音频工具"}));
   expect(screen.getByRole("combobox",{name:"音频导入轨道"})).toHaveTextContent("现场原声");
   expect(screen.getByRole("button",{name:"导入音频"})).toBeEnabled();
   view.rerender(<AudioTimelineTracks {...props} audioTimeline={{format_version:1,tracks:[{...original,id:"new-recording"}]}}/>);
   expect(screen.getByRole("combobox",{name:"音频导入轨道"})).toHaveTextContent("选择导入轨道");
   expect(screen.getByRole("button",{name:"导入音频"})).toBeDisabled();
+});
+
+
+it("separates the source name from waveform failure and rereads only the original job", async () => {
+  const failed = { job_id:"wave-original", result_kind:"waveform", base_version_id:"version", status:"failed", result:null, failure_reason:"波形资源检查未通过", repair_action:null } as import("@/lib/types").TaskMediaJob;
+  const fetcher=vi.fn(async()=>new Response(JSON.stringify(failed)));
+  vi.stubGlobal("fetch",fetcher);
+  vi.mocked(getCreationTaskMediaJob).mockResolvedValue({...failed,status:"succeeded",result:{peaks:[.1,.5],seconds_per_peak:1}});
+  render(<AudioTimelineTracks taskId="task" versionId="version" durationSeconds={10} audioTimeline={{format_version:1,tracks:[{...track,clips:[{...track.clips[0],name:"当前配音"}]}]}} selectedId={null} onSelect={vi.fn()} onPreview={vi.fn()} busy={false}/>);
+  expect(await screen.findByText("波形未加载")).toBeInTheDocument();
+  const selection=screen.getByRole("button",{name:"选择音频：当前配音"});
+  expect(selection).toHaveTextContent("当前配音");
+  const problem=screen.getByRole("button",{name:"查看波形问题：当前配音"});
+  expect(selection.contains(problem)).toBe(false);
+  fireEvent.click(problem);
+  expect(await screen.findByRole("alert")).toHaveTextContent("波形资源检查未通过");
+  fireEvent.click(screen.getByRole("button",{name:"重新读取波形"}));
+  await waitFor(()=>expect(selection.querySelector("svg")).not.toBeNull());
+  expect(getCreationTaskMediaJob).toHaveBeenCalledWith("task","wave-original",expect.any(AbortSignal));
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button",{name:"查看波形问题：当前配音"})).not.toBeInTheDocument();
+});
+
+it("keeps the original request error without offering an unbound resubmission", async () => {
+  vi.stubGlobal("fetch",vi.fn(async()=>{throw new Error("连接已断开");}));
+  render(<AudioTimelineTracks taskId="task" versionId="version" durationSeconds={10} audioTimeline={{format_version:1,tracks:[track]}} selectedId={null} onSelect={vi.fn()} onPreview={vi.fn()} busy={false}/>);
+  fireEvent.click(await screen.findByRole("button",{name:"查看波形问题：背景音乐"}));
+  expect(await screen.findByRole("alert")).toHaveTextContent("本地服务未接通。");
+  expect(screen.queryByRole("button",{name:"重新读取波形"})).not.toBeInTheDocument();
+  expect(screen.getByText("未取得原波形请求，请在运行详情中核对。")).toBeInTheDocument();
 });

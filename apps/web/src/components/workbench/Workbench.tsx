@@ -10,8 +10,9 @@ import { getCreationTaskWorkspace } from "@/lib/api";
 import { useAssistantSelection } from "../AssistantConversationProvider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Button } from "../ui/button";
+import { MediaVisibility } from "../ui/media-visibility";
 import { ScrollArea } from "../ui/scroll-area";
-import { WorkbenchRegistry, WorkspacePageContext, workspacePageId, type WorkspacePage } from "./context";
+import { WorkbenchRegistry, WorkspacePanelContext, WorkspacePageContext, workspacePageId, workspaceResourcePaths, isWorkbenchManagedPath, type WorkspacePage } from "./context";
 import styles from "./Workbench.module.css";
 
 const WorkbenchViewStates = createContext(new Map<string, Map<string, unknown>>());
@@ -21,38 +22,40 @@ const WorkbenchViewStates = createContext(new Map<string, Map<string, unknown>>(
 const PageMount = memo(function PageMount({ page, active, auxiliary, updateShell }: {
   page: WorkspacePage; active: boolean; auxiliary: boolean; updateShell: (id: string, props: AppShellProps) => void;
 }) {
+  const panel = useContext(WorkspacePanelContext);
+  const visible = active && !(auxiliary && panel.inspectorOpen);
   const node = useRef<HTMLDivElement>(null);
   const viewStates = useContext(WorkbenchViewStates);
   const viewState = viewStates.get(page.id) ?? new Map<string, unknown>();
   viewStates.set(page.id, viewState);
   const context = useMemo(() => ({ id: page.id, href: page.href, active, auxiliary, updateShell, viewState }), [page.id, page.href, active, auxiliary, updateShell, viewState]);
   useLayoutEffect(() => {
-    if (!active) return;
+    if (!visible) return;
     node.current?.querySelectorAll<HTMLElement>("[data-workspace-scroll]").forEach(element => {
       const saved = viewState.get(`scroll:${element.dataset.workspaceScroll}`) as { top: number; left: number } | undefined;
       if (saved) { element.scrollTop = saved.top; element.scrollLeft = saved.left; }
     });
     const saved = viewState.get("scroll:page") as { top: number; left: number } | undefined;
     if (saved && node.current) { node.current.scrollTop = saved.top; node.current.scrollLeft = saved.left; }
-  }, [active, viewState]);
+  }, [visible, viewState]);
   useEffect(() => {
     const pause = () => {
-      if (!active || document.hidden) node.current?.querySelectorAll("audio, video").forEach(media => (media as HTMLMediaElement).pause());
+      if (!visible || document.hidden) node.current?.querySelectorAll("audio, video").forEach(media => (media as HTMLMediaElement).pause());
     };
     pause();
     document.addEventListener("visibilitychange", pause);
     return () => document.removeEventListener("visibilitychange", pause);
-  }, [active]);
-  const content = <div role="region" aria-label={page.label} hidden={!active} className={`${styles.page}${auxiliary ? ` ${styles.resourcePage}` : ""}`} ref={node}
+  }, [visible]);
+  const content = <div role="region" aria-label={page.label} hidden={!visible} className={`${styles.page}${auxiliary ? ` ${styles.resourcePage}` : ""}`} ref={node}
     data-workspace-scroll="page" onScrollCapture={event => {
       const element = event.target;
       if (element instanceof HTMLElement && element.dataset.workspaceScroll) viewState.set(`scroll:${element.dataset.workspaceScroll}`, { top: element.scrollTop, left: element.scrollLeft });
     }}
     onPlayCapture={event => {
       if (!(event.target instanceof HTMLMediaElement)) return;
-      if (!active) event.target.pause();
+      if (!visible) event.target.pause();
     }}>
-    <WorkspacePageContext.Provider value={context}>{page.content}</WorkspacePageContext.Provider>
+    <WorkspacePageContext.Provider value={context}><MediaVisibility visible={visible}>{page.content}</MediaVisibility></WorkspacePageContext.Provider>
   </div>;
   return page.id.startsWith("/tasks/") || page.id === "/"
     ? <TabsContent value={page.id} keepMounted className={styles.page}>{content}</TabsContent>
@@ -93,9 +96,11 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
     if (selected?.items.some(item => "task_id" in item)) selected.select(selected.items.filter(item => !("task_id" in item)));
   }, [newVideo]);
   const activePage = pages.find(page => page.id === activeId && page.open);
-  const resourceIds = ["/library", "/knowledge", "/profiles"];
-  const managed = pathname === "/" || resourceIds.includes(pathname) || pathname.startsWith("/tasks/");
+  const resourceIds = workspaceResourcePaths;
+  const managed = isWorkbenchManagedPath(pathname);
   const dockedTask = resourceIds.includes(activeId) && targetId ? pages.find(page => page.id === targetId && page.open) : undefined;
+  const dockedHref = dockedTask?.href;
+  const releaseResourcePane = useCallback(() => { if (dockedHref) router.push(dockedHref); }, [dockedHref, router]);
   const shell = shells[dockedTask?.id ?? activeId] ?? {};
   const resourceShell = shells[activeId] ?? {};
   const shellPage = dockedTask ?? activePage;
@@ -151,7 +156,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
       playingMedia.current = event.target;
     }} onPauseCapture={releasePlaying} onEndedCapture={releasePlaying}>
       <Tabs value={dockedTask?.id ?? (resourceIds.includes(activeId) ? null : activePage?.id ?? null)} onValueChange={value => { if (typeof value === "string") activate(value); }} className={styles.root}>
-        <AppShellFrame {...scopedShell} inspector={dockedTask && activePage ? <WorkspacePageContext.Provider value={{ id: activePage.id, href: activePage.href, active: managed, auxiliary: true, updateShell, viewState: viewStates.current.get(activePage.id)! }}>{resourceShell.inspector}</WorkspacePageContext.Provider> : scopedShell.inspector} inspectorTitle={dockedTask ? resourceShell.inspectorTitle : scopedShell.inspectorTitle} workspaceTabs={tabstrip} conversation={<>
+        <AppShellFrame {...scopedShell} resourceOpen={Boolean(dockedTask)} onReleaseResourcePane={releaseResourcePane} inspectorDismissKey={activeId} inspector={dockedTask && activePage ? <WorkspacePageContext.Provider value={{ id: activePage.id, href: activePage.href, active: managed, auxiliary: true, updateShell, viewState: viewStates.current.get(activePage.id)! }}>{resourceShell.inspector}</WorkspacePageContext.Provider> : scopedShell.inspector} inspectorTitle={dockedTask ? resourceShell.inspectorTitle : scopedShell.inspectorTitle} workspaceTabs={tabstrip} conversation={<>
           <div className={styles.target} aria-label="当前操作目标">
             {target?.task ? <><Clapperboard size={14} /><button type="button" title={target.task.name} onClick={() => targetId && activate(targetId)}>{target.task.name}</button><Button variant="ghost" size="icon" aria-label="取消当前作品目标" title="取消当前作品目标" onClick={() => { setTargetId(null); selection?.select(selection.items.filter(item => !("task_id" in item))); }}><X /></Button></> : <span>工作区对话</span>}
           </div>

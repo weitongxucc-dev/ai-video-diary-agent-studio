@@ -13,8 +13,8 @@ import ui from './VideoEditor.module.css';
 export function VisualTemplateFields({value, onChange, disabled=false}: {value:VisualTemplate;
   onChange:(value:VisualTemplate)=>void; disabled?:boolean}) {
   return <div className={styles.editor}>
-    <TemplateParameterFields value={value} onChange={onChange} disabled={disabled}/>
     <VisualTemplatePreview definition={value}/>
+    <TemplateParameterFields value={value} onChange={onChange} disabled={disabled}/>
     <details><summary>修改动画源码与参数结构</summary>
       <div className={styles.fields}>{(['width','height','duration_seconds'] as const).map(key=><label key={key}>
         {{width:'组件宽度（像素）',height:'组件高度（像素）',duration_seconds:'动画长度（秒）'}[key]}

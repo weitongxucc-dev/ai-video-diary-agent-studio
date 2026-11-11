@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantConversationPanel } from "../AssistantConversationPanel";
+import { ConversationMessage } from "../ui/conversation-message";
 import { ReferenceChips } from "../ui/reference-chips";
 import { referenceAssistantKnowledge, referenceAssistantMaterial, referenceAssistantProfile, referenceAssistantSelection } from "@/lib/assistant-reference";
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
@@ -428,8 +429,9 @@ describe("persisted storyboard regeneration receipts", () => {
     const original = structuredClone(saved);
     render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    const details = screen.getByText("本轮结果").closest("details")!;
-    expect(details).toHaveAttribute("open");
+    const details = screen.getByText("本轮结果").closest<HTMLElement>(".assistant-turn-result")!;
+    if (status === "failed") expect(details).toHaveAttribute("open");
+    else expect(details.querySelector("summary")).toBeNull();
     expect(within(details).getByText(label)).toBeVisible();
     expect(details).not.toHaveTextContent(/预览已安排|成片已生成|视频已完成|已提交开始制作/);
     if (status === "failed") expect(within(details).getByText("来源已变化，原故事板保留。")).toBeVisible();
@@ -449,7 +451,7 @@ describe("persisted storyboard regeneration receipts", () => {
     const onSend = vi.fn();
     render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
       onSend={onSend} busy={false} configured scopeLabel="当前任务"/>);
-    const details = screen.getByText("本轮结果").closest("details")!;
+    const details = screen.getByText("本轮结果").closest<HTMLElement>(".assistant-turn-result")!;
     expect(within(details).getByText(kind === "unknown"
       ? "故事板重算结果尚未核实；原请求定位已保留，请查询原请求，不重复提交。"
       : "故事板重算请求已被拒绝；未取得新故事板版本。")).toBeVisible();
@@ -465,7 +467,7 @@ describe("persisted storyboard regeneration receipts", () => {
     const saved = withStoryboard(storyboard(status, "query"));
     render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    const details = screen.getByText("本轮结果").closest("details")!;
+    const details = screen.getByText("本轮结果").closest<HTMLElement>(".assistant-turn-result")!;
     expect(within(details).getByText(status === "queued"
       ? "原故事板重算请求：故事板重算已排队；尚未保存新故事板版本。"
       : "原请求记录：故事板版本已保存；不代表当前版本或成片已更新。")).toBeVisible();
@@ -482,7 +484,7 @@ describe("persisted business result cards", () => {
     const onInput = vi.fn(), onSend = vi.fn();
     const rendered = render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={onInput}
       onSend={onSend} busy={false} configured scopeLabel="当前任务"/>);
-    const details = screen.getByText("本轮结果").closest("details")!;
+    const details = screen.getByText("本轮结果").closest<HTMLElement>(".assistant-turn-result")!;
     const receipt = within(details).getByText("首次资源检查 · 未通过").closest("details")!;
     expect(details).toHaveAttribute("open");
     expect(receipt).toHaveAttribute("open");
@@ -573,11 +575,12 @@ describe("persisted business result cards", () => {
     saved.turns[0].result!.continuation = {type: "business_result", status: outcome, actionable: outcome === "proposed"};
     render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    const details = screen.getByText("本轮结果").closest("details")!;
+    const details = screen.getByText("本轮结果").closest<HTMLElement>(".assistant-turn-result")!;
     const history = within(details).getByText("历史资源检查 · 未通过").closest("details")!;
     expect(within(details).getByText(label)).toBeVisible();
     expect(history).not.toHaveAttribute("open");
     expect(within(history).getByText("首次检查时设备资源余量不足。")).not.toBeVisible();
+    if (!details.hasAttribute("open")) fireEvent.click(details.querySelector("summary")!);
     fireEvent.click(within(history).getByText("历史资源检查 · 未通过"));
     expect(within(history).getByText("这是该请求的历史检查记录，不能代表当前设备资源或执行许可。")).toBeVisible();
     expect(within(history).getByText("CPU 使用率：实测 95.6%；不高于 91%；检查未通过。")).toBeVisible();
@@ -605,7 +608,7 @@ describe("persisted business result cards", () => {
     saved.turns[0].result!.continuation = {status: "queued", actionable: false, waiting_reason: reason};
     render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    const details = screen.getByText("本轮结果").closest("details")!;
+    const details = screen.getByText("本轮结果").closest<HTMLElement>(".assistant-turn-result")!;
     expect(details).toHaveAttribute("open");
     expect(within(details).getByText(`等待处理：${label}`)).toBeVisible();
     expect(within(details).queryByText(reason)).not.toBeInTheDocument();
@@ -623,9 +626,9 @@ describe("persisted business result cards", () => {
       waiting_reason: "媒体处理未完成；查看作业原因后再决定下一步。"};
     render(<AssistantConversationPanel state={state({conversation: saved})} input="保留下一条草稿" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    const details = screen.getByText("本轮结果").closest("details")!;
-    expect(details).toHaveAttribute("open");
-    expect(within(details).getByText("预览已取消")).toBeVisible();
+    const details = screen.getByText("本轮结果").closest<HTMLElement>(".assistant-turn-result")!;
+    expect(details.querySelector("summary")).toBeNull();
+    expect(within(details).queryByText("预览已取消")).not.toBeInTheDocument();
     expect(within(details).getByText("后台处理已取消，未据此应用修改。")).toBeVisible();
     expect(details).not.toHaveTextContent(/user_cancelled|处理未完成|这次操作没有完成|预览已生成|修改已应用/);
     expect(screen.getByRole("textbox")).toHaveValue("保留下一条草稿");
@@ -643,7 +646,7 @@ describe("persisted business result cards", () => {
     saved.turns[0].result!.continuation = {status: "failed", actionable: false, waiting_reason: null};
     render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    const details = screen.getByText("本轮结果").closest("details")!;
+    const details = screen.getByText("本轮结果").closest<HTMLElement>(".assistant-turn-result")!;
     expect(details).toHaveAttribute("open");
     expect(within(details).getByText("后台处理未完成；请查看实际原因，当前草稿未因此改变。")).toBeVisible();
     expect(within(details).getByText("当前镜头源文件不可读取。")).toBeVisible();
@@ -2210,4 +2213,73 @@ it('does not bind an origin-less historical window receipt to a known current in
   await waitFor(()=>expect(result.current.loading).toBe(false));
   await act(async()=>{await result.current.refresh('turn-one');});
   expect(api.readWindow).not.toHaveBeenCalled();
+});
+
+
+describe("conversation panel width changes", () => {
+  function observeSizes() {
+    const callbacks = new Map<Element, {callback: ResizeObserverCallback; observer: ResizeObserver}>();
+    const original = Object.getOwnPropertyDescriptor(globalThis, "ResizeObserver")!;
+    class Observer implements ResizeObserver {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) { callbacks.set(target, {callback: this.callback, observer: this}); }
+      unobserve(target: Element) { callbacks.delete(target); }
+      disconnect() { for (const [target, entry] of callbacks) if (entry.observer === this) callbacks.delete(target); }
+    }
+    Object.defineProperty(globalThis, "ResizeObserver", {configurable: true, value: Observer});
+    return { resize: (target: Element) => { const entry = callbacks.get(target); entry?.callback([], entry.observer); }, restore: () => { Object.defineProperty(globalThis, "ResizeObserver", original); } };
+  }
+
+  it("remeasures the existing draft on width changes without resetting its content", () => {
+    const sizes = observeSizes();
+    try {
+      const onInput = vi.fn();
+      render(<AssistantConversationPanel state={state()} input="保留长草稿，缩窄后继续编辑" onInput={onInput}
+        onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
+      const textarea = screen.getByRole<HTMLTextAreaElement>("textbox");
+      let width = 320, height = 56;
+      vi.spyOn(textarea, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, 0, width, height));
+      Object.defineProperty(textarea, "scrollHeight", {configurable: true, get: () => height});
+      act(() => sizes.resize(textarea));
+      expect(textarea.style.height).toBe("56px");
+      width = 260; height = 98;
+      act(() => sizes.resize(textarea));
+      expect(textarea.style.height).toBe("98px");
+      height = 140;
+      act(() => sizes.resize(textarea));
+      expect(textarea.style.height).toBe("98px");
+      width = 360; height = 56;
+      act(() => sizes.resize(textarea));
+      expect(textarea.style.height).toBe("56px");
+      expect(textarea).toHaveValue("保留长草稿，缩窄后继续编辑");
+      expect(onInput).not.toHaveBeenCalled();
+    } finally { cleanup(); sizes.restore(); }
+  });
+
+  it("only offers message expansion after actual overflow and preserves the full message", () => {
+    const sizes = observeSizes();
+    try {
+      const onOpenChange = vi.fn();
+      const text = "完整要求：保留原声，加入两个素材，最后核对所有镜头。";
+      const {container} = render(<ConversationMessage className="assistant-user-message" onOpenChange={onOpenChange}>{text}</ConversationMessage>);
+      const content = container.querySelector<HTMLElement>(".assistant-message-content")!;
+      let height = 42;
+      Object.defineProperty(content, "scrollHeight", {configurable: true, get: () => height});
+      act(() => sizes.resize(content));
+      expect(screen.queryByRole("button", {name: "展开全文"})).not.toBeInTheDocument();
+      height = 105;
+      act(() => sizes.resize(content));
+      fireEvent.click(screen.getByRole("button", {name: "展开全文"}));
+      expect(content).toHaveAttribute("data-expanded");
+      expect(content).toHaveTextContent(text);
+      expect(onOpenChange).toHaveBeenLastCalledWith(true);
+      fireEvent.click(screen.getByRole("button", {name: "收起"}));
+      expect(content).not.toHaveAttribute("data-expanded");
+      expect(content).toHaveTextContent(text);
+      expect(onOpenChange).toHaveBeenLastCalledWith(false);
+      height = 42;
+      act(() => sizes.resize(content));
+      expect(screen.queryByRole("button", {name: "展开全文"})).not.toBeInTheDocument();
+    } finally { cleanup(); sizes.restore(); }
+  });
 });

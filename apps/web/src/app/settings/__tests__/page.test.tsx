@@ -256,20 +256,20 @@ it("keeps failed settings reads distinct from missing programs or databases", as
   expect(within(status).getAllByText("暂时无法读取配置")).toHaveLength(3);
 });
 
-it("shows six primary settings groups and puts public legal links in About",async()=>{
+it("exposes every settings destination directly and keeps public legal links in About",async()=>{
  api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("available"));api.getLocalModels.mockResolvedValue({models:[]});api.getProductionFoundation.mockResolvedValue(null);
  render(await SettingsPage({searchParams:Promise.resolve({section:"about"})}));
  const nav=screen.getByRole("navigation",{name:"设置分类"});
- expect(within(nav).getAllByRole("link")).toHaveLength(6);
- for(const label of ["我的","外观","创作","文件与资料","运行","关于"])expect(within(nav).getByRole("link",{name:label})).toBeInTheDocument();
+ expect(within(nav).getAllByRole("link")).toHaveLength(10);
+ for(const label of ["创作者与成员","外观","对话服务","制作习惯","声音库","保存位置","听写设置","资料来源","运行与诊断","关于与隐私"])expect(within(nav).getByRole("link",{name:label})).toBeInTheDocument();
  expect(screen.getByRole("link",{name:"隐私政策"})).toHaveAttribute("href","/privacy");expect(screen.getByRole("link",{name:"使用条款"})).toHaveAttribute("href","/terms");expect(screen.getByRole("button",{name:"打开使用帮助"})).toBeInTheDocument();
 });
 
 
-it.each(["model", "production", "voices", "asr"] as const)("keeps creation deep link %s in its four-item subgroup",async section=>{
+it.each(["model", "production", "voices", "asr"] as const)("keeps creation deep link %s selected in the settings navigation",async section=>{
  api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("available"));api.getLocalModels.mockResolvedValue({models:[]});api.getProductionFoundation.mockResolvedValue(null);
  render(await SettingsPage({searchParams:Promise.resolve({section})}));
- expect(screen.getByRole("link",{name:"创作"})).toHaveAttribute("aria-current","page");
- const nav=screen.getByRole("navigation",{name:"设置项目"});expect(within(nav).getAllByRole("link")).toHaveLength(4);
+ const nav=screen.getByRole("navigation",{name:"设置分类"});
+ expect(within(nav).getByRole("link",{current:"page"})).toHaveAttribute("href",`/settings?section=${section}`);
  expect(within(nav).getByRole("link",{name:{model:"对话服务",production:"制作习惯",voices:"声音库",asr:"听写设置"}[section]!})).toHaveAttribute("href",`/settings?section=${section}`);
 });

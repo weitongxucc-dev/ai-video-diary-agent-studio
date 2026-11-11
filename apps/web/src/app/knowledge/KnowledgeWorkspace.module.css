@@ -123,3 +123,6 @@
 .collectionTabs { composes: tabs from "../../components/ui/workspace-controls.module.css"; border-bottom:1px solid var(--border-1); margin-bottom:12px; }
 
 @container (max-width:480px) { .searchBar label { flex-basis:100%; } .searchBar [data-app-select-trigger] { flex:1; max-width:none; } }
+
+.inspectorActions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; }
+.inspectorActions button { max-width:100%; white-space:normal; text-align:left; }

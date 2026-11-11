@@ -202,7 +202,7 @@ describe("KnowledgePage", () => {
     api.listKnowledgeItems.mockRejectedValue(new Error("offline"));
     render(<KnowledgePage />);
     expect(await screen.findByRole("alert")).toHaveTextContent("请求失败：502");
-    expect(screen.getByText(/读取失败 · 选择资料查看正文/)).toBeInTheDocument();
+    expect(screen.getByText("读取失败", { exact: true })).toBeInTheDocument();
     expect(screen.queryByText(/0 条当前工作区结果/)).not.toBeInTheDocument();
   });
 

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { WorkspaceLayoutMenu } from "./workbench/WorkspaceLayoutMenu";
+import { MediaVisibility } from "./ui/media-visibility";
 import { WorkspaceInspector } from "./workbench/WorkspaceInspector";
 import { DesktopHeader } from "./DesktopHeader";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -39,7 +40,7 @@ import {
 } from "react";
 import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components/HomeCommandComposer";
 import { Button } from "./ui/button";
-import { useWorkspacePage } from "./workbench/context";
+import { WorkspacePanelContext, useWorkspacePage } from "./workbench/context";
 import { useWorkspaceBoot } from "./WorkspaceBootContext";
 import { PreflightDraftReturn } from "@/components/PreflightDraftReturn";
 import { HomeCardDialog, homeCardParentForTarget } from "@/components/HomeCardDialog";
@@ -127,6 +128,8 @@ export type AppShellProps = {
   inspectorDismissKey?: string;
   assistantContext?: HomeCommandComposerProps;
   workspaceTabs?: ReactNode;
+  resourceOpen?: boolean;
+  onReleaseResourcePane?: () => void;
   closeBlockedReason?: string;
 };
 
@@ -223,8 +226,19 @@ export function AppShellFrame({
   toolbar,
   toolbarActions,
   workspaceTabs,
+  resourceOpen = false,
+  onReleaseResourcePane,
 }: AppShellProps) {
   const panels = useEditorPanels(true);
+  const contentGrid = useRef<HTMLDivElement>(null);
+  const [contentWidth, setContentWidth] = useState(0);
+  useEffect(() => {
+    const element = contentGrid.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setContentWidth(entry.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const workspaceBoot = useWorkspaceBoot();
   const workspaceReady = !workspaceBoot.blocked;
   const [nativeMac, setNativeMac] = useState(false);
@@ -276,6 +290,20 @@ export function AppShellFrame({
   }, [inspectorOpenKey]);
   const quickAvailable = editorLayout && Boolean(quickInspector);
   const dockInspector = !standalone && Boolean(providedInspector) && detailsOpen && !quickOpen && !panels.workspaceCollapsed;
+  const revealTaskPanel = useCallback(() => { setDetailsOpen(false); onReleaseResourcePane?.(); }, [onReleaseResourcePane]);
+  const panelContext = useMemo(() => ({ inspectorOpen: dockInspector, resourceOpen, revealTaskPanel }), [dockInspector, resourceOpen, revealTaskPanel]);
+  const resourceReplacesChat = resourceOpen && !dockInspector && contentWidth > 0 && contentWidth - (panels.chatCollapsed ? 44 : panels.rightWidth) - 280 < 440;
+  const inspectorReplacesChat = dockInspector && contentWidth > 0 && contentWidth - panels.rightWidth - 320 < 440;
+  const conversationNode = useRef<HTMLElement>(null);
+  const mainNode = useRef<HTMLElement>(null);
+  const mainVisible = standalone || !panels.workspaceCollapsed || panels.chatCollapsed;
+  const chatVisible = !standalone && !panels.chatCollapsed && !inspectorReplacesChat && !resourceReplacesChat;
+  useEffect(() => {
+    if (!chatVisible) conversationNode.current?.querySelectorAll("audio, video").forEach(media => (media as HTMLMediaElement).pause());
+  }, [chatVisible]);
+  useEffect(() => {
+    if (!mainVisible) mainNode.current?.querySelectorAll("audio, video").forEach(media => (media as HTMLMediaElement).pause());
+  }, [mainVisible]);
   useEffect(() => { setQuickOpen(false); }, [quickInspectorKey]);
 
   useEffect(() => {
@@ -461,22 +489,24 @@ export function AppShellFrame({
         {!panels.collapsed ? <div className={`${editorShell.separator} ${editorShell.leftSeparator}`} {...panels.separator("left")} /> : null}
       </aside>
 
+      <WorkspacePanelContext.Provider value={panelContext}>
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
-        <div className={`${editorShell.contentGrid}${dockInspector ? ` ${editorShell.withInspector}` : ""}${standalone ? ` ${editorShell.standalone}` : ""}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed && !standalone ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
-          <section aria-label="创作助手" className={editorShell.conversation}>
+        <div ref={contentGrid} data-inspector-open={dockInspector || undefined} className={`${editorShell.contentGrid}${inspectorReplacesChat ? ` ${editorShell.inspectorReplacesChat}` : ""}${resourceReplacesChat ? ` ${editorShell.resourceReplacesChat}` : ""}${dockInspector ? ` ${editorShell.withInspector}` : ""}${standalone ? ` ${editorShell.standalone}` : ""}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed && !standalone ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
+          <section ref={conversationNode} onPlayCapture={event => { if (!chatVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} aria-label="创作助手" hidden={inspectorReplacesChat || resourceReplacesChat} className={editorShell.conversation}>
             <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}><div data-assistant-header-actions className="assistant-header-actions"/><Button variant="ghost" aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></Button></div></header>
-            <div className={editorShell.conversationBody}>
+            <div className={editorShell.conversationBody}><MediaVisibility visible={chatVisible}>
               {!workspaceReady ? <div className="assistant-conversation-empty"><p role="status">{workspaceBoot.message}</p>{workspaceBoot.href ? <Link href={workspaceBoot.href}>{workspaceBoot.href === '/onboarding' ? '完成首次设置' : '登录账号'}</Link> : null}{workspaceBoot.retry ? <Button variant="outline" onClick={workspaceBoot.retry}>重新核验</Button> : null}</div> : conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={{ pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
-            </div>
+            </MediaVisibility></div>
             <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
           </section>
-          <main className="desktop-main-scroll" data-scroll-region="main-y" onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) { setQuickOpen(false); setDetailsOpen(true); } }}>
-            {children}
+          <main ref={mainNode} onPlayCapture={event => { if (!mainVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} className="desktop-main-scroll" data-scroll-region="main-y" onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) { setQuickOpen(false); setDetailsOpen(true); } }}>
+            <MediaVisibility visible={mainVisible}>{children}</MediaVisibility>
           </main>
           {providedInspector && !standalone ? <WorkspaceInspector open={dockInspector} title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{dockInspector ? inspectorConfirmation : null}</WorkspaceInspector> : null}
         </div>
 
       </section>
+      </WorkspacePanelContext.Provider>
       <KeyboardShortcuts onOpenSearch={target => { setSearchParentId(homeCardParentForTarget(target)); setSearchOpen(true); }} />
       {providedInspector && standalone ? <HomeCardDialog open={detailsOpen && !quickOpen && !panels.workspaceCollapsed} kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>
         {providedInspector}
