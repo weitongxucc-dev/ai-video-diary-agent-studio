@@ -2696,7 +2696,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("字幕与封面工作区")).toBeInTheDocument();
     expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
-    expect(screen.getByText("未出片")).toBeInTheDocument();
+    expect(screen.getByText("源片预览 · 尚未出片")).toBeInTheDocument();
     expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "撤销" })).toBeEnabled();
   });
@@ -2813,7 +2813,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.exactEdit.mockResolvedValue({ operation: { id: "canvas-edit" } });
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
-    fireEvent.click(screen.getByText("画幅设置"));
+    fireEvent.click(screen.getByRole("button", { name: "画幅设置" }));
     fireEvent.click(screen.getByRole("button", {name:"成片画幅"}));
     fireEvent.click(screen.getByRole("option", {name:"16:9 横屏"}));
     await waitFor(()=>expect(mocks.exactEdit).toHaveBeenLastCalledWith("task-1",{operation_type:"ChangeCanvas",aspect_ratio:"16:9"}));
@@ -2834,7 +2834,7 @@ describe("CreationTaskWorkspace", () => {
     mocks.exactEdit.mockRejectedValue(new Error("valid 字幕轨必须有条目、产物和变换证据"));
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
-    fireEvent.click(screen.getByText("画幅设置"));
+    fireEvent.click(screen.getByRole("button", { name: "画幅设置" }));
     fireEvent.click(screen.getByRole("button", {name:"成片画幅"}));
     fireEvent.click(screen.getByRole("option", {name:"1:1 方形"}));
     expect(await screen.findByRole("alert")).toHaveTextContent("valid 字幕轨必须有条目、产物和变换证据");

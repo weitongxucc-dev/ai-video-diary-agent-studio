@@ -4,6 +4,7 @@ import { AudioLines, Captions, Clapperboard, FileText, Film, Paperclip, Sparkles
 import { useEffect, useState } from "react";
 import { assistantReferenceKey, locateAssistantReference, type SelectedAssistantReference } from "@/lib/assistant-reference";
 import { Button } from "./button";
+import { Tooltip } from "./tooltip";
 import { ReferencePreview } from "./reference-preview";
 import { Popover, PopoverContent, PopoverTrigger, PopoverTitle, PopoverClose } from "./popover";
 
@@ -26,9 +27,9 @@ export function ReferenceChips({ items, onRemove }: { items: SelectedAssistantRe
       </div>;
     })}</div>
     <Popover open={expanded} onOpenChange={setExpanded}>
-      <PopoverTrigger render={<Button variant="ghost"/>} className="assistant-reference-summary" aria-label={`查看本轮 ${items.length} 项引用`}>
-        <Paperclip size={14} aria-hidden/><span>{items.length > 3 ? `另 ${items.length - 3} 项` : "详情"}</span>
-      </PopoverTrigger>
+      <Tooltip label={`查看全部 ${items.length} 项引用及来源范围`}><PopoverTrigger render={<Button variant="ghost"/>} className="assistant-reference-summary" aria-label={`查看本轮 ${items.length} 项引用`}>
+        <Paperclip size={14} aria-hidden/>{items.length > 3 ? <span>+{items.length - 3}</span> : null}
+      </PopoverTrigger></Tooltip>
       <PopoverContent className="assistant-reference-popover">
         <div className="assistant-reference-heading"><PopoverTitle>本轮引用 · {items.length}</PopoverTitle><PopoverClose render={<Button variant="ghost" size="icon"/>} aria-label="关闭引用列表"><X size={16}/></PopoverClose></div>
         <ul className="assistant-reference-list">{items.map(item => {

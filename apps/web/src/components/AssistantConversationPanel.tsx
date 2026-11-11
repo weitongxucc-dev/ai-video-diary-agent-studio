@@ -1,6 +1,7 @@
 "use client";
 import { InputGroup, InputGroupTextarea } from "./ui/input-group";
 import { Button } from "./ui/button";
+import { Tooltip } from "./ui/tooltip";
 import { segmentRevisionStatus, segmentAdoptionReason, editExecutionReadinessMessage } from './creation-task/stage-labels';
 
 import { ConversationMessage } from "./ui/conversation-message";
@@ -218,7 +219,7 @@ function TurnContent({ turn, reading }: { turn: AssistantConversationTurn; readi
   const failure = [...tools].reverse().find(tool => tool.state === "failed")?.failure;
   return <div className="assistant-markdown-wrap">
     {tools.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:tools`} className="assistant-turn-tools">
-      <summary>工具记录 · {tools.length} 项 · {runningTool ? `正在${runningTool.label}` : failedTools ? "含失败记录" : "调用已结束"}{failure ? <span className="assistant-tool-summary-failure"><span>{failure.reason}</span>{failure.repair_action ? <span>{failure.repair_action}</span> : null}</span> : null}</summary>
+      <summary aria-label={`工具记录 · ${tools.length} 项 · ${runningTool ? `正在${runningTool.label}` : failedTools ? "含失败记录" : "调用已结束"}`}><span className="assistant-tool-state" data-failed={failedTools || undefined}>{runningTool ? <LoaderCircle size={13} className="assistant-spinning"/> : failedTools ? <CircleHelp size={13}/> : <Check size={13}/>}</span>{runningTool ? `正在${runningTool.label}` : failedTools ? "有步骤未完成" : "处理记录"}<span className="assistant-tool-count">{tools.length}</span>{failure ? <span className="assistant-tool-summary-failure"><span>{failure.reason}</span>{failure.repair_action ? <span>{failure.repair_action}</span> : null}</span> : null}</summary>
       <ol>{tools.map((tool, index) => <li data-state={tool.state} key={`${tool.tool_id}-${index}`}>
         <strong>{tool.label} · {toolStateLabels[tool.state]}</strong>
         <ToolResult tool={tool} reading={reading} readingKey={`${turn.id}:tool:${tool.tool_id}:diagnostic`}/>
@@ -846,7 +847,7 @@ export function AssistantConversationPanel({
           {!configured ? <a className="assistant-input-status" href="/settings" aria-label="连接文字模型" title="在设置中连接对话服务"><CircleHelp size={14}/>对话未连接</a> : referenceStatus.pending ? <span className="assistant-input-status" role="status">正在核验引用</span> : null}</div>
         {currentRunning && lastTurnId && !lastTurnId.startsWith("pending-") ? <Button variant="ghost" className="assistant-stop" type="button" aria-label="停止本轮" title="停止本轮回复；已提交的业务动作不撤销" onClick={() => void state.stop().catch((cause) => setError(cause.message))}><Square aria-hidden="true" size={14}/></Button>
           : null}
-        <Button variant="ghost" className="assistant-send" type="submit" aria-label={sendLabel} title={sendReason} disabled={sendDisabled}><ArrowUp aria-hidden="true" size={16} /></Button>
+        <Tooltip label={sendReason}><Button variant="ghost" className="assistant-send" type="submit" aria-label={sendLabel} aria-description={sendReason} disabled={sendDisabled}><ArrowUp aria-hidden="true" size={16} /></Button></Tooltip>
       </div>
       <span className="assistant-visually-hidden" id={`${diagnosticsId}-input-help`}>Enter 发送，Shift+Enter 换行；中文组合输入不会发送。{sendDisabled ? sendReason : "输入 / 查找命令。"}</span>
     </InputGroup></form>

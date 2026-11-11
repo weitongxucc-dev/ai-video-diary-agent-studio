@@ -48,6 +48,9 @@ vi.mock("@/lib/api", () => ({
 }));
 
 
+import { WorkspacePanelContext } from "../workbench/context";
+function QuickInspectorLauncher() { const panel = useContext(WorkspacePanelContext); return <button onClick={panel.openQuickInspector}>编辑镜头参数</button>; }
+
 import { AppShell } from "@/components/AppShell";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { MediaVisibilityContext } from "@/components/ui/media-visibility";
@@ -137,7 +140,7 @@ describe("AppShell", () => {
   it("opens one quick card, transfers its confirmation to details, and retains conversation", () => {
     const quick = (openDetails: () => void) => <><p>快捷参数</p><button onClick={openDetails}>转到完整详情</button></>;
     const props = { editorLayout: true, conversation: <p>已有对话草稿</p>, inspector: <p>完整镜头属性</p>, inspectorTitle: "镜头详情", quickInspector: quick, quickInspectorKey: "clip-1", quickInspectorLabel: "镜头快捷编辑" };
-    const view = render(<AppShell {...props}><p>剪辑</p></AppShell>);
+    const view = render(<AppShell {...props}><QuickInspectorLauncher/><p>剪辑</p></AppShell>);
     fireEvent.click(screen.getByRole("button", { name: "编辑镜头参数" }));
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(screen.getByRole("dialog", { name: "镜头快捷编辑" })).toHaveTextContent("快捷参数");
@@ -577,7 +580,7 @@ describe("AppShell", () => {
 
   describe("standard object overlays", () => {
     it("does not open details or parameters when a shot is selected", async () => {
-      render(<AppShell editorLayout quickInspector={() => <input aria-label="快速草稿" />} quickInspectorLabel="镜头参数" quickInspectorKey="one" inspector={<input aria-label="镜头草稿" defaultValue="保留" />} inspectorTitle="镜头详情" conversation={<p>任务对话</p>}><video /><button data-editor-transport>播放</button></AppShell>);
+      render(<AppShell editorLayout quickInspector={() => <input aria-label="快速草稿" />} quickInspectorLabel="镜头参数" quickInspectorKey="one" inspector={<input aria-label="镜头草稿" defaultValue="保留" />} inspectorTitle="镜头详情" conversation={<p>任务对话</p>}><QuickInspectorLauncher/><video /><button data-editor-transport>播放</button></AppShell>);
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", {name:"编辑镜头参数"}));
       expect(screen.queryByRole("dialog", {name:"镜头详情"})).not.toBeInTheDocument();
@@ -594,7 +597,7 @@ describe("AppShell", () => {
     it("keeps the quick dialog as the proposal parent while preserving its draft on close", async () => {
       function ConfirmationSurface() {
         const [confirmationOpen, setConfirmationOpen] = useState(false);
-        return <AppShell editorLayout quickInspector={() => <><input aria-label="快速草稿" defaultValue="待保存" /><button onClick={() => setConfirmationOpen(true)} type="button">确认草稿</button></>} quickInspectorLabel="镜头参数" quickInspectorKey="one" inspector={<input aria-label="详情草稿" defaultValue="详情" />} inspectorTitle="镜头详情" inspectorConfirmationKey={confirmationOpen ? "proposal-1" : undefined} inspectorConfirmation={confirmationOpen ? <HomeCardDialog kind="config" title="选择应用到草稿" onClose={() => setConfirmationOpen(false)}><button data-card-cancel type="button">返回修改</button><button type="button">应用到草稿</button></HomeCardDialog> : null} conversation={<p>任务对话</p>}><video /></AppShell>;
+        return <AppShell editorLayout quickInspector={() => <><input aria-label="快速草稿" defaultValue="待保存" /><button onClick={() => setConfirmationOpen(true)} type="button">确认草稿</button></>} quickInspectorLabel="镜头参数" quickInspectorKey="one" inspector={<input aria-label="详情草稿" defaultValue="详情" />} inspectorTitle="镜头详情" inspectorConfirmationKey={confirmationOpen ? "proposal-1" : undefined} inspectorConfirmation={confirmationOpen ? <HomeCardDialog kind="config" title="选择应用到草稿" onClose={() => setConfirmationOpen(false)}><button data-card-cancel type="button">返回修改</button><button type="button">应用到草稿</button></HomeCardDialog> : null} conversation={<p>任务对话</p>}><QuickInspectorLauncher/><video /></AppShell>;
       }
       render(<ConfirmationSurface />);
       fireEvent.click(screen.getByRole("button", { name: "编辑镜头参数" }));

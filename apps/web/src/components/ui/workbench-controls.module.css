@@ -1,6 +1,7 @@
 .tabs { min-width:0; min-height:0; }
 .tabsList { display:flex; align-items:center; gap:4px; width:max-content; min-height:32px; padding:3px; border-radius:8px; background:var(--surface-2); }
 .tabsList[data-variant="line"] { border-radius:0; background:transparent; }
+.tabsList[data-variant="line"] .tabsTrigger[data-active] { border-color:transparent; background:var(--surface-2); }
 .tabsTrigger { position:relative; display:inline-flex; flex:none; align-items:center; justify-content:center; gap:8px; height:32px; min-width:0; padding:0 12px; border:1px solid transparent; border-radius:8px; color:var(--text-2); background:transparent; font:inherit; font-weight:400; white-space:nowrap; cursor:pointer; transition:background 140ms,color 140ms; }
 .tabsTrigger:hover { background:var(--surface-3); color:var(--text-1); }
 .tabsTrigger[data-active] { color:var(--text-1); background:var(--surface-1); border-color:var(--border-1); font-weight:400; }
@@ -11,6 +12,13 @@
 .button { --button-bg:var(--accent); --button-fg:var(--accent-contrast); --button-hover-bg:color-mix(in srgb,var(--accent) 85%,var(--surface-1)); --button-pressed-bg:color-mix(in srgb,var(--accent) 75%,var(--surface-1)); display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 10px; border:1px solid transparent; border-radius:8px; font-family:var(--font-ui); font-size:var(--font-size-body); line-height:var(--line-body); font-weight:400; white-space:nowrap; user-select:none; cursor:pointer; transition:background-color 140ms,color 140ms,border-color 140ms; }
 .button[data-variant] { background:var(--button-bg); color:var(--button-fg); }
 .button[data-size="icon"] { width:32px; padding:0; }
+.tooltipPositioner { z-index:150; pointer-events:none; }
+.tooltipAnchor { display:inline-flex; flex-shrink:0; }
+.tooltipAnchor:focus-visible { outline:2px solid var(--focus); outline-offset:2px; border-radius:6px; }
+.tooltip { display:flex; align-items:center; gap:12px; max-width:280px; padding:6px 9px; border-radius:6px; background:var(--text-1); color:var(--surface-1); font:400 12px/18px var(--font-ui); box-shadow:0 3px 10px #0002; transform-origin:var(--transform-origin); transition:opacity 100ms ease; }
+.tooltip[data-starting-style],.tooltip[data-ending-style] { opacity:0; }
+.tooltip kbd { flex-shrink:0; color:inherit; opacity:.7; font:inherit; }
+@media (prefers-reduced-motion:reduce) { .tooltip { transition:none; } }
 .button[data-variant="outline"] { --button-bg:var(--surface-1); --button-fg:var(--text-1); --button-hover-bg:var(--surface-2); --button-pressed-bg:var(--surface-3); border-color:var(--border-2); }
 .button[data-variant="secondary"] { --button-bg:var(--surface-2); --button-fg:var(--text-1); --button-hover-bg:var(--surface-3); --button-pressed-bg:color-mix(in srgb,var(--text-1) 8%,var(--surface-3)); }
 .button[data-variant="ghost"] { --button-bg:transparent; --button-fg:var(--text-2); --button-hover-fg:var(--text-1); --button-hover-bg:var(--surface-2); --button-pressed-bg:var(--surface-3); }

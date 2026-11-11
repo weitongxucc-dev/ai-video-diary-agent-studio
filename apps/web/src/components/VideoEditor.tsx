@@ -1,4 +1,10 @@
 "use client";
+import { createPortal } from "react-dom";
+import { useActiveEditorDock, useEditorDockHost } from "./workbench/EditorDock";
+import { WorkspacePanelContext } from "./workbench/context";
+import { IconButton } from "./ui/icon-button";
+import { Tooltip } from "./ui/tooltip";
+import { Button } from "./ui/button";
 import { TimelineViewport } from "./TimelineViewport";
 import { OverlayTimeline } from "./creation-task/OverlayTimeline";
 import { WorkspaceVideo, WorkspaceAudio } from "./workbench/WorkspaceMedia";
@@ -8,8 +14,8 @@ import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
 import { VisualEffectsInspector } from "./VisualEffectsInspector";
 
-import { useEffect, useId, useRef, useState, type RefObject, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Check, Lock, Unlock, Maximize, Pause, Play, Plus, Replace, Volume2, VolumeX, ListVideo } from "lucide-react";
+import { useContext, useEffect, useId, useRef, useState, type RefObject, type ReactNode } from "react";
+import { ArrowLeft, ArrowRight, Check, Lock, Unlock, Maximize, Pause, Play, Plus, Replace, Volume2, VolumeX, ListVideo, SlidersHorizontal, ChevronDown } from "lucide-react";
 import { apiUrl, listenCreationTaskAudio, resolveCreationTaskMediaResponse, cancelCreationTaskMediaJob, taskMediaJobLabel, TaskMediaJobError } from "@/lib/api";
 import type { CreationTaskMontageClip, CreationTaskExactEditInput, CreationTaskMontage, CreationTaskSubtitleTrack, CreationTaskPersonRender, CreationTaskPersonRenderCapability, GraphicOverlay, MontageClipCandidate, TaskMediaJob } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
@@ -161,7 +167,7 @@ function CanvasControls({ ratio, fitMode, versionId, editError, busy, onPreview,
   const [draft,setDraft]=useWorkspaceViewState(`canvas:${versionId}:${ratio}:${fitMode}.ratio`, ratio);
   const [fit,setFit]=useWorkspaceViewState<""|"fill"|"fit">(`canvas:${versionId}:${ratio}:${fitMode}.fit`, fitMode);
   const [open,setOpen]=useState(false);
-  return <><button className={ui.button} onClick={()=>setOpen(true)} type="button">画幅设置</button>{open ? <HomeCardDialog kind="config" title="成片画幅" onClose={()=>setOpen(false)}><div className={ui.canvasFields}>
+  return <><Tooltip label="画幅设置"><Button variant="ghost" aria-label="画幅设置" onClick={()=>setOpen(true)}><span>{ratio}</span><ChevronDown size={13}/></Button></Tooltip>{open ? <HomeCardDialog kind="config" title="成片画幅" onClose={()=>setOpen(false)}><div className={ui.canvasFields}>
     <label className={ui.field}>画幅<CardSelect label="成片画幅" disabled={busy} value={draft} onChange={value=>{const next=value as typeof draft;onDraftChange();setDraft(next);void onPreview({operation_type:"ChangeCanvas",aspect_ratio:next,...(fit?{fit_mode:fit}:{})}).then(saved=>{if(!saved){setDraft(ratio);setFit(fitMode);}});}} options={[{value:"9:16",label:"9:16 竖屏"},{value:"16:9",label:"16:9 横屏"},{value:"1:1",label:"1:1 方形"}]} /></label>
     <label className={ui.field}>画面<CardSelect label="整片画面适配" disabled={busy} value={fit} onChange={value=>{const next=value as typeof fit;onDraftChange();setFit(next);void onPreview({operation_type:"ChangeCanvas",aspect_ratio:draft,...(next?{fit_mode:next}:{})}).then(saved=>{if(!saved){setDraft(ratio);setFit(fitMode);}});}} options={[{value:"",label:"各镜头原样"},{value:"fit",label:"完整画面"},{value:"fill",label:"填满画面"}]} /></label>
     <small>填满：可能裁切 · 完整：可能留边</small>
@@ -171,16 +177,19 @@ function CanvasControls({ ratio, fitMode, versionId, editError, busy, onPreview,
 }
 
 type VideoStageMontage = Pick<CreationTaskMontage, "clips" | "cues" | "duration_seconds" | "output_url" | "low_confidence_clip_count" | "aspect_ratio" | "graphic_overlays">;
-export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montage, planAspectRatio, subtitleTracks, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay, editError }:  {
+export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montage, planAspectRatio, subtitleTracks, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, timelineActions, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay, editError }:  {
   editError?: string;
   selectedOverlayId?: string|null; onSelectOverlay?: (id:string)=>void;
   taskId: string; versionId: string | null; narrationCacheKey: string | null; montage: VideoStageMontage;
   planAspectRatio: NonNullable<CreationTaskMontage["aspect_ratio"]>; subtitleTracks: CreationTaskSubtitleTrack[];
   selectedId: string | null; onSelect: (id: string) => void;
   onPosition: (video: HTMLVideoElement) => void; videoRef: RefObject<HTMLVideoElement | null>;
-  initialTime: number; renderAction: ReactNode; audioTracks?: (subtitleTrack: ReactNode) => ReactNode; busy?: boolean; onDraftChange?:()=>void; onPreview?: (input:CreationTaskExactEditInput)=>Promise<boolean>;
+  initialTime: number; renderAction: ReactNode; timelineActions?: ReactNode; audioTracks?: (subtitleTrack: ReactNode) => ReactNode; busy?: boolean; onDraftChange?:()=>void; onPreview?: (input:CreationTaskExactEditInput)=>Promise<boolean>;
 }) {
   const viewActive = useWorkspacePage()?.active ?? true;
+  const toolbarHost = useActiveEditorDock("tools");
+  const auxiliaryRef = useEditorDockHost("auxiliary");
+  const panel = useContext(WorkspacePanelContext);
   const [time, setTime] = useWorkspaceViewState("video.time", initialTime);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useWorkspaceViewState("video.muted", false);
@@ -225,8 +234,18 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
 <div className={ui.track}><span>字幕</span><div className={ui.subtitleLane}>{(subtitleTracks.find(track => track.language === "zh-CN" && track.status === "valid" && track.style.enabled !== false) ?? subtitleTracks.find(track => track.status === "valid" && track.style.enabled !== false))?.cues.map(cue => { const clip = montage.clips.find(item => cue.start_seconds >= item.timeline_start_seconds && cue.start_seconds < item.timeline_end_seconds); return clip ? <button title={cue.text} key={cue.id} type="button" style={{ left: `${cue.start_seconds / montage.duration_seconds * 100}%`, width: `${(cue.end_seconds - cue.start_seconds) / montage.duration_seconds * 100}%` }} aria-label={`定位字幕：${cue.text}`} aria-pressed={clip.id === selectedId} onClick={() => { onSelect(clip.id); seek(cue.start_seconds); }}>{cue.text}</button> : null; })}</div></div>
   );
   if (!viewActive) return null;
+  const previewTools = <div className={ui.previewActions}>
+    {!montage.output_url ? <span className={ui.previewKind}>源片预览 · 尚未出片</span> : null}
+    {montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}
+    <IconButton label={storyboardOpen ? "收起镜头列表" : "展开镜头列表"} aria-expanded={storyboardOpen} onClick={() => setStoryboardOpen(open => !open)}><ListVideo /></IconButton>
+    {panel.openQuickInspector ? <IconButton label="编辑镜头参数" description="调整当前镜头的画面和时间范围" onClick={panel.openQuickInspector}><SlidersHorizontal /></IconButton> : null}
+    {onPreview ? <CanvasControls ratio={aspectRatio} fitMode={canvasFitMode} versionId={versionId} editError={editError} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}
+    {renderAction}
+  </div>;
   return <div className={ui.stage}>
-    <div className={ui.previewToolbar}><strong>{montage.output_url ? "成片预览" : "未出片"}</strong><span>{aspectRatio} · {editorTime(montage.duration_seconds)}</span>{montage.low_confidence_clip_count > 0 ? <span className={ui.warning}>{montage.low_confidence_clip_count} 处待看</span> : null}<div className={ui.previewActions}><button className={ui.iconButton} type="button" aria-label={storyboardOpen ? "收起镜头列表" : "展开镜头列表"} title="镜头列表" aria-expanded={storyboardOpen} onClick={() => setStoryboardOpen(open => !open)}><ListVideo size={16}/></button>{onPreview ? <CanvasControls ratio={aspectRatio} fitMode={canvasFitMode} versionId={versionId} editError={editError} busy={busy} onPreview={onPreview} onDraftChange={onDraftChange} /> : null}{renderAction}</div></div>
+    {toolbarHost ? createPortal(previewTools, toolbarHost) : <div className={ui.previewToolbar}>{previewTools}</div>}
+    <div className={ui.previewSurface}>
+    <div className={ui.editorAuxiliary} ref={auxiliaryRef} data-editor-auxiliary />
     <div className={ui.playerViewport} ref={playerViewport}>
     <div className={ui.player} data-editor-player data-editor-aspect-ratio={aspectRatio} style={{ aspectRatio: previewRatio, ...(playerSize ?? {}) }}>
       {montage.output_url ? <WorkspaceVideo key={`${outputIdentity}:${outputRetry}`} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(versionId ?? "")}`)} muted={muted}
@@ -237,7 +256,6 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
         onEnded={event => { if (event.currentTarget === videoRef.current) setPlaying(false); }} onError={event => outputEvent(event.currentTarget, "error")} />
         : selected ? <ClipMedia key={clipMediaKey(selected, taskId)} clip={selected} taskId={taskId} preview />
           : <p>先选镜头</p>}
-      {montage.output_url ? <span className={ui.playerBadge}>成片画面</span> : null}
       {montage.output_url && playbackState !== "ready" ? <div className={mediaUi.playerState} role={playbackState === "error" ? "alert" : "status"}>
         <span>{playbackState === "error" ? "成片暂时无法播放" : "正在读取成片…"}</span>
         {playbackState === "error" ? <button className={ui.button} type="button" onClick={() => { setOutputState({ identity: outputIdentity, state: "loading" }); setPlaying(false); setOutputRetry(value => value + 1); }}>重新读取成片</button> : null}
@@ -245,17 +263,18 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
     </div>
     </div>
     {montage.output_url ? <div className={ui.transport} data-editor-transport>
-      <button className={ui.iconButton} aria-label={playing && playbackState === "ready" ? "暂停成片" : "播放成片"} onClick={() => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => outputEvent(video, "error")); else video.pause(); }} type="button">{playing && playbackState === "ready" ? <Pause size={17} /> : <Play size={17} />}</button>
-      <button className={ui.iconButton} aria-label={muted ? "取消静音" : "静音"} onClick={() => setMuted(!muted)} type="button">{muted ? <VolumeX size={16} /> : <Volume2 size={16} />}</button>
+      <IconButton className={ui.iconButton} label={playing && playbackState === "ready" ? "暂停成片" : "播放成片"} onClick={() => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => outputEvent(video, "error")); else video.pause(); }} type="button">{playing && playbackState === "ready" ? <Pause size={17} /> : <Play size={17} />}</IconButton>
+      <IconButton className={ui.iconButton} label={muted ? "取消静音" : "静音"} onClick={() => setMuted(!muted)} type="button">{muted ? <VolumeX size={16} /> : <Volume2 size={16} />}</IconButton>
       <input aria-label="成片播放位置" type="range" min={0} max={montage.duration_seconds} step={0.01} value={Math.min(time, montage.duration_seconds)} onChange={event => seek(Number(event.target.value))} />
       <time>{editorTime(time)} / {editorTime(montage.duration_seconds)}</time>
-      <button className={ui.iconButton} aria-label="全屏预览" onClick={() => { void videoRef.current?.requestFullscreen(); }} type="button"><Maximize size={16} /></button>
+      <IconButton className={ui.iconButton} label="全屏预览" onClick={() => { void videoRef.current?.requestFullscreen(); }} type="button"><Maximize size={16} /></IconButton>
     </div> : null}
+    </div>
     {storyboardOpen ? <div className={ui.storyboard} data-workspace-scroll="storyboard" aria-label="镜头故事板">{montage.clips.map((clip, index) => <button key={clip.id} type="button" aria-label={`选择镜头 ${index + 1}`} aria-describedby={`${storyboardId}-thumbnail-${index}`} aria-pressed={selectedId === clip.id} className={ui.shot} onClick={() => onSelect(clip.id)}>
       <span className={ui.shotImage}><ClipThumbnail clip={clip} taskId={taskId} statusId={`${storyboardId}-thumbnail-${index}`} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
       <span className={ui.shotLabel}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><small>{editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</small></span>
     </button>)}</div> : null}
-    <TimelineViewport duration={montage.duration_seconds} time={time} playing={playing} selectedTime={selected?.timeline_start_seconds} selectionKey={selectedId} formatTime={editorTime} onSeek={value => { const clip = montage.clips.find(item => value >= item.timeline_start_seconds && value < item.timeline_end_seconds); if (clip && clip.id !== selectedId) onSelect(clip.id); seek(value); }}>
+    <TimelineViewport actions={timelineActions} duration={montage.duration_seconds} time={time} playing={playing} selectedTime={selected?.timeline_start_seconds} selectionKey={selectedId} formatTime={editorTime} onSeek={value => { const clip = montage.clips.find(item => value >= item.timeline_start_seconds && value < item.timeline_end_seconds); if (clip && clip.id !== selectedId) onSelect(clip.id); seek(value); }}>
       <div className={ui.track}><span>画面</span><div className={ui.videoLane}>{montage.clips.map((clip,index)=><button key={clip.id} type="button" className={ui.videoTimelineClip} style={{left:`${clip.timeline_start_seconds/montage.duration_seconds*100}%`,width:`${(clip.timeline_end_seconds-clip.timeline_start_seconds)/montage.duration_seconds*100}%`}} aria-label={`定位镜头 ${index+1}：${editorTime(clip.timeline_start_seconds)}–${editorTime(clip.timeline_end_seconds)}`} aria-pressed={clip.id===selectedId} onClick={()=>{onSelect(clip.id);seek(clip.timeline_start_seconds);}}><span className={ui.timelineThumbnail}><ClipThumbnail clip={clip} taskId={taskId}/></span><span className={ui.timelineClipLabel}>{String(index+1).padStart(2,"0")}</span></button>)}</div></div>
       {onSelectOverlay && montage.graphic_overlays?.length ? <OverlayTimeline formatTime={editorTime} items={montage.graphic_overlays} duration={montage.duration_seconds} selectedId={selectedOverlayId} disabled={busy} onSelect={onSelectOverlay}/> : null}
       {audioTracks ? audioTracks(subtitleTrack) : <><NarrationWaveformTrack durationSeconds={montage.duration_seconds} taskId={taskId} narrationCacheKey={narrationCacheKey} clips={montage.clips} cues={montage.cues} selectedId={selectedId} onSelect={onSelect} />{subtitleTrack}</>}

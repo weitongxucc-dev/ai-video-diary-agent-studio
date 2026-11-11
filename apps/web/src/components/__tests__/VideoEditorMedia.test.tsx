@@ -246,7 +246,6 @@ describe("source and output playback identity", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新读取成片" }));
     expect(screen.getByLabelText("剪辑成片预览")).not.toBe(newVideo);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByText("成片画面")).toBeInTheDocument();
     expect(view.container.querySelector('[data-editor-player]')).toHaveAttribute("data-editor-aspect-ratio", "1:1");
     view.rerender(stage(workspace()));
     expect(screen.queryByText("成片暂时无法播放")).not.toBeInTheDocument();

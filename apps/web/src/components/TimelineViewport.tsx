@@ -2,6 +2,8 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Maximize2, Minus, Plus } from "lucide-react";
+import { useEditorDockHost } from "./workbench/EditorDock";
+import { IconButton } from "./ui/icon-button";
 import { useWorkspaceViewState } from "./workbench/context";
 import ui from "./VideoEditor.module.css";
 
@@ -12,10 +14,11 @@ function tickInterval(pixelsPerSecond: number) {
 }
 
 /** All lanes use the same time canvas; zoom and scroll are view state only. */
-export function TimelineViewport({ duration, time, playing, selectedTime, selectionKey, onSeek, formatTime, children }: {
+export function TimelineViewport({ duration, time, playing, selectedTime, selectionKey, onSeek, formatTime, actions, children }: {
   duration: number; time: number; playing: boolean; selectedTime?: number; selectionKey: string | null;
-  onSeek: (time: number) => void; formatTime: (time: number) => string; children: ReactNode;
+  onSeek: (time: number) => void; formatTime: (time: number) => string; children: ReactNode; actions?: ReactNode;
 }) {
+  const toolsRef = useEditorDockHost("timelineTools");
   const viewport = useRef<HTMLDivElement>(null);
   const ruler = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, label: 72 });
@@ -74,17 +77,17 @@ export function TimelineViewport({ duration, time, playing, selectedTime, select
   }
   return <section className={ui.timelinePanel} aria-label="配音与字幕时间范围">
     <div className={ui.timelineToolbar}>
-      <span>时间线</span><time>{formatTime(time)}</time>
+      {actions}<span className={ui.timelineName}>时间线</span><div ref={toolsRef} className={ui.timelineToolSlot} />
       <div className={ui.timelineZoom}>
-        <button className={ui.iconButton} type="button" aria-label="缩小时间线" title="缩小时间线" disabled={pixelsPerSecond <= fit} onClick={() => zoom(Math.max(fit, pixelsPerSecond / 1.5))}><Minus size={15}/></button>
+        <IconButton className={ui.iconButton} type="button" label="缩小时间线" disabled={pixelsPerSecond <= fit} onClick={() => zoom(Math.max(fit, pixelsPerSecond / 1.5))}><Minus size={15}/></IconButton>
         <input aria-label="时间线缩放" type="range" min={fit} max={Math.max(160, fit)} step="any" value={pixelsPerSecond} onChange={event => zoom(Number(event.target.value))}/>
-        <button className={ui.iconButton} type="button" aria-label="放大时间线" title="放大时间线" disabled={pixelsPerSecond >= Math.max(160, fit)} onClick={() => zoom(Math.min(Math.max(160, fit), pixelsPerSecond * 1.5))}><Plus size={15}/></button>
-        <button className={ui.iconButton} type="button" aria-label="时间线适应窗口" title="时间线适应窗口" onClick={() => zoom(null)}><Maximize2 size={15}/></button>
+        <IconButton className={ui.iconButton} type="button" label="放大时间线" disabled={pixelsPerSecond >= Math.max(160, fit)} onClick={() => zoom(Math.min(Math.max(160, fit), pixelsPerSecond * 1.5))}><Plus size={15}/></IconButton>
+        <IconButton className={ui.iconButton} type="button" label="时间线适应窗口" onClick={() => zoom(null)}><Maximize2 size={15}/></IconButton>
       </div>
     </div>
     <div ref={viewport} className={ui.timelineScroll} data-workspace-scroll="timeline" onScroll={event => setScroll(event.currentTarget.scrollLeft)}>
       <div className={ui.tracks} style={{ width: size.width ? size.label + laneWidth : "100%" }}>
-        <div className={ui.ruler}><span>时间</span><div ref={ruler} className={ui.timeRuler} role="slider" tabIndex={0} aria-label="时间线播放位置" aria-valuemin={0} aria-valuemax={duration} aria-valuenow={Math.min(duration, time)} aria-valuetext={formatTime(time)}
+        <div className={ui.ruler}><span aria-hidden /><div ref={ruler} className={ui.timeRuler} role="slider" tabIndex={0} aria-label="时间线播放位置" aria-valuemin={0} aria-valuemax={duration} aria-valuenow={Math.min(duration, time)} aria-valuetext={formatTime(time)}
           onPointerDown={event => { drag.current = true; event.currentTarget.setPointerCapture(event.pointerId); seekAt(event.clientX); }}
           onPointerMove={event => { if (drag.current) seekAt(event.clientX); }} onPointerUp={() => { drag.current = false; }} onPointerCancel={() => { drag.current = false; }}
           onKeyDown={event => { const step = event.shiftKey ? 10 : 1; const next = event.key === "Home" ? 0 : event.key === "End" ? duration : event.key === "ArrowRight" ? time + step : event.key === "ArrowLeft" ? time - step : null; if (next !== null) { event.preventDefault(); onSeek(Math.max(0, Math.min(duration, next))); } }}>

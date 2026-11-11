@@ -10,7 +10,10 @@ export type WorkspacePageSlot = {
   updateShell: (id: string, props: AppShellProps) => void;
   viewState: Map<string, unknown>;
 };
-export const WorkspacePanelContext = createContext({ inspectorOpen: false, resourceOpen: false, revealTaskPanel: () => {} });
+export const WorkspacePanelContext = createContext<{
+  inspectorOpen: boolean; resourceOpen: boolean; revealTaskPanel: () => void;
+  openQuickInspector?: () => void;
+}>({ inspectorOpen: false, resourceOpen: false, revealTaskPanel: () => {} });
 export const WorkbenchRegistry = createContext<{ register: (page: Omit<WorkspacePage, "open">) => void } | null>(null);
 export const WorkspacePageContext = createContext<WorkspacePageSlot | null>(null);
 

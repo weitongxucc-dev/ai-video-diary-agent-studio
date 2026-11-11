@@ -1,6 +1,6 @@
 "use client";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
-import { MediaVisibilityContext } from "../ui/media-visibility";
+import { MediaVisibility } from "../ui/media-visibility";
 import { X } from "lucide-react";
 import { Button } from "../ui/button";
 import styles from "../EditorShell.module.css";
@@ -24,6 +24,6 @@ export function WorkspaceInspector({ title, open, onClose, children }: {
     if (event.key === "Escape" && !event.defaultPrevented) { event.stopPropagation(); onClose(); }
   }}>
     <header><h2 ref={heading} tabIndex={-1}>{title}</h2><Button variant="ghost" size="icon" type="button" aria-label="关闭属性面板" title="关闭属性面板" onClick={onClose}><X size={16}/></Button></header>
-    <MediaVisibilityContext.Provider value={open}><div className={styles.inspectorBody}>{children}</div></MediaVisibilityContext.Provider>
+    <MediaVisibility visible={open}><div className={styles.inspectorBody}>{children}</div></MediaVisibility>
   </aside>;
 }

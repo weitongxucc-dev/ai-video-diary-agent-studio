@@ -3,16 +3,18 @@
 .page { height:100%; min-width:0; min-height:0; overflow:auto; }
 .page[hidden] { display:none; }
 .pages { height:100%; min-width:0; min-height:0; }
-.withResource { position:relative; display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,36%); grid-template-rows:36px minmax(0,1fr); overflow:hidden; }
-.withResource > .page:not(.resourcePage):not([hidden]) { grid-column:1; grid-row:1 / -1; }
-.withResource > .resourcePage:not([hidden]) { grid-column:2; grid-row:2; overscroll-behavior:contain; border-left:1px solid var(--border-1); }
-.resourceHeader { grid-column:2; grid-row:1; display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; padding:2px 12px; border-left:1px solid var(--border-1); background:var(--surface-1); color:var(--text-2); }
+.withResource { position:relative; overflow:hidden; }
+.withResource:has(> .resourcePane:not([hidden])) { display:grid; grid-template-columns:minmax(0,1fr) minmax(260px,34%); }
+.withResource:has(> .resourcePane:not([hidden])) > .page:not(.resourcePage):not([hidden]) { grid-column:1; grid-row:1; }
+.withResource > .resourcePane { grid-column:2; grid-row:1; border-left:1px solid var(--border-1); }
+.resourcePane { display:flex; flex-direction:column; height:100%; min-width:0; min-height:0; overflow:hidden; background:var(--surface-1); }
+.resourcePane[hidden] { display:none; }
+.resourcePane > .resourcePage { flex:1; min-height:0; height:0; overscroll-behavior:contain; }
+.resourceHeader { display:flex; align-items:center; justify-content:space-between; flex:0 0 34px; gap:8px; min-width:0; padding:0 10px; color:var(--text-2); }
 .resourceHeader > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-/* The resource list and its inspector share one auxiliary slot. */
-.withResource:not(:has(> .resourcePage:not([hidden]))) { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
-.withResource:not(:has(> .resourcePage:not([hidden]))) > .resourceHeader { display:none; }
+.resourceHeader > button { width:28px; height:28px; }
 @container workbench (max-width:760px) {
- .withResource { grid-template-columns:minmax(0,1fr) minmax(240px,40%); }
+ .withResource:has(> .resourcePane:not([hidden])) { grid-template-columns:minmax(0,1fr) minmax(220px,38%); }
 }
 .page:has([data-editor-workspace]) { overflow:hidden; }
 .tabScroll { height:36px; width:100%; }
@@ -23,8 +25,5 @@
 .tabTrigger span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tab .close { width:28px; height:28px; padding:4px; flex-shrink:0; }
 .close svg { width:14px; height:14px; }
-.target { display:flex; flex-shrink:0; gap:8px; align-items:center; min-height:32px; padding:0 12px; color:var(--text-2); font-size:12px; border-bottom:1px solid var(--border-1); }
-.target > button:not([data-slot]) { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:0; border:0; color:var(--text-1); background:transparent; font:inherit; text-align:left; cursor:pointer; }
-.target [data-slot="button"] { width:28px; height:28px; }
 .loading { margin:16px; color:var(--text-3); }
 .closeError { position:absolute; z-index:50; right:16px; bottom:16px; display:flex; align-items:center; gap:12px; max-width:min(480px,90%); padding:12px 16px; border:1px solid var(--border-2); border-radius:10px; background:var(--surface-1); box-shadow:0 8px 24px #171c3020; }

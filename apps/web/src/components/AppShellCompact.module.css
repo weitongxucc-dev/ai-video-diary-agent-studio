@@ -1,4 +1,4 @@
-.creatorControls { display:flex;align-items:center;justify-content:space-between;gap:4px;min-width:0;margin-top:auto;padding:10px 4px 14px; }
+.creatorControls { display:flex;align-items:center;justify-content:space-between;gap:4px;min-width:0;margin-top:auto;padding:10px 12px 12px; }
 .creatorControls[hidden] { display:none; }
 .avatarGroup { display:flex;align-items:center;flex:0 0 auto;min-height:28px;padding:2px 0;color:var(--text-2);text-decoration:none;border-radius:14px; }
 .avatar, .avatarCount { display:grid;place-items:center;flex:0 0 24px;width:24px;height:24px;box-sizing:border-box;border:2px solid var(--sidebar-bg);border-radius:50%;background:var(--surface-1);font-size:12px;line-height:18px; }

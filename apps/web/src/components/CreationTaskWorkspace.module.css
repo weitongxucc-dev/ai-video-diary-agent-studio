@@ -595,7 +595,9 @@
 .scriptReview [role="tabpanel"] > .workSection { border:0; padding:12px 0 0; background:transparent; }
 .runtimeState { color:var(--text-2); font-size:13px; }
 
-.viewNavigation { display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:40px; flex-shrink:0; padding:4px 12px; border-bottom:1px solid var(--border-1); background:var(--surface-1); }
+.viewNavigation { display:flex; align-items:center; gap:4px; min-height:36px; flex-shrink:0; padding:0 10px; background:var(--surface-1); }
+.viewNavigation [role="tab"] { height:28px; padding:0 8px; gap:5px; border-radius:5px; }
+.viewTools { display:flex; align-items:center; min-width:0; margin-left:auto; }
 .viewNavigation > [data-slot="tabs-list"] { min-width:0; overflow:auto; }
 .viewNavigation > button { flex-shrink:0; }
 

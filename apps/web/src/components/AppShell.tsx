@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { createPortal } from "react-dom";
+import { useActiveEditorDock } from "./workbench/EditorDock";
 import { WorkspaceLayoutMenu } from "./workbench/WorkspaceLayoutMenu";
 import { MediaVisibility } from "./ui/media-visibility";
 import { WorkspaceInspector } from "./workbench/WorkspaceInspector";
@@ -40,6 +42,7 @@ import {
 } from "react";
 import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components/HomeCommandComposer";
 import { Button } from "./ui/button";
+import { IconButton } from "./ui/icon-button";
 import { WorkspacePanelContext, useWorkspacePage } from "./workbench/context";
 import { useWorkspaceBoot } from "./WorkspaceBootContext";
 import { PreflightDraftReturn } from "@/components/PreflightDraftReturn";
@@ -119,6 +122,7 @@ export type AppShellProps = {
   quickInspectorKey?: string;
   quickInspectorLabel?: string;
   conversation?: ReactNode;
+  conversationActions?: ReactNode;
   autoFocus?: boolean;
   inspectorTitle?: string;
   workspaceStatus?: AppShellWorkspaceStatus;
@@ -217,7 +221,7 @@ export function AppShellFrame({
   quickInspector,
   quickInspectorKey,
   quickInspectorLabel,
-  conversation,
+  conversation, conversationActions,
   autoFocus = false,
   inspectorDismissKey,
   inspectorTitle = "当前任务详情",
@@ -288,12 +292,14 @@ export function AppShellFrame({
   useEffect(() => {
     if (inspectorOpenKey) { setQuickOpen(false); setDetailsOpen(true); }
   }, [inspectorOpenKey]);
+  const editorAuxiliaryHost = useActiveEditorDock("auxiliary");
   const quickAvailable = editorLayout && Boolean(quickInspector);
   const dockInspector = !standalone && Boolean(providedInspector) && detailsOpen && !quickOpen && !panels.workspaceCollapsed;
   const revealTaskPanel = useCallback(() => { setDetailsOpen(false); onReleaseResourcePane?.(); }, [onReleaseResourcePane]);
-  const panelContext = useMemo(() => ({ inspectorOpen: dockInspector, resourceOpen, revealTaskPanel }), [dockInspector, resourceOpen, revealTaskPanel]);
-  const resourceReplacesChat = resourceOpen && !dockInspector && contentWidth > 0 && contentWidth - (panels.chatCollapsed ? 44 : panels.rightWidth) - 280 < 440;
-  const inspectorReplacesChat = dockInspector && contentWidth > 0 && contentWidth - panels.rightWidth - 320 < 440;
+  const openQuickInspector = useCallback(() => { setDetailsOpen(false); setQuickOpen(true); }, []);
+  const panelContext = useMemo(() => ({ inspectorOpen: dockInspector, resourceOpen, revealTaskPanel, openQuickInspector: quickAvailable ? openQuickInspector : undefined }), [dockInspector, resourceOpen, revealTaskPanel, quickAvailable, openQuickInspector]);
+  const resourceReplacesChat = (resourceOpen && !dockInspector || dockInspector && Boolean(editorAuxiliaryHost)) && contentWidth > 0 && contentWidth - (panels.chatCollapsed ? 44 : panels.rightWidth) - 280 < 440;
+  const inspectorReplacesChat = dockInspector && !editorAuxiliaryHost && contentWidth > 0 && contentWidth - panels.rightWidth - 320 < 440;
   const conversationNode = useRef<HTMLElement>(null);
   const mainNode = useRef<HTMLElement>(null);
   const mainVisible = standalone || !panels.workspaceCollapsed || panels.chatCollapsed;
@@ -429,12 +435,8 @@ export function AppShellFrame({
       </>} actions={<>
             {!standalone ? <WorkspaceLayoutMenu conversationHidden={panels.chatCollapsed} workspaceHidden={panels.workspaceCollapsed} onConversation={panels.toggleChat} onWorkspace={panels.toggleWorkspace}/> : null}
             {toolbarActions}
-            {quickAvailable ? <Button variant="ghost" aria-label="编辑镜头参数" className={editorShell.detailsButton} onClick={() => { setDetailsOpen(false); setQuickOpen(true); }} type="button">镜头参数</Button> : null}
-            <Button variant="ghost" aria-label="搜索" aria-expanded={searchOpen} className="shell-icon-button desktop-search-button" onClick={() => { setSearchParentId(undefined); setSearchOpen(true); }} type="button">
-              <Search size={16} />
-
-            </Button>
-            {providedInspector ? <Button variant="ghost" className={editorShell.detailsButton} onClick={() => { setQuickOpen(false); setDetailsOpen(true); }} type="button">查看详情</Button> : null}
+            <IconButton label="搜索" shortcut="⌘ K" aria-expanded={searchOpen} onClick={() => { setSearchParentId(undefined); setSearchOpen(true); }}><Search size={16} /></IconButton>
+            {providedInspector ? <IconButton label="查看详情" description={detailsOpen ? "收起属性面板" : "查看当前对象属性"} aria-pressed={detailsOpen} onClick={() => { setQuickOpen(false); setDetailsOpen(value => !value); }}><PanelRight size={16} /></IconButton> : null}
             {panels.collapsed ? <><Button variant="ghost" type="button" aria-label="切换明暗主题" title="切换明暗主题" className="shell-icon-button" onClick={toggleTheme}><SunMoon size={16}/></Button><Link aria-label="设备设置" title="设备设置" className="shell-icon-button" href="/settings"><Settings size={16}/></Link></> : null}
             {!localAuthMode ? (
               <form action="/auth/signout" method="post">
@@ -491,9 +493,9 @@ export function AppShellFrame({
 
       <WorkspacePanelContext.Provider value={panelContext}>
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
-        <div ref={contentGrid} data-inspector-open={dockInspector || undefined} className={`${editorShell.contentGrid}${inspectorReplacesChat ? ` ${editorShell.inspectorReplacesChat}` : ""}${resourceReplacesChat ? ` ${editorShell.resourceReplacesChat}` : ""}${dockInspector ? ` ${editorShell.withInspector}` : ""}${standalone ? ` ${editorShell.standalone}` : ""}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed && !standalone ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
+        <div ref={contentGrid} data-inspector-open={dockInspector && !editorAuxiliaryHost || undefined} className={`${editorShell.contentGrid}${inspectorReplacesChat ? ` ${editorShell.inspectorReplacesChat}` : ""}${resourceReplacesChat ? ` ${editorShell.resourceReplacesChat}` : ""}${dockInspector && !editorAuxiliaryHost ? ` ${editorShell.withInspector}` : ""}${standalone ? ` ${editorShell.standalone}` : ""}${panels.chatCollapsed ? ` ${editorShell.chatCollapsed}` : ""}${panels.workspaceCollapsed && !standalone ? ` ${editorShell.workspaceCollapsed}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
           <section ref={conversationNode} onPlayCapture={event => { if (!chatVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} aria-label="创作助手" hidden={inspectorReplacesChat || resourceReplacesChat} className={editorShell.conversation}>
-            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}><div data-assistant-header-actions className="assistant-header-actions"/><Button variant="ghost" aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></Button></div></header>
+            <header className={editorShell.conversationHeader}><span><Sparkles size={17} />创作助手</span><div className={editorShell.conversationActions}>{conversationActions}<div data-assistant-header-actions className="assistant-header-actions"/><Button variant="ghost" aria-label={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} title={panels.chatCollapsed ? "展开对话栏" : "收起对话栏"} className="shell-icon-button" onClick={panels.toggleChat} type="button"><PanelRight size={16} /></Button></div></header>
             <div className={editorShell.conversationBody}><MediaVisibility visible={chatVisible}>
               {!workspaceReady ? <div className="assistant-conversation-empty"><p role="status">{workspaceBoot.message}</p>{workspaceBoot.href ? <Link href={workspaceBoot.href}>{workspaceBoot.href === '/onboarding' ? '完成首次设置' : '登录账号'}</Link> : null}{workspaceBoot.retry ? <Button variant="outline" onClick={workspaceBoot.retry}>重新核验</Button> : null}</div> : conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={{ pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} />}
             </MediaVisibility></div>
@@ -502,7 +504,7 @@ export function AppShellFrame({
           <main ref={mainNode} onPlayCapture={event => { if (!mainVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} className="desktop-main-scroll" data-scroll-region="main-y" onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) { setQuickOpen(false); setDetailsOpen(true); } }}>
             <MediaVisibility visible={mainVisible}>{children}</MediaVisibility>
           </main>
-          {providedInspector && !standalone ? <WorkspaceInspector open={dockInspector} title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{dockInspector ? inspectorConfirmation : null}</WorkspaceInspector> : null}
+          {providedInspector && !standalone ? (editorAuxiliaryHost ? createPortal(<WorkspaceInspector open={dockInspector} title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{dockInspector ? inspectorConfirmation : null}</WorkspaceInspector>, editorAuxiliaryHost) : <WorkspaceInspector open={dockInspector} title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{dockInspector ? inspectorConfirmation : null}</WorkspaceInspector>) : null}
         </div>
 
       </section>
