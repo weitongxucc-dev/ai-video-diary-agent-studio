@@ -4930,7 +4930,8 @@ async function openProductionScript(panel: HTMLElement) {
 }
 
 function openEditingStatusTray() {
-  const entry = screen.queryByRole("button", {name: /制作与检查$/, expanded: false});
+  const tray = screen.queryByRole("region", {name: "制作与检查"});
+  const entry = tray ? within(tray).queryByRole("button", {name: /制作与检查$|查看原因$|查看修改$|查看进度$|检查成片$/, expanded: false}) : null;
   if (entry) fireEvent.click(entry);
 }
 

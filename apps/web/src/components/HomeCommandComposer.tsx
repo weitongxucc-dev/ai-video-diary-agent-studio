@@ -111,7 +111,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     : null;
   const scopeKind = task ? "task" as const : "home" as const;
   const scopeId = task?.id ?? "home";
-  const assistant = useAssistantConversation({ scope_kind: "home", scope_id: "home" });
+  const assistant = useAssistantConversation({ scope_kind: scopeKind, scope_id: scopeId });
   const persistedConversation = assistant.conversation;
   const isCurrentConversation = assistant.isCurrentConversation;
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
@@ -144,6 +144,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const restoredPlanKey = useRef<string | null>(null);
   const replyPlanRequests = useRef(new Map<string, string>());
   const appliedTaskReads = useRef(new Set<string>());
+  useEffect(() => { setPending(null); }, [scopeKind, scopeId, assistant.conversation?.id]);
   useEffect(() => {
     scopeRevision.current += 1;
     setPreview(null); setPreviewOpen(false);

@@ -6,6 +6,7 @@ import { ASSISTANT_LOCATE_REFERENCE_EVENT, assistantReferenceHref } from "@/lib/
 import { AssistantConversationContext } from "./AssistantConversationContext";
 import { useScopedAssistantConversation } from "./useAssistantConversation";
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
+import { useWorkbenchTarget } from "./workbench/WorkbenchTarget";
 import { ASSISTANT_SELECTION_EVENT, assistantReferenceItems, assistantReferenceKey, type SelectedAssistantReference, ASSISTANT_MATERIAL_REFERENCE_EVENT, ASSISTANT_PROFILE_REFERENCE_EVENT, ASSISTANT_KNOWLEDGE_REFERENCE_EVENT, type AssistantKnowledgeReference, type AssistantMaterialReference, type AssistantProfileReference } from "@/lib/assistant-reference";
 
 import { getAssistantConversationReference, saveAssistantConversationReference } from "@/lib/api";
@@ -33,7 +34,8 @@ function MemberConversation({ children }: { children: ReactNode }) {
     window.addEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
     return () => window.removeEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
   }, [router]);
-  const state = useScopedAssistantConversation({ scope_kind: "home", scope_id: "home" });
+  const { targetId } = useWorkbenchTarget();
+  const state = useScopedAssistantConversation(targetId ? { scope_kind: "task", scope_id: targetId.slice("/tasks/".length) } : { scope_kind: "home", scope_id: "home" });
   const [savedReference, setSavedReference] = useState<AssistantSavedReference | null>(null);
   const itemsRef = useRef(assistantReferenceItems(savedReference));
   const [referenceStatus, setReferenceStatus] = useState({pending:true,reason:null as string|null});
