@@ -12,13 +12,13 @@ function state(running = false, loading = false) {
   return { conversation, conversations: [], loading, error: null, stop: vi.fn().mockResolvedValue(undefined) } as never;
 }
 describe("shared compact assistant send control", () => {
-  it.each([true, false])("uses an icon-only accessible send control with compact=%s", (compact) => {
+  it.each([true, false])("uses an icon-only accessible send control with compact=%s", async (compact) => {
     render(<AssistantConversationPanel state={state()} input="要求" onInput={vi.fn()} onSend={vi.fn()} configured busy={false} compact={compact} scopeLabel="fixture" />);
     const button = screen.getByRole("button", { name: "发送" });
     expect(button).toBeEnabled(); expect(button.textContent).toBe("");
     expect(button.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
-    expect(button).toHaveAttribute("title", "Enter 发送，Shift+Enter 换行");
-    button.focus(); expect(document.activeElement).toBe(button);
+    fireEvent.focus(button);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Enter 发送，Shift+Enter 换行");
   });
   it.each([
     ["", true, false, false, false, "发送", "先填写对话要求"],
@@ -26,7 +26,7 @@ describe("shared compact assistant send control", () => {
     ["要求", true, true, false, false, "发送", "正在恢复对话"],
     ["要求", true, false, true, false, "本轮运行中", "此对话已有正在运行的轮次；可先停止本轮或切换到另一段对话"],
     ["要求", true, false, false, true, "正在处理", "本轮正在处理，请稍后再发送"],
-  ])("exposes the actual disabled state for %s / %s / %s / %s / %s", (input, configured, loading, running, busy, label, reason) => {
+  ])("exposes the actual disabled state for %s / %s / %s / %s / %s", async (input, configured, loading, running, busy, label, reason) => {
     render(<AssistantConversationPanel state={state(running, loading)} input={input} onInput={vi.fn()} onSend={vi.fn()} configured={configured} busy={busy} scopeLabel="fixture" />);
     if (running) {
       expect(screen.getByRole("button", { name: "停止本轮" })).toBeEnabled();
@@ -35,7 +35,9 @@ describe("shared compact assistant send control", () => {
       return;
     }
     const button = screen.getByRole("button", { name: label });
-    expect(button).toBeDisabled(); expect(button).toHaveAttribute("title", reason);
+    expect(button).toBeDisabled();
+    fireEvent.focus(button.parentElement!);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(reason);
     expect(screen.getByRole("textbox", { name: "对话要求" })).toHaveAccessibleDescription(expect.stringContaining(reason));
   });
   it("preserves application commands and the existing real stop callback while running", () => {

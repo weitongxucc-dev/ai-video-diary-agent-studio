@@ -1,4 +1,7 @@
 "use client";
+import { createPortal } from "react-dom";
+import { useActiveEditorDock } from "./workbench/EditorDock";
+import { IconButton } from "./ui/icon-button";
 import { WorkspaceAudio } from "./workbench/WorkspaceMedia";
 import { useWorkspaceViewState } from "./workbench/context";
 
@@ -8,7 +11,7 @@ import { apiUrl, importCreationTaskAudio, listenCreationTaskAudio, getCreationTa
 import type { AudioEditInput, AudioTimeline, TimelineAudioClip, TimelineAudioTrack, TaskMediaJob } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
 import { HomeCardDialog } from "./HomeCardDialog";
-import { AudioLines, CircleAlert } from "lucide-react";
+import { AudioLines, CircleAlert, Headphones } from "lucide-react";
 
 function AudioTimelineClip({ taskId, versionId, clip, duration, selected, muted, onSelect }: {
   taskId: string; versionId: string | null; clip: TimelineAudioClip; duration: number;
@@ -93,6 +96,7 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
   selectedId: string | null; playhead?: number; onSelect: (id: string, time?: number) => void;
   onPreview: (input: AudioEditInput) => void; busy: boolean; onListenPosition?: (time: number) => void; sharedTimeScale?: boolean; subtitleTrack?: ReactNode;
 }) {
+  const toolsHost = useActiveEditorDock("timelineTools");
   const [toolsOpen, setToolsOpen] = useState(false);
   const toolsAnchor = useRef<HTMLButtonElement>(null);
   const [zoom, setZoom] = useWorkspaceViewState("audio.zoom", 1);
@@ -159,6 +163,7 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
       if (result.status === "cancelled") { listenController.current?.abort(); setWorking(false); }
     } catch (cause) { if (currentListenContext.current === context) setError(cause instanceof Error ? cause.message : "试听取消未完成"); }
   }
+  const audioToolAccess = <div className={ui.audioToolAccess}><IconButton ref={toolsAnchor} label="音频工具" type="button" aria-expanded={toolsOpen} aria-haspopup="dialog" onClick={() => setToolsOpen(value => !value)}><AudioLines size={14}/></IconButton>{working ? <span role="status">处理中…</span> : error ? <span>音频处理未完成</span> : null}</div>;
   const importControls = (
 <div className={ui.audioToolbar}>
       <AppSelect aria-label="音频导入轨道" value={importTrackId} onValueChange={newValue => setRole(newValue)} disabled={busy || working}><AppSelectOption value="">选择导入轨道</AppSelectOption>{graph.tracks.map(track => <AppSelectOption key={track.id} value={track.id}>{track.name}</AppSelectOption>)}</AppSelect>
@@ -177,12 +182,12 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
   return <section className={ui.audioTimeline} aria-label="多轨音频">
     <div data-workspace-scroll="audio-tracks" className={sharedTimeScale ? undefined : ui.audioScroll}><div style={{ width: `${(sharedTimeScale ? 1 : zoom)*100}%` }}>{graph.tracks.filter(track => track.clips.length).map(track => <div className={ui.audioTrack} key={track.id}>
       <div className={ui.audioTrackLabel}><button type="button" aria-pressed={selectedId === track.id} onClick={() => onSelect(track.id)}>{track.name}{track.muted ? " · 静音" : ""}</button>
-        <button type="button" aria-label={`独听${track.name}`} aria-pressed={solo.includes(track.id)} onClick={() => { setSolo(solo.includes(track.id) ? solo.filter(id => id !== track.id) : [...solo,track.id]); setAudio(null); }}>独听</button></div>
+        <IconButton label={`独听${track.name}`} aria-pressed={solo.includes(track.id)} className={ui.audioSoloButton} onClick={() => { setSolo(solo.includes(track.id) ? solo.filter(id => id !== track.id) : [...solo,track.id]); setAudio(null); }}><Headphones size={12}/></IconButton></div>
       <div className={ui.audioLane}>{track.clips.map(clip => <AudioTimelineClip key={`${clip.id}:${clip.source_ref}`} taskId={taskId} versionId={versionId} clip={clip} duration={duration} selected={selectedId === clip.id} muted={track.muted}
         onSelect={time => { onSelect(clip.id,time); setStart(clip.timeline_start_ms/1000); setEnd(Math.min(duration,(clip.timeline_start_ms+(clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000)); setAudio(null); }}/>) }<span className={ui.audioPlayhead} style={{left:`${playhead/duration*100}%`}} aria-hidden /></div>
     </div>)}</div></div>
     {subtitleTrack}
-    <div className={ui.audioToolAccess}><button ref={toolsAnchor} className={ui.button} type="button" aria-expanded={toolsOpen} aria-haspopup="dialog" onClick={() => setToolsOpen(value => !value)}><AudioLines size={14}/>音频工具</button>{working ? <span role="status">处理中…</span> : error ? <span>音频处理未完成</span> : null}</div>
+    {toolsHost && sharedTimeScale ? createPortal(audioToolAccess, toolsHost) : audioToolAccess}
     {toolsOpen ? <HomeCardDialog kind="selection" title="音频工具" anchor={toolsAnchor} onClose={() => setToolsOpen(false)}><div className={ui.audioToolPanel}>
     <div className={ui.audioControls} role="group" aria-label="音频导入与试听">
       {importControls}

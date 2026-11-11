@@ -1,0 +1,9 @@
+.toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:12px; }
+.toolbar.auxiliary { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:2px; padding:6px 10px 10px; border-bottom:1px solid var(--border-1); }
+.auxiliary > :first-child { width:100%; min-width:0; }
+.filters { display:grid; gap:10px; width:240px; max-width:calc(100vw - 24px); padding:12px; border:1px solid var(--border-2); border-radius:8px; background:var(--surface-1); color:var(--text-1); box-shadow:0 6px 20px #0002; font:400 13px/21px var(--font-ui); }
+.filters > h2 { margin:0; font:inherit; }
+.filters > [data-app-select-trigger] { width:100%; }
+.viewActions { display:flex; align-items:center; justify-content:space-between; gap:4px; border-top:1px solid var(--border-1); padding-top:8px; }
+.filterDot { flex:0 0 4px; width:4px; height:4px; margin-left:-4px; align-self:flex-start; margin-top:5px; border-radius:50%; background:var(--focus); }
+.filterDot[hidden] { display:none; }

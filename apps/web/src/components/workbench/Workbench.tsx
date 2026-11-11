@@ -10,9 +10,12 @@ import { getCreationTaskWorkspace } from "@/lib/api";
 import { useAssistantSelection } from "../AssistantConversationProvider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Button } from "../ui/button";
+import { ConversationTarget } from "./ConversationTarget";
 import { MediaVisibility } from "../ui/media-visibility";
 import { ScrollArea } from "../ui/scroll-area";
 import { WorkbenchRegistry, WorkspacePanelContext, WorkspacePageContext, workspacePageId, workspaceResourcePaths, isWorkbenchManagedPath, type WorkspacePage } from "./context";
+import { EditorDockProvider } from "./EditorDock";
+import { EditorResourcePane } from "./EditorResourcePane";
 import styles from "./Workbench.module.css";
 
 const WorkbenchViewStates = createContext(new Map<string, Map<string, unknown>>());
@@ -148,7 +151,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
       <Button variant="ghost" size="icon" className={styles.close} aria-label={`关闭${page.label}页签`} title={`关闭${page.label}页签`} onClick={() => close(page.id)}><X /></Button>
     </div>)}
   </TabsList></ScrollArea> : undefined;
-  return <WorkbenchRegistry.Provider value={registry}><WorkbenchViewStates.Provider value={viewStates.current}>
+  return <WorkbenchRegistry.Provider value={registry}><WorkbenchViewStates.Provider value={viewStates.current}><EditorDockProvider activePageId={shellPage?.id}>
     {children}
     <div hidden={!managed} className={styles.host} onPlayCapture={event => {
       if (!(event.target instanceof HTMLMediaElement)) return;
@@ -156,22 +159,22 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
       playingMedia.current = event.target;
     }} onPauseCapture={releasePlaying} onEndedCapture={releasePlaying}>
       <Tabs value={dockedTask?.id ?? (resourceIds.includes(activeId) ? null : activePage?.id ?? null)} onValueChange={value => { if (typeof value === "string") activate(value); }} className={styles.root}>
-        <AppShellFrame {...scopedShell} resourceOpen={Boolean(dockedTask)} onReleaseResourcePane={releaseResourcePane} inspectorDismissKey={activeId} inspector={dockedTask && activePage ? <WorkspacePageContext.Provider value={{ id: activePage.id, href: activePage.href, active: managed, auxiliary: true, updateShell, viewState: viewStates.current.get(activePage.id)! }}>{resourceShell.inspector}</WorkspacePageContext.Provider> : scopedShell.inspector} inspectorTitle={dockedTask ? resourceShell.inspectorTitle : scopedShell.inspectorTitle} workspaceTabs={tabstrip} conversation={<>
-          <div className={styles.target} aria-label="当前操作目标">
-            {target?.task ? <><Clapperboard size={14} /><button type="button" title={target.task.name} onClick={() => targetId && activate(targetId)}>{target.task.name}</button><Button variant="ghost" size="icon" aria-label="取消当前作品目标" title="取消当前作品目标" onClick={() => { setTargetId(null); selection?.select(selection.items.filter(item => !("task_id" in item))); }}><X /></Button></> : <span>工作区对话</span>}
-          </div>
+        <AppShellFrame {...scopedShell} resourceOpen={Boolean(dockedTask)} onReleaseResourcePane={releaseResourcePane} inspectorDismissKey={activeId} inspector={dockedTask && activePage ? <WorkspacePageContext.Provider value={{ id: activePage.id, href: activePage.href, active: managed, auxiliary: true, updateShell, viewState: viewStates.current.get(activePage.id)! }}>{resourceShell.inspector}</WorkspacePageContext.Provider> : scopedShell.inspector} inspectorTitle={dockedTask ? resourceShell.inspectorTitle : scopedShell.inspectorTitle} workspaceTabs={tabstrip} conversationActions={target?.task ? <ConversationTarget name={target.task.name} onReturn={() => targetId && activate(targetId)} onClear={() => { setTargetId(null); selection?.select(selection.items.filter(item => !("task_id" in item))); }} /> : undefined} conversation={<>
           <HomeCommandComposer {...resource} {...target} pageContext={undefined} assignLocation={href => router.push(href)} />
         </>}>
           <div data-workbench-pages className={`${styles.pages}${dockedTask ? ` ${styles.withResource}` : ""}`}>
-            {dockedTask ? <div className={styles.resourceHeader}><span>{activePage?.label}</span><Button variant="ghost" size="icon" aria-label="返回作品" title="返回作品" onClick={() => activate(dockedTask.id)}><X/></Button></div> : null}
-            {pages.filter(page => page.open && page.content !== null).map(page => <PageMount key={page.id} page={page} active={managed && (page.id === activeId || page.id === dockedTask?.id)} auxiliary={Boolean(dockedTask && page.id === activeId)} updateShell={updateShell} />)}
+            {pages.filter(page => page.open && page.content !== null).map(page => {
+              const auxiliary = Boolean(dockedTask && page.id === activeId);
+              const view = <PageMount key={page.id} page={page} active={managed && (page.id === activeId || page.id === dockedTask?.id)} auxiliary={auxiliary} updateShell={updateShell} />;
+              return resourceIds.includes(page.id) ? <EditorResourcePane key={page.id} title={page.label} active={managed && page.id === activeId} docked={auxiliary} onClose={() => { if (dockedTask) activate(dockedTask.id); }}>{view}</EditorResourcePane> : view;
+            })}
           </div>
           {closeError ? <div role="alert" className={styles.closeError}>{closeError}<Button variant="ghost" onClick={() => setCloseError(null)}>知道了</Button></div> : null}
           {!activePage?.content ? <p className={styles.loading} role="status">正在打开工作区…</p> : null}
         </AppShellFrame>
       </Tabs>
     </div>
-  </WorkbenchViewStates.Provider></WorkbenchRegistry.Provider>;
+  </EditorDockProvider></WorkbenchViewStates.Provider></WorkbenchRegistry.Provider>;
 }
 
 export function Workbench({ children }: { children: ReactNode }) {

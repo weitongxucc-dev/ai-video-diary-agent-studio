@@ -577,7 +577,7 @@ describe("HomeCommandComposer", () => {
       resolveTurn({ reply: "已读到当前制作条件。", provider: "minimax", model: "test", plan_preview: null });
     });
     const finalBody = await screen.findByText("已读到当前制作条件。", { exact: true });
-    const toolSummary = screen.getByText("工具记录 · 1 项 · 调用已结束");
+    const toolSummary = screen.getByLabelText("工具记录 · 1 项 · 调用已结束");
     expect(toolSummary.compareDocumentPosition(finalBody) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(toolSummary);
     expect(screen.getByText("已读取 1 项任务摘要。")).toBeInTheDocument();

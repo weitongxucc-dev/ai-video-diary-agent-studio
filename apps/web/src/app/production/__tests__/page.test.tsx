@@ -63,6 +63,15 @@ const foundation = {
 } as unknown as ProductionFoundation;
 
 describe("ProductionPage default CreationTask projection", () => {
+  it("keeps a failed task read distinct from an empty list and unknown counts", async () => {
+    mocks.getProductionFoundation.mockResolvedValue(foundation);
+    mocks.listCreationTasks.mockRejectedValueOnce(new Error("offline"));
+    render(await ProductionPage({ searchParams: Promise.resolve({}) }));
+    expect(screen.getByRole("alert")).toHaveTextContent("任务列表未能读取");
+    expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("inspector")).getByText("已创建任务").parentElement).toHaveTextContent("—");
+    expect(screen.getByRole("link", { name: "重试" })).toHaveAttribute("href", "/production");
+  });
   it("routes the automations URL to its workspace without implying that production has started", async () => {
     mocks.getProductionFoundation.mockResolvedValue(null);
     mocks.listCreationTasks.mockResolvedValue({ items: [], total_count: 0 });
@@ -83,14 +92,14 @@ describe("ProductionPage default CreationTask projection", () => {
     render(await ProductionPage({ searchParams: Promise.resolve({}) }));
 
     expect(screen.getByTestId("shell-task-states")).toHaveTextContent("task-not_started:not_started");
-    expect(screen.getAllByText("选题生成中")).not.toHaveLength(0);
+    expect(screen.getAllByText("正在处理")).not.toHaveLength(0);
     expect(screen.getAllByText("等待确认")).not.toHaveLength(0);
-    expect(screen.getAllByText("选题已完成")).not.toHaveLength(0);
+    expect(screen.getAllByText("已完成")).not.toHaveLength(0);
     expect(screen.getAllByText("需要处理")).not.toHaveLength(0);
     expect(screen.getByRole("link", { name: "打开 任务 completed" })).toHaveAttribute("href", "/tasks/task-completed");
 
     const inspector = within(screen.getByTestId("inspector"));
-    for (const label of ["等待开始", "选题生成中", "等待确认", "选题已完成", "需要处理"]) {
+    for (const label of ["等待开始", "正在处理", "等待确认", "已完成", "需要处理"]) {
       expect(inspector.getByText(label).parentElement).toHaveTextContent(`${label}1`);
     }
   });

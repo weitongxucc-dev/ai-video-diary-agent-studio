@@ -960,7 +960,7 @@ h4 {
 .queue-section > header { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 9px; padding: 0 2px; }
 .queue-section > header span { color: var(--text-3); font-size: 12px; }
 .queue-section > header h2 { margin: 1px 0 0; font-size: 13px; }
-.queue-section > header a { color: var(--text-2); font-size: 12px; text-decoration: none; }
+.queue-section > header a:not(.modern-primary-button) { color: var(--text-2); font-size: 12px; text-decoration: none; }
 .queue-list { overflow: hidden; border: 1px solid var(--border-1); border-radius: 12px; background: var(--surface-1); }
 .queue-row { display:grid; min-height:56px; align-items:center; grid-template-columns:24px minmax(0,1fr) 30px; gap:8px; padding:8px 12px; border-bottom: 1px solid var(--border-1); }
 .queue-row:last-child { border-bottom: 0; }
@@ -1530,3 +1530,7 @@ h4 {
 .settings-legal { color: var(--text-3); font-size: 12px; padding-inline: 10px; }
 .settings-legal summary { cursor: pointer; }
 .settings-legal nav { display: flex; gap: 12px; padding-block: 8px; }
+
+.queue-row { color:var(--text-1); text-decoration:none; }
+.queue-row:hover { background:var(--surface-2); }
+.queue-row:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }

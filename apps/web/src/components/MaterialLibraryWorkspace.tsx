@@ -1,5 +1,7 @@
 "use client";
 import { Button } from "./ui/button";
+import { IconButton } from "./ui/icon-button";
+import { MaterialLibraryToolbar } from "./material-library/MaterialLibraryToolbar";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
 import { useWorkspaceViewState, useWorkspacePage } from "./workbench/context";
 import { MaterialNotesEditor } from "./material-library/MaterialNotesEditor";
@@ -57,7 +59,8 @@ export function MaterialLibraryWorkspace({
   initialTag?: string;
 }) {
   const router = useRouter();
-  const viewActive = useWorkspacePage()?.active ?? true;
+  const page = useWorkspacePage();
+  const viewActive = page?.active ?? true;
   const searchParams = useSearchParams();
   const locateQuery = searchParams?.get("locate_ref") ?? "";
   const [assets, setAssets] = useState(initialLibrary.assets);
@@ -862,8 +865,8 @@ export function MaterialLibraryWorkspace({
       }} />}
     >
       <div className={`modern-library ${styles.workspace}`}>
-        <div className={`library-toolbar ${styles.toolbar}`}>
-          <InputGroup data-input-group aria-label="素材检索" className={`library-search ${styles.search}`}>
+        <MaterialLibraryToolbar auxiliary={Boolean(page?.auxiliary)} filtered={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)}
+          search={<InputGroup data-input-group aria-label="素材检索" className={`library-search ${styles.search}`}>
             <InputGroupAddon><Search size={16} /></InputGroupAddon>
             <InputGroupInput
               aria-label="搜索素材"
@@ -873,8 +876,7 @@ export function MaterialLibraryWorkspace({
               value={query}
             />
             {query ? <Button variant="ghost" aria-label="清除搜索" className={styles.searchClear} onClick={() => { setQuery(""); searchInput.current?.focus(); }} type="button"><X size={14} /></Button> : null}
-          </InputGroup>
-          <AppSelect className={styles.filterSelect} aria-label="媒体类型筛选" value={mediaType} onValueChange={newValue => selectMediaType(newValue as MediaTypeFilter)}>{mediaTypeOptions.map(value => <AppSelectOption key={value} value={value}>{value === "all" ? "全部类型" : mediaTypeLabels[value]}</AppSelectOption>)}</AppSelect>
+          </InputGroup>} filters={<><AppSelect className={styles.filterSelect} aria-label="媒体类型筛选" value={mediaType} onValueChange={newValue => selectMediaType(newValue as MediaTypeFilter)}>{mediaTypeOptions.map(value => <AppSelectOption key={value} value={value}>{value === "all" ? "全部类型" : mediaTypeLabels[value]}</AppSelectOption>)}</AppSelect>
           <AppSelect className={styles.filterSelect} aria-label="审核状态筛选" value={filter} onValueChange={newValue => setFilter(newValue as Filter)}><AppSelectOption value="all">全部确认状态</AppSelectOption><AppSelectOption value="raw">未人工确认</AppSelectOption><AppSelectOption value="approved">已人工确认</AppSelectOption><AppSelectOption value="rejected">已标记排除</AppSelectOption></AppSelect>
           {initialTag ? (
             <span className="library-tag">
@@ -888,16 +890,13 @@ export function MaterialLibraryWorkspace({
             <Link className={styles.resetFilters} href="/library" onClick={() => { setQuery(""); setFilter("all"); setMediaType("all"); }}>重置全部</Link>
           ) : (
             <Button variant="ghost" className={styles.resetFilters} onClick={resetAllFilters} type="button">重置全部</Button>
-          ) : null}
-          <div className="library-view-toggle" role="group" aria-label="列表显示方式">
+          ) : null}</>} viewActions={<><div className="library-view-toggle" role="group" aria-label="列表显示方式">
             <Button variant="ghost" aria-label="封面网格" aria-pressed={viewMode === "grid"} title="封面网格" onClick={() => setViewMode("grid")} type="button"><Grid2X2 size={16} /></Button>
             <Button variant="ghost" aria-label="对象列表" aria-pressed={viewMode === "list"} title="对象列表" onClick={() => setViewMode("list")} type="button"><List size={16} /></Button>
           </div>
-          <Button variant="ghost" className={styles.iconButton} aria-label="刷新素材列表" title="刷新素材列表" disabled={busy !== null} onClick={() => void refreshLibrary()} type="button"><RefreshCw size={16} /></Button>
-          <Button variant="ghost" className={styles.importButton} onClick={() => setImportOpen(true)} type="button"><Plus size={16} />导入素材</Button>
-
-        </div>
-        <div className={styles.summaryLine}><span>已载入 {assets.length} / {totalCount} · 最近更新在前</span><Button variant="ghost" className={styles.iconButton} aria-label="查看素材统计" title="查看素材统计" onClick={() => setStatisticsOpen(true)} type="button"><Info size={16} /></Button></div>
+          <Button variant="ghost" className={styles.iconButton} aria-label="刷新素材列表" title="刷新素材列表" disabled={busy !== null} onClick={() => void refreshLibrary()} type="button"><RefreshCw size={16} /></Button><IconButton label="查看素材统计" onClick={() => setStatisticsOpen(true)}><Info/></IconButton></>}
+          actions={page?.auxiliary ? <IconButton label="导入素材" onClick={() => setImportOpen(true)}><Plus/></IconButton> : <Button variant="outline" className={styles.importButton} onClick={() => setImportOpen(true)} type="button"><Plus size={16}/>导入素材</Button>} />
+        <div className={styles.summaryLine}><span>已载入 {assets.length} / {totalCount} · 最近更新在前</span></div>
         {intakeError || intake?.pending_files.length || (intake && intake.bound_to_current_workspace && intake.directory_state !== "ready") ? <div className={styles.intakeNotice} role={intakeError ? "alert" : "status"}><span>{intakeError ? "素材接入暂不可用" : intake?.pending_files.length ? `${intake.pending_files.length} 个外部文件等待确认复制完成` : "素材目录需要检查"}</span><Button variant="ghost" onClick={() => setImportOpen(true)} type="button">查看接入</Button></div> : null}
 
         {error ? (

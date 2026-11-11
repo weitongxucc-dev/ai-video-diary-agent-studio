@@ -14,7 +14,7 @@ import { AppShell } from "@/components/AppShell";
 import { CreateProductionTaskForm } from "@/components/CreateProductionTaskForm";
 import { ScheduledTasksWorkspace } from "@/components/ScheduledTasksWorkspace";
 import { getProductionFoundation, listCreationTasks, listVideoTemplates } from "@/lib/api.server";
-import { creationTaskStatusPresentation } from "@/lib/creation-task-status";
+import { creationTaskShortStatus, creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import type { CreationTask, ProductionFoundation } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -55,30 +55,19 @@ function CreationTaskRow({ task }: { task: CreationTask }) {
           ? AlertCircle
           : Clock3;
   return (
-    <article className="queue-row">
+    <Link className="queue-row" href={`/tasks/${encodeURIComponent(task.id)}`} aria-label={`打开 ${displayTaskText(task.name)}`}>
       <div className={`queue-row__state status-${taskState.tone}`}>
         <TaskStateIcon size={17} />
       </div>
       <div className="queue-row__main">
         <div className="queue-row__title">
           <strong>{displayTaskText(task.name)}</strong>
-          <span className={`status-${taskState.tone}`}>{taskState.label}</span>
+          <span className={`status-${taskState.tone}`}>{creationTaskShortStatus(task.stage_status, task.stage)}</span>
         </div>
-        <p>{taskState.stageLabel}</p>
-        <small>
-          {taskState.tone === "idle"
-            ? "任务已保存，等待开始选题。"
-            : "当前状态来自已保存的创作任务。"}
-        </small>
+
       </div>
-      <Link
-        aria-label={`打开 ${displayTaskText(task.name)}`}
-        className="queue-row__open"
-        href={`/tasks/${encodeURIComponent(task.id)}`}
-      >
-        <ArrowRight size={16} />
-      </Link>
-    </article>
+      <span className="queue-row__open" aria-hidden><ArrowRight size={16}/></span>
+    </Link>
   );
 }
 
@@ -189,12 +178,12 @@ export default async function ProductionPage({
         <div><dt>素材总数</dt><dd>{readiness.asset_count}</dd></div>
         <div><dt>已审核素材</dt><dd>{readiness.approved_asset_count}</dd></div>
         <div><dt>可用片段</dt><dd>{readiness.approved_segment_count}</dd></div>
-        <div><dt>已创建任务</dt><dd>{creationTasks.length}</dd></div>
-        <div><dt>等待开始</dt><dd>{taskStatusCounts.not_started}</dd></div>
-        <div><dt>选题生成中</dt><dd>{taskStatusCounts.running}</dd></div>
-        <div><dt>等待确认</dt><dd>{taskStatusCounts.waiting_for_user}</dd></div>
-        <div><dt>选题已完成</dt><dd>{taskStatusCounts.completed}</dd></div>
-        <div><dt>需要处理</dt><dd>{taskStatusCounts.failed}</dd></div>
+        <div><dt>已创建任务</dt><dd>{persistedTasks ? creationTasks.length : "—"}</dd></div>
+        <div><dt>等待开始</dt><dd>{persistedTasks ? taskStatusCounts.not_started : "—"}</dd></div>
+        <div><dt>正在处理</dt><dd>{persistedTasks ? taskStatusCounts.running : "—"}</dd></div>
+        <div><dt>等待确认</dt><dd>{persistedTasks ? taskStatusCounts.waiting_for_user : "—"}</dd></div>
+        <div><dt>已完成</dt><dd>{persistedTasks ? taskStatusCounts.completed : "—"}</dd></div>
+        <div><dt>需要处理</dt><dd>{persistedTasks ? taskStatusCounts.failed : "—"}</dd></div>
       </dl>
       {!readiness.ready ? (
         <div className="queue-blockers">
@@ -233,16 +222,7 @@ export default async function ProductionPage({
               <ArrowRight size={14} />
             </Link>
           </section>
-        ) : (
-          <section className="queue-gate queue-gate--ready">
-            <CheckCircle2 size={20} />
-            <div>
-              <strong>工作区已就绪</strong>
-              <p>可以创建新任务，或继续下面尚未完成的任务。</p>
-            </div>
-            <Link href="/?new=1">开始制作<ArrowRight size={14} /></Link>
-          </section>
-        )}
+        ) : null}
 
         <section className="queue-section">
           <header>
@@ -251,7 +231,7 @@ export default async function ProductionPage({
               <Plus size={16} />新建视频
             </Link>
           </header>
-          {creationTasks.length ? (
+          {persistedTasks === null ? <div className="queue-empty" role="alert"><AlertCircle size={20}/><div><strong>任务列表未能读取</strong><p>已有任务保留，请重新读取。</p></div><a href="/production">重试</a></div> : creationTasks.length ? (
             <div className="queue-list">
               {creationTasks.map((task) => <CreationTaskRow key={task.id} task={task} />)}
             </div>
@@ -262,7 +242,7 @@ export default async function ProductionPage({
                 <strong>还没有创作任务</strong>
                 <p>检查当前可用内容后，创建第一个创作任务。</p>
               </div>
-              <Link href="/?new=1">开始制作</Link>
+
             </div>
           )}
         </section>

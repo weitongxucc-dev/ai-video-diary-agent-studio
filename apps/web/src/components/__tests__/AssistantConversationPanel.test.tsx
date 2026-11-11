@@ -237,10 +237,10 @@ describe("actual goal progress", () => {
       failure: {reason: "曝光数值超出允许范围（-2 到 2）。", repair_action: "请使用范围内的曝光值重新准备修改。"}}];
     render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    expect(screen.getByText(/工具记录/).closest("details")).not.toHaveAttribute("open");
-    expect(within(screen.getByText(/工具记录/)).getByText("曝光数值超出允许范围（-2 到 2）。")).toBeVisible();
-    expect(within(screen.getByText(/工具记录/)).getByText("请使用范围内的曝光值重新准备修改。")).toBeVisible();
-    fireEvent.click(screen.getByText(/工具记录/));
+    expect(screen.getByLabelText(/工具记录/).closest("details")).not.toHaveAttribute("open");
+    expect(within(screen.getByLabelText(/工具记录/)).getByText("曝光数值超出允许范围（-2 到 2）。")).toBeVisible();
+    expect(within(screen.getByLabelText(/工具记录/)).getByText("请使用范围内的曝光值重新准备修改。")).toBeVisible();
+    fireEvent.click(screen.getByLabelText(/工具记录/));
     expect(screen.getByText("调整画面 · 未完成")).toBeVisible();
     expect(screen.queryByText("这一步没有完成。")).not.toBeInTheDocument();
   });
@@ -1098,7 +1098,7 @@ describe("AssistantConversationPanel", () => {
     expect(screen.getByText("真实方案").tagName).toBe("STRONG");
     expect(screen.getAllByRole("button", { name: "复制回复" })).toHaveLength(1);
     const tools = container.querySelector(".assistant-turn-tools summary")!;
-    expect(tools.textContent).toContain("工具记录 · 2 项 · 含失败记录");
+    expect(tools).toHaveAccessibleName("工具记录 · 2 项 · 含失败记录");
     const assistantText = screen.getByText("真实方案");
     expect(tools.compareDocumentPosition(assistantText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const toolDetails = tools.closest("details")!;
@@ -1191,7 +1191,7 @@ describe("AssistantConversationPanel", () => {
     await screen.findByRole("button", { name: "技术能力状态（诊断）" });
     const send = screen.getByRole("button", { name: "发送" });
     expect(send).toBeEnabled();
-    expect(send).toHaveAttribute("title", "Enter 执行本地会话操作；无效命令不会发送给模型");
+    expect(send).toHaveAccessibleDescription( "Enter 执行本地会话操作；无效命令不会发送给模型");
 
     if (activation === "button") fireEvent.click(send);
     else fireEvent.keyDown(screen.getByRole("textbox", { name: "对话要求" }), { key: "Enter" });
@@ -1238,7 +1238,7 @@ describe("AssistantConversationPanel", () => {
       busy={false} configured={false} scopeLabel="首页创作" />);
     const send = screen.getByRole("button", { name: "发送" });
     expect(send).toBeDisabled();
-    expect(send).toHaveAttribute("title", "请先配置对话服务");
+    expect(send).toHaveAccessibleDescription( "请先配置对话服务");
     fireEvent.click(send);
     fireEvent.keyDown(screen.getByRole("textbox", { name: "对话要求" }), { key: "Enter" });
     expect(await screen.findByRole("alert")).toHaveTextContent("请先配置对话服务");
@@ -1261,7 +1261,7 @@ describe("AssistantConversationPanel", () => {
     } else {
       const send = screen.getByRole("button", { name: "正在处理" });
       expect(send).toBeDisabled();
-      expect(send).toHaveAttribute("title", reason);
+      expect(send).toHaveAccessibleDescription( reason);
     }
     fireEvent.keyDown(screen.getByRole("textbox", { name: "对话要求" }), { key: "Enter" });
     expect(await screen.findByRole("alert")).toHaveTextContent(reason);
@@ -1742,7 +1742,7 @@ describe("persistent workbench conversation and command completion", () => {
         view.rerender(panel(command));
         const send=screen.getByRole("button",{name:"发送"});
         expect(send).toBeEnabled();
-        expect(send).toHaveAttribute("title","Enter 执行本地会话操作；无效命令不会发送给模型");
+        expect(send).toHaveAccessibleDescription("Enter 执行本地会话操作；无效命令不会发送给模型");
         if(activation === "button") fireEvent.click(send);
         else fireEvent.keyDown(screen.getByRole("textbox"),{key:"Enter"});
         await waitFor(()=>expect(onInput).toHaveBeenCalledWith(command === "/help" ? "/" : next.draft_text));
@@ -1772,7 +1772,7 @@ describe("persistent workbench conversation and command completion", () => {
     expect(screen.getAllByRole("alert").at(-1)).toHaveTextContent("没有发送给模型");
     view.rerender(panel("普通消息",true));
     expect(screen.getByRole("button",{name:"发送"})).toBeDisabled();
-    expect(screen.getByRole("button",{name:"发送"})).toHaveAttribute("title",referenceState === "pending" ? "正在保存或核验引用" : "引用当前不可用，请重新查看或取消引用");
+    expect(screen.getByRole("button",{name:"发送"})).toHaveAccessibleDescription(referenceState === "pending" ? "正在保存或核验引用" : "引用当前不可用，请重新查看或取消引用");
     fireEvent.keyDown(screen.getByRole("textbox"),{key:"Enter"});
     expect(onSend).not.toHaveBeenCalled();
   });

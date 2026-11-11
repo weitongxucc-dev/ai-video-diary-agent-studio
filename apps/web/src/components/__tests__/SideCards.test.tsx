@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useRef, useState } from "react";
 import { describe, expect, it } from "vitest";
 import { CardSelect, HomeCardDialog } from "../HomeCardDialog";
+import { WorkspacePageContext } from "../workbench/context";
 
 function Example({kind="modal"}:{kind?:"modal"|"detail"|"confirmation"}) {
   const [open,setOpen]=useState(false);
@@ -14,6 +15,20 @@ function Example({kind="modal"}:{kind?:"modal"|"detail"|"confirmation"}) {
 }
 
 describe("standard overlay primitives",()=>{
+  it("hides an inactive page's portal and restores its unsaved form when returning", async () => {
+    const user = userEvent.setup();
+    const page = { id: "/", href: "/", updateShell() {}, viewState: new Map<string, unknown>() };
+    const content = (active: boolean) => <WorkspacePageContext.Provider value={{ ...page, active }}><Example kind="detail"/></WorkspacePageContext.Provider>;
+    const view = render(content(true));
+    await user.click(screen.getByRole("button", { name: "打开" }));
+    const draft = screen.getByRole("textbox", { name: "草稿" });
+    await user.clear(draft); await user.type(draft, "保留未提交内容");
+    view.rerender(content(false));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    view.rerender(content(true));
+    expect(screen.getByRole("textbox", { name: "草稿" })).toBe(draft);
+    expect(draft).toHaveValue("保留未提交内容");
+  });
   it("opens a modal dialog and restores trigger focus without losing its draft",async()=>{
     const user=userEvent.setup(); render(<Example/>);
     await user.click(screen.getByRole("button",{name:"打开"}));
