@@ -1855,6 +1855,7 @@ describe("CreationTaskWorkspace", () => {
   });
 
   it("uses persisted cues when switching tracks and selecting another cue", async () => {
+    mocks.withReferenceProvider = true;
     const initial = subtitleCoverWorkspace();
     const chinese = initial.subtitle_tracks[0];
     chinese.cues.push({ ...chinese.cues[0], id: "subtitle-cue-2", text: "第二条字幕", line_breaks: [3] });
@@ -1870,6 +1871,10 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("真实运行不是口号");
     await chooseSelectValue(screen.getByLabelText("选择字幕"), "subtitle-cue-2");
     expect(screen.getByLabelText("字幕 2 文本")).toHaveValue("第二条\n字幕");
+    fireEvent.click(screen.getByRole("button", { name: "引用所选对象到对话" }));
+    await waitFor(() => expect(mocks.saveReference).toHaveBeenLastCalledWith(expect.any(String), {
+      kind: "selection", items: [expect.objectContaining({ kind: "subtitle", object_id: "subtitle-cue-2", task_id: initial.task.id, version: "timeline-version-6" })],
+    }, 0));
   });
 
   it("saves the persisted cover through ids and reports cancellation and failure", async () => {
@@ -3611,12 +3616,14 @@ describe("CreationTaskWorkspace", () => {
   });
 
   it("selects and previews persisted narration segments with API-owned audio URLs", async () => {
+    mocks.withReferenceProvider = true;
     const task = {
       ...baseTask,
       stage: "montage" as const,
       stage_status: "waiting_for_user" as const,
       status: "waiting_for_user" as const,
       progress: 70,
+      current_timeline_version_id: "timeline-narration-1",
     };
     const narration = {
       task,
@@ -3687,6 +3694,10 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("试听配音 1")).toHaveAttribute("src", "/api/creation-tasks/task-1/narration/segments/narration-segment-1/audio");
 
     fireEvent.click(screen.getByRole("button", { name: "选择配音 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "引用所选对象到对话" }));
+    await waitFor(() => expect(mocks.saveReference).toHaveBeenLastCalledWith(expect.any(String), {
+      kind: "selection", items: [expect.objectContaining({ kind: "narration", object_id: "narration-segment-1", task_id: task.id, version: task.current_timeline_version_id })],
+    }, 0));
     expect(screen.getByRole("region", { name: /^助手对话：/ })).toBeInTheDocument();
     expect(screen.getByLabelText("已选配音详情")).toHaveTextContent("第一段真实配音");
     expect(screen.getByLabelText("已选配音详情")).toHaveTextContent("片段时长");

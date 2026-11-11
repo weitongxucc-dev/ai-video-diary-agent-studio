@@ -166,7 +166,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
             {pages.filter(page => page.open && page.content !== null).map(page => {
               const auxiliary = Boolean(dockedTask && page.id === activeId);
               const view = <PageMount key={page.id} page={page} active={managed && (page.id === activeId || page.id === dockedTask?.id)} auxiliary={auxiliary} updateShell={updateShell} />;
-              return auxiliary ? <EditorResourcePane key={page.id} title={page.label} onClose={() => activate(dockedTask!.id)}>{view}</EditorResourcePane> : view;
+              return resourceIds.includes(page.id) ? <EditorResourcePane key={page.id} title={page.label} active={managed && page.id === activeId} docked={auxiliary} onClose={() => { if (dockedTask) activate(dockedTask.id); }}>{view}</EditorResourcePane> : view;
             })}
           </div>
           {closeError ? <div role="alert" className={styles.closeError}>{closeError}<Button variant="ghost" onClick={() => setCloseError(null)}>知道了</Button></div> : null}
