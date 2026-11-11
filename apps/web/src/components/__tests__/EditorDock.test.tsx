@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createPortal } from "react-dom";
 import { afterEach, expect, it } from "vitest";
-import { EditorDockProvider, useEditorDockHost } from "../workbench/EditorDock";
+import { EditorDockProvider, useActiveEditorDock, useEditorDockHost } from "../workbench/EditorDock";
 import { EditorResourcePane } from "../workbench/EditorResourcePane";
 import { WorkspacePageContext, WorkspacePanelContext, type WorkspacePageSlot } from "../workbench/context";
 
@@ -52,4 +53,23 @@ it("retains an unsubmitted local draft across resource switches and preview host
   view.rerender(<Workbench/>);
   expect(screen.getByTestId("preview-host")).toContainElement(input);
   expect(input).toHaveValue("https://example.com/unsubmitted-video");
+});
+
+it("keeps inactive cached pages' tools out of the current preview toolbar", () => {
+  function Tools({ label }: { label: string }) {
+    const host = useActiveEditorDock("tools");
+    return host ? createPortal(<button>{label}</button>, host) : null;
+  }
+  function Host() { return <div data-testid="tools-host" ref={useEditorDockHost("tools")} />; }
+  const fixture = (active: string) => <EditorDockProvider activePageId={active}>
+    {["/tasks/a", "/tasks/b"].map(id => <WorkspacePageContext.Provider key={id} value={{ ...page, id, active: id === active }}>
+      <div hidden={id !== active}><Host/><Tools label={id}/></div>
+    </WorkspacePageContext.Provider>)}
+  </EditorDockProvider>;
+  const view = render(fixture("/tasks/a"));
+  expect(screen.getAllByRole("button")).toHaveLength(1);
+  expect(screen.getByRole("button")).toHaveTextContent("/tasks/a");
+  view.rerender(fixture("/tasks/b"));
+  expect(screen.getAllByRole("button")).toHaveLength(1);
+  expect(screen.getByRole("button")).toHaveTextContent("/tasks/b");
 });
