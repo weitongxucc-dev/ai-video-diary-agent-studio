@@ -134,7 +134,7 @@ function KnowledgeWorkspaceContent({ items, loading, error, onRefresh, exampleMo
   }
   const inspector = selected && (!location.reference || shownDetail) ? <KnowledgeInspector key={selected.id} detail={shownDetail} detailError={detailError} exampleMode={exampleMode} item={selected} viewVersion={viewVersion} onViewVersion={setViewVersion} onVisibilityChanged={applyVisibilityUpdate} onContentSaved={(updated) => { setDetail(updated); setViewVersion(null); onRefresh(); }} /> : undefined;
 
-  return <AppShell inspector={inspector} inspectorTitle="资料详情" inspectorOpenKey={shownDetail && location.reference ? locateRaw ?? undefined : undefined}>
+  return <AppShell inspector={inspector} inspectorTitle="资料详情" inspectorLayout="reading" inspectorOpenKey={shownDetail && location.reference ? locateRaw ?? undefined : undefined}>
     <div className={styles.page}>
       {location.error || (location.reference && detailError) ? <p role="alert">{location.error ?? detailError}</p> : null}
       {exampleMode ? <div className={styles.exampleBanner}>{exampleLabel ?? "隔离视觉示例"} · 所有名称、分类、摘要和状态均非真实服务数据</div> : null}

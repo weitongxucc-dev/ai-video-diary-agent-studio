@@ -69,9 +69,8 @@ export default function PrivacyPage() {
   return (
     <AppShell>
       <div className="legal-page">
-        <section className="legal-main ui-panel">
+        <section className="legal-main">
           <header className="legal-header">
-            <span className="section-kicker">隐私政策</span>
             <h1>AI 视频日记 · 隐私与数据使用</h1>
             <p>
               这份文档说明 AI 视频日记

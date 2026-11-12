@@ -41,22 +41,28 @@ function readinessRepair(code: string) {
   }
 }
 export function TrendChart({ values }: { values: TrendPoint[] }) {
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(800);
+  useEffect(() => {
+    if (!chartRef.current) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
+    observer.observe(chartRef.current);
+    return () => observer.disconnect();
+  }, [values.length]);
   if (!values.length) return <p className={styles.trendEmptyText}>接收趋势暂无数据</p>;
   const peak = Math.max(...values.map(point => point.count));
   const maximum = Math.max(1, ...values.map((point) => point.count));
-  const x = (index: number) => values.length === 1 ? 143 : 12 + index * 262 / (values.length - 1);
-  const y = (count: number) => 66 - count / maximum * 48;
+  const x = (index: number) => values.length === 1 ? width / 2 : 24 + index * (width - 40) / (values.length - 1);
+  const y = (count: number) => 138 - count / maximum * 116;
   const points = values.map((point, index) => [x(index), y(point.count)].join(",")).join(" ");
-  return <div className={styles.chart}>
-    <div className={styles.chartAxis} aria-hidden><span>{peak > 0 ? peak : "条"}</span><span>0</span></div>
-    <svg aria-label="素材接收趋势" preserveAspectRatio="none" role="img" viewBox="0 0 286 78">
-      <path d="M12 18V66H274" fill="none" stroke="var(--border-1)" vectorEffect="non-scaling-stroke" />
-      <path data-zero-line d="M12 66H274" fill="none" stroke="var(--text-3)" vectorEffect="non-scaling-stroke" />
+  return <div className={styles.chart} ref={chartRef}>
+    {peak > 0 ? <><div className={styles.chartAxis} aria-hidden><span>{peak}</span><span>0</span></div>
+    <svg aria-label="素材接收趋势" preserveAspectRatio="none" role="img" viewBox={`0 0 ${width} 160`}>
+      {[22,80,138].map(y => <path key={y} d={`M24 ${y}H${width - 16}`} fill="none" stroke="var(--border-1)" vectorEffect="non-scaling-stroke" />)}
       {values.length > 1 ? <polyline fill="none" points={points} stroke="var(--accent)" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" vectorEffect="non-scaling-stroke" /> : null}
       {values.map((point, index) => <g key={point.date}><circle aria-label={point.date + " 接收 " + point.count + " 条"} cx={x(index)} cy={y(point.count)} fill="var(--accent)" r={values.length > 7 ? 1.5 : 2}><title>{point.date + "：" + point.count + " 条素材"}</title></circle></g>)}
-    </svg>
+    </svg></> : <p className={styles.trendEmptyText}>这段时间没有素材接收记录</p>}
     <div className={styles.chartLabels}><time>{values[0].date}</time><time>{values[values.length - 1].date}</time></div>
-    {peak === 0 ? <p className={styles.trendEmptyText}>这段时间没有素材接收记录</p> : null}
   </div>;
 }
 type Overview = "trend" | "tags" | "device" | null;
@@ -126,7 +132,6 @@ export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets 
   tasks: CreationTask[]; foundation: ProductionFoundation | null;
   insights?: MaterialLibraryInsights | null; live?: HomeLiveState; recentAssets?: MaterialAsset[] | null;
 }) {
-  const contentRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<MaterialAsset | null>(null);
@@ -136,11 +141,9 @@ export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets 
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [view, setView] = useState<"board" | "list">("board");
   const [activeOverview, setActiveOverview] = useState<Exclude<Overview, null>>("trend");
-  const [overviewFocused, setOverviewFocused] = useState(false);
   const [overviewInfo, setOverviewInfo] = useState<Overview>(null);
   const [preparationOpen, setPreparationOpen] = useState(false);
   const [taskPage, setTaskPage] = useState(0);
-  const focused = overviewFocused;
   const home = live?.data ?? null;
   const items = mergeHomeTasks(tasks, home);
   const filteredTasks = items.filter(item => taskName(item.title).toLocaleLowerCase().includes(query.toLocaleLowerCase()) && (filter === "all" || item.status === filter));
@@ -169,14 +172,11 @@ export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets 
   useEffect(() => { if (liveDays !== undefined) setRange(liveDays); }, [liveDays]);
   function setOverview(next: Overview) {
     setActiveOverview(next ?? "trend");
-    setOverviewFocused(next !== null);
-    // This element owns only the right workspace; never touch document or conversation scroll.
-    if (contentRef.current) contentRef.current.scrollTop = 0;
   }
   const maxTagCount = Math.max(1, ...featuredTags.map(item => item.asset_count));
   function cloudWord(item: MaterialLibraryInsights["tags"][number]) {
     const weight = Math.log1p(item.asset_count) / Math.log1p(Math.max(12, maxTagCount));
-    return <Link href={"/library?tag=" + encodeURIComponent(item.tag)} key={item.tag} data-frequency={item.asset_count} title={`${tagLabel(item.tag)} · ${item.asset_count} 条素材`} style={{fontSize:12 + 18 * weight,fontWeight:weight > .65 ? 500 : 400,marginInline:2 + 5 * weight}}>{tagLabel(item.tag)}<sup>{item.asset_count}</sup></Link>;
+    return <Link href={"/library?mode=manage&tag=" + encodeURIComponent(item.tag)} key={item.tag} data-frequency={item.asset_count} title={`${tagLabel(item.tag)} · ${item.asset_count} 条素材`} style={{fontSize:12 + 18 * weight,fontWeight:weight > .65 ? 500 : 400,marginInline:2 + 5 * weight}}>{tagLabel(item.tag)}<sup>{item.asset_count}</sup></Link>;
   }
   function taskRow(item: HomeTaskItem) {
     return <button className={view === "board" ? styles.taskCard : styles.taskRow} key={item.id} onClick={() => setSelectedTaskId(item.id)} type="button" title={taskName(item.title)}>
@@ -194,20 +194,20 @@ export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets 
       <label className={styles.search} data-input-group><Search aria-hidden size={16} /><input aria-label="搜索任务" ref={searchRef} value={query} placeholder="搜索任务" onChange={event => { setQuery(event.target.value); setTaskPage(0); }} />{query ? <button aria-label="清空任务搜索" title="清空搜索" onClick={() => { setQuery(""); setTaskPage(0); searchRef.current?.focus(); }} type="button"><X aria-hidden size={14} /></button> : null}</label>
       <AppSelect aria-label="任务状态" value={filter} onValueChange={value => { setFilter(value as TaskFilter); setTaskPage(0); }}><AppSelectOption value="all">全部状态</AppSelectOption><AppSelectOption value="not_started">等待开始</AppSelectOption><AppSelectOption value="waiting_for_user">等你确认</AppSelectOption><AppSelectOption value="running">正在制作</AppSelectOption><AppSelectOption value="completed">已完成步骤</AppSelectOption><AppSelectOption value="failed">需要处理</AppSelectOption></AppSelect>
       <button aria-label={view === "board" ? "切换为列表" : "切换为看板"} title={view === "board" ? "切换为列表" : "切换为看板"} className={styles.viewButton} onClick={() => setView(view === "board" ? "list" : "board")} type="button">{view === "board" ? <List aria-hidden size={16} /> : <Columns3 aria-hidden size={16} />}</button>
-      <Link className={styles.newTask} href="/production"><Plus aria-hidden size={16} />新建视频</Link>
+      <Link className={styles.newTask} href="/?new=1"><Plus aria-hidden size={16} />新建视频</Link>
     </div>
-    <div className={`${styles.content}${focused ? ` ${styles.overviewFocused}` : ""}`} ref={contentRef}>
-      <section aria-label="创作任务看板"><div className={styles.sectionHeading}><h2><button aria-expanded={!focused} aria-controls="home-task-body" onClick={() => setOverview(null)} type="button">{focused ? <ChevronRight aria-hidden size={14} /> : null}创作任务</button></h2><small>{items.length} 个任务</small></div>
-        <div id="home-task-body" hidden={focused}>
-          {emptyWorkspace ? <section aria-label="开始创作" className={styles.startHere}><h3>从一个视频目标开始</h3><p>当前可见范围还没有素材、资料、声音或创作任务。说说你想做的视频，也可以先导入画面。</p><div><Link href="/?new=1">说说视频目标 <ArrowRight aria-hidden size={14} /></Link><Link href="/library">去素材库导入</Link></div></section>
+    <div className={styles.content}>
+      <section aria-label="创作任务看板"><div className={styles.sectionHeading}><h2>创作任务</h2><small>{items.length} 个视频任务</small></div>
+        <div id="home-task-body">
+          {emptyWorkspace ? <section aria-label="开始创作" className={styles.startHere}><h3>从一个视频目标开始</h3><p>当前可见范围还没有素材、资料、声音或创作任务。说说你想做的视频，也可以先导入画面。</p><div><Link href="/?new=1">说说视频目标 <ArrowRight aria-hidden size={14} /></Link><Link href="/library?mode=manage">去素材库导入</Link></div></section>
             : !filteredTasks.length ? <div className={styles.empty}><p>{query || filter !== "all" ? "没有匹配的任务" : "还没有创作任务"}</p>{query || filter !== "all" ? <button onClick={() => { setQuery(""); setFilter("all"); searchRef.current?.focus(); }} type="button">清除筛选</button> : <Link href="/production">新建视频</Link>}</div>
-              : view === "board" ? <div className={styles.taskGroups} style={{gridTemplateColumns:groups.map(group=>group.items.length ? "minmax(210px,1fr)" : "minmax(100px,.32fr)").join(" ")}}>{groups.map(group => <section className={styles.taskGroup} aria-label={group.title} key={group.title}><h3>{group.title}<span>{group.items.length}</span></h3><div className={styles.taskColumn} tabIndex={group.items.length ? 0 : undefined} aria-label={`${group.title}任务滚动列表`}>{group.items.length ? group.items.map(taskRow) : <p className={styles.taskGroupEmpty}>{group.empty}</p>}</div></section>)}</div>
+              : view === "board" ? <div className={styles.taskGroups}>{groups.map(group => <section className={styles.taskGroup} aria-label={group.title} key={group.title}><h3>{group.title}<span>{group.items.length}</span></h3><div className={styles.taskColumn} tabIndex={group.items.length ? 0 : undefined} aria-label={`${group.title}任务滚动列表`}>{group.items.length ? group.items.map(taskRow) : <p className={styles.taskGroupEmpty}>{group.empty}</p>}</div></section>)}</div>
                 : <><div className={styles.taskList} aria-label="创作任务列表">{pageTasks.map(taskRow)}</div>{pageCount > 1 ? <nav className={styles.pagination} aria-label="已读取任务分页"><button disabled={currentPage === 0} onClick={() => setTaskPage(currentPage - 1)} type="button">上一页</button><span>{currentPage + 1} / {pageCount} · 已读 {filteredTasks.length} 项</span><button disabled={currentPage === pageCount - 1} onClick={() => setTaskPage(currentPage + 1)} type="button">下一页</button></nav> : null}</>}
         </div>
       </section>
-      <section aria-label="最近素材"><div className={styles.sectionHeading}><h2><button aria-expanded={!focused} aria-controls="home-recent-body" onClick={() => setOverview(null)} type="button">{focused ? <ChevronRight aria-hidden size={14} /> : null}最近素材</button></h2><Link href="/library">素材库 <ArrowRight aria-hidden size={14} /></Link></div>
-        <div id="home-recent-body" hidden={focused}>
-          {recentAssets?.length ? <div className={styles.recentGrid}>{recentAssets.slice(0, 3).map(asset => <button className={styles.materialRow} key={asset.id} type="button" onClick={() => { setSelectedAsset(asset); referenceAssistantMaterial({ selection: { scope: "asset", asset_id: asset.id, expected_updated_at: asset.updated_at }, label: asset.file_name }); }} title={asset.file_name}><span className={styles.materialPreview}><MaterialPreview asset={asset} /></span><span><strong>{asset.file_name}</strong><small>{asset.user_tags.slice(0, 2).join(" · ") || (asset.media_type === "audio" ? "音频" : asset.media_type === "image" ? "图片" : "视频")}</small><small>最近更新 · {new Date(asset.updated_at).toLocaleDateString("zh-CN")}</small></span></button>)}</div>
+      <section aria-label="最近素材"><div className={styles.sectionHeading}><h2>最近素材</h2><Link href="/library?mode=manage">素材库 <ArrowRight aria-hidden size={14} /></Link></div>
+        <div id="home-recent-body">
+          {recentAssets?.length ? <div className={styles.recentGrid}>{recentAssets.slice(0, 3).map(asset => <button className={styles.materialRow} key={asset.id} type="button" onClick={() => setSelectedAsset(asset)} title={asset.file_name}><span className={styles.materialPreview}><MaterialPreview asset={asset} /></span><span><strong>{asset.file_name}</strong><small>{asset.user_tags.slice(0, 2).join(" · ") || (asset.media_type === "audio" ? "音频" : asset.media_type === "image" ? "图片" : "视频")}</small><small>最近更新 · {new Date(asset.updated_at).toLocaleDateString("zh-CN")}</small></span></button>)}</div>
             : <p className={styles.compactEmpty}>{recentAssets === null ? "暂时无法读取最近素材" : "还没有素材，可以去素材库导入"}{recentAssets === null && live ? <button onClick={live.onRetry} type="button">重新读取</button> : null}</p>}
           {live?.materialsError ? <div className={styles.tagReadError} role="alert"><span>最近素材暂未更新</span><details className={styles.metaDetails}><summary>查看素材读取详情</summary><p>{live.materialsError}</p></details></div> : null}
         </div>
@@ -225,11 +225,9 @@ export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets 
           }}>{title}</button>)}
         </div>
         {activeOverview ? <div className={styles.cardHeading}>
-          <h3>{activeOverview === 'trend' ? '素材接收趋势' : activeOverview === 'tags' ? '内容标签' : '设备与存储'}</h3>
           <div className={styles.cardMeta}>
             {activeOverview === 'trend' ? <><time dateTime={home?.trend.meta.as_of}>{home ? `更新 ${new Date(home.trend.meta.as_of).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false})}` : '更新时间未知'}</time>{trendRangePicker}</> : null}
             <button className={styles.infoButton} aria-label={activeOverview === 'trend' ? '趋势统计口径' : activeOverview === 'tags' ? '标签统计口径' : '设备范围与诊断'} title="范围与数据来源" onClick={() => setOverviewInfo(activeOverview)} type="button"><Info aria-hidden size={15} /></button>
-            {focused ? <button className={styles.infoButton} aria-label="返回任务" title="返回任务" onClick={() => setOverview(null)} type="button"><X aria-hidden size={15} /></button> : null}
           </div>
         </div> : null}
         <div id="home-trend-body" role="tabpanel" aria-labelledby="home-trend-tab" className={styles.overviewBody} hidden={activeOverview !== 'trend'}>
@@ -238,7 +236,7 @@ export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets 
         <div id="home-tags-body" role="tabpanel" aria-labelledby="home-tags-tab" className={styles.overviewBody} hidden={activeOverview !== 'tags'}>
           <div className={styles.cloudField} aria-label="按真实素材频数排列的词云"><div className={styles.cloudCore}>{featuredTags.slice(0,1).map(cloudWord)}</div><div className={`${styles.cloudRow} ${styles.cloudTop}`}>{featuredTags.filter((_,index) => index > 0 && index % 2 === 1).map(cloudWord)}</div><div className={`${styles.cloudRow} ${styles.cloudBottom}`}>{featuredTags.filter((_,index) => index > 0 && index % 2 === 0).map(cloudWord)}</div></div>
           {!insights ? <div className={styles.tagReadError} role="alert"><span>暂时无法读取内容标签</span>{live ? <button onClick={live.onRetry} type="button">重新读取</button> : null}</div> : realTags.length === 0 ? <p className={styles.compactEmpty}>素材还没有可用标签</p> : null}
-          {moreTags.length ? <details className={styles.moreTags}><summary>更多标签（{moreTags.length}）</summary><ul>{moreTags.map(item => <li key={item.tag}><Link href={'/library?tag=' + encodeURIComponent(item.tag)}>{tagLabel(item.tag)}</Link><small>{item.asset_count} 条素材</small></li>)}</ul></details> : null}
+          {moreTags.length ? <details className={styles.moreTags}><summary>更多标签（{moreTags.length}）</summary><ul>{moreTags.map(item => <li key={item.tag}><Link href={'/library?mode=manage&tag=' + encodeURIComponent(item.tag)}>{tagLabel(item.tag)}</Link><small>{item.asset_count} 条素材</small></li>)}</ul></details> : null}
         </div>
         <div id="home-device-body" role="tabpanel" aria-labelledby="home-device-tab" className={styles.overviewBody} hidden={activeOverview !== 'device'}>
           {home ? <><dl className={styles.deviceMetrics}>
@@ -270,7 +268,7 @@ export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets 
         {selectedTask.updatedAt ? <div><dt>最近更新</dt><dd><time dateTime={selectedTask.updatedAt}>{new Date(selectedTask.updatedAt).toLocaleString("zh-CN")}</time></dd></div> : null}
       </dl></details>
     </div></HomeCardDialog> : null}
-    {selectedAsset ? <HomeCardDialog kind="detail" title={selectedAsset.file_name} onClose={() => setSelectedAsset(null)}><div className={styles.assetDetail}><MaterialPreview asset={selectedAsset} controls /><p>{selectedAsset.user_description || "尚未填写素材说明"}</p><p>{selectedAsset.user_tags.join(" · ")}</p><Link href="/library">打开素材库 <ArrowRight aria-hidden size={14} /></Link></div></HomeCardDialog> : null}
+    {selectedAsset ? <HomeCardDialog kind="detail" title={selectedAsset.file_name} onClose={() => setSelectedAsset(null)} footer={<button type="button" onClick={() => { referenceAssistantMaterial({ selection: { scope: "asset", asset_id: selectedAsset.id, expected_updated_at: selectedAsset.updated_at }, label: selectedAsset.file_name }); setSelectedAsset(null); }}>引用到对话</button>}><div className={styles.assetDetail}><MaterialPreview asset={selectedAsset} controls /><p>{selectedAsset.user_description || "尚未填写素材说明"}</p><p>{selectedAsset.user_tags.join(" · ")}</p><Link href="/library?mode=manage">打开素材库 <ArrowRight aria-hidden size={14} /></Link></div></HomeCardDialog> : null}
 
   </div>;
 }

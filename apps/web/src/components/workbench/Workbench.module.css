@@ -21,10 +21,12 @@
 }
 .page:has([data-editor-workspace]) { overflow:hidden; }
 .tabScroll { height:36px; width:100%; }
-.tabList { gap:2px; height:36px; padding:2px 0; }
-.tab { display:flex; align-items:center; max-width:240px; border:1px solid transparent; border-radius:8px; }
-.tab[data-active] { background:var(--surface-1); border-color:var(--border-1); }
-.tab .tabTrigger { max-width:208px; height:30px; padding:0 8px; border:0; background:transparent; }
+.tabList { gap:4px; height:36px; padding:2px 0; }
+.tab { display:flex; flex:0 0 208px; align-items:center; gap:0; width:208px; height:30px; padding:0 4px; border:0; border-radius:7px; background:var(--surface-2); }
+.tab:hover { background:color-mix(in srgb,var(--surface-1) 75%,var(--sidebar-bg)); }
+.tab[data-active] { background:var(--surface-1); }
+.tab .tabTrigger,.tab .tabTrigger[data-active],.tab .tabTrigger[data-state="active"] { flex:1; justify-content:flex-start; min-width:0; max-width:none; height:30px; padding:0 8px; border:0; border-radius:0; background:transparent; box-shadow:none; }
+.tab .tabTrigger::after { display:none; }
 .tabTrigger span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tab .close { width:28px; height:28px; padding:4px; flex-shrink:0; }
 .close svg { width:14px; height:14px; }

@@ -168,6 +168,8 @@ it("keeps the reviewed role label when the saved role differs from a suggestion"
 });
 
 it("keeps browsing separate from explicit asset and segment references", async () => {
+  const reveal = vi.fn();
+  window.addEventListener("yaohe:assistant-selection", reveal);
   vi.mocked(getProductionMaterials).mockResolvedValue(taggedLibrary);
   function Probe() { const selection=useAssistantSelection();return <output aria-label="草稿引用">{JSON.stringify(selection?.items)}</output>; }
   render(<AssistantConversationProvider><MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}}/><Probe/></AssistantConversationProvider>);
@@ -175,7 +177,10 @@ it("keeps browsing separate from explicit asset and segment references", async (
   fireEvent.click(screen.getByRole("button",{name:/^0:04\.0\s*local\.mp4/}));
   fireEvent.click(screen.getByRole("button",{name:/^0:01.*0:03/}));
   expect(screen.getByLabelText("草稿引用")).toHaveTextContent("[]");
+  expect(reveal).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button",{name:"引用到对话：local.mp4 · 片段 0:01–0:03"}));
+  expect(reveal).toHaveBeenCalledWith(expect.objectContaining({detail:expect.objectContaining({additive:true})}));
+  window.removeEventListener("yaohe:assistant-selection", reveal);
   await waitFor(()=>expect(JSON.parse(screen.getByLabelText("草稿引用").textContent!)).toEqual([{kind:"material",label:"local.mp4 · 片段 0:01–0:03",selection:{scope:"segment",asset_id:"asset",segment_id:"segment",expected_updated_at:asset.updated_at,expected_segment_updated_at:segment.updated_at}}]));
 });
 

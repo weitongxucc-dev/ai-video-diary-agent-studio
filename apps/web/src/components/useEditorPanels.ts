@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type MouseEvent } from "react";
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 export function useEditorPanels(enabled: boolean) {
-  const [left, setLeft] = useState(200);
+  const [left, setLeft] = useState(224);
   // Only an explicit user resize becomes a remembered width. Responsive defaults
   // must not turn into a permanent 360px preference on the first visit.
   const [right, setRight] = useState<number | null>(null);
@@ -18,7 +18,7 @@ export function useEditorPanels(enabled: boolean) {
     if (!enabled) return;
     const savedLeft = Number(localStorage.getItem("video-editor-left-width"));
     const savedRight = Number(localStorage.getItem("video-workspace-chat-width"));
-    if (Number.isFinite(savedLeft) && savedLeft >= 160) setLeft(clamp(savedLeft, 160, 280));
+    if (Number.isFinite(savedLeft) && savedLeft > 0) setLeft(clamp(savedLeft, 224, 280));
     if (Number.isFinite(savedRight) && savedRight >= 300) setRight(clamp(savedRight, 300, 480));
     const savedCollapse = localStorage.getItem("video-editor-left-collapsed");
     setCollapsed(savedCollapse === null ? window.innerWidth < 1200 : savedCollapse === "true");
@@ -38,24 +38,25 @@ export function useEditorPanels(enabled: boolean) {
     localStorage.setItem("video-editor-workspace-collapsed", String(workspaceCollapsed));
   }, [enabled, loaded, left, right, collapsed, chatCollapsed, workspaceCollapsed]);
   const centerMinimum = 440;
-  const leftWidth = collapsed ? 56 : Math.min(left, Math.max(160, viewport - 300 - centerMinimum - 8));
+  const leftWidth = collapsed ? 56 : Math.min(left, Math.max(224, viewport - 300 - centerMinimum - 8));
   const maxRight = Math.max(300, Math.min(480, viewport - leftWidth - centerMinimum - 8));
-  const chatWidth = clamp(right ?? (viewport >= 1200 ? 380 : 300), 300, maxRight);
+  const chatWidth = clamp(right ?? (viewport >= 1200 ? 340 : 300), 300, maxRight);
   const rightWidth = chatCollapsed ? 44 : chatWidth;
+  const openChat = useCallback(() => setChatCollapsed(false), []);
   function resize(side: "left" | "right", width: number) {
-    if (side === "left") setLeft(clamp(width, 160, Math.max(160, Math.min(280, viewport - chatWidth - centerMinimum))));
+    if (side === "left") setLeft(clamp(width, 224, Math.max(224, Math.min(280, viewport - chatWidth - centerMinimum))));
     else setRight(clamp(width, 300, maxRight));
   }
   function separator(side: "left" | "right") {
     return {
       role: "separator" as const, tabIndex: 0, "aria-orientation": "vertical" as const,
       "aria-label": side === "left" ? "调整导航栏宽度" : "调整对话栏宽度",
-      "aria-valuemin": side === "left" ? 160 : 300,
+      "aria-valuemin": side === "left" ? 224 : 300,
       "aria-valuemax": side === "left" ? 280 : maxRight,
       "aria-valuenow": Math.round(side === "left" ? leftWidth : chatWidth),
       title: "拖动或方向键调整；双击或 Home 恢复默认宽度",
       onClick(event: MouseEvent<HTMLDivElement>) { event.currentTarget.focus(); },
-      onDoubleClick() { if (side === "left") setLeft(200); else { setRight(null); localStorage.removeItem("video-workspace-chat-width"); } },
+      onDoubleClick() { if (side === "left") setLeft(224); else { setRight(null); localStorage.removeItem("video-workspace-chat-width"); } },
       onPointerDown(event: PointerEvent<HTMLDivElement>) {
         if (event.button !== 0) return;
         event.preventDefault(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId);
@@ -68,7 +69,7 @@ export function useEditorPanels(enabled: boolean) {
       onPointerUp(event: PointerEvent<HTMLDivElement>) { drag.current = null; event.currentTarget.releasePointerCapture(event.pointerId); },
       onPointerCancel() { drag.current = null; },
       onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-        if (event.key === "Home") { event.preventDefault(); if (side === "left") setLeft(200); else { setRight(null); localStorage.removeItem("video-workspace-chat-width"); } return; }
+        if (event.key === "Home") { event.preventDefault(); if (side === "left") setLeft(224); else { setRight(null); localStorage.removeItem("video-workspace-chat-width"); } return; }
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
         event.preventDefault();
         resize(side, (side === "left" ? left : chatWidth) + (event.key === "ArrowRight" ? 16 : -16) * 1);
@@ -76,7 +77,7 @@ export function useEditorPanels(enabled: boolean) {
     };
   }
   return {
-    leftWidth, rightWidth, collapsed, chatCollapsed, workspaceCollapsed,
+    leftWidth, rightWidth, collapsed, chatCollapsed, workspaceCollapsed, openChat,
     toggleLeft: () => setCollapsed(value => !value),
     toggleChat: () => setChatCollapsed(value => !value),
     toggleWorkspace: () => setWorkspaceCollapsed(value => !value),

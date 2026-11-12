@@ -364,8 +364,10 @@ export function PublishingWorkspace() {
       </HomeCardDialog> : null}
       {card==='account' && activePlatform ? <HomeCardDialog kind="config" title={activePlatform.label} onClose={closeCard} footer={<span>账号来自成员专用浏览器核验记录</span>}>
         {feedback}<dl className={styles.properties}><div><dt>接入状态</dt><dd>{activePlatform.status==='candidate_unverified' ? "候选接入，未完成真实验收" : "尚未接通"}</dd></div><div><dt>上次账号</dt><dd>{activeAccount?.account_ref ?? "未知"}</dd></div><div><dt>核验时间</dt><dd>{activeAccount ? formatTime(activeAccount.verified_at) : "未知"}</dd></div></dl><p>{activePlatform.requirement}</p>
-        {selectedPlatform==='douyin' && activePlatform.browser_connect ? <button className={styles.secondaryButton} type="button" disabled={busy!==null} onClick={()=>void connectDouyin()}>打开专用浏览器</button> : null}
-        {selectedPlatform==='douyin' && activePlatform.browser_connect ? <button className={styles.secondaryButton} type="button" disabled={busy!==null} onClick={()=>void verifyDouyin()}>读取当前账号</button> : null}
+        {selectedPlatform==='douyin' && activePlatform.browser_connect ? <div className={styles.tools}>
+          <button className={styles.secondaryButton} type="button" disabled={busy!==null} onClick={()=>void connectDouyin()}>打开专用浏览器</button>
+          <button className={styles.secondaryButton} type="button" disabled={busy!==null} onClick={()=>void verifyDouyin()}>读取当前账号</button>
+        </div> : null}
       </HomeCardDialog> : null}
       {card==='job' && selectedJob ? <HomeCardDialog kind="detail" title={statusLabels[selectedJob.status]} onClose={closeCard} footer={<button className={styles.secondaryButton} type="button" onClick={()=>void refreshJobs(selected?.id ?? null)}>刷新结果</button>}>
         <dl className={styles.properties}><div><dt>创作任务</dt><dd>{selected?.name}</dd></div><div><dt>平台</dt><dd>{typeof jobPlatform==='string' ? platformNames[jobPlatform] ?? jobPlatform : "未知"}</dd></div><div><dt>账号</dt><dd>{typeof jobAccount==='string' ? jobAccount : "未知"}</dd></div><div><dt>成片版本</dt><dd>{typeof jobFacts?.timeline_version_id==='string' ? "发布时固定版本" : "未知"}</dd></div></dl>

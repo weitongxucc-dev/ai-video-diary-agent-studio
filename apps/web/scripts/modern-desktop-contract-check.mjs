@@ -64,18 +64,19 @@ for (const required of [
   "desktop-sidebar",
   "DesktopHeader",
   "HomeCardDialog",
-  'aria-label="创作助手"',
+  'aria-label="曜核哈力斯"',
   'href: "/"',
   'href: "/production"',
-  'href: "/library"',
+  'href: "/library?mode=manage"',
   'href: "/settings"',
   "ai-video-diary-theme",
   "HomeCommandComposer",
+  'aria-label="新建视频"',
 ]) {
   if (!shell.includes(required)) failures.push(`AppShell is missing: ${required}`);
 }
 
-for (const required of ["<header", 'aria-label="新建视频"', "曜核AI剪辑"]) {
+for (const required of ["<header", "onToggleNavigation", "曜核AI剪辑"]) {
   if (!desktopHeader.includes(required)) failures.push(`desktop header owner is missing: ${required}`);
 }
 

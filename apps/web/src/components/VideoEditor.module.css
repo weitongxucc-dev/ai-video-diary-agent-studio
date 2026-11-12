@@ -21,10 +21,14 @@
 .previewActions { display:flex; align-items:center; gap:2px; margin-left:auto; }
 .previewKind { margin-right:6px; color:var(--text-2); font-size:12px; }
 .previewSurface { display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr) auto; flex:1 1 0; min-height:96px; min-width:0; }
-.previewSurface:has(> .editorAuxiliary > :not([hidden])) { grid-template-columns:minmax(220px,34%) minmax(0,1fr); column-gap:12px; }
+.previewSurface:has(> .editorAuxiliary > :not([hidden])) { grid-template-columns:minmax(300px,40%) minmax(0,1fr); column-gap:16px; }
+.workspace:global([data-active-view="script"]) .previewSurface:has(> .editorAuxiliary > :not([hidden])),.workspace:global([data-active-view="subtitle_cover"]) .previewSurface:has(> .editorAuxiliary > :not([hidden])) { grid-template-columns:minmax(340px,55%) minmax(220px,1fr); }
 .editorAuxiliary { grid-column:1; grid-row:1 / -1; min-width:0; min-height:0; overflow:hidden; border-right:1px solid var(--border-1); }
 .editorAuxiliary:empty,.editorAuxiliary:not(:has(> :not([hidden]))) { display:none; }
 .editorAuxiliary > aside { height:100%; border:0; }
+@container editor-stage (max-width:640px) {
+  .previewSurface:has(> .editorAuxiliary > :not([hidden])),.workspace:global([data-active-view="script"]) .previewSurface:has(> .editorAuxiliary > :not([hidden])),.workspace:global([data-active-view="subtitle_cover"]) .previewSurface:has(> .editorAuxiliary > :not([hidden])) { grid-template-columns:minmax(0,60%) minmax(0,1fr); column-gap:8px; }
+}
 .previewSurface:has(> .editorAuxiliary > :not([hidden])) > .playerViewport,.previewSurface:has(> .editorAuxiliary > :not([hidden])) > .transport { grid-column:2; }
 .previewSurface > .playerViewport { grid-row:1; padding:16px 12px 12px; }
 .previewSurface > .transport { grid-row:2; }
@@ -44,7 +48,7 @@
 .player > p { color: #e1e3e6; font-size: var(--font-size-body); padding: 24px; }
 .playerBadge { position: absolute; top: 12px; left: 12px; padding: 4px 8px; border-radius: 6px; background: rgb(0 0 0 / 65%); color: white; font-size: 12px; }
 .playerError { position: absolute; bottom: 0; background: rgb(0 0 0 / 75%); }
-.transport { display:flex; flex:0 0 auto; min-height:36px; align-items:center; gap:8px; padding:0 4px; background:var(--surface-1); }
+.transport { display:flex; flex:0 0 auto; flex-wrap:wrap; min-width:0; min-height:36px; align-items:center; gap:8px; padding:0 4px; background:var(--surface-1); }
 .transport input[type="range"] { flex: 1; min-width: 40px; }
 .transport time { flex-shrink: 0; color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
 .workspace input[type="range"], .inspector input[type="range"] { min-height: 20px; padding: 0; border: 0; box-shadow: none; accent-color: var(--accent); background: transparent; }
@@ -117,9 +121,9 @@
 .waveformClip path { stroke: currentColor; stroke-width: 1; fill: none; }
 .inspector { font: 400 var(--font-size-body)/var(--line-body) "PingFang SC", -apple-system, sans-serif; }
 .inspectorImage { width: 100%; min-width: 0; border-radius: 7px; background: var(--surface-2); }
-.inspectorTabs { display: flex; border-bottom: 1px solid var(--border-1); margin: 12px 0 16px; }
-.inspectorTabs button { flex: 1; height: 36px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--text-2); font-size: var(--font-size-body); cursor: pointer; }
-.inspectorTabs button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+.inspectorTabs { display: flex; gap:4px; margin: 12px 0 16px; }
+.inspectorTabs button { flex: 1; height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font-size: var(--font-size-body); cursor: pointer; }
+.inspectorTabs button[aria-pressed="true"] { background:var(--selection-bg); color: var(--text-1); font-weight: 500; }
 .properties { display: grid; gap: 12px; margin: 0; }
 .properties > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .properties dt { color: var(--text-2); font-size: 13px; }

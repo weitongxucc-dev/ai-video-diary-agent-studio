@@ -2,7 +2,7 @@
 
 import { createContext, memo, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Clapperboard, FileStack, X } from "lucide-react";
+import { Clapperboard, FileStack, Home, X } from "lucide-react";
 import { AppShellFrame, type AppShellProps } from "../AppShell";
 import { HomeCommandComposer } from "../HomeCommandComposer";
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
@@ -95,7 +95,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
   const activePage = pages.find(page => page.id === activeId && page.open);
   const resourceIds = workspaceResourcePaths;
   const managed = isWorkbenchManagedPath(pathname);
-  const dockedTask = resourceIds.includes(activeId) && targetId ? pages.find(page => page.id === targetId && page.open) : undefined;
+  const dockedTask = resourceIds.includes(activeId) && params?.get("mode") !== "manage" && targetId ? pages.find(page => page.id === targetId && page.open) : undefined;
   const dockedHref = dockedTask?.href;
   const releaseResourcePane = useCallback(() => { if (dockedHref) router.push(dockedHref); }, [dockedHref, router]);
   const shell = shells[dockedTask?.id ?? activeId] ?? {};
@@ -109,7 +109,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
     toolbarActions: shell.toolbarActions && scoped(shell.toolbarActions), quickInspector: shell.quickInspector ? openDetails => scoped(shell.quickInspector?.(openDetails)) : undefined };
   const target = targetId ? shells[targetId]?.assistantContext : undefined;
   const resource = resourceShell.assistantContext;
-  const tabs = pages.filter(page => page.open && !resourceIds.includes(page.id));
+  const tabs = pages.filter(page => page.open && (!resourceIds.includes(page.id) || page.id === activeId && !dockedTask));
   const activate = (id: string) => {
     const page = pages.find(item => item.id === id);
     if (page) { setPages(current => current.map(item => item.id === id ? { ...item, open: true } : item)); router.push(page.href); }
@@ -137,12 +137,12 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
       router.push(next?.href ?? "/");
     }
   };
-  const tabstrip = tabs.length ? <ScrollArea className={styles.tabScroll}><TabsList variant="line" aria-label="工作区页签" className={styles.tabList}>
+  const tabstrip = tabs.length ? <ScrollArea className={styles.tabScroll}><TabsList variant="workspace" aria-label="工作区页签" className={styles.tabList}>
     {tabs.map(page => <div key={page.id} className={styles.tab} data-active={page.id === activeId || undefined}>
       <TabsTrigger value={page.id} title={page.label} className={styles.tabTrigger}>
-        {page.id.startsWith("/tasks/") ? <Clapperboard aria-hidden /> : <FileStack aria-hidden />}<span>{page.label}</span>
+        {page.id.startsWith("/tasks/") ? <Clapperboard aria-hidden /> : page.id === "/" ? <Home aria-hidden /> : <FileStack aria-hidden />}<span>{page.id === "/" && newVideo ? "新视频" : page.label}</span>
       </TabsTrigger>
-      <Button variant="ghost" size="icon" className={styles.close} aria-label={`关闭${page.label}页签`} title={`关闭${page.label}页签`} onClick={() => close(page.id)}><X /></Button>
+      {page.id.startsWith("/tasks/") ? <Button variant="ghost" size="icon" className={styles.close} aria-label={`关闭${page.label}页签`} title={`关闭${page.label}页签`} onClick={() => close(page.id)}><X /></Button> : null}
     </div>)}
   </TabsList></ScrollArea> : undefined;
   return <WorkbenchAssistantTargetContext.Provider value={target}><WorkbenchRegistry.Provider value={registry}><WorkbenchViewStates.Provider value={viewStates.current}><EditorDockProvider activePageId={shellPage?.id}>
@@ -152,9 +152,9 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
       if (playingMedia.current && playingMedia.current !== event.target) playingMedia.current.pause();
       playingMedia.current = event.target;
     }} onPauseCapture={releasePlaying} onEndedCapture={releasePlaying}>
-      <Tabs value={dockedTask?.id ?? (resourceIds.includes(activeId) ? null : activePage?.id ?? null)} onValueChange={value => { if (typeof value === "string") activate(value); }} className={styles.root}>
-        <AppShellFrame {...scopedShell} activeCreationTaskId={shellPage?.id.startsWith("/tasks/") ? shellPage.id.slice("/tasks/".length) : undefined} resourceOpen={Boolean(dockedTask)} onReleaseResourcePane={releaseResourcePane} inspectorDismissKey={activeId} inspector={dockedTask && activePage ? <WorkspacePageContext.Provider value={{ id: activePage.id, href: activePage.href, active: managed, auxiliary: true, updateShell, viewState: viewStates.current.get(activePage.id)! }}>{resourceShell.inspector}</WorkspacePageContext.Provider> : scopedShell.inspector} inspectorTitle={dockedTask ? resourceShell.inspectorTitle : scopedShell.inspectorTitle} workspaceTabs={tabstrip} conversationActions={target?.task ? <ConversationTarget name={target.task.name} onReturn={() => targetId && activate(targetId)} onClear={clearTarget} /> : <span className="conversation-workspace-target">工作区对话</span>} conversation={<>
-          <HomeCommandComposer {...resource} {...target} pageContext={undefined} assignLocation={href => router.push(href)} />
+      <Tabs value={dockedTask?.id ?? activePage?.id ?? null} onValueChange={value => { if (typeof value === "string") activate(value); }} className={styles.root}>
+        <AppShellFrame {...scopedShell} active={managed} activeCreationTaskId={shellPage?.id.startsWith("/tasks/") ? shellPage.id.slice("/tasks/".length) : undefined} resourceOpen={Boolean(dockedTask)} onReleaseResourcePane={releaseResourcePane} inspectorDismissKey={activeId} inspector={dockedTask && activePage ? <WorkspacePageContext.Provider value={{ id: activePage.id, href: activePage.href, active: managed, auxiliary: true, updateShell, viewState: viewStates.current.get(activePage.id)! }}>{resourceShell.inspector}</WorkspacePageContext.Provider> : scopedShell.inspector} inspectorTitle={dockedTask ? resourceShell.inspectorTitle : scopedShell.inspectorTitle} workspaceTabs={tabstrip} conversationActions={target?.task ? <ConversationTarget name={target.task.name} onReturn={() => targetId && activate(targetId)} onClear={clearTarget} /> : <span className="conversation-workspace-target">{newVideo ? "新视频构思" : "工作区对话"}</span>} conversation={<>
+          <HomeCommandComposer {...resource} {...target} autoFocus={newVideo} pageContext={undefined} assignLocation={href => router.push(href)} />
         </>}>
           <div data-workbench-pages className={`${styles.pages}${dockedTask ? ` ${styles.withResource}` : ""}`}>
             {pages.filter(page => page.open && page.content !== null).map(page => {

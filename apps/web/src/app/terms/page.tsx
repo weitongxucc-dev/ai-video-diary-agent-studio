@@ -59,9 +59,8 @@ export default function TermsPage() {
   return (
     <AppShell>
       <div className="legal-page">
-        <section className="legal-main ui-panel">
+        <section className="legal-main">
           <header className="legal-header">
-            <span className="section-kicker">使用条款</span>
             <h1>AI 视频日记 · 使用条款</h1>
             <p>
               使用本项目即视为同意以下条款。如果你不同意，请停止使用并删除本地数据。

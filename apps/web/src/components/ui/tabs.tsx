@@ -10,7 +10,7 @@ import styles from "./workbench-controls.module.css";
 export function Tabs({ className = "", orientation = "horizontal", ...props }: TabsPrimitive.Root.Props) {
   return <TabsPrimitive.Root data-slot="tabs" data-orientation={orientation} orientation={orientation} className={`${styles.tabs} ${className}`} {...props} />;
 }
-export function TabsList({ className = "", variant = "default", ...props }: TabsPrimitive.List.Props & { variant?: "default" | "line" }) {
+export function TabsList({ className = "", variant = "default", ...props }: TabsPrimitive.List.Props & { variant?: "default" | "line" | "workspace" }) {
   return <TabsPrimitive.List data-slot="tabs-list" data-variant={variant} className={`${styles.tabsList} ${className}`} {...props} />;
 }
 export function TabsTrigger({ className = "", ...props }: TabsPrimitive.Tab.Props) {

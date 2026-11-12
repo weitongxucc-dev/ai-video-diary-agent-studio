@@ -33,7 +33,7 @@ import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import styles from "./MaterialLibraryControls.module.css";
 import { getProductionMaterial } from "@/lib/api/materials";
-import { ASSISTANT_LOCATE_REFERENCE_EVENT, readAssistantLocateReference } from "@/lib/assistant-reference";
+import { ASSISTANT_LOCATE_REFERENCE_EVENT, readAssistantLocateReference, referenceAssistantSelection } from "@/lib/assistant-reference";
 import { useWorkspaceSearchParams as useSearchParams } from "./workbench/context";
 import type { AssistantReferenceItem } from "@/lib/types/assistant";
 import { MaterialBusinessObjects } from "@/components/MaterialBusinessObjects";
@@ -416,7 +416,7 @@ export function MaterialLibraryWorkspace({
 
   function appendMaterialReference(asset: MaterialAsset, segment?: MaterialSegment) {
     if (selectionBlocked) return;
-    referenceSelection?.select([{
+    referenceAssistantSelection([{
       kind: "material",
       label: segment
         ? `${fileLabel(asset.file_name)} · 片段 ${duration(segment.start_seconds)}–${duration(segment.end_seconds)}`

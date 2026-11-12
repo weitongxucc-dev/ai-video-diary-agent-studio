@@ -322,10 +322,7 @@ h4 {
 .assistant-markdown a { color: var(--accent); text-decoration: underline; }
 .assistant-copy { margin-top: 5px; font-size: 11px; }
 .assistant-turn-tools, .assistant-turn-result, .assistant-capability-diagnostics { color: var(--text-3); font-size: 12px; }
-.assistant-turn-tools summary, .assistant-turn-result summary, .assistant-capability-diagnostics summary { width: fit-content; cursor: pointer; }
-.assistant-turn-tools ol { display: grid; gap: 4px; margin: 6px 0; padding-left: 22px; }
-.assistant-turn-tools li[data-state="failed"] > strong { color: var(--danger); }
-.assistant-turn-tools li[data-state="succeeded"] > strong { color: var(--success); }
+.assistant-turn-result summary, .assistant-capability-diagnostics summary { width: fit-content; cursor: pointer; }
 .assistant-turn-tools p, .assistant-turn-result p, .assistant-capability-diagnostics p { margin: 3px 0; color: var(--text-2); }
 .assistant-conversation-error { color: var(--danger); }
 

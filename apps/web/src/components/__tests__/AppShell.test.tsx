@@ -27,9 +27,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(search),
 }));
 
-vi.mock("@/components/HelpPanel", () => ({ HelpPanel: () => null }));
 vi.mock("@/components/KeyboardShortcuts", () => ({ KeyboardShortcuts: () => null }));
-vi.mock("@/lib/helpPanel", () => ({ toggleHelpPanel: vi.fn() }));
 vi.mock("@/lib/api", () => ({
   listLocalMembers: apiMocks.listLocalMembers,
   listCreationTasks: apiMocks.listCreationTasks,
@@ -52,9 +50,11 @@ import { WorkbenchAssistantTargetContext, WorkspacePanelContext } from "../workb
 import { getCurrentAssistantConversation } from "@/lib/api";
 function QuickInspectorLauncher() { const panel = useContext(WorkspacePanelContext); return <button onClick={panel.openQuickInspector}>编辑镜头参数</button>; }
 
-import { AppShell } from "@/components/AppShell";
+import { AppShell, AppShellFrame } from "@/components/AppShell";
+import { closeHelpPanel, toggleHelpPanel } from "@/lib/helpPanel";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { MediaVisibilityContext } from "@/components/ui/media-visibility";
+import { referenceAssistantMaterial } from "@/lib/assistant-reference";
 
 function creationTask(overrides: Partial<CreationTask> = {}): CreationTask {
   return {
@@ -104,17 +104,53 @@ it.each(["/production", "/history"])("keeps the visible target and task send sco
   pathname = path;
   const task = creationTask({ name: "仍在编辑的作品" });
   render(<WorkbenchAssistantTargetContext.Provider value={{ task }}><AppShell><p>独立管理页面</p></AppShell></WorkbenchAssistantTargetContext.Provider>);
+  expect(screen.queryByRole("button", { name: "当前作品：仍在编辑的作品" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "打开曜核哈力斯" }));
   expect(screen.getByRole("button", { name: "当前作品：仍在编辑的作品" })).toBeVisible();
   await screen.findByRole("textbox", { name: "任务对话要求" });
   await waitFor(() => expect(getCurrentAssistantConversation).toHaveBeenCalledWith({ scope_kind: "task", scope_id: task.id }));
 });
 
 afterEach(() => {
+  closeHelpPanel();
   vi.useRealTimers();
   Reflect.deleteProperty(document, "hidden");
 });
 
 describe("AppShell", () => {
+
+  it("opens only one help panel while the retained workbench is inactive", () => {
+    pathname = "/settings";
+    render(<><div hidden><AppShellFrame active={false}><p>保留的工作台</p></AppShellFrame></div><AppShell><p>设置内容</p></AppShell></>);
+    act(() => toggleHelpPanel());
+    expect(screen.getAllByRole("dialog", {name:"应用帮助"})).toHaveLength(1);
+    act(() => closeHelpPanel());
+    fireEvent.keyDown(window, {key:"?"});
+    expect(screen.getAllByRole("dialog", {name:"应用帮助"})).toHaveLength(1);
+  });
+
+  it("keeps management full width until explicitly opened or referenced, preserving the chat draft", () => {
+    localStorage.clear();
+    const view = render(<AppShell conversation={<input aria-label="保留草稿" defaultValue="未发送"/>} inspector={<p>资料正文</p>}><button data-open-details>查看资料</button></AppShell>);
+    expect(screen.queryByRole("region", { name:"曜核哈力斯" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name:"查看资料" }));
+    expect(screen.getByText("资料正文")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name:"打开曜核哈力斯" }));
+    expect(screen.getByRole("region", { name:"曜核哈力斯" })).toBeVisible();
+    expect(screen.getByText("资料正文")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name:"收起曜核哈力斯" }));
+    fireEvent.click(screen.getByRole("button", { name:"查看资料" }));
+    act(() => referenceAssistantMaterial({selection:{scope:"asset",asset_id:"original",expected_updated_at:"v1"},label:"原素材"}));
+    expect(screen.getByRole("region", { name:"曜核哈力斯" })).toBeVisible();
+    expect(screen.getByText("资料正文")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name:"收起曜核哈力斯" }));
+    fireEvent.click(screen.getByRole("button", { name:"打开曜核哈力斯" }));
+    expect(screen.getByLabelText("保留草稿")).toHaveValue("未发送");
+    pathname = "/knowledge";
+    view.rerender(<AppShell conversation={<input aria-label="保留草稿" defaultValue="未发送"/>}><p>知识库</p></AppShell>);
+    expect(screen.queryByRole("region", { name:"曜核哈力斯" })).not.toBeInTheDocument();
+    localStorage.clear();
+  });
 
   it("keeps workspace labels in the device settings title and restores its default", () => {
     const view = render(<AppShell workspaceStatus={{ label: "需要处理" }}><p>当前工作区</p></AppShell>);
@@ -132,17 +168,19 @@ describe("AppShell", () => {
     const home = screen.getByRole("link", { name: "曜核AI剪辑，返回首页" });
     expect(home).toHaveAttribute("href", "/");
     expect(within(home).getByText("曜核AI剪辑")).toBeInTheDocument();
-    expect(home.querySelector("img")).toHaveAttribute("src", "/yaohe-icon.png");
+    expect(home.querySelector("img")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "打开曜核哈力斯" }));
+    expect(screen.getByRole("region", { name: "曜核哈力斯" }).querySelector("img")).toHaveAttribute("src", "/yaohe-icon.png");
     expect(screen.queryByText("智能视频日记")).not.toBeInTheDocument();
   });
 
   it("keeps conversation visible and opens object properties in a dismissible dock", () => {
-    const view = render(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="one"><button data-open-details>镜头一</button></AppShell>);
-    expect(screen.getByRole("region", { name: "创作助手" })).toHaveTextContent("任务对话");
+    const view = render(<AppShell autoFocus conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="one"><button data-open-details>镜头一</button></AppShell>);
+    expect(screen.getByRole("region", { name: "曜核哈力斯" })).toHaveTextContent("任务对话");
     expect(screen.getByText("镜头属性")).not.toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "镜头一" }));
     expect(screen.getByRole("complementary", { name: "镜头详情" })).toHaveTextContent("镜头属性");
-    view.rerender(<AppShell conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="two"><p>预览修改</p></AppShell>);
+    view.rerender(<AppShell autoFocus conversation={<p>任务对话</p>} inspector={<p>镜头属性</p>} inspectorTitle="镜头详情" inspectorDismissKey="two"><p>预览修改</p></AppShell>);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByText("任务对话")).toBeVisible();
   });
@@ -171,17 +209,17 @@ describe("AppShell", () => {
     fireEvent.click(divider);
     expect(divider).toHaveFocus();
     fireEvent.keyDown(divider, { key: "ArrowRight" });
-    expect(divider).toHaveAttribute("aria-valuenow", "216");
+    expect(divider).toHaveAttribute("aria-valuenow", "240");
     fireEvent.keyDown(divider, { key: "ArrowLeft" });
-    expect(divider).toHaveAttribute("aria-valuenow", "200");
+    expect(divider).toHaveAttribute("aria-valuenow", "224");
     for (let i = 0; i < 10; i++) fireEvent.keyDown(divider, { key: "ArrowLeft" });
-    expect(divider).toHaveAttribute("aria-valuenow", "160");
+    expect(divider).toHaveAttribute("aria-valuenow", "224");
     fireEvent.click(screen.getByRole("button", { name: "收起导航栏" }));
     first.unmount();
     render(<AppShell editorLayout><p>剪辑</p></AppShell>);
     expect(screen.queryByRole("separator", { name: "调整导航栏宽度" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "展开导航栏" }));
-    expect(screen.getByRole("separator", { name: "调整导航栏宽度" })).toHaveAttribute("aria-valuenow", "160");
+    expect(screen.getByRole("separator", { name: "调整导航栏宽度" })).toHaveAttribute("aria-valuenow", "224");
     localStorage.clear();
   });
 
@@ -190,28 +228,28 @@ describe("AppShell", () => {
     const view = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
     const shell = view.container.firstElementChild as HTMLElement;
     const grid = view.container.querySelector('[class*="contentGrid"]') as HTMLElement;
-    expect(shell).toHaveStyle({ "--editor-left": "200px", "--editor-right": "380px" });
+    expect(shell).toHaveStyle({ "--editor-left": "224px", "--editor-right": "340px" });
     fireEvent.click(screen.getByRole("button", { name: "收起导航栏" }));
     expect(shell).toHaveStyle({ "--editor-left": "56px" });
-    fireEvent.click(screen.getByRole("button", { name: "收起对话栏" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起曜核哈力斯" }));
     expect(shell).toHaveStyle({ "--editor-right": "44px" });
     expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("chatCollapsed"));
     fireEvent.click(screen.getByRole("button", { name: "布局" }));
     fireEvent.click(screen.getByRole("button", { name: "作品区" }));
-    expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("workspaceCollapsed"));
+    expect(grid.className).not.toContain("workspaceCollapsed");
     // 三栏全收起后仍能逐个找回，且收起不卸载组件
     expect(screen.getByRole("button", { name: "展开导航栏" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "展开对话栏" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开曜核哈力斯" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "布局" })).toBeInTheDocument();
     expect(screen.getByText("剪辑")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "布局" }));
     fireEvent.click(screen.getByRole("button", { name: "作品区" }));
-    fireEvent.click(screen.getByRole("button", { name: "展开对话栏" }));
-    expect(shell).toHaveStyle({ "--editor-right": "380px" });
+    fireEvent.click(screen.getByRole("button", { name: "打开曜核哈力斯" }));
+    expect(shell).toHaveStyle({ "--editor-right": "340px" });
     expect(grid.className).not.toContain("chatCollapsed");
     fireEvent.click(screen.getByRole("button", { name: "展开导航栏" }));
-    expect(shell).toHaveStyle({ "--editor-left": "200px" });
-    expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "380");
+    expect(shell).toHaveStyle({ "--editor-left": "224px" });
+    expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "340");
     view.unmount();
     localStorage.clear();
   });
@@ -221,10 +259,10 @@ describe("AppShell", () => {
     const view = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
     const shell = view.container.firstElementChild as HTMLElement;
     fireEvent.keyDown(screen.getByRole("separator", { name: "调整对话栏宽度" }), { key: "ArrowRight" });
-    fireEvent.click(screen.getByRole("button", { name: "收起对话栏" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起曜核哈力斯" }));
     expect(shell).toHaveStyle({ "--editor-right": "44px" });
-    fireEvent.click(screen.getByRole("button", { name: "展开对话栏" }));
-    expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "396");
+    fireEvent.click(screen.getByRole("button", { name: "打开曜核哈力斯" }));
+    expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "356");
     view.unmount();
     localStorage.clear();
   });
@@ -233,42 +271,42 @@ describe("AppShell", () => {
     localStorage.clear();
     localStorage.setItem("video-editor-left-width", "260");
     localStorage.setItem("video-workspace-chat-width", "460");
-    const view = render(<AppShell conversation={<input aria-label="对话草稿" defaultValue="待发送"/>}><p>作品</p></AppShell>);
+    const view = render(<AppShell autoFocus conversation={<input aria-label="对话草稿" defaultValue="待发送"/>}><p>作品</p></AppShell>);
     fireEvent.keyDown(screen.getByRole("separator", {name:"调整导航栏宽度"}), {key:"Home"});
     fireEvent.keyDown(screen.getByRole("separator", {name:"调整对话栏宽度"}), {key:"Home"});
     expect(localStorage.getItem("video-workspace-chat-width")).toBeNull();
     expect(screen.getByLabelText("对话草稿")).toHaveValue("待发送");
     view.unmount();
     const restored = render(<AppShell><p>作品</p></AppShell>);
-    expect(restored.container.firstElementChild).toHaveStyle({"--editor-left":"200px", "--editor-right":"380px"});
+    expect(restored.container.firstElementChild).toHaveStyle({"--editor-left":"224px", "--editor-right":"340px"});
     restored.unmount(); localStorage.clear();
   });
 
   it("keeps the conversation and workspace collapse state after remount", () => {
     localStorage.clear();
     const first = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
-    fireEvent.click(screen.getByRole("button", { name: "收起对话栏" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起曜核哈力斯" }));
     fireEvent.click(screen.getByRole("button", { name: "布局" }));
     fireEvent.click(screen.getByRole("button", { name: "作品区" }));
     first.unmount();
     const second = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
-    expect(screen.getByRole("button", { name: "展开对话栏" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开曜核哈力斯" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "布局" })).toBeInTheDocument();
     const grid = second.container.querySelector('[class*="contentGrid"]') as HTMLElement;
     expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("chatCollapsed"));
-    expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("workspaceCollapsed"));
+    expect(grid.className).not.toContain("workspaceCollapsed");
     second.unmount();
     localStorage.clear();
   });
 
   it("uses approved desktop widths for a fresh workspace and keeps a previously saved layout", () => {
     localStorage.clear();
-    const first = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
-    expect(first.container.firstElementChild).toHaveStyle({ "--editor-left": "200px", "--editor-right": "380px" });
+    const first = render(<AppShell autoFocus conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    expect(first.container.firstElementChild).toHaveStyle({ "--editor-left": "224px", "--editor-right": "340px" });
     first.unmount();
     localStorage.setItem("video-editor-left-width", "224");
     localStorage.setItem("video-workspace-chat-width", "350");
-    const saved = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    const saved = render(<AppShell autoFocus conversation={<p>对话</p>}><p>首页</p></AppShell>);
     expect(saved.container.firstElementChild).toHaveStyle({ "--editor-left": "224px", "--editor-right": "350px" });
     saved.unmount();
     localStorage.clear();
@@ -293,7 +331,7 @@ describe("AppShell", () => {
     expect(screen.queryByRole("link", { name: "成员与空间" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "设备设置" })).toHaveAttribute("href", "/settings");
     expect(screen.queryByRole("button", { name: "创作者与空间菜单" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles");
+    expect(screen.getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles?mode=manage");
     expect(screen.getByRole("link", { name: "新建视频" })).toHaveAttribute("href", "/?new=1");
     expect(screen.getByText("创作任务")).toBeInTheDocument();
     expect(screen.getByText("产品演示视频")).toBeInTheDocument();
@@ -322,7 +360,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: /处理任务.*选题未生成/ })).toBeInTheDocument();
     for (const name of ["等待任务", "生成任务", "确认任务", "完成任务", "处理任务"]) {
       const row = screen.getByRole("link", { name: new RegExp(name) });
-      expect(row.querySelector('svg[data-task-stage="topic"]')).toHaveClass("lucide-lightbulb");
+      expect(row.querySelector("svg")).toHaveClass("lucide-clapperboard");
       expect(row.querySelector("small")).toBeVisible();
       expect(row.querySelectorAll(".is-spinning")).toHaveLength(name === "生成任务" ? 1 : 0);
     }
@@ -371,7 +409,7 @@ describe("AppShell", () => {
     await act(async () => {});
     pathname = "/production";
     search = "view=automations";
-    view.rerender(<AppShell conversation={<p>对话</p>}><p>定时页</p></AppShell>);
+    view.rerender(<AppShell autoFocus conversation={<p>对话</p>}><p>定时页</p></AppShell>);
     await act(async () => {});
     expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("link", { name: /已保存创作任务.*正在选题/ })).toBeInTheDocument();
@@ -390,7 +428,7 @@ describe("AppShell", () => {
     Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
     const running = creationTask({ status: "running", stage_status: "running" });
     apiMocks.listCreationTasks.mockResolvedValue({ items: [running], total_count: 1 });
-    render(<AppShell conversation={<p>对话</p>}><p>定时页</p></AppShell>);
+    render(<AppShell autoFocus conversation={<p>对话</p>}><p>定时页</p></AppShell>);
     await act(async () => {});
     await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
     expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(1);
@@ -412,7 +450,7 @@ describe("AppShell", () => {
     apiMocks.listCreationTasks.mockResolvedValueOnce({ items: [running], total_count: 1 })
       .mockRejectedValueOnce(new Error("本地任务状态读取失败"))
       .mockResolvedValue({ items: [creationTask({ status: "failed", stage_status: "failed" })], total_count: 1 });
-    render(<AppShell conversation={<p>对话</p>}><p>页面</p></AppShell>);
+    render(<AppShell autoFocus conversation={<p>对话</p>}><p>页面</p></AppShell>);
     await act(async () => {});
     await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
     expect(screen.getByRole("alert")).toHaveTextContent("已有任务仍可打开");
@@ -425,7 +463,7 @@ describe("AppShell", () => {
   it("does not restore an older running page snapshot after the server has reported failure", async () => {
     const failed = creationTask({ status: "failed", stage_status: "failed", updated_at: "2026-10-10T02:34:00Z" });
     apiMocks.listCreationTasks.mockResolvedValue({ items: [failed], total_count: 1 });
-    const view = render(<AppShell conversation={<p>对话</p>}><p>页面</p></AppShell>);
+    const view = render(<AppShell autoFocus conversation={<p>对话</p>}><p>页面</p></AppShell>);
     expect(await screen.findByRole("link", { name: /选题未生成/ })).toBeInTheDocument();
     view.rerender(<AppShell creationTasks={[creationTask({ status: "running", stage_status: "running" })]} conversation={<p>对话</p>}><p>页面</p></AppShell>);
     expect(screen.getByRole("link", { name: /选题未生成/ })).toBeInTheDocument();
@@ -442,7 +480,7 @@ describe("AppShell", () => {
   });
 
   it("keeps scheduled tasks discoverable in search with the confirmed execution boundary", () => {
-    render(<AppShell conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    render(<AppShell autoFocus conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
     fireEvent.click(screen.getByRole("button", { name: "搜索" }));
     const palette = screen.getByRole("dialog", { name: "搜索页面和创作任务" });
     const preview = within(palette).getByRole("option", { name: /定时任务/ });
@@ -455,7 +493,7 @@ describe("AppShell", () => {
   it("shows loading rather than an empty list until the actual read returns empty", async () => {
     let resolve!: (value: { items: CreationTask[]; total_count: number }) => void;
     apiMocks.listCreationTasks.mockReturnValueOnce(new Promise(finish => { resolve = finish; }));
-    render(<AppShell conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    render(<AppShell autoFocus conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
     expect(screen.getByRole("status")).toHaveTextContent("正在读取创作任务…");
     expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
     await act(async () => resolve({ items: [], total_count: 0 }));
@@ -478,7 +516,7 @@ describe("AppShell", () => {
 
   it("distinguishes failure from empty and retries the original task read", async () => {
     apiMocks.listCreationTasks.mockRejectedValueOnce(new Error("合成读取故障"));
-    render(<AppShell conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    render(<AppShell autoFocus conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
     expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法读取创作任务");
     expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
     apiMocks.listCreationTasks.mockResolvedValueOnce({ items: [creationTask()], total_count: 1 });
@@ -527,9 +565,9 @@ describe("AppShell", () => {
     let reject!: (cause: Error) => void;
     apiMocks.listCreationTasks.mockReturnValueOnce(new Promise((_finish, fail) => { reject = fail; }))
       .mockResolvedValueOnce({ items: [], total_count: 0 });
-    const view = render(<AppShell conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
+    const view = render(<AppShell autoFocus conversation={<p>对话</p>}><p>页面内容</p></AppShell>);
     pathname = "/history";
-    view.rerender(<AppShell conversation={<p>对话</p>}><p>素材</p></AppShell>);
+    view.rerender(<AppShell autoFocus conversation={<p>对话</p>}><p>素材</p></AppShell>);
     await screen.findByText("还没有创作任务");
     await act(async () => reject(new Error("过期读取故障")));
     expect(screen.getByText("还没有创作任务")).toBeInTheDocument();
@@ -543,10 +581,10 @@ describe("AppShell", () => {
     const second = creationTask({ id: "task-b", name: "保留任务" });
     apiMocks.listCreationTasks.mockResolvedValueOnce({ items: [first, second], total_count: 2 })
       .mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
-    const view = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    const view = render(<AppShell autoFocus conversation={<p>对话</p>}><p>首页</p></AppShell>);
     await screen.findByRole("link", { name: /旧可读任务/ });
     pathname = "/history";
-    view.rerender(<AppShell conversation={<p>对话</p>}><p>素材</p></AppShell>);
+    view.rerender(<AppShell autoFocus conversation={<p>对话</p>}><p>素材</p></AppShell>);
     await waitFor(() => expect(apiMocks.listCreationTasks).toHaveBeenCalledTimes(2));
     await act(async () => finish({ items: result === "empty" ? [] : [second], total_count: result === "empty" ? 0 : 1 }));
     expect(screen.queryByRole("link", { name: /旧可读任务/ })).not.toBeInTheDocument();
@@ -561,10 +599,10 @@ describe("AppShell", () => {
     const second = creationTask({ id: "task-b", name: "任务 B" });
     apiMocks.listCreationTasks.mockResolvedValueOnce({ items: [first, second], total_count: 2 })
       .mockRejectedValueOnce(new Error("完整列表读取失败"));
-    const view = render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    const view = render(<AppShell autoFocus conversation={<p>对话</p>}><p>首页</p></AppShell>);
     await screen.findByRole("link", { name: /任务 B/ });
     pathname = "/history";
-    view.rerender(<AppShell conversation={<p>对话</p>}><p>素材</p></AppShell>);
+    view.rerender(<AppShell autoFocus conversation={<p>对话</p>}><p>素材</p></AppShell>);
     await screen.findByRole("alert");
     view.rerender(<AppShell creationTasks={[{ ...first, name: "任务 A 新事实", updated_at: "2026-10-14T01:00:00Z" }]} conversation={<p>对话</p>}><p>素材</p></AppShell>);
     expect(screen.getByRole("link", { name: /任务 A 新事实/ })).toBeInTheDocument();
@@ -594,7 +632,7 @@ describe("AppShell", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", {name:"编辑镜头参数"}));
       expect(screen.queryByRole("dialog", {name:"镜头详情"})).not.toBeInTheDocument();
-      expect(screen.getByRole("dialog", {name:"镜头参数"})).toHaveAttribute("aria-modal","true");
+      expect(screen.getByRole("dialog", {name:"镜头参数"})).not.toHaveAttribute("aria-modal","true");
       fireEvent.click(screen.getByRole("button", {name:"关闭卡片"}));
       await waitFor(() => expect(screen.queryByRole("dialog", {name:"镜头参数"})).not.toBeInTheDocument());
       fireEvent.click(screen.getByRole("button", {name:"查看详情"}));
@@ -625,16 +663,16 @@ describe("AppShell", () => {
     it("uses the 1200 responsive default without overwriting remembered width", () => {
       localStorage.clear();
       Object.defineProperty(window,"innerWidth",{configurable:true,value:1199});
-      const view=render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+      const view=render(<AppShell autoFocus conversation={<p>对话</p>}><p>首页</p></AppShell>);
       expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"300px"});
       Object.defineProperty(window,"innerWidth",{configurable:true,value:1200});
       fireEvent(window,new Event("resize"));
-      expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"380px"});
+      expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"340px"});
       expect(localStorage.getItem("video-workspace-chat-width")).toBeNull();
       fireEvent.keyDown(screen.getByRole("separator",{name:"调整对话栏宽度"}),{key:"ArrowRight"});
       Object.defineProperty(window,"innerWidth",{configurable:true,value:1199});
       fireEvent(window,new Event("resize"));
-      expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"396px"});
+      expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"356px"});
       view.unmount();localStorage.clear();
     });
   });
@@ -666,20 +704,44 @@ describe("hidden workspace media", () => {
   });
 
   it("pauses a collapsed conversation and preserves its draft and media position on return", () => {
-    render(<AppShell conversation={<><input aria-label="未发送草稿" defaultValue="保留这个要求"/><audio aria-label="对话试听" controls src="/chat.wav"/></>}><p>作品</p></AppShell>);
+    render(<AppShell autoFocus conversation={<><input aria-label="未发送草稿" defaultValue="保留这个要求"/><audio aria-label="对话试听" controls src="/chat.wav"/></>}><p>作品</p></AppShell>);
     const audio = screen.getByLabelText("对话试听") as HTMLAudioElement;
     const pause = vi.spyOn(audio, "pause").mockImplementation(() => {});
     audio.currentTime = 7;
     fireEvent.play(audio);
     expect(pause).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name:"收起对话栏" }));
+    fireEvent.click(screen.getByRole("button", { name:"收起曜核哈力斯" }));
     expect(pause).toHaveBeenCalledOnce();
     fireEvent.play(audio);
     expect(pause).toHaveBeenCalledTimes(2);
-    fireEvent.click(screen.getByRole("button", { name:"展开对话栏" }));
+    fireEvent.click(screen.getByRole("button", { name:"打开曜核哈力斯" }));
     expect(screen.getByLabelText("对话试听")).toBe(audio);
     expect(audio.currentTime).toBe(7);
     expect(screen.getByLabelText("未发送草稿")).toHaveValue("保留这个要求");
+  });
+
+  it("gives narrow text editing room and returns from chat without losing either draft", () => {
+    localStorage.clear();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(node: Element) { if (node.hasAttribute("data-editor-toolbar-parent")) this.callback([{target:node, contentRect:{width:900}} as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      unobserve() {} disconnect() {}
+    });
+    function EditingPane() {
+      const panel = useContext(WorkspacePanelContext);
+      return <><button onClick={panel.revealTaskPanel}>返回文案</button><div hidden={panel.conversationFocused}><input aria-label="文案草稿" defaultValue="未保存文案"/></div></>;
+    }
+    render(<AppShell editorLayout editingPane="script" conversation={<input aria-label="对话草稿" defaultValue="未发送要求"/>}><EditingPane/></AppShell>);
+    expect(screen.queryByRole("region",{name:"曜核哈力斯"})).not.toBeInTheDocument();
+    expect(screen.getByLabelText("文案草稿")).toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:"打开曜核哈力斯"}));
+    expect(screen.getByLabelText("对话草稿")).toBeVisible();
+    expect(screen.getByLabelText("文案草稿")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button",{name:"返回文案"}));
+    expect(screen.getByLabelText("文案草稿")).toBeVisible();
+    expect(screen.getByLabelText("文案草稿")).toHaveValue("未保存文案");
+    expect(screen.getByLabelText("对话草稿")).toHaveValue("未发送要求");
+    expect(screen.getByLabelText("对话草稿")).not.toBeVisible();
   });
 
   it.each(["resource", "inspector"])("pauses the conversation when a narrow %s pane replaces it", kind => {
@@ -698,12 +760,12 @@ describe("hidden workspace media", () => {
     const audio=screen.getByLabelText("对话试听") as HTMLAudioElement;
     const pause=vi.spyOn(audio,"pause").mockImplementation(()=>{});
     fireEvent.click(screen.getByRole("button",{name:kind === "resource" ? "打开资源" : "打开属性"}));
-    expect(audio.closest("section[aria-label='创作助手']")).toHaveAttribute("hidden");
+    expect(audio.closest("section[aria-label='曜核哈力斯']")).toHaveAttribute("hidden");
     expect(pause).toHaveBeenCalledOnce();
     fireEvent.play(audio);
     expect(pause).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByRole("button",{name:kind === "resource" ? "返回作品" : "关闭属性面板"}));
-    expect(screen.getByRole("region",{name:"创作助手"})).toContainElement(audio);
+    expect(screen.getByRole("region",{name:"曜核哈力斯"})).toContainElement(audio);
     expect(pause).toHaveBeenCalledTimes(2);
   });
 

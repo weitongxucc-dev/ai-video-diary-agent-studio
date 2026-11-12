@@ -11,6 +11,7 @@
 | [Button](sources/button.tsx.txt)：统一动作尺寸、状态和键盘语义 | [button.tsx](../../../apps/web/src/components/ui/button.tsx)、[共享控件样式](../../../apps/web/src/components/ui/workbench-controls.module.css) | 页面只安排位置，不覆盖公共状态；图标提供提示与可访问名称 |
 | [InputGroup](sources/input-group.tsx.txt)：输入与附件共用单层边界 | [输入组件](../../../apps/web/src/components/ui/input-group.tsx)、[对话面板](../../../apps/web/src/components/AssistantConversationPanel.tsx) | 禁用发送不等于禁用输入，引用身份由真实会话拥有 |
 | [Message](sources/message.tsx.txt)：连续阅读与轻量消息 | [消息折叠](../../../apps/web/src/components/ui/conversation-message.tsx)、[对话面板](../../../apps/web/src/components/AssistantConversationPanel.tsx) | 完成后突出回答，过程可查；不搬入演示回复和假进度 |
+| [AI Elements Chain of Thought](https://elements.ai-sdk.dev/components/chain-of-thought)：可折叠过程与相连步骤 | [过程组件](../../../apps/web/src/components/ui/chain-of-thought.tsx)、[对话面板](../../../apps/web/src/components/AssistantConversationPanel.tsx)，使用现有 Base UI Collapsible 适配 | 只显示真实工具事件，步骤已返回不等于回复或作品完成；展开选择和历史状态保持 |
 | [Citations](sources/ai-citations.tsx.txt)：可辨识引用与就近详情 | [引用选择](../../../apps/web/src/components/ui/reference-picker.tsx)、[素材使用定位](../../../apps/web/src/components/ui/material-usage.tsx) | 预览、引用、采用不同；保留真实对象、版本和精确范围 |
 | [Tabs](sources/tabs.tsx.txt)：同级内容切换 | [工作台](../../../apps/web/src/components/workbench/Workbench.tsx) | 资源浏览不换任务对话；明确切作品恢复对应上下文 |
 | [Dialog](sources/dialog.tsx.txt)、[Popover](sources/popover.tsx.txt)：焦点和覆盖层级 | [对话框](../../../apps/web/src/components/ui/overlay.tsx)、[浮层](../../../apps/web/src/components/ui/popover.tsx) | 长期精调用停靠面板，短操作用浮层，关闭不丢草稿 |

@@ -25,7 +25,8 @@
 .cardHeading small { color: var(--text-2); font-size:12px; }
 .viewToggle { display:flex; flex:0 0 auto; gap:2px; padding:2px; border:1px solid var(--border-1); border-radius:8px; }
 .viewToggle button { display:grid; width:30px; height:28px; place-items:center; border:0; border-radius:6px; background:transparent; color:var(--text-2); cursor:pointer; }
-.viewToggle button:hover, .viewToggle button[aria-pressed="true"] { background:var(--surface-2); color:var(--text-1); }
+.viewToggle button:hover { background:var(--surface-2); color:var(--text-1); }
+.viewToggle button[aria-pressed="true"] { background:var(--selection-bg); color:var(--text-1); }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
 .grid.list { grid-template-columns:minmax(0,1fr); gap:0; }
 .sourceList.list .cover { grid-template-columns:64px minmax(0,1fr) auto; grid-template-rows:24px 20px; align-items:center; min-height:56px; padding:2px 6px; border-width:0 0 1px; border-radius:0; }
@@ -37,7 +38,7 @@
 .scriptList.list .cover > * { min-width:0; }
 .cover { display: grid; align-content: start; gap: 5px; min-width: 0; min-height: 190px; padding: 7px; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
 .cover:hover, .cover:focus-visible { border-color: var(--accent); outline: 0; }
-.cover[aria-pressed="true"] { border-color: var(--selection-line); background: var(--hover); }
+.cover[aria-pressed="true"] { border-color: var(--selection-line); background: var(--selection-bg); }
 .cover:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .coverArt { display: flex; min-height: 100px; flex-direction: column; align-items: flex-start; justify-content: space-between; padding: 10px; border-radius: 5px; background: var(--surface-2); color: var(--accent); }
 .coverArt small { color: var(--text-2); font-size:12px; }

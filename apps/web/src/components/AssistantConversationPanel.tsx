@@ -5,6 +5,7 @@ import { Tooltip } from "./ui/tooltip";
 import { segmentRevisionStatus, segmentAdoptionReason, editExecutionReadinessMessage } from './creation-task/stage-labels';
 
 import { ConversationMessage } from "./ui/conversation-message";
+import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "./ui/chain-of-thought";
 import { ReferencePicker } from "./ui/reference-picker";
 import type { MaterialUsageContext } from "./ui/material-usage";
 import { ReferenceChips } from "./ui/reference-chips";
@@ -13,7 +14,7 @@ import { Children, useEffect, useLayoutEffect, useId, useMemo, useRef, useState,
 import { useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference, useAssistantReferenceStatus, useAssistantSelection } from "./AssistantConversationProvider";
 import { HomeCardDialog } from "./HomeCardDialog";
 import "./AssistantConversation.css";
-import { Plus, History, Pencil, CircleHelp, ArrowUp, ArrowDown, MessageCircleDashed, LoaderCircle, Copy, Check, MoreHorizontal, Square, X } from "lucide-react";
+import { Plus, History, Pencil, CircleHelp, CircleAlert, Brain, ArrowUp, ArrowDown, MessageCircleDashed, LoaderCircle, Copy, Check, MoreHorizontal, Square } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { createPortal } from "react-dom";
 import remarkGfm from "remark-gfm";
@@ -192,10 +193,10 @@ function GoalProgress({ value, reading, refreshPaused, onRead, readingResult }: 
   </ReadingDetails>;
 }
 
-export function AssistantFailureMessage({ message, reading, readingKey = "diagnostic" }: { message: string; reading?: ReadingState; readingKey?: string }) {
+export function AssistantFailureMessage({ message, reading, readingKey = "diagnostic", summary = "这次操作没有完成，请打开诊断查看原因。" }: { message: string; reading?: ReadingState; readingKey?: string; summary?: string }) {
   const diagnostic = /https?:\/\/|Traceback|HTTP\s?\d|\b(?:unreachable|ECONNREFUSED|ENOTFOUND|fetch failed|Connection refused)\b|\/(?:Users|Volumes|private)\/|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b|(?:不是|并非)\s*有效(?:的)?\s*JSON\b|^\s*[{[]/i.test(message);
   if (!diagnostic) return <>{message}</>;
-  return <><span>这次操作没有完成，请打开诊断查看原因。</span><ReadingDetails reading={reading} readingKey={readingKey}><summary>诊断详情</summary><pre>{message}</pre></ReadingDetails></>;
+  return <><span>{summary}</span><ReadingDetails reading={reading} readingKey={readingKey}><summary>诊断详情</summary><pre>{message}</pre></ReadingDetails></>;
 }
 
 function AssistantText({ text }: { text: string }) {
@@ -215,18 +216,28 @@ function AssistantText({ text }: { text: string }) {
 
 function TurnTools({ turn, reading }: { turn: AssistantConversationTurn; reading?: ReadingState }) {
   const tools = turnTools(turn);
-  if (!tools.length) return null;
+  const running = turn.status === "running";
+  const readingKey = `${turn.id}:tools`;
+  const [requestedOpen, setRequestedOpen] = useState<boolean>();
+  const open = reading?.get(readingKey, requestedOpen ?? running) ?? requestedOpen ?? running;
   const runningTool = tools.find((tool) => tool.state === "running");
-  const failedTools = tools.some((tool) => tool.state === "failed" || tool.state === "unreturned");
-  const failure = [...tools].reverse().find(tool => tool.state === "failed")?.failure;
-  return <div className="assistant-markdown-wrap">
-    {tools.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:tools`} className="assistant-turn-tools">
-      <summary aria-label={`工具记录 · ${tools.length} 项 · ${runningTool ? `正在${runningTool.label}` : failedTools ? "含失败记录" : "调用已结束"}`}><span className="assistant-tool-state" data-failed={failedTools || undefined}>{runningTool ? <LoaderCircle size={13} className="assistant-spinning"/> : failedTools ? <CircleHelp size={13}/> : <Check size={13}/>}</span>{runningTool ? `正在${runningTool.label}` : failedTools ? "有步骤未完成" : "处理记录"}<span className="assistant-tool-count">{tools.length}</span>{failure ? <span className="assistant-tool-summary-failure"><span>{failure.reason}</span>{failure.repair_action ? <span>{failure.repair_action}</span> : null}</span> : null}</summary>
-      <ol>{tools.map((tool, index) => <li data-state={tool.state} key={`${tool.tool_id}-${index}`}>
-        <strong>{tool.label} · {toolStateLabels[tool.state]}</strong>
-        <ToolResult tool={tool} reading={reading} readingKey={`${turn.id}:tool:${tool.tool_id}:diagnostic`}/>
-      </li>)}</ol>
-    </ReadingDetails> : null}
+  const failedTools = tools.filter((tool) => tool.state === "failed" || tool.state === "unreturned");
+  const failedTool = [...tools].reverse().find(tool => tool.state === "failed");
+  const failure = failedTool?.failure;
+  const activity = runningTool ? `正在${runningTool.label}` : turn.assistant_text.trim() ? "正在回复…" : tools.length ? "正在整理回复…" : "正在思考…";
+  if (!tools.length) return running ? <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={14} className="is-spinning"/>{activity}</p> : null;
+  return <div className="assistant-process">
+    <ChainOfThought className="assistant-turn-tools" data-reading-key={readingKey} open={open} onOpenChange={value => { setRequestedOpen(value); reading?.save(readingKey, value); }}>
+      <ChainOfThoughtHeader aria-label={`工具记录 · ${tools.length} 项 · ${running ? activity : failedTools.length ? "含失败记录" : "调用已结束"}`}>
+        {running ? <LoaderCircle aria-hidden size={14} className="is-spinning"/> : <Brain aria-hidden size={14}/>}
+        <span role={running ? "status" : undefined}>{running ? activity : "处理过程"}</span><span className="assistant-tool-count">{tools.length} 步</span>
+        {failedTools.length ? <span className="assistant-process-issue">{failedTools.length} 次调用异常</span> : null}
+      </ChainOfThoughtHeader>
+      <ChainOfThoughtContent>{tools.map((tool, index) => <ChainOfThoughtStep key={`${tool.tool_id}-${index}`} icon={tool.state === "running" ? LoaderCircle : tool.state === "succeeded" ? Check : CircleAlert} status={tool.state === "running" ? "active" : tool.state === "succeeded" ? "complete" : "error"} label={`${tool.label} · ${toolStateLabels[tool.state]}`}>
+        <ToolResult tool={tool} reading={reading} readingKey={`${turn.id}:tool:${tool.tool_id}:${index}:diagnostic`}/>
+      </ChainOfThoughtStep>)}</ChainOfThoughtContent>
+    </ChainOfThought>
+    {!open && failedTool && failure ? <div className="assistant-tool-summary-failure"><AssistantFailureMessage reading={reading} readingKey={`${readingKey}:failure`} message={failure.reason} summary={`“${failedTool.label}”曾返回失败，详情保留在诊断中。`}/>{failure.repair_action ? <span>{failure.repair_action}</span> : null}</div> : null}
   </div>;
 }
 
@@ -245,10 +256,10 @@ export function AssistantConversationHeaderActions({ state, busy, onConversation
   return <div className="assistant-header-actions">
     <Button variant="ghost" className="assistant-icon-action" type="button" aria-label="历史对话" title="历史对话" disabled={disabled}
       onClick={() => { void state.loadList().then(() => setHistoryOpen(true)).catch(fail); }}><History size={15}/></Button>
-    <Button variant="ghost" className="assistant-icon-action" type="button" aria-label="新对话" title="新对话" disabled={disabled}
+    <Button variant="ghost" className="assistant-icon-action" type="button" aria-label="新对话" title="新对话，保留当前作品" disabled={disabled}
       onClick={() => { void state.createNew().then(next => { onConversationChange?.(); onInput(next.draft_text); }).catch(fail); }}><Plus size={15}/></Button>
     {children}
-    {historyOpen ? <HomeCardDialog title="历史对话" onClose={() => setHistoryOpen(false)}><div className="assistant-resume-list">
+    {historyOpen ? <HomeCardDialog title="历史对话" kind="detail" onClose={() => setHistoryOpen(false)}><p>同一作品可以有多段对话；切换对话不会新建视频任务。</p><div className="assistant-resume-list">
       {state.conversations.map(item => <Button variant="ghost" type="button" key={item.id} aria-current={item.id === state.conversation?.id ? "true" : undefined}
         onClick={() => { void state.resume(item.id).then(next => { onConversationChange?.(); onInput(next.draft_text); setHistoryOpen(false); }).catch(fail); }}><strong>{item.title}</strong><small>{new Date(item.updated_at).toLocaleString()}</small></Button>)}
       {!state.conversations.length ? <p>还没有可恢复的对话。</p> : null}
@@ -486,11 +497,10 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
   return <article className="assistant-persisted-turn" data-turn-status={turn.status} data-turn-id={turn.id}>
     {turn.user_message.trim() ? <ConversationMessage className="assistant-user-message" savedOpen={reading?.get(`${turn.id}:user`, false)} onOpenChange={open => reading?.save(`${turn.id}:user`, open)}>{turn.user_message}</ConversationMessage> : null}
     {businessContinuation ? <p className="assistant-stream-status">继续完成原要求</p> : null}
-    {turn.status === "running" ? <TurnTools turn={turn} reading={reading}/> : null}
+    <TurnTools turn={turn} reading={reading}/>
     <TurnContent turn={turn} reading={reading} latest={latest} />
     {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
     {inputReceipts.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:inputs`} defaultOpen={inputReceipts.some(item => item.status === "rejected" || item.status === "interrupted")} className="assistant-turn-inputs"><summary>追加要求记录 · {inputReceipts.length}</summary>{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</ReadingDetails> : null}
-    {turn.status === "running" ? <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={12} className="is-spinning"/>正在回复…</p> : null}
     {resultSummary ? <TurnResult summary={resultSummary} summaryInHeading={summaryInHeading} reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult) && (resultNeedsAttention || !turn.assistant_text.trim())}>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
       {storyboardSummary && storyboardSummary !== resultSummary ? <p>{storyboardSummary}</p> : null}
@@ -511,10 +521,9 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
       {job?.resource_wait ? <ResourceWaitReceipt receipt={job.resource_wait} reading={reading} readingKey={`${turn.id}:resource:${job.resource_wait.observation_id}:${job.resource_wait.context}`}/> : null}
       {refreshPaused && pendingResult ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
     </TurnResult> : null}
-    {turn.status !== "running" ? <TurnTools turn={turn} reading={reading}/> : null}
     <div className="assistant-result-actions">
       {onOpenEditProposal && canOpenTurnProposal(turn) ? <Button variant="ghost" type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</Button> : null}
-      {pendingResult || unknownRequest || job?.status === "interrupted" ? <Button variant="ghost" type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</Button> : null}
+      {unknownRequest || job?.status === "interrupted" || pendingResult && (turn.status !== "running" || refreshPaused) ? <Button variant="ghost" type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</Button> : null}
     </div>
     {onOpenCreationRequest && turn.status !== "running" && result?.kind === "creation_request" && typeof result.creation_request_id === "string" ? <Button variant="ghost" className="assistant-text-action" type="button" disabled={Boolean(continueReason)} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</Button> : null}
     {turn.status === "failed" ? <p role="status">{outputRecovered ? "本轮回复曾中断；制作与技术检查已恢复完成，历史失败保留。"
@@ -577,7 +586,7 @@ export function AssistantConversationPanel({
   const resultReadRevision = useRef(0);
   const diagnosticsId = useId();
   useLayoutEffect(() => {
-    setHeaderSlot(panelRef.current?.closest('[aria-label="创作助手"]')?.querySelector<HTMLElement>("[data-assistant-header-actions]") ?? null);
+    setHeaderSlot(panelRef.current?.closest("[data-conversation-pane]")?.querySelector<HTMLElement>("[data-assistant-header-actions]") ?? null);
   }, []);
   const conversation = state.conversation;
   useEffect(() => { resultReadRevision.current += 1; setReadingResultTurn(null); }, [conversation?.id]);
@@ -832,7 +841,7 @@ export function AssistantConversationPanel({
         state.historyScrollPositions?.current.set(conversation.id, node.scrollTop);
       }}>
       {turns.length ? <div className="assistant-transcript" role="log" aria-live="polite" aria-relevant="additions" aria-busy={currentRunning}>
-        {turns.map((turn) => <TurnView latest={turn.id === latestReplyId} key={turn.id} inputReceipts={[...inputs.values()].filter(({ item, owner }) => owner === turn.id && item.status !== "accepted" && item.status !== "consumed").map(({ item }) => item)} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} taskScopeId={conversation?.scope_kind === "task" ? conversation.scope_id : undefined} refreshPaused={state.businessRefreshPaused} windowReadError={conversation ? state.scriptWindowReadErrors?.[assistantScriptWindowReadKey(conversation.id, turn)] : undefined}
+        {turns.map((turn) => <TurnView latest={turn.id === latestReplyId} key={`${conversation?.id}:${turn.id}`} inputReceipts={[...inputs.values()].filter(({ item, owner }) => owner === turn.id && item.status !== "accepted" && item.status !== "consumed").map(({ item }) => item)} reading={reading} onTransferReply={onTransferReply} onCreatePlanFromReply={onCreatePlanFromReply} onOpenEditProposal={onOpenEditProposal} onOpenCreationRequest={onOpenCreationRequest} transferDraftState={transferDraftState} turn={turn} onContinue={message => { onInput(message); focus?.focus(); }} continueReason={busy || currentRunning ? "本轮运行中。" : input !== "" ? "当前已有草稿，请先处理当前草稿。" : null} onReadResult={readTurnResult} readingResult={readingResultTurn === turn.id} taskScopeId={conversation?.scope_kind === "task" ? conversation.scope_id : undefined} refreshPaused={state.businessRefreshPaused} windowReadError={conversation ? state.scriptWindowReadErrors?.[assistantScriptWindowReadKey(conversation.id, turn)] : undefined}
           productionRecovered={Boolean(goalProgress?.goal.status === "production_completed" && goalProgress.goal.production_result?.status === "succeeded" && goalProgress.goal.production_result.video_ready && goalProgress.turns.some(item => item.id === turn.id))}
           outputRecovered={Boolean(goalProgress && completedGoalOutput(goalProgress) && goalProgress.turns.some(item => item.id === turn.id))}/>)}
       </div> : !state.loading ? <div className="assistant-empty" aria-label="空对话"><div className="assistant-empty-icon"><MessageCircleDashed aria-hidden="true" size={22}/></div><h2>想聊点什么？</h2><p title={scopeLabel}>说说你的想法，或告诉我想怎么改。</p></div> : null}
@@ -855,11 +864,11 @@ export function AssistantConversationPanel({
         <div className="assistant-input-tools">
           <ReferencePicker open={referencePickerOpen} onOpenChange={setReferencePickerOpen} onAdded={()=>{if(input.endsWith("@"))onInput(input.slice(0,-1));focus?.focus();}}/>
           {composerActions}
-          {acceptsQueuedInput ? <label className="assistant-input-mode"><span className="assistant-visually-hidden">追加要求</span><select aria-label="追加要求处理方式" title="选择在安全点调整当前目标，或在本轮完成后处理" value={inputMode} onChange={event=>setInputMode(event.target.value as "steer"|"follow_up")}><option value="steer">安全点追加</option><option value="follow_up">完成后处理</option></select></label> : null}
+          {acceptsQueuedInput ? <label className="assistant-input-mode"><span className="assistant-visually-hidden">追加要求</span><select aria-label="追加要求处理方式" title="补充当前要求，或等本轮结束后再处理" value={inputMode} onChange={event=>setInputMode(event.target.value as "steer"|"follow_up")}><option value="steer">补充当前要求</option><option value="follow_up">完成后处理</option></select></label> : null}
           {!configured ? <a className="assistant-input-status" href="/settings" aria-label="连接文字模型" title="在设置中连接对话服务"><CircleHelp size={14}/>对话未连接</a> : referenceStatus.pending ? <span className="assistant-input-status" role="status">正在核验引用</span> : null}</div>
         {currentRunning && lastTurnId && !lastTurnId.startsWith("pending-") ? <Button variant="ghost" className="assistant-stop" type="button" aria-label="停止本轮" title="停止本轮回复；已提交的业务动作不撤销" onClick={() => void state.stop().catch((cause) => setError(cause.message))}><Square aria-hidden="true" size={14}/></Button>
           : null}
-        <Tooltip label={sendReason}><Button variant="ghost" className="assistant-send" type="submit" aria-label={sendLabel} aria-description={sendReason} disabled={sendDisabled}><ArrowUp aria-hidden="true" size={16} /></Button></Tooltip>
+        {!currentRunning || input.trim() ? <Tooltip label={sendReason}><Button variant="ghost" className="assistant-send" type="submit" aria-label={sendLabel} aria-description={sendReason} disabled={sendDisabled}><ArrowUp aria-hidden="true" size={16} /></Button></Tooltip> : null}
       </div>
       <span className="assistant-visually-hidden" id={`${diagnosticsId}-input-help`}>Enter 发送，Shift+Enter 换行；中文组合输入不会发送。{sendDisabled ? sendReason : "输入 / 查找命令。"}</span>
     </InputGroup></form>

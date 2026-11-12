@@ -13,7 +13,7 @@ function EditingSurface() {
 }
 function Workbench({ inspectorOpen = false, docked = true, active = true, surface = true, pageActive = true }: { inspectorOpen?: boolean; docked?: boolean; active?: boolean; surface?: boolean; pageActive?: boolean }) {
   return <EditorDockProvider activePageId={page.id}><WorkspacePageContext.Provider value={{ ...page, active: pageActive }}>
-    <WorkspacePanelContext.Provider value={{ inspectorOpen, resourceOpen: true, revealTaskPanel() {} }}>
+    <WorkspacePanelContext.Provider value={{ inspectorOpen, resourceOpen: true, conversationFocused: false, revealTaskPanel() {} }}>
       {surface ? <EditingSurface/> : null}
       <EditorResourcePane title="素材库" active={active} docked={docked} onClose={() => {}}><input aria-label="素材筛选" defaultValue="原筛选"/></EditorResourcePane>
     </WorkspacePanelContext.Provider>

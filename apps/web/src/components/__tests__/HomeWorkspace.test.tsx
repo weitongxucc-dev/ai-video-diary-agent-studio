@@ -58,13 +58,12 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
     fireEvent.click(screen.getByRole("button", {name:"切换为列表"}));
     check();
   });
-  it("shows a selected default trend, zero coordinates, grouped range/time and one metadata entry", () => {
+  it("shows a compact honest zero trend, grouped range/time and one metadata entry", () => {
     const zero={...home,trend:{...home.trend,points:[{date:"2026-10-09",count:0},{date:"2026-10-10",count:0}]}};
     render(<HomeWorkspace foundation={null} tasks={[]} live={live(zero)} />);
     expect(screen.getByRole("tab",{name:"素材接收趋势"})).toHaveAttribute("aria-selected","true");
-    const chart=screen.getByRole("img",{name:"素材接收趋势"});
-    expect(chart.querySelector("[data-zero-line]")).toBeInTheDocument();
-    expect(chart.querySelectorAll("circle")).toHaveLength(2);
+    expect(screen.queryByRole("img",{name:"素材接收趋势"})).not.toBeInTheDocument();
+    expect(screen.getByText("这段时间没有素材接收记录")).toBeVisible();
     const ranges=screen.getByLabelText("趋势范围");
     expect(ranges.parentElement?.querySelector("time")).toHaveAttribute("dateTime",meta.as_of);
     expect(screen.getAllByRole("button",{name:"趋势统计口径"})).toHaveLength(1);
@@ -96,7 +95,7 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
     ]}} />);
     overview("内容标签与行业");
     const high=screen.getByRole("link",{name:/用途:人物主镜头/}),low=screen.getByRole("link",{name:/用途:补充画面/});
-    expect(high).toHaveAttribute("href","/library?tag="+encodeURIComponent("用途:a_roll"));
+    expect(high).toHaveAttribute("href","/library?mode=manage&tag="+encodeURIComponent("用途:a_roll"));
     expect(high).toHaveAttribute("data-frequency","80");
     expect(Number.parseFloat(high.style.fontSize)).toBeGreaterThan(Number.parseFloat(low.style.fontSize));
     expect(high.parentElement?.className).toContain("cloudCore");
@@ -174,8 +173,8 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
     fireEvent.click(screen.getByRole("button", { name: "切换为列表" }));
     const row = screen.getByRole("button", { name: /设备演示/ });
     overview("素材接收趋势");
-    expect(taskBody).toHaveAttribute("hidden");
-    expect(recentBody).toHaveAttribute("hidden");
+    expect(taskBody).not.toHaveAttribute("hidden");
+    expect(recentBody).not.toHaveAttribute("hidden");
     expect(trendBody).not.toHaveAttribute("hidden");
     fireEvent.click(screen.getByRole("button", { name: "30 天" }));
     expect(state.onDays).toHaveBeenCalledOnce();
@@ -185,7 +184,6 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
     expect(state.onRetry).not.toHaveBeenCalled();
     overview("内容标签与行业");
     expect(container.querySelector("#home-device-body")).toHaveAttribute("hidden");
-    fireEvent.click(screen.getByRole("button", { name: "最近素材" }));
     expect(taskBody).not.toHaveAttribute("hidden");
     expect(recentBody).not.toHaveAttribute("hidden");
     expect(container.querySelector("#home-task-body")).toBe(taskBody);
@@ -195,19 +193,18 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
     expect(screen.getByRole("button", { name: "切换为看板" })).toBeInTheDocument();
     overview("素材接收趋势");
     expect(screen.getByRole("button", { name: "30 天" })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", {name:"返回任务"}));
     expect(taskBody).not.toHaveAttribute("hidden");
   });
 
-  it("scrolls only the right content when opening and restoring an overview", () => {
+  it("preserves dashboard scroll and visible tasks when changing overview tabs", () => {
     const { container } = render(<HomeWorkspace foundation={null} tasks={[task]} live={live()} />);
     const right = container.querySelector('[class*="content"]') as HTMLElement;
     right.scrollTop = 250;
     overview("设备与存储");
-    expect(right.scrollTop).toBe(0);
+    expect(right.scrollTop).toBe(250);
     right.scrollTop = 120;
-    fireEvent.click(screen.getByRole("button", { name: "创作任务" }));
-    expect(right.scrollTop).toBe(0);
+    overview("素材接收趋势");
+    expect(right.scrollTop).toBe(120);
   });
 
   it("renders a single empty result and restores search focus after clearing", () => {
@@ -224,11 +221,14 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
     window.addEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, listener);
     render(<HomeWorkspace foundation={null} tasks={[]} recentAssets={[asset]} />);
     fireEvent.click(screen.getByRole("button", { name: /真实画面.jpg/ }));
-    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ selection: { scope: "asset", asset_id: "asset-real", expected_updated_at: asset.updated_at }, label: asset.file_name });
+    expect(listener).not.toHaveBeenCalled();
     const card = screen.getByRole("dialog", { name: asset.file_name });
     expect(within(card).getByRole("img", { name: `原素材预览：${asset.file_name}` })).toHaveAttribute("src", "/api/production/materials/asset-real/media");
     fireEvent.error(within(card).getByRole("img"));
     expect(card).toHaveTextContent("预览暂不可用");
+    fireEvent.click(within(card).getByRole("button", { name: "引用到对话" }));
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ selection: { scope: "asset", asset_id: "asset-real", expected_updated_at: asset.updated_at }, label: asset.file_name });
+    expect(screen.queryByRole("dialog", { name: asset.file_name })).not.toBeInTheDocument();
     window.removeEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, listener);
   });
 
@@ -271,7 +271,7 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
     expect(screen.queryByRole("link", { name: /设备/ })).not.toBeInTheDocument();
     const more = screen.getByText("更多标签（1）").closest("details")!;
     fireEvent.click(within(more).getByText("更多标签（1）"));
-    expect(within(more).getByRole("link", { name: longTag })).toHaveAttribute("href", "/library?tag=" + encodeURIComponent(longTag));
+    expect(within(more).getByRole("link", { name: longTag })).toHaveAttribute("href", "/library?mode=manage&tag=" + encodeURIComponent(longTag));
   });
 
   it("offers a compact start only when all seven known counts and actual task entries are empty", () => {
@@ -279,10 +279,9 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
     const view = render(<HomeWorkspace foundation={null} tasks={[]} live={live(empty)} recentAssets={[]} />);
     expect(screen.getByRole("region", { name: "开始创作" })).toBeInTheDocument();
     overview("素材接收趋势");
-    expect(screen.getByRole("img", { name: "素材接收趋势" }).querySelector("[data-zero-line]")).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "素材接收趋势" })).not.toBeInTheDocument();
     expect(screen.getByText("这段时间没有素材接收记录")).toBeInTheDocument();
     view.rerender(<HomeWorkspace foundation={null} tasks={[]} live={live({ ...empty, counts: empty.counts.filter(item => item.key !== "voices") })} />);
-    fireEvent.click(screen.getByRole("button", { name: "创作任务" }));
     expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
   });
 
@@ -315,10 +314,10 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
     const view = render(<TrendChart values={[]} />);
     expect(screen.getByText("接收趋势暂无数据")).toBeInTheDocument();
     view.rerender(<TrendChart values={[{ date: "2026-10-09", count: 1 }]} />);
-    expect(screen.getByRole("img").querySelector("circle")).toHaveAttribute("cx", "143");
+    expect(screen.getByRole("img").querySelector("circle")).toHaveAttribute("cx", "400");
     view.rerender(<TrendChart values={Array.from({ length: 30 }, (_, index) => ({ date: String(index), count: index % 5 }))} />);
     const circles = screen.getByRole("img").querySelectorAll("circle");
     expect(circles).toHaveLength(30);
-    expect(circles[29]).toHaveAttribute("cx", "274");
+    expect(circles[29]).toHaveAttribute("cx", "784");
   });
 });

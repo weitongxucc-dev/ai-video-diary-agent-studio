@@ -2,7 +2,7 @@
 .tabs { display:flex; align-items:center; gap:12px; min-width:0; min-height:36px; overflow-x:auto; scrollbar-width:thin; }
 .tabs > :is(button,a) { display:inline-flex; flex:0 0 auto; align-items:center; justify-content:center; gap:6px; min-height:36px; padding:0 2px; border:0; border-bottom:1px solid transparent; border-radius:0; background:transparent; color:var(--text-2); font:400 13px/21px var(--font-ui); text-decoration:none; white-space:nowrap; cursor:pointer; }
 .tabs > :is(button,a):hover { color:var(--text-1); }
-.tabs > :is([aria-pressed=true],[aria-selected=true],[aria-current=page]) { border-bottom-color:var(--text-1); color:var(--text-1); }
+.tabs > :is([aria-pressed=true],[aria-selected=true],[aria-current=page]) { border-bottom:2px solid var(--accent); color:var(--text-1); font-weight:600; }
 .tabs svg { flex-shrink:0; width:16px; height:16px; }
 .tabs > :is(button,a):focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
 .search { display:flex; align-items:center; gap:6px; min-width:0; min-height:32px; padding:0 8px; border:1px solid var(--border-1); border-radius:6px; background:var(--surface-1); color:var(--text-2); }

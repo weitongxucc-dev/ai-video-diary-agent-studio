@@ -4,7 +4,7 @@ import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import { AssistantConversationContext } from "../AssistantConversationContext";
 import { useScopedAssistantConversation } from "../useAssistantConversation";
 import type { AssistantConversation, AssistantConversationTurn, CreationTask } from "@/lib/types";
-import type { AssistantBusinessContinuation, AssistantStoryboardRegeneration } from "@/lib/types/assistant";
+import type { AssistantBusinessContinuation, AssistantScriptWindowRequest, AssistantStoryboardRegeneration } from "@/lib/types/assistant";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
 const restoreApi=vi.hoisted(()=>({read:vi.fn(async(taskId:string,requestId:string)=>({task_id:taskId,request_id:requestId,
   action:'undo',status:'applied',operation_id:'restored-operation',result_version_id:'restored-version',failure:null}))}));
@@ -64,11 +64,11 @@ vi.mock("@/lib/api", () => {
     const materialResult = result.material_result as { scope: string; changed: boolean } | null | undefined;
     const projected = result.plan_preview ? { kind: "plan_preview", plan_preview: result.plan_preview }
       : materialResult ? { kind: "material_result", scope: materialResult.scope, changed: materialResult.changed }
-        : result.execution_action || result.script_draft || result.topic_candidates || result.storyboard_regeneration || result.timeline_action || result.continuation
+        : result.execution_action || result.script_draft || result.topic_candidates || result.storyboard_regeneration || result.script_window_request || result.timeline_action || result.continuation
           ? { kind: "task_turn", execution_action: result.execution_action, execution_status: result.execution_status,
               script_draft: result.script_draft ? "saved" : null, topic_candidates: Boolean(result.topic_candidates),
               timeline_action: result.timeline_action, continuation: result.continuation,
-              edit_preview: Boolean(result.edit_preview), ...(result.storyboard_regeneration ? {response: result} : {}) }
+              edit_preview: Boolean(result.edit_preview), ...(result.storyboard_regeneration || result.script_window_request ? {response: result} : {}) }
           : result.edit_preview ? { kind: "task_turn", edit_preview: true }
             : { kind: "conversation" };
     const turn = { id: turnId, sequence: mocks.sequence, user_message: userMessage, assistant_text: assistantText,
@@ -154,6 +154,54 @@ describe("HomeCommandComposer", () => {
     return {id, sequence: 2, status: "completed", user_message: "", assistant_text: "已回读持久回合", events: [],
       result: {kind: "task_turn", continuation}, created_at: "2026-10-18T11:00:00Z", updated_at: "2026-10-18T11:00:00Z"};
   }
+
+  const scriptReceipt: AssistantScriptWindowRequest = {kind: "script_window_request", operation: "start",
+    task_id: "task-1", request_id: "script-request", script_id: "script-1", status: "saved",
+    input_id: "input-1", input_turn_id: "input-turn-1", updated_at: "2026-11-11T10:00:00Z"};
+
+  it("refreshes a saved script and its later confirmed receipt once each without changing the draft", async () => {
+    configuredModel();
+    const onTaskUpdated = vi.fn();
+    mocks.editAsk.mockResolvedValueOnce({reply: "文案已保存", edit_preview: null,
+      script_window_request: scriptReceipt, input_id: "input-1", input_turn_id: "input-turn-1"});
+    render(<TaskConversation task={{id: "task-1", stage: "script", name: "当前作品"} as CreationTask} onTaskUpdated={onTaskUpdated}/>);
+    const input = await readyInput("任务对话要求");
+    fireEvent.change(input, {target: {value: "保存文案"}});
+    await waitFor(() => expect(screen.getByRole("button", {name: "发送"})).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", {name: "发送"}));
+    await waitFor(() => expect(onTaskUpdated).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByRole("button", {name: "发送"})).toBeDisabled());
+    fireEvent.change(input, {target: {value: "保留下一条草稿"}});
+    const id = screen.getByLabelText("持久会话ID").textContent!;
+    const saved = mocks.saved.get(id)!;
+    const original = saved.turns[0];
+    mocks.saved.set(id, {...saved, turns: [{...original, updated_at: "2026-11-11T10:01:00Z",
+      result: {...original.result, response: {script_window_request: {...scriptReceipt, operation: "confirm", status: "confirmed"},
+        input_id: "input-1", input_turn_id: "input-turn-1"}}}]});
+    fireEvent.click(screen.getByRole("button", {name: "回读持久会话"}));
+    await waitFor(() => expect(onTaskUpdated).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole("button", {name: "回读持久会话"}));
+    await waitFor(() => expect(screen.getByLabelText("持久回合更新时间")).toHaveTextContent("2026-11-11T10:01:00Z"));
+    expect(onTaskUpdated).toHaveBeenCalledTimes(2);
+    expect(input).toHaveValue("保留下一条草稿");
+    expect(mocks.sendTaskTurn).toHaveBeenCalledOnce();
+  });
+
+  it.each([{status: "rejected"}, {status: "not_submitted"}, {task_id: "task-other"}, {input_id: "input-other"}, {input_turn_id: "turn-other"}])(
+    "does not refresh from an unaccepted or mismatched script receipt (%#)", async invalid => {
+      configuredModel();
+      const onTaskUpdated = vi.fn();
+      render(<TaskConversation task={{id: "task-1", stage: "script", name: "当前作品"} as CreationTask} onTaskUpdated={onTaskUpdated}/>);
+      await readyInput("任务对话要求");
+      const id = screen.getByLabelText("持久会话ID").textContent!;
+      const saved = mocks.saved.get(id)!;
+      const turn = persistedReceiptTurn("script-invalid", null);
+      turn.result = {kind: "task_turn", response: {script_window_request: {...scriptReceipt, ...invalid}, input_id: "input-1", input_turn_id: "input-turn-1"}};
+      mocks.saved.set(id, {...saved, turns: [turn]});
+      fireEvent.click(screen.getByRole("button", {name: "回读持久会话"}));
+      expect(await screen.findByText("已回读持久回合")).toBeVisible();
+      expect(onTaskUpdated).not.toHaveBeenCalled();
+    });
 
   it("refreshes persisted apply receipts from the initial turn and a second autonomous edit once each", async () => {
     configuredModel();
@@ -578,7 +626,7 @@ describe("HomeCommandComposer", () => {
     });
     const finalBody = await screen.findByText("已读到当前制作条件。", { exact: true });
     const toolSummary = screen.getByLabelText("工具记录 · 1 项 · 调用已结束");
-    expect(finalBody.compareDocumentPosition(toolSummary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toolSummary.compareDocumentPosition(finalBody) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(toolSummary);
     expect(screen.getByText("已读取 1 项任务摘要。")).toBeInTheDocument();
     await waitFor(() => expect(input).toHaveFocus());
@@ -820,7 +868,7 @@ describe("HomeCommandComposer", () => {
     const reads = mocks.saved.size;
     const undo = within(screen.getByRole("group", { name: "对话输入" })).getByRole("button", { name: "撤销修改" });
     expect(undo).toBeEnabled();
-    expect(undo).toHaveAttribute("title", "撤销上一次已保存的修改");
+    expect(undo).toHaveAttribute("title", "撤销“测试任务”上一次已保存的修改");
     view.rerender(<HomeCommandComposer task={{ ...task, current_timeline_version_id: "v2", timeline_sequence: 2, can_undo: false }} />);
     expect(screen.queryByRole("button", { name: "撤销修改" })).not.toBeInTheDocument();
     expect(input).toHaveValue("下一轮草稿保持");

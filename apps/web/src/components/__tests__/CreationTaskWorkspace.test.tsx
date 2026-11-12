@@ -3457,7 +3457,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("镜头 1 裁剪起点")).toHaveValue(1.5);
     await waitFor(() => expect(screen.getByLabelText("镜头 1 快速裁剪起点")).toHaveValue(1.5));
     fireEvent.click(within(quick).getByRole("button", { name: "换素材" }));
-    fireEvent.click(within(quick).getByRole("button", { name: "查看候选" }));
+    fireEvent.click(within(quick).getByRole("button", { name: "打开镜头详情" }));
     expect(mocks.openQuickDetails).toHaveBeenCalledOnce();
     mocks.undoTimeline.mockResolvedValue({});
     mocks.getWorkspace.mockResolvedValue(workspace(

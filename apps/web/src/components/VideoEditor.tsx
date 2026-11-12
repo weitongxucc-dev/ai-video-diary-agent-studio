@@ -387,8 +387,8 @@ export function VideoClipQuickEditor({ clip, index, busy, draft, onDraftStateCha
       </section>}
     </div>
     <footer className={quickUi.footer}>
-      <small>{clip.locked ? "镜头已锁定" : tab === "trim" && trimChanged || tab === "frame" && frameChanged ? "完成输入或拖动后直接应用到草稿" : tab === "replace" ? "需在详情选择候选" : "当前设置已保存"}</small>
-      {tab === "replace" ? <button onClick={onOpenDetails} type="button">查看候选</button> : null}
+      <small>{clip.locked ? "镜头已锁定" : tab === "trim" && trimChanged || tab === "frame" && frameChanged ? "完成输入或拖动后直接应用到草稿" : tab === "replace" ? "在详情中点击“换素材”" : "当前设置已保存"}</small>
+      {tab === "replace" ? <button onClick={onOpenDetails} type="button">打开镜头详情</button> : null}
     </footer>
   </div>;
 }
@@ -436,9 +436,8 @@ export function VideoClipInspector({ clip, index, count, taskId, versionId, subt
     }
   }
   return <div className={ui.inspector} aria-label="已选镜头详情">
-    <ClipMedia key={clipMediaKey(clip, taskId)} clip={clip} taskId={taskId} preview bounded className={ui.inspectorImage} />
     <nav className={ui.inspectorTabs} aria-label="镜头详情视图"><button aria-pressed={tab === "properties"} onClick={() => setTab("properties")} type="button">属性</button><button aria-pressed={tab === "source"} onClick={() => setTab("source")} type="button">来源</button></nav>
-    {tab === "source" ? <div className={ui.source}><strong>{clip.person_render_id ? "当前人物口型" : clip.source_reference.split("/").pop()}</strong><p>{editorTime(clip.source_start_seconds)} – {editorTime(clip.source_end_seconds)}</p>{clip.person_render_id ? <span>根据当前任务配音制作</span> : <a href="/library">查看素材</a>}<h3>选片依据</h3><ul>{clip.match_reasons?.map(reason => <li key={reason}>{reason}</li>)}</ul><span>匹配程度 {clip.match_score.toFixed(2)}</span></div> : <>
+    {tab === "source" ? <div className={ui.source}><ClipMedia key={clipMediaKey(clip, taskId)} clip={clip} taskId={taskId} preview bounded className={ui.inspectorImage} /><strong>{clip.person_render_id ? "当前人物口型" : clip.source_reference.split("/").pop()}</strong><p>{editorTime(clip.source_start_seconds)} – {editorTime(clip.source_end_seconds)}</p>{clip.person_render_id ? <span>根据当前任务配音制作</span> : <a href="/library">查看素材</a>}<h3>选片依据</h3><ul>{clip.match_reasons?.map(reason => <li key={reason}>{reason}</li>)}</ul><span>匹配程度 {clip.match_score.toFixed(2)}</span></div> : <>
       <dl className={ui.properties}><div><dt>画面用途</dt><dd>{clip.person_render_id ? "人物口型" : clip.role === "a_roll" ? "人物主镜头" : "补充画面"}</dd></div><div><dt>成片位置</dt><dd>{editorTime(clip.timeline_start_seconds)} – {editorTime(clip.timeline_end_seconds)}</dd></div></dl>
       <section className={ui.propertySection}><h3>裁剪</h3><div className={ui.twoFields}><label>起点（秒）<input aria-label={`镜头 ${index + 1} 裁剪起点`} type="number" min={0} step={.1} value={Number.isFinite(start) ? start : ""} disabled={busy || clip.locked} onChange={event => { const value = event.target.value === "" ? Number.NaN : Number(event.target.value); onDraftChange(value !== clip.source_start_seconds || framingChanged); setStart(value); onDraftStateChange?.({ start: value, mode, x, y }); }} onBlur={() => applyTrim()} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); applyTrim(); } }} /></label><label>终点（秒）<output>{Number.isFinite(start) ? (start + clip.source_end_seconds - clip.source_start_seconds).toFixed(1) : "—"}</output></label></div></section>
       <details className={ui.advancedGroup}><summary>更多剪辑</summary><div className={ui.advancedContent}>

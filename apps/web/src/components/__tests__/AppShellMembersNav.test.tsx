@@ -47,7 +47,7 @@ function openPalette() {
   return screen.getByRole("dialog", { name: "搜索页面和创作任务" });
 }
 
-describe("real avatar group and existing theme controls", () => {
+describe("member directory entry and existing theme controls", () => {
   beforeEach(() => {
     identity.role = null; identity.ready = true; identity.error = null;
     localStorage.clear();
@@ -64,19 +64,19 @@ describe("real avatar group and existing theme controls", () => {
     expect(screen.getByRole("link",{name:"完成首次设置"})).toHaveAttribute("href","/onboarding");
     expect(getCurrentAssistantConversation).not.toHaveBeenCalled(); expect(listCreationTasks).not.toHaveBeenCalled(); expect(membersApi).not.toHaveBeenCalled();
   });
-  it("shows one actual member without adding empty slots, photographs or status dots", async () => {
+  it("labels the actual member directory instead of an unexplained avatar", async () => {
     identity.role="owner";render(<AppShell creationTasks={[]}><p>页面内容</p></AppShell>);
     const nav=screen.getByRole("navigation", {name:"创作者与设备设置"});
     const group=await within(nav).findByRole("link",{name:"1位创作者，打开成员设置"});expect(group).toHaveAttribute("href","/settings?section=creators");
-    expect(group.querySelectorAll("[data-avatar]")).toHaveLength(1);expect(group.querySelector("[data-avatar-count]")).toBeNull();expect(group).toHaveAttribute("title", "测试创作者；不会切换当前身份");
+    expect(group).toHaveTextContent("成员与空间");expect(group.querySelectorAll("[data-avatar]")).toHaveLength(0);expect(group.querySelector("[data-avatar-count]")).toBeNull();expect(group).toHaveAttribute("title", "测试创作者；不会切换当前身份");
     expect(within(nav).queryByRole("img")).not.toBeInTheDocument();expect(within(nav).queryByText(/成员空位/)).not.toBeInTheDocument();expect(within(nav).getAllByRole("link")).toHaveLength(2);
     expect(within(nav).getByRole("button",{name:"切换明暗主题"})).toBeInTheDocument();
     openPalette();expect(screen.getByRole("option", {name:/成员与空间/})).toBeInTheDocument();
   });
-  it("shows at most three overlapping actual members and the real remaining count for five",async()=>{
+  it("keeps the actual roster count and names available without overlapping avatars",async()=>{
     membersApi.mockResolvedValue({members:Array.from({length:5},(_,index)=>({member_id:`member-${index}`,name:`创作者${index+1}`,role:index===0?"owner":"member",created_at:"2026-10-10"}))});
     render(<AppShell creationTasks={[]}><p>页面内容</p></AppShell>);
-    const group=await screen.findByRole("link",{name:"5位创作者，打开成员设置"});expect(group.querySelectorAll("[data-avatar]")).toHaveLength(3);expect(group.querySelector("[data-avatar-count]")).toHaveTextContent("+2");
+    const group=await screen.findByRole("link",{name:"5位创作者，打开成员设置"});expect(group).toHaveTextContent("成员与空间");expect(group.querySelectorAll("[data-avatar]")).toHaveLength(0);expect(group.querySelector("[data-avatar-count]")).toBeNull();
     expect(group).toHaveAttribute("title","创作者1、创作者2、创作者3、创作者4、创作者5；不会切换当前身份");expect(membersApi).toHaveBeenCalledTimes(1);
   });
   it("renders no avatars when the actual roster is empty",async()=>{
