@@ -11,7 +11,7 @@ import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 describe("saved scheduled definition preview shortcut", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("opens the retained preview URL and labels the jump as a definition preview", () => {
+  it("opens the retained preview URL and labels the jump as scheduled tasks", () => {
     render(<KeyboardShortcuts onOpenSearch={vi.fn()} />);
 
     fireEvent.keyDown(window, { key: "6", metaKey: true });
@@ -19,9 +19,15 @@ describe("saved scheduled definition preview shortcut", () => {
     expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/production?view=automations");
     expect(mocks.pushToast).toHaveBeenCalledExactlyOnceWith({
       kind: "info",
-      message: "已跳转 · 定时定义预览",
+      message: "已跳转 · 定时任务",
       durationMs: 1800,
     });
+  });
+
+  it.each([["2", "library"], ["3", "knowledge"], ["4", "profiles"], ["5", "templates"]])("opens the full manager with shortcut %s", (key, route) => {
+    render(<KeyboardShortcuts onOpenSearch={vi.fn()} />);
+    fireEvent.keyDown(window, {key, metaKey:true});
+    expect(mocks.push).toHaveBeenCalledExactlyOnceWith(`/${route}?mode=manage`);
   });
 
   it("keeps the preview shortcut inactive while editing an input", () => {

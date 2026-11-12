@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ArrowRight, ChevronRight, History, Layers3, Library, Pencil, Search, WifiOff } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { boundedPreflightReturn, readPreflightDraftScope, resolvePreflightRepairContext, replacePreflightDraftTemplate, sameDraftScope, savePreflightRepairContext, type PreflightRepairContext } from "@/lib/preflight-draft";
 import { useWorkspacePage, useWorkspaceSearchParams } from "./workbench/context";
@@ -172,13 +172,19 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
     <section className={styles.inspectorNotice}><strong>当前未复用</strong><p>逐镜头调色、美颜、音轨编排、转场、静态图文、人物口型、封面、双语字幕、模型与成本偏好、发布规则及自动任务。</p></section>
   </div> : null;
 
-  const grid = <div className={own.templateList} data-gallery={visible.some(item=>Boolean(item.settings.visual)) || undefined}>{visible.map((item) => {
+  const templateRows = (items: VideoTemplate[]) => items.map((item) => {
     const key = `${item.id}:${item.version}`;
     const structure = item.settings.script_structure?.join(" → ") || (item.settings.script_section_count ? `${item.settings.script_section_count} 段，按新主题重新撰写` : "按新主题生成");
     const body = <><span className={own.previewMark} aria-label={item.settings.visual?"动画组件":"文案结构预览"} title={item.settings.visual?categories[item.settings.visual.category]:structure}><Layers3 size={19}/></span><span className={own.rowCopy}><strong>{item.name} · 第{item.version}版{item.settings.visual ? " · 动画组件" : item.settings.kind === "composition" ? " · 整片组合" : " · 制作结构"}</strong><small>{item.settings.visual ? `${categories[item.settings.visual.category]} · ${item.settings.visual.width}×${item.settings.visual.height} · ${item.settings.visual.duration_seconds} 秒 · ${item.settings.visual.provenance[0].license}` : `${item.settings.aspect_ratio} · ${item.settings.duration_target_seconds} 秒 · ${item.settings.script_section_count ?? item.settings.script_structure?.length ?? "未固定"} 段`}</small></span><ChevronRight size={16} aria-hidden="true"/></>;
     if (!canAct) return <div key={key} className={own.templateRow} data-offline-inert>{body}</div>;
-    return <article className={own.templateCard} key={key}>{item.settings.visual ? <div className={own.effectPreview}><VisualTemplatePreview definition={item.settings.visual} compact/></div> : null}<button type="button" aria-pressed={selected?.id === item.id && selected.version === item.version} onClick={() => { ++editorRevision.current;setEditing(null);setSaveNotice(null);setSelectedKey(key);setDetailsOpen(true); }} className={own.templateRow}>{body}</button></article>;
-  })}</div>;
+    return <article className={own.templateCard} key={key}>{item.settings.visual ? <div className={own.effectPreview} style={{"--template-preview-width": `${160 * item.settings.visual.width / item.settings.visual.height}px`} as CSSProperties}><VisualTemplatePreview definition={item.settings.visual} compact/></div> : null}<button type="button" aria-pressed={selected?.id === item.id && selected.version === item.version} onClick={() => { ++editorRevision.current;setEditing(null);setSaveNotice(null);setSelectedKey(key);setDetailsOpen(true); }} className={own.templateRow}>{body}</button></article>;
+  });
+  const structures = visible.filter(item => !item.settings.visual);
+  const visuals = visible.filter(item => item.settings.visual);
+  const grid = <>
+    {structures.length ? <section className={own.templateGroup} aria-label="制作结构与组合">{visuals.length ? <h2>制作结构与组合</h2> : null}<div className={own.templateList}>{templateRows(structures)}</div></section> : null}
+    {visuals.length ? <section className={own.templateGroup} aria-label="动画组件">{structures.length ? <h2>动画组件</h2> : null}<div className={own.templateList} data-gallery>{templateRows(visuals)}</div></section> : null}
+  </>;
 
   const emptyStage = hasQuery
     ? <section className={styles.emptyStage}><p>没有找到名称匹配“{trimmed}”的模板。</p><button type="button" onClick={() => setQuery("")}>清除搜索</button></section>

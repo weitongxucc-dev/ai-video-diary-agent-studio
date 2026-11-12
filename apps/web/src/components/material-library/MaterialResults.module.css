@@ -2,7 +2,7 @@
 .referenceEntry { position:relative;min-width:0; }
 .materialCard { display:grid;width:100%;height:100%;min-width:0;padding:0;overflow:hidden;border:1px solid var(--border-1);border-radius:8px;background:var(--surface-1);color:var(--text-1);text-align:left;cursor:pointer;font:400 13px/21px var(--font-ui); }
 .materialCard:hover { border-color:var(--border-2);background:var(--surface-2); }
-.materialCard:global(.is-selected) { border-color:var(--focus);background:var(--surface-2); }
+.materialCard:global(.is-selected) { border-color:var(--focus);background:var(--selection-bg); }
 .materialCard:focus-visible { outline:2px solid var(--focus);outline-offset:2px; }
 .materialCard:disabled { opacity:.5;cursor:default; }
 .materialCard :global(.library-card__poster) { position:relative;display:grid;place-items:center;overflow:hidden;aspect-ratio:16/10;background:var(--surface-2); }

@@ -11,9 +11,9 @@ import { AppShell, type AppShellProps } from "../AppShell";
 import type { HomeCommandComposerProps } from "../HomeCommandComposer";
 import type { CreationTask } from "@/lib/types";
 
-const navigation = vi.hoisted(() => ({ path: "/tasks/a", push: vi.fn() }));
+const navigation = vi.hoisted(() => ({ path: "/tasks/a", search: "", push: vi.fn() }));
 const composerMount = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ usePathname: () => navigation.path, useSearchParams: () => new URLSearchParams(), useRouter: () => ({ push: navigation.push }) }));
+vi.mock("next/navigation", () => ({ usePathname: () => navigation.path, useSearchParams: () => new URLSearchParams(navigation.search), useRouter: () => ({ push: navigation.push }) }));
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ token: "member-epoch" }) }));
 vi.mock("../AssistantConversationProvider", () => ({ useAssistantSelection: () => null }));
 vi.mock("../AppShell", async importOriginal => {
@@ -38,10 +38,32 @@ function route() {
 }
 function fixture(children: ReactNode) { return <WorkbenchTargetProvider><Workbench>{children}</Workbench></WorkbenchTargetProvider>; }
 beforeEach(() => {
-  vi.clearAllMocks(); navigation.path = "/tasks/a";
+  vi.clearAllMocks(); navigation.path = "/tasks/a"; navigation.search = "";
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
 });
 afterEach(cleanup);
+
+it("opens full resource management without losing the work target, drafts, or return position", async () => {
+  const view = render(fixture(route()));
+  const field = await screen.findByRole("textbox", { name:"页面草稿 /tasks/a" });
+  fireEvent.change(field, {target:{value:"待确认字幕"}});
+  const player = screen.getByLabelText("预览 /tasks/a") as HTMLVideoElement;
+  player.currentTime = 12;
+  fireEvent.timeUpdate(player);
+  navigation.path = "/library"; navigation.search = "mode=manage";
+  view.rerender(fixture(route()));
+  expect(await screen.findByRole("tab", {name:"素材库"})).toHaveAttribute("aria-selected","true");
+  expect(screen.queryByRole("region", {name:"作品 a"})).not.toBeInTheDocument();
+  expect(screen.getByRole("region", {name:"素材库"})).toBeVisible();
+  expect(screen.getByLabelText("发送目标")).toHaveTextContent("a");
+  expect(vi.mocked(HTMLMediaElement.prototype.pause).mock.contexts).toContain(player);
+  navigation.path = "/tasks/a"; navigation.search = "";
+  view.rerender(fixture(route()));
+  expect(await screen.findByRole("textbox", {name:"页面草稿 /tasks/a"})).toHaveValue("待确认字幕");
+  expect(screen.getByLabelText("预览 /tasks/a")).toBe(player);
+  expect(player.currentTime).toBe(12);
+  expect(composerMount).toHaveBeenCalledTimes(1);
+});
 
 it("keeps one conversation and explicit task target while browsing, isolates two task drafts, and restores a closed view", async () => {
   const view = render(fixture(route()));

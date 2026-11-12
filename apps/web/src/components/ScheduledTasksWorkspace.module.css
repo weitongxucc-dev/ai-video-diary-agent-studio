@@ -9,7 +9,8 @@
 .count { margin:8px 0; }
 .list { display:grid; min-width:0; margin:0; padding:0; list-style:none; }
 .row { display:flex; min-width:0; width:100%; min-height:56px; align-items:center; gap:10px; padding:8px 4px; border:0; border-bottom:1px solid var(--rule); border-radius:0; background:transparent; color:var(--text-2); text-align:left; font:inherit; cursor:pointer; }
-.row:hover, .row.selected { background:var(--surface-2); }
+.row:hover { background:var(--surface-2); }
+.row.selected { background:color-mix(in srgb,var(--focus) 9%,var(--surface-1)); box-shadow:inset 3px 0 var(--focus); }
 .row > svg { flex-shrink:0; }
 .rowCopy { display:grid; min-width:0; flex:1; gap:2px; }
 .rowCopy strong { overflow:hidden; color:var(--text-1); font-size:13px; line-height:18px; font-weight:400; white-space:nowrap; text-overflow:ellipsis; }
@@ -35,14 +36,19 @@
 .errorBox { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; margin:8px 0; color:var(--danger); font-size:12px; line-height:18px; overflow-wrap:anywhere; }
 .errorBox p { margin:0; }
 @media (max-width:1279px) { .page { padding-inline:16px; } .toolbar { margin-inline:-16px; padding-inline:16px; } .search { width:190px; max-width:190px; } }
-.form { display:grid;gap:12px;font-size:13px; }
+.form { display:grid;gap:20px;font-size:13px; }
 .form > label { display:grid;gap:5px; }
 .form input:not([type=checkbox]),.form [data-app-select-trigger],.form textarea { width:100%;min-width:0;min-height:32px;padding:6px 8px;border:1px solid var(--border-1);border-radius:7px;background:var(--surface-1);color:var(--text-1);font:inherit; }
 .form textarea { min-height:80px;resize:vertical; }
-.form .check { display:flex;align-items:center;gap:7px;min-height:32px; }
+.form .check { display:flex;align-items:flex-start;gap:8px;min-height:36px;padding:7px 4px; }
+.form .check input { flex:0 0 auto; margin-top:3px; }
+.form .check span { min-width:0; overflow-wrap:anywhere; }
+.form small { color:var(--text-2);font-size:12px; }
+.scopeChoices { display:grid;gap:8px;min-width:0; }
+.scopeList { max-height:200px;overflow:auto;overscroll-behavior:contain; }
 .form input[type=checkbox] { margin:0;accent-color:var(--text-1); }
 .form fieldset { padding:8px 0;border:0;border-top:1px solid var(--rule); }
-.form legend { padding:0;color:var(--text-2);font-size:12px; }
+.form legend { padding:0 0 8px;color:var(--text-1);font-size:13px;font-weight:500; }
 .form p { margin:0;font-size:12px;line-height:18px;color:var(--text-2); }
 .window { display:grid;grid-template-columns:1fr 1fr;gap:10px; }
 .window label { display:grid;gap:5px; }

@@ -17,3 +17,20 @@ it("pauses and reopens with the actual current definition revision",async()=>{vi
 it("confirms only the selected occurrence's actual preflight fingerprint and opens persisted task",async()=>{const preview={goal:"真实目标",knowledge_references:[],source_references:[],approved_asset_count:0,blockers:[],confirmable:true,preflight_fingerprint:"f".repeat(64)} as never;vi.mocked(api.previewAutomationRun).mockResolvedValue(preview);vi.mocked(api.confirmAutomationRun).mockImplementation(async()=>{vi.mocked(api.listAutomationRuns).mockResolvedValue({items:[run({task_id:"task-real",plan_id:"plan-real",stage:"topic"})],total_count:1});return {} as never;});await open();fireEvent.click(screen.getByRole("button",{name:/修订 2/}));fireEvent.click(screen.getByRole("button",{name:"预检本次方案"}));fireEvent.click(await screen.findByRole("button",{name:"确认方案并创建任务"}));await waitFor(()=>expect(api.confirmAutomationRun).toHaveBeenCalledWith("run","f".repeat(64)));expect(await screen.findByRole("link",{name:"打开创作任务"})).toHaveAttribute("href","/tasks/task-real");});
 it("shows real blocked reason and refuses confirmation for non-confirmable preflight",async()=>{vi.mocked(api.listAutomationRuns).mockResolvedValue({items:[run({state:"blocked",reason:"当前没有模型",repair_action:"配置文字模型"})],total_count:1});vi.mocked(api.previewAutomationRun).mockResolvedValue({goal:"目标",knowledge_references:[],source_references:[],approved_asset_count:0,blockers:[{impact:"资料不足",repair_action:"补充授权资料"}],confirmable:false,preflight_fingerprint:"f".repeat(64)} as never);await open();fireEvent.click(screen.getByRole("button",{name:/修订 2/}));expect(screen.getByText("当前没有模型")).toBeInTheDocument();fireEvent.click(screen.getByRole("button",{name:"预检本次方案"}));expect(await screen.findByRole("button",{name:"确认方案并创建任务"})).toBeDisabled();expect(api.confirmAutomationRun).not.toHaveBeenCalled();});
 it("keeps prior rows when refresh fails and reads legacy definitions only when explicitly expanded",async()=>{render(<ScheduledTasksWorkspace/>);await screen.findByRole("button",{name:/夜间记录/});vi.mocked(api.listAutomations).mockRejectedValueOnce(new Error("成员许可已变化"));fireEvent.click(screen.getByRole("button",{name:"刷新自动化"}));expect(await screen.findByRole("alert")).toHaveTextContent("成员许可已变化");expect(screen.getByRole("button",{name:/夜间记录/})).toBeInTheDocument();fireEvent.click(screen.getByText("旧版已保存定义"));await waitFor(()=>expect(listScheduledTasks).toHaveBeenCalledTimes(1));expect(screen.getByText(/保留原定义与数据，不自动执行/)).toBeInTheDocument();});
+
+it("preserves selected material IDs while filtering a long scope list", async () => {
+  const options = await api.getAutomationOptions();
+  vi.mocked(api.getAutomationOptions).mockResolvedValue({...options, materials: Array.from({length:12}, (_, index) => ({id:`asset-${index}`, label:`素材 ${index}`, version:"v1"}))});
+  vi.mocked(api.createAutomation).mockResolvedValue(automation());
+  render(<ScheduledTasksWorkspace/>);
+  fireEvent.click(await screen.findByRole("button", {name:"新建安排"}));
+  fireEvent.change(screen.getByRole("textbox", {name:"名称"}), {target:{value:"范围筛选"}});
+  fireEvent.change(screen.getByRole("textbox", {name:"创作目标"}), {target:{value:"使用所选素材"}});
+  await chooseSelectValue(screen.getByRole("combobox", {name:"固定模板版本"}), "template|2");
+  fireEvent.click(screen.getByRole("checkbox", {name:"素材 0"}));
+  fireEvent.change(screen.getByRole("searchbox", {name:"搜索素材"}), {target:{value:"素材 11"}});
+  expect(screen.queryByRole("checkbox", {name:"素材 0"})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("checkbox", {name:"素材 11"}));
+  fireEvent.click(screen.getByRole("button", {name:"保存安排"}));
+  await waitFor(() => expect(api.createAutomation).toHaveBeenCalledWith(expect.objectContaining({source_scope:{connector_ids:[],knowledge_ids:[],material_asset_ids:["asset-0","asset-11"]}})));
+});

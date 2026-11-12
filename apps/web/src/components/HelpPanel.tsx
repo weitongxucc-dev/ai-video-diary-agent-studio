@@ -22,8 +22,8 @@ const HELP_BY_PATH: Array<{ match: (path: string) => boolean; content: HelpConte
     match: (path) => path === "/" || path === "",
     content: {
       title: "从一个制作目标开始",
-      intro: "在首页描述制作目标，检查实际条件后进入任务；生成与保存分别显示真实结果。",
-      steps: ["写下想制作的内容", "检查资料、素材、声音和模型", "确认方案后进入创作任务"],
+      intro: "首页查看待办与制作进度，点击新建视频后向曜核哈力斯描述目标；生成与保存分别显示真实结果。",
+      steps: ["点击新建视频，写下想制作的内容", "检查资料、素材、声音和模型", "确认方案后进入创作任务"],
     },
   },
   {
@@ -93,7 +93,7 @@ const HELP_BY_PATH: Array<{ match: (path: string) => boolean; content: HelpConte
 ];
 
 const GLOBAL_HELP: HelpContent = {
-  title: "AI 视频日记工作台",
+  title: "曜核AI剪辑工作台",
   intro: "左侧选择模块和并行任务，中间完成当前工作，右侧只显示所选对象的参数、证据和阻断。",
   steps: ["⌘K 搜索页面和任务", "⌘N 开始制作新视频", "⌘1–7 切换主要模块"],
 };

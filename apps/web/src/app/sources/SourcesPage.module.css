@@ -1,5 +1,5 @@
 
-.entry { margin-top: 16px; }
+.entry { max-width:800px; margin-top:16px; }
 .methods { display: flex; flex-wrap: wrap; gap: 8px; }
 .methods button { padding: 7px 12px; border: 1px solid var(--border-1); border-radius: 8px; color: var(--text-2); background: var(--surface-1); font-size: 13px; cursor: pointer; }
 .methods button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--surface-2); }

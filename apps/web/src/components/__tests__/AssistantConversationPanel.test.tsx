@@ -237,9 +237,10 @@ describe("actual goal progress", () => {
       failure: {reason: "曝光数值超出允许范围（-2 到 2）。", repair_action: "请使用范围内的曝光值重新准备修改。"}}];
     render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
-    expect(screen.getByLabelText(/工具记录/).closest("details")).not.toHaveAttribute("open");
-    expect(within(screen.getByLabelText(/工具记录/)).getByText("曝光数值超出允许范围（-2 到 2）。")).toBeVisible();
-    expect(within(screen.getByLabelText(/工具记录/)).getByText("请使用范围内的曝光值重新准备修改。")).toBeVisible();
+    expect(screen.getByRole("button", {name:/工具记录/})).toHaveAttribute("aria-expanded", "false");
+    const failure = screen.getByRole("button", {name:/工具记录/}).closest(".assistant-process")!.querySelector(".assistant-tool-summary-failure")!;
+    expect(within(failure as HTMLElement).getByText("曝光数值超出允许范围（-2 到 2）。")).toBeVisible();
+    expect(within(failure as HTMLElement).getByText("请使用范围内的曝光值重新准备修改。")).toBeVisible();
     fireEvent.click(screen.getByLabelText(/工具记录/));
     expect(screen.getByText("调整画面 · 未完成")).toBeVisible();
     expect(screen.queryByText("这一步没有完成。")).not.toBeInTheDocument();
@@ -890,7 +891,7 @@ describe("AssistantConversationPanel", () => {
     const onInput = vi.fn(), changed = vi.fn(), send = vi.fn();
     const controller = state({ createNew, resume, loadList: vi.fn().mockResolvedValue([saved, historic]),
       conversations: [saved, historic], setError: vi.fn() });
-    const view = render(<section aria-label="创作助手"><header><div data-assistant-header-actions/></header>
+    const view = render(<section data-conversation-pane aria-label="曜核哈力斯"><header><div data-assistant-header-actions/></header>
       <AssistantConversationPanel state={controller} input="当前草稿" onInput={onInput} onSend={send}
         onConversationChange={changed} busy={false} configured scopeLabel="首页" legacyHistory={<details><summary>旧版只读历史</summary><p>任务原始旧回复</p></details>}/></section>);
     const slot = view.container.querySelector<HTMLElement>("[data-assistant-header-actions]")!;
@@ -1044,6 +1045,7 @@ describe("AssistantConversationPanel", () => {
         onSend={vi.fn()} busy={false} configured scopeLabel="当前对话" />;
       const first = render(panel());
       act(paint);
+      screen.getAllByRole("button", {name:/工具记录/}).forEach(button => fireEvent.click(button));
       first.container.querySelectorAll<HTMLDetailsElement>("details[data-reading-key]").forEach(detail => {
         detail.open = true;
         fireEvent(detail, new Event("toggle"));
@@ -1059,7 +1061,9 @@ describe("AssistantConversationPanel", () => {
       act(paint);
       next.rerender(panel());
       const restoredDetails = next.container.querySelectorAll<HTMLDetailsElement>("details[data-reading-key]");
-      expect(restoredDetails).toHaveLength(8); // Both results, tool groups, and their diagnostic children.
+      expect(restoredDetails).toHaveLength(6); // Both results and their/tool diagnostic children.
+      expect(screen.getAllByRole("button", {name:/工具记录/})).toHaveLength(2);
+      screen.getAllByRole("button", {name:/工具记录/}).forEach(button => expect(button).toHaveAttribute("aria-expanded", "true"));
       expect([...restoredDetails].every(detail => detail.open)).toBe(true);
       const restoredHistory = screen.getByLabelText("持久对话记录");
       let scroll = 0;
@@ -1107,12 +1111,12 @@ describe("AssistantConversationPanel", () => {
 
     expect(screen.getByText("真实方案").tagName).toBe("STRONG");
     expect(screen.getAllByRole("button", { name: "复制回复" })).toHaveLength(1);
-    const tools = container.querySelector(".assistant-turn-tools summary")!;
+    const tools = screen.getByRole("button", {name:/工具记录/});
     expect(tools).toHaveAccessibleName("工具记录 · 2 项 · 含失败记录");
     const assistantText = screen.getByText("真实方案");
-    expect(assistantText.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const toolDetails = tools.closest("details")!;
-    expect(toolDetails).not.toHaveAttribute("open");
+    expect(tools.compareDocumentPosition(assistantText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const toolDetails = container.querySelector<HTMLElement>(".assistant-turn-tools")!;
+    expect(tools).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(tools);
     expect(within(toolDetails).getAllByRole("listitem")).toHaveLength(2);
     expect(within(toolDetails).getByText("读取当前方案 · 已返回")).toBeInTheDocument();
@@ -1311,6 +1315,32 @@ describe("AssistantConversationPanel", () => {
       busy={false} configured scopeLabel="首页创作" />);
     expect(screen.queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "停止本轮" })).toBeInTheDocument();
+  });
+
+  it("keeps activity visible between tool completion and reply, then collapses the completed process", () => {
+    const saved = conversation();
+    saved.turns = [{...saved.turns[0], status: "running", assistant_text: "", result: null,
+      events: [{type: "tool_start", tool_id: 1, label: "读取当前方案"},
+        {type: "tool_end", tool_id: 1, label: "读取当前方案", ok: true, summary: "方案已读取"}]}];
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const panel = () => <AssistantConversationPanel state={state({conversation: saved, stop})} input=""
+      onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>;
+    const view = render(panel());
+    expect(screen.getByRole("status")).toHaveTextContent("正在整理回复…");
+    expect(screen.getByRole("button", {name: /工具记录/})).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByRole("button", {name: "查询本轮结果"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "发送"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "追加要求"})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "停止本轮"}));
+    expect(stop).toHaveBeenCalledOnce();
+    saved.turns = [{...saved.turns[0], status: "completed", assistant_text: "方案内容已核实"}];
+    view.rerender(panel());
+    expect(screen.queryByText("正在整理回复…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {name: "停止本轮"})).not.toBeInTheDocument();
+    const process = screen.getByRole("button", {name: /工具记录/});
+    expect(process).toHaveAttribute("aria-expanded", "false");
+    const reply = screen.getByText("方案内容已核实");
+    expect(process.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("keeps a late stream callback bound to the conversation and turn that sent it", async () => {

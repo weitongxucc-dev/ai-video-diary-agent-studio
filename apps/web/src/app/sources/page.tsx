@@ -227,8 +227,8 @@ export default function SourcesPage() {
     <AppShell inspector={selectedItem ? <SourceItemInspector item={selectedItem} busy={busy} onSave={saveToKnowledge} /> : selectedConnector ? <SourceInspector connector={selectedConnector} lastRun={lastRuns[selectedConnector.id] ?? null} /> : undefined} inspectorTitle={selectedItem ? "信息条目详情" : "信息源详情"}>
       <div className="source-workspace">
         {error ? <section className="source-error" role="alert"><AlertCircle size={17} /><div><strong>{error}</strong><p>已有信息不会被改写；修复连接、登录或权限后再重试。</p></div></section> : null}
-        {notice ? <p className="source-notice" role="status">{notice} {savedReceipt?.sourceItemId === selectedItemId && savedReceipt.useState !== "excluded" ? <Link href="/knowledge">查看我的资料</Link> : null}</p> : null}
-        <div className="source-content-bar"><nav className="source-content-tabs" aria-label="内容资料视图"><Link href="/knowledge">我的资料</Link><span aria-current="page">资料来源</span></nav><button className="modern-primary-button" disabled={loading} onClick={() => void refresh(selectedConnectorId)} type="button"><RefreshCw className={loading ? "is-spinning" : ""} size={16} />刷新</button></div>
+        {notice ? <p className="source-notice" role="status">{notice} {savedReceipt?.sourceItemId === selectedItemId && savedReceipt.useState !== "excluded" ? <Link href="/knowledge?mode=manage">查看我的资料</Link> : null}</p> : null}
+        <div className="source-content-bar"><nav className="source-content-tabs" aria-label="内容资料视图"><Link href="/knowledge?mode=manage">我的资料</Link><span aria-current="page">资料来源</span></nav><button className="modern-primary-button" disabled={loading} onClick={() => void refresh(selectedConnectorId)} type="button"><RefreshCw className={loading ? "is-spinning" : ""} size={16} />刷新</button></div>
         <section className={styles.entry} aria-label="添加内容">
           <nav className={styles.methods} aria-label="添加方式">
             {([['text', '粘贴文字'], ['file', '导入文件'], ['web', '保存网页']] as const).map(([mode, label]) => <button aria-pressed={entryMode === mode} key={mode} type="button" onClick={() => setEntryMode(mode)}>{label}</button>)}

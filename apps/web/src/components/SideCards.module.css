@@ -18,7 +18,7 @@
 .card:focus-within { border-color:var(--focus); }
 .card > header {
   display: flex;
-  flex: 0 0 40px;
+  flex: 0 0 48px;
   min-width: 0;
   align-items: center;
   justify-content: space-between;
@@ -31,9 +31,9 @@
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 21px;
-  font-weight: 400;
+  font-weight: 600;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -55,19 +55,21 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 16px 20px;
+  padding: 20px 24px;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
-.body :is(h1,h2,h3) { margin-block: 0 8px; font-size:13px; line-height:21px; font-weight: 400; }
+.body :is(h1,h2,h3) { margin-block: 0 10px; font-size:14px; line-height:22px; font-weight: 500; }
 .card > footer {
   display: flex;
-  flex: 0 0 64px;
+  flex: 0 0 auto;
+  min-height:64px;
+  flex-wrap:wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 0 16px;
+  padding: 12px 20px;
   border-top: 1px solid var(--rule);
 }
 .card > footer button {
@@ -82,8 +84,8 @@
 }
 /* Geometry belongs to the selected primitive, never to workspace DOM measurements. */
 .modalShade { position: fixed; z-index: 110; inset: 0; background: rgb(23 23 33 / 22%); }
-.modal { position: fixed; z-index: 111; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(36rem, calc(100vw - 32px)); max-height: calc(100dvh - 32px); }
-.sheet { position: fixed; z-index: 105; inset: 12px 12px 12px auto; width: min(32rem, calc(100vw - 24px)); max-height: calc(100dvh - 24px); }
+.modal { position: fixed; z-index: 111; top: calc(50% + 22px); left: 50%; transform: translate(-50%, -50%); width: min(36rem, calc(100vw - 32px)); max-height: calc(100dvh - 88px); }
+.sheet { position: fixed; z-index: 105; inset: 56px 16px 16px auto; width: min(36rem, calc(100vw - 32px)); max-height: calc(100dvh - 72px); }
 .positioner { z-index: 120; }
 .selection { width: min(20rem, var(--available-width)); max-height: min(28rem, var(--available-height)); }
 .card[data-closed], .modalShade[data-closed], .positioner[data-closed] { display: none; }

@@ -88,7 +88,7 @@ describe("sources file import", () => {
     expect(api.saveSourceItemToKnowledge.mock.calls[0][0]).toBe("source-file");
     expect(api.saveSourceItemToKnowledge.mock.calls[0][1]).toEqual({});
     expect(api.listKnowledgeItems).not.toHaveBeenCalled();
-    expect(await screen.findByRole("link", { name: "查看我的资料" })).toHaveAttribute("href", "/knowledge");
+    expect(await screen.findByRole("link", { name: "查看我的资料" })).toHaveAttribute("href", "/knowledge?mode=manage");
   });
 
   it("reports a parse failure instead of inventing body text", async () => {

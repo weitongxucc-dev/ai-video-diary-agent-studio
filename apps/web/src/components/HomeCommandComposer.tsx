@@ -14,7 +14,7 @@ import { CreationRequestPanel } from "@/components/CreationRequestPanel";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
 import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
-import { assistantTaskTurnResult, useAssistantConversation } from "@/components/useAssistantConversation";
+import { assistantTaskTurnResult, assistantTurnScriptWindowRequest, useAssistantConversation } from "@/components/useAssistantConversation";
 import { AssistantConversationPanel, AssistantFailureMessage } from "@/components/AssistantConversationPanel";
 import { editExecutionReadinessMessage } from './creation-task/stage-labels';
 
@@ -83,9 +83,15 @@ function EditMedia({ item, label }: { item: CreationTaskEditPreviewResponse["pro
 function appliedTaskReceiptKeys(conversation: AssistantConversation, taskId: string) {
   return conversation.turns.flatMap(turn => {
     const receipt = assistantTaskTurnResult(turn)?.continuation;
-    return receipt?.type === "business_result" && receipt.task_id === taskId && receipt.phase === "apply"
+    const keys = receipt?.type === "business_result" && receipt.task_id === taskId && receipt.phase === "apply"
       && receipt.status === "confirmed" && receipt.operation_id && receipt.result_version_id
       ? [JSON.stringify([conversation.id, taskId, receipt.operation_id])] : [];
+    const script = assistantTurnScriptWindowRequest(turn, taskId);
+    if (script && (script.status === "saved" || script.status === "confirmed")) {
+      keys.push(JSON.stringify([conversation.id, taskId, "script", script.request_id, script.operation,
+        script.script_id, script.status, script.updated_at]));
+    }
+    return keys;
   });
 }
 
@@ -246,8 +252,10 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setTaskPreview(result.edit_preview);
         setTaskPreviewOpen(Boolean(result.edit_preview));
-        if (onTaskUpdated && (result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration || result.segment_revision || result.timeline_restore)) {
-          if (fresh) for (const key of appliedTaskReceiptKeys(fresh, task.id)) appliedTaskReads.current.add(key);
+        const receiptKeys = fresh ? appliedTaskReceiptKeys(fresh, task.id) : [];
+        if (onTaskUpdated && (result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration || result.segment_revision || result.timeline_restore
+          || receiptKeys.some(key => !appliedTaskReads.current.has(key)))) {
+          for (const key of receiptKeys) appliedTaskReads.current.add(key);
           onTaskUpdated();
         }
       } else {
@@ -479,7 +487,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         busy={pending !== null || awaitingVersionRead}
         configured={modelConfigured}
         composerActions={<>
-          {task && undoAvailable && !taskContext?.timelinePresent ? <Button variant="ghost" size="icon" className="assistant-icon-action" disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button" aria-label={pending === "undo" ? "撤销中" : "撤销修改"} title={pending === "undo" ? "正在撤销修改" : "撤销上一次已保存的修改"}>{pending === "undo" ? <LoaderCircle size={15} aria-hidden className="is-spinning"/> : <Undo2 size={15} aria-hidden/>}</Button> : null}
+          {task && undoAvailable && !taskContext?.timelinePresent ? <Button variant="ghost" className="assistant-recovery-action" disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button" aria-label={pending === "undo" ? "撤销中" : "撤销修改"} title={`撤销“${task.name}”上一次已保存的修改`}>{pending === "undo" ? <LoaderCircle size={15} aria-hidden className="is-spinning"/> : <Undo2 size={15} aria-hidden/>}撤销作品修改</Button> : null}
           {task && restoreRequest ? <Button variant="ghost" className="assistant-recovery-action" disabled={pending !== null} onClick={() => void queryTaskRestore()} type="button" aria-label="查询原撤销结果" title="查询原请求的结果，不重复提交撤销">{pending === "undo" ? <LoaderCircle size={14} aria-hidden className="is-spinning"/> : <RotateCcw size={14} aria-hidden/>}查询原撤销结果</Button> : null}
         </>}
         input={assistant.draftText}

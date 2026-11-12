@@ -1,6 +1,6 @@
 .page { width: min(100%, 1160px); margin: 0 auto; padding: 16px 20px 24px; container-type: inline-size; }
 .optionalSetup { margin: 8px 0 14px; color: var(--text-2); font-size: 13px; }
-.sectionHeader span, .previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 400; }
+.previewEyebrow, .inspector > span:not(.status) { color: var(--text-3); font-size: 12px; font-weight: 400; }
 .secondaryButton, .primaryButton { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 7px; padding: 0 14px; border-radius: 8px; font-size: 13px; font-weight: 400; white-space: nowrap; }
 .secondaryButton { border: 1px solid var(--border-2); background: var(--surface-1); color: var(--text-1); cursor: pointer; }
 .primaryButton { border: 1px solid var(--accent); background: var(--accent); color: var(--accent-contrast); cursor: pointer; }
@@ -50,6 +50,7 @@
 .mediaPlaceholder { display: grid; width: min(100%, 520px); padding: 16px; place-content: center; justify-items: center; gap: 9px; margin: 16px 0 8px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-2); color: var(--text-3); }
 .preview video { width: min(100%, 520px); max-height: 320px; margin: 16px 0 8px; border-radius: 10px; background: #111; }
 .preview audio { width: min(100%, 520px); margin: 20px 0 12px; }
+.detailActions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:12px; }
 .previewActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; }
 .previewActions small { max-width: 300px; color: var(--text-2); font-size: 12px; text-align: left; }
 .previewStatus { margin-top: 8px; padding: 8px 10px; border-radius: 7px; background: var(--surface-2); font-size:12px; }
@@ -81,9 +82,9 @@
 .empty p { margin: 3px 0 0; color: var(--text-2); font-size:12px; }
 .fullStage { margin-top: 14px; padding: 18px; border: 1px solid var(--border-1); border-radius: 10px; background: var(--surface-1); }
 .sectionHeader { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-1); }
-.sectionHeader h2 { margin: 3px 0 2px; font-size: 13px; font-weight: 400; }
+.sectionHeader h2 { margin:0 0 8px; font-size:14px; font-weight:600; }
 .sectionHeader p { margin: 0; color: var(--text-2); font-size: 12px; }
-.sectionHeader em { color: var(--text-3); font-size: 12px; font-style: normal; }
+.sectionHeader em { margin-left:auto; white-space:nowrap; color: var(--text-3); font-size: 12px; font-style: normal; }
 .records { display: grid; }
 .records article { display: flex; align-items: flex-start; gap: 10px; padding: 15px 4px; border-bottom: 1px solid var(--border-1); }
 .records article > div { min-width: 0; flex: 1; }
@@ -128,7 +129,6 @@
 .originalPreview small { color: var(--text-3); font-size: 12px; }
 .sectionHeader button, .stage button:not([data-slot="button"]) { padding:7px 10px; border:1px solid var(--border-1); border-radius:8px; background:var(--surface-1); color:var(--text-1); cursor:pointer; }
 .objectRail > button { display:grid; gap:4px; padding:10px; border:0; border-bottom:1px solid var(--border-1); background:transparent; color:var(--text-1); text-align:left; cursor:pointer; }
-.objectRail > button[aria-pressed="true"] { background:var(--surface-1); }
 .stage { padding:16px; }
 .stage video, .stage img { display:block; max-width:100%; max-height:300px; }
 .stage audio { max-width:100%; }
@@ -147,7 +147,7 @@
 .workspace { border:0; border-radius:0; }
 .objectRail { background:transparent; }
 .objectRail > button { grid-template-columns:32px minmax(0,1fr); align-items:center; min-height:56px; padding:8px; gap:8px; }
-.objectRail > button[aria-pressed="true"] { background:var(--surface-2); border-radius:8px; }
+.objectRail > button[aria-pressed="true"] { background:var(--selection-bg); border-radius:8px; }
 .objectIcon { display:grid; place-items:center; width:32px; height:32px; border-radius:8px; background:var(--surface-2); color:var(--text-2); }
 .objectInfo { display:grid; min-width:0; gap:4px; }
 .objectInfo strong, .objectInfo small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

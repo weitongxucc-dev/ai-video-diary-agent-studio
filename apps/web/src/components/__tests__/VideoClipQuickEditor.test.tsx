@@ -41,7 +41,7 @@ it("keeps a clip draft across categories and applies valid changes on completion
   fireEvent.click(screen.getByRole("button", { name:"裁剪" }));
   expect(screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" })).toHaveValue(1.5);
   fireEvent.click(screen.getByRole("button", { name:"换素材" }));
-  fireEvent.click(screen.getByRole("button", { name:"查看候选" }));
+  fireEvent.click(screen.getByRole("button", { name:"打开镜头详情" }));
   expect(onOpenDetails).toHaveBeenCalledTimes(1);
   expect(onPreview).toHaveBeenCalledTimes(3);
   expect(onDraftChange).toHaveBeenCalledTimes(4);
@@ -86,9 +86,9 @@ it("labels the float card draft state honestly and never fakes a replacement pre
   expect(screen.getByText("完成输入或拖动后直接应用到草稿")).toBeInTheDocument();
   // 换素材 tab：诚实委托详情，不伪造“预览修改”
   fireEvent.click(screen.getByRole("button", { name:"换素材" }));
-  expect(screen.getByText("需在详情选择候选")).toBeInTheDocument();
+  expect(screen.getByText("在详情中点击“换素材”")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name:"预览修改" })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name:"查看候选" }));
+  fireEvent.click(screen.getByRole("button", { name:"打开镜头详情" }));
   expect(onOpenDetails).toHaveBeenCalledTimes(1);
   expect(onPreview).not.toHaveBeenCalled();
 });
