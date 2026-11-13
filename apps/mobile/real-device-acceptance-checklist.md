@@ -5,11 +5,11 @@
 ## 当前可复用证据
 
 - 工作区：`/Volumes/Dujiangyan-VM/AI视频日记/repositories/main`
-- 分支：`codex/1.5.2-governance-agent-mobile-cli`
-- 验收基线提交：以执行前 `git rev-parse HEAD` 为准；本次记录为 `941a3d8520aaf9d8018eeb301e497bee13dc55a4`。
+- 分支：`main`
+- 验收基线提交：以执行前 `git rev-parse HEAD` 为准；当前代码基线为 `2296974f`。
 - Flutter：`3.41.6`，Dart `3.11.4`。
 - `flutter analyze`：通过，`No issues found`。
-- `flutter test`：通过，输出 `+64`，共 65 个测试。
+- `flutter test`：通过，输出 `+76`，共 76 个测试；包含执行状态四态、任务/工作区串线和请求/助手回合关联解析测试。
 - `flutter devices`：当前只发现 macOS 和 Chrome，没有 Android/iOS 实体设备，也没有无线设备。
 - `flutter build apk --debug`：未完成，当前环境没有 Android SDK；这不是 APK 构建通过，也不是设备验收失败。
 
@@ -52,6 +52,7 @@ Android 若需构建包，先确认 Android SDK、JDK 17、平台和构建工具
 | ☐ | 正式登录与配对 | 使用正式账号登录；同账号配对和新成员邀请分别走对应入口；主机回读的设备、成员、Workspace 与邀请一致后才保存绑定 | 登录请求结果、`/api/companion/session` 回执、手机连接页 |
 | ☐ | 错误授权 | 过期/撤销邀请、错设备、停用成员、错误 Workspace 或不可信证书均拒绝；不产生半绑定或把凭证发往跳转地址 | 手机错误提示 + 主机 4xx/证书日志 |
 | ☐ | 任务回执 | 刷新任务时带当前成员凭证和 `X-Workspace-Id`；列表和详情只出现当前 Workspace 的真实任务，任务状态与主机页面一致 | 手机任务页 + 主机响应摘要 |
+| ☐ | 执行状态与结果关联 | 任务详情读取 `/api/creation-tasks/{task_id}/execution`；入口不可用时回查 `/job-runs`；手机区分运行中、已完成、失败、未知，并展示任务/作业及主机返回的 `request_id`、`assistant_turn_id`；缺失或串线回执显示未知并要求查询原请求 | 手机状态卡 + 主机执行回执摘要 + 原请求/回合记录 |
 | ☐ | 会话恢复 | 退出 App 再启动能重新核验；过期令牌只刷新同一用户；退出连接后旧请求不能恢复任务或覆盖新绑定 | 重启前后录屏 + token 刷新/退出日志 |
 | ☐ | 网络切换 | Wi-Fi 暂断、切换同网 AP、主机短暂不可达后，失败状态明确；恢复后查询真实状态，不重复提交未知请求 | 网络切换时间线 + 原请求/查询回执 |
 | ☐ | 成片下载与播放 | 只有 `output_ready` 且版本匹配时可下载；请求带 `expected_version_id`；响应版本头、序号和 `video/*` 均匹配后才落盘播放；中断不留下可播放半文件 | 手机落盘文件、文件大小/SHA-256、播放录屏、主机响应头 |
