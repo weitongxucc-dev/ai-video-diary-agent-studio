@@ -82,6 +82,10 @@ def _project_runtime_events(events: list[dict], turn_id: str) -> tuple[list[dict
         refs = _nested_references(source)
         associations.extend(refs)
         item = {'step': source.get('step'), 'type': event_type, 'at': _iso_time(at_ms)}
+        if isinstance(source.get('event_id'), str):
+            item['event_id'] = _opaque(source['event_id'])
+        if isinstance(source.get('parent_event_id'), str):
+            item['parent_event_id'] = _opaque(source['parent_event_id'])
         if source.get('tool_call_id') is not None:
             item['tool_call_ref'] = _opaque(str(source['tool_call_id']))
         if source.get('tool_name') is not None and isinstance(source.get('tool_name'), str):
@@ -198,6 +202,7 @@ def project_turn_trace(turn: dict) -> dict:
     return {
         'turn_id': turn['id'],
         'conversation_id': turn['conversation_id'],
+        'session_id': result.get('session_id') if isinstance(result.get('session_id'), str) else None,
         'status': turn['status'],
         'sequence': turn['sequence'],
         'created_at': turn['created_at'],

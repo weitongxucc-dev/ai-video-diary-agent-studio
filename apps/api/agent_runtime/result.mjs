@@ -6,6 +6,7 @@ export function createSessionResult(sessionId) {
   const usageKeys = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"];
   const usageSeen = new Set();
   const traceSeen = new Set();
+  const eventIds = new Map();
   let traceStep = 0;
   function eventTime(event) {
     return Number.isFinite(event?.timestamp) ? event.timestamp : Date.now();
@@ -15,7 +16,14 @@ export function createSessionResult(sessionId) {
     const key = `${type}|${toolId}|${event?.timestamp ?? ""}|${fields.nested_tool_id ?? ""}`;
     if (traceSeen.has(key)) return;
     traceSeen.add(key);
-    result.trace_events.push({step:++traceStep, type, at_ms:eventTime(event), ...fields});
+    const step = ++traceStep;
+    const eventId = `${sessionId}:${step}`;
+    const parentEventId = fields.parent_event_id ?? (toolId ? eventIds.get(`tool:${toolId}`) : undefined);
+    result.trace_events.push({step, event_id:eventId, ...(parentEventId ? {parent_event_id:parentEventId} : {}), type,
+      at_ms:eventTime(event), ...fields});
+    if (toolId && (type === "tool_start" || type === "nested_tool")) eventIds.set(`tool:${toolId}`, eventId);
+    if (toolId && type === "tool_end") eventIds.delete(`tool:${toolId}`);
+    return eventId;
   }
   function traceReferences(value, depth = 0) {
     if (!value || typeof value !== "object" || depth > 4) return {};
@@ -52,14 +60,15 @@ export function createSessionResult(sessionId) {
       if (eventType === "tool_execution_end") {
         const details = event.result?.details;
         const failure = details?.failure;
-        traceEvent(event, "tool_end", {tool_call_id:event.toolCallId, tool_name:event.toolName,
+        const toolEventId = traceEvent(event, "tool_end", {tool_call_id:event.toolCallId, tool_name:event.toolName,
           status:event.isError ? "failed" : "succeeded",
           failure_class: event.isError ? (failure?.error ?? failure?.code ?? "tool_failed") : undefined,
           references:traceReferences(details)});
         for (const receipt of (Array.isArray(details?.business_receipts) ? details.business_receipts : [])) {
           traceEvent(event, "nested_tool", {nested_tool_id:receipt.tool_call_id ?? receipt.tool_name,
             tool_call_id:receipt.tool_call_id, tool_name:receipt.tool_name,
-            status:receipt.is_error ? "failed" : "succeeded", references:traceReferences(receipt)});
+            status:receipt.is_error ? "failed" : "succeeded", parent_event_id:toolEventId,
+            references:traceReferences(receipt)});
         }
       }
       if (eventType === "compaction_start") traceEvent(event, "compaction_start", {status:"started"});

@@ -40,6 +40,18 @@ test("OpenFilm replicate skill is packaged as a method-only adapter", async () =
   assert.match(await readFile(manifest.skillPath, "utf8"), /参考视频/);
 });
 
+test("editing-videos is pinned and stripped to a method-only product adapter", async () => {
+  const manifests = await loadSkillManifests(join(root, "skills"));
+  const manifest = manifests.get("editing-videos");
+  assert.equal(manifest.provenance.repository, "https://github.com/joshcirre/editing-videos");
+  assert.equal(manifest.provenance.revision, "7a68b6070c3afc3be82396fb252e36340d1bf70f");
+  assert.equal(manifest.provenance.license_spdx, "MIT");
+  assert.equal(manifest.runtime.runnable, false);
+  assert.equal(manifest.runtime.network, false);
+  assert.ok(manifest.dependencies.tools.includes("read_editing_resource_catalog"));
+  assert.match(await readFile(manifest.skillPath, "utf8"), /不可用行为/);
+});
+
 test("manifest rejects external execution and tools outside the product boundary", () => {
   const base = {
     schema_version: 1, name: "test", version: "1", entry: {skill: "x", adapter: "y"},
