@@ -41,6 +41,9 @@ describe("EditorResourceLibraryPanel", () => {
     expect(await screen.findByText("文本与贴纸叠加层")).toBeInTheDocument();
     expect(screen.getByText(/apps\/api\/app\/graphic_overlays\.py/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "打开编辑入口" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
+    expect(screen.getByRole("region", { name: "文本与贴纸叠加层资源预览" })).toHaveTextContent("版本与回滚");
+    expect(screen.getByRole("button", { name: "打开采用入口" })).toBeInTheDocument();
   });
 
   it("shows an imported skill as a connected, provenance-backed resource", async () => {
