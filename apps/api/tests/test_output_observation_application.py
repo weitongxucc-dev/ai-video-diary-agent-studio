@@ -145,6 +145,10 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     assert observed_resources[0].observation_ref == receipt['job_id']
     assert observed_resources[0].metadata['job_id'] == receipt['job_id']
     assert observed_resources[0].metadata['output_id'] == artifact.id
+    output_provenance = repo.list_output_resource_provenance(
+        'local', artifact.id, observation_ref=receipt['job_id'])
+    assert len(output_provenance) == 1
+    assert output_provenance[0]['usage']['timeline_version_id'] == base.id
     assert len(measured['samples'])==3 and all(s['object_refs']==['clip:clip-1'] for s in measured['samples'])
     assert measured['material_references'] == [{
         'clip_id': 'clip-1', 'asset_ref': 'asset:owned-asset', 'segment_ref': 'segment:owned-segment',

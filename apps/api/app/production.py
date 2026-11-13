@@ -1291,6 +1291,11 @@ class ProductionRepository:
             workspace_id, task_id, timeline_version_id=timeline_version_id,
         )
 
+    def list_output_resource_provenance(self, workspace_id: str, artifact_ref: str, *, observation_ref: str | None = None):
+        return self.resource_governance.provenance_for_output(
+            workspace_id, artifact_ref, observation_ref=observation_ref,
+        )
+
     def list_semantic_field_definitions(self, workspace_id: str, *, include_deprecated: bool = False):
         return self.material_data_governance.list_field_definitions(
             workspace_id, include_deprecated=include_deprecated

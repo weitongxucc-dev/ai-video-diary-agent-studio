@@ -274,6 +274,14 @@ class ResourceGovernanceStore:
         manifests = {item.manifest_id: self.get_manifest(workspace_id, item.manifest_id) for item in records}
         return [{"manifest": self._manifest_payload(manifests[item.manifest_id]), "usage": self._usage_payload(item)} for item in records]
 
+    def provenance_for_output(self, workspace_id: str, artifact_ref: str, *, observation_ref: str | None = None) -> list[dict[str, object]]:
+        """Read the governed resources bound to one registered output/observation."""
+        records = self.list_usage(workspace_id, artifact_ref=artifact_ref)
+        if observation_ref is not None:
+            records = [item for item in records if item.observation_ref == observation_ref]
+        manifests = {item.manifest_id: self.get_manifest(workspace_id, item.manifest_id) for item in records}
+        return [{"manifest": self._manifest_payload(manifests[item.manifest_id]), "usage": self._usage_payload(item)} for item in records]
+
     def _save_manifest_connection(self, conn: sqlite3.Connection, manifest: ResourceManifest) -> None:
         self._validate_manifest(manifest)
         existing = conn.execute(
