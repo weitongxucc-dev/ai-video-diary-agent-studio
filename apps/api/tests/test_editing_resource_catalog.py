@@ -55,6 +55,18 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
     assert skills.json()["resources"][0]["id"] == "skill:cut-as-code-video-cut"
     assert skills.json()["resources"][0]["entrypoints"] == ["read_creation_skill"]
     assert skills.json()["resources"][0]["runtime_requirements"]["manifest_version"] == "2026.11.13-adapter.1"
+    assert skills.json()["resources"][0]["provenance"][0]["license_spdx"] == "MIT"
+    assert skills.json()["resources"][0]["runtime_requirements"]["capabilities"]["permissions"]
+    assert skills.json()["resources"][0]["runtime_requirements"]["install_checks"]["mode"] == "package-time"
+    assert skills.json()["resources"][0]["runtime_requirements"]["adoption"]["status"] == "installed"
+    assert skills.json()["resources"][0]["runtime_requirements"]["rollback"]["deletes_user_data"] is False
+
+    preflight = client.get("/api/editing-resources/skill:cut-as-code-video-cut/preflight")
+    assert preflight.status_code == 200
+    assert preflight.json()["status"] == "connected"
+    assert preflight.json()["ready"] is True
+    assert preflight.json()["adoption"]["requires_explicit_edit_authorization"] is True
+    assert "EditProposal/TimelineVersion" in preflight.json()["write_boundary"]
 
     voices = client.get("/api/editing-resource-catalog", params={"category": "voice"})
     assert voices.status_code == 200

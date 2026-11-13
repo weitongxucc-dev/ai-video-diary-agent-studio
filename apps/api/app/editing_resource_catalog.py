@@ -34,6 +34,7 @@ class ResourceProvenance(BaseModel):
     revision: str = Field(min_length=1, max_length=120)
     path: str = Field(min_length=1, max_length=500)
     license: str = Field(min_length=1, max_length=120)
+    license_spdx: str | None = Field(default=None, max_length=40)
     source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     asset_license: str | None = Field(default=None, max_length=120)
     font_license: str | None = Field(default=None, max_length=120)
@@ -199,6 +200,7 @@ def _packaged_skill_resources() -> list[EditingResource]:
     resources: list[EditingResource] = []
     for manifest_path in sorted(skills_root.glob("*/manifest.json")):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        _validate_packaged_skill_manifest(manifest, manifest_path)
         provenance = manifest["provenance"]
         resources.append(EditingResource(
             id=f"skill:{manifest['name']}", category_id="skills", name=manifest["name"],
@@ -207,13 +209,63 @@ def _packaged_skill_resources() -> list[EditingResource]:
             provenance=[ResourceProvenance(
                 repository=provenance["repository"], revision=provenance["revision"],
                 path=provenance["path"], license=provenance["license"],
+                license_spdx=provenance["license_spdx"],
             )],
-            runtime_requirements={"manifest_version": manifest["version"], **manifest["runtime"],
+            runtime_requirements={"manifest_schema_version": manifest["schema_version"],
+                                  "manifest_version": manifest["version"], **manifest["runtime"],
                                   "adapter": manifest["entry"]["adapter"],
-                                  "evaluation": manifest["evaluation"]["status"]},
+                                  "capabilities": {"inputs": manifest["inputs"], "outputs": manifest["outputs"],
+                                                    "permissions": manifest["permissions"], "dependencies": manifest["dependencies"]},
+                                  "install_checks": manifest["install_checks"],
+                                  "adoption": manifest["adoption"],
+                                  "rollback": manifest["rollback"],
+                                  "evaluation": manifest["evaluation"]},
             entrypoints=["read_creation_skill"],
         ))
     return resources
+
+
+def _validate_packaged_skill_manifest(manifest: object, path: Path) -> None:
+    """Apply the catalog's install preflight to a packaged Skill manifest."""
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Skill manifest 不是对象：{path}")
+    required = ("schema_version", "name", "version", "entry", "inputs", "outputs", "permissions",
+                "dependencies", "runtime", "install_checks", "adoption", "rollback", "provenance", "evaluation")
+    missing = [key for key in required if key not in manifest]
+    if missing:
+        raise ValueError(f"Skill manifest 缺少字段：{','.join(missing)}")
+    if manifest["schema_version"] != 1 or not all(isinstance(manifest[key], str) and manifest[key].strip() for key in ("name", "version")):
+        raise ValueError("Skill manifest 版本或身份无效")
+    entry = manifest["entry"]
+    if not isinstance(entry, dict) or not all(isinstance(entry.get(key), str) and entry[key].strip() for key in ("skill", "adapter")):
+        raise ValueError("Skill manifest entry 无效")
+    runtime = manifest["runtime"]
+    if not isinstance(runtime, dict) or any(runtime.get(key) is not False for key in ("network", "shell", "arbitrary_code")):
+        raise ValueError("Skill manifest runtime 未关闭外部执行")
+    install = manifest["install_checks"]
+    if (not isinstance(install, dict) or install.get("mode") != "package-time"
+            or any(install.get(key) is not False for key in ("network", "shell", "arbitrary_code"))
+            or not isinstance(install.get("checks"), list) or not install["checks"]):
+        raise ValueError("Skill manifest 安装前检查无效")
+    adoption = manifest["adoption"]
+    if (not isinstance(adoption, dict) or adoption.get("status") != "installed"
+            or adoption.get("writes") is not False or adoption.get("requires_explicit_edit_authorization") is not True):
+        raise ValueError("Skill manifest 采用边界无效")
+    rollback = manifest["rollback"]
+    if (not isinstance(rollback, dict) or not isinstance(rollback.get("mode"), str)
+            or not isinstance(rollback.get("pre_adoption"), str) or not isinstance(rollback.get("post_adoption"), str)
+            or rollback.get("deletes_user_data") is not False):
+        raise ValueError("Skill manifest 回滚边界无效")
+    provenance = manifest["provenance"]
+    if (not isinstance(provenance, dict)
+            or not all(isinstance(provenance.get(key), str) and provenance[key].strip()
+                       for key in ("repository", "revision", "path", "license", "license_spdx"))):
+        raise ValueError("Skill manifest provenance 无效")
+    if provenance["license_spdx"] not in {"MIT", "Apache-2.0", "CC0-1.0"}:
+        raise ValueError("Skill manifest 许可不在可导入范围")
+    evaluation = manifest["evaluation"]
+    if not isinstance(evaluation, dict) or not isinstance(evaluation.get("status"), str) or not isinstance(evaluation.get("evidence"), list):
+        raise ValueError("Skill manifest 评测声明无效")
 
 
 def editing_resource_catalog() -> EditingResourceCatalog:
