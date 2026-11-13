@@ -135,3 +135,21 @@ def test_material_consumer_edges_keep_deidentified_trace_fields(tmp_path: Path):
     assert rows[2]["usage"]["metadata"]["output_id"] == "artifact-one"
     assert {adopted.id, rendered.id, observed.id} == {item["usage"]["id"] for item in rows}
 
+
+@pytest.mark.parametrize("outcome", ["failed", "unknown", "blocked"])
+def test_failure_and_unknown_outcomes_round_trip_without_promoting_resource(tmp_path: Path, outcome: str):
+    store = make_store(tmp_path)
+    asset = SimpleNamespace(
+        id="asset-outcome", file_name="outcome.mp4", media_type="video",
+        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        modified_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    record = store.record_material_usage(
+        workspace_id="ws-resource", asset=asset, segment_id="segment-outcome",
+        stage="output_observation", task_id="task-outcome", timeline_version_id="timeline-outcome",
+        artifact_ref="artifact-outcome", observation_ref="observation-outcome",
+    )
+    updated = store.update_usage_outcome("ws-resource", record.id, outcome=outcome, reason="fixture outcome")
+    assert updated.metadata["outcome"] == outcome
+    assert store.get_manifest("ws-resource", record.manifest_id).state == "connected"
+

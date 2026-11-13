@@ -1296,6 +1296,11 @@ class ProductionRepository:
             workspace_id, artifact_ref, observation_ref=observation_ref,
         )
 
+    def update_resource_usage_outcome(self, workspace_id: str, usage_id: str, *, outcome: str, reason: str | None = None):
+        return self.resource_governance.update_usage_outcome(
+            workspace_id, usage_id, outcome=outcome, reason=reason,
+        )
+
     def list_semantic_field_definitions(self, workspace_id: str, *, include_deprecated: bool = False):
         return self.material_data_governance.list_field_definitions(
             workspace_id, include_deprecated=include_deprecated
