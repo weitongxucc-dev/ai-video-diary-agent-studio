@@ -156,7 +156,7 @@ export default function ProfilePage() {
           { field: "banned_words", title: "避免使用的词汇", label: "添加避免用词", value: newBannedWord, onChange: setNewBannedWord, placeholder: "例如：众所周知" },
         ] as const).map(item => <section className={styles.section} key={item.field}>
           <h2>{item.title}</h2><div className={styles.tags}>{profile[item.field].map(value => <span className={styles.tag} key={value}>{value}<button aria-label={`删除${item.title}：${value}`} onClick={() => removeListValue(item.field, value)} type="button"><X size={13}/></button></span>)}</div>
-          <div className={styles.addRow}><input aria-label={item.label} onChange={event => item.onChange(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addListValue(item.field, item.value); } }} placeholder={item.placeholder} value={item.value}/><button disabled={busy || !item.value.trim()} onClick={() => addListValue(item.field, item.value)} type="button"><Plus size={14}/>添加</button></div>
+          <div className={styles.addRow}><input aria-label={item.label} onChange={event => item.onChange(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); addListValue(item.field, item.value); } }} placeholder={item.placeholder} value={item.value}/><button disabled={busy || !item.value.trim()} onClick={() => addListValue(item.field, item.value)} type="button"><Plus size={14}/>添加</button></div>
         </section>)}
         <section className={styles.section}><h2>表达风格</h2>{fixedPreferences.map(item => {
           const value = profile.style_preferences[item.key] ?? "";

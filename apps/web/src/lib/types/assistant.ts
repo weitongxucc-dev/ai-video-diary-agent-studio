@@ -236,6 +236,46 @@ export type AssistantConversationTurn = {
     created_at: string;
     updated_at: string;
 };
+export type AssistantTraceEvent = {
+    type: string;
+    step?: number | null;
+    at?: string | null;
+    duration_ms?: number | null;
+    tool_id?: number | string | null;
+    tool_call_ref?: string | null;
+    tool_name?: string | null;
+    label?: string | null;
+    status?: string | null;
+    ok?: boolean;
+    trigger?: string | null;
+    failure_origin?: string | null;
+    failure_class?: string | null;
+    failure?: AssistantToolFailure;
+    associations?: { kind: string; ref: string }[];
+};
+export type AssistantTurnTrace = {
+    turn_id: string;
+    conversation_id: string;
+    status: string;
+    sequence: number;
+    created_at: string;
+    updated_at: string;
+    events: AssistantTraceEvent[];
+    event_count: number;
+    tool_counts: Record<string, number>;
+    compaction_count: number;
+    provider_usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number } | null;
+    usage_status: "known" | "estimated" | "unknown";
+    usage_source?: string | null;
+    associations: { kind: string; ref: string }[];
+    business_status?: string | null;
+    evidence_candidates: { reviewer_kind: string; candidate_ref: string; status: string; source_refs: string[] }[];
+    started_at?: string | null;
+    ended_at?: string | null;
+    duration_ms?: number | null;
+    failure_class?: string | null;
+    retry_count?: number;
+};
 export type AssistantReferenceItem = {
     kind: "material";
     selection: MaterialAssistantSelection;

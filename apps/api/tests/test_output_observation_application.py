@@ -139,6 +139,12 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     assert measured['measurement_scope']=='actual_output_bounded_frames'
     assert measured['output_role']=='composed_output' and measured['media']['width']==width and measured['media']['height']==height
     assert measured['output']['artifact_id']==artifact.id and measured['output']['sha256']==publication.sha256
+    observed_resources = repo.resource_governance.list_usage('local', task_id='task', artifact_ref=artifact.id)
+    assert len(observed_resources) == 1
+    assert observed_resources[0].stage == 'output_observation'
+    assert observed_resources[0].observation_ref == receipt['job_id']
+    assert observed_resources[0].metadata['job_id'] == receipt['job_id']
+    assert observed_resources[0].metadata['output_id'] == artifact.id
     assert len(measured['samples'])==3 and all(s['object_refs']==['clip:clip-1'] for s in measured['samples'])
     assert measured['material_references'] == [{
         'clip_id': 'clip-1', 'asset_ref': 'asset:owned-asset', 'segment_ref': 'segment:owned-segment',

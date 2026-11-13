@@ -66,7 +66,7 @@ extension HostMediaApi on HostApi {
       draft.verify(receipt);
       return receipt;
     } on FormatException catch (failure) {
-      throw AppFailure(failure.message);
+      throw AppFailure(failure.message, code: 'invalid_execution_receipt');
     } on TypeError {
       throw const AppFailure('素材回执格式无法读取，请查询原发送请求。');
     }
@@ -135,6 +135,52 @@ extension HostMediaApi on HostApi {
       throw const AppFailure('主机返回的任务详情与当前作品或工作区不一致，请刷新后重试。');
     }
     return task;
+  }
+
+  Future<TaskExecutionSnapshot> creationExecution(
+    HostSession session,
+    String taskId, {
+    String? jobId,
+  }) async {
+    final suffix = jobId == null
+        ? ''
+        : '?job_id=${Uri.encodeQueryComponent(jobId)}';
+    final data = await _json(
+      session,
+      '/api/creation-tasks/${Uri.encodeComponent(taskId)}/execution$suffix',
+    );
+    try {
+      return TaskExecutionSnapshot.fromExecution(
+        data,
+        expectedTaskId: taskId,
+        expectedWorkspaceId: session.workspaceId,
+      );
+    } on FormatException catch (failure) {
+      throw AppFailure(failure.message, code: 'invalid_execution_receipt');
+    } on TypeError {
+      throw const AppFailure('主机返回的执行回执格式不匹配，请查询原任务。');
+    }
+  }
+
+  Future<TaskExecutionSnapshot> taskJobProgress(
+    HostSession session,
+    String taskId,
+  ) async {
+    final data = await _json(
+      session,
+      '/api/creation-tasks/${Uri.encodeComponent(taskId)}/job-runs',
+    );
+    try {
+      return TaskExecutionSnapshot.fromJobProgress(
+        data,
+        expectedTaskId: taskId,
+        expectedWorkspaceId: session.workspaceId,
+      );
+    } on FormatException catch (failure) {
+      throw AppFailure(failure.message);
+    } on TypeError {
+      throw const AppFailure('主机返回的作业进度格式不匹配，请查询原任务。');
+    }
   }
 
   /// Download through the authenticated CA-bound transport before native playback.

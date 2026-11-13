@@ -573,4 +573,12 @@ def read_sdk_result(output: str, kind: str = "edit_preview") -> tuple[str, dict 
             preview = runtime
         elif isinstance(preview, dict):
             preview = {**preview, **runtime}
+    trace_events = result.get("trace_events")
+    if isinstance(trace_events, list) and trace_events:
+        safe_trace = [event for event in trace_events[:1000]
+                      if isinstance(event, dict) and isinstance(event.get("type"), str)]
+        if preview is None:
+            preview = {"trace_events": safe_trace}
+        elif isinstance(preview, dict):
+            preview = {**preview, "trace_events": safe_trace}
     return answer, preview

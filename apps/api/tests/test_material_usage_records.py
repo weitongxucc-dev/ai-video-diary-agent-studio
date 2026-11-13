@@ -307,7 +307,15 @@ def test_metadata_usage_writer_and_task_traceback_without_analysis(tmp_path, mon
     ])
     render.record_usage(WORKSPACE, plan)
     render.record_usage(WORKSPACE, plan)
+    render.record_usage(
+        WORKSPACE, plan, task_id="metadata-task", timeline_version_id="current-head",
+        artifact_ref="artifacts/metadata-task/final.mp4", trace={"job_id": "render-job-1"},
+    )
     assert repo.material_assets.get_asset(WORKSPACE, asset.id).segments[0].usage_count == 1
+    resource_rows = repo.resource_governance.list_usage(WORKSPACE, task_id="metadata-task")
+    assert len(resource_rows) == 1
+    assert resource_rows[0].stage == "render"
+    assert resource_rows[0].metadata["job_id"] == "render-job-1"
 
     write_plan(repo, "orphan-task-plan", "missing-task", [])
     monkeypatch.setattr(asset_storage, "utc_now", lambda: when + timedelta(seconds=1))

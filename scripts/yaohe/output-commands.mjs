@@ -1,18 +1,6 @@
 import {CliError} from './errors.mjs';
 import {checkArguments} from './arguments.mjs';
-import {taskPath} from './task-binding.mjs';
-
-function taskSnapshot(data) {
-  const task = data?.task;
-  if (!task || typeof task.workspace_id !== 'string' || !task.workspace_id
-      || (task.current_timeline_version_id !== null
-        && typeof task.current_timeline_version_id !== 'string')
-      || !Number.isInteger(task.timeline_sequence) || task.timeline_sequence < 0
-      || typeof task.output_ready !== 'boolean') {
-    throw new CliError('任务响应缺少可核验的工作区、时间线或成片状态',4);
-  }
-  return task;
-}
+import {taskPath, taskSnapshot} from './task-binding.mjs';
 
 export async function outputCommand(api,args) {
   const {positional:p,flags:f} = args;

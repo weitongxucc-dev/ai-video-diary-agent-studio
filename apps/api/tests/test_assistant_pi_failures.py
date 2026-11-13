@@ -407,6 +407,7 @@ def test_runtime_check_requires_actual_nested_packaged_imports(monkeypatch, tmp_
     source = Path(__file__).parents[1] / "agent_tools"
     target = tmp_path / "agent-tools"
     shutil.copytree(source, target, ignore=shutil.ignore_patterns("*.mjs"))
+    shutil.copytree(Path(__file__).parents[1] / "agent_runtime", target.parent / "agent_runtime")
     extension = target / "diary_tools.ts"
     assert tool_sources_readable(extension)
     (target / missing).unlink()
@@ -428,6 +429,26 @@ def test_tool_readiness_uses_import_graph_instead_of_fixed_module_names(tmp_path
     assert tool_sources_readable(extension)
     module.write_text('import "../missing.ts";\n')
     assert not tool_sources_readable(extension)
+
+
+def test_tool_readiness_allows_packaged_runtime_mjs_sibling_but_rejects_escape(tmp_path):
+    from app.assistant.tool_sources import tool_sources_readable
+
+    tools = tmp_path / "agent_tools"
+    runtime = tmp_path / "agent_runtime" / "skills"
+    runtime.mkdir(parents=True)
+    tools.mkdir()
+    extension = tools / "diary_tools.ts"
+    extension.write_text('import "../agent_runtime/skills/manifest.mjs";\n')
+    (runtime / "manifest.mjs").write_text("export const fixture = true;\n")
+    assert tool_sources_readable(extension)
+
+    extension.write_text('import "../../outside.mjs";\n')
+    (tmp_path.parent / "outside.mjs").write_text("export const fixture = true;\n")
+    try:
+        assert not tool_sources_readable(extension)
+    finally:
+        (tmp_path.parent / "outside.mjs").unlink()
 
 
 

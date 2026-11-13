@@ -445,6 +445,7 @@ class CreationRequestWorkflowUseCase:
                 reader.workspace_id, request_id, window_id, expected_revision=payload.expected_revision,
                 input_fingerprint=payload.input_fingerprint, verified_owner_user_id=owner, local_diagnostic=diagnostic,
                 adoption_kind=payload.adoption_kind,
+                assistant_turn_id=str(payload.assistant_turn_id) if payload.assistant_turn_id is not None else None,
             )
         except (PermissionError, KeyError, OSError) as exc:
             raise conflict("creation_window_resource_unavailable", "所选资源已变化、不可读取或当前不允许采用。",
