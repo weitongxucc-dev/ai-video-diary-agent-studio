@@ -6,7 +6,7 @@ The host supplies finite, lazy identity/source readers, not an application bag.
 from __future__ import annotations
 
 from uuid import UUID
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from app.assistant.inputs import AssistantInputConflict
 from app.conversation_repository import (
     ConversationDraftVersionConflict, ConversationReferenceVersionConflict,
@@ -132,7 +132,7 @@ class ConversationHTTPAdapter:
             raise HTTPException(status_code=404, detail='当前对话中没有这次请求的保存回执。')
         return AssistantConversationRequestResponse.model_validate(receipt)
 
-    def trace(self, turn_id: str, request: Request):
+    def trace(self, turn_id: str, request: Request, *, before: int | None = None, limit: int = 200):
         """Return a redacted, read-only execution trace for an owned turn.
 
         The persisted conversation event stream is the source of truth for
@@ -144,7 +144,7 @@ class ConversationHTTPAdapter:
         if turn is None:
             raise HTTPException(status_code=404, detail='对话轮次不存在。')
         self._owned_conversation(request, turn['conversation_id'])
-        return project_turn_trace(turn)
+        return project_turn_trace(turn, before=before, limit=limit)
 
     def resume(self, conversation_id: str, request: Request):
         workspace_id, member_id, row = self._owned_conversation(request, conversation_id)
@@ -280,8 +280,8 @@ def build_conversation_router(adapter_for):
         return adapter_for().get_request(conversation_id, client_request_id, request)
 
     @router.get('/api/assistant/turns/{turn_id}/trace')
-    def get_assistant_turn_trace(turn_id: str, request: Request):
-        return adapter_for().trace(turn_id, request)
+    def get_assistant_turn_trace(turn_id: str, request: Request, before: int | None = Query(default=None, ge=0), limit: int = Query(default=200, ge=1, le=200)):
+        return adapter_for().trace(turn_id, request, before=before, limit=limit)
 
     @router.post('/api/assistant/conversations/{conversation_id}/resume', response_model=AssistantConversationResponse)
     def resume_assistant_conversation(conversation_id: str, request: Request):

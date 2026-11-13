@@ -40,8 +40,9 @@ export function listAssistantConversations(scope: AssistantConversationScope): P
 export function getAssistantConversation(conversationId: string): Promise<AssistantConversation> {
     return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`);
 }
-export function getAssistantTurnTrace(turnId: string): Promise<AssistantTurnTrace> {
-    return creationPlanRequest(`/api/assistant/turns/${encodeURIComponent(turnId)}/trace`);
+export function getAssistantTurnTrace(turnId: string, before?: number | null): Promise<AssistantTurnTrace> {
+    const query = before == null ? "" : `?before=${encodeURIComponent(String(before))}`;
+    return creationPlanRequest(`/api/assistant/turns/${encodeURIComponent(turnId)}/trace${query}`);
 }
 export function resumeAssistantConversation(conversationId: string): Promise<AssistantConversation> {
     return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/resume`, {

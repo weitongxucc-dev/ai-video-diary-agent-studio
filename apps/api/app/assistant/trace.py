@@ -111,7 +111,11 @@ def _project_runtime_events(events: list[dict], turn_id: str) -> tuple[list[dict
         projected.append(item)
     duration = int(ended_ms - started_ms) if isinstance(started_ms, (int, float)) and isinstance(ended_ms, (int, float)) else None
     deduped = list({(item['kind'], item['ref']): item for item in associations}.values())
-    return projected[-200:], _iso_time(started_ms), _iso_time(ended_ms), duration, failure_class, retries, deduped
+    # Keep the complete projected stream here.  Pagination is applied by
+    # ``project_turn_trace`` after usage, association, and duration metadata
+    # have been calculated; slicing at this layer would make events older
+    # than the first 200 permanently unreachable.
+    return projected, _iso_time(started_ms), _iso_time(ended_ms), duration, failure_class, retries, deduped
 
 
 def project_evidence_candidates(turn: dict) -> list[dict]:
@@ -132,7 +136,7 @@ def project_evidence_candidates(turn: dict) -> list[dict]:
     return candidates
 
 
-def project_turn_trace(turn: dict) -> dict:
+def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 200) -> dict:
     """Project one persisted turn into a redacted diagnostic trace."""
     events = turn.get('events') or []
     projected = []
@@ -199,6 +203,10 @@ def project_turn_trace(turn: dict) -> dict:
     business = result.get('continuation') if isinstance(result.get('continuation'), dict) else {}
     business_status = business.get('status') if isinstance(business.get('status'), str) else None
     usage_status = requested_usage_status if requested_usage_status in {'known', 'estimated'} and provider_usage else 'known' if provider_usage else 'unknown'
+    total_event_count = len(projected)
+    end = total_event_count if before is None else min(max(before, 0), total_event_count)
+    start = max(0, end - limit)
+    visible_events = projected[start:end]
     return {
         'turn_id': turn['id'],
         'conversation_id': turn['conversation_id'],
@@ -207,8 +215,10 @@ def project_turn_trace(turn: dict) -> dict:
         'sequence': turn['sequence'],
         'created_at': turn['created_at'],
         'updated_at': turn['updated_at'],
-        'events': projected[-200:],
-        'event_count': len(projected),
+        'events': visible_events,
+        'event_count': total_event_count,
+        'events_returned': len(visible_events),
+        'next_before': start if start > 0 else None,
         'tool_counts': tool_counts,
         'compaction_count': compactions,
         'provider_usage': provider_usage or None,

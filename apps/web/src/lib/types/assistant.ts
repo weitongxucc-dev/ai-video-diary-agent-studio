@@ -265,6 +265,8 @@ export type AssistantTurnTrace = {
     updated_at: string;
     events: AssistantTraceEvent[];
     event_count: number;
+    events_returned?: number;
+    next_before?: number | null;
     tool_counts: Record<string, number>;
     compaction_count: number;
     provider_usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number } | null;
