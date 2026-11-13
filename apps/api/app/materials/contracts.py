@@ -74,6 +74,10 @@ class MaterialSegment:
     # Logical clip identity is stable across re-analysis; version changes when
     # the clip's semantic payload is replaced or corrected.
     version: int = 1
+    # The source revision and analysis run that produced this logical clip are
+    # persisted with the clip so old task references can be explained later.
+    source_revision: dict[str, str] = field(default_factory=dict)
+    analysis_version: str = ""
 
 
 @dataclass

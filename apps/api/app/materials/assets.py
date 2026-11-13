@@ -612,7 +612,8 @@ class MaterialAssetStore:
                     latest = current_segments.get(analyzed.id)
                     if latest is not None:
                         for name in ("visual_status", "visual_model_id", "visual_sample_count", "understanding",
-                                     "suggested_usage_role", "usage_role_confidence", "usage_role_reason"):
+                                     "suggested_usage_role", "usage_role_confidence", "usage_role_reason",
+                                     "version", "source_revision", "analysis_version", "start_seconds", "end_seconds"):
                             setattr(latest, name, getattr(analyzed, name))
                         latest.system_tags = _infer_system_tags(current, latest)
                         merged_segments.append(latest)

@@ -9,6 +9,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 from typing import TYPE_CHECKING, Literal
+from dataclasses import replace
 
 from app.materials.assets import MaterialAssetStore, _infer_system_tags, _scene_ranges, _segment_id
 from app.materials.contracts import MaterialAsset, MaterialSegment, MaterialVisualFeature
@@ -17,6 +18,7 @@ from app.materials.data_governance import (
     MaterialClipReferenceMigration,
     MaterialDataGovernanceStore,
     MaterialSegmentLineage,
+    _migration_status_for_relation,
 )
 from app.materials.source_files import MaterialSourceFileAccess
 from app.models import utc_now
@@ -177,18 +179,33 @@ class MaterialAnalysisUseCase:
             ranges = _scene_ranges(boundaries, duration)
             old_segments = {segment.id: segment for segment in asset.segments}
             segments: list[MaterialSegment] = []
+            analysis_version = run_id or json.dumps(source_revision, sort_keys=True, separators=(",", ":"))
             for start, end in ranges:
                 segment_id = _segment_id(asset.id, start, end)
                 previous = old_segments.get(segment_id)
-                segments.append(
-                    previous
-                    or MaterialSegment(
+                if previous is None:
+                    segments.append(MaterialSegment(
                         id=segment_id,
                         asset_id=asset.id,
                         start_seconds=start,
                         end_seconds=end,
-                    )
-                )
+                        source_revision=dict(source_revision),
+                        analysis_version=analysis_version,
+                    ))
+                    continue
+                next_version = previous.version
+                if (previous.source_revision != source_revision
+                        or previous.analysis_version != analysis_version):
+                    next_version += 1
+                segments.append(replace(
+                    previous,
+                    start_seconds=start,
+                    end_seconds=end,
+                    version=next_version,
+                    source_revision=dict(source_revision),
+                    analysis_version=analysis_version,
+                    updated_at=utc_now(),
+                ))
             asset.duration_seconds = round(duration, 3)
             asset.segments = segments
             asset.analysis_status = "ready"
@@ -680,22 +697,32 @@ def _clip_reference_migrations(
         ]
         if not overlaps:
             result.append(MaterialClipReferenceMigration(
-                id=f"clipmig_{hashlib.sha256(f'{parent.id}:{source_revision}'.encode()).hexdigest()[:24]}",
+                id=f"clipmig_{hashlib.sha256(f'{parent.id}:{parent.version}:{source_revision}'.encode()).hexdigest()[:24]}",
                 workspace_id=workspace_id, asset_id=asset_id, old_segment_id=parent.id,
                 old_segment_version=parent.version, new_segment_id=None, new_segment_version=None,
-                relation="unresolved", explanation="重新分析后找不到时间重叠片段，旧任务引用需要人工核对。",
+                relation="unresolved", status="needs_review",
+                explanation="重新分析后找不到时间重叠片段，旧任务引用需要人工核对。",
                 source_revision=dict(source_revision),
             ))
             continue
-        relation = "preserved" if len(overlaps) == 1 and overlaps[0].id == parent.id else (
-            "split" if len(overlaps) > 1 else "merge"
-        )
         for child in overlaps:
+            child_parent_count = sum(
+                max(other.start_seconds, child.start_seconds)
+                < min(other.end_seconds, child.end_seconds)
+                for other in parents
+            )
+            relation = (
+                "preserved" if len(overlaps) == 1 and child.id == parent.id
+                else "split" if len(overlaps) > 1
+                else "merge" if child_parent_count > 1
+                else "resegmented"
+            )
             result.append(MaterialClipReferenceMigration(
-                id=f"clipmig_{hashlib.sha256(f'{parent.id}:{child.id}:{source_revision}'.encode()).hexdigest()[:24]}",
+                id=f"clipmig_{hashlib.sha256(f'{parent.id}:{parent.version}:{child.id}:{child.version}:{source_revision}'.encode()).hexdigest()[:24]}",
                 workspace_id=workspace_id, asset_id=asset_id, old_segment_id=parent.id,
                 old_segment_version=parent.version, new_segment_id=child.id,
                 new_segment_version=child.version, relation=relation,
+                status=_migration_status_for_relation(relation),
                 explanation=("旧片段时间范围保持不变。" if relation == "preserved"
                              else "旧片段与新片段按时间重叠映射，旧任务应显示该迁移关系。"),
                 source_revision=dict(source_revision),

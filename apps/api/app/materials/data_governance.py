@@ -35,9 +35,19 @@ KnowledgeClaimOrigin = Literal[
 ]
 KnowledgeClaimStatus = Literal["candidate", "confirmed", "rejected", "unresolved"]
 SegmentLineageRelation = Literal["preserved", "split", "merge", "resegmented"]
+ClipReferenceMigrationStatus = Literal["current", "migrated", "needs_review"]
 QualityProfileStatus = Literal["observed", "partial", "unavailable", "unknown"]
 QualityMetricStatus = Literal["observed", "unavailable", "unknown"]
 IndexRebuildJobStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
+
+
+def _migration_status_for_relation(relation: str) -> ClipReferenceMigrationStatus:
+    """Derive the status for rows written before the explicit status column."""
+    if relation == "preserved":
+        return "current"
+    if relation == "resegmented":
+        return "migrated"
+    return "needs_review"
 
 
 QUALITY_METRIC_NAMES = (
@@ -99,6 +109,7 @@ class MaterialClipReferenceMigration:
     new_segment_id: str | None
     new_segment_version: int | None
     relation: Literal["preserved", "split", "merge", "resegmented", "unresolved"]
+    status: ClipReferenceMigrationStatus
     explanation: str
     source_revision: dict[str, str]
     created_at: datetime = field(default_factory=utc_now)
@@ -423,12 +434,12 @@ class MaterialDataGovernanceStore:
                 """
                 INSERT OR IGNORE INTO material_clip_reference_migrations
                     (id, workspace_id, asset_id, old_segment_id, old_segment_version,
-                     new_segment_id, new_segment_version, relation, explanation,
+                     new_segment_id, new_segment_version, relation, status, explanation,
                      source_revision_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [(item.id, item.workspace_id, item.asset_id, item.old_segment_id, item.old_segment_version,
-                  item.new_segment_id, item.new_segment_version, item.relation, item.explanation,
+                  item.new_segment_id, item.new_segment_version, item.relation, item.status, item.explanation,
                   _json(item.source_revision), item.created_at.isoformat()) for item in items],
             )
 
@@ -965,12 +976,15 @@ class MaterialDataGovernanceStore:
 
     @staticmethod
     def _clip_migration_from_row(row: sqlite3.Row) -> MaterialClipReferenceMigration:
+        relation = str(row["relation"])
         return MaterialClipReferenceMigration(
             id=str(row["id"]), workspace_id=str(row["workspace_id"]), asset_id=str(row["asset_id"]),
             old_segment_id=str(row["old_segment_id"]), old_segment_version=int(row["old_segment_version"]),
             new_segment_id=row["new_segment_id"],
             new_segment_version=int(row["new_segment_version"]) if row["new_segment_version"] is not None else None,
-            relation=str(row["relation"]), explanation=str(row["explanation"]),
+            relation=relation,
+            status=(str(row["status"]) if "status" in row.keys() and row["status"] else _migration_status_for_relation(relation)),
+            explanation=str(row["explanation"]),
             source_revision=json.loads(str(row["source_revision_json"])),
             created_at=datetime.fromisoformat(str(row["created_at"])),
         )
