@@ -17,7 +17,7 @@ def test_manifest_keeps_navigation_categories_separate_from_resource_items():
     assert statuses["templates"] == "connected"
     assert statuses["voice"] == "connected"
     assert statuses["music"] == "catalog_only"
-    assert statuses["sfx"] == "catalog_only"
+    assert statuses["sfx"] == "connected"
     assert statuses["filters"] == "planned"
     skills, total = search_editing_resources(catalog, category="skills", limit=100)
     assert total == len(skills) >= 1
@@ -27,6 +27,11 @@ def test_manifest_keeps_navigation_categories_separate_from_resource_items():
     assert all(item.category_id in statuses for item in catalog.resources)
     assert all(item.version >= 1 for item in catalog.resources)
     assert all(item.editable_via == ["EditProposal", "TimelineVersion"] for item in catalog.resources)
+    sfx, sfx_total = search_editing_resources(catalog, category="sfx", limit=100)
+    assert sfx_total == len(sfx) == 1
+    assert sfx[0].id == "openfilm:sound-glass-pulse"
+    assert sfx[0].status == "connected"
+    assert sfx[0].provenance[0].revision == "19b26b60c1286b412c01ad64971263ae0e2aef13"
 
 
 def test_template_items_expose_real_preview_and_provenance():
@@ -76,6 +81,16 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
     voices = client.get("/api/editing-resource-catalog", params={"category": "voice"})
     assert voices.status_code == 200
     assert voices.json()["resources"][0]["id"] == "builtin:voice-profiles"
+
+    sfx_preview = client.get("/api/editing-resources/openfilm:sound-glass-pulse/preview")
+    assert sfx_preview.status_code == 200
+    assert sfx_preview.headers["content-type"].startswith("audio/mp4")
+    transition_preview = client.get("/api/editing-resources/openfilm:transition-glitch/preview", params={"version": 2})
+    assert transition_preview.status_code == 200
+    assert transition_preview.headers["content-type"].startswith("video/mp4")
+    transition_poster = client.get("/api/editing-resources/openfilm:transition-glitch/preview", params={"representation": "poster", "version": 2})
+    assert transition_poster.status_code == 200
+    assert transition_poster.headers["content-type"].startswith("image/jpeg")
 
 
 def test_resource_detail_returns_404_for_unknown_version():

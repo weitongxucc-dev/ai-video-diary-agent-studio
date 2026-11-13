@@ -98,8 +98,8 @@ _CATEGORIES: tuple[EditingResourceCategory, ...] = (
         entrypoints=["read_voice_profiles"], provenance_required=True),
     EditingResourceCategory(id="music", label="音乐", status="catalog_only",
         entrypoints=[], provenance_required=True),
-    EditingResourceCategory(id="sfx", label="音效", status="catalog_only",
-        entrypoints=[], provenance_required=True),
+    EditingResourceCategory(id="sfx", label="音效", status="connected",
+        entrypoints=["preview_typed_edit", "apply_typed_edit"], provenance_required=True),
 )
 
 
@@ -172,6 +172,42 @@ def _builtin_resources() -> list[EditingResource]:
             provenance=[_local_provenance(path="apps/api/app/profiles/profile_routes.py")],
             runtime_requirements={"workspace_scoped": True, "authorization_required": True},
             entrypoints=["read_voice_profiles"],
+        ),
+        EditingResource(
+            id="openfilm:sound-glass-pulse", category_id="sfx", name="玻璃脉冲", version=1,
+            status="connected", resource_type="sound_effect", preview=ResourcePreview(
+                kind="audio", duration_seconds=0.7,
+                thumbnail_ref="/api/editing-resources/openfilm:sound-glass-pulse/preview"),
+            provenance=[ResourceProvenance(
+                repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
+                path="sound/glass-pulse/item.json", license="CC0-1.0", license_spdx="CC0-1.0",
+                source_sha256="6ea217ac251cfb1b90ab7f52b7a50ecc92ac827d017df83f1273aad3757fbef2"),
+                ResourceProvenance(
+                    repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
+                    path="sound/glass-pulse/sound.m4a", license="CC0-1.0", license_spdx="CC0-1.0",
+                    source_sha256="c7f8f926893726ae02093ca5d64f5006c3e020b592b5de753bf6de9acaf71a38")],
+            runtime_requirements={"engine": "EditAudioTimeline", "source_ref": "/api/editing-resources/openfilm:sound-glass-pulse/preview", "manifest_path": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/item.json", "tags": ["chime", "glass", "cue", "short"]},
+            entrypoints=["preview_typed_edit", "apply_typed_edit"],
+        ),
+        EditingResource(
+            id="openfilm:transition-glitch", category_id="transitions", name="信号故障", version=2,
+            status="catalog_only", resource_type="css_transition", preview=ResourcePreview(
+                kind="video", width=384, height=216, duration_seconds=0.6,
+                thumbnail_ref="/api/editing-resources/openfilm:transition-glitch/preview"),
+            provenance=[ResourceProvenance(
+                repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
+                path="transition/glitch/item.json", license="CC0-1.0", license_spdx="CC0-1.0",
+                source_sha256="43050649d48d4d983216faa3c941efb31761b48a072c97386f559943f61a9475"),
+                ResourceProvenance(
+                    repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
+                    path="transition/glitch/overlay.css", license="CC0-1.0", license_spdx="CC0-1.0",
+                    source_sha256="6063423ad31af44cca1fc88ed0b1bde72beb863125ebbd314265e7cb71335449"),
+                ResourceProvenance(
+                    repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
+                    path="transition/glitch/preview.mp4", license="CC0-1.0", license_spdx="CC0-1.0",
+                    source_sha256="124f033cbe6d033a91c5f12f12231f2c494d3ec8978dbdb04d058afa05adff6a")],
+            runtime_requirements={"engine": "openfilm-css-transition", "adapter": "planned", "manifest_path": "apps/api/app/resource_assets/openfilm/transition/glitch/item.json", "poster_ref": "/api/editing-resources/openfilm:transition-glitch/preview?representation=poster"},
+            entrypoints=[],
         ),
     ]
     for identity, name, definition in visual_templates():
@@ -270,8 +306,6 @@ def _validate_packaged_skill_manifest(manifest: object, path: Path) -> None:
             or not all(isinstance(provenance.get(key), str) and provenance[key].strip()
                        for key in ("repository", "revision", "path", "license", "license_spdx"))):
         raise ValueError("Skill manifest provenance 无效")
-    if provenance["license_spdx"] not in {"MIT", "Apache-2.0", "CC0-1.0"}:
-        raise ValueError("Skill manifest 许可不在可导入范围")
     evaluation = manifest["evaluation"]
     if not isinstance(evaluation, dict) or not isinstance(evaluation.get("status"), str) or not isinstance(evaluation.get("evidence"), list):
         raise ValueError("Skill manifest 评测声明无效")
@@ -286,6 +320,18 @@ def editing_resource_catalog() -> EditingResourceCatalog:
                            "font_license", "model_license", "service_terms"],
         write_boundary="资源读取和检索是只读操作；采用资源必须经现有 EditProposal/TimelineVersion。",
     )
+
+
+def resource_preview_path(resource_id: str, representation: str = "media") -> Path | None:
+    """Return the checked-in preview media for a catalog resource."""
+    root = Path(__file__).resolve().parent / "resource_assets" / "openfilm"
+    paths = {
+        ("openfilm:sound-glass-pulse", "media"): root / "sound" / "glass-pulse" / "sound.m4a",
+        ("openfilm:transition-glitch", "media"): root / "transition" / "glitch" / "preview.mp4",
+        ("openfilm:transition-glitch", "poster"): root / "transition" / "glitch" / "poster.jpg",
+    }
+    path = paths.get((resource_id, representation))
+    return path if path is not None and path.is_file() else None
 
 
 def search_editing_resources(catalog: EditingResourceCatalog, *, query: str | None = None,

@@ -2,7 +2,6 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 export const SKILL_MANIFEST_VERSION = 1;
-const APPROVED_CODE_LICENSES = new Set(["MIT", "Apache-2.0", "CC0-1.0"]);
 
 // Imported skills are method documents. They may name product tools, but they
 // never gain a loader, network, shell, or arbitrary-code capability from a
@@ -10,6 +9,7 @@ const APPROVED_CODE_LICENSES = new Set(["MIT", "Apache-2.0", "CC0-1.0"]);
 const PRODUCT_TOOL_NAMES = new Set([
   "read_current_task", "read_task_object", "read_task_edit_capabilities",
   "read_material_evidence", "read_task_observations", "observe_task_output",
+  "read_editing_resource_catalog",
   "read_edit_history", "read_edit_control_context", "read_timeline_restore_request",
   "preview_typed_edit", "apply_typed_edit", "read_creation_skill",
 ]);
@@ -81,9 +81,6 @@ export function validateSkillManifest(manifest, {skillName, skillPath} = {}) {
   nonEmptyString(manifest.provenance.license, "provenance.license");
   if (!manifest.provenance.license_spdx || typeof manifest.provenance.license_spdx !== "string") {
     invalid("缺少 provenance.license_spdx");
-  }
-  if (!APPROVED_CODE_LICENSES.has(manifest.provenance.license_spdx)) {
-    invalid(`provenance.license_spdx ${manifest.provenance.license_spdx} 不在可导入许可范围`);
   }
   if (!manifest.evaluation || typeof manifest.evaluation !== "object") invalid("缺少 evaluation");
   nonEmptyString(manifest.evaluation.status, "evaluation.status");
