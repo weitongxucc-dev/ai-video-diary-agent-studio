@@ -4,7 +4,7 @@ import sqlite3
 from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 27
+PRODUCTION_SCHEMA_VERSION = 28
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -1062,7 +1062,111 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         CREATE INDEX IF NOT EXISTS idx_resource_usage_artifact
             ON resource_usage_records(workspace_id, artifact_ref, created_at, id);
     """),
+    # Migration 28 is applied by _migrate_resource_manifest_kinds below. The
+    # marker keeps the version ledger linear in tests and on partial databases.
+    (28, ""),
 )
+
+def _migrate_resource_manifest_kinds(conn: sqlite3.Connection) -> None:
+    """Expand resource manifests without losing existing usage or licenses.
+
+    SQLite cannot alter a CHECK constraint in place. Rebuild the three related
+    tables together so their foreign keys continue to point at the new parent.
+    The operation is data-preserving and only changes the allowed resource-kind
+    vocabulary for audio, transitions and method Skills.
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='resource_manifests'"
+    ).fetchone()
+    if exists is None:
+        return
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for index in (
+            "idx_resource_manifests_workspace", "idx_resource_licenses_manifest",
+            "idx_resource_usage_task", "idx_resource_usage_artifact",
+        ):
+            conn.execute(f"DROP INDEX IF EXISTS {index}")
+        conn.execute("ALTER TABLE resource_manifest_licenses RENAME TO resource_manifest_licenses_v27")
+        conn.execute("ALTER TABLE resource_usage_records RENAME TO resource_usage_records_v27")
+        conn.execute("ALTER TABLE resource_manifests RENAME TO resource_manifests_v27")
+        conn.executescript("""
+            CREATE TABLE resource_manifests (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                resource_id TEXT NOT NULL,
+                resource_kind TEXT NOT NULL CHECK (resource_kind IN ('material', 'template', 'font', 'model', 'service', 'audio', 'transition', 'skill')),
+                resource_version TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN ('candidate', 'catalog_only', 'planned', 'connected')),
+                source_revision_json TEXT NOT NULL,
+                digest TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(workspace_id, resource_id, resource_version)
+            );
+            CREATE TABLE resource_manifest_licenses (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                manifest_id TEXT NOT NULL,
+                layer TEXT NOT NULL CHECK (layer IN ('asset', 'font', 'model', 'service')),
+                identifier TEXT NOT NULL,
+                source_ref TEXT NOT NULL,
+                terms_ref TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                UNIQUE(workspace_id, manifest_id, layer, identifier),
+                FOREIGN KEY(manifest_id) REFERENCES resource_manifests(id)
+            );
+            CREATE TABLE resource_usage_records (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                manifest_id TEXT NOT NULL,
+                resource_version TEXT NOT NULL,
+                stage TEXT NOT NULL CHECK (stage IN ('candidate', 'installed', 'imported', 'adopted', 'task_input', 'timeline', 'render', 'output_observation')),
+                task_id TEXT,
+                timeline_version_id TEXT,
+                artifact_ref TEXT,
+                observation_ref TEXT,
+                actor_ref TEXT,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(workspace_id, manifest_id, resource_version, stage, task_id, timeline_version_id, artifact_ref, observation_ref),
+                FOREIGN KEY(manifest_id) REFERENCES resource_manifests(id)
+            );
+        """)
+        conn.execute("""INSERT INTO resource_manifests
+            SELECT id, workspace_id, resource_id, resource_kind, resource_version, state,
+                   source_revision_json, digest, metadata_json, created_at, updated_at
+            FROM resource_manifests_v27""")
+        conn.execute("""INSERT INTO resource_manifest_licenses
+            SELECT id, workspace_id, manifest_id, layer, identifier, source_ref, terms_ref, metadata_json
+            FROM resource_manifest_licenses_v27""")
+        conn.execute("""INSERT INTO resource_usage_records
+            SELECT id, workspace_id, manifest_id, resource_version, stage, task_id,
+                   timeline_version_id, artifact_ref, observation_ref, actor_ref, metadata_json, created_at
+            FROM resource_usage_records_v27""")
+        conn.executescript("""
+            DROP TABLE resource_manifest_licenses_v27;
+            DROP TABLE resource_usage_records_v27;
+            DROP TABLE resource_manifests_v27;
+            CREATE INDEX idx_resource_manifests_workspace
+                ON resource_manifests(workspace_id, resource_kind, resource_id, resource_version);
+            CREATE INDEX idx_resource_licenses_manifest
+                ON resource_manifest_licenses(workspace_id, manifest_id, layer);
+            CREATE INDEX idx_resource_usage_task
+                ON resource_usage_records(workspace_id, task_id, created_at, id);
+            CREATE INDEX idx_resource_usage_artifact
+                ON resource_usage_records(workspace_id, artifact_ref, created_at, id);
+        """)
+        conn.execute("INSERT OR IGNORE INTO production_schema_migrations(version) VALUES (28)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+
 
 # 「内容可见性」地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。
 # 与 version 13 同一原因：这三张表都在迁移链之外创建（knowledge_items 由
@@ -1200,6 +1304,9 @@ def apply_production_migrations(conn: sqlite3.Connection) -> None:
                     run_id TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL)""")
                 migrate_script_sections(conn)
                 conn.execute("INSERT INTO production_schema_migrations(version) VALUES (?)", (version,))
+            continue
+        if version == 28:
+            _migrate_resource_manifest_kinds(conn)
             continue
         # Older assembled databases can have migration markers for 1..14 but
         # lack the narration table originally created by migration 4. Restore
