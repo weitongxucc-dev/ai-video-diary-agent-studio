@@ -265,6 +265,15 @@ it("exposes every settings destination directly and keeps public legal links in 
  expect(screen.getByRole("link",{name:"隐私政策"})).toHaveAttribute("href","/privacy");expect(screen.getByRole("link",{name:"使用条款"})).toHaveAttribute("href","/terms");expect(screen.getByRole("button",{name:"打开使用帮助"})).toBeInTheDocument();
 });
 
+it("explains the current setting impact and points to the real repair surface", async () => {
+ api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("available"));api.getLocalModels.mockResolvedValue({models:[]});api.getProductionFoundation.mockResolvedValue(null);
+ render(await SettingsPage({searchParams:Promise.resolve({section:"model"})}));
+ const guidance = screen.getByRole("complementary", { name: "当前设置说明" });
+ expect(guidance).toHaveTextContent("暂时无法读取连接状态");
+ expect(guidance).toHaveTextContent("影响聊天、选题和写稿");
+ expect(within(guidance).getByRole("link", { name: "查看运行情况" })).toHaveAttribute("href", "/health");
+});
+
 
 it.each(["model", "production", "voices", "asr"] as const)("keeps creation deep link %s selected in the settings navigation",async section=>{
  api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("available"));api.getLocalModels.mockResolvedValue({models:[]});api.getProductionFoundation.mockResolvedValue(null);

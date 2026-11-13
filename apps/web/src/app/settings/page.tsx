@@ -414,6 +414,13 @@ const SETTINGS_CATEGORIES: Array<{
   { id: "about", label: "隐私、帮助与关于", description: "数据说明、法律和版本" },
 ];
 
+type SettingGuidance = {
+  status: string;
+  impact: string;
+  actionHref?: string;
+  actionLabel?: string;
+};
+
 export default async function SettingsPage({
   searchParams,
 }: {
@@ -434,6 +441,30 @@ export default async function SettingsPage({
   const activeRuntimeSection = SECTIONS.find(
     (section) => section.id === activeCategory,
   );
+  const activeGuidance: SettingGuidance = (() => {
+    switch (activeCategory) {
+      case "model":
+        return { status: llmServiceView(settingItems).label, impact: "影响聊天、选题和写稿；保存配置不会替代一次真实调用。", actionHref: "/health", actionLabel: "查看运行情况" };
+      case "production":
+        return { status: profile ? "已设置" : "尚未设置", impact: "作为新创作的默认值，单个任务可以临时调整。", actionHref: "/production", actionLabel: "查看创作任务" };
+      case "voices":
+        return { status: profile?.voice_name ? "已选择默认声音" : "尚未选择默认声音", impact: "影响新任务的配音；授权和模型不可用时不会静默替换。", actionHref: "/profiles?mode=manage&view=voices", actionLabel: "管理人物与声音" };
+      case "paths":
+        return { status: status ? status.video.inbox_exists && status.video.output_exists ? "目录可用" : "目录待准备" : "暂时无法读取", impact: "影响素材接收、处理中间文件和成片输出。", actionHref: "/health", actionLabel: "检查运行情况" };
+      case "asr":
+        return { status: status ? status.asr.local_whisper_configured || status.asr.configured ? "已配置·待验证" : "尚未配置" : "暂时无法读取", impact: "影响听写、字幕和配音前的文字准备；外部服务可能产生费用。", actionHref: "/health", actionLabel: "检查本机能力" };
+      case "sources":
+        return { status: status?.external_sources.configured ? "已配置" : "尚未配置", impact: "影响选题和资料检索；内容添加仍在信息源和知识库页面完成。", actionHref: "/sources", actionLabel: "管理信息源" };
+      case "runtime":
+        return { status: "按需查看", impact: "用于解释能力阻断和修复动作，不改变普通创作默认值。", actionHref: "/health", actionLabel: "打开运行检查" };
+      case "creators":
+        return { status: "当前工作区", impact: "影响成员权限、共享范围和手机伴侣归属。", actionHref: "/members", actionLabel: "管理成员" };
+      case "appearance":
+        return { status: "当前界面偏好", impact: "只影响本机界面和操作习惯，不影响成片内容。" };
+      case "about":
+        return { status: "可随时查看", impact: "说明数据处理范围、帮助入口和版本信息。", actionHref: "/privacy", actionLabel: "查看隐私说明" };
+    }
+  })();
 
   return (
     <AppShell
@@ -487,6 +518,11 @@ export default async function SettingsPage({
         </nav>
         <section className={`${own.main} ${formStyles.surface} ${voiceStyles.surface}`}>
           {offline ? <p role="alert">暂时无法连接本地服务。</p> : null}
+          <aside className={own.guidance} aria-label="当前设置说明">
+            <div><span>当前状态</span><strong>{activeGuidance.status}</strong></div>
+            <p>{activeGuidance.impact}</p>
+            {activeGuidance.actionHref && activeGuidance.actionLabel ? <Link href={activeGuidance.actionHref}>{activeGuidance.actionLabel}</Link> : null}
+          </aside>
           {activeCategory === "creators" ? <SettingsCreators selectedMemberId={params.member} /> : null}
           {activeCategory === "appearance" ? <section className={own.auxiliary} aria-label="外观设置"><h2>外观</h2><SettingsAppearance /></section> : null}
           {activeCategory === "runtime" ? <section className={own.auxiliary} aria-label="运行与诊断"><h2>运行与诊断</h2><DeviceResourcePreparationPanel/><nav aria-label="运行帮助"><Link href="/health">运行情况与修复</Link><Link href="/settings?section=paths">本地模型与路径</Link><Link href="/settings?section=model">对话服务连接</Link></nav></section> : null}
