@@ -1,6 +1,6 @@
 import { ensureLocalMemberIdentity, readLocalMemberToken } from "../local-member-auth";
 import { isLocalAuthMode } from "../auth/routing";
-import type { WorkspaceAssistantPlanTurnResponse, AssistantStreamEvent, AssistantConversation, AssistantConversationScope, AssistantCapabilities } from '../types/assistant';
+import type { WorkspaceAssistantPlanTurnResponse, AssistantStreamEvent, AssistantConversation, AssistantConversationScope, AssistantCapabilities, AssistantTurnTrace } from '../types/assistant';
 import type { MaterialAssistantSelection, MaterialAssistantTurnResponse } from '../types/materials';
 import { creationPlanRequest, assistantStreamRequest } from './creation-transport';
 import type { AssistantInputReceipt } from '../types/assistant';
@@ -39,6 +39,9 @@ export function listAssistantConversations(scope: AssistantConversationScope): P
 }
 export function getAssistantConversation(conversationId: string): Promise<AssistantConversation> {
     return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`);
+}
+export function getAssistantTurnTrace(turnId: string): Promise<AssistantTurnTrace> {
+    return creationPlanRequest(`/api/assistant/turns/${encodeURIComponent(turnId)}/trace`);
 }
 export function resumeAssistantConversation(conversationId: string): Promise<AssistantConversation> {
     return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/resume`, {

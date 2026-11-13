@@ -11,7 +11,7 @@ import type { MaterialUsageContext } from "./ui/material-usage";
 import { ReferenceChips } from "./ui/reference-chips";
 
 import { Children, useEffect, useLayoutEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import { useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference, useAssistantReferenceStatus, useAssistantSelection } from "./AssistantConversationProvider";
+import { useAssistantReferenceStatus, useAssistantSelection } from "./AssistantConversationProvider";
 import { HomeCardDialog } from "./HomeCardDialog";
 import "./AssistantConversation.css";
 import { Plus, History, Pencil, CircleHelp, CircleAlert, Brain, ArrowUp, ArrowDown, MessageCircleDashed, LoaderCircle, Copy, Check, MoreHorizontal, Square } from "lucide-react";
@@ -19,9 +19,9 @@ import ReactMarkdown from "react-markdown";
 import { createPortal } from "react-dom";
 import remarkGfm from "remark-gfm";
 import Link from "next/link";
-import { getAssistantCapabilities, taskMediaJobLabel, taskMediaResourceCheckLabel } from "@/lib/api";
+import { getAssistantCapabilities, getAssistantTurnTrace, taskMediaJobLabel, taskMediaResourceCheckLabel } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantScriptToolReceipt, AssistantToolFailure, ResourceAdmissionReceipt } from "@/lib/types";
-import type { AssistantInputReceipt, AssistantStoryboardRegeneration, AssistantScriptWindowRequest } from "@/lib/types/assistant";
+import type { AssistantInputReceipt, AssistantStoryboardRegeneration, AssistantScriptWindowRequest, AssistantTurnTrace } from "@/lib/types/assistant";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
 import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal, assistantTurnScriptWindowRequest, assistantScriptWindowReadKey } from "./useAssistantConversation";
 
@@ -239,6 +239,48 @@ function TurnTools({ turn, reading }: { turn: AssistantConversationTurn; reading
     </ChainOfThought>
     {!open && failedTool && failure ? <div className="assistant-tool-summary-failure"><AssistantFailureMessage reading={reading} readingKey={`${readingKey}:failure`} message={failure.reason} summary={`“${failedTool.label}”曾返回失败，详情保留在诊断中。`}/>{failure.repair_action ? <span>{failure.repair_action}</span> : null}</div> : null}
   </div>;
+}
+
+const traceUsageLabels = { known: "供应商实测", estimated: "本地估算", unknown: "未知" } as const;
+const traceStatusLabels: Record<string, string> = { running: "正在处理", completed: "已完成", failed: "失败", stopped: "已中断", queued: "已排队", cancelled: "已取消", unknown: "结果待核实" };
+const traceEventStatus = (status?: string | null) => status === "succeeded" ? "已完成" : status === "failed" ? "失败" : status === "started" ? "开始" : status === "completed" ? "已完成" : status === "cancelled" ? "已取消" : status ?? "状态未知";
+const traceFailureLabels: Record<string, string> = { business_tool_failed: "业务工具失败", tool_failed: "工具失败", provider_error: "模型服务失败", timeout: "运行超时", cancelled: "已取消" };
+const traceDuration = (value?: number | null) => value == null ? "—" : value < 1000 ? `${value} ms` : `${(value / 1000).toFixed(2)} s`;
+const traceTime = (value?: string | null) => value ? new Date(value).toLocaleTimeString("zh-CN", { hour12: false }) : "时间未知";
+
+function AssistantTurnTracePanel({ turn, reading }: { turn: AssistantConversationTurn; reading?: ReadingState }) {
+  const readingKey = `${turn.id}:trace`;
+  const [open, setOpen] = useState(() => reading?.get(readingKey, false) ?? false);
+  const [trace, setTrace] = useState<AssistantTurnTrace | null>(null);
+  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  useEffect(() => {
+    if (!open || trace || state === "loading" || state === "error") return;
+    let active = true;
+    setState("loading");
+    void getAssistantTurnTrace(turn.id).then(value => { if (active) { setTrace(value); setState("ready"); } })
+      .catch(() => { if (active) setState("error"); });
+    return () => { active = false; };
+  }, [open, state, trace, turn.id]);
+  return <details className="assistant-trace" open={open} onToggle={event => { const next = event.currentTarget.open; setOpen(next); reading?.save(readingKey, next); }}>
+    <summary>运行轨迹与用量</summary>
+    {turn.status === "running" ? <p>本轮仍在运行；当前处理过程已显示，完成后可读取脱敏事件和 Token 状态。</p> : state === "loading" ? <p role="status">正在读取运行观察…</p> : state === "error" ? <div role="alert"><p>运行观察暂时无法读取；不影响本轮业务结果。</p><Button variant="ghost" type="button" onClick={() => { setTrace(null); setState("idle"); }}>重新读取</Button></div> : trace ? <div className="assistant-trace-body">
+      <dl className="assistant-trace-summary">
+        <div><dt>状态</dt><dd>{traceStatusLabels[trace.status] ?? "状态待核实"}</dd></div>
+        <div><dt>事件</dt><dd>{trace.event_count}</dd></div>
+        <div><dt>耗时</dt><dd>{traceDuration(trace.duration_ms)}</dd></div>
+        <div><dt>重试</dt><dd>{trace.retry_count ?? 0}</dd></div>
+      </dl>
+      <section aria-label="Token 用量账本" className="assistant-token-ledger">
+        <strong>Token 用量 · {traceUsageLabels[trace.usage_status]}</strong>
+        {trace.provider_usage ? <span>{trace.provider_usage.totalTokens ?? "—"} total · 输入 {trace.provider_usage.input ?? "—"} · 输出 {trace.provider_usage.output ?? "—"}</span> : <span>供应商没有返回可核实的用量，当前不推算费用。</span>}
+      </section>
+      {trace.failure_class ? <p role="alert">失败分类：{traceFailureLabels[trace.failure_class] ?? "运行失败"}；请查看本轮失败原因并按恢复动作处理。</p> : null}
+      {trace.associations.length ? <p className="assistant-trace-associations">已关联 {trace.associations.length} 个任务、资源或输出引用。</p> : null}
+      <ol className="assistant-trace-events" aria-label="运行事件">
+        {trace.events.map((event, index) => <li key={`${event.type}-${event.step ?? index}`}><span>{event.type}{event.tool_name ? ` · ${event.tool_name}` : event.label ? ` · ${event.label}` : ""}</span><small>{traceTime(event.at)} · {traceEventStatus(event.status)} · {traceDuration(event.duration_ms)}{event.failure_class ? ` · ${traceFailureLabels[event.failure_class] ?? "运行失败"}` : ""}</small></li>)}
+      </ol>
+    </div> : state === "ready" ? <p>本轮没有可展示的运行事件。</p> : <p>展开后读取只读运行账本。</p>}
+  </details>;
 }
 
 function TurnContent({ turn, reading, latest }: { turn: AssistantConversationTurn; reading?: ReadingState; latest: boolean }) {
@@ -498,6 +540,7 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
     {turn.user_message.trim() ? <ConversationMessage className="assistant-user-message" savedOpen={reading?.get(`${turn.id}:user`, false)} onOpenChange={open => reading?.save(`${turn.id}:user`, open)}>{turn.user_message}</ConversationMessage> : null}
     {businessContinuation ? <p className="assistant-stream-status">继续完成原要求</p> : null}
     <TurnTools turn={turn} reading={reading}/>
+    <AssistantTurnTracePanel turn={turn} reading={reading}/>
     <TurnContent turn={turn} reading={reading} latest={latest} />
     {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
     {inputReceipts.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:inputs`} defaultOpen={inputReceipts.some(item => item.status === "rejected" || item.status === "interrupted")} className="assistant-turn-inputs"><summary>追加要求记录 · {inputReceipts.length}</summary>{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</ReadingDetails> : null}
@@ -558,9 +601,6 @@ export function AssistantConversationPanel({
   composerActions?: ReactNode;
   materialUsage?: MaterialUsageContext;
 }) {
-  const selectedProfile = useAssistantProfileReference();
-  const selectedMaterial = useAssistantMaterialReference();
-  const selectedKnowledge = useAssistantKnowledgeReference();
   const referenceStatus = useAssistantReferenceStatus();
   const selection = useAssistantSelection();
   const [inputMode,setInputMode]=useState<"steer"|"follow_up">("steer");
@@ -589,6 +629,7 @@ export function AssistantConversationPanel({
     setHeaderSlot(panelRef.current?.closest("[data-conversation-pane]")?.querySelector<HTMLElement>("[data-assistant-header-actions]") ?? null);
   }, []);
   const conversation = state.conversation;
+  const conversationId = conversation?.id;
   useEffect(() => { resultReadRevision.current += 1; setReadingResultTurn(null); }, [conversation?.id]);
   const readTurnResult = async (turn: AssistantConversationTurn, openProposal = false) => {
     const id = conversation?.id;
@@ -747,8 +788,8 @@ export function AssistantConversationPanel({
     return () => observer.disconnect();
   }, [input, focus]);
   useEffect(() => {
-    if (autoFocus && !state.loading && conversation) focus?.focus();
-  }, [autoFocus, conversation?.id, focus, state.loading]);
+    if (autoFocus && !state.loading && conversationId) focus?.focus();
+  }, [autoFocus, conversationId, focus, state.loading]);
 
   async function submit(event?: FormEvent, commandText?: string) {
     event?.preventDefault();

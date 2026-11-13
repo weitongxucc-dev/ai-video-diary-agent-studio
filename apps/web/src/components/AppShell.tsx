@@ -232,6 +232,9 @@ export function applyTheme(mode: ThemeMode) {
       : mode;
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themeMode = mode;
+  const colorScheme = document.head.querySelector<HTMLMetaElement>('meta[name="color-scheme"]')
+    ?? (() => { const meta = document.createElement("meta"); meta.name = "color-scheme"; document.head.appendChild(meta); return meta; })();
+  colorScheme.content = resolved === "dark" ? "dark light" : "light dark";
 }
 
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";

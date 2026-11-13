@@ -62,8 +62,11 @@ export function EditorResourceLibraryPanel({
   const [view, setView] = useState<"grid" | "list">("grid");
   const [categories, setCategories] = useState(editorResourceCategories);
   const [catalogResources, setCatalogResources] = useState<CatalogResource[]>([]);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogRetry, setCatalogRetry] = useState(0);
   useEffect(() => {
     let active = true;
+    setCatalogError(null);
     void fetch(`/api/editing-resource-catalog?category=${encodeURIComponent(apiCategoryId[categoryId])}`)
       .then(response => response.ok ? response.json() : Promise.reject(new Error("资源目录暂不可用")))
       .then((payload: { categories?: Array<{ id: string; status: RemoteStatus }>; resources?: CatalogResource[] }) => {
@@ -74,9 +77,9 @@ export function EditorResourceLibraryPanel({
           return remote ? { ...item, state: remote.status === "connected" ? "available" : remote.status } : item;
         }));
       })
-      .catch(() => { if (active) setCatalogResources([]); });
+      .catch(() => { if (active) { setCatalogResources([]); setCatalogError("资源目录暂时无法读取，请重试；当前页面不会把它当成空目录。"); } });
     return () => { active = false; };
-  }, [categoryId]);
+  }, [categoryId, catalogRetry]);
   const category = categories.find(item => item.id === categoryId) ?? categories[0];
   const visibleAssets = useMemo(() => assets.filter(asset => assetMatches(asset, query, filter)), [assets, filter, query]);
   const selected = assets.find(asset => asset.id === selectedId) ?? visibleAssets[0] ?? null;
@@ -97,7 +100,7 @@ export function EditorResourceLibraryPanel({
           <select aria-label="资源类型筛选" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部类型</option><option value="video">视频</option><option value="image">图片</option><option value="audio">音频</option></select>
           <div className={styles.viewToggle} role="group" aria-label="资源显示方式"><button type="button" aria-label="网格视图" aria-pressed={view === "grid"} onClick={() => setView("grid")}><Grid2X2 size={15} /></button><button type="button" aria-label="列表视图" aria-pressed={view === "list"} onClick={() => setView("list")}><List size={15} /></button></div>
         </div>
-        {categoryId === "materials" ? <div className={`${styles.materialArea} ${view === "list" ? styles.list : ""}`}>
+        {catalogError ? <div className={styles.catalogError} role="alert"><p>{catalogError}</p><button type="button" onClick={() => setCatalogRetry(value => value + 1)}>重新读取资源目录</button></div> : categoryId === "materials" ? <div className={`${styles.materialArea} ${view === "list" ? styles.list : ""}`}>
           <div className={styles.results} aria-label="素材结果">{visibleAssets.length ? visibleAssets.map(asset => <button key={asset.id} type="button" className={`${styles.card} ${selected?.id === asset.id ? styles.selected : ""}`} aria-pressed={selected?.id === asset.id} onClick={() => onSelect(asset)}><span className={styles.thumb}>{asset.media_type === "image" ? <img src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} alt="" /> : asset.media_type === "video" ? <Film size={22} /> : <AudioLines size={22} />}</span><span className={styles.cardCopy}><strong>{fileLabel(asset.file_name)}</strong><small>{mediaLabel(asset.media_type)} · {reviewLabel(asset)}</small><small>{asset.user_tags.slice(0, 2).join(" · ") || roleLabel(asset)}</small></span></button>) : <p className={styles.empty}>没有匹配的已接入素材。请调整搜索或先导入素材。</p>}</div>
           {selected ? <aside className={styles.detail} aria-label="资源详情"><div className={styles.detailPreview}>{selected.media_type === "image" ? <img src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`} alt={`预览：${fileLabel(selected.file_name)}`} /> : selected.media_type === "video" ? <video controls preload="metadata" src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`} aria-label={`预览：${fileLabel(selected.file_name)}`} /> : <audio controls preload="metadata" src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`} aria-label={`预览：${fileLabel(selected.file_name)}`} />}</div><h3>{fileLabel(selected.file_name)}</h3><p>{selected.user_description || "暂无用户说明"}</p><dl><div><dt>状态</dt><dd>{selected.analysis_status === "ready" ? "已分析" : selected.analysis_status === "pending" ? "等待分析" : "暂不可用"}</dd></div><div><dt>来源</dt><dd>{selected.source_url || selected.path || "本地素材"}</dd></div><div><dt>版本</dt><dd>{selected.updated_at}</dd></div></dl>{selected.analysis_status === "ready" && selected.use_state === "available" ? <button type="button" className={styles.adopt} onClick={() => onAdopt(selected)}><Check size={15} />采用到当前任务</button> : <p className={styles.unavailable}>当前资源不能直接采用；请先完成分析或调整使用状态。</p>}</aside> : <div className={styles.detail}><ImageIcon size={28} /><p>选择一个素材查看预览、来源和采用状态。</p></div>}
         </div> : category.state === "available" && catalogResources.length ? <CatalogResourceResults resources={catalogResources} onOpenCatalog={() => onOpenCatalog?.(category.id)} /> : <UnavailableCategory category={category} onOpenCatalog={() => onOpenCatalog?.(category.id)} />}

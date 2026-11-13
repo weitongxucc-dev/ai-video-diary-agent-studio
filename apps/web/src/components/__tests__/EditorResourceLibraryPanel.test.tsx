@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MaterialAsset } from "@/lib/types";
 import { EditorResourceLibraryPanel } from "../EditorResourceLibraryPanel";
@@ -52,5 +52,17 @@ describe("EditorResourceLibraryPanel", () => {
     expect(await screen.findByText("cut-as-code-video-cut")).toBeInTheDocument();
     expect(screen.getByText(/a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4/)).toBeInTheDocument();
     expect(screen.getByText(/MIT License/)).toBeInTheDocument();
+  });
+
+  it("shows a retryable error instead of treating a catalog failure as empty", async () => {
+    const fetcher = vi.fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ categories: [], resources: [] }) });
+    vi.stubGlobal("fetch", fetcher);
+    render(<EditorResourceLibraryPanel assets={[]} selectedId={null} initialCategory="skills" onSelect={vi.fn()} onAdopt={vi.fn()} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("不会把它当成空目录");
+    fireEvent.click(screen.getByRole("button", { name: "重新读取资源目录" }));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 });

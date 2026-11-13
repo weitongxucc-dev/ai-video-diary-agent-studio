@@ -9,7 +9,7 @@ export { getCreationTaskEditRequest, setCreationTaskVisibility, getCreationTaskE
 export { setCreationPlanVisibility, previewCreationPlan, updateAssistantPlanPreview, confirmCreationPlan, getCreationPlan } from './api/creation-plans';
 export { setVideoTemplateVisibility, getContentTemplates, listVideoTemplates, saveVideoTemplate } from './api/templates';
 export { updateProductionProfile, getVoiceProfiles, createVoiceProfile, updateVoiceProfile } from './api/profiles';
-export { getCurrentAssistantConversation, createAssistantConversation, listAssistantConversations, getAssistantConversation, resumeAssistantConversation, updateAssistantConversation, restoreUnpersistedAssistantTurnDraft, stopAssistantConversationTurn, getAssistantCapabilities, getAssistantConversationReference, saveAssistantConversationReference, sendWorkspaceAssistantPlanTurn, sendMaterialAssistantTurn } from './api/assistant';
+export { getCurrentAssistantConversation, createAssistantConversation, listAssistantConversations, getAssistantConversation, getAssistantTurnTrace, resumeAssistantConversation, updateAssistantConversation, restoreUnpersistedAssistantTurnDraft, stopAssistantConversationTurn, getAssistantCapabilities, getAssistantConversationReference, saveAssistantConversationReference, sendWorkspaceAssistantPlanTurn, sendMaterialAssistantTurn } from './api/assistant';
 export { getHomeDashboard } from './api/home';
 export { listPublishingPlatforms, listPublishingAccounts, connectPublishingAccount, verifyPublishingAccount, listPlatformPublishJobs, createPlatformPublishJob } from './api/publishing';
 export { getSourceItems, getSourcesStatus, syncSourceItems, retrySourceSync, ingestManualLink } from './api/sources';
