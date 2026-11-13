@@ -239,6 +239,8 @@ export type AssistantConversationTurn = {
 export type AssistantTraceEvent = {
     type: string;
     step?: number | null;
+    event_id?: string | null;
+    parent_event_id?: string | null;
     at?: string | null;
     duration_ms?: number | null;
     tool_id?: number | string | null;
@@ -256,6 +258,7 @@ export type AssistantTraceEvent = {
 export type AssistantTurnTrace = {
     turn_id: string;
     conversation_id: string;
+    session_id?: string | null;
     status: string;
     sequence: number;
     created_at: string;

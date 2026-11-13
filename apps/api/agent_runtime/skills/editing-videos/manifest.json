@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "name": "editing-videos",
+  "version": "jcss-v0.3.52-adapter.1",
+  "entry": {
+    "skill": "read_creation_skill:editing-videos",
+    "adapter": "method-only-product-tools"
+  },
+  "inputs": [
+    "当前 CreationTask 及冻结 TimelineVersion",
+    "工作区已分析并授权的素材、字幕、声音和模板",
+    "用户的剪辑目标、受众和发布约束",
+    "已有提案、预览、成片和输出观察"
+  ],
+  "outputs": [
+    "带时间区间、证据和未知项的编辑提案",
+    "可预览、可回读、可撤销的局部编辑",
+    "版本、资源 provenance、技术检查和媒体验收覆盖说明"
+  ],
+  "permissions": [
+    "读取当前任务、素材证据、资源目录和输出观察",
+    "读取当前任务编辑能力和编辑历史",
+    "准备或提交当前任务声明允许的局部编辑",
+    "回读版本、采用状态、失败状态和撤销入口"
+  ],
+  "dependencies": {
+    "skills": ["source-speech", "narration-materials", "local-edit", "visual-template"],
+    "tools": [
+      "read_current_task", "read_task_object", "read_task_edit_capabilities",
+      "read_material_evidence", "read_task_observations", "observe_task_output",
+      "read_editing_resource_catalog", "read_edit_history", "read_edit_control_context",
+      "read_timeline_restore_request", "preview_typed_edit", "apply_typed_edit"
+    ]
+  },
+  "runtime": {
+    "kind": "trusted-markdown",
+    "execution_mode": "method-only",
+    "runnable": false,
+    "network": false,
+    "arbitrary_code": false,
+    "shell": false
+  },
+  "install_checks": {
+    "mode": "package-time",
+    "network": false,
+    "shell": false,
+    "arbitrary_code": false,
+    "checks": [
+      "manifest schema and SKILL.md name match",
+      "repository revision and provenance path are fixed",
+      "declared product tools are in the host allowlist",
+      "external CLI, scripts, services and arbitrary runtime are excluded"
+    ]
+  },
+  "adoption": {
+    "entrypoint": "read_creation_skill",
+    "status": "installed",
+    "writes": false,
+    "requires_explicit_edit_authorization": true,
+    "write_boundary": "编辑提案只能沿 preview_typed_edit/apply_typed_edit 与 EditProposal/TimelineVersion；Skill 本身不写时间线。"
+  },
+  "rollback": {
+    "mode": "pinned-package-revert",
+    "pre_adoption": "移除当前 Skill 包并恢复上一份通过校验的固定版本，再重新加载可信目录。",
+    "post_adoption": "已采用的时间线修改沿 read_edit_history、undo_last_edit 或原请求回读恢复；未知结果先查原请求，不换 request_id 重放。",
+    "deletes_user_data": false
+  },
+  "provenance": {
+    "repository": "https://github.com/joshcirre/editing-videos",
+    "path": "SKILL.md",
+    "revision": "7a68b6070c3afc3be82396fb252e36340d1bf70f",
+    "license": "MIT License",
+    "license_spdx": "MIT",
+    "resource_notice": "仅采用判断方法；JCSS、ffmpeg、Chrome、Whisper、仓库脚本、外部服务和第三方媒体未导入。"
+  },
+  "evaluation": {
+    "status": "adapter-static-and-tool-contract-tested",
+    "evidence": [
+      "manifest validator rejects network/arbitrary execution and unknown tools",
+      "session exposes the packaged skill with its validated manifest",
+      "adapter names only existing read/preview/apply/recovery tools"
+    ],
+    "unverified": [
+      "真实视频剪辑判断、设备、模型和最终视听质量",
+      "外部 JCSS/脚本/Chrome/ffmpeg 运行时行为",
+      "真实长片和跨平台输出验收"
+    ]
+  }
+}

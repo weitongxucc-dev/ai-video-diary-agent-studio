@@ -15,6 +15,14 @@ const piExecutable=execFileSync("which",["pi"],{encoding:"utf8"}).trim();
 const modulePath=join(dirname(dirname(realpathSync(piExecutable))),"index.js");
 const aiRoot = join(dirname(dirname(modulePath)), "node_modules/@earendil-works/pi-ai/dist");
 const { AssistantMessageEventStream } = await import(pathToFileURL(join(aiRoot, "utils/event-stream.js")));
+const syntheticUsage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+
+function syntheticMessage(content) {
+  return { role: "assistant", content, api: "openai-completions", provider: "ai-video-diary",
+    model: "synthetic-skill", stopReason: content[0].type === "toolCall" ? "toolUse" : "stop",
+    timestamp: Date.now(), usage: syntheticUsage };
+}
 
 test("SDK owns two editing rounds, safe steering/follow-up, persisted history and trusted skills", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "diary-sdk-slice-"));
@@ -51,7 +59,7 @@ test("SDK owns two editing rounds, safe steering/follow-up, persisted history an
     const options = { modulePath, cwd, sessionId, sessionDir: join(cwd, "sessions"),
       modelId: "synthetic-editor", systemPrompt: "你是视频编辑助手。按真实工具回执回答。", tools: [edit.name], customTools: [edit], extensionFactories:[inputExtension] };
     current = await openCreationSession(options);
-    assert.deepEqual(current.resourceLoader.getSkills().skills.map(s => s.name).sort(), ["cut-as-code-video-cut", "local-edit", "narration-materials", "source-speech", "visual-template"]);
+    assert.deepEqual(current.resourceLoader.getSkills().skills.map(s => s.name).sort(), ["cut-as-code-video-cut", "editing-videos", "local-edit", "narration-materials", "openfilm-replicate", "source-speech", "visual-template"]);
     assert.deepEqual(current.session.getActiveToolNames().sort(), ["edit_caption", "read_creation_skill"]);
     const events = [];
     current.session.subscribe(event => events.push(event));
@@ -97,6 +105,70 @@ test("SDK owns two editing rounds, safe steering/follow-up, persisted history an
     assert.equal(current.session.messages.length, count);
     assert.equal(current.session.messages.filter(m => m.role === "toolResult").length, 2);
     assert.equal(receipts.length, 2, "opening SDK history must not replay business writes");
+  } finally { current?.session.dispose(); await rm(cwd, { recursive: true, force: true }); }
+});
+
+test("read_creation_skill discovers a packaged method and rejects direct execution or unknown names", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "diary-sdk-skill-") );
+  let current;
+  try {
+    await writeFile(join(cwd, "models.json"), JSON.stringify({ providers: { "ai-video-diary": {
+      baseUrl: "http://127.0.0.1:9", api: "openai-completions", apiKey: "synthetic-unused",
+      models: [{ id: "synthetic-skill", contextWindow: 16384, maxTokens: 1024 }],
+    } } }));
+    current = await openCreationSession({ modulePath, cwd, sessionId: "44444444-4444-4444-8444-444444444444",
+      sessionDir: join(cwd, "sessions"), modelId: "synthetic-skill", systemPrompt: "只读取受控创作方法。", tools: [] });
+    assert.ok(current.session.getActiveToolNames().includes("read_creation_skill"));
+    assert.equal(current.session.getActiveToolNames().includes("run_creation_skill"), false);
+    let calls = 0;
+    current.session.agent.streamFunction = () => {
+      const stream = new AssistantMessageEventStream();
+      const content = calls++ === 0
+        ? [{ type: "toolCall", id: "skill-read", name: "read_creation_skill", arguments: { name: "openfilm-replicate" } }]
+        : [{ type: "text", text: "已读取方法。" }];
+      const answer = syntheticMessage(content);
+      queueMicrotask(() => { stream.push({ type: "done", reason: answer.stopReason, message: answer }); stream.end(answer); });
+      return stream;
+    };
+    await current.session.prompt("读取参考视频复刻方法", { source: "rpc" });
+    assert.equal(calls, 2);
+    const skillResult = current.session.messages.find(message => message.role === "toolResult" && message.toolCallId === "skill-read");
+    assert.ok(skillResult);
+    assert.match(JSON.stringify(skillResult), /openfilm-replicate/);
+    assert.match(JSON.stringify(skillResult), /method-only/);
+    assert.match(JSON.stringify(skillResult), /runnable/);
+    assert.match(JSON.stringify(skillResult), /false/);
+
+    calls = 0;
+    current.session.agent.streamFunction = () => {
+      const stream = new AssistantMessageEventStream();
+      const answer = syntheticMessage(calls++ === 0
+        ? [{ type: "toolCall", id: "skill-run", name: "run_creation_skill", arguments: { name: "openfilm-replicate" } }]
+        : [{ type: "text", text: "直接运行入口不可用。" }]);
+      queueMicrotask(() => { stream.push({ type: "done", reason: answer.stopReason, message: answer }); stream.end(answer); });
+      return stream;
+    };
+    await current.session.prompt("直接运行该方法", { source: "rpc" });
+    assert.equal(calls, 2);
+    const rejected = current.session.messages.find(message => message.role === "toolResult" && message.toolCallId === "skill-run");
+    assert.ok(rejected);
+    assert.equal(rejected.isError, true);
+    assert.match(JSON.stringify(rejected), /run_creation_skill|not found|未知|不存在/i);
+
+    calls = 0;
+    current.session.agent.streamFunction = () => {
+      const stream = new AssistantMessageEventStream();
+      const answer = syntheticMessage(calls++ === 0
+        ? [{ type: "toolCall", id: "skill-missing", name: "read_creation_skill", arguments: { name: "missing-skill" } }]
+        : [{ type: "text", text: "未知方法已拒绝。" }]);
+      queueMicrotask(() => { stream.push({ type: "done", reason: answer.stopReason, message: answer }); stream.end(answer); });
+      return stream;
+    };
+    await current.session.prompt("读取不存在的方法", { source: "rpc" });
+    const missing = current.session.messages.find(message => message.role === "toolResult" && message.toolCallId === "skill-missing");
+    assert.ok(missing);
+    assert.equal(missing.isError, true);
+    assert.match(JSON.stringify(missing), /此创作方法未随当前版本发布/);
   } finally { current?.session.dispose(); await rm(cwd, { recursive: true, force: true }); }
 });
 

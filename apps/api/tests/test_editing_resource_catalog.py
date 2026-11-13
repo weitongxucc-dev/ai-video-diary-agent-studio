@@ -21,6 +21,7 @@ def test_manifest_keeps_navigation_categories_separate_from_resource_items():
     assert statuses["filters"] == "planned"
     skills, total = search_editing_resources(catalog, category="skills", limit=100)
     assert total == len(skills) >= 1
+    assert {item.name for item in skills} >= {"cut-as-code-video-cut", "openfilm-replicate", "editing-videos"}
     assert all(item.provenance and item.provenance[0].revision for item in skills)
     assert all(item.entrypoints == ["read_creation_skill"] for item in skills)
     assert all(item.category_id in statuses for item in catalog.resources)

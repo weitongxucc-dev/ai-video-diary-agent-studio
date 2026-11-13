@@ -56,15 +56,15 @@ def test_project_turn_trace_orders_runtime_fixture_with_duration_failure_retry_a
         "sequence": 1, "created_at": "now", "updated_at": "now", "result": {
             "usage_status": "known", "provider_usage": {"input": 7, "output": 3, "totalTokens": 10},
             "trace_events": [
-                {"step": 1, "type": "turn_start", "at_ms": 1000},
-                {"step": 2, "type": "tool_start", "at_ms": 1100, "tool_call_id": "call-1", "tool_name": "read"},
-                {"step": 3, "type": "tool_end", "at_ms": 1300, "tool_call_id": "call-1", "tool_name": "read",
+                {"step": 1, "event_id": "session:1", "type": "turn_start", "at_ms": 1000},
+                {"step": 2, "event_id": "session:2", "type": "tool_start", "at_ms": 1100, "tool_call_id": "call-1", "tool_name": "read"},
+                {"step": 3, "event_id": "session:3", "parent_event_id": "session:2", "type": "tool_end", "at_ms": 1300, "tool_call_id": "call-1", "tool_name": "read",
                  "status": "failed", "failure_class": "business_tool_failed",
                  "references": {"request_id": "request-1", "job_id": "job-1"}},
-                {"step": 4, "type": "compaction_start", "at_ms": 1400, "status": "started"},
-                {"step": 5, "type": "compaction_end", "at_ms": 1600, "status": "completed"},
-                {"step": 6, "type": "retry", "at_ms": 1700, "status": "started"},
-                {"step": 7, "type": "nested_tool", "at_ms": 1800, "tool_call_id": "nested-1",
+                {"step": 4, "event_id": "session:4", "type": "compaction_start", "at_ms": 1400, "status": "started"},
+                {"step": 5, "event_id": "session:5", "parent_event_id": "session:4", "type": "compaction_end", "at_ms": 1600, "status": "completed"},
+                {"step": 6, "event_id": "session:6", "type": "retry", "at_ms": 1700, "status": "started"},
+                {"step": 7, "event_id": "session:7", "parent_event_id": "session:3", "type": "nested_tool", "at_ms": 1800, "tool_call_id": "nested-1",
                  "tool_name": "read_job", "status": "succeeded", "references": {"output_id": "output-1"}},
             ],
         }, "events": [],
@@ -77,6 +77,8 @@ def test_project_turn_trace_orders_runtime_fixture_with_duration_failure_retry_a
     assert [event["type"] for event in trace["events"]] == [
         "turn_start", "tool_start", "tool_end", "compaction_start", "compaction_end", "retry", "nested_tool"]
     assert trace["events"][2]["duration_ms"] == 200
+    assert len(trace["events"][2]["event_id"]) == 20
+    assert len(trace["events"][2]["parent_event_id"]) == 20
     assert all("request-1" not in str(event) for event in trace["events"])
     assert {item["kind"] for item in trace["associations"]} >= {"business_request", "job", "output"}
     assert trace["usage_status"] == "known"
