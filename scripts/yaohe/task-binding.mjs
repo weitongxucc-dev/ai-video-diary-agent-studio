@@ -4,6 +4,18 @@ import {id, uuid} from './arguments.mjs';
 export const taskPath = task => `/api/creation-tasks/${id(task)}`;
 export const requestPath = (task,request,phase) => `${taskPath(task)}/assistant/edit-requests/${uuid(request)}?phase=${phase}`;
 
+export function taskSnapshot(data) {
+  const task = data?.task;
+  if (!task || typeof task.workspace_id !== 'string' || !task.workspace_id
+      || (task.current_timeline_version_id !== null
+        && typeof task.current_timeline_version_id !== 'string')
+      || !Number.isInteger(task.timeline_sequence) || task.timeline_sequence < 0
+      || typeof task.output_ready !== 'boolean') {
+    throw new CliError('任务响应缺少可核验的工作区、时间线或成片状态',4);
+  }
+  return task;
+}
+
 export async function version(api,task,source) {
   const a = 'expected_timeline_version_id', b = 'expected_timeline_sequence';
   if ((a in source) !== (b in source)) throw new CliError('期望版本与序号必须一起提供');

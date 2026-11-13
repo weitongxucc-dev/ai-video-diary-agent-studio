@@ -748,3 +748,93 @@ for (const status of [403,409]) {
     assert.equal(f.calls.length,2);
   });
 }
+
+const TRACE_TURN='turn_synthetic';
+const tracePayload = (overrides={}) => ({
+  turn_id:TRACE_TURN,conversation_id:'conversation_synthetic',status:'completed',sequence:4,
+  created_at:'2026-11-13T00:00:00Z',updated_at:'2026-11-13T00:00:01Z',
+  events:[{type:'tool_end',tool_id:'read_agent_run_trace',label:'读取运行追踪',ok:true,
+    associations:[{kind:'task',ref:'task_ref_hash'}],failure:undefined,
+    raw_arguments:'must_not_be_printed',internal_path:'/private/secret/result.mp4'}],
+  event_count:1,tool_counts:{'读取运行追踪':1},compaction_count:0,
+  provider_usage:{input:4,output:2,totalTokens:6},usage_status:'known',usage_source:'provider',
+  associations:[{kind:'turn',ref:'turn_ref_hash'}],business_status:'completed',evidence_candidates:[],
+  started_at:'2026-11-13T00:00:00Z',ended_at:'2026-11-13T00:00:01Z',duration_ms:1000,
+  failure_class:null,retry_count:0,
+  ...overrides,
+});
+
+test('run trace reads a redacted turn and preserves measured provider usage without raw fields',async t=>{
+  const f=await fixture(t,(_call,res)=>send(res,200,tracePayload()));
+  const result=await f.cli('run','trace',TRACE_TURN);
+  assert.equal(result.code,0,result.output);
+  assert.equal(result.json.data.usage_status,'known');
+  assert.deepEqual(result.json.data.provider_usage,{input:4,output:2,totalTokens:6});
+  assert.equal(result.json.data.events[0].raw_arguments,undefined);
+  assert.equal(result.json.data.events[0].internal_path,undefined);
+  assert.ok(!result.output.includes('must_not_be_printed'));
+  assert.equal(f.calls[0].url,`/api/assistant/turns/${TRACE_TURN}/trace`);
+});
+
+test('task-scoped run trace reads the task snapshot before the trace and exposes timeline context',async t=>{
+  const f=await fixture(t,(call,res)=>call.url===PREFIX
+    ? send(res,200,{task:{workspace_id:'workspace_from_api',current_timeline_version_id:'version_trace',
+        timeline_sequence:13,output_ready:true}})
+    : send(res,200,tracePayload({provider_usage:null,usage_status:'unknown',usage_source:null})));
+  const result=await f.cli('run','trace',TRACE_TURN,'--task',TASK);
+  assert.equal(result.code,0,result.output);
+  assert.equal(result.json.data.usage_status,'unknown');
+  assert.equal(result.json.data.provider_usage,null);
+  assert.deepEqual(result.json.data.task_snapshot,{task_id:TASK,workspace_id:'workspace_from_api',
+    current_timeline_version_id:'version_trace',timeline_sequence:13,output_ready:true});
+  assert.deepEqual(f.calls.map(call=>[call.method,call.url]),[
+    ['GET',PREFIX],['GET',`/api/assistant/turns/${TRACE_TURN}/trace`]]);
+});
+
+test('run trace preserves an API-provided estimated usage state without inventing amounts',async t=>{
+  const f=await fixture(t,(_call,res)=>send(res,200,tracePayload({usage_status:'estimated',
+    provider_usage:null,usage_source:'runtime_estimate'})));
+  const result=await f.cli('run','trace',TRACE_TURN);
+  assert.equal(result.code,0,result.output);
+  assert.equal(result.json.data.usage_status,'estimated');
+  assert.equal(result.json.data.provider_usage,null);
+});
+
+test('run trace preserves redacted runtime duration and retry fields',async t=>{
+  const f=await fixture(t,(_call,res)=>send(res,200,tracePayload({
+    events:[{step:1,type:'tool_start',at:'2026-11-13T00:00:00.100Z',tool_name:'read_task'},
+      {step:2,type:'tool_end',at:'2026-11-13T00:00:00.300Z',tool_name:'read_task',status:'failed',
+        failure_class:'business_tool_failed',duration_ms:200,tool_call_ref:'opaque_ref'}],
+    event_count:2,started_at:'2026-11-13T00:00:00.100Z',ended_at:'2026-11-13T00:00:00.300Z',
+    duration_ms:200,failure_class:'business_tool_failed',retry_count:1,
+  })));
+  const result=await f.cli('run','trace',TRACE_TURN);
+  assert.equal(result.code,0,result.output);
+  assert.equal(result.json.data.duration_ms,200);
+  assert.equal(result.json.data.retry_count,1);
+  assert.equal(result.json.data.events[1].duration_ms,200);
+  assert.equal(result.json.data.events[1].failure_class,'business_tool_failed');
+});
+
+test('run trace maps failed turns to a nonzero exit while retaining the redacted failure reason',async t=>{
+  const f=await fixture(t,(_call,res)=>send(res,200,tracePayload({status:'failed',events:[{
+    type:'tool_end',tool_id:'start_creation_execution',label:'开始制作',ok:false,
+    failure:{error:'render unavailable',code:'device_unavailable',stage:'render',submission_effect:'not_submitted'},
+  }]})));
+  const result=await f.cli('run','trace',TRACE_TURN);
+  assert.equal(result.code,1,result.output);
+  assert.equal(result.json.state,'failed');
+  assert.equal(result.json.data.events[0].failure.error,'render unavailable');
+  assert.equal(result.json.data.events[0].failure.internal_path,undefined);
+});
+
+test('run trace keeps unknown turn results and invalid trace data nonzero',async t=>{
+  let reads=0;
+  const f=await fixture(t,(call,res)=>call.url.endsWith('/trace')
+    ? (++reads===1 ? send(res,200,tracePayload({status:'unknown',usage_status:'unknown',provider_usage:null})) : send(res,200,{}))
+    : send(res,200,{}));
+  const unknown=await f.cli('run','trace',TRACE_TURN);
+  assert.equal(unknown.code,4,unknown.output);
+  const malformed=await f.cli('run','trace',TRACE_TURN);
+  assert.equal(malformed.code,4,malformed.output);
+});

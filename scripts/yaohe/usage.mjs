@@ -26,6 +26,7 @@ export const HELP = `曜核 CLI — Node >=22，普通业务 API 消费者
   execution resume TASK
   execution wait TASK JOB [--timeout-seconds 30]
   output download TASK --file PATH
+  run trace TURN [--task TASK]
   request query TASK UUID [--phase preview|apply|script]
   job inspect|wait|cancel TASK JOB [--timeout-seconds 30]
   timeline undo|redo TASK [--expected-version VERSION --expected-sequence N]
