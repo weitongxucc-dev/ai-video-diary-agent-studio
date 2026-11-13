@@ -56,6 +56,22 @@ export function validateSkillManifest(manifest, {skillName, skillPath} = {}) {
   if (manifest.runtime.network !== false || manifest.runtime.shell !== false || manifest.runtime.arbitrary_code !== false) {
     invalid("runtime 必须明确关闭 network、shell 和 arbitrary_code");
   }
+  if (!manifest.install_checks || typeof manifest.install_checks !== "object") invalid("缺少 install_checks");
+  nonEmptyString(manifest.install_checks.mode, "install_checks.mode");
+  stringList(manifest.install_checks.checks, "install_checks.checks");
+  if (manifest.install_checks.network !== false || manifest.install_checks.shell !== false || manifest.install_checks.arbitrary_code !== false) {
+    invalid("install_checks 必须明确关闭 network、shell 和 arbitrary_code");
+  }
+  if (!manifest.adoption || typeof manifest.adoption !== "object") invalid("缺少 adoption");
+  nonEmptyString(manifest.adoption.entrypoint, "adoption.entrypoint");
+  if (manifest.adoption.status !== "installed" || manifest.adoption.writes !== false || manifest.adoption.requires_explicit_edit_authorization !== true) {
+    invalid("adoption 必须是 installed、只读且要求明确编辑授权");
+  }
+  if (!manifest.rollback || typeof manifest.rollback !== "object") invalid("缺少 rollback");
+  nonEmptyString(manifest.rollback.mode, "rollback.mode");
+  nonEmptyString(manifest.rollback.pre_adoption, "rollback.pre_adoption");
+  nonEmptyString(manifest.rollback.post_adoption, "rollback.post_adoption");
+  if (manifest.rollback.deletes_user_data !== false) invalid("rollback 不得删除用户数据");
   if (!manifest.provenance || typeof manifest.provenance !== "object") invalid("缺少 provenance");
   nonEmptyString(manifest.provenance.repository, "provenance.repository");
   nonEmptyString(manifest.provenance.revision, "provenance.revision");

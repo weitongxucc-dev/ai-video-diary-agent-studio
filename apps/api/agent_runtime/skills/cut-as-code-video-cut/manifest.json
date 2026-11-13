@@ -38,6 +38,31 @@
     "arbitrary_code": false,
     "shell": false
   },
+  "install_checks": {
+    "mode": "package-time",
+    "network": false,
+    "shell": false,
+    "arbitrary_code": false,
+    "checks": [
+      "manifest schema and SKILL.md name match",
+      "SPDX license is approved before loading",
+      "repository revision and provenance path are fixed",
+      "declared product tools are in the host allowlist"
+    ]
+  },
+  "adoption": {
+    "entrypoint": "read_creation_skill",
+    "status": "installed",
+    "writes": false,
+    "requires_explicit_edit_authorization": true,
+    "write_boundary": "局部编辑只能沿现有 preview_typed_edit/apply_typed_edit 与 EditProposal/TimelineVersion；Skill 本身不写时间线。"
+  },
+  "rollback": {
+    "mode": "pinned-package-revert",
+    "pre_adoption": "移除当前 Skill 包并恢复上一份通过校验的固定版本，再重新加载可信目录。",
+    "post_adoption": "已采用的时间线修改沿 read_edit_history、undo_last_edit 或原请求回读恢复；未知结果先查原请求，不换 request_id 重放。",
+    "deletes_user_data": false
+  },
   "provenance": {
     "repository": "https://github.com/WhiteTowerAI/cut-as-code",
     "path": "skills/video-cut/SKILL.md",
