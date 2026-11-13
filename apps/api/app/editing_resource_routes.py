@@ -54,4 +54,23 @@ def build_editing_resource_router(catalog_for: Callable):
             raise HTTPException(status_code=404, detail="资源版本不存在")
         return item.model_dump(mode="json")
 
+    @router.get("/api/editing-resources/{resource_id}/preflight")
+    def preflight_editing_resource(resource_id: str, version: int = Query(default=1, ge=1)):
+        catalog = catalog_for()
+        item = next((item for item in catalog.resources if item.id == resource_id and item.version == version), None)
+        if item is None:
+            raise HTTPException(status_code=404, detail="资源版本不存在")
+        requirements = item.runtime_requirements
+        return {
+            "resource_id": item.id,
+            "version": item.version,
+            "status": item.status,
+            "ready": item.status == "connected",
+            "provenance": [entry.model_dump(mode="json") for entry in item.provenance],
+            "install_checks": requirements.get("install_checks", {"mode": "not_declared", "checks": []}),
+            "adoption": requirements.get("adoption", {"status": "not_declared"}),
+            "rollback": requirements.get("rollback", {"mode": "not_declared"}),
+            "write_boundary": "资源导入/读取本身只读；编辑采用仍须经现有 EditProposal/TimelineVersion。",
+        }
+
     return router
