@@ -253,7 +253,7 @@ it("keeps failed settings reads distinct from missing programs or databases", as
   const status = screen.getByRole("complementary", { name: "设置状态" });
   expect(within(status).queryByText("未创建")).toBeNull();
   expect(within(status).queryByText("未找到程序")).toBeNull();
-  expect(within(status).getAllByText("暂时无法读取配置")).toHaveLength(3);
+  expect(within(status).getAllByText("暂时无法读取配置")).toHaveLength(4);
 });
 
 it("exposes every settings destination directly and keeps public legal links in About",async()=>{
@@ -261,7 +261,7 @@ it("exposes every settings destination directly and keeps public legal links in 
  render(await SettingsPage({searchParams:Promise.resolve({section:"about"})}));
  const nav=screen.getByRole("navigation",{name:"设置分类"});
  expect(within(nav).getAllByRole("link")).toHaveLength(10);
- for(const label of ["创作者与成员","外观","对话服务","制作习惯","声音库","保存位置","听写设置","资料来源","运行与诊断","关于与隐私"])expect(within(nav).getByRole("link",{name:label})).toBeInTheDocument();
+ for(const label of ["我的空间","外观与操作","AI 服务","创作默认","人物与声音","素材与存储","听写与设备","信息源","高级诊断","隐私、帮助与关于"])expect(within(nav).getByRole("link",{name:label})).toBeInTheDocument();
  expect(screen.getByRole("link",{name:"隐私政策"})).toHaveAttribute("href","/privacy");expect(screen.getByRole("link",{name:"使用条款"})).toHaveAttribute("href","/terms");expect(screen.getByRole("button",{name:"打开使用帮助"})).toBeInTheDocument();
 });
 
@@ -271,5 +271,5 @@ it.each(["model", "production", "voices", "asr"] as const)("keeps creation deep 
  render(await SettingsPage({searchParams:Promise.resolve({section})}));
  const nav=screen.getByRole("navigation",{name:"设置分类"});
  expect(within(nav).getByRole("link",{current:"page"})).toHaveAttribute("href",`/settings?section=${section}`);
- expect(within(nav).getByRole("link",{name:{model:"对话服务",production:"制作习惯",voices:"声音库",asr:"听写设置"}[section]!})).toHaveAttribute("href",`/settings?section=${section}`);
+ expect(within(nav).getByRole("link",{name:{model:"AI 服务",production:"创作默认",voices:"人物与声音",asr:"听写与设备"}[section]!})).toHaveAttribute("href",`/settings?section=${section}`);
 });

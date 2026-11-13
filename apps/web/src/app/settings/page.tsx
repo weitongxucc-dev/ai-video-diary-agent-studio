@@ -402,16 +402,16 @@ const SETTINGS_CATEGORIES: Array<{
   label: string;
   description: string;
 }> = [
-  { id: "creators", label: "创作者与成员", description: "当前身份与成员名册" },
-  { id: "appearance", label: "外观", description: "界面主题" },
-  { id: "model", label: "对话服务", description: "模型服务、能力与连接" },
-  { id: "production", label: "制作习惯", description: "文案时长与品牌" },
-  { id: "voices", label: "声音库", description: "默认声音与授权" },
-  { id: "paths", label: "保存位置", description: "移动硬盘与输出" },
-  { id: "asr", label: "听写设置", description: "云端与本地 ASR" },
-  { id: "sources", label: "资料来源", description: "知识库与外部来源" },
-  { id: "runtime", label: "运行与诊断", description: "本机检查和修复" },
-  { id: "about", label: "关于与隐私", description: "帮助、法律和使用说明" },
+  { id: "creators", label: "我的空间", description: "身份、工作区与成员" },
+  { id: "appearance", label: "外观与操作", description: "主题和界面偏好" },
+  { id: "model", label: "AI 服务", description: "对话服务与连接状态" },
+  { id: "production", label: "创作默认", description: "新任务的语言、时长与品牌" },
+  { id: "voices", label: "人物与声音", description: "默认人物、声音与授权" },
+  { id: "paths", label: "素材与存储", description: "素材库和导出位置" },
+  { id: "asr", label: "听写与设备", description: "转写方式和本机能力" },
+  { id: "sources", label: "信息源", description: "外部来源和连接细节" },
+  { id: "runtime", label: "高级诊断", description: "运行检查和修复入口" },
+  { id: "about", label: "隐私、帮助与关于", description: "数据说明、法律和版本" },
 ];
 
 export default async function SettingsPage({
@@ -462,8 +462,12 @@ export default async function SettingsPage({
               <dd>{!status ? "暂时无法读取配置" : status.video.ffmpeg_available ? "已找到程序" : "未找到程序"}</dd>
             </div>
             <div>
-              <dt>数据库</dt>
-              <dd>{!status ? "暂时无法读取配置" : status.storage.database_exists ? "已创建" : "未创建"}</dd>
+              <dt>素材接收目录</dt>
+              <dd>{!status ? "暂时无法读取配置" : status.video.inbox_exists ? "可用" : "未准备"}</dd>
+            </div>
+            <div>
+              <dt>输出目录</dt>
+              <dd>{!status ? "暂时无法读取配置" : status.video.output_exists ? "可用" : "未准备"}</dd>
             </div>
           </dl>
           <p>密钥只显示是否已填写，不会返回原文。</p>
@@ -474,10 +478,12 @@ export default async function SettingsPage({
       <div className={`workspace-page ${own.page}`}>
         <nav className={own.categoryNav} aria-label="设置分类">
           {SETTINGS_CATEGORIES.map(category => <Link
+            aria-label={category.label}
+            aria-describedby={`settings-category-${category.id}-description`}
             aria-current={activeCategory === category.id ? "page" : undefined}
             href={`/settings?section=${category.id}`}
             key={category.id}
-          >{category.label}</Link>)}
+          ><span className={own.categoryLabel}>{category.label}</span><small id={`settings-category-${category.id}-description`}>{category.description}</small></Link>)}
         </nav>
         <section className={`${own.main} ${formStyles.surface} ${voiceStyles.surface}`}>
           {offline ? <p role="alert">暂时无法连接本地服务。</p> : null}
