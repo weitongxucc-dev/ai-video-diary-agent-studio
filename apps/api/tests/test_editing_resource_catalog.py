@@ -96,3 +96,11 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
 def test_resource_detail_returns_404_for_unknown_version():
     response = client.get("/api/editing-resources/template:missing", params={"version": 2})
     assert response.status_code == 404
+
+
+def test_failed_is_a_supported_import_outcome_without_promoting_the_resource():
+    catalog = editing_resource_catalog()
+    assert "failed" in ("connected", "catalog_only", "planned", "failed")
+    response = client.get("/api/editing-resource-catalog", params={"status": "failed"})
+    assert response.status_code == 200
+    assert response.json()["resources"] == []

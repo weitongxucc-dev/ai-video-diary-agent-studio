@@ -14,7 +14,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.creation.visual_template_catalog import visual_templates
 
-ResourceStatus = Literal["connected", "catalog_only", "planned"]
+# ``failed`` is a persisted outcome for an attempted import or adapter check;
+# it is intentionally distinct from ``planned`` (never attempted) and
+# ``catalog_only`` (known resource without a connected write adapter).
+ResourceStatus = Literal["connected", "catalog_only", "planned", "failed"]
 
 
 class ResourcePreview(BaseModel):
