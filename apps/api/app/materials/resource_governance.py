@@ -31,6 +31,7 @@ _RESOURCE_STATES = {"candidate", "catalog_only", "planned", "connected"}
 _LICENSE_LAYERS = {"asset", "font", "model", "service"}
 _STAGES = {"candidate", "installed", "imported", "adopted", "task_input", "timeline", "render", "output_observation"}
 _EXECUTABLE_STAGES = {"adopted", "task_input", "timeline", "render", "output_observation"}
+_OUTCOMES = {"succeeded", "failed", "unknown", "blocked"}
 
 
 def _json(value: object) -> str:
@@ -281,6 +282,32 @@ class ResourceGovernanceStore:
             records = [item for item in records if item.observation_ref == observation_ref]
         manifests = {item.manifest_id: self.get_manifest(workspace_id, item.manifest_id) for item in records}
         return [{"manifest": self._manifest_payload(manifests[item.manifest_id]), "usage": self._usage_payload(item)} for item in records]
+
+    def update_usage_outcome(self, workspace_id: str, usage_id: str, *, outcome: str, reason: str | None = None) -> ResourceUsageRecord:
+        """Persist a terminal/unknown observation without changing resource state."""
+        if outcome not in _OUTCOMES:
+            raise ValueError("资源使用结果状态无效")
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM resource_usage_records WHERE workspace_id=? AND id=?",
+                (workspace_id, usage_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError(usage_id)
+            metadata = json.loads(str(row["metadata_json"]))
+            metadata["outcome"] = outcome
+            if reason:
+                metadata["outcome_reason"] = reason[:500]
+            conn.execute(
+                "UPDATE resource_usage_records SET metadata_json=? WHERE workspace_id=? AND id=?",
+                (_json(metadata), workspace_id, usage_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM resource_usage_records WHERE workspace_id=? AND id=?",
+                (workspace_id, usage_id),
+            ).fetchone()
+        assert row is not None
+        return self._usage_from_row(row)
 
     def _save_manifest_connection(self, conn: sqlite3.Connection, manifest: ResourceManifest) -> None:
         self._validate_manifest(manifest)
