@@ -279,6 +279,7 @@ function AssistantTurnTracePanel({ turn, reading }: { turn: AssistantConversatio
       <ol className="assistant-trace-events" aria-label="运行事件">
         {trace.events.map((event, index) => <li key={`${event.type}-${event.step ?? index}`}><span>{event.type}{event.tool_name ? ` · ${event.tool_name}` : event.label ? ` · ${event.label}` : ""}</span><small>{traceTime(event.at)} · {traceEventStatus(event.status)} · {traceDuration(event.duration_ms)}{event.failure_class ? ` · ${traceFailureLabels[event.failure_class] ?? "运行失败"}` : ""}</small></li>)}
       </ol>
+      {trace.next_before != null ? <Button variant="ghost" type="button" onClick={() => void getAssistantTurnTrace(turn.id, trace.next_before).then(value => setTrace(current => current ? { ...value, events: [...value.events, ...current.events] } : value))}>加载更早事件</Button> : null}
     </div> : state === "ready" ? <p>本轮没有可展示的运行事件。</p> : <p>展开后读取只读运行账本。</p>}
   </details>;
 }

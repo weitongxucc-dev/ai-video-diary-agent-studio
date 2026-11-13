@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
   readWindow: vi.fn(),
   withdrawAssistantInput: vi.fn(),
   getAssistantCapabilities: vi.fn(),
+  getAssistantTurnTrace: vi.fn(),
   getCurrentAssistantConversation: vi.fn(),
   listAssistantConversations: vi.fn(),
   updateAssistantConversation: vi.fn(),
@@ -124,6 +125,28 @@ it("shows a real business continuation without fabricating a user message or emp
   expect(rendered.container.querySelector(".assistant-user-message")).toBeNull();
   expect(screen.queryByRole("button", {name: "继续编辑本条要求"})).not.toBeInTheDocument();
   expect(screen.getByText("接续未完成；原要求和实际结果保留在记录中。")).toBeVisible();
+});
+
+it("loads earlier persisted trace events and keeps the newest page visible", async () => {
+  api.getAssistantTurnTrace.mockImplementation(async (_turnId: string, before?: number | null) => ({
+    turn_id: "turn-one", conversation_id: "conversation-one", session_id: null, status: "completed",
+    sequence: 1, created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:01Z",
+    events: (before == null ? [3, 4] : [1, 2]).map(step => ({type: "tool_start", step, label: `事件${step}`})),
+    event_count: 4, events_returned: 2, next_before: before == null ? 2 : null,
+    tool_counts: {}, compaction_count: 0, provider_usage: null, usage_status: "unknown", usage_source: null,
+    associations: [], business_status: null, evidence_candidates: [], started_at: null, ended_at: null,
+    duration_ms: null, failure_class: null, retry_count: 0,
+  }));
+  render(<AssistantConversationPanel state={state()} input="" onInput={vi.fn()} onSend={vi.fn()}
+    busy={false} configured scopeLabel="当前任务"/>);
+  fireEvent.click(screen.getByText("运行轨迹与用量"));
+  expect(await screen.findByText("tool_start · 事件4")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", {name: "加载更早事件"}));
+  expect(await screen.findByText("tool_start · 事件1")).toBeVisible();
+  expect(screen.getByText("tool_start · 事件2")).toBeVisible();
+  expect(screen.getByText("tool_start · 事件3")).toBeVisible();
+  expect(screen.getByText("tool_start · 事件4")).toBeVisible();
+  expect(api.getAssistantTurnTrace).toHaveBeenNthCalledWith(2, "turn-one", 2);
 });
 
 function projectedTaskConversation(status: "queued" | "unknown" | "proposed" | "confirmed" | "rejected"): AssistantConversation {

@@ -29,6 +29,43 @@ def test_project_turn_trace_marks_missing_provider_usage_unknown():
     assert trace["provider_usage"] is None
 
 
+def test_project_turn_trace_paginates_older_events_without_changing_usage_or_associations():
+    turn = {
+        "id": "turn-page", "conversation_id": "conversation-1", "status": "completed", "sequence": 1,
+        "created_at": "now", "updated_at": "now",
+        "events": [{"type": "tool_start", "tool_id": index, "label": f"工具{index}"} for index in range(5)],
+        "result": {"usage_status": "known", "provider_usage": {"input": 4, "output": 2, "totalTokens": 6}},
+    }
+    latest = project_turn_trace(turn, limit=2)
+    assert latest["event_count"] == 5
+    assert latest["events_returned"] == 2
+    assert latest["next_before"] == 3
+    older = project_turn_trace(turn, before=latest["next_before"], limit=2)
+    assert [event["tool_id"] for event in older["events"]] == [1, 2]
+    assert older["next_before"] == 1
+    assert older["provider_usage"] == latest["provider_usage"]
+
+
+def test_project_turn_trace_paginates_runtime_events_beyond_default_page():
+    turn = {
+        "id": "turn-runtime-page", "conversation_id": "conversation-1", "status": "completed", "sequence": 1,
+        "created_at": "now", "updated_at": "now",
+        "result": {"trace_events": [
+            {"type": "retry", "event_id": f"event-{index}", "at_ms": index}
+            for index in range(205)
+        ]},
+        "events": [],
+    }
+    latest = project_turn_trace(turn)
+    assert latest["event_count"] == 205
+    assert latest["events_returned"] == 200
+    assert latest["next_before"] == 5
+    oldest = project_turn_trace(turn, before=5)
+    assert oldest["events_returned"] == 5
+    assert all(len(event["event_id"]) == 20 for event in oldest["events"])
+    assert oldest["events"][0]["event_id"] != latest["events"][0]["event_id"]
+
+
 def test_project_turn_trace_correlates_redacted_tool_business_job_and_output_refs():
     trace = project_turn_trace({
         "id": "turn-3", "conversation_id": "conversation-1", "status": "completed", "sequence": 1,
