@@ -26,3 +26,10 @@
 .catalogError { display:grid; place-items:center; gap:8px; min-height:220px; padding:28px; border:1px dashed var(--danger); border-radius:8px; color:var(--danger); text-align:center; }
 .catalogError p { margin:0; }
 .catalogError button { min-height:30px; padding:5px 9px; border:1px solid var(--border-1); border-radius:7px; background:var(--surface-1); color:var(--text-1); font:inherit; font-size:12px; cursor:pointer; }
+.catalogActions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+.catalogActions button { min-block-size:30px; padding:5px 9px; border:1px solid var(--border-1); border-radius:7px; background:var(--surface-1); color:var(--text-1); font:inherit; font-size:11px; cursor:pointer; }
+.catalogActions span { color:var(--text-3); font-size:11px; }
+.catalogPreview { display:grid; gap:5px; padding:9px; border:1px solid var(--border-1); border-radius:7px; background:var(--surface-2); font-size:11px; }
+.catalogPreview span,.catalogPreview p { color:var(--text-2); overflow-wrap:anywhere; }
+.catalogPreview p { margin:5px 0 0; line-height:16px; }
+.catalogPreview details summary { cursor:pointer; color:var(--text-1); }
