@@ -33,3 +33,5 @@
 .catalogPreview span,.catalogPreview p { color:var(--text-2); overflow-wrap:anywhere; }
 .catalogPreview p { margin:5px 0 0; line-height:16px; }
 .catalogPreview details summary { cursor:pointer; color:var(--text-1); }
+.catalogPreview video { display:block; inline-size:100%; max-block-size:220px; object-fit:contain; background:#111; }
+.catalogPreview audio { inline-size:100%; }

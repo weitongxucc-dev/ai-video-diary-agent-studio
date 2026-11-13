@@ -18,6 +18,9 @@ test("packaged external editing skill has a fixed, safe manifest", async () => {
   assert.equal(manifest.install_checks.mode, "package-time");
   assert.equal(manifest.adoption.status, "installed");
   assert.equal(manifest.rollback.deletes_user_data, false);
+  assert.match(manifest.rollback.post_adoption, /原请求/);
+  assert.match(manifest.rollback.post_adoption, /read_edit_history/);
+  assert.match(manifest.rollback.post_adoption, /undo_last_edit/);
   assert.ok(manifest.dependencies.tools.includes("preview_typed_edit"));
   assert.match(await readFile(manifest.skillPath, "utf8"), /受控适配/);
 });
@@ -30,6 +33,9 @@ test("OpenFilm replicate skill is packaged as a method-only adapter", async () =
   assert.equal(manifest.provenance.license_spdx, "MIT");
   assert.equal(manifest.runtime.runnable, false);
   assert.equal(manifest.runtime.network, false);
+  assert.match(manifest.rollback.post_adoption, /原请求/);
+  assert.match(manifest.rollback.post_adoption, /read_edit_history/);
+  assert.match(manifest.rollback.post_adoption, /undo_last_edit/);
   assert.ok(manifest.dependencies.tools.includes("read_editing_resource_catalog"));
   assert.match(await readFile(manifest.skillPath, "utf8"), /参考视频/);
 });
