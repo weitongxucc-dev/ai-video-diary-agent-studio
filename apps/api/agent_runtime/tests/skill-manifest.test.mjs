@@ -22,6 +22,18 @@ test("packaged external editing skill has a fixed, safe manifest", async () => {
   assert.match(await readFile(manifest.skillPath, "utf8"), /受控适配/);
 });
 
+test("OpenFilm replicate skill is packaged as a method-only adapter", async () => {
+  const manifests = await loadSkillManifests(join(root, "skills"));
+  const manifest = manifests.get("openfilm-replicate");
+  assert.equal(manifest.provenance.repository, "https://github.com/openfilm/skill-replicate");
+  assert.equal(manifest.provenance.revision, "eef1ee5eda2a2aaeec60a3f133d73b86dd53c053");
+  assert.equal(manifest.provenance.license_spdx, "MIT");
+  assert.equal(manifest.runtime.runnable, false);
+  assert.equal(manifest.runtime.network, false);
+  assert.ok(manifest.dependencies.tools.includes("read_editing_resource_catalog"));
+  assert.match(await readFile(manifest.skillPath, "utf8"), /参考视频/);
+});
+
 test("manifest rejects external execution and tools outside the product boundary", () => {
   const base = {
     schema_version: 1, name: "test", version: "1", entry: {skill: "x", adapter: "y"},
@@ -39,4 +51,5 @@ test("manifest rejects external execution and tools outside the product boundary
   assert.throws(() => validateSkillManifest({...base, runtime: {...base.runtime, runnable: true}}), /不可直接运行/);
   assert.throws(() => validateSkillManifest({...base, rollback: {...base.rollback, deletes_user_data: true}}), /删除用户数据/);
   assert.throws(() => validateSkillManifest({...base, dependencies: {skills: [], tools: ["bash"]}}), /未受控工具/);
+  assert.equal(validateSkillManifest({...base, provenance: {...base.provenance, license: "Other", license_spdx: "LicenseRef-Local"}}).provenance.license_spdx, "LicenseRef-Local");
 });

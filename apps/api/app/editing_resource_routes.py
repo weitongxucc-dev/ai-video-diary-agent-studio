@@ -4,8 +4,9 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 
-from app.editing_resource_catalog import ResourceStatus, search_editing_resources
+from app.editing_resource_catalog import ResourceStatus, resource_preview_path, search_editing_resources
 
 
 def build_editing_resource_router(catalog_for: Callable):
@@ -73,5 +74,17 @@ def build_editing_resource_router(catalog_for: Callable):
             "rollback": requirements.get("rollback", {"mode": "not_declared"}),
             "write_boundary": "资源导入/读取本身只读；编辑采用仍须经现有 EditProposal/TimelineVersion。",
         }
+
+    @router.get("/api/editing-resources/{resource_id}/preview")
+    def read_editing_resource_preview(resource_id: str, version: int = Query(default=1, ge=1), representation: str = Query(default="media", pattern="^(media|poster)$")):
+        catalog = catalog_for()
+        item = next((item for item in catalog.resources if item.id == resource_id and item.version == version), None)
+        if item is None:
+            raise HTTPException(status_code=404, detail="资源版本不存在")
+        path = resource_preview_path(resource_id, representation)
+        if path is None:
+            raise HTTPException(status_code=404, detail="资源预览不存在")
+        media_type = "image/jpeg" if representation == "poster" else {"audio": "audio/mp4", "video": "video/mp4"}.get(item.preview.kind, "application/octet-stream")
+        return FileResponse(path, media_type=media_type, filename=path.name)
 
     return router

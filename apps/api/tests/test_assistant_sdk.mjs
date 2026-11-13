@@ -51,7 +51,7 @@ test("SDK owns two editing rounds, safe steering/follow-up, persisted history an
     const options = { modulePath, cwd, sessionId, sessionDir: join(cwd, "sessions"),
       modelId: "synthetic-editor", systemPrompt: "你是视频编辑助手。按真实工具回执回答。", tools: [edit.name], customTools: [edit], extensionFactories:[inputExtension] };
     current = await openCreationSession(options);
-    assert.deepEqual(current.resourceLoader.getSkills().skills.map(s => s.name).sort(), ["cut-as-code-video-cut", "local-edit", "narration-materials", "source-speech", "visual-template"]);
+    assert.deepEqual(current.resourceLoader.getSkills().skills.map(s => s.name).sort(), ["cut-as-code-video-cut", "local-edit", "narration-materials", "openfilm-replicate", "source-speech", "visual-template"]);
     assert.deepEqual(current.session.getActiveToolNames().sort(), ["edit_caption", "read_creation_skill"]);
     const events = [];
     current.session.subscribe(event => events.push(event));

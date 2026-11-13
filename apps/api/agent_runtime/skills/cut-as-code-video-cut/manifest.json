@@ -47,7 +47,7 @@
     "arbitrary_code": false,
     "checks": [
       "manifest schema and SKILL.md name match",
-      "SPDX license is approved before loading",
+      "provenance records the declared license before loading",
       "repository revision and provenance path are fixed",
       "declared product tools are in the host allowlist"
     ]

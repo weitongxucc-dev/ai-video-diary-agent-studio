@@ -186,13 +186,18 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
         {name: "local-edit", status: "installed", purpose: "局部修改"},
         {name: "visual-template", status: "installed", purpose: "可编辑视觉模板与程序化制作"},
       ];
-      const manifest = (await loadSkillManifests(packagedSkillsRoot)).get("cut-as-code-video-cut");
-      if (!manifest) throw new Error("受控粗剪 Skill manifest 未随当前版本发布");
-      const {skillPath: _skillPath, ...publicManifest} = manifest;
-      skills.push({name: manifest.name, status: "installed", purpose: "证据驱动粗剪适配",
-        version: manifest.version, provenance: manifest.provenance, evaluation: manifest.evaluation,
-        manifest: publicManifest});
-      const details = {resources, skills, provenance_fields: ["repository", "revision", "license", "asset_license", "path", "license_spdx", "source_sha256", "font_license", "model_license", "service_terms"], instruction: "只有 status=connected 且本轮读取到真实版本的资源可进入 EditProposal；方法文档 Skill 不可直接运行；外部资源必须逐项登记来源和许可。"};
+      const manifests = await loadSkillManifests(packagedSkillsRoot);
+      const purposes: Record<string, string> = {
+        "cut-as-code-video-cut": "证据驱动粗剪适配",
+        "openfilm-replicate": "参考视频镜头与节奏复刻适配",
+      };
+      for (const manifest of manifests.values()) {
+        const {skillPath: _skillPath, ...publicManifest} = manifest;
+        skills.push({name: manifest.name, status: "installed", purpose: purposes[manifest.name] ?? "受控创作方法适配",
+          version: manifest.version, provenance: manifest.provenance, evaluation: manifest.evaluation,
+          manifest: publicManifest});
+      }
+      const details = {resources, skills, provenance_fields: ["repository", "revision", "license", "asset_license", "path", "license_spdx", "source_sha256", "font_license", "model_license", "service_terms"], instruction: "只有 status=connected 且本轮读取到真实版本的资源可进入 EditProposal；方法文档 Skill 不可直接运行；外部资源逐项登记来源和版本，便于回滚和复现。"};
       return {content: [{type: "text", text: JSON.stringify(details)}], details};
     },
   });
