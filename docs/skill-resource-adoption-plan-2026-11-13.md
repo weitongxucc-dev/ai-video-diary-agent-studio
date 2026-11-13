@@ -40,6 +40,18 @@
 | Remotion skills、motion-canvas、HyperFrames | 可作为未来程序化动效研究对象；当前需要额外运行时、字体和媒体依赖，暂不并入核心。 |
 | OpenTimelineIO | 可作为未来时间线交换格式候选；当前数据治理和 `TimelineVersion` 写入边界优先。 |
 
+## 其他成熟项目的吸收方式
+
+我们可以直接采用成熟项目已经做好的内容，按“资源直接入库、方法改成曜核 Skill、产品运行时做适配”三种方式吸收：
+
+| 来源 | 直接吸收 | 转成曜核能力 | 暂不整包搬入的部分 |
+| --- | --- | --- | --- |
+| [OpenFilm](https://github.com/openfilm/openfilm) / [library](https://github.com/openfilm/library) | 模板、音效、音乐、贴纸、滤镜、特效、转场和预览文件 | `openfilm-replicate`、资源 manifest、素材预览和 `EditProposal` 入口 | OpenFilm Studio/CLI 自己的编辑器运行时 |
+| [OpenFilm skills](https://github.com/openfilm/skills) | Skill 索引、Skill brief 和评测写法 | 固定 revision 的方法 Skill、输入输出声明和 Trace/回放评测 | OpenFilm 的安装器和第二套 Agent 循环 |
+| [OpenChatCut](https://github.com/0xsline/OpenChatCut) | 多轨剪辑、字幕驱动剪辑、动效/转场/LUT、主体安全区、导出和 MCP 的成熟交互与流程 | 映射为曜核的资源类型、编辑提案、Trace 事件、输出观察和 CLI/手机端契约 | 整套 Electron/Remotion/MCP 编辑器运行时 |
+
+因此“采用”并不等于只能把整个产品复制过来。我们会优先把已经能直接工作的模板、音频、视觉效果和 Skill 放进资源库；对于需要接入曜核时间线的数据结构或渲染引擎的部分，再写最小适配器，把成熟能力接到曜核已有的治理和回滚路径上。
+
 ## 当前资源库实际内容
 
 | 分类 | 当前状态 | 实际内容 |
