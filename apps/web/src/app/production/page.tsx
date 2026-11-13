@@ -210,20 +210,6 @@ export default async function ProductionPage({
         : { label: "工作区存在阻断" }}
     >
       <div className="modern-queue">
-        {!readiness.ready ? (
-          <section className="queue-gate queue-gate--blocked">
-            <AlertCircle size={20} />
-            <div>
-              <strong>开始制作前还有 {readiness.blockers.length} 项需要处理</strong>
-              <p>{readiness.blockers[0]?.message}</p>
-            </div>
-            <Link href={readiness.approved_segment_count ? "/settings" : "/library"}>
-              {readiness.approved_segment_count ? "打开制作设置" : "审核素材"}
-              <ArrowRight size={14} />
-            </Link>
-          </section>
-        ) : null}
-
         <section className="queue-section">
           <header>
             <h2>最近任务</h2>

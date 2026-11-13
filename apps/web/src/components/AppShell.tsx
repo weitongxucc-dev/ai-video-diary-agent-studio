@@ -10,7 +10,6 @@ import { DesktopHeader } from "./DesktopHeader";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Activity,
-  AudioLines,
   ArrowLeft,
   BookOpen,
   LoaderCircle,
@@ -19,7 +18,6 @@ import {
   Home,
   Library,
   MessageSquare,
-  Music2,
   PanelRight,
   Plus,
   RefreshCw,
@@ -29,7 +27,6 @@ import {
   SunMoon,
   UserRound,
   Users,
-  Wand2,
 } from "lucide-react";
 import {
   useEffect,
@@ -83,24 +80,6 @@ const primaryNav: NavItem[] = [
   { href: "/templates?mode=manage", label: "视频模板", icon: FileStack },
   { href: "/history", label: "发布与数据", icon: Activity },
   { href: "/production?view=automations", label: "定时任务", icon: Sparkles },
-];
-
-// Functional destinations stay separate from the editor's asset-library panel.
-// The panel can be opened beside a task with mode=panel and keeps unavailable
-// catalogs explicit instead of presenting them as ready-to-use assets.
-const resourceNav: NavItem[] = [
-  { href: "/library?mode=panel&resource=materials", label: "素材", icon: Library, activePath: "/library" },
-  { href: "/library?mode=panel&resource=skills", label: "技能", icon: Sparkles, activePath: "/library" },
-  { href: "/library?mode=panel&resource=stickers", label: "贴纸", icon: Sparkles, activePath: "/library" },
-  { href: "/library?mode=panel&resource=filters", label: "滤镜", icon: SunMoon, activePath: "/library" },
-  { href: "/library?mode=panel&resource=effects", label: "特效", icon: Wand2, activePath: "/library" },
-  { href: "/library?mode=panel&resource=transitions", label: "转场", icon: Clapperboard, activePath: "/library" },
-  { href: "/templates?mode=manage", label: "模板", icon: FileStack, activePath: "/templates" },
-  { href: "/library?mode=panel&resource=subtitles", label: "字幕", icon: FileStack, activePath: "/library" },
-  { href: "/library?mode=panel&resource=text", label: "字幕 / 文本", icon: FileStack, activePath: "/library" },
-  { href: "/profiles?mode=manage&view=voices", label: "配音", icon: AudioLines, activePath: "/profiles" },
-  { href: "/library?mode=panel&resource=music", label: "音乐", icon: Music2, activePath: "/library" },
-  { href: "/library?mode=panel&resource=sfx", label: "音效", icon: AudioLines, activePath: "/library" },
 ];
 
 const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
@@ -197,20 +176,6 @@ function NavigationRowsContent({ pathname, searchParams, showMembers = true }: {
   </>;
 }
 
-function ResourceNavigationRows({ pathname, searchParams, collapsed }: { pathname: string; searchParams?: Pick<URLSearchParams, "get">; collapsed: boolean }) {
-  return <div className="desktop-resource-nav" aria-label="Asset Library 资源面板">
-    {!collapsed ? <span className="desktop-nav-heading desktop-nav-heading--resource">Asset Library</span> : null}
-    {resourceNav.map(item => {
-      const ItemIcon = item.icon;
-      const resource = item.href.includes("resource=") ? item.href.split("resource=")[1] : null;
-      const active = resource
-        ? pathname === "/library" && searchParams?.get("mode") === "panel" && searchParams?.get("resource") === resource
-        : pathname === (item.activePath ?? item.href.split(/[?#]/)[0]);
-      return <Link aria-label={`资源面板：${item.label}`} aria-current={active ? "page" : undefined} className={`desktop-nav-row${active ? " is-active" : ""}`} href={item.href} title={`资源面板：${item.label}`} key={item.href}><ItemIcon size={16} strokeWidth={1.8} /><span>{item.label}</span></Link>;
-    })}
-  </div>;
-}
-
 function ToolbarLocation({ pathname }: { pathname: string }) {
   const searchParams = useSearchParams();
   return <ToolbarLocationContent pathname={pathname} searchParams={searchParams} />;
@@ -299,7 +264,6 @@ export function AppShellFrame({
   const showMembersNav = localMemberRole !== "member";
   const localAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE === "local";
   const pathname = usePathname() ?? "";
-  const navSearchParams = useSearchParams();
   const standalone = ["/settings", "/health", "/onboarding", "/privacy", "/terms", "/members", "/profile", "/learning", "/sources"].some(route => pathname === route || pathname.startsWith(`${route}/`));
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -507,10 +471,6 @@ export function AppShellFrame({
               <NavigationRows pathname={pathname} showMembers={showMembersNav} />
             </Suspense>
           </div>
-          <Suspense fallback={null}>
-            <ResourceNavigationRows pathname={pathname} searchParams={navSearchParams} collapsed={panels.collapsed} />
-          </Suspense>
-
           {panels.collapsed ? <Link href="/?new=1" className="desktop-nav-row" aria-label="新建视频" title="新建视频"><Plus size={16}/></Link> : null}
           <div className="desktop-nav-section desktop-nav-section--creation-tasks">
             <div className="desktop-nav-heading"><Link href="/" title="查看全部创作任务">创作任务</Link><Link href="/?new=1" aria-label="新建视频" title="新建视频" className="shell-icon-button"><Plus size={16}/></Link></div>

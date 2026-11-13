@@ -245,7 +245,7 @@ export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets 
           </dl>{home.storage.capacity && home.storage.capacity.total_bytes > 0 ? <progress aria-label="数据盘已用容量" value={home.storage.capacity.used_bytes} max={home.storage.capacity.total_bytes} /> : null}<Link href="/settings?section=paths">检查保存位置 <ArrowRight aria-hidden size={14} /></Link></> : <p className={styles.compactEmpty}>暂未读取设备与存储信息</p>}
         </div>
       </section>
-      {!foundation ? <div className={styles.readiness}><strong>暂时连不上制作服务</strong><Link href="/health">查看原因</Link></div> : dependencyBlockers.length && !foundation.readiness.ready ? <div className={styles.preparation} role="status"><span>制作前还有 {dependencyBlockers.length} 项需要准备。</span><button onClick={() => setPreparationOpen(true)} type="button">查看准备事项<ArrowRight aria-hidden size={14} /></button></div> : null}
+      {!foundation ? <div className={styles.readiness}><strong>暂时连不上制作服务</strong><Link href="/health">查看原因</Link></div> : dependencyBlockers.length && !foundation.readiness.ready ? <div className={styles.preparation}><span>制作准备</span><button onClick={() => setPreparationOpen(true)} type="button">查看准备事项<ArrowRight aria-hidden size={14} /></button></div> : null}
       {live?.loading ? <p className={styles.compactEmpty} role="status">正在更新首页数据…</p> : null}
       {live?.error ? <div className={styles.readiness} role="alert"><strong>部分首页数据读取失败</strong><button onClick={live.onRetry} type="button">重新读取</button><details><summary>查看详情</summary><p>{live.error}</p></details></div> : null}
     </div>
