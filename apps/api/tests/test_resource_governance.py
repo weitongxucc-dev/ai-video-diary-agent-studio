@@ -20,11 +20,11 @@ def make_store(tmp_path: Path) -> ResourceGovernanceStore:
     return repo.resource_governance
 
 
-def manifest(state: str = "connected") -> ResourceManifest:
+def manifest(state: str = "connected", resource_kind: str = "template") -> ResourceManifest:
     source_revision = {"repository": "https://example.invalid/resource", "revision": "abc123"}
     metadata = {"path": "templates/title.html", "sha256": "f" * 64}
     return ResourceManifest(
-        id="manifest-title-v1", workspace_id="ws-resource", resource_id="title", resource_kind="template",
+        id="manifest-title-v1", workspace_id="ws-resource", resource_id="title", resource_kind=resource_kind,
         resource_version="1", state=state, source_revision=source_revision,
         digest=manifest_digest(resource_id="title", resource_version="1", source_revision=source_revision, metadata=metadata),
         metadata=metadata,
@@ -47,6 +47,18 @@ def test_manifest_locks_version_and_keeps_layered_licenses(tmp_path: Path):
                                      source_revision=saved.source_revision, metadata=changed_metadata)
     with pytest.raises(ResourceManifestConflict):
         store.save_manifest(saved.__class__(**{**saved.__dict__, "metadata": changed_metadata, "digest": changed_digest}))
+
+
+def test_audio_manifest_is_a_first_class_adoptable_resource_after_migration(tmp_path: Path):
+    store = make_store(tmp_path)
+    item = manifest(resource_kind="audio")
+    saved = store.save_manifest(item)
+    usage = store.record_usage(ResourceUsageRecord(
+        "usage-audio", item.workspace_id, saved.id, saved.resource_version, "adopted", task_id="task-audio",
+    ))
+    assert saved.resource_kind == "audio"
+    assert usage.stage == "adopted"
+    assert store.get_manifest(item.workspace_id, item.id).resource_kind == "audio"
 
 
 @pytest.mark.parametrize("state", ["candidate", "catalog_only", "planned"])

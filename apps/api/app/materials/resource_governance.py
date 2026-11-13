@@ -19,7 +19,7 @@ from uuid import uuid4
 from app.models import utc_now
 
 
-ResourceKind = Literal["material", "template", "font", "model", "service"]
+ResourceKind = Literal["material", "template", "font", "model", "service", "audio", "transition", "skill"]
 ResourceState = Literal["candidate", "catalog_only", "planned", "connected"]
 LicenseLayer = Literal["asset", "font", "model", "service"]
 ResourceStage = Literal[
@@ -28,6 +28,7 @@ ResourceStage = Literal[
 ]
 
 _RESOURCE_STATES = {"candidate", "catalog_only", "planned", "connected"}
+_RESOURCE_KINDS = {"material", "template", "font", "model", "service", "audio", "transition", "skill"}
 _LICENSE_LAYERS = {"asset", "font", "model", "service"}
 _STAGES = {"candidate", "installed", "imported", "adopted", "task_input", "timeline", "render", "output_observation"}
 _EXECUTABLE_STAGES = {"adopted", "task_input", "timeline", "render", "output_observation"}
@@ -345,7 +346,7 @@ class ResourceGovernanceStore:
     def _validate_manifest(manifest: ResourceManifest) -> None:
         if not all(isinstance(value, str) and value.strip() for value in (manifest.id, manifest.workspace_id, manifest.resource_id, manifest.resource_version, manifest.digest)):
             raise ValueError("资源 manifest 缺少稳定身份、版本或摘要")
-        if manifest.resource_kind not in {"material", "template", "font", "model", "service"}:
+        if manifest.resource_kind not in _RESOURCE_KINDS:
             raise ValueError("资源类型无效")
         if manifest.state not in _RESOURCE_STATES:
             raise ValueError("资源目录状态无效")
