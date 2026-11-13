@@ -48,3 +48,46 @@ def test_project_turn_trace_correlates_redacted_tool_business_job_and_output_ref
     assert all(len(item["ref"]) == 20 for item in trace["associations"])
     assert trace["evidence_candidates"][0]["reviewer_kind"] == "visual_reviewer"
     assert "request-secret" not in str(trace)
+
+
+def test_project_turn_trace_orders_runtime_fixture_with_duration_failure_retry_and_compaction():
+    trace = project_turn_trace({
+        "id": "turn-runtime", "conversation_id": "conversation-runtime", "status": "failed",
+        "sequence": 1, "created_at": "now", "updated_at": "now", "result": {
+            "usage_status": "known", "provider_usage": {"input": 7, "output": 3, "totalTokens": 10},
+            "trace_events": [
+                {"step": 1, "type": "turn_start", "at_ms": 1000},
+                {"step": 2, "type": "tool_start", "at_ms": 1100, "tool_call_id": "call-1", "tool_name": "read"},
+                {"step": 3, "type": "tool_end", "at_ms": 1300, "tool_call_id": "call-1", "tool_name": "read",
+                 "status": "failed", "failure_class": "business_tool_failed",
+                 "references": {"request_id": "request-1", "job_id": "job-1"}},
+                {"step": 4, "type": "compaction_start", "at_ms": 1400, "status": "started"},
+                {"step": 5, "type": "compaction_end", "at_ms": 1600, "status": "completed"},
+                {"step": 6, "type": "retry", "at_ms": 1700, "status": "started"},
+                {"step": 7, "type": "nested_tool", "at_ms": 1800, "tool_call_id": "nested-1",
+                 "tool_name": "read_job", "status": "succeeded", "references": {"output_id": "output-1"}},
+            ],
+        }, "events": [],
+    })
+    assert trace["started_at"].endswith("00:00:01+00:00")
+    assert trace["ended_at"].endswith("00:00:01.800000+00:00")
+    assert trace["duration_ms"] == 800
+    assert trace["failure_class"] == "business_tool_failed"
+    assert trace["retry_count"] == 1
+    assert [event["type"] for event in trace["events"]] == [
+        "turn_start", "tool_start", "tool_end", "compaction_start", "compaction_end", "retry", "nested_tool"]
+    assert trace["events"][2]["duration_ms"] == 200
+    assert all("request-1" not in str(event) for event in trace["events"])
+    assert {item["kind"] for item in trace["associations"]} >= {"business_request", "job", "output"}
+    assert trace["usage_status"] == "known"
+
+
+def test_project_turn_trace_preserves_estimated_usage_as_estimated():
+    trace = project_turn_trace({
+        "id": "turn-estimated", "conversation_id": "conversation-1", "status": "completed", "sequence": 1,
+        "created_at": "now", "updated_at": "now", "events": [], "result": {
+            "usage_status": "estimated", "provider_usage": {"input": 9, "output": 2, "totalTokens": 11},
+        },
+    })
+    assert trace["usage_status"] == "estimated"
+    assert trace["usage_source"] == "local_estimate"
