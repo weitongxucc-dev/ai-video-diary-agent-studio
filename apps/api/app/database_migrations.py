@@ -4,7 +4,7 @@ import sqlite3
 from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 28
+PRODUCTION_SCHEMA_VERSION = 29
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -1001,6 +1001,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
             new_segment_id TEXT,
             new_segment_version INTEGER,
             relation TEXT NOT NULL CHECK (relation IN ('preserved', 'split', 'merge', 'resegmented', 'unresolved')),
+            status TEXT NOT NULL CHECK (status IN ('current', 'migrated', 'needs_review')),
             explanation TEXT NOT NULL,
             source_revision_json TEXT NOT NULL,
             created_at TEXT NOT NULL
@@ -1065,6 +1066,7 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     # Migration 28 is applied by _migrate_resource_manifest_kinds below. The
     # marker keeps the version ledger linear in tests and on partial databases.
     (28, ""),
+    (29, ""),
 )
 
 def _migrate_resource_manifest_kinds(conn: sqlite3.Connection) -> None:
@@ -1166,6 +1168,55 @@ def _migrate_resource_manifest_kinds(conn: sqlite3.Connection) -> None:
         raise
     finally:
         conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _migrate_clip_reference_migration_status(conn: sqlite3.Connection) -> None:
+    """Persist an explicit, fail-closed status for historical clip mappings."""
+    table = "material_clip_reference_migrations"
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if exists is None:
+            conn.executescript("""
+                CREATE TABLE material_clip_reference_migrations (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    old_segment_id TEXT NOT NULL,
+                    old_segment_version INTEGER NOT NULL,
+                    new_segment_id TEXT,
+                    new_segment_version INTEGER,
+                    relation TEXT NOT NULL CHECK (relation IN ('preserved', 'split', 'merge', 'resegmented', 'unresolved')),
+                    status TEXT NOT NULL CHECK (status IN ('current', 'migrated', 'needs_review')),
+                    explanation TEXT NOT NULL,
+                    source_revision_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX idx_material_clip_reference_migrations_asset
+                    ON material_clip_reference_migrations(workspace_id, asset_id, old_segment_id, created_at DESC);
+            """)
+        else:
+            columns = {
+                str(row[1])
+                for row in conn.execute(f"PRAGMA table_info({table})")
+            }
+            if "status" not in columns:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN status TEXT NOT NULL DEFAULT 'needs_review'"
+                )
+            conn.execute(
+                f"UPDATE {table} SET status = CASE relation "
+                "WHEN 'preserved' THEN 'current' "
+                "WHEN 'resegmented' THEN 'migrated' "
+                "ELSE 'needs_review' END"
+            )
+        conn.execute("INSERT OR IGNORE INTO production_schema_migrations(version) VALUES (29)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # 「内容可见性」地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。
@@ -1307,6 +1358,9 @@ def apply_production_migrations(conn: sqlite3.Connection) -> None:
             continue
         if version == 28:
             _migrate_resource_manifest_kinds(conn)
+            continue
+        if version == 29:
+            _migrate_clip_reference_migration_status(conn)
             continue
         # Older assembled databases can have migration markers for 1..14 but
         # lack the narration table originally created by migration 4. Restore

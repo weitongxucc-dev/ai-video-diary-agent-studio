@@ -485,6 +485,8 @@ class MaterialSegmentResponse(BaseModel):
     start_seconds: float = Field(ge=0)
     end_seconds: float = Field(gt=0)
     version: int = Field(default=1, ge=1)
+    source_revision: dict[str, str] = Field(default_factory=dict)
+    analysis_version: str = ""
     description: str
     transcript: str
     visual_status: Literal["pending", "ready", "blocked", "failed"]
@@ -666,6 +668,21 @@ class MaterialSegmentLineageResponse(BaseModel):
     created_at: datetime
 
 
+class MaterialClipReferenceMigrationResponse(BaseModel):
+    id: str
+    workspace_id: str
+    asset_id: str
+    old_segment_id: str
+    old_segment_version: int
+    new_segment_id: str | None
+    new_segment_version: int | None
+    relation: Literal["preserved", "split", "merge", "resegmented", "unresolved"]
+    status: Literal["current", "migrated", "needs_review"]
+    explanation: str
+    source_revision: dict[str, str]
+    created_at: datetime
+
+
 class MaterialQualityProfileResponse(BaseModel):
     id: str
     workspace_id: str
@@ -704,6 +721,7 @@ class MaterialDataGovernanceResponse(BaseModel):
     assertions: list[MaterialAssetAssertionResponse]
     indexes: list[MaterialIndexRecordResponse]
     lineage: list[MaterialSegmentLineageResponse]
+    clip_reference_migrations: list[MaterialClipReferenceMigrationResponse] = Field(default_factory=list)
     quality_profiles: list[MaterialQualityProfileResponse] = Field(default_factory=list)
     index_rebuild_jobs: list[MaterialIndexRebuildJobResponse] = Field(default_factory=list)
 

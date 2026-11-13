@@ -5,8 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.materials.analysis import MaterialAnalysisUseCase
+from app.materials.analysis import MaterialAnalysisUseCase, _clip_reference_migrations
 from app.materials.assets import MaterialAssetStore
+from app.materials.contracts import MaterialSegment
 from app.materials.data_governance import KnowledgeClaim, SemanticFieldDefinition
 from app.materials.source_files import MaterialSourceFileAccess
 from app.media_observations import MaterialSpeechAnalysis, SegmentUnderstanding, SubtitleSegment
@@ -146,7 +147,10 @@ def test_analysis_run_records_stages_input_revision_and_expiry(tmp_path):
     provider, speech = RecordingVisualProvider(), RecordingSpeechAnalyzer()
     repo, source, asset = case(tmp_path, provider=provider, speech=speech)
 
-    repo.analyze_asset("workspace", asset.id)
+    first_result = repo.analyze_asset("workspace", asset.id)
+    assert first_result.segments[0].version == 1
+    assert first_result.segments[0].source_revision["size_bytes"] == str(source.stat().st_size)
+    assert first_result.segments[0].analysis_version
     first = repo.list_material_analysis_runs("workspace", asset.id)[0]
     assert first.status == "partial"
     assert first.source_revision["size_bytes"] == str(source.stat().st_size)
@@ -167,6 +171,38 @@ def test_analysis_run_records_stages_input_revision_and_expiry(tmp_path):
     assert len(runs) == 2
     assert {run.status for run in runs} == {"expired", "partial"}
     assert any(item.relation == "preserved" for item in repo.material_data_governance.list_segment_lineage("workspace", asset.id))
+    migrations = repo.material_data_governance.list_clip_reference_migrations("workspace", asset.id)
+    assert any(item.relation == "preserved" and item.status == "current" for item in migrations)
+    assert repo.get_asset("workspace", asset.id).segments[0].version == 2
+
+
+def test_clip_reference_migrations_fail_closed_for_split_merge_and_unresolved():
+    parent = MaterialSegment(id="old", asset_id="asset", start_seconds=0, end_seconds=10, version=3)
+    split_children = [
+        MaterialSegment(id="new-a", asset_id="asset", start_seconds=0, end_seconds=4, version=1),
+        MaterialSegment(id="new-b", asset_id="asset", start_seconds=4, end_seconds=10, version=1),
+    ]
+    split = _clip_reference_migrations("workspace", "asset", [parent], split_children, {"mtime_ns": "2"})
+    assert {item.relation for item in split} == {"split"}
+    assert {item.status for item in split} == {"needs_review"}
+
+    merge_parents = [
+        MaterialSegment(id="old-a", asset_id="asset", start_seconds=0, end_seconds=4, version=2),
+        MaterialSegment(id="old-b", asset_id="asset", start_seconds=4, end_seconds=10, version=2),
+    ]
+    merge_child = [MaterialSegment(id="new", asset_id="asset", start_seconds=0, end_seconds=10, version=4)]
+    merge = _clip_reference_migrations("workspace", "asset", merge_parents, merge_child, {"mtime_ns": "3"})
+    assert {item.relation for item in merge} == {"merge"}
+    assert {item.status for item in merge} == {"needs_review"}
+
+    unresolved = _clip_reference_migrations(
+        "workspace", "asset", [parent],
+        [MaterialSegment(id="other", asset_id="asset", start_seconds=20, end_seconds=30, version=1)],
+        {"mtime_ns": "4"},
+    )
+    assert unresolved[0].relation == "unresolved"
+    assert unresolved[0].new_segment_id is None
+    assert unresolved[0].status == "needs_review"
 
 
 def test_analysis_persists_evidence_candidate_assertions_and_indexes(tmp_path):

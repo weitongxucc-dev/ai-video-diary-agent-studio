@@ -10,6 +10,7 @@ from app.schemas import (
     MaterialIndexRecordResponse,
     MaterialLibraryResponse,
     MaterialSegmentLineageResponse,
+    MaterialClipReferenceMigrationResponse,
     SemanticFieldDefinitionResponse,
     SemanticFieldDefinitionsResponse,
     MaterialAssertionRequest,
@@ -96,6 +97,10 @@ def build_material_processing_router(*, workspace_for, reader_for, mode_for, ing
             lineage=[
                 MaterialSegmentLineageResponse.model_validate(item, from_attributes=True)
                 for item in production_for().list_material_segment_lineage(workspace_id, asset_id)
+            ],
+            clip_reference_migrations=[
+                MaterialClipReferenceMigrationResponse.model_validate(item, from_attributes=True)
+                for item in production_for().material_data_governance.list_clip_reference_migrations(workspace_id, asset_id)
             ],
             quality_profiles=[
                 MaterialQualityProfileResponse.model_validate(item, from_attributes=True)
