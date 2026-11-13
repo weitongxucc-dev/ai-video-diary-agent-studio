@@ -53,6 +53,9 @@ export function validateSkillManifest(manifest, {skillName, skillPath} = {}) {
   }
   if (!manifest.runtime || typeof manifest.runtime !== "object") invalid("缺少 runtime");
   nonEmptyString(manifest.runtime.kind, "runtime.kind");
+  if (manifest.runtime.execution_mode !== "method-only" || manifest.runtime.runnable !== false) {
+    invalid("runtime 必须明确是不可直接运行的方法文档");
+  }
   if (manifest.runtime.network !== false || manifest.runtime.shell !== false || manifest.runtime.arbitrary_code !== false) {
     invalid("runtime 必须明确关闭 network、shell 和 arbitrary_code");
   }

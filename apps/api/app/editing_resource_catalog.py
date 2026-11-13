@@ -247,8 +247,10 @@ def _validate_packaged_skill_manifest(manifest: object, path: Path) -> None:
             or not isinstance(dependencies.get("tools"), list)):
         raise ValueError("Skill manifest dependencies 无效")
     runtime = manifest["runtime"]
-    if not isinstance(runtime, dict) or any(runtime.get(key) is not False for key in ("network", "shell", "arbitrary_code")):
-        raise ValueError("Skill manifest runtime 未关闭外部执行")
+    if (not isinstance(runtime, dict) or runtime.get("execution_mode") != "method-only"
+            or runtime.get("runnable") is not False
+            or any(runtime.get(key) is not False for key in ("network", "shell", "arbitrary_code"))):
+        raise ValueError("Skill manifest runtime 必须是不可直接运行的方法文档")
     install = manifest["install_checks"]
     if (not isinstance(install, dict) or install.get("mode") != "package-time"
             or any(install.get(key) is not False for key in ("network", "shell", "arbitrary_code"))
@@ -280,7 +282,7 @@ def editing_resource_catalog() -> EditingResourceCatalog:
     return EditingResourceCatalog(
         categories=[item.model_copy(deep=True) for item in _CATEGORIES],
         resources=_builtin_resources(),
-        provenance_fields=["repository", "revision", "path", "license", "source_sha256", "asset_license",
+        provenance_fields=["repository", "revision", "path", "license", "license_spdx", "source_sha256", "asset_license",
                            "font_license", "model_license", "service_terms"],
         write_boundary="资源读取和检索是只读操作；采用资源必须经现有 EditProposal/TimelineVersion。",
     )

@@ -13,6 +13,8 @@ test("packaged external editing skill has a fixed, safe manifest", async () => {
   assert.equal(manifest.provenance.revision, "a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4");
   assert.equal(manifest.runtime.network, false);
   assert.equal(manifest.runtime.arbitrary_code, false);
+  assert.equal(manifest.runtime.execution_mode, "method-only");
+  assert.equal(manifest.runtime.runnable, false);
   assert.equal(manifest.install_checks.mode, "package-time");
   assert.equal(manifest.adoption.status, "installed");
   assert.equal(manifest.rollback.deletes_user_data, false);
@@ -25,7 +27,7 @@ test("manifest rejects external execution and tools outside the product boundary
     schema_version: 1, name: "test", version: "1", entry: {skill: "x", adapter: "y"},
     inputs: ["input"], outputs: ["output"], permissions: ["read"],
     dependencies: {skills: [], tools: ["read_current_task"]},
-    runtime: {kind: "trusted-markdown", network: false, shell: false, arbitrary_code: false},
+    runtime: {kind: "trusted-markdown", execution_mode: "method-only", runnable: false, network: false, shell: false, arbitrary_code: false},
     install_checks: {mode: "package-time", network: false, shell: false, arbitrary_code: false, checks: ["check"]},
     adoption: {entrypoint: "read_creation_skill", status: "installed", writes: false, requires_explicit_edit_authorization: true},
     rollback: {mode: "pinned-package-revert", pre_adoption: "remove", post_adoption: "query", deletes_user_data: false},
@@ -34,6 +36,7 @@ test("manifest rejects external execution and tools outside the product boundary
   };
   assert.throws(() => validateSkillManifest({...base, runtime: {...base.runtime, network: true}}), /network/);
   assert.throws(() => validateSkillManifest({...base, runtime: {...base.runtime, shell: true}}), /shell/);
+  assert.throws(() => validateSkillManifest({...base, runtime: {...base.runtime, runnable: true}}), /不可直接运行/);
   assert.throws(() => validateSkillManifest({...base, rollback: {...base.rollback, deletes_user_data: true}}), /删除用户数据/);
   assert.throws(() => validateSkillManifest({...base, dependencies: {skills: [], tools: ["bash"]}}), /未受控工具/);
 });

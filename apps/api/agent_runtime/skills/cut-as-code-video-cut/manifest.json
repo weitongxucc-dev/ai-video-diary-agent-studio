@@ -34,6 +34,8 @@
   },
   "runtime": {
     "kind": "trusted-markdown",
+    "execution_mode": "method-only",
+    "runnable": false,
     "network": false,
     "arbitrary_code": false,
     "shell": false
