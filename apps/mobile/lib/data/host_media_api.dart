@@ -183,6 +183,23 @@ extension HostMediaApi on HostApi {
     }
   }
 
+  Future<AgentTraceSnapshot> assistantTurnTrace(
+    HostSession session,
+    String assistantTurnId,
+  ) async {
+    final data = await _json(
+      session,
+      '/api/assistant/turns/${Uri.encodeComponent(assistantTurnId)}/trace',
+    );
+    try {
+      return AgentTraceSnapshot.fromJson(data, expectedTurnId: assistantTurnId);
+    } on FormatException catch (failure) {
+      throw AppFailure(failure.message, code: 'invalid_trace_receipt');
+    } on TypeError {
+      throw const AppFailure('主机返回的 Trace 格式不匹配，请查询原助手回合。');
+    }
+  }
+
   /// Download through the authenticated CA-bound transport before native playback.
   Future<void> downloadOutput(
     HostSession session,
