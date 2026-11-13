@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import os
 import subprocess
 import threading
 import time
@@ -128,6 +129,11 @@ def run_pi_streaming(
     stop_event = control.begin(turn_id) if turn_id else None
     _require_process_group_platform()
     def launch_process():
+        from app.assistant.windows_process import WindowsJobProcess
+        from app.subprocess_environment import subprocess_environment
+
+        if os.name == "nt":
+            return WindowsJobProcess(cmd, env=subprocess_environment(env), cwd=cwd)
         return subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", bufsize=1, env=env, cwd=cwd, start_new_session=True,
@@ -411,3 +417,9 @@ def run_pi_streaming(
             control.release(turn_id, process, keep_turn_control)
         elif not _process_group_released(process):
             terminate(process)
+        from app.assistant.windows_process import WindowsJobProcess
+
+        if isinstance(process, WindowsJobProcess):
+            stdout_thread.join(timeout=1)
+            stderr_thread.join(timeout=1)
+            process.close()
