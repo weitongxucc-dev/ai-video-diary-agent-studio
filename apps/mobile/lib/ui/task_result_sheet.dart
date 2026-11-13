@@ -19,6 +19,7 @@ class TaskResultSheet extends StatefulWidget {
 class _TaskResultSheetState extends State<TaskResultSheet>
     with WidgetsBindingObserver {
   Map<String, dynamic>? task;
+  TaskExecutionSnapshot? execution;
   VideoPlayerController? player;
   String? error;
   bool loading = false;
@@ -57,10 +58,47 @@ class _TaskResultSheetState extends State<TaskResultSheet>
       error = null;
     });
     try {
-      final current = await widget.store.withSession(
-        (session) => widget.store.api.creationTask(session, widget.taskId),
-      );
-      if (_current) setState(() => task = current);
+      final loaded = await widget.store.withSession((session) async {
+        final current = await widget.store.api.creationTask(
+          session,
+          widget.taskId,
+        );
+        TaskExecutionSnapshot runtime;
+        try {
+          runtime = await widget.store.api.creationExecution(
+            session,
+            widget.taskId,
+          );
+        } on AppFailure catch (failure) {
+          if (failure.code == 'invalid_execution_receipt') {
+            runtime = TaskExecutionSnapshot.unknown(
+              widget.taskId,
+              workspaceId: session.workspaceId,
+              reason: failure.message,
+            );
+          } else {
+            try {
+              runtime = await widget.store.api.taskJobProgress(
+                session,
+                widget.taskId,
+              );
+            } on AppFailure {
+              runtime = TaskExecutionSnapshot.unknown(
+                widget.taskId,
+                workspaceId: session.workspaceId,
+                reason: failure.message,
+              );
+            }
+          }
+        }
+        return (task: current, execution: runtime);
+      });
+      if (_current) {
+        setState(() {
+          task = loaded.task;
+          execution = loaded.execution;
+        });
+      }
     } on AppFailure catch (failure) {
       if (_current) setState(() => error = failure.message);
     } on AuthenticationFailure catch (failure) {
@@ -188,6 +226,7 @@ class _TaskResultSheetState extends State<TaskResultSheet>
               task!['stage_reason'] as String,
               style: const TextStyle(height: 1.6),
             ),
+          _ExecutionStatusView(execution: execution),
           if (error != null)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -244,4 +283,72 @@ class _TaskResultSheetState extends State<TaskResultSheet>
       ),
     ),
   );
+}
+
+class _ExecutionStatusView extends StatelessWidget {
+  const _ExecutionStatusView({required this.execution});
+  final TaskExecutionSnapshot? execution;
+
+  @override
+  Widget build(BuildContext context) {
+    final current = execution;
+    final status = current?.status ?? TaskRuntimeStatus.unknown;
+    final label = switch (status) {
+      TaskRuntimeStatus.running => '执行中',
+      TaskRuntimeStatus.completed => '执行已完成',
+      TaskRuntimeStatus.failed => '执行失败',
+      TaskRuntimeStatus.unknown => '执行状态未知',
+    };
+    final color = switch (status) {
+      TaskRuntimeStatus.running => const Color(0xff315f9b),
+      TaskRuntimeStatus.completed => const Color(0xff28754d),
+      TaskRuntimeStatus.failed => const Color(0xffa33a3a),
+      TaskRuntimeStatus.unknown => const Color(0xff6d6672),
+    };
+    final associations = <String>[
+      if (current != null) '任务 ${current.taskId}',
+      if (current?.jobId != null) '作业 ${current!.jobId}',
+      if (current?.requestId != null) '请求 ${current!.requestId}',
+      if (current?.assistantTurnId != null) '回合 ${current!.assistantTurnId}',
+    ];
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: TextStyle(color: color, fontWeight: FontWeight.w600),
+            ),
+            if (current?.stage != null) Text('阶段：${current!.stage}'),
+            if (current?.progress != null) Text('进度：${current!.progress}%'),
+            if (associations.isNotEmpty)
+              Text(
+                associations.join(' · '),
+                style: const TextStyle(fontSize: 12),
+              ),
+            if (current != null &&
+                current.requestId == null &&
+                current.assistantTurnId == null)
+              const Text(
+                '本次主机回执未返回原请求或助手回合关联。',
+                style: TextStyle(fontSize: 12),
+              ),
+            if (current?.reason != null)
+              Text(
+                current!.reason!,
+                style: TextStyle(color: color, height: 1.4),
+              ),
+            if (current?.impact != null) Text('影响：${current!.impact}'),
+            if (current?.repairAction != null)
+              Text('处理：${current!.repairAction}'),
+            if (status == TaskRuntimeStatus.unknown && current?.reason == null)
+              const Text('主机没有返回可核验的执行状态，请刷新或查询原请求。'),
+          ],
+        ),
+      ),
+    );
+  }
 }

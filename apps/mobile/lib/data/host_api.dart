@@ -11,7 +11,9 @@ import 'voice_sampling_task.dart';
 import 'trusted_host_client.dart'
     if (dart.library.io) 'trusted_host_client_io.dart'
     as native;
+import 'task_execution.dart';
 export 'host_session.dart';
+export 'task_execution.dart';
 part 'host_media_api.dart';
 
 class AppFailure implements Exception {
