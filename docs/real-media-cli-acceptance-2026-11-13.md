@@ -1,7 +1,7 @@
 # 1.5.2 真实媒体与主链路验收记录
 
 记录日期：2026-11-13  
-源码工作区：`/Volumes/Dujiangyan-VM/AI视频日记/repositories/main-origin-main`  
+源码工作区：`/Volumes/Dujiangyan-VM/AI视频日记/repositories/main`
 分支：`codex/1.5.2-governance-agent-mobile-cli`  
 代码提交：`7ec28241`
 

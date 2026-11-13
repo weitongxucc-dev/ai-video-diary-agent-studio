@@ -50,7 +50,7 @@
 
 ## 2026-11-13 数据闭环增量验收
 
-在干净的 `main-origin-main` worktree 上补齐了“候选证据 → Agent 采用 → 任务/时间线引用 → 输出观察”闭环：
+在干净的 `main` worktree 上补齐了“候选证据 → Agent 采用 → 任务/时间线引用 → 输出观察”闭环：
 
 - 候选 `MaterialSegmentMatch` 现在回带 `evidence_ref_ids`，Agent 工具和方案快照使用同一组 ID。
 - 规划窗口采用保存 `material_adoption`，采用事务重新检查素材权限、用途资格和证据有效性。
