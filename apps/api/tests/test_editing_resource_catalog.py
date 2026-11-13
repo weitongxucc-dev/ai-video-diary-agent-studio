@@ -50,12 +50,15 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
     assert all(item["category_id"] == "templates" for item in body["resources"])
     assert "EditProposal/TimelineVersion" in body["write_boundary"]
     assert "source_sha256" in body["provenance_fields"]
+    assert "license_spdx" in body["provenance_fields"]
 
     skills = client.get("/api/editing-resource-catalog", params={"category": "skills"})
     assert skills.status_code == 200
     assert skills.json()["resources"][0]["id"] == "skill:cut-as-code-video-cut"
     assert skills.json()["resources"][0]["entrypoints"] == ["read_creation_skill"]
     assert skills.json()["resources"][0]["runtime_requirements"]["manifest_version"] == "2026.11.13-adapter.1"
+    assert skills.json()["resources"][0]["runtime_requirements"]["execution_mode"] == "method-only"
+    assert skills.json()["resources"][0]["runtime_requirements"]["runnable"] is False
     assert skills.json()["resources"][0]["provenance"][0]["license_spdx"] == "MIT"
     assert skills.json()["resources"][0]["runtime_requirements"]["capabilities"]["permissions"]
     assert skills.json()["resources"][0]["runtime_requirements"]["install_checks"]["mode"] == "package-time"
@@ -66,6 +69,7 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
     assert preflight.status_code == 200
     assert preflight.json()["status"] == "connected"
     assert preflight.json()["ready"] is True
+    assert preflight.json()["runnable"] is False
     assert preflight.json()["adoption"]["requires_explicit_edit_authorization"] is True
     assert "EditProposal/TimelineVersion" in preflight.json()["write_boundary"]
 

@@ -66,6 +66,7 @@ def build_editing_resource_router(catalog_for: Callable):
             "version": item.version,
             "status": item.status,
             "ready": item.status == "connected",
+            "runnable": requirements.get("runnable", item.status == "connected"),
             "provenance": [entry.model_dump(mode="json") for entry in item.provenance],
             "install_checks": requirements.get("install_checks", {"mode": "not_declared", "checks": []}),
             "adoption": requirements.get("adoption", {"status": "not_declared"}),

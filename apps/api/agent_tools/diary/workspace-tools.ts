@@ -192,7 +192,7 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
       skills.push({name: manifest.name, status: "installed", purpose: "证据驱动粗剪适配",
         version: manifest.version, provenance: manifest.provenance, evaluation: manifest.evaluation,
         manifest: publicManifest});
-      const details = {resources, skills, provenance_fields: ["repository", "revision", "license", "asset_license", "font_license", "model_license", "service_terms"], instruction: "只有 status=connected 且本轮读取到真实版本的资源可进入 EditProposal；外部资源必须逐项登记来源和许可。"};
+      const details = {resources, skills, provenance_fields: ["repository", "revision", "license", "asset_license", "path", "license_spdx", "source_sha256", "font_license", "model_license", "service_terms"], instruction: "只有 status=connected 且本轮读取到真实版本的资源可进入 EditProposal；方法文档 Skill 不可直接运行；外部资源必须逐项登记来源和许可。"};
       return {content: [{type: "text", text: JSON.stringify(details)}], details};
     },
   });
