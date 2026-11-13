@@ -16,6 +16,8 @@
 .resourceHeader { display:flex; align-items:center; justify-content:space-between; flex:0 0 34px; gap:8px; min-width:0; padding:0 10px; color:var(--text-2); }
 .resourceHeader > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .resourceHeader > button { width:28px; height:28px; }
+.resourceLink { flex:0 0 auto; padding:4px 8px; border:1px solid var(--border-1); border-radius:6px; color:var(--text-2); font-size:12px; text-decoration:none; }
+.resourceLink:hover { color:var(--text-1); background:var(--surface-2); }
 @container workbench (max-width:760px) {
  .withResource:has(> .resourceHome[data-docked]:not([hidden])) { grid-template-columns:minmax(0,1fr) minmax(220px,38%); }
 }

@@ -34,6 +34,12 @@ it("docks resources beside the preview and retains the input while properties ta
   expect(input).toHaveValue("保留这次筛选");
 });
 
+it("offers the asset drawer from a standalone resource page", () => {
+  render(<Workbench docked={false} />);
+  const link = screen.getByRole("link", { name: "打开资源抽屉" });
+  expect(link).toHaveAttribute("href", "/library?mode=panel&resource=materials");
+});
+
 it("retains an unsubmitted local draft across resource switches and preview host removal", () => {
   const view = render(<Workbench/>);
   const input = screen.getByRole("textbox", { name: "素材筛选" });

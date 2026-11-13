@@ -328,6 +328,9 @@ describe("AppShell", () => {
     for (const label of ["首页", "素材库", "知识库", "人物与声音", "视频模板", "发布与数据"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
+    for (const label of ["素材", "技能", "贴纸", "滤镜", "特效", "转场", "模板", "字幕", "配音", "音乐", "音效"]) {
+      expect(screen.queryByRole("link", { name: `资源面板：${label}` })).not.toBeInTheDocument();
+    }
     expect(screen.queryByRole("link", { name: "成员与空间" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "设备设置" })).toHaveAttribute("href", "/settings");
     expect(screen.queryByRole("button", { name: "创作者与空间菜单" })).not.toBeInTheDocument();

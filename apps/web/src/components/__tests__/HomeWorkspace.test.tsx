@@ -303,7 +303,8 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
   ])("retains the real %s preparation action below the primary work", (code, href, label) => {
     const foundation = { readiness: { ready: false, blockers: [{ code, message: "真实缺项" }, { code: "brand_profile_missing", message: "品牌" }] } } as ProductionFoundation;
     render(<HomeWorkspace foundation={foundation} tasks={[]} />);
-    expect(screen.getByText("制作前还有 1 项需要准备。")).toBeInTheDocument();
+    expect(screen.queryByText(/制作前还有/)).not.toBeInTheDocument();
+    expect(screen.getByText("制作准备")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name:"查看准备事项" }));
     expect(screen.getByRole("region", { name: "制作准备事项" })).toHaveTextContent("真实缺项");
     expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
