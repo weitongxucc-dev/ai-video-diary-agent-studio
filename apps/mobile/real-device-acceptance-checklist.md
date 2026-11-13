@@ -9,7 +9,7 @@
 - 验收基线提交：以执行前 `git rev-parse HEAD` 为准；当前代码基线为 `2296974f`。
 - Flutter：`3.41.6`，Dart `3.11.4`。
 - `flutter analyze`：通过，`No issues found`。
-- `flutter test`：通过，输出 `+76`，共 76 个测试；包含执行状态四态、任务/工作区串线和请求/助手回合关联解析测试。
+- `flutter test`：通过，输出 `+79`，共 79 个测试；包含执行状态四态、任务/工作区串线、请求/助手回合关联和 Trace 回读解析测试。
 - `flutter devices`：当前只发现 macOS 和 Chrome，没有 Android/iOS 实体设备，也没有无线设备。
 - `flutter build apk --debug`：未完成，当前环境没有 Android SDK；这不是 APK 构建通过，也不是设备验收失败。
 
@@ -41,6 +41,29 @@ flutter run --debug -d <真实Android设备ID> -t lib/main.dart
 ```
 
 Android 若需构建包，先确认 Android SDK、JDK 17、平台和构建工具已安装，再执行 `flutter build apk --debug`。iOS 需在 Xcode 中使用真实签名设备运行；模拟器不证明相机、麦克风、Bonjour 或局域网证书行为。
+
+## 最小设备执行脚本
+
+在每台真实设备上按同一顺序执行，逐项保存录屏、主机响应摘要和文件摘要；`<DEVICE_ID>`、账号和邀请只在本机输入，不写入日志：
+
+```sh
+cd /Volumes/Dujiangyan-VM/AI视频日记/repositories/main/apps/mobile
+flutter pub get
+flutter devices
+flutter analyze
+flutter test
+flutter run -d <DEVICE_ID> -t lib/main.dart
+```
+
+应用内执行以下步骤：
+
+1. 扫描当前主机邀请，确认用途、设备、Workspace、成员和 CA 摘要后登录；记录 `/api/companion/session` 的设备、成员和 Workspace 回执。
+2. 打开任务列表和一条真实任务，刷新详情；记录 `task_id`、Workspace、任务状态和时间线版本。
+3. 打开“作品进度与成片”，分别准备运行中、已完成、失败或无作业的任务，记录手机显示的四态；保存作业 ID，以及主机回执实际返回的 `request_id`、`assistant_turn_id`。缺失关联必须记录为未知。
+4. 对 `output_ready=true` 的任务下载成片，记录请求中的 `expected_version_id`、响应的时间线版本/序号、MIME、文件大小和 SHA-256，然后在手机上播放、暂停、退出后台再恢复。
+5. 在下载前推进一次时间线，确认手机拒绝旧版本并要求刷新；断网后重新打开作品，确认手机回查原任务而不显示本地完成态。
+
+Android 和 iOS 分别填写下方结果模板；同一条证据不能同时代替另一平台的真机验收。
 
 ## Android / iOS 共同验收
 

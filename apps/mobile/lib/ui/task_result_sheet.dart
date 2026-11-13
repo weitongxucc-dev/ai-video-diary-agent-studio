@@ -20,6 +20,7 @@ class _TaskResultSheetState extends State<TaskResultSheet>
     with WidgetsBindingObserver {
   Map<String, dynamic>? task;
   TaskExecutionSnapshot? execution;
+  AgentTraceSnapshot? trace;
   VideoPlayerController? player;
   String? error;
   bool loading = false;
@@ -91,12 +92,28 @@ class _TaskResultSheetState extends State<TaskResultSheet>
             }
           }
         }
-        return (task: current, execution: runtime);
+        AgentTraceSnapshot? observedTrace;
+        final turnId = runtime.assistantTurnId;
+        if (turnId != null) {
+          try {
+            observedTrace = await widget.store.api.assistantTurnTrace(
+              session,
+              turnId,
+            );
+          } on AppFailure catch (failure) {
+            observedTrace = AgentTraceSnapshot.unknown(
+              turnId,
+              reason: failure.message,
+            );
+          }
+        }
+        return (task: current, execution: runtime, trace: observedTrace);
       });
       if (_current) {
         setState(() {
           task = loaded.task;
           execution = loaded.execution;
+          trace = loaded.trace;
         });
       }
     } on AppFailure catch (failure) {
@@ -227,6 +244,10 @@ class _TaskResultSheetState extends State<TaskResultSheet>
               style: const TextStyle(height: 1.6),
             ),
           _ExecutionStatusView(execution: execution),
+          _TraceStatusView(
+            trace: trace,
+            assistantTurnId: execution?.assistantTurnId,
+          ),
           if (error != null)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
@@ -348,6 +369,35 @@ class _ExecutionStatusView extends StatelessWidget {
               const Text('主机没有返回可核验的执行状态，请刷新或查询原请求。'),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _TraceStatusView extends StatelessWidget {
+  const _TraceStatusView({required this.trace, required this.assistantTurnId});
+  final AgentTraceSnapshot? trace;
+  final String? assistantTurnId;
+
+  @override
+  Widget build(BuildContext context) {
+    if (assistantTurnId == null) {
+      return const Text('当前回执未提供助手回合 ID，Trace 状态未知。');
+    }
+    final current = trace;
+    if (current == null) return const SizedBox.shrink();
+    final summary = <String>[
+      if (current.eventCount != null) '事件 ${current.eventCount}',
+      if (current.durationMs != null) '耗时 ${current.durationMs}ms',
+      if (current.usageStatus != null) '用量 ${current.usageStatus}',
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Text(
+        current.reason == null
+            ? 'Trace：${current.status ?? '未知'}${summary.isEmpty ? '' : ' · ${summary.join(' · ')}'}'
+            : 'Trace：未知（${current.reason}）',
+        style: const TextStyle(fontSize: 12),
       ),
     );
   }

@@ -1,5 +1,80 @@
 enum TaskRuntimeStatus { running, completed, failed, unknown }
 
+class AgentTraceSnapshot {
+  const AgentTraceSnapshot({
+    required this.turnId,
+    required this.status,
+    this.conversationId,
+    this.usageStatus,
+    this.eventCount,
+    this.toolCounts = const {},
+    this.compactionCount,
+    this.failureClass,
+    this.durationMs,
+    this.associations = const [],
+    this.reason,
+  });
+
+  final String turnId;
+  final String? conversationId;
+  final String? status;
+  final String? usageStatus;
+  final int? eventCount;
+  final Map<String, int> toolCounts;
+  final int? compactionCount;
+  final String? failureClass;
+  final int? durationMs;
+  final List<String> associations;
+  final String? reason;
+
+  factory AgentTraceSnapshot.unknown(String turnId, {String? reason}) =>
+      AgentTraceSnapshot(turnId: turnId, status: 'unknown', reason: reason);
+
+  factory AgentTraceSnapshot.fromJson(
+    Map<String, dynamic> data, {
+    required String expectedTurnId,
+  }) {
+    final turnId = data['turn_id'];
+    if (turnId is! String || turnId != expectedTurnId) {
+      throw const FormatException('Trace 回执与当前助手回合不一致。');
+    }
+    final rawCounts = data['tool_counts'];
+    final toolCounts = <String, int>{};
+    if (rawCounts is Map<String, dynamic>) {
+      for (final entry in rawCounts.entries) {
+        if (entry.value is int && entry.value >= 0) {
+          toolCounts[entry.key] = entry.value as int;
+        }
+      }
+    }
+    final rawAssociations = data['associations'];
+    final associations = rawAssociations is List
+        ? rawAssociations
+              .whereType<Map<String, dynamic>>()
+              .map((item) => item['kind'])
+              .whereType<String>()
+              .toList()
+        : const <String>[];
+    return AgentTraceSnapshot(
+      turnId: turnId,
+      conversationId: _string(data['conversation_id']),
+      status: _string(data['status']),
+      usageStatus: _string(data['usage_status']),
+      eventCount: _int(data['event_count']),
+      toolCounts: toolCounts,
+      compactionCount: _int(data['compaction_count']),
+      failureClass: _string(data['failure_class']),
+      durationMs: _int(data['duration_ms']),
+      associations: associations,
+    );
+  }
+
+  static String? _string(Object? value) =>
+      value is String && value.isNotEmpty ? value : null;
+
+  static int? _int(Object? value) => value is int ? value : null;
+}
+
 /// A read-only projection of the host's persisted execution state.
 ///
 /// The host may add association fields at different nesting levels as the
