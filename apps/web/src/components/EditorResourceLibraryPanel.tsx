@@ -22,13 +22,13 @@ export const editorResourceCategories: Category[] = [
   { id: "templates", label: "模板", description: "内容结构与可复用视觉模板", state: "available", nextStep: "打开视频模板管理页查看已接入模板", icon: Grid2X2 },
   { id: "subtitles", label: "字幕", description: "字幕轨和字幕样式资源", state: "available", nextStep: "字幕编辑在当前任务的字幕工作区完成", icon: Subtitles },
   { id: "text", label: "字幕 / 文本", description: "字幕轨、文字卡和排版资源", state: "available", nextStep: "字幕编辑在当前任务的字幕工作区完成", icon: Subtitles },
-  { id: "voice", label: "配音", description: "声音档案与试听结果", state: "catalog_only", nextStep: "打开人物与声音管理页选择可用声音", icon: AudioLines },
+  { id: "voice", label: "配音", description: "版本化声音档案与试听结果", state: "available", nextStep: "打开人物与声音管理页选择可用声音", icon: AudioLines },
   { id: "music", label: "音乐", description: "背景音乐资源", state: "catalog_only", nextStep: "音乐目录尚未接入；当前只能使用任务已有音轨", icon: Music2 },
   { id: "sfx", label: "音效", description: "短音效与声音过渡", state: "catalog_only", nextStep: "音效目录尚未接入，当前不能采用", icon: AudioLines },
 ];
 
 type CatalogResource = { id: string; category_id: string; name: string; version: number; status: RemoteStatus; resource_type: string; preview: { kind: string; duration_seconds?: number | null }; provenance: Array<{ repository: string; revision: string; path: string; license: string }>; runtime_requirements?: Record<string, unknown>; entrypoints: string[] };
-const apiCategoryId: Record<EditorResourceCategory, string> = { materials: "materials", skills: "skills", stickers: "stickers", filters: "filters", effects: "effects", transitions: "transitions", templates: "templates", subtitles: "subtitles_text", text: "subtitles_text", voice: "voice_music_sfx", music: "voice_music_sfx", sfx: "voice_music_sfx" };
+const apiCategoryId: Record<EditorResourceCategory, string> = { materials: "materials", skills: "skills", stickers: "stickers", filters: "filters", effects: "effects", transitions: "transitions", templates: "templates", subtitles: "subtitles_text", text: "subtitles_text", voice: "voice", music: "music", sfx: "sfx" };
 
 function stateLabel(state: CategoryState) {
   return state === "available" ? "可用" : state === "catalog_only" ? "目录中" : "计划中";

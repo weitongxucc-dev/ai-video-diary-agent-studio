@@ -44,7 +44,11 @@ export function useWorkspaceViewState<T>(key: string, initial: T | (() => T)) {
 export function useWorkspaceSearchParams() {
   const page = useWorkspacePage();
   const params = useSearchParams();
-  const search = page ? page.href.split("?")[1] ?? "" : params?.toString() ?? "";
+  // The active page follows the browser URL. A cached page can retain an
+  // older href while Next has already navigated to a new query (for example
+  // switching `/library?mode=manage` to an Asset Library category). Auxiliary
+  // pages still use their own href so a docked resource pane keeps its scope.
+  const search = page?.active ? params?.toString() ?? "" : page ? page.href.split("?")[1] ?? "" : params?.toString() ?? "";
   return useMemo(() => new URLSearchParams(search), [search]);
 }
 export function workspacePageId(pathname: string, search: Pick<URLSearchParams, "get">) {

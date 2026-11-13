@@ -238,7 +238,7 @@ def test_returned_fields_are_unchanged_by_this_fix():
         "asset_ref", "segment_ref", "score", "rank", "match_tier", "matched_terms",
         "matched_conditions", "time_range", "start_seconds", "end_seconds",
         "segment_duration_seconds", "file_name", "duration_seconds", "tags",
-        "source_reference", "reasons",
+        "source_reference", "reasons", "evidence_ref_ids",
     }, f"返回字段集合被改动了：{sorted(first)}"
     assert set(result) == {
         "candidates", "evidence_complete", "evidence_note",

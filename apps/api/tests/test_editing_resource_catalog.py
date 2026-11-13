@@ -11,11 +11,13 @@ def test_manifest_keeps_navigation_categories_separate_from_resource_items():
     catalog = editing_resource_catalog()
     assert [item.id for item in catalog.categories] == [
         "materials", "skills", "stickers", "filters", "effects", "transitions",
-        "templates", "subtitles_text", "voice_music_sfx",
+        "templates", "subtitles_text", "voice", "music", "sfx",
     ]
     statuses = {item.id: item.status for item in catalog.categories}
     assert statuses["templates"] == "connected"
-    assert statuses["voice_music_sfx"] == "catalog_only"
+    assert statuses["voice"] == "connected"
+    assert statuses["music"] == "catalog_only"
+    assert statuses["sfx"] == "catalog_only"
     assert statuses["filters"] == "planned"
     skills, total = search_editing_resources(catalog, category="skills", limit=100)
     assert total == len(skills) >= 1
@@ -53,6 +55,10 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
     assert skills.json()["resources"][0]["id"] == "skill:cut-as-code-video-cut"
     assert skills.json()["resources"][0]["entrypoints"] == ["read_creation_skill"]
     assert skills.json()["resources"][0]["runtime_requirements"]["manifest_version"] == "2026.11.13-adapter.1"
+
+    voices = client.get("/api/editing-resource-catalog", params={"category": "voice"})
+    assert voices.status_code == 200
+    assert voices.json()["resources"][0]["id"] == "builtin:voice-profiles"
 
 
 def test_resource_detail_returns_404_for_unknown_version():

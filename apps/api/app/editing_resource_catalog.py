@@ -93,8 +93,12 @@ _CATEGORIES: tuple[EditingResourceCategory, ...] = (
         entrypoints=["read_video_templates", "read_visual_template"]),
     EditingResourceCategory(id="subtitles_text", label="字幕/文本", status="connected",
         entrypoints=["read_narration_segments", "read_script_sections", "preview_typed_edit"]),
-    EditingResourceCategory(id="voice_music_sfx", label="配音/音乐/音效", status="catalog_only",
+    EditingResourceCategory(id="voice", label="配音", status="connected",
         entrypoints=["read_voice_profiles"], provenance_required=True),
+    EditingResourceCategory(id="music", label="音乐", status="catalog_only",
+        entrypoints=[], provenance_required=True),
+    EditingResourceCategory(id="sfx", label="音效", status="catalog_only",
+        entrypoints=[], provenance_required=True),
 )
 
 
@@ -134,11 +138,39 @@ def _builtin_resources() -> list[EditingResource]:
             entrypoints=["preview_typed_edit", "apply_typed_edit"],
         ),
         EditingResource(
+            id="builtin:fade-in", category_id="effects", name="淡入", version=1,
+            status="connected", resource_type="visual_effect_preset", preview=ResourcePreview(kind="parameterized"),
+            provenance=[_local_provenance(path="apps/api/app/visual_effects.py")],
+            runtime_requirements={"engine": "ffmpeg", "operation": "VisualEffects.fade_in_seconds"},
+            entrypoints=["preview_typed_edit", "apply_typed_edit"],
+        ),
+        EditingResource(
+            id="builtin:fade-out", category_id="effects", name="淡出", version=1,
+            status="connected", resource_type="visual_effect_preset", preview=ResourcePreview(kind="parameterized"),
+            provenance=[_local_provenance(path="apps/api/app/visual_effects.py")],
+            runtime_requirements={"engine": "ffmpeg", "operation": "VisualEffects.fade_out_seconds"},
+            entrypoints=["preview_typed_edit", "apply_typed_edit"],
+        ),
+        EditingResource(
+            id="builtin:warm-color", category_id="effects", name="暖色调", version=1,
+            status="connected", resource_type="visual_effect_preset", preview=ResourcePreview(kind="parameterized"),
+            provenance=[_local_provenance(path="apps/api/app/visual_effects.py")],
+            runtime_requirements={"engine": "ffmpeg", "operation": "VisualEffects.temperature"},
+            entrypoints=["preview_typed_edit", "apply_typed_edit"],
+        ),
+        EditingResource(
             id="builtin:subtitle-text", category_id="subtitles_text", name="字幕与文本", version=1,
             status="connected", resource_type="subtitle_text", preview=ResourcePreview(kind="overlay"),
             provenance=[_local_provenance(path="apps/api/app/graphic_overlays.py")],
             runtime_requirements={"write_path": "EditProposal/TimelineVersion"},
             entrypoints=["read_narration_segments", "read_script_sections", "preview_typed_edit"],
+        ),
+        EditingResource(
+            id="builtin:voice-profiles", category_id="voice", name="版本化声音档案", version=1,
+            status="connected", resource_type="voice_library", preview=ResourcePreview(kind="library"),
+            provenance=[_local_provenance(path="apps/api/app/profiles/profile_routes.py")],
+            runtime_requirements={"workspace_scoped": True, "authorization_required": True},
+            entrypoints=["read_voice_profiles"],
         ),
     ]
     for identity, name, definition in visual_templates():
