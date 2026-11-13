@@ -26,4 +26,4 @@ Windows 以后只在 `codex/windows-integration-1.5.2` 开发。该分支已基�
 
 ## 退役条件
 
-在关闭 Draft PR #146 并删除 `windows/local-model-validation` 前，保留本记录和上述提交；删除后只从 `codex/windows-integration-1.5.2` 继续开发。
+Draft PR #146 已关闭，`windows/local-model-validation` 已删除；本记录和上述提交作为迁移与回滚依据保留，后续只从 `codex/windows-integration-1.5.2` 继续开发。
