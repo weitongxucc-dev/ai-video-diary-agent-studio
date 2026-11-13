@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dev": "NODE_ENV=development electron .",
+    "dev": "node scripts/dev.js",
     "generate:build-identity": "node scripts/generate-build-identity.js",
     "test:build-identity": "node scripts/build-identity-test.js",
     "test:device-identity": "node scripts/device-identity-test.js",
