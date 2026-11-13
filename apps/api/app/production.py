@@ -642,7 +642,8 @@ class ProductionRepository:
             ),
             voice_reference=self.creation_plan_voice_reference, person_reference=self.creation_plan_person_reference,
             write_task=self.task_records.write_adopted_task, topic_records=self.topic_records,
-            script_records=self.script_records, execution_records=self.execution_records)
+            script_records=self.script_records, execution_records=self.execution_records,
+            resource_usage=self.resource_governance.record_material_usage)
         self.section_adoption = SectionAdoptionTransaction(
             connection_factory=lambda: self._connect(),
             execution_records=self.execution_records, lineage_records=self.lineage_records,

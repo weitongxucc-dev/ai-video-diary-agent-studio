@@ -637,6 +637,8 @@ class RenderStageUseCase:
             rendered,
             task_id=current_task.id,
             timeline_version_id=current_task.current_timeline_version_id,
+            artifact_ref=rendered.output_path,
+            trace={"job_id": result.id},
         )
         return rendered
 
@@ -792,7 +794,8 @@ class RenderStageUseCase:
         return valid
 
     def record_usage(self, workspace_id: str, plan, *, task_id: str | None = None,
-                     timeline_version_id: str | None = None) -> None:
+                     timeline_version_id: str | None = None, artifact_ref: str | None = None,
+                     trace: dict[str, object] | None = None) -> None:
         for clip in plan.clips:
             if clip.person_render_id or clip.segment_id is None:
                 continue
@@ -805,6 +808,14 @@ class RenderStageUseCase:
                 task_id=task_id,
                 timeline_version_id=timeline_version_id,
             )
+            if (hasattr(self.repository, "resource_governance") and task_id
+                    and timeline_version_id and artifact_ref):
+                asset = self.repository.get_asset(workspace_id, clip.asset_id)
+                self.repository.resource_governance.record_material_usage(
+                    workspace_id=workspace_id, asset=asset, segment_id=clip.segment_id,
+                    stage="render", task_id=task_id, timeline_version_id=timeline_version_id,
+                    artifact_ref=artifact_ref, trace=trace,
+                )
 
     def task_or_missing(self, workspace_id: str, task_id: str) -> CreationTask:
         try:

@@ -1,4 +1,6 @@
 from pathlib import Path
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -101,4 +103,35 @@ def test_task_timeline_render_and_observation_provenance_round_trip(tmp_path: Pa
     rows = store.provenance_for_task("ws-resource", "task-1", timeline_version_id="timeline-2")
     assert [row["usage"]["stage"] for row in rows] == ["adopted", "task_input", "timeline", "render", "output_observation"]
     assert rows[-1]["manifest"]["licenses"][-1]["layer"] == "service"
+
+
+def test_material_consumer_edges_keep_deidentified_trace_fields(tmp_path: Path):
+    store = make_store(tmp_path)
+    asset = SimpleNamespace(
+        id="asset-one", file_name="one.mp4", media_type="video",
+        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        modified_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    adopted = store.record_material_usage(
+        workspace_id="ws-resource", asset=asset, segment_id="segment-one", stage="adopted",
+        task_id="task-one", trace={"assistant_turn_id": "turn-one", "request_id": "request-one", "secret": "/private/path"},
+    )
+    rendered = store.record_material_usage(
+        workspace_id="ws-resource", asset=asset, segment_id="segment-one", stage="render",
+        task_id="task-one", timeline_version_id="timeline-one", artifact_ref="artifact-one",
+        trace={"job_id": "job-one"},
+    )
+    observed = store.record_material_usage(
+        workspace_id="ws-resource", asset=asset, segment_id="segment-one", stage="output_observation",
+        task_id="task-one", timeline_version_id="timeline-one", artifact_ref="artifact-one",
+        observation_ref="observation-one", trace={"job_id": "job-one", "output_id": "artifact-one"},
+    )
+    rows = store.provenance_for_task("ws-resource", "task-one", timeline_version_id="timeline-one")
+    assert [item["usage"]["stage"] for item in rows] == ["adopted", "render", "output_observation"]
+    assert rows[0]["usage"]["metadata"]["assistant_turn_id"] == "turn-one"
+    assert rows[0]["usage"]["metadata"]["request_id"] == "request-one"
+    assert "secret" not in rows[0]["usage"]["metadata"]
+    assert rows[1]["usage"]["metadata"]["job_id"] == "job-one"
+    assert rows[2]["usage"]["metadata"]["output_id"] == "artifact-one"
+    assert {adopted.id, rendered.id, observed.id} == {item["usage"]["id"] for item in rows}
 

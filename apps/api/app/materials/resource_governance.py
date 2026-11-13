@@ -44,6 +44,17 @@ def manifest_digest(*, resource_id: str, resource_version: str, source_revision:
     return hashlib.sha256(_json(payload).encode("utf-8")).hexdigest()
 
 
+def resource_trace_metadata(source: dict[str, object] | None = None, **values: object) -> dict[str, str]:
+    """Keep only bounded correlation identifiers in resource receipts."""
+    merged = {**(source or {}), **values}
+    allowed = {"assistant_turn_id", "request_id", "job_id", "output_id"}
+    return {
+        key: value.strip()[:160]
+        for key, value in merged.items()
+        if key in allowed and isinstance(value, str) and value.strip()
+    }
+
+
 @dataclass(frozen=True)
 class ResourceLicense:
     id: str
@@ -203,6 +214,46 @@ class ResourceGovernanceStore:
             )
         return record
 
+    def record_material_usage(
+        self, *, workspace_id: str, asset, segment_id: str | None, stage: ResourceStage,
+        task_id: str | None = None, timeline_version_id: str | None = None,
+        artifact_ref: str | None = None, observation_ref: str | None = None,
+        trace: dict[str, object] | None = None, connection: sqlite3.Connection | None = None,
+    ) -> ResourceUsageRecord:
+        """Material adapter used by production consumers.
+
+        MaterialAsset remains the owner of media facts; this creates a stable
+        connected manifest for its current revision and records the governed
+        consumer edge with bounded trace identifiers.
+        """
+        version = asset.updated_at.isoformat()
+        resource_id = f"material:{asset.id}"
+        manifest_id = f"manifest_{hashlib.sha256(f'{workspace_id}:{resource_id}:{version}'.encode()).hexdigest()[:24]}"
+        metadata = {"asset_id": asset.id, "file_name": asset.file_name, "media_type": asset.media_type}
+        manifest = ResourceManifest(
+            id=manifest_id, workspace_id=workspace_id, resource_id=resource_id,
+            resource_kind="material", resource_version=version, state="connected",
+            source_revision={"asset_updated_at": version, "modified_at": asset.modified_at.isoformat()},
+            digest=manifest_digest(resource_id=resource_id, resource_version=version,
+                                   source_revision={"asset_updated_at": version, "modified_at": asset.modified_at.isoformat()},
+                                   metadata=metadata), metadata=metadata,
+        )
+        usage_key = _json({"manifest": manifest_id, "stage": stage, "task": task_id,
+                           "timeline": timeline_version_id, "artifact": artifact_ref,
+                           "observation": observation_ref, "segment": segment_id})
+        record = ResourceUsageRecord(
+            id=f"resource_usage_{hashlib.sha256(usage_key.encode()).hexdigest()[:24]}",
+            workspace_id=workspace_id, manifest_id=manifest_id, resource_version=version,
+            stage=stage, task_id=task_id, timeline_version_id=timeline_version_id,
+            artifact_ref=artifact_ref, observation_ref=observation_ref,
+            metadata={"segment_id": segment_id, **resource_trace_metadata(trace)},
+        )
+        if connection is None:
+            self.save_manifest(manifest)
+            return self.record_usage(record)
+        self._save_manifest_connection(connection, manifest)
+        return self._record_usage_connection(connection, record)
+
     def list_usage(self, workspace_id: str, *, task_id: str | None = None,
                    manifest_id: str | None = None, artifact_ref: str | None = None) -> list[ResourceUsageRecord]:
         query = "SELECT * FROM resource_usage_records WHERE workspace_id=?"
@@ -222,6 +273,38 @@ class ResourceGovernanceStore:
             records = [item for item in records if item.timeline_version_id in {None, timeline_version_id}]
         manifests = {item.manifest_id: self.get_manifest(workspace_id, item.manifest_id) for item in records}
         return [{"manifest": self._manifest_payload(manifests[item.manifest_id]), "usage": self._usage_payload(item)} for item in records]
+
+    def _save_manifest_connection(self, conn: sqlite3.Connection, manifest: ResourceManifest) -> None:
+        self._validate_manifest(manifest)
+        existing = conn.execute(
+            "SELECT id, digest FROM resource_manifests WHERE workspace_id=? AND resource_id=? AND resource_version=?",
+            (manifest.workspace_id, manifest.resource_id, manifest.resource_version),
+        ).fetchone()
+        if existing is not None and (str(existing["id"]) != manifest.id or str(existing["digest"]) != manifest.digest):
+            raise ResourceManifestConflict("同一资源版本的 manifest 已锁定，不能覆盖")
+        conn.execute(
+            """INSERT INTO resource_manifests
+                (id, workspace_id, resource_id, resource_kind, resource_version, state,
+                 source_revision_json, digest, metadata_json, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET state=excluded.state,
+                   metadata_json=excluded.metadata_json, updated_at=excluded.updated_at""",
+            (manifest.id, manifest.workspace_id, manifest.resource_id, manifest.resource_kind,
+             manifest.resource_version, manifest.state, _json(manifest.source_revision),
+             manifest.digest, _json(manifest.metadata), manifest.created_at.isoformat(), utc_now().isoformat()),
+        )
+
+    def _record_usage_connection(self, conn: sqlite3.Connection, record: ResourceUsageRecord) -> ResourceUsageRecord:
+        conn.execute(
+            """INSERT OR IGNORE INTO resource_usage_records
+                (id, workspace_id, manifest_id, resource_version, stage, task_id,
+                 timeline_version_id, artifact_ref, observation_ref, actor_ref, metadata_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (record.id, record.workspace_id, record.manifest_id, record.resource_version,
+             record.stage, record.task_id, record.timeline_version_id, record.artifact_ref,
+             record.observation_ref, record.actor_ref, _json(record.metadata), record.created_at.isoformat()),
+        )
+        return record
 
     @staticmethod
     def _validate_manifest(manifest: ResourceManifest) -> None:

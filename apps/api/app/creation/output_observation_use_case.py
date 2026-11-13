@@ -333,6 +333,31 @@ class OutputObservationUseCase:
         montage = binding.get('montage') or binding.get('media_input', {}).get('plan')
         single_clip = binding.get('media_input', {}).get('clip')
         material_references = self._material_references(task.workspace_id, montage, single_clip)
+        resource_governance = getattr(self.repository, "resource_governance", None)
+        if resource_governance is not None:
+            source = event.get("source") if isinstance(event.get("source"), dict) else {}
+            input_facts = event.get("input_facts") if isinstance(event.get("input_facts"), dict) else {}
+            trace = {
+                key: source.get(key) or input_facts.get(key) or event.get(key)
+                for key in ("assistant_turn_id", "request_id")
+            }
+            trace["request_id"] = str(payload.request_id) if payload.request_id is not None else trace.get("request_id")
+            trace["job_id"] = job.id
+            trace["output_id"] = output.get("artifact_id")
+            for reference in material_references:
+                asset_id = str(reference["asset_ref"]).removeprefix("asset:")
+                segment_id = str(reference["segment_ref"]).removeprefix("segment:")
+                try:
+                    asset = self.repository.get_asset(task.workspace_id, asset_id)
+                except KeyError:
+                    continue
+                resource_governance.record_material_usage(
+                    workspace_id=task.workspace_id, asset=asset, segment_id=segment_id,
+                    stage="output_observation", task_id=task_id,
+                    timeline_version_id=input_facts.get("base_version_id"),
+                    artifact_ref=output.get("artifact_id"), observation_ref=job.id,
+                    trace=trace,
+                )
         for sample in measured['samples']:
             timestamp = sample['timestamp_seconds']
             if montage:

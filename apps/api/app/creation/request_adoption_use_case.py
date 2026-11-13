@@ -25,7 +25,7 @@ class CreationRequestAdoptionUseCase:
                  prepare_plan, insert_plan, read_asset, decode_asset, material_eligible,
                  voice_reference, person_reference, write_task,
                  topic_records, script_records, execution_records,
-                 evidence_refs_for=None):
+                 evidence_refs_for=None, resource_usage=None):
         self._connect = connection_factory
         self.records = records
         self._decode_plan, self._decode_task = decode_plan, decode_task
@@ -37,11 +37,13 @@ class CreationRequestAdoptionUseCase:
         self.topic_records, self.script_records = topic_records, script_records
         self.execution_records = execution_records
         self._evidence_refs_for = evidence_refs_for
+        self._resource_usage = resource_usage
 
     def confirm_creation_request_window(self, workspace_id: str, request_id: str, window_id: str, *,
                                        expected_revision: int, input_fingerprint: str,
                                        verified_owner_user_id: str | None = None, local_diagnostic: bool = False,
-                                       adoption_kind: Literal["manual", "delegated_system"] = "manual") -> dict:
+                                       adoption_kind: Literal["manual", "delegated_system"] = "manual",
+                                       assistant_turn_id: str | None = None) -> dict:
         from app.creation.intent_use_case import CreationIntentUseCase
         owner = content_owner(verified_owner_user_id)
         with self._connect() as conn:
@@ -86,6 +88,13 @@ class CreationRequestAdoptionUseCase:
                         }
                         if not set(match.evidence_ref_ids) <= current_evidence:
                             raise ValueError("规划窗口引用的素材证据已失效，请重新检索并准备方案")
+                    if self._resource_usage is not None:
+                        trace = {"assistant_turn_id": assistant_turn_id, "request_id": request_id}
+                        for stage in ("adopted", "task_input"):
+                            self._resource_usage(
+                                workspace_id=workspace_id, asset=asset, segment_id=segment.id,
+                                stage=stage, task_id=task.id, trace=trace, connection=conn,
+                            )
                 if plan.selected_voice:
                     self._voice_reference(workspace_id,plan.selected_voice.profile_id,plan.selected_voice.version,viewer_user_id=owner,local_diagnostic=local_diagnostic)
                 if plan.selected_person:
