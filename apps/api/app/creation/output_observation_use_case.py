@@ -47,6 +47,40 @@ class OutputObservationUseCase:
         self.repository, self.artifact_store, self.audio = repository, artifact_store, audio
         self.temporary_root, self.ocr_worker_path = temporary_root, ocr_worker_path
 
+    def _material_references(self, workspace_id: str, montage: dict | None, single_clip: dict | None) -> list[dict[str, object]]:
+        """Bind observed timeline clips back to their governed source evidence."""
+        clips = []
+        if isinstance(montage, dict):
+            clips = [item for item in montage.get("clips", []) if isinstance(item, dict)]
+        elif isinstance(single_clip, dict):
+            clips = [single_clip]
+        references: list[dict[str, object]] = []
+        read_evidence = getattr(self.repository, "list_material_evidence", None)
+        for clip in clips:
+            asset_id = clip.get("asset_id")
+            segment_id = clip.get("segment_id")
+            if not isinstance(asset_id, str) or not asset_id or not isinstance(segment_id, str) or not segment_id:
+                continue
+            evidence_rows = (
+                read_evidence(workspace_id, asset_id, limit=500)
+                if read_evidence is not None else []
+            )
+            segment_evidence = [
+                item.id for item in evidence_rows
+                if item.status == "valid" and (item.segment_id is None or item.segment_id == segment_id)
+            ]
+            references.append({
+                "clip_id": clip.get("id"),
+                "asset_ref": f"asset:{asset_id}",
+                "segment_ref": f"segment:{segment_id}",
+                "source_time_range": [clip.get("source_start_seconds"), clip.get("source_end_seconds")],
+                "timeline_time_range": [clip.get("timeline_start_seconds"), clip.get("timeline_end_seconds")],
+                "evidence_ref_ids": segment_evidence,
+                "match_score": clip.get("match_score"),
+                "match_reasons": clip.get("match_reasons", []),
+            })
+        return references
+
     def submit(self, runtime, media, task, actor, payload, source, *, receipt_for, write_guard=None):
         """Both transports arrange one original observation through the media owner."""
         previous=self.original_request(task,actor,payload)
@@ -298,6 +332,7 @@ class OutputObservationUseCase:
         measured = observe_output(path, sample_times=payload.sample_times_seconds, temporary_root=self.temporary_root, run_command=run_command, expected_size=(output['registered_width'], output['registered_height']), max_output_bytes=context.max_output_bytes, ocr_worker=Path(self.ocr_worker_path).expanduser() if event['input_facts']['ocr']['status'] == 'ready' else None)
         montage = binding.get('montage') or binding.get('media_input', {}).get('plan')
         single_clip = binding.get('media_input', {}).get('clip')
+        material_references = self._material_references(task.workspace_id, montage, single_clip)
         for sample in measured['samples']:
             timestamp = sample['timestamp_seconds']
             if montage:
@@ -306,7 +341,7 @@ class OutputObservationUseCase:
             elif single_clip:
                 sample['object_refs'] = [f"clip:{single_clip['id']}"]
                 sample['timeline_timestamp_seconds'] = single_clip['timeline_start_seconds'] + timestamp
-        result = {'observation_id': job.id, 'task_id': task_id, 'timeline_version_id': event['input_facts']['base_version_id'], 'timeline_sequence': event['input_facts']['timeline_sequence'], 'observed_at': utc_now().isoformat(), 'target': payload.target.model_dump(mode='json'), 'ocr_execution': event['input_facts']['ocr'], 'output': {key: value for key, value in output.items() if key not in {'logical_ref', 'mtime_ns', 'ctime_ns'}}, 'output_role': binding['kind'], **measured}
+        result = {'observation_id': job.id, 'task_id': task_id, 'timeline_version_id': event['input_facts']['base_version_id'], 'timeline_sequence': event['input_facts']['timeline_sequence'], 'observed_at': utc_now().isoformat(), 'target': payload.target.model_dump(mode='json'), 'ocr_execution': event['input_facts']['ocr'], 'output': {key: value for key, value in output.items() if key not in {'logical_ref', 'mtime_ns', 'ctime_ns'}}, 'output_role': binding['kind'], 'material_references': material_references, **measured}
         return result
 
     def validate_result(self, job, event, result, context):

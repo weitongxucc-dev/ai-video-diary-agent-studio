@@ -41,6 +41,7 @@ from app.material_hash import (
 )
 
 import io
+import hashlib
 import json
 import logging
 import math
@@ -94,8 +95,13 @@ from app.materials.collections import MaterialCollectionStore
 import app.materials.assets as _owner_app_materials_assets
 from app.materials.assets import MaterialAssetStore, MaterialVersionConflict as MaterialVersionConflict, _infer_system_tags as _infer_system_tags, _segment_id as _segment_id
 from app.materials.analysis import MaterialAnalysisUseCase
+from app.materials.analysis_runs import MaterialAnalysisRunStore
+from app.materials.data_governance import MaterialDataGovernanceStore
 from app.materials.analysis_execution import probe_duration, detect_scene_boundaries
 from app.materials.usage_records import MaterialUsageRecordReader
+from app.materials.reference_video import (
+    ReferenceVideoStudyStore, build_reference_video_study, compare_study_to_timeline,
+)
 from app.materials.source_files import MaterialSourceFileAccess, directory_accepts_writes as directory_accepts_writes
 from app.materials.intake import MaterialIntakeUseCase
 from app.materials.link_intake import LinkMaterialIntakeUseCase
@@ -120,6 +126,7 @@ from app.materials.contracts import (
     SuggestedUsageRole as SuggestedUsageRole,
     AnalysisStatus as AnalysisStatus,
     MaterialMediaType,
+    MATERIAL_MEDIA_LABEL as MATERIAL_MEDIA_LABEL,
     MATERIAL_MEDIA_BY_SUFFIX as MATERIAL_MEDIA_BY_SUFFIX,
     BUSINESS_OBJECT_KINDS as BUSINESS_OBJECT_KINDS,
     ContentUseState,
@@ -135,6 +142,7 @@ from app.materials.contracts import (
     material_allows_automation as material_allows_automation,
     material_usage_eligibility,
     effective_segment_usage_role as effective_segment_usage_role,
+    selectable_segment_usage_role as selectable_segment_usage_role,
 )
 from app.material_speech import LocalMaterialSpeechAnalyzer
 from app.visual_semantics import (
@@ -372,10 +380,13 @@ class ProductionRepository:
         self._material_business_objects = MaterialBusinessObjectStore(self._connect)
         self._material_collections = MaterialCollectionStore(self._connect)
         self._material_assets = MaterialAssetStore(lambda: self._connect())
+        self.material_analysis_runs = MaterialAnalysisRunStore(self._connect)
+        self.material_data_governance = MaterialDataGovernanceStore(self._connect)
         self.material_usage_records = MaterialUsageRecordReader(
             connection_factory=lambda: self._connect(),
             read_asset=lambda workspace_id, asset_id: self._material_assets.get_asset(workspace_id, asset_id),
         )
+        self.reference_video_studies = ReferenceVideoStudyStore(self._connect)
         self.material_intake = MaterialIntakeUseCase(
             self._material_assets, self._material_source_files,
             connection_factory=lambda: self._connect(),
@@ -384,6 +395,12 @@ class ProductionRepository:
         self.material_search = MaterialSegmentSearchUseCase(
             list_assets=self._material_assets.list_assets,
             segment_eligible=material_segment_eligible,
+            index_status_for=self.material_data_governance.latest_index_status,
+            evidence_refs_for=lambda workspace_id, asset_id, segment_id: [
+                item.id for item in self.material_data_governance.list_evidence_for_segment(
+                    workspace_id, asset_id, segment_id,
+                )
+            ],
         )
         self._workspace_media_references = WorkspaceMediaReferenceAccess(
             self._connect, self._material_source_files, self._material_assets)
@@ -393,6 +410,8 @@ class ProductionRepository:
             scene_reader=scene_reader or detect_scene_boundaries,
             visual_provider=visual_provider or UnavailableVisualSemanticProvider(),
             speech_analyzer=speech_analyzer, visual_understanding=visual_understanding,
+            analysis_runs=self.material_analysis_runs,
+            data_governance=self.material_data_governance,
         )
         self._initialize_profile_stores()
         self._legacy_voice_profiles = LegacyVoiceProfileStore(self._connect)
@@ -616,6 +635,9 @@ class ProductionRepository:
             prepare_plan=self.plan_confirmation.prepare_confirmed_creation_plan, insert_plan=self.plan_records.insert_confirmed_creation_plan,
             read_asset=self._material_assets._asset_payload_visibility_row_by_id,
             decode_asset=self._asset_from_payload, material_eligible=material_segment_eligible,
+            evidence_refs_for=lambda workspace_id, asset_id, segment_id: self.material_data_governance.list_evidence_for_segment(
+                workspace_id, asset_id, segment_id,
+            ),
             voice_reference=self.creation_plan_voice_reference, person_reference=self.creation_plan_person_reference,
             write_task=self.task_records.write_adopted_task, topic_records=self.topic_records,
             script_records=self.script_records, execution_records=self.execution_records)
@@ -1137,6 +1159,140 @@ class ProductionRepository:
     def analyze_asset(self, workspace_id: str, asset_id: str, *, expected_source_digest: str | None = None) -> MaterialAsset:
         return self._material_analysis.analyze_asset(workspace_id, asset_id, expected_source_digest=expected_source_digest)
 
+    def list_material_analysis_runs(self, workspace_id: str, asset_id: str, *, limit: int = 20):
+        self.get_asset(workspace_id, asset_id)
+        return self.material_analysis_runs.list_for_asset(workspace_id, asset_id, limit=limit)
+
+    def list_material_evidence(self, workspace_id: str, asset_id: str, *, limit: int = 200):
+        self.get_asset(workspace_id, asset_id)
+        return self.material_data_governance.list_evidence(workspace_id, asset_id, limit=limit)
+
+    def create_reference_video_study(self, workspace_id: str, asset_id: str):
+        asset = self.get_asset(workspace_id, asset_id)
+        path = self._material_source_files.validated_library_file(asset.path)
+        self._material_source_files.require_material_copy_confirmation(workspace_id, path)
+        source_revision = self._material_source_files.material_copy_revision(path.stat())
+        runs = self.material_analysis_runs.list_for_asset(workspace_id, asset_id, limit=20)
+        latest = next((run for run in runs if run.status in {"succeeded", "partial"}
+                       and run.source_revision == source_revision), None)
+        # A ready flag on the asset is insufficient after the source file has
+        # changed: its segments may still belong to the previous revision.
+        # Reference study must be grounded in an analysis run for this exact
+        # source revision.
+        if latest is None:
+            raise ValueError("参考视频必须先完成当前源修订的素材分析")
+        with path.open("rb") as source:
+            digest = hashlib.file_digest(source, "sha256").hexdigest()
+        study = build_reference_video_study(
+            study_id=f"reference_study_{uuid4().hex[:12]}", workspace_id=workspace_id,
+            asset=asset, source_revision=source_revision, source_digest=digest,
+            analysis_run_id=latest.id if latest else None,
+            evidence_ids_for=lambda current_asset_id, segment_id: [
+                item.id for item in self.material_data_governance.list_evidence_for_segment(
+                    workspace_id, current_asset_id, segment_id,
+                )
+            ],
+        )
+        return self.reference_video_studies.save_study(study)
+
+    def get_reference_video_study(self, workspace_id: str, study_id: str):
+        study = self.reference_video_studies.get_study(workspace_id, study_id)
+        asset = self.get_asset(workspace_id, study.asset_id)
+        path = self._material_source_files.validated_library_file(asset.path)
+        current_revision = self._material_source_files.material_copy_revision(path.stat())
+        if current_revision != study.source_revision and study.status == "ready":
+            study = replace(study, status="stale", updated_at=utc_now())
+            self.reference_video_studies.save_study(study)
+        return study
+
+    def compare_reference_video_study(self, workspace_id: str, study_id: str, task_id: str, timeline_version_id: str):
+        study = self.get_reference_video_study(workspace_id, study_id)
+        if study.status != "ready":
+            raise ValueError("参考视频分析已过期，请按当前源修订重新 study")
+        asset = self.get_asset(workspace_id, study.asset_id)
+        eligibility = material_usage_eligibility(asset, purpose="reference")
+        if not eligibility.eligible:
+            raise ValueError(f"参考视频当前不可用：{eligibility.reason}")
+        current_evidence_ids = {
+            item.id
+            for shot in study.shots
+            for item in self.material_data_governance.list_evidence_for_segment(
+                workspace_id, study.asset_id, shot.segment_id,
+            )
+        }
+        if any(ref_id not in current_evidence_ids for shot in study.shots for ref_id in shot.evidence_ref_ids):
+            raise ValueError("参考视频证据已失效，请按当前源修订重新 study")
+        task = self.task_records.get_creation_task(workspace_id, task_id)
+        version = self.timeline_records.get_timeline_version(workspace_id, timeline_version_id)
+        if version.task_id != task_id or task.current_timeline_version_id != timeline_version_id:
+            raise ValueError("compare 必须绑定当前任务时间线版本")
+        montage = version.snapshot.get("montage")
+        if not isinstance(montage, dict):
+            raise ValueError("当前时间线没有可比较的混剪镜头")
+        report = compare_study_to_timeline(
+            report_id=f"reference_compare_{uuid4().hex[:12]}", study=study,
+            workspace_id=workspace_id, task_id=task_id,
+            timeline_version_id=timeline_version_id, montage=montage,
+        )
+        return self.reference_video_studies.save_compare(report)
+
+    def list_material_assertions(self, workspace_id: str, asset_id: str, *, limit: int = 200):
+        self.get_asset(workspace_id, asset_id)
+        return self.material_data_governance.list_assertions(workspace_id, asset_id, limit=limit)
+
+    def transition_material_assertion(self, workspace_id: str, asset_id: str, assertion_id: str, *, status: str, expected_status: str | None = None):
+        self.get_asset(workspace_id, asset_id)
+        return self.material_data_governance.transition_assertion(
+            workspace_id, asset_id, assertion_id, status=status, expected_status=expected_status
+        )
+
+    def list_material_indexes(self, workspace_id: str, asset_id: str):
+        self.get_asset(workspace_id, asset_id)
+        return self.material_data_governance.list_indexes(workspace_id, asset_id)
+
+    def list_material_quality_profiles(self, workspace_id: str, asset_id: str):
+        self.get_asset(workspace_id, asset_id)
+        return self.material_data_governance.list_quality_profiles(workspace_id, asset_id)
+
+    def list_material_index_rebuild_jobs(self, workspace_id: str, asset_id: str):
+        self.get_asset(workspace_id, asset_id)
+        return self.material_data_governance.list_index_rebuild_jobs(workspace_id, asset_id)
+
+    def record_material_assertion(self, assertion):
+        self.get_asset(assertion.workspace_id, assertion.asset_id)
+        return self.material_data_governance.record_assertion(assertion)
+
+    def queue_material_index_rebuild(self, workspace_id: str, asset_id: str, *, index_type: str,
+                                     source_revision: dict[str, str], source_digest: str | None,
+                                     index_version: str):
+        self.get_asset(workspace_id, asset_id)
+        return self.material_data_governance.queue_index_rebuild(
+            workspace_id, asset_id, index_type=index_type, source_revision=source_revision,
+            source_digest=source_digest, index_version=index_version,
+        )
+
+    def list_material_segment_lineage(self, workspace_id: str, asset_id: str):
+        self.get_asset(workspace_id, asset_id)
+        return self.material_data_governance.list_segment_lineage(workspace_id, asset_id)
+
+    def list_semantic_field_definitions(self, workspace_id: str, *, include_deprecated: bool = False):
+        return self.material_data_governance.list_field_definitions(
+            workspace_id, include_deprecated=include_deprecated
+        )
+
+    def record_knowledge_claim(self, claim):
+        return self.material_data_governance.record_knowledge_claim(claim)
+
+    def list_knowledge_claims(self, workspace_id: str, knowledge_item_id: str, *, knowledge_version: str | None = None):
+        return self.material_data_governance.list_knowledge_claims(
+            workspace_id, knowledge_item_id, knowledge_version=knowledge_version
+        )
+
+    def transition_knowledge_claim(self, workspace_id: str, claim_id: str, *, status: str, expected_status: str | None = None):
+        return self.material_data_governance.transition_knowledge_claim(
+            workspace_id, claim_id, status=status, expected_status=expected_status
+        )
+
     def get_visual_feature(
         self,
         workspace_id: str,
@@ -1458,7 +1614,6 @@ class ProductionRepository:
                 'previous_input_digest': job.input_digest, 'input_digest': input_digest,
                 'source_binding_event_id': source_binding_event_id}), connection=connection)
         return self.job_records.get_job_run(job.workspace_id, job.id, connection=connection)
-
 
 
 

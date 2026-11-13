@@ -37,15 +37,28 @@ class MaterialUsageRecordReader:
         if all(segment.id != segment_id for segment in asset.segments):
             raise KeyError(segment_id)
         with self._connect() as conn:
-            usage_rows = conn.execute(
+            try:
+                usage_rows = conn.execute(
                 """
-                SELECT plan_id, clip_id, used_at
+                SELECT plan_id, clip_id, used_at, {task_column}, {timeline_column}
                 FROM material_segment_usage
                 WHERE workspace_id = ? AND asset_id = ? AND segment_id = ?
                 ORDER BY used_at DESC
-                """,
-                (workspace_id, asset_id, segment_id),
-            ).fetchall()
+                """.format(task_column="task_id", timeline_column="timeline_version_id"),
+                    (workspace_id, asset_id, segment_id),
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                if "no such column" not in str(exc):
+                    raise
+                usage_rows = conn.execute(
+                    """
+                    SELECT plan_id, clip_id, used_at, NULL AS task_id, NULL AS timeline_version_id
+                    FROM material_segment_usage
+                    WHERE workspace_id = ? AND asset_id = ? AND segment_id = ?
+                    ORDER BY used_at DESC
+                    """,
+                    (workspace_id, asset_id, segment_id),
+                ).fetchall()
             plan_rows = conn.execute(
                 """
                 SELECT id, task_id, payload
@@ -78,7 +91,9 @@ class MaterialUsageRecordReader:
         for row in usage_rows:
             plan = plans.get(str(row["plan_id"]))
             clip = plan["clips"].get(str(row["clip_id"])) if plan else None
-            task = tasks.get(str(plan["task_id"])) if plan else None
+            recorded_task_id = str(row["task_id"]) if row["task_id"] else None
+            task = tasks.get(recorded_task_id or str(plan["task_id"])) if plan else None
+            recorded_version_id = str(row["timeline_version_id"]) if row["timeline_version_id"] else None
             current_version_id = task.get("current_timeline_version_id") if task else None
             records.append(
                 {
@@ -86,7 +101,7 @@ class MaterialUsageRecordReader:
                     "clip_id": str(row["clip_id"]),
                     "used_at": datetime.fromisoformat(str(row["used_at"])),
                     "task": {
-                        "id": str(plan["task_id"]) if plan else None,
+                        "id": recorded_task_id or (str(plan["task_id"]) if plan else None),
                         "name": str(task.get("name") or "") if task else None,
                         "stage": str(task.get("stage") or "") if task else None,
                         "status": str(task.get("status") or "") if task else None,
@@ -98,8 +113,8 @@ class MaterialUsageRecordReader:
                     else None,
                     "role": str(clip.get("role")) if clip else None,
                     "manually_selected": bool(clip.get("manually_selected")) if clip else None,
-                    "timeline_version_id": str(current_version_id) if current_version_id else None,
-                    "resolution": "current" if current_version_id else "unknown",
+                    "timeline_version_id": recorded_version_id or (str(current_version_id) if current_version_id else None),
+                    "resolution": "recorded" if recorded_version_id else ("current" if current_version_id else "unknown"),
                 }
             )
         return records

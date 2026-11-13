@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from typing import Literal
 
 from app.creation.contracts import TaskEvent as _TaskEvent
@@ -23,7 +24,8 @@ class CreationRequestAdoptionUseCase:
     def __init__(self, connection_factory, *, records, decode_plan, decode_task,
                  prepare_plan, insert_plan, read_asset, decode_asset, material_eligible,
                  voice_reference, person_reference, write_task,
-                 topic_records, script_records, execution_records):
+                 topic_records, script_records, execution_records,
+                 evidence_refs_for=None):
         self._connect = connection_factory
         self.records = records
         self._decode_plan, self._decode_task = decode_plan, decode_task
@@ -34,6 +36,7 @@ class CreationRequestAdoptionUseCase:
         self._write_task = write_task
         self.topic_records, self.script_records = topic_records, script_records
         self.execution_records = execution_records
+        self._evidence_refs_for = evidence_refs_for
 
     def confirm_creation_request_window(self, workspace_id: str, request_id: str, window_id: str, *,
                                        expected_revision: int, input_fingerprint: str,
@@ -75,13 +78,30 @@ class CreationRequestAdoptionUseCase:
                         raise PermissionError("当前成员已无权使用规划窗口的素材")
                     if segment is None or not self._material_eligible(asset,segment,workspace_id,automation_only=True):
                         raise ValueError("规划窗口引用的素材文件或使用资格已变化")
+                    if match.evidence_ref_ids and self._evidence_refs_for is not None:
+                        current_evidence = {
+                            item.id for item in self._evidence_refs_for(
+                                workspace_id, asset.id, segment.id,
+                            )
+                        }
+                        if not set(match.evidence_ref_ids) <= current_evidence:
+                            raise ValueError("规划窗口引用的素材证据已失效，请重新检索并准备方案")
                 if plan.selected_voice:
                     self._voice_reference(workspace_id,plan.selected_voice.profile_id,plan.selected_voice.version,viewer_user_id=owner,local_diagnostic=local_diagnostic)
                 if plan.selected_person:
                     self._person_reference(workspace_id,plan.selected_person.profile_id,plan.selected_person.version,viewer_user_id=owner,local_diagnostic=local_diagnostic)
                 plan.adoption = {**adoption, "version": plan.preflight_fingerprint,
                     "window_input_fingerprint": window["input_fingerprint"], "plan_id": plan.id, "preflight_fingerprint": plan.preflight_fingerprint,
-                    "request_id": request_id, "request_revision": row["revision"], "window_id": window_id}
+                    "request_id": request_id, "request_revision": row["revision"], "window_id": window_id,
+                    "material_adoption": [
+                        {
+                            **asdict(match),
+                            "adopted_at": utc_now().isoformat(),
+                            "adoption_kind": adoption_kind,
+                            "adopted_by": owner,
+                        }
+                        for match in plan.material_matches
+                    ]}
                 self.insert_plan(conn,plan,task)
                 self._apply_creation_intent(conn, plan, task, intent, adoption)
             now = utc_now().isoformat()

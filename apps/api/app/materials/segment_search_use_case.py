@@ -26,11 +26,23 @@ class SegmentEligibility(Protocol):
                  workspace_id: str, *, automation_only: bool = False) -> bool: ...
 
 
+class IndexStatusReader(Protocol):
+    def __call__(self, workspace_id: str, asset_id: str, index_type: str) -> str | None: ...
+
+
+class EvidenceRefReader(Protocol):
+    def __call__(self, workspace_id: str, asset_id: str, segment_id: str) -> list[str]: ...
+
+
 class MaterialSegmentSearchUseCase:
     def __init__(self, *, list_assets: ReadableAssets,
-                 segment_eligible: SegmentEligibility) -> None:
+                 segment_eligible: SegmentEligibility,
+                 index_status_for: IndexStatusReader | None = None,
+                 evidence_refs_for: EvidenceRefReader | None = None) -> None:
         self._list_assets = list_assets
         self._segment_eligible = segment_eligible
+        self._index_status_for = index_status_for
+        self._evidence_refs_for = evidence_refs_for
 
     def search_material_segments(
         self,
@@ -92,6 +104,10 @@ class MaterialSegmentSearchUseCase:
         ):
             if selected_assets is not None and asset.id not in selected_assets:
                 continue
+            index_stale = (
+                self._index_status_for is not None
+                and self._index_status_for(workspace_id, asset.id, "material_search") == "stale"
+            )
             qualification=material_usage_eligibility(asset,purpose=purpose)
             if not qualification.eligible:
                 qualification_counts[qualification.status]+=1
@@ -193,7 +209,7 @@ class MaterialSegmentSearchUseCase:
                         asset_ref=f"asset:{asset.id}",
                         segment_ref=f"segment:{segment.id}",
                         score=round(score, 4),
-                        reasons=reasons,
+                        reasons=[*reasons, "素材搜索索引已过期，结果仅供核对" ] if index_stale else reasons,
                         match_tier=tier,
                         matched_terms=matched_terms,
                         matched_conditions=conditions,
@@ -207,7 +223,11 @@ class MaterialSegmentSearchUseCase:
                         ),
                         tags=segment_tags,
                         evidence_excerpt=_material_searchable_corpus(segment, asset)[:900],
-                        needs_confirmation=tier in {"partial", "structural", "semantic"},
+                        evidence_ref_ids=(
+                            self._evidence_refs_for(workspace_id, asset.id, segment.id)
+                            if self._evidence_refs_for is not None else []
+                        ),
+                        needs_confirmation=index_stale or tier in {"partial", "structural", "semantic"},
                     )
                 )
         matches.sort(key=lambda item: (-item.score, item.asset_ref, item.segment_ref))

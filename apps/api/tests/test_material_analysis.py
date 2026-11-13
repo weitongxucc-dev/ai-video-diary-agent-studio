@@ -7,9 +7,12 @@ import pytest
 
 from app.materials.analysis import MaterialAnalysisUseCase
 from app.materials.assets import MaterialAssetStore
+from app.materials.data_governance import KnowledgeClaim, SemanticFieldDefinition
 from app.materials.source_files import MaterialSourceFileAccess
 from app.media_observations import MaterialSpeechAnalysis, SegmentUnderstanding, SubtitleSegment
 from app.production import ProductionRepository
+from app.source_repository import SourceRepository
+from app.source_types import KnowledgeParameter, SourceConnector, SourceItem
 from app.visual_semantics import VisualEmbedding, VisualSemanticError
 
 
@@ -43,7 +46,7 @@ class RecordingSpeechAnalyzer:
         )
 
 
-def case(tmp_path, *, provider=None, speech=None):
+def case(tmp_path, *, provider=None, speech=None, understanding=None):
     library = tmp_path / "library"
     library.mkdir()
     source = library / "source.mp4"
@@ -51,7 +54,7 @@ def case(tmp_path, *, provider=None, speech=None):
     repo = ProductionRepository(
         tmp_path / "analysis.sqlite3", library,
         duration_reader=lambda _path: 8.0, scene_reader=lambda _path, _duration: [4.0],
-        visual_provider=provider, speech_analyzer=speech,
+        visual_provider=provider, speech_analyzer=speech, visual_understanding=understanding,
     )
     repo.material_source_files.bind_material_ingestion("workspace", expected_directory=str(library))
     repo.material_source_files.confirm_material_copy_complete(
@@ -137,6 +140,179 @@ def test_public_analysis_keeps_model_bindings_prompt_cache_and_concurrent_manual
     restored = repo.get_asset("workspace", asset.id)
     assert restored.segments[0].description == segment.description
     assert restored.speech_analysis.observations[0].text == "合成声音观察"
+
+
+def test_analysis_run_records_stages_input_revision_and_expiry(tmp_path):
+    provider, speech = RecordingVisualProvider(), RecordingSpeechAnalyzer()
+    repo, source, asset = case(tmp_path, provider=provider, speech=speech)
+
+    repo.analyze_asset("workspace", asset.id)
+    first = repo.list_material_analysis_runs("workspace", asset.id)[0]
+    assert first.status == "partial"
+    assert first.source_revision["size_bytes"] == str(source.stat().st_size)
+    assert first.stages["media_probe"]["status"] == "succeeded"
+    assert first.stages["speech"]["status"] == "succeeded"
+    assert first.stages["visual_understanding"]["status"] == "skipped"
+    assert first.stages["visual_embeddings"]["status"] == "succeeded"
+
+    source.write_bytes(b"a newer synthetic source revision")
+    repo.material_source_files.confirm_material_copy_complete(
+        "workspace",
+        relative_path=source.name,
+        expected_revision=repo.material_source_files.material_copy_revision(source.stat()),
+        confirmation_source="manual",
+    )
+    repo.analyze_asset("workspace", asset.id)
+    runs = repo.list_material_analysis_runs("workspace", asset.id)
+    assert len(runs) == 2
+    assert {run.status for run in runs} == {"expired", "partial"}
+    assert any(item.relation == "preserved" for item in repo.material_data_governance.list_segment_lineage("workspace", asset.id))
+
+
+def test_analysis_persists_evidence_candidate_assertions_and_indexes(tmp_path):
+    provider, speech = RecordingVisualProvider(), RecordingSpeechAnalyzer()
+
+    class Understanding:
+        def analyze(self, path, segments, fingerprint):
+            return {
+                segment.id: SegmentUnderstanding(
+                    "ready",
+                    fingerprint=fingerprint or "",
+                    model_id="synthetic-understanding",
+                    sample_times=[segment.start_seconds, segment.end_seconds],
+                    summary="合成画面观察",
+                    facts=[{"kind": "object", "text": "一辆自行车", "confidence": 0.91}],
+                    ocr_status="ready",
+                    ocr_model_id="synthetic-ocr",
+                )
+                for segment in segments
+            }
+
+    repo, source, asset = case(
+        tmp_path,
+        provider=provider,
+        speech=speech,
+        understanding=Understanding(),
+    )
+    repo.analyze_asset("workspace", asset.id)
+
+    run = repo.list_material_analysis_runs("workspace", asset.id)[0]
+    assert run.source_digest == hashlib.sha256(source.read_bytes()).hexdigest()
+    evidence = repo.list_material_evidence("workspace", asset.id)
+    assertions = repo.list_material_assertions("workspace", asset.id)
+    indexes = repo.list_material_indexes("workspace", asset.id)
+    assert len(evidence) == 3
+    assert all(item.source_revision["size_bytes"] == str(source.stat().st_size) for item in evidence)
+    assert len(assertions) == 2
+    assert {item.field_ref for item in assertions} == {"object"}
+    assert {item.value for item in assertions} == {"一辆自行车"}
+    assert all(item.status == "candidate" for item in assertions)
+    assert all(item.origin == "model_inference" for item in assertions)
+    confirmed = repo.material_data_governance.transition_assertion(
+        "workspace", asset.id, assertions[0].id, status="confirmed", expected_status="candidate"
+    )
+    assert confirmed.status == "confirmed"
+    assert set(item.index_type for item in indexes) == {"visual_features", "material_search"}
+    assert all(item.status == "ready" for item in indexes)
+
+    source.write_bytes(b"changed after the first analysis")
+    repo.material_source_files.confirm_material_copy_complete(
+        "workspace",
+        relative_path=source.name,
+        expected_revision=repo.material_source_files.material_copy_revision(source.stat()),
+        confirmation_source="manual",
+    )
+    repo.duration_reader = lambda _path: (_ for _ in ()).throw(ValueError("synthetic failure"))
+    failed = repo.analyze_asset("workspace", asset.id)
+    assert failed.analysis_status == "failed"
+    stale_indexes = repo.list_material_indexes("workspace", asset.id)
+    assert {item.status for item in stale_indexes} == {"stale"}
+    assert all(item.invalid_reason for item in stale_indexes)
+
+
+def test_data_governance_field_definition_and_knowledge_claim_lifecycle(tmp_path):
+    repo, _source, _asset = case(tmp_path)
+    field = repo.material_data_governance.upsert_field_definition(
+        SemanticFieldDefinition(
+            id="field-capacity-v1",
+            workspace_id="workspace",
+            canonical_id="product.capacity",
+            display_name="产能",
+            value_type="number",
+            unit_family="throughput",
+            allowed_units=("件/分钟", "件/小时"),
+            aliases=("速度",),
+            applies_to=("product",),
+        )
+    )
+    assert field.value_type == "number"
+    assert repo.list_semantic_field_definitions("workspace")[0].canonical_id == "product.capacity"
+
+    claim = repo.record_knowledge_claim(
+        KnowledgeClaim(
+            id="claim-capacity-1",
+            workspace_id="workspace",
+            knowledge_item_id="knowledge-1",
+            knowledge_version="2",
+            field_ref="product.capacity",
+            value=120,
+            unit="件/分钟",
+            evidence_refs=({"locator": "第2页", "source_ref": "source-1"},),
+            origin="business_fact",
+            confidence=0.98,
+            asserted_by="member-1",
+        )
+    )
+    assert claim.status == "candidate"
+    confirmed = repo.transition_knowledge_claim(
+        "workspace", claim.id, status="confirmed", expected_status="candidate"
+    )
+    assert confirmed.status == "confirmed"
+    assert repo.list_knowledge_claims("workspace", "knowledge-1", knowledge_version="2")[0].unit == "件/分钟"
+
+
+def test_parsed_knowledge_parameters_become_candidate_claims(tmp_path):
+    repo, _source, _asset = case(tmp_path)
+    sources = SourceRepository(
+        tmp_path / "analysis.sqlite3",
+        governance_store=repo.material_data_governance,
+    )
+    sources.upsert_connector(
+        SourceConnector(
+            id="connector-files",
+            workspace_id="workspace",
+            platform="knowledge_files",
+            protocol="local_file",
+            account_or_rule="用户提供",
+            frequency="on_demand",
+            permissions=("read:source_items",),
+        )
+    )
+    source = SourceItem(
+        id="source-parameters",
+        workspace_id="workspace",
+        connector_id="connector-files",
+        source_label="file_import",
+        source_url=None,
+        content_type="text/markdown",
+        author=None,
+        published_at=None,
+        body="产能：120",
+        subtitles=None,
+        media_references=(),
+        license="user_provided",
+        title="参数资料",
+        file_reference="parameters.md",
+        content_hash="f" * 64,
+        parameters=(KnowledgeParameter("capacity", "120", "件/分钟", "第1段"),),
+    )
+    sources.save_source_items("workspace", [source])
+    item = sources.save_source_item_to_knowledge("workspace", source.id, verified_owner_user_id="member-1")
+    claims = repo.list_knowledge_claims("workspace", item.id, knowledge_version="1")
+    assert len(claims) == 1
+    assert claims[0].field_ref == "knowledge.parameter.capacity"
+    assert claims[0].status == "candidate"
+    assert claims[0].evidence_refs[0]["locator"] == "第1段"
 
 
 def test_public_analysis_preserves_copy_and_final_digest_rejection_without_asset_publish(tmp_path):

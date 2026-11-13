@@ -3,11 +3,19 @@ from fastapi import APIRouter
 from urllib.parse import quote
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
-from app.schemas import KnowledgeSearchResponse
+from uuid import uuid4
+from app.schemas import (
+    KnowledgeClaimRequest,
+    KnowledgeClaimResponse,
+    KnowledgeClaimsResponse,
+    KnowledgeClaimStatusRequest,
+    KnowledgeSearchResponse,
+)
 from app.source_repository import KnowledgeVersionConflict
 from app.knowledge_file_store import KnowledgeOriginalUnavailable, KnowledgeOriginalIntegrityError, KnowledgeOriginalStorageError
 from app.schemas import KnowledgeItemResponse, KnowledgeItemsResponse, KnowledgeItemDetailResponse, KnowledgeItemVersionResponse, KnowledgeItemVisibilityRequest, KnowledgeItemContentRequest, SaveSourceItemToKnowledgeRequest
 from app.source_types import KnowledgeItem
+from app.materials.data_governance import KnowledgeClaim
 
 
 def _knowledge_item_response(item: KnowledgeItem, visibility: str) -> KnowledgeItemResponse:
@@ -18,7 +26,7 @@ def _knowledge_item_response(item: KnowledgeItem, visibility: str) -> KnowledgeI
 
 
 def build_knowledge_router(*, records_for, workspace_for, reader_for, write_guard,
-                           route_names) -> APIRouter:
+                           governance_for, route_names) -> APIRouter:
     router = APIRouter()
 
     @router.post(
@@ -123,6 +131,88 @@ def build_knowledge_router(*, records_for, workspace_for, reader_for, write_guar
             for version in versions
         ]
         return detail
+
+
+    @router.get("/api/knowledge-items/{knowledge_item_id}/claims", response_model=KnowledgeClaimsResponse)
+    def list_knowledge_claims(knowledge_item_id: str, request: Request, version: str | None = None):
+        workspace_id = workspace_for(request)
+        user_id, diagnostic = reader_for(request, workspace_id)
+        try:
+            item = records_for().get_knowledge_item_readable_by(
+                workspace_id, knowledge_item_id, user_id=user_id, local_diagnostic=diagnostic,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+        if version is not None and version != item.version and not any(
+            record.version == version for record in records_for().list_knowledge_item_versions(item.workspace_id, item.id)
+        ):
+            raise HTTPException(status_code=404, detail="knowledge item version not found")
+        claims = governance_for().list_knowledge_claims(workspace_id, item.id, knowledge_version=version)
+        return KnowledgeClaimsResponse(
+            claims=[KnowledgeClaimResponse.model_validate(claim, from_attributes=True) for claim in claims]
+        )
+
+
+    @router.post("/api/knowledge-items/{knowledge_item_id}/claims", response_model=KnowledgeClaimResponse)
+    def create_knowledge_claim(
+        knowledge_item_id: str, request: Request, payload: KnowledgeClaimRequest,
+    ) -> KnowledgeClaimResponse:
+        denied = write_guard(request)
+        if denied is not None:
+            return denied
+        workspace_id = workspace_for(request)
+        user_id, diagnostic = reader_for(request, workspace_id)
+        try:
+            item = records_for().get_knowledge_item_readable_by(
+                workspace_id, knowledge_item_id, user_id=user_id, local_diagnostic=diagnostic,
+            )
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+        versions = records_for().list_knowledge_item_versions(item.workspace_id, item.id)
+        if payload.knowledge_version != item.version and not any(
+            record.version == payload.knowledge_version for record in versions
+        ):
+            raise HTTPException(status_code=404, detail="knowledge item version not found")
+        claim = KnowledgeClaim(
+            id=f"claim_{uuid4().hex}", workspace_id=workspace_id,
+            knowledge_item_id=item.id, knowledge_version=payload.knowledge_version,
+            field_ref=payload.field_ref, value=payload.value, unit=payload.unit,
+            qualifiers=payload.qualifiers, evidence_refs=tuple(payload.evidence_refs),
+            origin=payload.origin, confidence=payload.confidence, status=payload.status,
+            asserted_by=user_id or "local-diagnostic", supersedes_ref=payload.supersedes_ref,
+        )
+        try:
+            saved = governance_for().record_knowledge_claim(claim)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return KnowledgeClaimResponse.model_validate(saved, from_attributes=True)
+
+
+    @router.put("/api/knowledge-items/{knowledge_item_id}/claims/{claim_id}/status", response_model=KnowledgeClaimResponse)
+    def update_knowledge_claim_status(
+        knowledge_item_id: str, claim_id: str, request: Request, payload: KnowledgeClaimStatusRequest,
+    ) -> KnowledgeClaimResponse:
+        denied = write_guard(request)
+        if denied is not None:
+            return denied
+        workspace_id = workspace_for(request)
+        user_id, diagnostic = reader_for(request, workspace_id)
+        try:
+            item = records_for().get_knowledge_item_readable_by(
+                workspace_id, knowledge_item_id, user_id=user_id, local_diagnostic=diagnostic,
+            )
+            claim = governance_for().get_knowledge_claim(workspace_id, claim_id)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail="knowledge item or claim not found") from exc
+        if claim.knowledge_item_id != item.id:
+            raise HTTPException(status_code=404, detail="knowledge item or claim not found")
+        try:
+            updated = governance_for().transition_knowledge_claim(
+                workspace_id, claim_id, status=payload.status, expected_status=payload.expected_status,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return KnowledgeClaimResponse.model_validate(updated, from_attributes=True)
 
 
 

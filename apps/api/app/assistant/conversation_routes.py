@@ -27,6 +27,7 @@ from app.schemas import (
     CreationPlanPreviewRequest,
     CreationPlanPreviewResponse,
 )
+from app.assistant.trace import project_turn_trace
 
 
 class ConversationHTTPAdapter:
@@ -130,6 +131,20 @@ class ConversationHTTPAdapter:
         if receipt is None:
             raise HTTPException(status_code=404, detail='当前对话中没有这次请求的保存回执。')
         return AssistantConversationRequestResponse.model_validate(receipt)
+
+    def trace(self, turn_id: str, request: Request):
+        """Return a redacted, read-only execution trace for an owned turn.
+
+        The persisted conversation event stream is the source of truth for
+        diagnostics.  Keep the projection deliberately small: callers need
+        correlation, tool outcomes and known provider usage, never prompts,
+        raw tool arguments, file paths or credentials.
+        """
+        turn = self._conversations_for().get_turn(turn_id)
+        if turn is None:
+            raise HTTPException(status_code=404, detail='对话轮次不存在。')
+        self._owned_conversation(request, turn['conversation_id'])
+        return project_turn_trace(turn)
 
     def resume(self, conversation_id: str, request: Request):
         workspace_id, member_id, row = self._owned_conversation(request, conversation_id)
@@ -263,6 +278,10 @@ def build_conversation_router(adapter_for):
     @router.get('/api/assistant/conversations/{conversation_id}/requests/{client_request_id}', response_model=AssistantConversationRequestResponse)
     def get_assistant_conversation_request(conversation_id: str, client_request_id: UUID, request: Request):
         return adapter_for().get_request(conversation_id, client_request_id, request)
+
+    @router.get('/api/assistant/turns/{turn_id}/trace')
+    def get_assistant_turn_trace(turn_id: str, request: Request):
+        return adapter_for().trace(turn_id, request)
 
     @router.post('/api/assistant/conversations/{conversation_id}/resume', response_model=AssistantConversationResponse)
     def resume_assistant_conversation(conversation_id: str, request: Request):

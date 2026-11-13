@@ -8,8 +8,8 @@ const safeVoiceReasons = new Set([
   "authorization_not_effective", "authorization_content_type_denied", "authorization_scope_denied",
 ]);
 
-export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stage, selectedRefs, selectedProfile, selectedKnowledge, isTaskRead, verifyTaskVersion, getEditCapabilities, readMaterialSelection}: {
-  request: BusinessRequest; taskId: string | undefined; stage: string | undefined; selectedRefs: string[]; selectedProfile: any; selectedKnowledge: any; isTaskRead: () => boolean; verifyTaskVersion: (workspace: any) => void; getEditCapabilities: () => any; readMaterialSelection: () => any;
+export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stage, selectedRefs, selectedProfile, selectedKnowledge, isTaskRead, verifyTaskVersion, getEditCapabilities, readMaterialSelection, readActionSource}: {
+  request: BusinessRequest; taskId: string | undefined; stage: string | undefined; selectedRefs: string[]; selectedProfile: any; selectedKnowledge: any; isTaskRead: () => boolean; verifyTaskVersion: (workspace: any) => void; getEditCapabilities: () => any; readMaterialSelection: () => any; readActionSource: () => {turnId?: string};
 }) {
   const materialSelection = readMaterialSelection();
   registerMaterialEvidence(pi, request);
@@ -144,10 +144,59 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
       const templates = ordered.slice(offset,offset+limit).map(item=>({
         id:item.id,name:item.name,version:item.version,origin:item.origin,
         kind:item.settings?.kind??'production_structure',category:item.settings?.visual?.category,
+        engine:item.settings?.visual?.engine ?? null,
+        provenance:(item.settings?.visual?.provenance || []).map((entry:any)=>({
+          repository:entry.repository ?? null, revision:entry.revision ?? null,
+          license:entry.license ?? null, path:entry.path ?? null,
+        })),
       }));
       const truncated=offset+templates.length<ordered.length;
       const details={templates,offset,total_count:ordered.length,truncated,next_offset:truncated?offset+templates.length:null};
       return {content:[{type:"text",text:JSON.stringify(details)}],details};
+    },
+  });
+
+  pi.registerTool({
+    name: "read_editing_resource_catalog",
+    label: "读取剪辑资源目录",
+    description: "读取当前版本真正可调用的剪辑资源与 Skill 入口。返回资源分类、接通状态、入口和 provenance 要求；catalog_only/planned 只是目录或规划，不能当成已安装能力，也不能直接写时间线。",
+    parameters: {type: "object", properties: {}, additionalProperties: false},
+    execute: async () => {
+      const data = await request("/api/video-templates");
+      const templateCount = Array.isArray(data.items) ? data.items.length : 0;
+      const resources = [
+        {id: "materials", label: "素材", status: "connected", entrypoints: ["find_materials", "read_material_evidence"], provenance_required: true},
+        {id: "templates", label: "模板", status: templateCount ? "connected" : "catalog_only", entrypoints: ["read_video_templates", "read_visual_template"], count: templateCount, provenance_required: true},
+        {id: "subtitles", label: "字幕", status: "connected", entrypoints: ["read_narration_segments", "read_script_sections"], provenance_required: false},
+        {id: "voice", label: "配音", status: "connected", entrypoints: ["read_voice_profiles", "select_narration_voice"], provenance_required: true},
+        {id: "effects", label: "画面效果", status: "connected", entrypoints: ["preview_typed_edit", "apply_typed_edit"], provenance_required: false},
+        {id: "transitions", label: "转场", status: "connected", entrypoints: ["preview_typed_edit", "apply_typed_edit"], provenance_required: false},
+        {id: "text_stickers", label: "文本/贴纸", status: "connected", entrypoints: ["read_task_object", "preview_typed_edit"], provenance_required: true},
+        {id: "audio_library", label: "音乐/音效", status: "catalog_only", entrypoints: [], provenance_required: true},
+        {id: "motion_runtime", label: "动效运行时", status: "connected", entrypoints: ["read_visual_template"], provenance_required: true},
+        {id: "filters_lut", label: "滤镜/LUT", status: "planned", entrypoints: [], provenance_required: true},
+      ];
+      const skills = [
+        {name: "source-speech", status: "installed", purpose: "原声口播"},
+        {name: "narration-materials", status: "installed", purpose: "旁白配素材"},
+        {name: "local-edit", status: "installed", purpose: "局部修改"},
+        {name: "visual-template", status: "installed", purpose: "可编辑视觉模板与程序化制作"},
+      ];
+      const details = {resources, skills, provenance_fields: ["repository", "revision", "license", "asset_license", "font_license", "model_license", "service_terms"], instruction: "只有 status=connected 且本轮读取到真实版本的资源可进入 EditProposal；外部资源必须逐项登记来源和许可。"};
+      return {content: [{type: "text", text: JSON.stringify(details)}], details};
+    },
+  });
+
+  pi.registerTool({
+    name: "read_agent_run_trace",
+    label: "读取 Agent 运行追踪",
+    description: "读取当前对话回合已经持久化的脱敏运行追踪，包含工具状态、失败分类、上下文压缩和供应商真实用量（若有）。不会返回提示词、原始参数、路径或凭据；usage_status=unknown时不能推算成本。",
+    parameters: {type: "object", properties: {}, additionalProperties: false},
+    execute: async () => {
+      const turnId = readActionSource()?.turnId;
+      if (!turnId) throw new Error("当前回合没有可读取的运行身份。");
+      const details = await request(`/api/assistant/turns/${encodeURIComponent(turnId)}/trace`);
+      return {content: [{type: "text", text: JSON.stringify(details)}], details};
     },
   });
 
@@ -170,6 +219,7 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
         match_tier: item.match_tier, evidence_excerpt: item.evidence_excerpt.slice(0, 900),
         start_seconds: item.start_seconds, end_seconds: item.end_seconds, duration_seconds: item.duration_seconds,
         time_range: item.time_range, needs_confirmation: item.needs_confirmation,
+        evidence_ref_ids: (item as any).evidence_ref_ids || [],
       }));
       const details = {matches: excerpts, qualification_message: result.qualification_message,
         total_count: result.total_count, truncated: result.truncated};

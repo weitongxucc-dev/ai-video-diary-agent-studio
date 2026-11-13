@@ -168,6 +168,8 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   const only = (...keys: string[]) => [...query.keys()].every(key => keys.includes(key) && query.getAll(key).length === 1);
   const result = (operation: string, args: Record<string, any> = {}) => ({operation, arguments: args});
   if (method === 'GET') {
+    const trace = pathname.match(/^\/api\/assistant\/turns\/([^/]+)\/trace$/);
+    if (trace && !search) return result('read_agent_run_trace', {assistant_turn_id: decodeURIComponent(trace[1])});
     if (pathname === '/api/video-templates' && !search) return result('read_video_templates');
     const template = pathname.match(/^\/api\/video-templates\/([^/]+)$/);
     if (template && only('version') && /^[1-9]\d*$/.test(query.get('version') || ''))

@@ -73,6 +73,24 @@ def bound(asset, segment=None):
 def selected(tmp_path, asset, *, segment=None, params=None):
     return call(tmp_path, "read_selected_material", {f"/api/production/materials/{asset['id']}": asset}, selection=bound(asset, segment), params=params)
 
+def test_governance_read_returns_closure_without_treating_candidates_as_facts(tmp_path):
+    governance = {
+        "asset_id": "asset-one",
+        "analysis_runs": [{"id": "run-1", "status": "succeeded"}],
+        "evidence": [{"id": "ev-1", "status": "valid"}],
+        "assertions": [{"id": "as-1", "status": "candidate", "value": "型号待确认"}],
+        "indexes": [{"id": "idx-1", "status": "stale"}],
+        "lineage": [], "quality_profiles": [{"metrics": {"audio": {"status": "unavailable"}}}],
+        "index_rebuild_jobs": [],
+    }
+    out = call(tmp_path, "read_material_governance", {"/api/production/materials/asset-one/data-governance": governance}, params={"asset_id": "asset-one"})
+    assert out["ok"]
+    details = out["result"]["details"]
+    assert details["summary"] == {"analysis_runs": 1, "evidence_refs": 1, "assertions": 1,
+        "candidate_assertions": 1, "confirmed_assertions": 0, "stale_indexes": 1,
+        "unavailable_quality_metrics": 1}
+    assert "不是自动采用许可" in details["instruction"]
+
 def test_unselected_library_reads_all_real_pages_but_sends_only_aggregate_counts(tmp_path, asset):
     assets = [{**asset, "id": f"asset-{index}", "analysis_status": ["pending", "ready", "blocked", "failed"][index % 4]} for index in range(151)]
     out = call(tmp_path, "read_material_library_status", {

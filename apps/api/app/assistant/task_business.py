@@ -235,7 +235,7 @@ class TaskBusiness:
         binding=dict(source_binding)
         if is_script_generation(binding) and operation not in SCRIPT_GENERATION_OPERATIONS:
             raise TaskBusinessRejected('本次生成动作仅授权读取与保存原请求草稿')
-        reconcile_original=(operation in {'read_task_workspace','read_task_quality_check','read_task_quality_continuation','continue_task_quality_check','read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
+        reconcile_original=(operation in {'read_agent_run_trace','read_task_workspace','read_task_quality_check','read_task_quality_continuation','continue_task_quality_check','read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
             or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
         # Section owners validate the frozen target and dependency digest at
         # commit. An unrelated timeline publication may legitimately move HEAD.
@@ -488,6 +488,12 @@ class TaskBusiness:
             raise TaskBusinessRejected('本次生成动作不授权采用、制作或其他写入')
         if generation and operation in {'patch_script_sections','read_script_sections'} and args['script_id']!=goal['script_id']:
             raise TaskBusinessRejected('生成窗口不能切换原请求的稿件')
+        if operation == 'read_agent_run_trace':
+            from app.assistant.trace import project_turn_trace
+            turn = self.conversations.get_turn(origin['assistant_turn_id'])
+            if turn is None or turn['conversation_id'] != goal['conversation_id']:
+                raise TaskBusinessRejected('当前回合运行追踪不可读', kind='not_found')
+            return project_turn_trace(turn)
         if operation=='read_segment_visual_decision':
             if not self.visual_job_belongs_to_goal(goal,actor,args['job_id']):
                 raise TaskBusinessRejected('画面决定不属于原目标来源')

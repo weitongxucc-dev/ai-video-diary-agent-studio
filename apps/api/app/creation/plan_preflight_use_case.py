@@ -8,7 +8,7 @@ import json
 from typing import Literal
 
 from app.avatar_lipsync import AvatarAndLipSyncProvider
-from app.materials.contracts import effective_segment_usage_role
+from app.materials.contracts import MaterialSegmentMatch, effective_segment_usage_role
 from app.model_runtime import ModelCatalog
 from app.creation.video_template_records import VideoTemplate
 from app.production import ProductionRepository
@@ -149,36 +149,53 @@ class CreationPlanPreflightUseCase:
                                                               local_diagnostic=_plan_local_diagnostic)
         if automation_scope is not None:
             usable = [(asset, segment) for asset, segment in usable if asset.id in automation_scope["material_asset_ids"]]
+        frozen_material_matches: list[MaterialSegmentMatch] | None = None
         if frozen_plan is not None:
             chosen_pairs = {(item["asset_ref"].removeprefix("asset:"), item["segment_ref"].removeprefix("segment:"))
                 for item in frozen_plan["material_matches"]}
             usable = [(asset, segment) for asset, segment in usable if (asset.id, segment.id) in chosen_pairs]
+            # A request window is an Agent/user adoption boundary. Reuse the
+            # exact candidate snapshot that was shown in that window; do not
+            # run a second ranking pass that could silently change its reasons
+            # or evidence.
+            frozen_material_matches = [
+                MaterialSegmentMatch(**item)
+                for item in frozen_plan.get("material_matches", [])
+                if isinstance(item, dict)
+            ]
         approved_assets = list({asset.id: asset for asset, _ in usable}.values())
         approved_clips = [segment for asset, segment in usable if effective_segment_usage_role(asset, segment) == "b_roll"]
         eligible_material_pairs = {(asset.id, segment.id) for asset, segment in usable}
         eligible_material_ids = sorted({asset_id for asset_id, _ in eligible_material_pairs})
-        material_matches = self.production.material_search.search_material_segments(
-            workspace_id,
-            query=payload.goal,
-            asset_ids=eligible_material_ids,
-            eligible_segment_refs=eligible_material_pairs,
-            usage_roles=["a_roll", "b_roll"],
-            limit=8,
-            viewer_user_id=_plan_user_id,
-            local_diagnostic=_plan_local_diagnostic,
-        ) if eligible_material_ids else []
-        material_matches = [match for match in material_matches if (match.asset_ref.removeprefix("asset:"), match.segment_ref.removeprefix("segment:")) in eligible_material_pairs]
-        if not material_matches and template is None:
+        if frozen_material_matches is not None:
+            material_matches = [
+                match for match in frozen_material_matches
+                if (match.asset_ref.removeprefix("asset:"), match.segment_ref.removeprefix("segment:"))
+                in eligible_material_pairs
+            ]
+        else:
             material_matches = self.production.material_search.search_material_segments(
                 workspace_id,
+                query=payload.goal,
                 asset_ids=eligible_material_ids,
-            eligible_segment_refs=eligible_material_pairs,
+                eligible_segment_refs=eligible_material_pairs,
                 usage_roles=["a_roll", "b_roll"],
                 limit=8,
                 viewer_user_id=_plan_user_id,
                 local_diagnostic=_plan_local_diagnostic,
             ) if eligible_material_ids else []
             material_matches = [match for match in material_matches if (match.asset_ref.removeprefix("asset:"), match.segment_ref.removeprefix("segment:")) in eligible_material_pairs]
+            if not material_matches and template is None:
+                material_matches = self.production.material_search.search_material_segments(
+                    workspace_id,
+                    asset_ids=eligible_material_ids,
+                    eligible_segment_refs=eligible_material_pairs,
+                    usage_roles=["a_roll", "b_roll"],
+                    limit=8,
+                    viewer_user_id=_plan_user_id,
+                    local_diagnostic=_plan_local_diagnostic,
+                ) if eligible_material_ids else []
+                material_matches = [match for match in material_matches if (match.asset_ref.removeprefix("asset:"), match.segment_ref.removeprefix("segment:")) in eligible_material_pairs]
         if automation_scope is not None:
             material_matches = [match for match in material_matches if match.asset_ref.removeprefix("asset:") in automation_scope["material_asset_ids"]]
         language_to_voice_language = {
@@ -361,7 +378,17 @@ class CreationPlanPreflightUseCase:
                 item.__dict__ for item in pronunciation_references
             ],
             "material_rule_summary": "使用当前可自动选用的有效镜头；保留主动限制、人工疑点与匹配依据。",
-            "material_matches": [asdict(item) for item in material_matches],
+            # Keep old preflight fingerprints stable when a historical
+            # candidate had no governed evidence yet. New evidence IDs are
+            # included and therefore become part of the adoption contract as
+            # soon as they exist.
+            "material_matches": [
+                {
+                    key: value for key, value in asdict(item).items()
+                    if item.evidence_ref_ids or key != "evidence_ref_ids"
+                }
+                for item in material_matches
+            ],
             "model_snapshot": [{key: model[key] for key in ("id", "capability", "state", "ready")}
                 for model in model_snapshot if model["id"] in required_model_ids],
             "confirmation_points": ["确认资料与来源事实", "确认选题", "审核成片与发布"],

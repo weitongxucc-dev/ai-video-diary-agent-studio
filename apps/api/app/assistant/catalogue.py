@@ -7,21 +7,21 @@ SCRIPT_TOOL_READS = ("read_media_script_tool_capabilities", "list_media_script_t
 
 ASSISTANT_BUSINESS_TOOLS = {
     "home": (
-        "read_workspace_context", "read_video_templates", "read_voice_profiles", "find_knowledge", "find_materials",
+        "read_workspace_context", "read_video_templates", "read_editing_resource_catalog", "read_agent_run_trace", "read_voice_profiles", "find_knowledge", "find_materials",
         "preview_creation_plan", "read_creation_request", "resume_creation_request", "revise_creation_request", "prepare_creation_window",
-        "read_material_library_status", "search_material_library",
+        "read_material_library_status", "search_material_library", "read_material_governance",
         "create_source_task", "read_source_task",
     ),
     "profile_reference": ("read_selected_profile",),
     "knowledge_reference": ("read_selected_knowledge",),
-    "material": ("read_material_library_status", "search_material_library",
+    "material": ("read_material_library_status", "search_material_library", "read_material_governance", "read_editing_resource_catalog", "read_agent_run_trace",
                  "create_source_task", "read_source_task",
                  "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags"),
-    "topic": ("read_current_task", "find_knowledge", "generate_creation_task_topics", "adopt_creation_task_topic",
+    "topic": ("read_current_task", "read_editing_resource_catalog", "read_agent_run_trace", "find_knowledge", "generate_creation_task_topics", "adopt_creation_task_topic",
               "preview_script_draft", "start_creation_execution", "resume_creation_execution", "read_creation_execution"),
-    "script": ("read_current_task", "find_knowledge", "preview_script_draft",
+    "script": ("read_current_task", "read_editing_resource_catalog", "read_agent_run_trace", "find_knowledge", "preview_script_draft",
                "start_creation_execution", "resume_creation_execution", "read_creation_execution"),
-    "task_edit": ("record_input_understanding", "read_narration_segment_context", "read_narration_segment_sources", "revise_narration_segment", "read_narration_revision", "resume_narration_revision", "read_current_task", "find_knowledge", "find_materials", "preview_script_draft",
+    "task_edit": ("record_input_understanding", "read_narration_segment_context", "read_narration_segment_sources", "revise_narration_segment", "read_narration_revision", "resume_narration_revision", "read_current_task", "find_knowledge", "find_materials", "read_material_governance", "read_editing_resource_catalog", "read_agent_run_trace", "preview_script_draft",
                   "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags",
                   "read_edit_control_context", "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
                   "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "read_segment_visual_decision", "regenerate_storyboard"),
@@ -30,7 +30,7 @@ ASSISTANT_BUSINESS_TOOLS = {
 SCRIPT_WINDOW_TOOL_OPERATIONS = {'start_script_window':'start','patch_script_sections':'patch',
     'confirm_saved_script':'confirm','read_script_window_request':None}
 
-TASK_READ_PREVIEW_TOOLS = ("read_video_templates", "read_visual_template", "save_visual_template", "update_visual_template", "start_script_window", "patch_script_sections", "confirm_saved_script", "read_script_window_request", "prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
+TASK_READ_PREVIEW_TOOLS = ("read_video_templates", "read_editing_resource_catalog", "read_agent_run_trace", "read_visual_template", "save_visual_template", "update_visual_template", "start_script_window", "patch_script_sections", "confirm_saved_script", "read_script_window_request", "prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_storyboard_regeneration",
                            "select_narration_voice", "read_narration_voice_selection",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit", "apply_typed_edit",
@@ -58,6 +58,8 @@ _PI_TOOL_LABELS = {
     "read_narration_voice_selection": "查询原声音选择",
     "read_workspace_context": "读取当前工作区",
     "read_video_templates": "读取可用模板",
+    "read_editing_resource_catalog": "读取剪辑资源目录",
+    "read_agent_run_trace": "读取 Agent 运行追踪",
     "read_visual_template": "读取动画源码",
     "save_visual_template": "另存视觉模板",
     "update_visual_template": "更新视觉模板版本",
@@ -139,6 +141,7 @@ _PI_TOOL_LABELS = {
     "read_selected_material": "读取所选素材",
     "suggest_selected_material_tags": "建议素材标签",
     "read_material_library_status": "读取素材库状态",
+    "read_material_governance": "读取素材治理状态",
     "search_material_library": "检索可见素材",
     "update_selected_material_tags": "修改我的标签",
 }
@@ -186,7 +189,7 @@ search_material_library返回文件候选与状态，find_materials返回已分�
 回答用日常中文。标题和动作尽量不超过五个字，不说工具名、模型名、预检、提案等内部词；说清能否开始、缺什么和下一步。"""
 
 MATERIAL_PROMPT = """你是 AI 视频日记素材库里的对话助手，只使用已注册的真实素材业务读写工具。
-用户问库里有什么或分析进度时用 read_material_library_status；按描述找文件用 search_material_library。只按真实分页总数和返回候选作答，空库、零匹配、HTTP失败分别说明，不把一页当全库。文件候选不等于适合成片，不自动选择或创建视频。
+用户问库里有什么或分析进度时用 read_material_library_status；按描述找文件用 search_material_library；需要判断某条素材是否有可回查的分析运行、证据、断言、索引新鲜度、质量和片段血缘时用 read_material_governance。需要知道当前版本哪些剪辑资源和 Skill 真正接通时用 read_editing_resource_catalog；只有 connected 且本轮读到真实版本的资源才可进入编辑提案。需要解释本轮 Agent 如何运行、工具是否成功或供应商用量是否真实可得时用 read_agent_run_trace；usage_status=unknown时不能推算费用。治理回执用于解释依据和缺口，不等于自动采用许可，candidate、stale、unavailable必须按原状态表达。只按真实分页总数和返回候选作答，空库、零匹配、HTTP失败分别说明，不把一页当全库。文件候选不等于适合成片，不自动选择或创建视频。
 有发送时的明确选择才调用 read_selected_material，读取文件身份、原资产时间范围和分项文字证据；整条素材可按offset/limit继续读片段，不能混淆不同文件同一秒数。区分画面观察、声音陈述、OCR、已存片段转录、用户说明和未知项；blocked、failed或not_recorded不能说已识别。依据不足须说明，不从标签猜人物身份、用途或缺失转写。
 只有用户明确要求修改标签并能确定替换、添加或移除及对应文字时，先read_selected_material核对标签，再调用 update_selected_material_tags 一次；“把标签改成……”表示替换，“再加上/添加……”表示添加，“移除/去掉……”表示移除。无选择只读库或请用户在页面选择，不猜对象。对象身份由服务端发送时绑定，不接受用户或模型指定ID、路径、成员、工作区，也不能改系统标签、片段描述、转写、用途或标签夹。
 如果用户没有说清操作方式或标签内容，先用日常中文问清，不执行修改。普通标签直接保存，不创建剪辑提案或创作任务，也不要求二次确认。只有工具写后同对象回读成功才可说已保存；失败如实说明，不得根据提交或模型回复冒称成功。不请求原始媒体、任意路径或整库正文，不泄露路径和身份信息。"""

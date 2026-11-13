@@ -8,10 +8,16 @@ import logging
 from pathlib import Path
 import sqlite3
 import subprocess
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from app.materials.assets import MaterialAssetStore, _infer_system_tags, _scene_ranges, _segment_id
 from app.materials.contracts import MaterialAsset, MaterialSegment, MaterialVisualFeature
+from app.materials.analysis_runs import MaterialAnalysisRunStore
+from app.materials.data_governance import (
+    MaterialClipReferenceMigration,
+    MaterialDataGovernanceStore,
+    MaterialSegmentLineage,
+)
 from app.materials.source_files import MaterialSourceFileAccess
 from app.models import utc_now
 from app.visual_semantics import SegmentWindow, VisualSemanticError, VisualSemanticProvider, evidence_timestamps, visual_feature_version
@@ -88,6 +94,8 @@ class MaterialAnalysisUseCase:
         visual_provider: VisualSemanticProvider,
         speech_analyzer: LocalMaterialSpeechAnalyzer | None,
         visual_understanding: LocalVisualUnderstanding | None,
+        analysis_runs: MaterialAnalysisRunStore | None = None,
+        data_governance: MaterialDataGovernanceStore | None = None,
     ) -> None:
         self.assets = assets
         self.source_files = source_files
@@ -97,6 +105,8 @@ class MaterialAnalysisUseCase:
         self.visual_provider = visual_provider
         self.speech_analyzer = speech_analyzer
         self.visual_understanding = visual_understanding
+        self.analysis_runs = analysis_runs
+        self.data_governance = data_governance
         self._usage_role_prompt_vectors: list[list[float]] | None = None
 
     def analyze_asset(self, workspace_id: str, asset_id: str, *, expected_source_digest: str | None = None) -> MaterialAsset:
@@ -106,7 +116,60 @@ class MaterialAnalysisUseCase:
         path = self.source_files.validated_library_file(asset.path)
         self.source_files.require_material_copy_confirmation(workspace_id, path)
         source_stat = path.stat()
+        source_revision = self.source_files.material_copy_revision(source_stat)
+        prior_segments = list(asset.segments)
+        run_id: str | None = None
+        if self.data_governance is not None:
+            self.data_governance.mark_indexes_stale(
+                workspace_id, asset.id, source_revision, None
+            )
+        if self.analysis_runs is not None:
+            self.analysis_runs.expire_obsolete(workspace_id, asset.id, source_revision)
+            run = self.analysis_runs.start(
+                workspace_id,
+                asset.id,
+                source_revision=source_revision,
+                parameters={
+                    "expected_source_digest_supplied": expected_source_digest is not None,
+                    "segment_strategy": "scene_boundaries",
+                },
+            )
+            run_id = run.id
+
+        def stage(
+            name: str,
+            status: Literal["pending", "running", "succeeded", "blocked", "failed", "skipped"],
+            *,
+            message: str = "",
+            model_id: str = "",
+            completed_count: int = 0,
+            total_count: int = 0,
+        ) -> None:
+            if self.analysis_runs is not None and run_id is not None:
+                self.analysis_runs.update_stage(
+                    workspace_id,
+                    run_id,
+                    name,
+                    status,
+                    message=message,
+                    model_id=model_id,
+                    completed_count=completed_count,
+                    total_count=total_count,
+                )
+
+        def finish(
+            status: Literal["succeeded", "partial", "failed", "expired"],
+            *,
+            error_message: str | None = None,
+        ) -> None:
+            if self.analysis_runs is not None and run_id is not None:
+                self.analysis_runs.finish(
+                    workspace_id, run_id, status=status, error_message=error_message
+                )
+
+        analysis_completed = False
         try:
+            stage("media_probe", "running")
             duration = float(self.duration_reader(path))
             if duration <= 0:
                 raise ValueError("视频时长无效")
@@ -129,18 +192,115 @@ class MaterialAnalysisUseCase:
             asset.duration_seconds = round(duration, 3)
             asset.segments = segments
             asset.analysis_status = "ready"
+            stage(
+                "media_probe",
+                "succeeded",
+                message=f"已读取时长并定位 {len(segments)} 个镜头。",
+                completed_count=len(segments),
+                total_count=len(segments),
+            )
             source_fingerprint = None
             if self.visual_understanding is not None:
+                stage("visual_understanding", "running", total_count=len(segments))
                 with path.open("rb") as source:
                     source_fingerprint = hashlib.file_digest(source, "sha256").hexdigest()
+                if self.analysis_runs is not None and run_id is not None:
+                    self.analysis_runs.update_source_digest(
+                        workspace_id, run_id, source_fingerprint
+                    )
+            else:
+                stage("visual_understanding", "skipped", message="本机未配置画面理解模型。")
+                stage("ocr", "skipped", message="未运行画面理解，因此未运行 OCR。")
             if self.speech_analyzer is not None:
+                stage("speech", "running")
                 asset.speech_analysis = self.speech_analyzer.analyze(path, duration, asset.speech_analysis, source_fingerprint)
+                speech_status = asset.speech_analysis.status
+                stage(
+                    "speech",
+                    "succeeded" if speech_status == "ready" else speech_status,
+                    message=asset.speech_analysis.message,
+                    model_id=asset.speech_analysis.model_id,
+                    completed_count=len(asset.speech_analysis.observations),
+                    total_count=len(asset.speech_analysis.observations),
+                )
+            else:
+                stage("speech", "skipped", message="未配置本地语音转写。")
             if self.visual_understanding is not None:
                 observations = self.visual_understanding.analyze(path, segments, source_fingerprint)
                 for segment in segments:
                     segment.understanding = observations[segment.id]
+                ready_observations = sum(
+                    bool(item.understanding and item.understanding.status == "ready")
+                    for item in segments
+                )
+                visual_understanding_status = (
+                    "succeeded"
+                    if ready_observations == len(segments)
+                    else "failed"
+                    if ready_observations == 0
+                    else "blocked"
+                )
+                stage(
+                    "visual_understanding",
+                    visual_understanding_status,
+                    message="画面对象、动作和场景观察已写入片段。",
+                    model_id=next(
+                        (item.understanding.model_id for item in segments if item.understanding),
+                        "",
+                    ),
+                    completed_count=ready_observations,
+                    total_count=len(segments),
+                )
+                ready_ocr = sum(
+                    bool(item.understanding and item.understanding.ocr_status == "ready")
+                    for item in segments
+                )
+                stage(
+                    "ocr",
+                    "succeeded" if ready_ocr == len(segments) else "blocked" if ready_ocr else "failed",
+                    message="OCR 结果随画面理解保存，并保留采样帧依据。",
+                    model_id=next(
+                        (item.understanding.ocr_model_id for item in segments if item.understanding),
+                        "",
+                    ),
+                    completed_count=ready_ocr,
+                    total_count=len(segments),
+                )
             visual_message = self._analyze_visual_semantics(asset, path)
+            visual_ready = sum(item.visual_status == "ready" for item in asset.segments)
+            visual_model_id = self.visual_provider.model_id if self.visual_provider.ready else ""
+            stage(
+                "visual_embeddings",
+                "succeeded"
+                if visual_ready == len(asset.segments)
+                else "blocked"
+                if not self.visual_provider.ready
+                else "failed"
+                if visual_ready == 0
+                else "blocked",
+                message=visual_message,
+                model_id=visual_model_id,
+                completed_count=visual_ready,
+                total_count=len(asset.segments),
+            )
             role_message = self._suggest_usage_roles(asset)
+            role_ready = sum(
+                item.suggested_usage_role != "unassigned" for item in asset.segments
+            )
+            stage(
+                "usage_role",
+                "succeeded"
+                if role_ready == len(asset.segments)
+                else "blocked"
+                if not self.visual_provider.ready
+                else "failed"
+                if role_ready == 0
+                else "blocked",
+                message=role_message,
+                model_id=visual_model_id,
+                completed_count=role_ready,
+                total_count=len(asset.segments),
+            )
             for segment in asset.segments:
                 segment.system_tags = _infer_system_tags(asset, segment)
             asset.analysis_message = (
@@ -148,19 +308,75 @@ class MaterialAnalysisUseCase:
                 f"{asset.speech_analysis.message if asset.speech_analysis else '未分析原片声音。'} "
                 f"画面观察 {sum(bool(item.understanding and item.understanding.status == 'ready') for item in segments)}/{len(segments)} 个片段。"
             ).strip()
+            analysis_completed = True
         except (OSError, subprocess.SubprocessError, ValueError) as exc:
             logger.exception("Material analysis failed for asset %s", asset_id)
             asset.analysis_status = "failed"
             asset.analysis_message = f"镜头分析失败：{_material_analysis_public_error(exc)}。检查后可手动重试。"
+            finish("failed", error_message=_material_analysis_public_error(exc))
         final_stat = path.stat()
-        if self.source_files.material_copy_revision(source_stat) != self.source_files.material_copy_revision(final_stat):
+        if source_revision != self.source_files.material_copy_revision(final_stat):
+            finish("expired", error_message="原文件修订已变化，本次分析结果未保存。")
             raise ValueError("分析期间原片发生变化，未保存本次结果，请重新分析。")
         if expected_source_digest is not None:
             with path.open("rb") as source:
                 final_digest = hashlib.file_digest(source, "sha256").hexdigest()
             if final_digest != expected_source_digest:
+                finish("expired", error_message="原文件内容摘要已变化，本次分析结果未保存。")
                 raise ValueError("分析期间原片内容发生变化，未保存本次结果，请重新分析。")
-        return self.assets.save_asset(asset, analysis_only=True)
+            if analysis_completed and self.analysis_runs is not None and run_id is not None:
+                self.analysis_runs.update_source_digest(workspace_id, run_id, final_digest)
+        try:
+            saved = self.assets.save_asset(asset, analysis_only=True)
+        except ValueError:
+            finish("expired", error_message="素材状态或原文件已变化，本次分析结果未保存。")
+            raise
+        if not analysis_completed:
+            return saved
+        if self.data_governance is not None and run_id is not None:
+            visual_ready = sum(item.visual_status == "ready" for item in saved.segments)
+            visual_status = "ready" if visual_ready == len(saved.segments) else "failed"
+            visual_model_id = self.visual_provider.model_id if self.visual_provider.ready else "unavailable"
+            with path.open("rb") as source:
+                source_digest = hashlib.file_digest(source, "sha256").hexdigest()
+            self.data_governance.record_analysis_outputs(
+                workspace_id,
+                saved,
+                analysis_version=run_id,
+                source_revision=source_revision,
+                source_digest=source_digest,
+                model_or_rule=visual_model_id,
+                visual_index_status=visual_status,
+                visual_index_version=f"visual:{visual_model_id}",
+                visual_index_coverage={
+                    "ready_segments": visual_ready,
+                    "total_segments": len(saved.segments),
+                    "sample_count": sum(item.visual_sample_count for item in saved.segments),
+                },
+            )
+            self.data_governance.record_segment_lineage(
+                _segment_lineage(
+                    workspace_id,
+                    saved.id,
+                    prior_segments,
+                    saved.segments,
+                    source_revision,
+                )
+            )
+            self.data_governance.record_clip_reference_migrations(
+                _clip_reference_migrations(
+                    workspace_id, saved.id, prior_segments, saved.segments, source_revision,
+                )
+            )
+        if self.analysis_runs is not None and run_id is not None:
+            completed_run = self.analysis_runs.get(workspace_id, run_id)
+            statuses = {
+                str(value.get("status"))
+                for value in completed_run.stages.values()
+                if isinstance(value, dict)
+            }
+            finish("partial" if statuses & {"blocked", "failed", "skipped"} else "succeeded")
+        return saved
 
     def get_visual_feature(
         self,
@@ -406,3 +622,82 @@ class MaterialAnalysisUseCase:
             for row in rows
             if fingerprints.get(str(row["segment_id"])) == str(row["fingerprint"])
         }
+
+
+def _segment_lineage(
+    workspace_id: str,
+    asset_id: str,
+    parents: list[MaterialSegment],
+    children: list[MaterialSegment],
+    source_revision: dict[str, str],
+) -> list[MaterialSegmentLineage]:
+    """Record temporal overlap when a re-analysis preserves or changes boundaries."""
+    result: list[MaterialSegmentLineage] = []
+    for parent in parents:
+        overlaps = [
+            child for child in children
+            if max(parent.start_seconds, child.start_seconds)
+            < min(parent.end_seconds, child.end_seconds)
+        ]
+        for child in overlaps:
+            reverse_count = sum(
+                max(parent.start_seconds, other.start_seconds)
+                < min(parent.end_seconds, other.end_seconds)
+                for other in parents
+            )
+            relation = (
+                "preserved" if parent.id == child.id
+                else "split" if len(overlaps) > 1
+                else "merge" if reverse_count > 1
+                else "resegmented"
+            )
+            result.append(
+                MaterialSegmentLineage(
+                    workspace_id=workspace_id,
+                    asset_id=asset_id,
+                    parent_segment_id=parent.id,
+                    child_segment_id=child.id,
+                    relation=relation,
+                    source_revision=dict(source_revision),
+                )
+            )
+    return result
+
+
+def _clip_reference_migrations(
+    workspace_id: str,
+    asset_id: str,
+    parents: list[MaterialSegment],
+    children: list[MaterialSegment],
+    source_revision: dict[str, str],
+) -> list[MaterialClipReferenceMigration]:
+    result: list[MaterialClipReferenceMigration] = []
+    for parent in parents:
+        overlaps = [
+            child for child in children
+            if max(parent.start_seconds, child.start_seconds)
+            < min(parent.end_seconds, child.end_seconds)
+        ]
+        if not overlaps:
+            result.append(MaterialClipReferenceMigration(
+                id=f"clipmig_{hashlib.sha256(f'{parent.id}:{source_revision}'.encode()).hexdigest()[:24]}",
+                workspace_id=workspace_id, asset_id=asset_id, old_segment_id=parent.id,
+                old_segment_version=parent.version, new_segment_id=None, new_segment_version=None,
+                relation="unresolved", explanation="重新分析后找不到时间重叠片段，旧任务引用需要人工核对。",
+                source_revision=dict(source_revision),
+            ))
+            continue
+        relation = "preserved" if len(overlaps) == 1 and overlaps[0].id == parent.id else (
+            "split" if len(overlaps) > 1 else "merge"
+        )
+        for child in overlaps:
+            result.append(MaterialClipReferenceMigration(
+                id=f"clipmig_{hashlib.sha256(f'{parent.id}:{child.id}:{source_revision}'.encode()).hexdigest()[:24]}",
+                workspace_id=workspace_id, asset_id=asset_id, old_segment_id=parent.id,
+                old_segment_version=parent.version, new_segment_id=child.id,
+                new_segment_version=child.version, relation=relation,
+                explanation=("旧片段时间范围保持不变。" if relation == "preserved"
+                             else "旧片段与新片段按时间重叠映射，旧任务应显示该迁移关系。"),
+                source_revision=dict(source_revision),
+            ))
+    return result

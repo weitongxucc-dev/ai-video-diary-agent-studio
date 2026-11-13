@@ -743,6 +743,8 @@ class MaterialAssetStore:
         *,
         plan_id: str | None = None,
         clip_id: str | None = None,
+        task_id: str | None = None,
+        timeline_version_id: str | None = None,
     ) -> MaterialAsset:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -753,21 +755,29 @@ class MaterialAssetStore:
             usage_plan_id = plan_id or f"manual_{uuid4().hex}"
             usage_clip_id = clip_id or f"clip_{uuid4().hex}"
             used_at = utc_now()
-            cursor = conn.execute(
-                """
-                INSERT OR IGNORE INTO material_segment_usage
-                    (workspace_id, plan_id, clip_id, asset_id, segment_id, used_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    workspace_id,
-                    usage_plan_id,
-                    usage_clip_id,
-                    asset_id,
-                    segment_id,
-                    used_at.isoformat(),
-                ),
-            )
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO material_segment_usage
+                        (workspace_id, plan_id, clip_id, asset_id, segment_id, used_at,
+                         task_id, timeline_version_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (workspace_id, usage_plan_id, usage_clip_id, asset_id, segment_id,
+                     used_at.isoformat(), task_id, timeline_version_id),
+                )
+            except sqlite3.OperationalError as exc:
+                if "no column named" not in str(exc):
+                    raise
+                cursor = conn.execute(
+                    """
+                    INSERT OR IGNORE INTO material_segment_usage
+                        (workspace_id, plan_id, clip_id, asset_id, segment_id, used_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (workspace_id, usage_plan_id, usage_clip_id, asset_id, segment_id,
+                     used_at.isoformat()),
+                )
             if cursor.rowcount == 0:
                 return asset
             segment.usage_count += 1

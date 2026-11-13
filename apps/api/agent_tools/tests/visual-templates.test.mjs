@@ -20,6 +20,19 @@ test('template list, fixed source, save and update use typed host operations',as
   assert.deepEqual(calls[3].args,{template_id:'mine',payload:{expected_version:1,name:'v2'}});
 });
 
+test('agent trace is a typed read operation in the host bridge', async () => {
+  const calls = [];
+  const request = createBusinessRequest({taskId: 'task', selectedTaskVersion: null,
+    verifyTaskVersion() {}, readCredentials() { throw Error('no HTTP credentials'); }, getSignal: () => undefined,
+    fetchRequest() { throw Error('no HTTP fallback'); }, businessCall: async (operation, args) => {
+      calls.push({operation, args});
+      return {ok: true, value: {turn_id: 'turn-1', usage_status: 'unknown'}};
+    }});
+  const result = await request('/api/assistant/turns/turn-1/trace');
+  assert.equal(result.turn_id, 'turn-1');
+  assert.deepEqual(calls, [{operation: 'read_agent_run_trace', args: {assistant_turn_id: 'turn-1'}}]);
+});
+
 test('unknown save keeps original locator and cannot repeat under a new effect',async()=>{
   const tools=new Map(),writes=[];
   const definition={engine:'openfilm-html-v1',source:'window.film={frame(t){}}',bindings:[],values:{},provenance:[]};

@@ -668,3 +668,83 @@ test('conversation draft conflict and forged identity are not repaired by overwr
   assert.equal((await f.cli('conversation','turn',c,'--file',file,'--request-id',REQUEST)).code,2);
   assert.equal(f.calls.length,1);
 });
+
+test('output download binds the authenticated task workspace and current timeline before writing MP4',async t=>{
+  const bytes=Buffer.from('fixture-mp4-bytes');
+  const f=await fixture(t,(call,res)=>{
+    if(call.url===PREFIX) return send(res,200,{task:{workspace_id:'workspace_from_api',
+      current_timeline_version_id:'version_ready',timeline_sequence:12,output_ready:true}});
+    assert.equal(call.url,PREFIX+'/output?expected_version_id=version_ready');
+    res.writeHead(200,{'Content-Type':'video/mp4','Content-Length':String(bytes.length),
+      'X-Timeline-Version-Id':'version_ready','X-Timeline-Sequence':'12'});
+    res.end(bytes);
+  });
+  const target=join(f.directory,'nested','result.mp4');
+  await (await import('node:fs/promises')).mkdir(join(f.directory,'nested'));
+  const result=await f.cli('output','download',TASK,'--file',target);
+  assert.equal(result.code,0,result.output);
+  assert.deepEqual(await readFile(target),bytes);
+  assert.deepEqual(f.calls.map(call=>[call.method,call.url]),[
+    ['GET',PREFIX],['GET',PREFIX+'/output?expected_version_id=version_ready']]);
+  assert.equal(f.calls.at(-1).headers['x-local-member-token'],TOKEN);
+  assert.equal(f.calls.at(-1).headers['x-workspace-id'],undefined);
+  assert.equal(result.json.data.workspace_id,'workspace_from_api');
+  assert.equal(result.json.data.sequence,12);
+});
+
+test('output download reports pending without requesting an unready output',async t=>{
+  const f=await fixture(t,(call,res)=>send(res,200,{task:{workspace_id:'workspace_from_api',
+    current_timeline_version_id:'version_pending',timeline_sequence:3,output_ready:false}}));
+  const result=await f.cli('output','download',TASK,'--file',join(f.directory,'result.mp4'));
+  assert.equal(result.code,3,result.output);
+  assert.equal(result.json.state,'pending');
+  assert.equal(f.calls.length,1);
+});
+
+test('output download rejects a timeline header mismatch before replacing an existing file',async t=>{
+  const bytes=Buffer.from('new-bytes');
+  const f=await fixture(t,(call,res)=>{
+    if(call.url===PREFIX) return send(res,200,{task:{workspace_id:'workspace_from_api',
+      current_timeline_version_id:'version_ready',timeline_sequence:12,output_ready:true}});
+    res.writeHead(200,{'Content-Type':'video/mp4','Content-Length':String(bytes.length),
+      'X-Timeline-Version-Id':'different_version','X-Timeline-Sequence':'12'});
+    res.end(bytes);
+  });
+  const target=join(f.directory,'result.mp4');
+  await writeFile(target,'old-bytes');
+  const result=await f.cli('output','download',TASK,'--file',target);
+  assert.equal(result.code,4,result.output);
+  assert.equal(result.json.expected_version_id,'version_ready');
+  assert.deepEqual(await readFile(target),Buffer.from('old-bytes'));
+  assert.deepEqual((await readdir(f.directory)).filter(name=>name.includes('.part-')),[]);
+});
+
+test('output download removes an incomplete temporary file when byte count disagrees',async t=>{
+  const bytes=Buffer.from('short');
+  const f=await fixture(t,(call,res)=>{
+    if(call.url===PREFIX) return send(res,200,{task:{workspace_id:'workspace_from_api',
+      current_timeline_version_id:'version_ready',timeline_sequence:12,output_ready:true}});
+    res.writeHead(200,{'Content-Type':'video/mp4','Content-Length':String(bytes.length+1),
+      'X-Timeline-Version-Id':'version_ready','X-Timeline-Sequence':'12'});
+    res.write(bytes);
+    res.destroy();
+  });
+  const target=join(f.directory,'result.mp4');
+  const result=await f.cli('output','download',TASK,'--file',target);
+  assert.equal(result.code,4,result.output);
+  await assert.rejects(readFile(target));
+  assert.deepEqual((await readdir(f.directory)).filter(name=>name.includes('.part-')),[]);
+});
+
+for (const status of [403,409]) {
+  test(`output download preserves API rejection ${status}`,async t=>{
+    const f=await fixture(t,(call,res)=>call.url===PREFIX
+      ? send(res,200,{task:{workspace_id:'workspace_from_api',current_timeline_version_id:'version_ready',
+          timeline_sequence:12,output_ready:true}})
+      : send(res,status,{detail:'output unavailable'}));
+    const result=await f.cli('output','download',TASK,'--file',join(f.directory,'result.mp4'));
+    assert.equal(result.code,1,result.output);
+    assert.equal(result.json.http_status,status);
+    assert.equal(f.calls.length,2);
+  });
+}

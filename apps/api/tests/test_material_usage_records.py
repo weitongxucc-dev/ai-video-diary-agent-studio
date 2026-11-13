@@ -144,6 +144,24 @@ def test_a_record_names_the_task_clip_and_current_version(tmp_path: Path) -> Non
     assert record["timeline_version_id"] == "timeline_current_1"
 
 
+def test_render_usage_can_name_the_exact_task_and_timeline_version(tmp_path: Path) -> None:
+    repo, library = make_repo(tmp_path)
+    asset_id = register(repo, library, "回查素材精确版本.mp4")
+    segment = repo.get_asset(WORKSPACE, asset_id).segments[0]
+    write_task(repo, "task_usage_exact", current_version_id="timeline_head")
+    write_plan(repo, "plan_usage_exact", "task_usage_exact", [clip("clip_usage_exact", asset_id, segment.id)])
+    repo.material_assets.record_segment_usage(
+        WORKSPACE, asset_id, segment.id, plan_id="plan_usage_exact", clip_id="clip_usage_exact",
+        task_id="task_usage_exact", timeline_version_id="timeline_rendered",
+    )
+
+    record = repo.material_usage_records.list_segment_usage_records(WORKSPACE, asset_id, segment.id)[0]
+
+    assert record["task"]["id"] == "task_usage_exact"
+    assert record["timeline_version_id"] == "timeline_rendered"
+    assert record["resolution"] == "recorded"
+
+
 def test_another_segment_and_another_workspace_are_not_mixed_in(tmp_path: Path) -> None:
     repo, library = make_repo(tmp_path)
     asset_id = register(repo, library, "回查素材丙.mp4")

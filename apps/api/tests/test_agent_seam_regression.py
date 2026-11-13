@@ -27,6 +27,7 @@ EVIDENCE_FIELDS = [
     "duration_seconds",
     "time_range",
     "tags",
+    "evidence_ref_ids",
 ]
 
 
@@ -144,6 +145,7 @@ def test_evidence_has_real_values_on_a_text_hit(tmp_path):
     assert dumped["start_seconds"] != dumped["end_seconds"], f"起止时间应有跨度：{dumped}"
     assert dumped["asset_file_name"] == "office.mp4", f"asset_file_name 应为素材文件名：{dumped}"
     assert dumped["tags"], f"tags 不该为空：{dumped}"
+    assert dumped["evidence_ref_ids"], f"治理候选必须回带可回查证据：{dumped}"
 
 
 # --------------------------------------------------------------------------

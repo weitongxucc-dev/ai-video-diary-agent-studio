@@ -71,6 +71,9 @@ class MaterialSegment:
     last_used_at: datetime | None = None
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
+    # Logical clip identity is stable across re-analysis; version changes when
+    # the clip's semantic payload is replaced or corrected.
+    version: int = 1
 
 
 @dataclass
@@ -178,6 +181,7 @@ class MaterialSegmentMatch:
     visual_sample_count: int = 0
     visual_sample_timestamps: list[float] = field(default_factory=list)
     evidence_excerpt: str = ""
+    evidence_ref_ids: list[str] = field(default_factory=list)
     needs_confirmation: bool = False
 
 

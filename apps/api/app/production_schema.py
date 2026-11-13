@@ -23,6 +23,20 @@ def initialize_production_schema(connection_factory) -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_material_assets_workspace
                     ON material_assets(workspace_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS material_analysis_runs (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    source_revision TEXT NOT NULL,
+                    source_digest TEXT,
+                    status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'partial', 'failed', 'expired')),
+                    payload TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_material_analysis_runs_asset
+                    ON material_analysis_runs(workspace_id, asset_id, started_at DESC);
                 CREATE TABLE IF NOT EXISTS material_ingestion_binding (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     workspace_id TEXT NOT NULL,
@@ -299,10 +313,37 @@ def initialize_production_schema(connection_factory) -> None:
                     asset_id TEXT NOT NULL,
                     segment_id TEXT NOT NULL,
                     used_at TEXT NOT NULL,
+                    task_id TEXT,
+                    timeline_version_id TEXT,
                     PRIMARY KEY(workspace_id, plan_id, clip_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_material_usage_segment
                     ON material_segment_usage(workspace_id, segment_id, used_at DESC);
+                CREATE TABLE IF NOT EXISTS reference_video_studies (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    source_revision_json TEXT NOT NULL,
+                    source_digest TEXT,
+                    analysis_run_id TEXT,
+                    status TEXT NOT NULL CHECK(status IN ('ready', 'stale')),
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_reference_video_studies_asset
+                    ON reference_video_studies(workspace_id, asset_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS reference_video_compare_reports (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    reference_study_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    timeline_version_id TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_reference_video_compare_task
+                    ON reference_video_compare_reports(workspace_id, task_id, created_at DESC);
                 """
         )
         columns = {
@@ -313,6 +354,13 @@ def initialize_production_schema(connection_factory) -> None:
             conn.execute(
                 "ALTER TABLE episode_voice_selections ADD COLUMN voice_version TEXT"
             )
+        usage_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(material_segment_usage)")
+        }
+        for name in ("task_id", "timeline_version_id"):
+            if name not in usage_columns:
+                conn.execute(f"ALTER TABLE material_segment_usage ADD COLUMN {name} TEXT")
         conn.execute(
             """
                 INSERT OR IGNORE INTO media_preview_attempts

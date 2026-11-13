@@ -100,7 +100,7 @@ void main() {
   http.Response success(http.Request request) => http.Response(
     request.url.path.endsWith('/companion/session')
         ? jsonEncode(identityFixture())
-        : '{"items":[{"id":"task-a","name":"confirmed task","status":"running","stage":"script"}]}',
+        : '{"items":[{"id":"task-a","workspace_id":"workspace-a","name":"confirmed task","status":"running","stage":"script"}]}',
     200,
   );
 

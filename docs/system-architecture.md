@@ -1,6 +1,6 @@
 # 系统架构
 
-本文件定义 AI 视频日记的运行模块、跨进程责任、外部能力适配和关键数据流。产品范围见 product-requirements.md，领域对象与状态见 domain-model.md。
+本文件定义 AI 视频日记的运行模块、跨进程责任、外部能力适配和关键数据流。跨对象的数据分层、字段分类、证据、索引和生命周期见[data-governance.md](data-governance.md)；产品范围见 product-requirements.md，领域对象与状态见 domain-model.md。
 
 ## 1. 架构目标
 

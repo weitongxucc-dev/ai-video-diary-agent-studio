@@ -345,6 +345,7 @@ from app.timeline_history_routes import build_timeline_history_router
 from app.home_routes import build_home_router
 from app.material_insights_routes import build_material_insights_router
 from app.material_processing_routes import build_material_processing_router
+from app.reference_video_routes import build_reference_video_router
 from app.legacy_montage_routes import LegacyMontageResponseAdapter, build_legacy_montage_router
 from app.knowledge_notes_routes import build_knowledge_notes_router
 from app.device_preparation_routes import build_device_preparation_router
@@ -4639,6 +4640,14 @@ app.include_router(build_material_insights_router(
 app.include_router(build_material_library_router(_material_library_http_adapter, ('list_production_materials',)))
 
 
+app.include_router(build_reference_video_router(
+    workspace_for=lambda: current_workspace_id,
+    reader_for=lambda: _content_identity_http_adapter().reader,
+    visible_for=lambda: _content_identity_http_adapter().visible,
+    production_for=lambda: production_repo,
+))
+
+
 
 
 def _material_ingestion_for(repository: ProductionRepository):
@@ -4802,6 +4811,7 @@ app.include_router(build_material_processing_router(
     library_response_for=lambda: MaterialLibraryResponse,
     asset_response_for=lambda: _material_asset_response,
     http_error_for=lambda: HTTPException,
+    visible_for=lambda: _content_identity_http_adapter().visible,
 ))
 
 
@@ -5141,6 +5151,7 @@ def _knowledge_http_router(route_names):
         workspace_for=lambda request: current_workspace_id(request),
         reader_for=lambda request, workspace_id: _content_identity_http_adapter().reader(request, workspace_id),
         write_guard=lambda request: _local_member_write_guard(request),
+        governance_for=lambda: production_repo.material_data_governance,
         route_names=route_names,
     )
 
@@ -5293,6 +5304,15 @@ app.include_router(_knowledge_http_router(("search_knowledge_items",)))
 
 
 app.include_router(_knowledge_http_router(("get_knowledge_item_detail",)))
+
+
+app.include_router(_knowledge_http_router(("list_knowledge_claims",)))
+
+
+app.include_router(_knowledge_http_router(("create_knowledge_claim",)))
+
+
+app.include_router(_knowledge_http_router(("update_knowledge_claim_status",)))
 
 
 app.include_router(_knowledge_http_router(("edit_knowledge_item_content",)))

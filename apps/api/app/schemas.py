@@ -484,6 +484,7 @@ class MaterialSegmentResponse(BaseModel):
     asset_id: str
     start_seconds: float = Field(ge=0)
     end_seconds: float = Field(gt=0)
+    version: int = Field(default=1, ge=1)
     description: str
     transcript: str
     visual_status: Literal["pending", "ready", "blocked", "failed"]
@@ -552,6 +553,282 @@ class MaterialAssetResponse(BaseModel):
     segments: list[MaterialSegmentResponse]
     created_at: datetime
     updated_at: datetime
+
+
+class MaterialAnalysisStageResponse(BaseModel):
+    status: Literal["pending", "running", "succeeded", "blocked", "failed", "skipped"]
+    message: str = ""
+    model_id: str = ""
+    completed_count: int = Field(default=0, ge=0)
+    total_count: int = Field(default=0, ge=0)
+
+
+class MaterialAnalysisRunResponse(BaseModel):
+    id: str
+    workspace_id: str
+    asset_id: str
+    source_revision: dict[str, str]
+    source_digest: str | None = None
+    status: Literal["running", "succeeded", "partial", "failed", "expired"]
+    stages: dict[str, MaterialAnalysisStageResponse]
+    model_ids: dict[str, str]
+    parameters: dict[str, object]
+    error_message: str | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
+    updated_at: datetime
+
+
+class MaterialAnalysisRunsResponse(BaseModel):
+    runs: list[MaterialAnalysisRunResponse]
+
+
+class MaterialEvidenceRefResponse(BaseModel):
+    id: str
+    workspace_id: str
+    asset_id: str
+    segment_id: str | None = None
+    source_ref: str
+    source_revision: dict[str, str]
+    source_time_range: tuple[float, float] | None = None
+    locator_type: str
+    locator: dict[str, object]
+    modality: str
+    model_or_rule: str
+    analysis_version: str
+    sampling_coverage: dict[str, object]
+    status: Literal["valid", "stale", "unresolved"]
+    created_at: datetime
+
+
+class MaterialAssetAssertionResponse(BaseModel):
+    id: str
+    workspace_id: str
+    asset_id: str
+    segment_id: str | None = None
+    field_ref: str
+    value: object
+    unit: str | None = None
+    qualifiers: dict[str, object]
+    evidence_refs: tuple[str, ...]
+    origin: Literal[
+        "visual_observation", "audio_transcript", "ocr_observation", "business_fact",
+        "user_note", "user_confirmation", "model_inference",
+    ]
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    status: Literal["candidate", "confirmed", "rejected", "unresolved"]
+    asserted_by: str
+    supersedes_ref: str | None = None
+    created_at: datetime
+
+
+class MaterialIndexRecordResponse(BaseModel):
+    id: str
+    workspace_id: str
+    asset_id: str
+    index_type: str
+    source_revision: dict[str, str]
+    source_digest: str | None = None
+    model_or_rule: str
+    index_version: str
+    coverage: dict[str, object]
+    status: Literal["building", "ready", "stale", "failed"]
+    invalid_reason: str | None = None
+    built_at: datetime | None = None
+    updated_at: datetime
+
+
+class SemanticFieldDefinitionResponse(BaseModel):
+    id: str
+    workspace_id: str
+    canonical_id: str
+    display_name: str
+    value_type: Literal[
+        "text", "integer", "number", "boolean", "enum", "datetime", "range", "object_ref", "list"
+    ]
+    unit_family: str | None = None
+    allowed_units: tuple[str, ...]
+    aliases: tuple[str, ...]
+    applies_to: tuple[str, ...]
+    version: int = Field(ge=1)
+    status: Literal["active", "deprecated"]
+    created_at: datetime
+    updated_at: datetime
+
+
+class MaterialSegmentLineageResponse(BaseModel):
+    workspace_id: str
+    asset_id: str
+    parent_segment_id: str
+    child_segment_id: str
+    relation: Literal["preserved", "split", "merge", "resegmented"]
+    source_revision: dict[str, str]
+    created_at: datetime
+
+
+class MaterialQualityProfileResponse(BaseModel):
+    id: str
+    workspace_id: str
+    asset_id: str
+    source_revision: dict[str, str]
+    source_digest: str | None = None
+    analysis_run_id: str | None = None
+    profile_version: str
+    status: Literal["observed", "partial", "unavailable", "unknown"]
+    metrics: dict[str, dict[str, object]]
+    unavailable_reasons: tuple[str, ...]
+    created_at: datetime
+    updated_at: datetime
+
+
+class MaterialIndexRebuildJobResponse(BaseModel):
+    id: str
+    workspace_id: str
+    asset_id: str
+    index_type: str
+    source_revision: dict[str, str]
+    source_digest: str | None = None
+    index_version: str
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    attempt_count: int = Field(ge=0)
+    error_message: str | None = None
+    requested_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime
+
+
+class MaterialDataGovernanceResponse(BaseModel):
+    analysis_runs: list[MaterialAnalysisRunResponse] = Field(default_factory=list)
+    evidence: list[MaterialEvidenceRefResponse]
+    assertions: list[MaterialAssetAssertionResponse]
+    indexes: list[MaterialIndexRecordResponse]
+    lineage: list[MaterialSegmentLineageResponse]
+    quality_profiles: list[MaterialQualityProfileResponse] = Field(default_factory=list)
+    index_rebuild_jobs: list[MaterialIndexRebuildJobResponse] = Field(default_factory=list)
+
+
+class ReferenceVideoShotResponse(BaseModel):
+    id: str
+    asset_id: str
+    segment_id: str
+    start_seconds: float
+    end_seconds: float
+    duration_seconds: float
+    evidence_ref_ids: tuple[str, ...]
+
+
+class ReferenceVideoStudyResponse(BaseModel):
+    id: str
+    workspace_id: str
+    asset_id: str
+    source_revision: dict[str, str]
+    source_digest: str | None = None
+    analysis_run_id: str | None = None
+    status: Literal["ready", "stale"]
+    shots: tuple[ReferenceVideoShotResponse, ...]
+    metrics: dict[str, object]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReferenceVideoCompareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    task_id: str = Field(min_length=1, max_length=160)
+    timeline_version_id: str = Field(min_length=1, max_length=160)
+
+
+class ReferenceVideoCompareReportResponse(BaseModel):
+    id: str
+    workspace_id: str
+    reference_study_id: str
+    task_id: str
+    timeline_version_id: str
+    reference_evidence_ref_ids: tuple[str, ...]
+    metrics: dict[str, object]
+    visual_observation: dict[str, object]
+    audio_observation: dict[str, object]
+    acceptance: Literal["requires_bounded_visual_review", "structural_match"]
+    created_at: datetime
+
+
+class MaterialAssertionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field_ref: str = Field(min_length=1, max_length=200)
+    value: object
+    unit: str | None = Field(default=None, max_length=40)
+    qualifiers: dict[str, object] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=50)
+    segment_id: str | None = Field(default=None, max_length=160)
+    status: Literal["candidate", "confirmed", "rejected", "unresolved"] = "confirmed"
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    supersedes_ref: str | None = Field(default=None, max_length=120)
+
+
+class MaterialAssertionStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["candidate", "confirmed", "rejected", "unresolved"]
+    expected_status: Literal["candidate", "confirmed", "rejected", "unresolved"] | None = None
+
+
+class MaterialIndexRebuildRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    index_type: str = Field(min_length=1, max_length=80)
+    source_revision: dict[str, str]
+    source_digest: str | None = None
+    index_version: str = Field(min_length=1, max_length=120)
+
+
+class KnowledgeClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_version: str = Field(min_length=1, max_length=100)
+    field_ref: str = Field(min_length=1, max_length=200)
+    value: object
+    unit: str | None = Field(default=None, max_length=40)
+    qualifiers: dict[str, object] = Field(default_factory=dict)
+    evidence_refs: list[dict[str, object]] = Field(default_factory=list, max_length=50)
+    origin: Literal["business_fact", "model_inference", "user_note", "user_confirmation"] = "user_confirmation"
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    status: Literal["candidate", "confirmed", "rejected", "unresolved"] = "confirmed"
+    supersedes_ref: str | None = Field(default=None, max_length=120)
+
+
+class KnowledgeClaimStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["candidate", "confirmed", "rejected", "unresolved"]
+    expected_status: Literal["candidate", "confirmed", "rejected", "unresolved"] | None = None
+
+
+class KnowledgeClaimResponse(BaseModel):
+    id: str
+    workspace_id: str
+    knowledge_item_id: str
+    knowledge_version: str
+    field_ref: str
+    value: object
+    unit: str | None = None
+    qualifiers: dict[str, object]
+    evidence_refs: tuple[dict[str, object], ...]
+    origin: Literal["business_fact", "model_inference", "user_note", "user_confirmation"]
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    status: Literal["candidate", "confirmed", "rejected", "unresolved"]
+    asserted_by: str
+    supersedes_ref: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeClaimsResponse(BaseModel):
+    claims: list[KnowledgeClaimResponse]
+
+
+class SemanticFieldDefinitionsResponse(BaseModel):
+    fields: list[SemanticFieldDefinitionResponse]
 
 
 class MediaLinkCheckRequest(BaseModel):
@@ -637,7 +914,7 @@ class MaterialUsageRecordResponse(BaseModel):
     role: str | None
     manually_selected: bool | None
     timeline_version_id: str | None
-    resolution: Literal["current", "unknown"]
+    resolution: Literal["recorded", "current", "unknown"]
 
 
 class MaterialUsageRecordsResponse(BaseModel):
@@ -1046,6 +1323,7 @@ class MaterialSegmentMatchResponse(BaseModel):
     duration_seconds: float = 0.0
     time_range: str = ""
     tags: list[str] = Field(default_factory=list)
+    evidence_ref_ids: list[str] = Field(default_factory=list)
 
 
 class MaterialSegmentSearchResponse(BaseModel):

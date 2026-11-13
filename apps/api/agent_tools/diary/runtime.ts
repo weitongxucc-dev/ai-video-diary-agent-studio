@@ -105,7 +105,7 @@ export function createDiaryTools(environment: Record<string, string | undefined>
     registerEditControls(pi, {request, taskId, selectedTaskVersion, isTaskRead, verifyTaskVersion, readActionSource,
       hasPreview, markPreview, hasCreationAction, hasEditControlWrite, markEditControlWrite, releaseNotSubmittedEditControl, markTaskRead, typedRequestId});
     registerWorkspaceTools(pi, {request, taskId, stage, selectedRefs, selectedProfile, selectedKnowledge,
-      isTaskRead, verifyTaskVersion, getEditCapabilities, readMaterialSelection});
+      isTaskRead, verifyTaskVersion, getEditCapabilities, readMaterialSelection, readActionSource});
     registerVisualTemplateTools(pi,{request,readActionSource,typedRequestId});
     preferences.register(pi);
     registerMaterialCandidates(pi, {request});

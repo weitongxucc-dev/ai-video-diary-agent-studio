@@ -710,6 +710,17 @@ export default async function SettingsPage({
               />
               {[activeRuntimeSection].map((section) => {
                 const sectionFields = fields[section.id] ?? [];
+                const advancedNames = new Set(
+                  section.id === "paths"
+                    ? ["understanding_runtime_python_path", "native_ocr_worker_path"]
+                    : section.id === "asr"
+                      ? ["local_whisper_cli_path", "local_whisper_python_path", "local_whisper_model_path", "tencentcloud_asr_region", "tencentcloud_asr_engine_model_type"]
+                      : section.id === "sources"
+                        ? ["product_hunt_token", "hermes_radar_path"]
+                        : [],
+                );
+                const primaryFields = sectionFields.filter((field) => !advancedNames.has(field.name));
+                const advancedFields = sectionFields.filter((field) => advancedNames.has(field.name));
                 return (
                   <fieldset
                     aria-labelledby={`settings-section-${section.id}`}
@@ -725,10 +736,17 @@ export default async function SettingsPage({
                       {section.description}
                     </p></details>
                     <div className="settings-grid">
-                      {section.id === "asr" ? <AsrFields fields={sectionFields} /> : sectionFields.map((field) => (
+                      {section.id === "asr" ? <AsrFields fields={primaryFields} /> : primaryFields.map((field) => (
                         <FieldRow field={field} key={field.name} />
                       ))}
                     </div>
+                    {advancedFields.length ? <details className={own.help}>
+                      <summary>高级诊断与连接细节</summary>
+                      <p>这些字段只在本机能力异常或需要接入外部来源时使用；修改前先确认当前路径和服务状态。</p>
+                      <div className="settings-grid">
+                        {advancedFields.map((field) => <FieldRow field={field} key={field.name} />)}
+                      </div>
+                    </details> : null}
                   </fieldset>
                 );
               })}

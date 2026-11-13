@@ -9,6 +9,7 @@
 | Agent 工作纪律、渐进加载和任务分级 | [`../AGENTS.md`](../AGENTS.md) | 每个 Agent 任务自动生效 |
 | 产品定位、用户结果、能力边界和端到端验收 | [`product-requirements.md`](product-requirements.md) | 产品范围或完成判断发生变化 |
 | 业务名词、对象关系、状态机和转换语义 | [`domain-model.md`](domain-model.md) | 数据结构、API 契约或工作流状态发生变化 |
+| 数据分层、字段分类、证据、质量、索引和生命周期 | [`data-governance.md`](data-governance.md) | 数据字典、素材理解、知识治理、检索或长期维护规则发生变化 |
 | 模块责任、跨进程数据流、模型与平台适配 | [`system-architecture.md`](system-architecture.md) | 变更跨越两个以上运行模块或外部服务 |
 | UI 视觉与交互原则、作品优先及公共组件 | [`../DESIGN.md`](../DESIGN.md) | UI、产品文案、组件或截图验收 |
 | 任务拆分、并行代理、审核、验证和文档治理 | [`development-workflow.md`](development-workflow.md) | 复杂、高风险或跨模块任务 |

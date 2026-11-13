@@ -631,7 +631,13 @@ class RenderStageUseCase:
         rendered = creation_task_montage_plan_from_payload(
             self.repository.get_creation_task_montage_plan(workspace_id, task.id)
         )
-        self.record_usage(workspace_id, rendered)
+        current_task = self.repository.task_records.get_creation_task(workspace_id, task.id)
+        self.record_usage(
+            workspace_id,
+            rendered,
+            task_id=current_task.id,
+            timeline_version_id=current_task.current_timeline_version_id,
+        )
         return rendered
 
     def valid(
@@ -785,7 +791,8 @@ class RenderStageUseCase:
                 self.graphic_source_paths(workspace_id, task_id, plan.get("graphic_overlays", []), grant)
         return valid
 
-    def record_usage(self, workspace_id: str, plan) -> None:
+    def record_usage(self, workspace_id: str, plan, *, task_id: str | None = None,
+                     timeline_version_id: str | None = None) -> None:
         for clip in plan.clips:
             if clip.person_render_id or clip.segment_id is None:
                 continue
@@ -795,6 +802,8 @@ class RenderStageUseCase:
                 clip.segment_id,
                 plan_id=plan.id,
                 clip_id=clip.id,
+                task_id=task_id,
+                timeline_version_id=timeline_version_id,
             )
 
     def task_or_missing(self, workspace_id: str, task_id: str) -> CreationTask:

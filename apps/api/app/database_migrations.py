@@ -4,7 +4,7 @@ import sqlite3
 from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 23
+PRODUCTION_SCHEMA_VERSION = 26
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -831,6 +831,183 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     """),
     (22, ""),  # Transactional section-row migration is applied below.
     (23, ""),
+    (24, """
+        CREATE TABLE IF NOT EXISTS material_evidence_refs (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            segment_id TEXT,
+            source_ref TEXT NOT NULL,
+            source_revision_json TEXT NOT NULL,
+            source_time_range_json TEXT NOT NULL,
+            locator_type TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            modality TEXT NOT NULL,
+            model_or_rule TEXT NOT NULL,
+            analysis_version TEXT NOT NULL,
+            sampling_coverage_json TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('valid', 'stale', 'unresolved')),
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_material_evidence_asset
+            ON material_evidence_refs(workspace_id, asset_id, created_at, id);
+
+        CREATE TABLE IF NOT EXISTS material_asset_assertions (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            segment_id TEXT,
+            field_ref TEXT NOT NULL,
+            value_json TEXT NOT NULL,
+            unit TEXT,
+            qualifiers_json TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            origin TEXT NOT NULL CHECK (origin IN (
+                'visual_observation', 'audio_transcript', 'ocr_observation',
+                'business_fact', 'user_note', 'user_confirmation', 'model_inference'
+            )),
+            confidence REAL CHECK (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)),
+            status TEXT NOT NULL CHECK (status IN ('candidate', 'confirmed', 'rejected', 'unresolved')),
+            asserted_by TEXT NOT NULL,
+            supersedes_ref TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_material_assertions_asset
+            ON material_asset_assertions(workspace_id, asset_id, created_at, id);
+
+        CREATE TABLE IF NOT EXISTS material_index_records (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            index_type TEXT NOT NULL,
+            source_revision_json TEXT NOT NULL,
+            source_digest TEXT,
+            model_or_rule TEXT NOT NULL,
+            index_version TEXT NOT NULL,
+            coverage_json TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('building', 'ready', 'stale', 'failed')),
+            invalid_reason TEXT,
+            built_at TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, asset_id, index_type, index_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_material_indexes_asset
+            ON material_index_records(workspace_id, asset_id, updated_at DESC);
+    """),
+    (25, """
+        CREATE TABLE IF NOT EXISTS semantic_field_definitions (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            canonical_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            value_type TEXT NOT NULL CHECK (value_type IN (
+                'text', 'integer', 'number', 'boolean', 'enum', 'datetime',
+                'range', 'object_ref', 'list'
+            )),
+            unit_family TEXT,
+            allowed_units_json TEXT NOT NULL,
+            aliases_json TEXT NOT NULL,
+            applies_to_json TEXT NOT NULL,
+            version INTEGER NOT NULL CHECK (version > 0),
+            status TEXT NOT NULL CHECK (status IN ('active', 'deprecated')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, canonical_id, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_semantic_fields_workspace
+            ON semantic_field_definitions(workspace_id, canonical_id, version DESC);
+
+        CREATE TABLE IF NOT EXISTS knowledge_claims (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            knowledge_item_id TEXT NOT NULL,
+            knowledge_version TEXT NOT NULL,
+            field_ref TEXT NOT NULL,
+            value_json TEXT NOT NULL,
+            unit TEXT,
+            qualifiers_json TEXT NOT NULL,
+            evidence_refs_json TEXT NOT NULL,
+            origin TEXT NOT NULL CHECK (origin IN (
+                'business_fact', 'model_inference', 'user_note', 'user_confirmation'
+            )),
+            confidence REAL CHECK (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0)),
+            status TEXT NOT NULL CHECK (status IN ('candidate', 'confirmed', 'rejected', 'unresolved')),
+            asserted_by TEXT NOT NULL,
+            supersedes_ref TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_knowledge_claims_item
+            ON knowledge_claims(workspace_id, knowledge_item_id, knowledge_version, created_at, id);
+
+        CREATE TABLE IF NOT EXISTS material_segment_lineage (
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            parent_segment_id TEXT NOT NULL,
+            child_segment_id TEXT NOT NULL,
+            relation TEXT NOT NULL CHECK (relation IN ('preserved', 'split', 'merge', 'resegmented')),
+            source_revision_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (workspace_id, asset_id, parent_segment_id, child_segment_id, relation)
+        );
+        CREATE INDEX IF NOT EXISTS idx_material_segment_lineage_asset
+            ON material_segment_lineage(workspace_id, asset_id, created_at DESC);
+    """),
+    (26, """
+        CREATE TABLE IF NOT EXISTS material_quality_profiles (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            source_revision_json TEXT NOT NULL,
+            source_digest TEXT,
+            analysis_run_id TEXT,
+            profile_version TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('observed', 'partial', 'unavailable', 'unknown')),
+            metrics_json TEXT NOT NULL,
+            unavailable_reasons_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, asset_id, source_revision_json, profile_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_material_quality_asset
+            ON material_quality_profiles(workspace_id, asset_id, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS material_index_rebuild_jobs (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            index_type TEXT NOT NULL,
+            source_revision_json TEXT NOT NULL,
+            source_digest TEXT,
+            index_version TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+            attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+            error_message TEXT,
+            requested_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, asset_id, index_type, source_revision_json, index_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_material_index_rebuild_jobs_pending
+            ON material_index_rebuild_jobs(status, requested_at, id);
+
+        CREATE TABLE IF NOT EXISTS material_clip_reference_migrations (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            asset_id TEXT NOT NULL,
+            old_segment_id TEXT NOT NULL,
+            old_segment_version INTEGER NOT NULL,
+            new_segment_id TEXT,
+            new_segment_version INTEGER,
+            relation TEXT NOT NULL CHECK (relation IN ('preserved', 'split', 'merge', 'resegmented', 'unresolved')),
+            explanation TEXT NOT NULL,
+            source_revision_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_material_clip_reference_migrations_asset
+            ON material_clip_reference_migrations(workspace_id, asset_id, old_segment_id, created_at DESC);
+    """),
 )
 
 # 「内容可见性」地基（父条目 WIL-110 R05，子 issue WIL-112 第①段）。

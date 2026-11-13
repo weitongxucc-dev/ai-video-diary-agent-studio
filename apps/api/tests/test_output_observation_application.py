@@ -140,6 +140,11 @@ def test_public_actual_output_observation_and_fixed_request_replay(tmp_path, mon
     assert measured['output_role']=='composed_output' and measured['media']['width']==width and measured['media']['height']==height
     assert measured['output']['artifact_id']==artifact.id and measured['output']['sha256']==publication.sha256
     assert len(measured['samples'])==3 and all(s['object_refs']==['clip:clip-1'] for s in measured['samples'])
+    assert measured['material_references'] == [{
+        'clip_id': 'clip-1', 'asset_ref': 'asset:owned-asset', 'segment_ref': 'segment:owned-segment',
+        'source_time_range': [0, 2], 'timeline_time_range': [0, 2], 'evidence_ref_ids': [],
+        'match_score': 1, 'match_reasons': [],
+    }]
     assert measured['ocr_execution']['status']=='unavailable'
     assert {'visual_semantics','speech_and_listening','ocr'}=={v['scope'] for v in measured['unavailable']}
     assert not {'logical_ref','mtime_ns','ctime_ns'} & measured['output'].keys()

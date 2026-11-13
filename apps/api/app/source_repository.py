@@ -31,6 +31,7 @@ from app.knowledge_files import KnowledgeParameter, KnowledgeSection, parse_know
 from app.knowledge_file_store import KnowledgeFileStore, KnowledgeOriginalUnavailable
 from app.source_policy import content_allows_use
 from app.source_storage_schema import KNOWLEDGE_GRANTS_DDL, KNOWLEDGE_ORIGINAL_FILES_DDL, SOURCE_TABLES_DDL
+from app.materials.data_governance import KnowledgeClaim
 
 
 class KnowledgeVersionConflict(ValueError):
@@ -46,11 +47,18 @@ class SourceRepository:
     knowledge grant; original ownership is never rewritten.
     """
 
-    def __init__(self, database_path: str | Path, *, file_store: KnowledgeFileStore | None = None) -> None:
+    def __init__(
+        self,
+        database_path: str | Path,
+        *,
+        file_store: KnowledgeFileStore | None = None,
+        governance_store=None,
+    ) -> None:
         self._database_path = Path(database_path).expanduser()
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_database()
         self._original_files = file_store if file_store is not None else KnowledgeFileStore(self._database_path.parent)
+        self._governance = governance_store
 
     def upsert_connector(self, connector: SourceConnector) -> SourceConnector:
         self._require_workspace(connector.workspace_id)
@@ -462,7 +470,43 @@ class SourceRepository:
                 "SELECT * FROM knowledge_items WHERE id = ? AND workspace_id = ?",
                 (item_id, workspace_id),
             ).fetchone()
-        return self._knowledge_item_from_row(saved)
+        result = self._knowledge_item_from_row(saved)
+        self._record_parameter_claims(result)
+        return result
+
+    def _record_parameter_claims(self, item: KnowledgeItem) -> None:
+        """Project explicitly parsed parameters into candidate claims idempotently."""
+        if self._governance is None or not item.parameters:
+            return
+        for parameter in item.parameters:
+            claim_id = "claim_" + hashlib.sha256(
+                json.dumps(
+                    [item.id, item.version, parameter.key, parameter.value, parameter.unit, parameter.locator],
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()[:32]
+            try:
+                self._governance.get_knowledge_claim(item.workspace_id, claim_id)
+                continue
+            except KeyError:
+                pass
+            self._governance.record_knowledge_claim(
+                KnowledgeClaim(
+                    id=claim_id,
+                    workspace_id=item.workspace_id,
+                    knowledge_item_id=item.id,
+                    knowledge_version=item.version,
+                    field_ref=f"knowledge.parameter.{parameter.key}",
+                    value=parameter.value,
+                    unit=parameter.unit,
+                    evidence_refs=((
+                        {"source_item_id": item.source_item_id or "", "locator": parameter.locator},
+                    )),
+                    origin="business_fact",
+                    status="candidate",
+                    asserted_by="knowledge-parser",
+                )
+            )
 
     def _save_parsed_source_to_knowledge(
         self,

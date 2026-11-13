@@ -233,14 +233,17 @@ class HostApi {
     try {
       final items = List<Map<String, dynamic>>.from(data['items'] as List);
       if (items.any(
-        (item) => [
-          'id',
-          'name',
-          'status',
-          'stage',
-        ].any((key) => item[key] is! String),
+        (item) =>
+            [
+              'id',
+              'workspace_id',
+              'name',
+              'status',
+              'stage',
+            ].any((key) => item[key] is! String) ||
+            item['workspace_id'] != session.workspaceId,
       )) {
-        throw const FormatException();
+        throw const FormatException('主机返回了不属于当前工作区的任务。');
       }
       return items;
     } on TypeError {
@@ -255,11 +258,19 @@ class HostApi {
   ) async {
     final data = await _json(session, '/api/media/voice-sampling-tasks');
     try {
-      return (data['items'] as List)
+      final tasks = (data['items'] as List)
           .map(
             (item) => VoiceSamplingTask.fromJson(item as Map<String, dynamic>),
           )
           .toList();
+      if (tasks.any(
+        (task) =>
+            task.workspaceId != session.workspaceId ||
+            task.ownerUserId != session.memberId,
+      )) {
+        throw const FormatException('主机返回了不属于当前成员或工作区的声音采样任务。');
+      }
+      return tasks;
     } on FormatException {
       throw const AppFailure('声音采样任务不完整，请重新读取电脑任务。');
     } on TypeError {
@@ -276,7 +287,12 @@ class HostApi {
       '/api/media/voice-sampling-tasks/${Uri.encodeComponent(taskId)}',
     );
     try {
-      return VoiceSamplingTask.fromJson(data);
+      final task = VoiceSamplingTask.fromJson(data);
+      if (task.workspaceId != session.workspaceId ||
+          task.ownerUserId != session.memberId) {
+        throw const FormatException('主机返回了不属于当前成员或工作区的声音采样任务。');
+      }
+      return task;
     } on FormatException {
       throw const AppFailure('声音采样任务不完整，请重新读取电脑任务。');
     } on TypeError {

@@ -94,7 +94,7 @@ function workspaceReader(request) {
   const {tools, pi} = registry();
   registerWorkspaceTools(pi, {request, taskId: undefined, stage: 'home', selectedRefs: [], selectedProfile: null,
     selectedKnowledge: null, isTaskRead: () => false, verifyTaskVersion() {}, getEditCapabilities: () => null,
-    readMaterialSelection: () => null});
+    readMaterialSelection: () => null, readActionSource: () => ({turnId: 'turn-for-trace'})});
   return tools;
 }
 
@@ -112,6 +112,26 @@ test('template discovery reaches later catalog pages and only returns bounded me
   assert.equal(JSON.stringify(last).includes('PRIVATE_FULL_SOURCE'),false);
   const found=(await tools.read_video_templates.execute('search',{query:'季度',category:'data'})).details;
   assert.deepEqual(found.templates.map(item=>item.id),['template-65']);
+});
+
+test('resource catalog exposes connected versus planned capabilities and provenance boundary', async()=>{
+  const tools=workspaceReader(async()=>({items:[{id:'template-1',name:'卡片',version:1,origin:'built_in',settings:{visual:{category:'title'}}}]}));
+  const result=await tools.read_editing_resource_catalog.execute('catalog',{});
+  assert.equal(result.details.resources.find(item=>item.id==='templates').status,'connected');
+  assert.equal(result.details.resources.find(item=>item.id==='audio_library').status,'catalog_only');
+  assert.equal(result.details.resources.find(item=>item.id==='filters_lut').status,'planned');
+  assert.deepEqual(result.details.provenance_fields.slice(0,4),['repository','revision','license','asset_license']);
+  assert.match(result.content[0].text,/connected/);
+});
+
+test('agent trace reads only the current turn and keeps usage unknown without provider receipt', async()=>{
+  const tools=workspaceReader(async path=>{
+    assert.equal(path,'/api/assistant/turns/turn-for-trace/trace');
+    return {turn_id:'turn-for-trace',status:'completed',usage_status:'unknown',events:[{type:'tool_end',label:'读取素材',ok:true}]};
+  });
+  const result=await tools.read_agent_run_trace.execute('trace',{});
+  assert.equal(result.details.usage_status,'unknown');
+  assert.equal(result.details.events[0].label,'读取素材');
 });
 
 for (const [returned, total] of [[0, 0], [8, 8], [19, 19], [3, 50]]) {
