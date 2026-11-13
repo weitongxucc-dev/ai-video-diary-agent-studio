@@ -75,6 +75,10 @@ corepack pnpm --dir apps/desktop build:win
 
 Windows API 使用 PyInstaller onedir，连同依赖放入包内 `resources/api-service/`，由桌面壳直接管理 `api-server.exe`。这样避免 onefile 启动器被停止后遗留 Python 子进程，也省去每次启动的临时解压；整个服务目录进入构建标识。macOS 仍使用原来的单文件 API。
 
+文字模型 Key 按工作区保存到 Windows 凭据管理器，设置页只返回是否已配置；不写入源码、dotenv 或工作区 JSON。Mac 继续使用系统钥匙串。Windows 本机内测包采用无压缩归档并关闭差分更新，以缩短本机构建时间，安装器体积相应增大。
+
+构建标识按文件分块读取资源，避免把整个 Web/API 包同时保留在内存中；输入顺序、字节数和摘要格式保持一致。
+
 安装器允许选择 E 盘安装位置，使用独立的 Windows Preview 应用身份，不发布 Release。此包未签名，身份模式 `local` 仅用于本机受控内测。可用绝对 `--user-data-dir=E:\path\profile` 和固定 `--local-web-port=13100` 启动，将测试配置和运行数据放在 E 盘；`.env` 中的数据库、模型、素材与输出路径也须指向 E 盘。卸载不删除用户数据。
 
 验收范围是安装、工作台、退出和再次启动。模型后端、Windows 媒体资源校准和完整制作流程另行验证；Node.js 与 Pi 仍需在本机安装，不随此包提供。Mac 构建和签名发布配置保持原入口。

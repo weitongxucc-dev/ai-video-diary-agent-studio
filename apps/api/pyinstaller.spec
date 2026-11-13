@@ -55,6 +55,9 @@ def _application_modules(application_directory: Path) -> list[str]:
 
 _APP_MODULES = _application_modules(_SPEC_DIR / "app")
 
+# pywintypes loads this dynamically when CredRead converts credential timestamps.
+_WINDOWS_HIDDEN = ["win32timezone"] if sys.platform == "win32" else []
+
 # uvicorn dynamic imports (auto protocol / loop / ws selection at runtime)
 _UVICORN_HIDDEN = [
     "uvicorn.logging",
@@ -83,6 +86,7 @@ _HIDDEN_IMPORTS = sorted(
         _APP_MODULES
         + _UVICORN_HIDDEN
         + _LANGGRAPH_HIDDEN
+        + _WINDOWS_HIDDEN
     )
 )
 

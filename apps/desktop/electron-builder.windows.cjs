@@ -8,6 +8,8 @@ module.exports = {
   directories: { output: 'dist-windows' },
   // Reuse the project's installed Electron instead of downloading it again.
   electronDist: path.dirname(require('electron')),
+  // Local unsigned previews prioritize iteration speed; no update feed is used.
+  compression: 'store',
   artifactName: 'Yaohe-Studio-${version}-windows-${arch}-setup.${ext}',
   win: {
     target: [{ target: 'nsis', arch: ['x64'] }],
@@ -15,6 +17,7 @@ module.exports = {
     signAndEditExecutable: false,
   },
   nsis: {
+    differentialPackage: false,
     oneClick: false,
     perMachine: false,
     allowToChangeInstallationDirectory: true,
