@@ -239,6 +239,13 @@ def _validate_packaged_skill_manifest(manifest: object, path: Path) -> None:
     entry = manifest["entry"]
     if not isinstance(entry, dict) or not all(isinstance(entry.get(key), str) and entry[key].strip() for key in ("skill", "adapter")):
         raise ValueError("Skill manifest entry 无效")
+    if any(not isinstance(manifest[key], list) for key in ("inputs", "outputs", "permissions")):
+        raise ValueError("Skill manifest 能力声明必须是数组")
+    dependencies = manifest["dependencies"]
+    if (not isinstance(dependencies, dict)
+            or not isinstance(dependencies.get("skills"), list)
+            or not isinstance(dependencies.get("tools"), list)):
+        raise ValueError("Skill manifest dependencies 无效")
     runtime = manifest["runtime"]
     if not isinstance(runtime, dict) or any(runtime.get(key) is not False for key in ("network", "shell", "arbitrary_code")):
         raise ValueError("Skill manifest runtime 未关闭外部执行")
