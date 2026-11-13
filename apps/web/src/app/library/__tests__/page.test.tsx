@@ -17,8 +17,8 @@ vi.mock("@/lib/api.server", () => ({
   getProductionMaterials: serverMocks.getProductionMaterials,
 }));
 vi.mock("@/components/MaterialLibraryWorkspace", () => ({
-  MaterialLibraryWorkspace: ({ initialTag }: { initialTag?: string }) => (
-    <div data-testid="workspace" data-tag={initialTag ?? ""} />
+  MaterialLibraryWorkspace: ({ initialTag, initialMode, initialResource }: { initialTag?: string; initialMode?: string; initialResource?: string }) => (
+    <div data-testid="workspace" data-tag={initialTag ?? ""} data-mode={initialMode ?? ""} data-resource={initialResource ?? ""} />
   ),
 }));
 
@@ -46,5 +46,11 @@ describe("LibraryPage tag filter", () => {
     render(await LibraryPage({ searchParams: Promise.resolve({}) }));
     expect(serverMocks.getProductionMaterials).toHaveBeenCalledWith({ tag: undefined });
     expect(screen.getByTestId("workspace")).toHaveAttribute("data-tag", "");
+  });
+
+  it("passes panel navigation through to the real resource workspace", async () => {
+    render(await LibraryPage({ searchParams: Promise.resolve({ mode: "panel", resource: "transitions" }) }));
+    expect(screen.getByTestId("workspace")).toHaveAttribute("data-mode", "panel");
+    expect(screen.getByTestId("workspace")).toHaveAttribute("data-resource", "transitions");
   });
 });

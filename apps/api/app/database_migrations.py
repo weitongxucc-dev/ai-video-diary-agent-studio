@@ -4,7 +4,7 @@ import sqlite3
 from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 26
+PRODUCTION_SCHEMA_VERSION = 27
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -1007,6 +1007,60 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
         );
         CREATE INDEX IF NOT EXISTS idx_material_clip_reference_migrations_asset
             ON material_clip_reference_migrations(workspace_id, asset_id, old_segment_id, created_at DESC);
+    """),
+    (27, """
+        CREATE TABLE IF NOT EXISTS resource_manifests (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            resource_id TEXT NOT NULL,
+            resource_kind TEXT NOT NULL CHECK (resource_kind IN ('material', 'template', 'font', 'model', 'service')),
+            resource_version TEXT NOT NULL,
+            state TEXT NOT NULL CHECK (state IN ('candidate', 'catalog_only', 'planned', 'connected')),
+            source_revision_json TEXT NOT NULL,
+            digest TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, resource_id, resource_version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_resource_manifests_workspace
+            ON resource_manifests(workspace_id, resource_kind, resource_id, resource_version);
+
+        CREATE TABLE IF NOT EXISTS resource_manifest_licenses (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            manifest_id TEXT NOT NULL,
+            layer TEXT NOT NULL CHECK (layer IN ('asset', 'font', 'model', 'service')),
+            identifier TEXT NOT NULL,
+            source_ref TEXT NOT NULL,
+            terms_ref TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            UNIQUE(workspace_id, manifest_id, layer, identifier),
+            FOREIGN KEY(manifest_id) REFERENCES resource_manifests(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_resource_licenses_manifest
+            ON resource_manifest_licenses(workspace_id, manifest_id, layer);
+
+        CREATE TABLE IF NOT EXISTS resource_usage_records (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            manifest_id TEXT NOT NULL,
+            resource_version TEXT NOT NULL,
+            stage TEXT NOT NULL CHECK (stage IN ('candidate', 'installed', 'imported', 'adopted', 'task_input', 'timeline', 'render', 'output_observation')),
+            task_id TEXT,
+            timeline_version_id TEXT,
+            artifact_ref TEXT,
+            observation_ref TEXT,
+            actor_ref TEXT,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(workspace_id, manifest_id, resource_version, stage, task_id, timeline_version_id, artifact_ref, observation_ref),
+            FOREIGN KEY(manifest_id) REFERENCES resource_manifests(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_resource_usage_task
+            ON resource_usage_records(workspace_id, task_id, created_at, id);
+        CREATE INDEX IF NOT EXISTS idx_resource_usage_artifact
+            ON resource_usage_records(workspace_id, artifact_ref, created_at, id);
     """),
 )
 

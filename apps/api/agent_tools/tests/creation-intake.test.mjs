@@ -121,7 +121,15 @@ test('resource catalog exposes connected versus planned capabilities and provena
   assert.equal(result.details.resources.find(item=>item.id==='audio_library').status,'catalog_only');
   assert.equal(result.details.resources.find(item=>item.id==='filters_lut').status,'planned');
   assert.deepEqual(result.details.provenance_fields.slice(0,4),['repository','revision','license','asset_license']);
+  const imported = result.details.skills.find(item=>item.name==='cut-as-code-video-cut');
+  assert.equal(imported.status,'installed');
+  assert.equal(imported.version,'2026.11.13-adapter.1');
+  assert.equal(imported.provenance.revision,'a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4');
+  assert.equal(imported.provenance.license_spdx,'MIT');
+  assert.equal(imported.evaluation.status,'adapter-static-and-tool-contract-tested');
+  assert.equal(imported.manifest.runtime.network,false);
   assert.match(result.content[0].text,/connected/);
+  assert.match(result.content[0].text,/cut-as-code-video-cut/);
 });
 
 test('agent trace reads only the current turn and keeps usage unknown without provider receipt', async()=>{

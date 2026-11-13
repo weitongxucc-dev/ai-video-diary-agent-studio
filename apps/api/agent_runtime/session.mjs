@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {createNativeTaskTools} from './native-tools.mjs';
 import {configureContextCompaction} from './context-policy.mjs';
+import {loadSkillManifests} from './skills/manifest.mjs';
 
 export const PI_VERSION = "1.5.2";
 const resources = dirname(fileURLToPath(import.meta.url));
@@ -47,10 +48,11 @@ export async function openCreationSession({ modulePath, cwd, sessionDir, session
     additionalPromptTemplatePaths: [join(resources, "prompts")],
     extensionFactories: [...(productExtension ? [productExtension.extension] : []), ...extensionFactories, taskContextExtension],
     systemPrompt: `${systemPrompt}
-创作方法按需用 read_creation_skill 读取：原声口播 source-speech、旁白配素材 narration-materials、局部修改 local-edit、动画模板与程序化制作 visual-template。
+创作方法按需用 read_creation_skill 读取：原声口播 source-speech、旁白配素材 narration-materials、局部修改 local-edit、动画模板与程序化制作 visual-template、受控粗剪适配 cut-as-code-video-cut。
 ${await readFile(join(resources,"prompts/review-result.md"),"utf8")}
 ${nativeEnabled?'原生工具通过当前任务宿主执行。先读 open_task_working_context；文件API的 /task 是虚拟路径，Shell从work执行并使用相对路径（../inputs、../outputs），不把虚拟绝对路径当真实磁盘位置。可按真实错误改程序；产物先登记，再沿现有编辑入口预览和采用，不能把执行成功说成作品已采用。文字模型不直接接收原始图片/音视频；必要观察沿已授权局部分析取得。':''}`,
   });
+  const skillManifests = await loadSkillManifests(join(resources, "skills"));
   await resourceLoader.reload();
   const errors = resourceLoader.getExtensions().errors;
   if (errors.length) throw new Error(errors.map(error => error.error).join("\n"));
@@ -85,7 +87,8 @@ ${nativeEnabled?'原生工具通过当前任务宿主执行。先读 open_task_w
     execute: async (_id, { name }) => {
       const skill = resourceLoader.getSkills().skills.find(item => item.name === name);
       if (!skill) throw new Error("此创作方法未随当前版本发布。");
-      return { content: [{ type: "text", text: await readFile(skill.filePath, "utf8") }], details: { name } };
+      const manifest = skillManifests.get(name);
+      return { content: [{ type: "text", text: await readFile(skill.filePath, "utf8") }], details: { name, ...(manifest ? {manifest} : {}) } };
     },
   };
   const result = await sdk.createAgentSession({

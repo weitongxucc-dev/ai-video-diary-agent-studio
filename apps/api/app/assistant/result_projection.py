@@ -559,4 +559,18 @@ def read_sdk_result(output: str, kind: str = "edit_preview") -> tuple[str, dict 
             or any(not isinstance(item, dict) or item.get("type") != "tool_execution_end"
                    for item in result["tool_results"])):
         raise _fail(FAILURE_UNKNOWN, explanation="创作会话没有返回可核验的完成结果，请查询已有操作回执。")
-    return project_business_result(result, kind)
+    answer, preview = project_business_result(result, kind)
+    # Keep the provider's measured usage alongside the business result. This
+    # is deliberately unknown when the provider omitted usage; no price or
+    # token estimate is synthesized here.
+    usage = result.get("provider_usage") if isinstance(result.get("provider_usage"), dict) else None
+    measured = {key: value for key, value in (usage or {}).items()
+                if key in {"input", "output", "cacheRead", "cacheWrite", "totalTokens"}
+                and type(value) is int and value >= 0}
+    if result.get("usage_status") == "known" and measured:
+        runtime = {"provider_usage": measured, "usage_status": "known"}
+        if preview is None:
+            preview = runtime
+        elif isinstance(preview, dict):
+            preview = {**preview, **runtime}
+    return answer, preview

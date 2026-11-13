@@ -97,6 +97,7 @@ from app.materials.assets import MaterialAssetStore, MaterialVersionConflict as 
 from app.materials.analysis import MaterialAnalysisUseCase
 from app.materials.analysis_runs import MaterialAnalysisRunStore
 from app.materials.data_governance import MaterialDataGovernanceStore
+from app.materials.resource_governance import ResourceGovernanceStore
 from app.materials.analysis_execution import probe_duration, detect_scene_boundaries
 from app.materials.usage_records import MaterialUsageRecordReader
 from app.materials.reference_video import (
@@ -382,6 +383,7 @@ class ProductionRepository:
         self._material_assets = MaterialAssetStore(lambda: self._connect())
         self.material_analysis_runs = MaterialAnalysisRunStore(self._connect)
         self.material_data_governance = MaterialDataGovernanceStore(self._connect)
+        self.resource_governance = ResourceGovernanceStore(self._connect)
         self.material_usage_records = MaterialUsageRecordReader(
             connection_factory=lambda: self._connect(),
             read_asset=lambda workspace_id, asset_id: self._material_assets.get_asset(workspace_id, asset_id),
@@ -1274,6 +1276,19 @@ class ProductionRepository:
     def list_material_segment_lineage(self, workspace_id: str, asset_id: str):
         self.get_asset(workspace_id, asset_id)
         return self.material_data_governance.list_segment_lineage(workspace_id, asset_id)
+
+    def save_resource_manifest(self, manifest):
+        """Persist one immutable resource version and its layered licenses."""
+        return self.resource_governance.save_manifest(manifest)
+
+    def record_resource_usage(self, record):
+        """Append a candidate/adoption/task/output provenance edge."""
+        return self.resource_governance.record_usage(record)
+
+    def list_resource_provenance(self, workspace_id: str, task_id: str, *, timeline_version_id: str | None = None):
+        return self.resource_governance.provenance_for_task(
+            workspace_id, task_id, timeline_version_id=timeline_version_id,
+        )
 
     def list_semantic_field_definitions(self, workspace_id: str, *, include_deprecated: bool = False):
         return self.material_data_governance.list_field_definitions(

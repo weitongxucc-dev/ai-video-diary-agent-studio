@@ -4,7 +4,11 @@
 
 曜核已有 OpenFilm HTML 视觉目录和 RenderComp 数据动效目录。每个可执行视觉模板都保存了资源仓库、固定修订、代码许可证、源路径和 SHA-256；模板列表和 Agent 工具会回带这些 provenance 摘要。Agent 还可以调用 `read_editing_resource_catalog` 查看当前分类、接通状态和实际入口。
 
-底部资源在产品上按以下类型组织：素材、模板、字幕、配音、音效、音乐、文本/贴纸、滤镜、转场和动效。当前生产入口已经接通的是素材检索、模板/视觉组件、字幕、配音、画面效果、文本/贴纸和转场。音乐/音效目前是 `catalog_only`，滤镜/LUT 是 `planned`；没有对应业务入口的类型不能显示为已安装能力。
+后端只读目录接口为 `GET /api/editing-resource-catalog`（`q`、`category`、`status`、`offset`、`limit`），并提供 `GET /api/editing-resources` 列表别名及 `GET /api/editing-resources/{resource_id}?version=1` 版本详情。返回的 `categories` 是功能导航分类，`resources` 是具体资源项；每个资源项包含版本、预览元数据、来源/许可证、运行依赖和 `EditProposal`/`TimelineVersion` 写入边界。接口不创建提案、不写时间线。
+
+底部资源在产品上按以下类型组织：素材、技能、模板、字幕、配音、音效、音乐、文本/贴纸、滤镜、转场和动效。当前生产入口已经接通的是素材检索、受控 Skill 读取、模板/视觉组件、字幕、配音、画面效果、文本/贴纸和转场。音乐/音效目前是 `catalog_only`，滤镜/LUT 是 `planned`；没有对应业务入口的类型不能显示为已安装能力。
+
+当前随版本发布的外部 Skill 为 `cut-as-code-video-cut`，固定于 WhiteTowerAI/cut-as-code 的提交 `a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4`。它只作为方法文档适配进入曜核，必须通过 `read_creation_skill` 和现有任务工具执行；网络、Shell、任意代码、外部下载及第三方运行时均未导入。
 
 ## 采用边界
 
@@ -15,4 +19,4 @@
 
 ## 后续顺序
 
-先完善资源目录的标签、预览和版本锁定，再接入受控导入 Worker；随后补齐贴纸、滤镜、转场、LUT 和音效的独立资源包。OTIO/FCPXML/EDL 交换和外部 Provider 放在稳定的资源 provenance 与时间线写入边界之后。
+资源目录、面板和受控 Skill 导入已形成第一版纵向切片。下一步按真实业务入口补齐贴纸、滤镜、LUT、音乐和音效的独立资源包，并为每类资源补齐真实预览、采用回执和输出观察；OTIO/FCPXML/EDL 交换和外部 Provider 放在稳定的资源 provenance 与时间线写入边界之后。

@@ -27,3 +27,24 @@ def test_project_turn_trace_marks_missing_provider_usage_unknown():
     })
     assert trace["usage_status"] == "unknown"
     assert trace["provider_usage"] is None
+
+
+def test_project_turn_trace_correlates_redacted_tool_business_job_and_output_refs():
+    trace = project_turn_trace({
+        "id": "turn-3", "conversation_id": "conversation-1", "status": "completed", "sequence": 1,
+        "created_at": "now", "updated_at": "now", "result": {
+            "usage_status": "known", "provider_usage": {"input": 4, "output": 2, "totalTokens": 6},
+            "continuation": {"status": "succeeded"},
+        }, "events": [{"type": "tool_start", "tool_id": 1, "tool_call_id": "call-secret"},
+            {"type": "tool_end", "tool_id": 1, "tool_call_id": "call-secret", "ok": True,
+             "trace_references": {"request_id": "request-secret", "job_id": "job-secret",
+                                   "output_reference": "output-secret"}},
+            {"type": "evidence_candidate", "reviewer_kind": "visual_reviewer",
+             "candidate_id": "candidate-secret", "status": "pending", "source_refs": ["output-secret"]}],
+    })
+    assert trace["usage_source"] == "provider"
+    assert trace["business_status"] == "succeeded"
+    assert {item["kind"] for item in trace["associations"]} == {"conversation", "turn", "tool_call", "business_request", "job", "output"}
+    assert all(len(item["ref"]) == 20 for item in trace["associations"])
+    assert trace["evidence_candidates"][0]["reviewer_kind"] == "visual_reviewer"
+    assert "request-secret" not in str(trace)

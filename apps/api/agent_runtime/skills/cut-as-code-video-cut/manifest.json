@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "name": "cut-as-code-video-cut",
+  "version": "2026.11.13-adapter.1",
+  "entry": {
+    "skill": "read_creation_skill:cut-as-code-video-cut",
+    "adapter": "method-only-product-tools"
+  },
+  "inputs": [
+    "当前 CreationTask 及冻结 TimelineVersion",
+    "授权的镜头/音频/字幕对象",
+    "源时间文字或词级证据",
+    "用户明确的粗剪目标"
+  ],
+  "outputs": [
+    "带证据和未知项的 keep/drop 编辑候选",
+    "曜核预览或已回读的可撤销局部编辑",
+    "真实版本、采用状态和检查覆盖说明"
+  ],
+  "permissions": [
+    "读取当前任务和授权对象",
+    "读取源时间与已有输出观察",
+    "准备或提交当前任务声明允许的局部编辑",
+    "回读原请求、版本和撤销入口"
+  ],
+  "dependencies": {
+    "skills": ["source-speech", "local-edit"],
+    "tools": [
+      "read_current_task", "read_task_object", "read_task_edit_capabilities",
+      "read_material_evidence", "read_task_observations", "observe_task_output",
+      "read_edit_history", "read_edit_control_context", "read_timeline_restore_request",
+      "preview_typed_edit", "apply_typed_edit"
+    ]
+  },
+  "runtime": {
+    "kind": "trusted-markdown",
+    "network": false,
+    "arbitrary_code": false,
+    "shell": false
+  },
+  "provenance": {
+    "repository": "https://github.com/WhiteTowerAI/cut-as-code",
+    "path": "skills/video-cut/SKILL.md",
+    "revision": "a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4",
+    "license": "MIT License (repository and documentation)",
+    "license_spdx": "MIT",
+    "resource_notice": "外部脚本、模型、字体、示例媒体、Pexels 和服务条款未导入；它们需分别核对。"
+  },
+  "evaluation": {
+    "status": "adapter-static-and-tool-contract-tested",
+    "evidence": [
+      "manifest validator rejects network/arbitrary execution and unknown tools",
+      "session exposes the packaged skill with its validated manifest",
+      "adapter names only existing read/preview/apply/recovery tools"
+    ],
+    "unverified": [
+      "真实媒体、模型判断、设备、长片和最终视听质量",
+      "外部仓库运行时、脚本和服务行为"
+    ]
+  }
+}

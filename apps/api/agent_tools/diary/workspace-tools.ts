@@ -1,6 +1,10 @@
 import type {BusinessRequest, ToolRegistrar} from './contracts.ts';
 import {registerMaterialTools} from '../material_tools.ts';
 import {registerMaterialEvidence} from '../materials/evidence.ts';
+import {fileURLToPath} from 'node:url';
+import {loadSkillManifests} from '../../agent_runtime/skills/manifest.mjs';
+
+const packagedSkillsRoot = fileURLToPath(new URL('../../agent_runtime/skills/', import.meta.url));
 
 const safeVoiceReasons = new Set([
   "profile_reference_only", "profile_excluded", "profile_not_for_automation",
@@ -182,6 +186,12 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
         {name: "local-edit", status: "installed", purpose: "局部修改"},
         {name: "visual-template", status: "installed", purpose: "可编辑视觉模板与程序化制作"},
       ];
+      const manifest = (await loadSkillManifests(packagedSkillsRoot)).get("cut-as-code-video-cut");
+      if (!manifest) throw new Error("受控粗剪 Skill manifest 未随当前版本发布");
+      const {skillPath: _skillPath, ...publicManifest} = manifest;
+      skills.push({name: manifest.name, status: "installed", purpose: "证据驱动粗剪适配",
+        version: manifest.version, provenance: manifest.provenance, evaluation: manifest.evaluation,
+        manifest: publicManifest});
       const details = {resources, skills, provenance_fields: ["repository", "revision", "license", "asset_license", "font_license", "model_license", "service_terms"], instruction: "只有 status=connected 且本轮读取到真实版本的资源可进入 EditProposal；外部资源必须逐项登记来源和许可。"};
       return {content: [{type: "text", text: JSON.stringify(details)}], details};
     },

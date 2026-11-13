@@ -45,23 +45,30 @@ import { useStateOptions, EMPTY_OBJECT_IDS } from './material-library/material-s
 import { duration, roleLabel, analysisMessage, tagLabel, fileLabel } from './material-library/material-labels';
 import { mediaTypeOptions, mediaTypeLabels, readMediaTypeFromUrl } from './material-library/material-filters';
 import { visibleError } from './material-library/material-errors';
+import { EditorResourceLibraryPanel, type EditorResourceCategory } from './EditorResourceLibraryPanel';
 
 export function MaterialLibraryWorkspace({
   initialLibrary,
   initialInsights,
   initialCollections,
   initialTag,
+  initialMode,
+  initialResource,
 }: {
   initialLibrary: MaterialLibrary;
   initialInsights: MaterialLibraryInsights;
   initialCollections: MaterialCollections;
   // 来自 /library?tag= 的精确标签筛选；URL 是唯一来源，清除后由页面重挂载恢复
   initialTag?: string;
+  initialMode?: string;
+  initialResource?: string;
 }) {
   const router = useRouter();
   const page = useWorkspacePage();
   const viewActive = page?.active ?? true;
   const searchParams = useSearchParams();
+  const resourceMode = (searchParams?.get("mode") ?? initialMode) === "panel";
+  const resourceCategory = (searchParams?.get("resource") ?? initialResource ?? "materials") as EditorResourceCategory;
   const locateQuery = searchParams?.get("locate_ref") ?? "";
   const [assets, setAssets] = useState(initialLibrary.assets);
   const [locatedAsset, setLocatedAsset] = useState<MaterialAsset | null>(null);
@@ -864,7 +871,7 @@ export function MaterialLibraryWorkspace({
         onResult: applyMaterialAssistantResult,
       }} />}
     >
-      <div className={`modern-library ${styles.workspace}`}>
+      {resourceMode ? <EditorResourceLibraryPanel assets={assets} selectedId={selected?.id ?? null} initialCategory={resourceCategory} onSelect={asset => selectAsset(asset)} onAdopt={asset => appendMaterialReference(asset)} /> : <div className={`modern-library ${styles.workspace}`}>
         <MaterialLibraryToolbar summary={`已载入 ${assets.length} / ${totalCount} · 最近更新在前`} auxiliary={Boolean(page?.auxiliary)} filtered={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)}
           search={<InputGroup data-input-group aria-label="素材检索" className="library-search">
             <InputGroupAddon><Search size={16} /></InputGroupAddon>
@@ -957,7 +964,7 @@ export function MaterialLibraryWorkspace({
         </HomeCardDialog> : null}
         {statisticsOpen ? <HomeCardDialog kind="detail" title="素材统计" onClose={() => setStatisticsOpen(false)}>
         <section className={styles.statistics} aria-label="素材覆盖"><p>{insights.asset_count} 个可见文件 · {insights.segment_count} 个片段</p><div className={styles.statTags}>{insights.tags.filter(entry => entry.asset_count > 0).map(entry => <Link key={entry.tag} href={"/library?tag=" + encodeURIComponent(entry.tag)}>{tagLabel(entry.tag)}<small>{entry.asset_count} 份素材</small></Link>)}</div><p>此处统计已有内容；具体缺口会在制作任务检查素材时显示。</p></section>        </HomeCardDialog> : null}
-      </div>
+      </div>}
     </AppShell>
   );
 }

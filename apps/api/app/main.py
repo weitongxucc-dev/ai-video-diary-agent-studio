@@ -304,6 +304,8 @@ from app.device_invite_accept_routes import (
     DeviceInviteAcceptResponse, build_device_invite_accept_router,
 )
 from app.content_template_routes import build_content_template_router
+from app.editing_resource_catalog import editing_resource_catalog
+from app.editing_resource_routes import build_editing_resource_router
 from app.creation.source_inputs_use_case import CreationSourceInputs
 from app.task_edit_routes import CoverConfirmationHttpAdapter, TaskEditReceiptHttpAdapter, build_task_edit_router
 from app.task_observation_routes import TaskObservationResponseAdapter, build_task_observation_router
@@ -999,6 +1001,11 @@ app.include_router(build_scheduled_task_router(
 app.include_router(build_content_template_router(
     response_for=lambda: ContentTemplatesResponse,
     catalog_for=lambda: list_content_templates,
+))
+
+
+app.include_router(build_editing_resource_router(
+    catalog_for=editing_resource_catalog,
 ))
 
 
