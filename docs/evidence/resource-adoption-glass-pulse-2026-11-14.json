@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "validated_at": "2026-11-14T03:04:58.796547+00:00",
+  "resource": {
+    "id": "openfilm:sound-glass-pulse",
+    "status": "connected",
+    "resource_kind": "audio",
+    "version": "1",
+    "source_sha256": "c7f8f926893726ae02093ca5d64f5006c3e020b592b5de753bf6de9acaf71a38",
+    "preview_status": 200,
+    "preview_content_type": "audio/mp4",
+    "preview_path": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/sound.m4a",
+    "preview_bytes": 5690
+  },
+  "catalog_only_resource_left_unadopted": {
+    "id": "openfilm:transition-glitch",
+    "status": "catalog_only",
+    "reason": "转场 adapter 仍为 planned，未进入执行阶段"
+  },
+  "render": {
+    "source": "output/acceptance/resource-adoption-source.mp4",
+    "output": "output/acceptance/resource-adoption-glass-pulse.mp4",
+    "sha256": "a08d68777f67e607771c048c3bd232e098b7ba976164f9761ac02afb0b78dda1",
+    "size_bytes": 21493,
+    "artifact_ref": "output/acceptance/resource-adoption-glass-pulse.mp4",
+    "command": "ffmpeg color+sine + OpenFilm Glass Pulse sound.m4a + amix"
+  },
+  "observation": {
+    "measurement_scope": "actual_output_bounded_frames",
+    "media": {
+      "width": 320,
+      "height": 240,
+      "duration_seconds": 2.0,
+      "video_codec": "h264",
+      "video_frame_rate": "24/1",
+      "audio_stream_count": 1
+    },
+    "samples": [
+      {
+        "id": "frame-0",
+        "timestamp_seconds": 0.25,
+        "width": 320,
+        "height": 240,
+        "sha256": "9a6253a6bb65bbcb54320305b46f774e2b691a1c98dcca00a7b0f90efc770707",
+        "pixel_mean_rgb": [
+          23.0,
+          78.0,
+          100.0
+        ],
+        "pixel_extrema_rgb": [
+          [
+            23,
+            23
+          ],
+          [
+            78,
+            78
+          ],
+          [
+            100,
+            100
+          ]
+        ],
+        "object_refs": [],
+        "ocr_status": "unavailable",
+        "ocr_text": []
+      },
+      {
+        "id": "frame-1",
+        "timestamp_seconds": 1.0,
+        "width": 320,
+        "height": 240,
+        "sha256": "9a6253a6bb65bbcb54320305b46f774e2b691a1c98dcca00a7b0f90efc770707",
+        "pixel_mean_rgb": [
+          23.0,
+          78.0,
+          100.0
+        ],
+        "pixel_extrema_rgb": [
+          [
+            23,
+            23
+          ],
+          [
+            78,
+            78
+          ],
+          [
+            100,
+            100
+          ]
+        ],
+        "object_refs": [],
+        "ocr_status": "unavailable",
+        "ocr_text": []
+      },
+      {
+        "id": "frame-2",
+        "timestamp_seconds": 1.75,
+        "width": 320,
+        "height": 240,
+        "sha256": "9a6253a6bb65bbcb54320305b46f774e2b691a1c98dcca00a7b0f90efc770707",
+        "pixel_mean_rgb": [
+          23.0,
+          78.0,
+          100.0
+        ],
+        "pixel_extrema_rgb": [
+          [
+            23,
+            23
+          ],
+          [
+            78,
+            78
+          ],
+          [
+            100,
+            100
+          ]
+        ],
+        "object_refs": [],
+        "ocr_status": "unavailable",
+        "ocr_text": []
+      }
+    ],
+    "ocr_model_id": null,
+    "unavailable": [
+      {
+        "scope": "visual_semantics",
+        "reason": "本地合成画面的语义理解尚无受许可执行能力；像素测量不代表看懂内容。"
+      },
+      {
+        "scope": "speech_and_listening",
+        "reason": "本次只观察实际画面，没有转写或听感检查。"
+      },
+      {
+        "scope": "ocr",
+        "reason": "本地 OCR 未配置或输出观察执行范围尚未标定；未提取文字。"
+      }
+    ]
+  },
+  "governance": {
+    "workspace_id": "resource-acceptance-workspace",
+    "task_id": "resource-acceptance-task",
+    "timeline_version_id": "timeline-resource-acceptance-v1",
+    "observation_id": "observation-27c11b36-4709-42d6-8bd4-611b57bb8bae",
+    "stages": [
+      "adopted",
+      "task_input",
+      "timeline",
+      "render",
+      "output_observation"
+    ],
+    "provenance_for_output": [
+      {
+        "manifest": {
+          "id": "manifest-openfilm-sound-glass-pulse-v1",
+          "resource_id": "openfilm:sound-glass-pulse",
+          "resource_kind": "audio",
+          "resource_version": "1",
+          "state": "connected",
+          "source_revision": {
+            "repository": "https://github.com/openfilm/library",
+            "revision": "19b26b60c1286b412c01ad64971263ae0e2aef13"
+          },
+          "digest": "d4a493c47712eeb6971861fcf5ca428c287cec520781c8a41fc4113ccb6354f1",
+          "licenses": [
+            {
+              "id": "license-glass-pulse",
+              "layer": "asset",
+              "identifier": "CC0-1.0",
+              "source_ref": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/item.json",
+              "terms_ref": "",
+              "metadata": {}
+            }
+          ],
+          "metadata": {
+            "catalog_id": "openfilm:sound-glass-pulse",
+            "manifest_path": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/item.json",
+            "path": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/sound.m4a",
+            "resource_type": "sound_effect",
+            "source_sha256": "c7f8f926893726ae02093ca5d64f5006c3e020b592b5de753bf6de9acaf71a38"
+          }
+        },
+        "usage": {
+          "id": "usage-glass-pulse-output-observation",
+          "stage": "output_observation",
+          "resource_version": "1",
+          "task_id": "resource-acceptance-task",
+          "timeline_version_id": "timeline-resource-acceptance-v1",
+          "artifact_ref": "output/acceptance/resource-adoption-glass-pulse.mp4",
+          "observation_ref": "observation-27c11b36-4709-42d6-8bd4-611b57bb8bae",
+          "actor_ref": null,
+          "metadata": {
+            "assistant_turn_id": "resource-acceptance-turn",
+            "job_id": "resource-render-job",
+            "outcome": "succeeded",
+            "outcome_reason": "真实 ffmpeg 渲染与有界输出观察通过",
+            "output_id": "output/acceptance/resource-adoption-glass-pulse.mp4",
+            "request_id": "resource-acceptance-request"
+          },
+          "created_at": "2026-11-14T03:04:58.791216+00:00"
+        }
+      }
+    ]
+  },
+  "unverified": [
+    "真实桌面窗口播放",
+    "真实 provider 模型回合",
+    "真实设备播放",
+    "Glass Pulse 音听感主观验收"
+  ],
+  "evidence_root": "output/acceptance"
+}
