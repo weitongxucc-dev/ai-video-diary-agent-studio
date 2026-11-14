@@ -55,7 +55,7 @@ class MaterialLibrarySearch(Protocol):
 class MaterialLibraryHTTPAdapter:
     def __init__(self, *, records_for: Callable[[], MaterialLibraryRecords],
                  search_for: Callable[[], MaterialLibrarySearch], workspace_for,
-                 reader_for, visible, write_guard, library_root, asset_response):
+                 reader_for, visible, write_guard, library_root, asset_response, knowledge_claims_for=None):
         self._records_for = records_for
         self._search_for = search_for
         self._workspace_for = workspace_for
@@ -64,6 +64,7 @@ class MaterialLibraryHTTPAdapter:
         self._write_guard = write_guard
         self._library_root = library_root
         self._asset_response = asset_response
+        self._knowledge_claims_for = knowledge_claims_for
 
 
     def list_production_materials(self, request: Request, limit: int=24, offset: int=0, q: str | None=None, tag: str | None=None, review_status: str | None=None, media_type: str | None=None) -> MaterialLibraryResponse:
@@ -146,7 +147,7 @@ class MaterialLibraryHTTPAdapter:
             return MaterialSegmentSearchResponse.model_validate({**matches, 'matches': [asdict(item) for item in matches['matches']]})
         return [MaterialSegmentMatchResponse.model_validate(asdict(item)) for item in matches]
 
-    def candidate_bundle(self, request: Request, asset_id: str, q: str = "", limit: int = 20) -> dict[str, object]:
+    def candidate_bundle(self, request: Request, asset_id: str, q: str = "", limit: int = 20, knowledge_item_id: str | None = None) -> dict[str, object]:
         workspace_id = self._workspace_for(request)
         viewer_user_id, local_diagnostic = self._reader_for(request, workspace_id)
         try:
@@ -168,7 +169,14 @@ class MaterialLibraryHTTPAdapter:
             "asset_updated_at": asset.updated_at.isoformat(),
             "modified_at": asset.modified_at.isoformat(),
         }
-        return build_candidate_bundle(matches, material_source_revision_for=lambda _item: revision)
+        claims = []
+        if knowledge_item_id and self._knowledge_claims_for is not None:
+            try:
+                claims = self._knowledge_claims_for(workspace_id, knowledge_item_id, viewer_user_id, local_diagnostic)
+            except (KeyError, ValueError) as exc:
+                raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+        return build_candidate_bundle(matches, claims, material_source_revision_for=lambda _item: revision,
+                                      knowledge_requested=bool(knowledge_item_id))
 
     def set_production_material_visibility(self, asset_id: str, request: Request, payload: ContentVisibilityRequest) -> MaterialAssetResponse:
         """显式共享或收回一条素材；响应回读同一列。"""
@@ -272,8 +280,8 @@ def build_material_library_router(adapter_for, route_names: tuple[str, ...] | No
         return adapter_for().search_production_material_segments(request, q, usage_role, tags, min_duration_seconds, max_duration_seconds, limit, purpose, include_eligibility)
 
     @router.get('/api/production/materials/{asset_id}/candidate-bundle')
-    def read_material_candidate_bundle(asset_id: str, request: Request, q: str = '', limit: int = 20) -> dict[str, object]:
-        return adapter_for().candidate_bundle(request, asset_id, q, limit)
+    def read_material_candidate_bundle(asset_id: str, request: Request, q: str = '', limit: int = 20, knowledge_item_id: str | None = None) -> dict[str, object]:
+        return adapter_for().candidate_bundle(request, asset_id, q, limit, knowledge_item_id)
 
     @router.put('/api/production/materials/{asset_id}/visibility', response_model=MaterialAssetResponse)
     def set_production_material_visibility(asset_id: str, request: Request, payload: ContentVisibilityRequest) -> MaterialAssetResponse:

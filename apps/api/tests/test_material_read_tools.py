@@ -108,6 +108,18 @@ def test_candidate_bundle_read_preserves_explicit_uncertainty(tmp_path):
     assert out["result"]["details"]["candidates"][0]["authorization"]["status"] == "needs_confirmation"
     assert "read_material_candidate_bundle" in out["names"]
 
+def test_candidate_bundle_can_request_a_visible_knowledge_version(tmp_path):
+    bundle = {"schema": "candidate-bundle/v1", "candidates": [],
+              "summary": {"total": 0, "material_candidates": 0, "knowledge_candidates": 0,
+                           "confirmed": 0, "needs_confirmation": 0},
+              "missing_domains": ["person", "voice"]}
+    out = call(tmp_path, "read_material_candidate_bundle", {
+        "/api/production/materials/asset-one/candidate-bundle?knowledge_item_id=knowledge-one": bundle,
+    }, params={"asset_id": "asset-one", "knowledge_item_id": "knowledge-one"})
+    assert out["ok"]
+    assert len(out["calls"]) == 1
+    assert out["calls"][0]["path"] == "/api/production/materials/asset-one/candidate-bundle?knowledge_item_id=knowledge-one"
+
 def test_unselected_library_reads_all_real_pages_but_sends_only_aggregate_counts(tmp_path, asset):
     assets = [{**asset, "id": f"asset-{index}", "analysis_status": ["pending", "ready", "blocked", "failed"][index % 4]} for index in range(151)]
     out = call(tmp_path, "read_material_library_status", {

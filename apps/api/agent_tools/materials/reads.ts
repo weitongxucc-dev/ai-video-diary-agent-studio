@@ -65,11 +65,13 @@ export function registerMaterialReads(pi: ToolRegistrar, {request, boundSelectio
     parameters: { type: "object", properties: {
       asset_id: { type: "string", minLength: 1 },
       query: { type: "string", maxLength: 120 },
+      knowledge_item_id: { type: "string", minLength: 1 },
       limit: { type: "integer", minimum: 1, maximum: 20 },
     }, required: ["asset_id"], additionalProperties: false },
-    execute: async (_id: string, params: { asset_id: string; query?: string; limit?: number }) => {
+    execute: async (_id: string, params: { asset_id: string; query?: string; knowledge_item_id?: string; limit?: number }) => {
       const query = new URLSearchParams();
       if (params.query) query.set("q", params.query);
+      if (params.knowledge_item_id) query.set("knowledge_item_id", params.knowledge_item_id);
       if (params.limit !== undefined) query.set("limit", String(params.limit));
       const suffix = query.toString() ? `?${query}` : "";
       const value = await read(`/api/production/materials/${encodeURIComponent(params.asset_id)}/candidate-bundle${suffix}`);

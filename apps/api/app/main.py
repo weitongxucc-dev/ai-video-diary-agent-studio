@@ -4629,6 +4629,12 @@ def _material_library_http_adapter():
         write_guard=_local_member_write_guard,
         library_root=lambda: settings.video_inbox_path,
         asset_response=_material_asset_response,
+        knowledge_claims_for=lambda workspace_id, item_id, user_id, diagnostic: production_repo.list_knowledge_claims(
+            workspace_id, item_id,
+            knowledge_version=source_repository.get_knowledge_item_readable_by(
+                workspace_id, item_id, user_id=user_id, local_diagnostic=diagnostic,
+            ).version,
+        ),
     )
 
 

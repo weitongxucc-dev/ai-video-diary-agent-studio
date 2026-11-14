@@ -15,7 +15,7 @@ def test_candidate_bundle_projects_material_and_knowledge_without_promoting_unkn
         evidence_refs=(), status="candidate", confidence=None, field_ref="model",
         value="待确认型号", unit=None, origin="model_inference",
     )
-    bundle = build_candidate_bundle([material], [claim])
+    bundle = build_candidate_bundle([material], [claim], knowledge_requested=True)
     assert bundle["schema"] == "candidate-bundle/v1"
     assert bundle["summary"] == {
         "total": 2, "material_candidates": 1, "knowledge_candidates": 1,
@@ -64,4 +64,30 @@ def test_material_candidate_bundle_read_adapter_returns_revision_and_missing_dom
     result = adapter.candidate_bundle(SimpleNamespace(), "asset-1")
     assert result["schema"] == "candidate-bundle/v1"
     assert result["candidates"][0]["source_revision"]["asset_updated_at"].startswith("2026-")
+    assert result["missing_domains"] == ["knowledge", "person", "voice"]
+
+
+def test_material_candidate_bundle_reads_visible_knowledge_claims_when_requested():
+    asset = SimpleNamespace(
+        id="asset-1", visibility="shared", owner_user_id=None,
+        updated_at=SimpleNamespace(isoformat=lambda: "2026-01-01T00:00:00+00:00"),
+        modified_at=SimpleNamespace(isoformat=lambda: "2025-12-31T00:00:00+00:00"),
+    )
+    claim = SimpleNamespace(
+        id="claim-1", knowledge_item_id="knowledge-1", knowledge_version="v2",
+        evidence_refs=(), status="candidate", confidence=None, field_ref="model",
+        value="待确认型号", unit=None, origin="model_inference",
+    )
+    records = SimpleNamespace(get_asset=lambda _workspace, _asset_id: asset)
+    search = SimpleNamespace(search_material_segments=lambda *_args, **_kwargs: [])
+    adapter = MaterialLibraryHTTPAdapter(
+        records_for=lambda: records, search_for=lambda: search,
+        workspace_for=lambda _request: "workspace-1", reader_for=lambda _request, _workspace: ("member-1", False),
+        visible=lambda *_args: True, write_guard=lambda _request: None,
+        library_root=lambda: ".", asset_response=lambda value: value,
+        knowledge_claims_for=lambda *_args: [claim],
+    )
+    result = adapter.candidate_bundle(SimpleNamespace(), "asset-1", knowledge_item_id="knowledge-1")
+    assert result["summary"]["knowledge_candidates"] == 1
+    assert result["candidates"][0]["source_revision"] == {"knowledge_version": "v2"}
     assert result["missing_domains"] == ["person", "voice"]

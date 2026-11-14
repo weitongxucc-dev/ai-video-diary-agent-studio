@@ -62,7 +62,7 @@ def _knowledge_candidate(item: Any) -> dict[str, object]:
 
 def build_candidate_bundle(
     material_matches: Iterable[Any] = (), knowledge_claims: Iterable[Any] = (),
-    *, material_source_revision_for=None,
+    *, material_source_revision_for=None, knowledge_requested: bool = False,
 ) -> dict[str, object]:
     """Return a bounded, explicitly uncertain candidate envelope."""
     candidates = []
@@ -80,6 +80,6 @@ def build_candidate_bundle(
             "confirmed": sum(item["status"] == "confirmed" for item in candidates),
             "needs_confirmation": sum(item["authorization"]["status"] == "needs_confirmation" for item in candidates),
         },
-        "missing_domains": ["person", "voice"],
+        "missing_domains": (["person", "voice"] if knowledge_requested else ["knowledge", "person", "voice"]),
         "instruction": "候选、证据、授权和质量状态必须按原值解释；unknown/needs_confirmation 不能当作确认事实或采用许可。",
     }
