@@ -4767,7 +4767,7 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('get_unmatched_material_corrections',)))
 
 
-app.include_router(build_material_library_router(_material_library_http_adapter, ('search_production_material_segments',)))
+app.include_router(build_material_library_router(_material_library_http_adapter, ('search_production_material_segments', 'read_material_candidate_bundle')))
 
 
 app.include_router(build_material_library_router(_material_library_http_adapter, ('set_production_material_visibility',)))

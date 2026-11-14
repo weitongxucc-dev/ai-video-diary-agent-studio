@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 from app.materials.assets import MaterialVersionConflict
 from app.materials.usage_records import MaterialUsageRecordReader
 from app.materials.contracts import MaterialAssetNote
+from app.materials.candidate_bundle import build_candidate_bundle
 from app.schemas import (
     ContentVisibilityRequest, MaterialAssetResponse, MaterialAssetTagsRequest,
     MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialAssetNotesRequest,
@@ -145,6 +146,30 @@ class MaterialLibraryHTTPAdapter:
             return MaterialSegmentSearchResponse.model_validate({**matches, 'matches': [asdict(item) for item in matches['matches']]})
         return [MaterialSegmentMatchResponse.model_validate(asdict(item)) for item in matches]
 
+    def candidate_bundle(self, request: Request, asset_id: str, q: str = "", limit: int = 20) -> dict[str, object]:
+        workspace_id = self._workspace_for(request)
+        viewer_user_id, local_diagnostic = self._reader_for(request, workspace_id)
+        try:
+            asset = self._records_for().get_asset(workspace_id, asset_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="material asset not found") from exc
+        if not self._visible(request, workspace_id, asset.visibility, asset.owner_user_id):
+            raise HTTPException(status_code=404, detail="material asset not found")
+        try:
+            matches = self._search_for().search_material_segments(
+                workspace_id, query=q, asset_ids=[asset_id], usage_roles=["a_roll", "b_roll"],
+                tags=None, min_duration_seconds=None, max_duration_seconds=None,
+                limit=limit, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+                purpose="manual", include_eligibility=False,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        revision = {
+            "asset_updated_at": asset.updated_at.isoformat(),
+            "modified_at": asset.modified_at.isoformat(),
+        }
+        return build_candidate_bundle(matches, material_source_revision_for=lambda _item: revision)
+
     def set_production_material_visibility(self, asset_id: str, request: Request, payload: ContentVisibilityRequest) -> MaterialAssetResponse:
         """显式共享或收回一条素材；响应回读同一列。"""
         denied = self._write_guard(request)
@@ -245,6 +270,10 @@ def build_material_library_router(adapter_for, route_names: tuple[str, ...] | No
     @router.get('/api/production/materials/search', response_model=list[MaterialSegmentMatchResponse] | MaterialSegmentSearchResponse)
     def search_production_material_segments(request: Request, q: str='', usage_role: str | None=None, tags: str | None=None, min_duration_seconds: float | None=None, max_duration_seconds: float | None=None, limit: int=20, purpose: Literal['manual', 'automatic']='manual', include_eligibility: bool=False) -> list[MaterialSegmentMatchResponse] | MaterialSegmentSearchResponse:
         return adapter_for().search_production_material_segments(request, q, usage_role, tags, min_duration_seconds, max_duration_seconds, limit, purpose, include_eligibility)
+
+    @router.get('/api/production/materials/{asset_id}/candidate-bundle')
+    def read_material_candidate_bundle(asset_id: str, request: Request, q: str = '', limit: int = 20) -> dict[str, object]:
+        return adapter_for().candidate_bundle(request, asset_id, q, limit)
 
     @router.put('/api/production/materials/{asset_id}/visibility', response_model=MaterialAssetResponse)
     def set_production_material_visibility(asset_id: str, request: Request, payload: ContentVisibilityRequest) -> MaterialAssetResponse:
