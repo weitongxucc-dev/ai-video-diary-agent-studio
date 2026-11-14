@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "validated_at": "2026-11-14T03:04:58.796547+00:00",
+  "validated_at": "2026-11-14T03:22:57.112548+00:00",
   "resource": {
     "id": "openfilm:sound-glass-pulse",
     "status": "connected",
@@ -144,7 +144,25 @@
     "workspace_id": "resource-acceptance-workspace",
     "task_id": "resource-acceptance-task",
     "timeline_version_id": "timeline-resource-acceptance-v1",
-    "observation_id": "observation-27c11b36-4709-42d6-8bd4-611b57bb8bae",
+    "timeline_persisted": true,
+    "timeline_snapshot": {
+      "tracks": [
+        {
+          "id": "resource-audio-track",
+          "kind": "audio",
+          "items": [
+            {
+              "resource_id": "openfilm:sound-glass-pulse",
+              "manifest_id": "manifest-openfilm-sound-glass-pulse-v1",
+              "source_ref": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/sound.m4a",
+              "start_seconds": 0,
+              "duration_seconds": 2
+            }
+          ]
+        }
+      ]
+    },
+    "observation_id": "observation-abd685d5-bf4b-48a1-a86d-d8cc0fb48963",
     "stages": [
       "adopted",
       "task_input",
@@ -190,7 +208,7 @@
           "task_id": "resource-acceptance-task",
           "timeline_version_id": "timeline-resource-acceptance-v1",
           "artifact_ref": "output/acceptance/resource-adoption-glass-pulse.mp4",
-          "observation_ref": "observation-27c11b36-4709-42d6-8bd4-611b57bb8bae",
+          "observation_ref": "observation-abd685d5-bf4b-48a1-a86d-d8cc0fb48963",
           "actor_ref": null,
           "metadata": {
             "assistant_turn_id": "resource-acceptance-turn",
@@ -200,7 +218,7 @@
             "output_id": "output/acceptance/resource-adoption-glass-pulse.mp4",
             "request_id": "resource-acceptance-request"
           },
-          "created_at": "2026-11-14T03:04:58.791216+00:00"
+          "created_at": "2026-11-14T03:22:57.107390+00:00"
         }
       }
     ]
