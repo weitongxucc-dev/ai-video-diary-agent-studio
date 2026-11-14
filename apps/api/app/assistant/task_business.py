@@ -489,11 +489,12 @@ class TaskBusiness:
         if generation and operation in {'patch_script_sections','read_script_sections'} and args['script_id']!=goal['script_id']:
             raise TaskBusinessRejected('生成窗口不能切换原请求的稿件')
         if operation == 'read_agent_run_trace':
-            from app.assistant.trace import project_turn_trace
+            from app.assistant.trace import project_turn_trace, project_usage_ledger
             turn = self.conversations.get_turn(origin['assistant_turn_id'])
             if turn is None or turn['conversation_id'] != goal['conversation_id']:
                 raise TaskBusinessRejected('当前回合运行追踪不可读', kind='not_found')
-            return project_turn_trace(turn)
+            turns = self.conversations.list_turns(turn['conversation_id'])
+            return project_turn_trace({**turn, 'usage_ledger': project_usage_ledger(turns)})
         if operation=='read_segment_visual_decision':
             if not self.visual_job_belongs_to_goal(goal,actor,args['job_id']):
                 raise TaskBusinessRejected('画面决定不属于原目标来源')

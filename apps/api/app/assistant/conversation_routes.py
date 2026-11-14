@@ -27,7 +27,7 @@ from app.schemas import (
     CreationPlanPreviewRequest,
     CreationPlanPreviewResponse,
 )
-from app.assistant.trace import project_turn_trace
+from app.assistant.trace import project_turn_trace, project_usage_ledger
 
 
 class ConversationHTTPAdapter:
@@ -144,6 +144,8 @@ class ConversationHTTPAdapter:
         if turn is None:
             raise HTTPException(status_code=404, detail='对话轮次不存在。')
         self._owned_conversation(request, turn['conversation_id'])
+        turns = self._conversations_for().list_turns(turn['conversation_id'])
+        turn = {**turn, 'usage_ledger': project_usage_ledger(turns)}
         return project_turn_trace(turn, before=before, limit=limit)
 
     def resume(self, conversation_id: str, request: Request):

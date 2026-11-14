@@ -1,4 +1,16 @@
-from app.assistant.trace import project_turn_trace
+from app.assistant.trace import project_turn_trace, project_usage_ledger
+
+
+def test_project_usage_ledger_keeps_measured_estimated_and_unknown_separate():
+    ledger = project_usage_ledger([
+        {'result': {'usage_status': 'known', 'provider_usage': {'input': 2, 'totalTokens': 3}}},
+        {'result': {'usage_status': 'estimated', 'provider_usage': {'input': 9, 'totalTokens': 9}}},
+        {'result': {'usage_status': 'unknown'}},
+    ])
+    assert ledger == {'turn_count': 3,
+        'usage_status_counts': {'known': 1, 'estimated': 1, 'unknown': 1},
+        'measured_usage': {'input': 2, 'totalTokens': 3},
+        'estimated_usage': {'input': 9, 'totalTokens': 9}}
 
 
 def test_project_turn_trace_redacts_text_and_aggregates_known_usage():
