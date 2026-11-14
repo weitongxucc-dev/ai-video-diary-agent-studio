@@ -169,14 +169,50 @@ class MaterialLibraryHTTPAdapter:
             "asset_updated_at": asset.updated_at.isoformat(),
             "modified_at": asset.modified_at.isoformat(),
         }
+        def segment_for(item):
+            segment_id = str(getattr(item, "segment_ref", "")).removeprefix("segment:")
+            return next((segment for segment in getattr(asset, "segments", []) if segment.id == segment_id), None)
+
+        def source_revision_for(item):
+            segment = segment_for(item)
+            return dict(segment.source_revision) if segment and segment.source_revision else revision
+
+        list_quality_profiles = getattr(self._records_for(), "list_material_quality_profiles", None)
+        if callable(list_quality_profiles):
+            profiles = list_quality_profiles(workspace_id, asset_id)
+        else:
+            governance = getattr(self._records_for(), "material_data_governance", None)
+            profiles = governance.list_quality_profiles(workspace_id, asset_id) if governance is not None else []
+
+        def quality_profile_for(item):
+            segment = segment_for(item)
+            if segment is None or not getattr(segment, "source_revision", None):
+                return None
+            expected = tuple(sorted(segment.source_revision.items()))
+            return next(
+                (
+                    profile
+                    for profile in profiles
+                    if tuple(sorted((getattr(profile, "source_revision", {}) or {}).items())) == expected
+                ),
+                None,
+            )
+
         claims = []
         if knowledge_item_id and self._knowledge_claims_for is not None:
             try:
                 claims = self._knowledge_claims_for(workspace_id, knowledge_item_id, viewer_user_id, local_diagnostic)
             except (KeyError, ValueError) as exc:
                 raise HTTPException(status_code=404, detail="knowledge item not found") from exc
-        return build_candidate_bundle(matches, claims, material_source_revision_for=lambda _item: revision,
-                                      knowledge_requested=bool(knowledge_item_id))
+        return build_candidate_bundle(
+            matches,
+            claims,
+            material_source_revision_for=source_revision_for,
+            material_asset=asset,
+            material_segment_for=segment_for,
+            material_quality_profile_for=quality_profile_for,
+            knowledge_requested=bool(knowledge_item_id),
+        )
 
     def set_production_material_visibility(self, asset_id: str, request: Request, payload: ContentVisibilityRequest) -> MaterialAssetResponse:
         """显式共享或收回一条素材；响应回读同一列。"""

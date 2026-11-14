@@ -13,31 +13,86 @@ def _status(value: object, default: str = "unknown") -> str:
     return value if isinstance(value, str) and value else default
 
 
-def _material_candidate(item: Any, source_revision: dict[str, str] | None) -> dict[str, object]:
+def _declared_language(*values: object) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _material_candidate(
+    item: Any,
+    source_revision: dict[str, str] | None,
+    *,
+    asset: Any | None = None,
+    segment: Any | None = None,
+    quality_profile: Any | None = None,
+) -> dict[str, object]:
     evidence = list(getattr(item, "evidence_ref_ids", []) or [])
     needs_confirmation = bool(getattr(item, "needs_confirmation", True))
+    use_state = _status(getattr(asset, "use_state", None)) if asset is not None else "unknown"
+    if use_state == "excluded":
+        authorization_status = "excluded"
+    elif needs_confirmation:
+        authorization_status = "needs_confirmation"
+    elif use_state != "unknown":
+        authorization_status = use_state
+    else:
+        authorization_status = "unknown"
+    quality: dict[str, object] = {
+        "status": _status(getattr(quality_profile, "status", None)) if quality_profile is not None else "unknown",
+        "needs_confirmation": needs_confirmation,
+    }
+    if quality_profile is not None:
+        quality.update({
+            "metrics": dict(getattr(quality_profile, "metrics", {}) or {}),
+            "profile_version": getattr(quality_profile, "profile_version", ""),
+            "source_revision": dict(getattr(quality_profile, "source_revision", {}) or {}),
+            "unavailable_reasons": list(getattr(quality_profile, "unavailable_reasons", ()) or ()),
+        })
+    metadata = getattr(asset, "metadata", None) if asset is not None else None
+    language = _declared_language(
+        getattr(segment, "language", None),
+        getattr(item, "language", None),
+        getattr(asset, "language", None) if asset is not None else None,
+        metadata.get("language") if isinstance(metadata, dict) else None,
+    )
+    language_projection: dict[str, object] = (
+        {"status": "declared", "value": language}
+        if language is not None
+        else {"status": "unknown", "reason": "素材没有声明语言，不能从文字内容推断语言。"}
+    )
+    details: dict[str, object] = {
+        "time_range": getattr(item, "time_range", ""),
+        "relevance_score": getattr(item, "score", None),
+        "reasons": list(getattr(item, "reasons", []) or []),
+        "match_tier": getattr(item, "match_tier", "unknown"),
+    }
+    if segment is not None and getattr(segment, "analysis_version", ""):
+        details["analysis_version"] = segment.analysis_version
+    if asset is not None:
+        details["source"] = {
+            "status": "known",
+            "kind": "external_url" if getattr(asset, "source_url", "") else "local_library",
+            "media_type": _status(getattr(asset, "media_type", None)),
+        }
     return {
         "kind": "material_segment",
         "ref": getattr(item, "segment_ref", None),
         "asset_ref": getattr(item, "asset_ref", None),
         "status": "candidate",
-        "quality": {
-            "status": "unknown",
-            "score": getattr(item, "score", None),
-            "needs_confirmation": needs_confirmation,
-        },
+        "quality": quality,
         "source_revision": source_revision or {"status": "unknown"},
         "evidence": {"status": "available" if evidence else "unknown", "ref_ids": evidence},
         "authorization": {
-            "status": "needs_confirmation" if needs_confirmation else "unknown",
-            "purpose": "manual_or_automatic",
+            "status": authorization_status,
+            "use_state": use_state,
+            "visibility": _status(getattr(asset, "visibility", None)) if asset is not None else "unknown",
+            "owner_known": bool(getattr(asset, "owner_user_id", None)) if asset is not None else False,
+            "purpose": "manual",
         },
-        "language": {"status": "unknown"},
-        "details": {
-            "time_range": getattr(item, "time_range", ""),
-            "reasons": list(getattr(item, "reasons", []) or []),
-            "match_tier": getattr(item, "match_tier", "unknown"),
-        },
+        "language": language_projection,
+        "details": details,
     }
 
 
@@ -62,13 +117,23 @@ def _knowledge_candidate(item: Any) -> dict[str, object]:
 
 def build_candidate_bundle(
     material_matches: Iterable[Any] = (), knowledge_claims: Iterable[Any] = (),
-    *, material_source_revision_for=None, knowledge_requested: bool = False,
+    *, material_source_revision_for=None, material_asset=None, material_segment_for=None,
+    material_quality_profile=None, material_quality_profile_for=None, knowledge_requested: bool = False,
 ) -> dict[str, object]:
     """Return a bounded, explicitly uncertain candidate envelope."""
     candidates = []
     for item in material_matches:
         revision = material_source_revision_for(item) if material_source_revision_for else None
-        candidates.append(_material_candidate(item, revision))
+        segment = material_segment_for(item) if material_segment_for else None
+        profile = (
+            material_quality_profile_for(item)
+            if material_quality_profile_for is not None
+            else material_quality_profile
+        )
+        candidates.append(_material_candidate(
+            item, revision, asset=material_asset, segment=segment,
+            quality_profile=profile,
+        ))
     candidates.extend(_knowledge_candidate(item) for item in knowledge_claims)
     return {
         "schema": "candidate-bundle/v1",
