@@ -15,6 +15,32 @@ _REFERENCE_KINDS = {
 }
 
 
+def project_usage_ledger(turns: list[dict]) -> dict:
+    """Aggregate persisted provider receipts across a conversation.
+
+    Only explicit provider usage is summed. Estimated values remain separate
+    and unknown turns never contribute zeroes or inferred costs.
+    """
+    measured, estimated = {}, {}
+    counts = {'known': 0, 'estimated': 0, 'unknown': 0}
+    for turn in turns:
+        result = turn.get('result') if isinstance(turn.get('result'), dict) else {}
+        status = result.get('usage_status')
+        usage = result.get('provider_usage') if isinstance(result.get('provider_usage'), dict) else None
+        values = {key: value for key, value in (usage or {}).items()
+                  if key in {'input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'}
+                  and type(value) is int and value >= 0}
+        if status not in {'known', 'estimated'} or not values:
+            counts['unknown'] += 1
+            continue
+        counts[status] += 1
+        target = measured if status == 'known' else estimated
+        for key, value in values.items():
+            target[key] = target.get(key, 0) + value
+    return {'turn_count': len(turns), 'usage_status_counts': counts,
+            'measured_usage': measured or None, 'estimated_usage': estimated or None}
+
+
 def _opaque(value: object) -> str | None:
     if not isinstance(value, str) or not value:
         return None
@@ -232,4 +258,5 @@ def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 20
         'duration_ms': runtime_duration,
         'failure_class': runtime_failure,
         'retry_count': retries,
+        'usage_ledger': turn.get('usage_ledger') if isinstance(turn.get('usage_ledger'), dict) else None,
     }
