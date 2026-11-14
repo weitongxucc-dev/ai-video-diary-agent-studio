@@ -59,6 +59,26 @@ export function registerMaterialReads(pi: ToolRegistrar, {request, boundSelectio
     },
   });
   pi.registerTool({
+    name: "read_material_candidate_bundle",
+    label: "读取素材候选证据包",
+    description: "读取一条已授权素材的统一候选证据包。候选、来源修订、证据、质量、授权和语言状态分开表达；unknown 或 needs_confirmation 不能当作确认事实或采用许可。只读，不修改任务或时间线。",
+    parameters: { type: "object", properties: {
+      asset_id: { type: "string", minLength: 1 },
+      query: { type: "string", maxLength: 120 },
+      limit: { type: "integer", minimum: 1, maximum: 20 },
+    }, required: ["asset_id"], additionalProperties: false },
+    execute: async (_id: string, params: { asset_id: string; query?: string; limit?: number }) => {
+      const query = new URLSearchParams();
+      if (params.query) query.set("q", params.query);
+      if (params.limit !== undefined) query.set("limit", String(params.limit));
+      const suffix = query.toString() ? `?${query}` : "";
+      const value = await read(`/api/production/materials/${encodeURIComponent(params.asset_id)}/candidate-bundle${suffix}`);
+      const details = JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "string" ? materialText(item) : item));
+      if (details.schema !== "candidate-bundle/v1") throw new Error("素材候选证据包版本不一致");
+      return result(details);
+    },
+  });
+  pi.registerTool({
     name: "suggest_selected_material_tags",
     label: "查看片段标签建议",
     description: "仅根据当前选中片段的已保存画面观察给出待采纳标签和采样依据；不修改任何标签，不推断永久习惯。没有明确片段选择时须先选择。",

@@ -91,6 +91,23 @@ def test_governance_read_returns_closure_without_treating_candidates_as_facts(tm
         "unavailable_quality_metrics": 1}
     assert "不是自动采用许可" in details["instruction"]
 
+def test_candidate_bundle_read_preserves_explicit_uncertainty(tmp_path):
+    bundle = {
+        "schema": "candidate-bundle/v1",
+        "candidates": [{"kind": "material_segment", "status": "candidate",
+                        "authorization": {"status": "needs_confirmation"}}],
+        "summary": {"total": 1, "material_candidates": 1, "knowledge_candidates": 0,
+                     "confirmed": 0, "needs_confirmation": 1},
+        "missing_domains": ["person", "voice"],
+    }
+    out = call(tmp_path, "read_material_candidate_bundle",
+               {"/api/production/materials/asset-one/candidate-bundle": bundle},
+               params={"asset_id": "asset-one"})
+    assert out["ok"]
+    assert out["result"]["details"]["schema"] == "candidate-bundle/v1"
+    assert out["result"]["details"]["candidates"][0]["authorization"]["status"] == "needs_confirmation"
+    assert "read_material_candidate_bundle" in out["names"]
+
 def test_unselected_library_reads_all_real_pages_but_sends_only_aggregate_counts(tmp_path, asset):
     assets = [{**asset, "id": f"asset-{index}", "analysis_status": ["pending", "ready", "blocked", "failed"][index % 4]} for index in range(151)]
     out = call(tmp_path, "read_material_library_status", {
