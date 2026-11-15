@@ -30,11 +30,13 @@ uv run --project apps/api python scripts/validate_resource_adoption.py --output-
 - 输出 MP4 SHA-256：`a08d68777f67e607771c048c3bd232e098b7ba976164f9761ac02afb0b78dda1`
 - 320×240、2 秒、H.264/AAC，3 帧有界观察通过
 
-真实桌面人工听感、真实 provider 回合和设备播放仍未宣称通过。
+真实 provider Agent 回合已完成：`/api/assistant/plan/turn` 返回 `completed`，对应 Trace 回读到 `usage_status=known`、`input=7118`、`output=75`、`totalTokens=7378`，并保存 5 个运行事件。此前 runtime-only 回执被误当业务预览的问题已修复。
+
+本机默认 `MacBook Air扬声器` 的资源音频和成片播放均退出码 0，用户第二次播放后确认“听到了”。这证明本机设备播放路径和人工听到路径通过；未对音色、杂音或音量作质量评级，外接手机或其他物理设备播放仍未完成。
 ## Provider、播放与未完成项（2026-11-15）
 
 - 同一工作区的 Minimax `MiniMax-M3` 真实 provider 请求已返回 HTTP 200 和 usage：`prompt_tokens=216`、`completion_tokens=64`、`total_tokens=280`，缓存 token 128、推理 token 63。完整回执见 `agent-trace-token-replay-2026-11-15.json` 的 `provider_receipt`。
-- Agent 端也确实触达了 provider，但只读回答收口时把 runtime-only `provider_usage` 错当成编辑/方案预览，接口返回 `ValidationError`，对应回合仍为 `running`，所以没有把它宣称为 Agent Trace 的已绑定 token 回执。
+- Agent 端真实 provider 回合已经完成；修复前把 runtime-only `provider_usage` 错当成编辑/方案预览的历史失败仍保留在 Trace 证据中，用于回归说明。
 - 已在本机默认 `MacBook Air扬声器` 播放资源音频和成片音轨，`afplay` 两次退出码均为 0；这证明设备路径到达，仍需实际使用者确认听感。
-- 当前未完成：人工听感确认、外接/手机等真实设备播放、Agent Trace 内部 provider usage 绑定。
+- 当前未完成：外接/手机等真实设备播放、完整视频生产链路的真实成片验收，以及其他 Skill 资源逐项运行时接通。
 - 用户在第二次播放后确认“听到了”；本记录只证明人工听到声音，未扩展为音色、杂音或音量质量结论。

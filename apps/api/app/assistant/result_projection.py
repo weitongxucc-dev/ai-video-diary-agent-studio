@@ -567,18 +567,21 @@ def read_sdk_result(output: str, kind: str = "edit_preview") -> tuple[str, dict 
     measured = {key: value for key, value in (usage or {}).items()
                 if key in {"input", "output", "cacheRead", "cacheWrite", "totalTokens"}
                 and type(value) is int and value >= 0}
+    runtime = None
     if result.get("usage_status") == "known" and measured:
-        runtime = {"provider_usage": measured, "usage_status": "known"}
-        if preview is None:
+        runtime = {"kind": "runtime_receipt", "provider_usage": measured, "usage_status": "known"}
+        if preview is not None and isinstance(preview, dict):
+            preview = {**preview, **{key: value for key, value in runtime.items() if key != "kind"}}
+        elif preview is None:
             preview = runtime
-        elif isinstance(preview, dict):
-            preview = {**preview, **runtime}
     trace_events = result.get("trace_events")
     if isinstance(trace_events, list) and trace_events:
         safe_trace = [event for event in trace_events[:1000]
                       if isinstance(event, dict) and isinstance(event.get("type"), str)]
         if preview is None:
-            preview = {"trace_events": safe_trace}
+            preview = {"kind": "runtime_receipt", "trace_events": safe_trace}
+        elif isinstance(preview, dict) and preview.get("kind") == "runtime_receipt":
+            preview = {**preview, "trace_events": safe_trace}
         elif isinstance(preview, dict):
             preview = {**preview, "trace_events": safe_trace}
     return answer, preview

@@ -377,16 +377,16 @@ class TaskBusiness:
             **{key:sealed.get(key) if frozen.get(key) else None for key in ('profile_reference','knowledge_reference')}}
         return {**frozen,'target_snapshot':snapshot,'selected_object_refs':timeline_object_refs(items,task.id,tracks)}
 
-    def finish_goal(self, claim, reply, preview):
+    def finish_goal(self, claim, reply, preview, runtime_receipt=None):
         if isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
-            return self.finish(claim, reply, script_window_request=preview)
+            return self.finish(claim, reply, script_window_request=preview, runtime_receipt=runtime_receipt)
         if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
-            return self.finish(claim, reply, quality_continuation=preview)
+            return self.finish(claim, reply, quality_continuation=preview, runtime_receipt=runtime_receipt)
         if isinstance(preview, dict) and preview.get('kind') == 'media_job':
-            return self.finish(claim, reply, reported_media=preview['media_job'])
-        return self.finish(claim, reply)
+            return self.finish(claim, reply, reported_media=preview['media_job'], runtime_receipt=runtime_receipt)
+        return self.finish(claim, reply, runtime_receipt=runtime_receipt)
 
-    def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None, reported_media=None):
+    def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None, reported_media=None, runtime_receipt=None):
         """Project real host receipts; a model's proposed result is never adopted here."""
         goal=self.conversations.get_task_goal(claim['turn_id'])
         if (goal is None or goal['current_turn_id']!=claim['turn_id'] or goal['status']!='running'
@@ -475,8 +475,13 @@ class TaskBusiness:
             'turn_id':claim['turn_id'],'goal_revision':str(goal.get('revision',0)),
             'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')}
         from fastapi.encoders import jsonable_encoder
+        result = {'kind':'task_turn','response':response,'goal_business_actions':proofs}
+        if isinstance(runtime_receipt, dict):
+            for key in ('provider_usage', 'usage_status', 'trace_events'):
+                if key in runtime_receipt:
+                    result[key] = runtime_receipt[key]
         self.conversations.finish_turn(claim['turn_id'],'completed',reply,
-            jsonable_encoder({'kind':'task_turn','response':response,'goal_business_actions':proofs}),
+            jsonable_encoder(result),
             write_guard=lambda conn:self.check(binding,Event(),float('inf'),connection=conn,check_version=False),
             completed_input_id=goal.get('source_input_id') if goal.get('source_input_turn_id')==claim['turn_id'] else None)
         return response
