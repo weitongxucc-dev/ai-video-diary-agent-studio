@@ -37,3 +37,4 @@ uv run --project apps/api python scripts/validate_resource_adoption.py --output-
 - Agent 端也确实触达了 provider，但只读回答收口时把 runtime-only `provider_usage` 错当成编辑/方案预览，接口返回 `ValidationError`，对应回合仍为 `running`，所以没有把它宣称为 Agent Trace 的已绑定 token 回执。
 - 已在本机默认 `MacBook Air扬声器` 播放资源音频和成片音轨，`afplay` 两次退出码均为 0；这证明设备路径到达，仍需实际使用者确认听感。
 - 当前未完成：人工听感确认、外接/手机等真实设备播放、Agent Trace 内部 provider usage 绑定。
+- 用户在第二次播放后确认“听到了”；本记录只证明人工听到声音，未扩展为音色、杂音或音量质量结论。
