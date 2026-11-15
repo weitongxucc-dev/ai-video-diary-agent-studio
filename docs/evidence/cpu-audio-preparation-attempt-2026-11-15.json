@@ -39,5 +39,21 @@
   },
   "limits": [
     "本证据不把测试 fixture 或本地 ffmpeg 渲染当成设备 CPU 音频标定。"
-  ]
+  ],
+  "follow_up": {
+    "validated_at": "2026-11-15T02:30:00+00:00",
+    "profile_file": "/Volumes/Dujiangyan-VM/AI视频日记/app-data/default/device-resource-profile.json",
+    "profile_file_status": "available",
+    "profile_operations": [
+      "cpu_audio"
+    ],
+    "normal_8000_process": "still uses legacy-movies/agent.sqlite3 without DEVICE_ID/DEVICE_RESOURCE_PROFILE_PATH; original 409 remains expected",
+    "canonical_validation_attempt": "explicit profile/device environment reached profile_status=available, but the validation database has historical event-id inconsistency during startup; no new preparation receipt or profile publication was claimed",
+    "recovery_preserved": [
+      "52f19d58741f4256add9c092fdcd286e",
+      "8164046b5c6745569121454150a55764",
+      "2d35c407cbfa4ff1a4848e3948f0434c"
+    ],
+    "next_action": "收敛 DATABASE_PATH、canonical device lock 和成员库到同一运行实例后，再沿同一 shape 重跑并 finalize；不复制或覆盖素材/数据库。"
+  }
 }
