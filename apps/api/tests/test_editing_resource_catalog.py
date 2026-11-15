@@ -84,7 +84,8 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
 
     sfx_preview = client.get("/api/editing-resources/openfilm:sound-glass-pulse/preview")
     assert sfx_preview.status_code == 200
-    assert sfx_preview.headers["content-type"].startswith("audio/mp4")
+    assert sfx_preview.headers["content-type"].startswith("audio/wav")
+    assert sfx_preview.headers["content-disposition"].startswith("inline;")
     transition_preview = client.get("/api/editing-resources/openfilm:transition-glitch/preview", params={"version": 2})
     assert transition_preview.status_code == 200
     assert transition_preview.headers["content-type"].startswith("video/mp4")

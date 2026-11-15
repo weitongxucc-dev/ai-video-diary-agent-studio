@@ -329,7 +329,10 @@ def resource_preview_path(resource_id: str, representation: str = "media") -> Pa
     """Return the checked-in preview media for a catalog resource."""
     root = Path(__file__).resolve().parent / "resource_assets" / "openfilm"
     paths = {
-        ("openfilm:sound-glass-pulse", "media"): root / "sound" / "glass-pulse" / "sound.m4a",
+        # Keep the checked-in OpenFilm m4a as the source/provenance asset. The
+        # WAV is a tiny local preview derivative because Electron's bundled
+        # Chromium does not decode this m4a reliably in an <audio> element.
+        ("openfilm:sound-glass-pulse", "media"): root / "sound" / "glass-pulse" / "preview.wav",
         ("openfilm:transition-glitch", "media"): root / "transition" / "glitch" / "preview.mp4",
         ("openfilm:transition-glitch", "poster"): root / "transition" / "glitch" / "poster.jpg",
     }

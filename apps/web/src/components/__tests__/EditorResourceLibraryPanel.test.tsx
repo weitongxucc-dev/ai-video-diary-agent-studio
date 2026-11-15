@@ -37,7 +37,7 @@ describe("EditorResourceLibraryPanel", () => {
       categories: [{ id: "stickers", status: "connected" }],
       resources: [{ id: "builtin:stickers", category_id: "stickers", name: "文本与贴纸叠加层", version: 1, status: "connected", resource_type: "overlay", preview: { kind: "overlay" }, provenance: [{ repository: "曜核/AI视频日记", revision: "main", path: "apps/api/app/graphic_overlays.py", license: "internal" }], entrypoints: ["preview_typed_edit", "apply_typed_edit"] }],
     }) }));
-    render(<EditorResourceLibraryPanel assets={[]} selectedId={null} initialCategory="stickers" onSelect={vi.fn()} onAdopt={vi.fn()} />);
+    render(<EditorResourceLibraryPanel assets={[]} selectedId={null} initialCategory="stickers" onSelect={vi.fn()} onAdopt={vi.fn()} onOpenCatalog={vi.fn()} />);
     expect(await screen.findByText("文本与贴纸叠加层")).toBeInTheDocument();
     expect(screen.getByText(/apps\/api\/app\/graphic_overlays\.py/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "打开编辑入口" })).toBeInTheDocument();

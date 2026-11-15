@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "validated_at": "2026-11-15T01:19:13.510123+00:00",
+  "endpoint": "/api/device/resource-preparations",
+  "attempt": {
+    "kind": "cpu",
+    "shape": {
+      "width_px": 64,
+      "height_px": 64,
+      "frame_rate": 24,
+      "duration_seconds": 2.0,
+      "clip_count": 1,
+      "audio_input_count": 2,
+      "sample_rate": 8000,
+      "channels": 1
+    }
+  },
+  "status_before": {
+    "actor_scope": "426aa448a5c32dc75c0880d9dbe0daa9d62ee1cb5032f8b5aa4271eee926d6f3",
+    "platform": "darwin",
+    "cpu_preparation_supported": true,
+    "preparation_configured": false,
+    "profile_status": "unprepared",
+    "revision": null,
+    "available_operations": []
+  },
+  "result": {
+    "http_status": 409,
+    "body": {
+      "error": "请使用已绑定设备路径的正常资源模式准备能力。",
+      "detail": "请使用已绑定设备路径的正常资源模式准备能力。"
+    }
+  },
+  "interpretation": {
+    "profile_published": false,
+    "audio_budget_status": "unavailable",
+    "reason": "当前 API 进程未绑定 DEVICE_ID 和 DEVICE_RESOURCE_PROFILE_PATH，正常资源模式未配置；接口明确返回 409。",
+    "next_required_runtime": "从桌面设备配置完成同一设备档绑定后，沿原输入形状重新准备并查询原队列。"
+  },
+  "limits": [
+    "本证据不把测试 fixture 或本地 ffmpeg 渲染当成设备 CPU 音频标定。"
+  ]
+}

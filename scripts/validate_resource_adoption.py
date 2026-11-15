@@ -107,7 +107,7 @@ def main() -> int:
     )
     preview = preview_endpoint("openfilm:sound-glass-pulse", 1, "media")
     preview_path = Path(preview.path)
-    if not preview_path.is_file() or preview.media_type != "audio/mp4":
+    if not preview_path.is_file() or preview.media_type not in {"audio/mp4", "audio/wav"}:
         raise RuntimeError("Glass Pulse 预览路由没有解析到真实音频文件")
 
     workspace_id = "resource-acceptance-workspace"

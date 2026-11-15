@@ -758,6 +758,8 @@ const tracePayload = (overrides={}) => ({
     raw_arguments:'must_not_be_printed',internal_path:'/private/secret/result.mp4'}],
   event_count:1,tool_counts:{'读取运行追踪':1},compaction_count:0,
   provider_usage:{input:4,output:2,totalTokens:6},usage_status:'known',usage_source:'provider',
+  usage_ledger:{turn_count:1,usage_status_counts:{known:1,estimated:0,unknown:0},
+    measured_usage:{input:4,output:2,totalTokens:6},estimated_usage:null},
   associations:[{kind:'turn',ref:'turn_ref_hash'}],business_status:'completed',evidence_candidates:[],
   started_at:'2026-11-13T00:00:00Z',ended_at:'2026-11-13T00:00:01Z',duration_ms:1000,
   failure_class:null,retry_count:0,
@@ -770,6 +772,7 @@ test('run trace reads a redacted turn and preserves measured provider usage with
   assert.equal(result.code,0,result.output);
   assert.equal(result.json.data.usage_status,'known');
   assert.deepEqual(result.json.data.provider_usage,{input:4,output:2,totalTokens:6});
+  assert.deepEqual(result.json.data.usage_ledger.usage_status_counts,{known:1,estimated:0,unknown:0});
   assert.equal(result.json.data.events[0].raw_arguments,undefined);
   assert.equal(result.json.data.events[0].internal_path,undefined);
   assert.ok(!result.output.includes('must_not_be_printed'));
