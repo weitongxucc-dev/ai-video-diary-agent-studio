@@ -48,7 +48,155 @@
     "cli_contract_repaired": "usage_ledger, session_id and pagination metadata are now accepted and preserved"
   },
   "limits": [
-    "This replay proves persisted redacted trace and CLI contract behavior for one completed local turn.",
-    "It does not prove a new provider call or measured token usage."
-  ]
+    "Agent 真实 provider 回合触达了 provider，但当前 HTTP 收口把 runtime-only provider receipt 当成 plan/edit preview 校验；该回合未形成 completed Trace。",
+    "直接 provider 请求已取得真实 usage，但它不是 Agent Trace 回合，因此不能替代 Agent 内部账本绑定验收。",
+    "afplay 退出码为 0 且默认设备为 MacBook Air扬声器；人工听感需由实际使用者确认，模型不能代替人耳。",
+    "真实外接手机或其他物理设备播放尚未执行；当前仅完成本机扬声器路径。"
+  ],
+  "provider_receipt": {
+    "status": "passed",
+    "integration": "direct_provider_request_using_same_workspace_settings",
+    "provider": "minimax",
+    "model": "MiniMax-M3",
+    "endpoint": "https://api.minimax.cn/v1/chat/completions",
+    "http_status": 200,
+    "elapsed_ms": 1432,
+    "response_id": "0748411998a6362980661e18122828f1",
+    "usage": {
+      "input": 216,
+      "output": 64,
+      "totalTokens": 280,
+      "cacheRead": 128
+    },
+    "raw_usage": {
+      "total_tokens": 280,
+      "total_characters": 0,
+      "prompt_tokens": 216,
+      "completion_tokens": 64,
+      "completion_tokens_details": {
+        "reasoning_tokens": 63
+      },
+      "prompt_tokens_details": {
+        "cached_tokens": 128
+      }
+    },
+    "finish_reason": "length",
+    "api_key_exposed": false,
+    "interpretation": "真实 provider 已返回可核验 usage；这次请求只读，不等同于 Agent Trace 回合已绑定 provider usage。"
+  },
+  "agent_integration_attempt": {
+    "status": "blocked",
+    "endpoint": "/api/assistant/plan/turn and /api/creation-tasks/{task_id}/assistant/turn",
+    "turn_ids": [
+      "a8483901-a120-40a9-8f2b-9c7634a4be8b"
+    ],
+    "observed_failure": "provider_usage-only runtime receipt was incorrectly validated as plan/edit preview",
+    "http_effect": "HTTP response failed with Pydantic ValidationError; persisted turn remained running with no events/provider_usage",
+    "not_counted_as": "provider receipt bound to Agent Trace"
+  },
+  "media_playback": {
+    "source_audio": {
+      "validated_at": "2026-11-15T01:43:28Z",
+      "source": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/sound.m4a",
+      "playback_command": "afplay source on default macOS output device",
+      "playback_exit_code": 0,
+      "playback_elapsed_ms": 1792,
+      "stderr": "",
+      "ffprobe": {
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "aac",
+            "codec_long_name": "AAC (Advanced Audio Coding)",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "codec_tag": "0x6134706d",
+            "mime_codec_string": "mp4a.40.2",
+            "sample_fmt": "fltp",
+            "sample_rate": "48000",
+            "channels": 1,
+            "channel_layout": "mono",
+            "bits_per_sample": 0,
+            "initial_padding": 0,
+            "id": "0x1",
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/48000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 33600,
+            "duration": "0.700000",
+            "bit_rate": "52646",
+            "nb_frames": "34",
+            "extradata_size": 5,
+            "disposition": {
+              "default": 1,
+              "dub": 0,
+              "original": 0,
+              "comment": 0,
+              "lyrics": 0,
+              "karaoke": 0,
+              "forced": 0,
+              "hearing_impaired": 0,
+              "visual_impaired": 0,
+              "clean_effects": 0,
+              "attached_pic": 0,
+              "timed_thumbnails": 0,
+              "non_diegetic": 0,
+              "captions": 0,
+              "descriptions": 0,
+              "metadata": 0,
+              "dependent": 0,
+              "still_image": 0,
+              "multilayer": 0
+            },
+            "tags": {
+              "language": "und",
+              "handler_name": "SoundHandler"
+            }
+          }
+        ],
+        "format": {
+          "filename": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/sound.m4a",
+          "nb_streams": 1,
+          "nb_programs": 0,
+          "nb_stream_groups": 0,
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "format_long_name": "QuickTime / MOV",
+          "start_time": "0.000000",
+          "duration": "0.700000",
+          "size": "5690",
+          "bit_rate": "65028",
+          "probe_score": 100,
+          "tags": {
+            "major_brand": "M4A ",
+            "minor_version": "512",
+            "compatible_brands": "M4A isomiso2",
+            "encoder": "Lavf62.12.101"
+          }
+        }
+      },
+      "output_device": "MacBook Air扬声器",
+      "device_path_verified": true,
+      "subjective_listening": "pending_human_confirmation",
+      "status": "device_reached"
+    },
+    "output_mp4": {
+      "path": "output/acceptance/resource-adoption-glass-pulse.mp4",
+      "playback_command": "afplay output/acceptance/resource-adoption-glass-pulse.mp4",
+      "exit_code": 0,
+      "output_device": "MacBook Air扬声器",
+      "device_path_verified": true,
+      "subjective_listening": "pending_human_confirmation"
+    },
+    "interpretation": "系统已把资源音频和成片音轨送到默认扬声器；程序退出码只能证明播放路径完成，不能替代人的听感确认。"
+  },
+  "acceptance_status": {
+    "persisted_trace_replay": "passed",
+    "direct_provider_usage_receipt": "passed",
+    "provider_usage_bound_into_agent_trace": "blocked",
+    "resource_audio_device_path": "passed",
+    "human_listening": "pending_human_confirmation"
+  }
 }
