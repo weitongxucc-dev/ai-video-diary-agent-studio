@@ -3641,11 +3641,14 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
     return case
 
 
-def test_segment_video_checkpoint_precedes_remaining_narration_and_retains_version(tmp_path,monkeypatch):
+@pytest.mark.parametrize('interrupt_after_publication', [False, True])
+def test_segment_video_checkpoint_precedes_remaining_narration_and_retains_version(tmp_path,monkeypatch,interrupt_after_publication):
     case = _segment_units_case(tmp_path,monkeypatch)
     original_next = case.segments.next_initial
     def next_outside_publication(job, owner, *, connection=None):
         assert connection is None or not connection.in_transaction, 'next section planning holds publication writer'
+        if interrupt_after_publication:
+            raise RuntimeError('interrupted after durable section publication')
         return original_next(job, owner, connection=connection)
     wav_reads=_assert_wav_reads_outside_writer(monkeypatch,case)
     submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
@@ -3654,8 +3657,16 @@ def test_segment_video_checkpoint_precedes_remaining_narration_and_retains_versi
     second = case.scheduler.pick_and_grant()
     assert second.unit_key.startswith('segment_video:section_1:')
     monkeypatch.setattr(case.segments, 'next_initial', next_outside_publication)
-    case.executor.execute(second,case.scheduler)
+    if interrupt_after_publication:
+        with pytest.raises(RuntimeError, match='durable section publication'):
+            case.executor.execute(second,case.scheduler)
+        assert case.scheduler._get(second.request_id).state == 'done'
+        assert case.repo.job_records.get_job_run('local',case.job.id).status == 'queued'
+    else:
+        case.executor.execute(second,case.scheduler)
     monkeypatch.setattr(case.segments, 'next_initial', original_next)
+    if interrupt_after_publication:
+        submit_creation_stage(case.execution,case.scheduler,case.repo.job_records.get_job_run('local',case.job.id),case.actor)
     context = case.segments.context('local',case.task_id,'section_1',case.actor)
     assert context['video']['kind']=='video'
     assert case.segments.video_path('local',case.task_id,'section_1',context['segment_version'],case.actor).is_file()
@@ -5496,6 +5507,13 @@ def test_known_visual_planning_conflict_keeps_paid_audio_and_original_resume(tmp
     assert view['usage']['settled'] and view['usage']['used_output_bytes'] > 0
     assert case.scheduler.pick_and_grant() is None
     saved_usage = dict(view['usage'])
+    if not revision:
+        # A resumed job may already have all audio cached. Its planner must
+        # persist a visible conflict too, without dispatching or regenerating.
+        assert next_creation_intent(case.repo, case.scheduler, updated) is None
+        replay = case.segments.read_visual_decision('local', case.task_id, job.id, 'section_1', case.actor)
+        assert replay['status'] == 'planning_conflict' and replay['usage'] == saved_usage
+        assert case.scheduler.pick_and_grant() is None
     monkeypatch.setattr(case.segments, 'prepare_video', original)
     _require_section_visual_decision(case, monkeypatch)
     if revision:
@@ -5519,6 +5537,42 @@ def test_known_visual_planning_conflict_keeps_paid_audio_and_original_resume(tmp
     assert video.owner_id == job.id and video.unit_key.startswith('segment_video:')
     assert case.segments.visual_usage(updated) == saved_usage
     case.scheduler.cancel(video.request_id, case.actor)
+    case.scheduler.close()
+
+
+@pytest.mark.parametrize('cancel_during_planning', [False, True])
+def test_cached_audio_planning_conflict_is_visible_and_preserves_cancellation(tmp_path, monkeypatch, cancel_during_planning):
+    from app.creation.duration_requirement import DurationConflict
+    case = _visual_decision_case(tmp_path, monkeypatch)
+    # Exercise the legacy/restore path: paid audio exists without a video plan.
+    case.owner.segments = case.executor.segments = None
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    case.executor.execute(grant, case.scheduler)
+    case.owner.segments = case.executor.segments = case.segments
+    audio = case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)[0]
+    assert audio.status == 'ready'
+    requests = case.repo.job_records.list_creation_job_request_states('local', case.job.id)
+    def conflict(*args, **kwargs):
+        if cancel_during_planning:
+            case.repo.job_records.finish_job_run('local', case.job.id, status='cancelled', failure_reason='user_cancelled',
+                impact='原产物保留', repair_action='用户主动恢复')
+        raise DurationConflict('缺少后续画面，已付配音保留')
+    monkeypatch.setattr(case.segments, 'prepare_video', conflict)
+    current = case.repo.job_records.get_job_run('local', case.job.id)
+    if cancel_during_planning:
+        with pytest.raises(ValueError, match='过时冲突'):
+            case.segments.next_initial(current, case.owner)
+        assert case.segments.planning_conflict(current, 'section_1') is None
+        assert case.repo.job_records.get_job_run('local', case.job.id).status == 'cancelled'
+    else:
+        assert case.segments.next_initial(current, case.owner) is None
+        view = case.segments.read_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor)
+        assert view['status'] == 'planning_conflict' and view['audio']['persisted']
+        assert view['kept_audio_reference'] == audio.audio_reference
+        assert case.repo.job_records.get_job_run('local', case.job.id).failure_reason == 'waiting_for_user'
+    assert case.repo.job_records.list_creation_job_request_states('local', case.job.id) == requests
+    assert case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)[0] == audio
     case.scheduler.close()
 
 

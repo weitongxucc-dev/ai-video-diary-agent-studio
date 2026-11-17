@@ -1510,6 +1510,9 @@ class ProductionRepository:
             if current != event.payload['expected_segment_version']:
                 raise ValueError('保存视频准备前段落版本已变化')
             self.execution_records.append_task_event(event,connection=conn)
+            if event.event_type == 'segment_visual_planning_conflict':
+                conn.execute("UPDATE job_runs SET failure_reason='waiting_for_user',updated_at=? WHERE workspace_id=? AND id=?",
+                    (utc_now().isoformat(), event.workspace_id, event.job_id))
 
 
 
