@@ -762,8 +762,13 @@ def probe_audio_metadata(path: Path, *, scheduler=None, grant=None, cancel_event
         limits = {"duration_seconds": resources[prefix + "_duration_limit_seconds"],
                   "sample_rate": resources[prefix + "_sample_rate_limit"],
                   "channels": resources[prefix + "_channels_limit"]}
-        if any(measured[name] > limit + (.025 if name == "duration_seconds" else 0) for name, limit in limits.items()):
-            raise ValueError("实际音频规格超出本次许可声明，未进入解码或 DSP")
+        labels = {"duration_seconds": ("时长", "秒"), "sample_rate": ("采样率", "Hz"), "channels": ("声道数", "声道")}
+        exceeded = [f"{labels[name][0]}实测 {measured[name]:g} {labels[name][1]}，许可上限 {limit:g} {labels[name][1]}"
+            for name, limit in limits.items() if measured[name] > limit + (.025 if name == "duration_seconds" else 0)]
+        if exceeded:
+            stage = "输出" if output else "输入"
+            consequence = "未通过输出核验" if output else "未进入解码或 DSP"
+            raise ValueError(f"{stage}音频规格超出本次许可声明：{'；'.join(exceeded)}；{consequence}")
         if not output:
             if expected.get('media_type') == 'video':
                 # v2 DSP is unchanged. Only a video declaration sealed in this
