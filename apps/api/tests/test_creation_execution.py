@@ -3831,7 +3831,8 @@ def test_section_undo_redo_preserves_later_other_section_publication(tmp_path,mo
 
 
 @pytest.mark.parametrize('concurrent_edit', [False, True])
-def test_existing_montage_cannot_skip_newly_published_sections(tmp_path, monkeypatch, concurrent_edit):
+@pytest.mark.parametrize('changed_narration', [False, True])
+def test_existing_montage_cannot_skip_newly_published_sections(tmp_path, monkeypatch, concurrent_edit, changed_narration):
     from app.creation.editing.metadata_use_case import MetadataEditUseCase
     from app.creation.montage_stage_use_case import MontageStageUseCase, MontageStageRejected, montage_dependency
     from app.creation_execution import upstream_stage_valid
@@ -3853,6 +3854,8 @@ def test_existing_montage_cannot_skip_newly_published_sections(tmp_path, monkeyp
     assert changed_stage_sections({'montage':legacy, 'stage_segments':{'section_1':'saved1','section_2':'saved2'}},
         normalized, None, None) == []
     stale = replace(full, id='old_montage', clips=[replace(clip, id='old_'+clip.id) for clip in full.clips])
+    if changed_narration:
+        stale = replace(stale, cues=[replace(cue, text='旧旁白') for cue in stale.cues])
     edits = MetadataEditUseCase(case.repo, case.segments.artifact_store, output_root=tmp_path/'composition', audio_service=None)
     case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', task.id, stale.id,
         creation_task_montage_plan_to_payload(stale))
@@ -3866,6 +3869,12 @@ def test_existing_montage_cannot_skip_newly_published_sections(tmp_path, monkeyp
         [SubtitleCue(cue.id, None, cue.text, caption.start_seconds, caption.end_seconds)
             for cue, caption in zip(stale.cues, narration_schedule(stale.cues, stale.duration_seconds), strict=True)],
         'timeline', None, 'artifacts/original.srt', 'transform_original', 'valid')
+    from app.creation.editing.metadata_use_case import execution_subtitle_track
+    from app.subtitle_tracks import render_srt
+    reference, transform = edits.publish_subtitle_text(workspace_id='local', task_id=task.id,
+        proposal_id=base.id, kind='subtitle_test_source', input_refs=[f'timeline:{base.id}'],
+        content=render_srt(execution_subtitle_track(track)), engine='subtitle-srt/v1', parameters={})
+    track = replace(track, artifact_ref=reference, transform_id=transform)
     case.repo.subtitle_records.create_subtitle_track(track)
     inherited = replace(base, id='inherited-captions', parent_version_id=base.id, sequence=base.sequence+1,
         snapshot={**base.snapshot, 'subtitle_track_ids':[track.id]})

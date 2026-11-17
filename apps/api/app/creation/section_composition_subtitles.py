@@ -13,6 +13,15 @@ def compose_subtitles(metadata, task, base, version, montage):
     tracks = metadata.current_subtitle_tracks(task.workspace_id, task, current_version=base)
     result = []
     schedule = narration_schedule(montage.cues, montage.duration_seconds)
+    from app.montage import creation_task_montage_plan_from_payload
+    before = creation_task_montage_plan_from_payload(base.snapshot['montage'])
+    before_schedule = narration_schedule(before.cues, before.duration_seconds)
+    def clock(cues, captions):
+        return [(cue.id, cue.text, round(caption.start_seconds, 3), round(caption.end_seconds, 3))
+            for cue, caption in zip(cues, captions, strict=True)]
+    if clock(before.cues, before_schedule) == clock(montage.cues, schedule):
+        # Picture-only adoption must preserve manual caption timing/text and translations.
+        return [clone_subtitle_track(track, timeline_version_id=version.id) for track in tracks]
     for track in tracks:
         if track.generation_method != 'timeline':
             # A changed source script cannot silently keep an old translation valid.
