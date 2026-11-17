@@ -1623,6 +1623,14 @@ class ConversationRepository:
         if not any(response.get(key) for key in ("media_job","edit_preview","edit_request")) and not submitted_execution and not submitted_script:
             return None
         waiting="waiting_adoption" if response.get("edit_preview") else "waiting_unknown" if (response.get("edit_request") or {}).get("status") in {"result_unknown","unknown"} else "waiting_result"
+        if (result.get('completed_local_edit') is not None and root_id == turn_id and not previous and not running_execution
+                and not any(response.get(key) for key in ('media_job', 'edit_preview', 'execution_status', 'script_draft',
+                    'timeline_restore', 'quality_continuation', 'script_window_request', 'segment_revision',
+                    'storyboard_regeneration', 'script_tool', 'topic_candidates'))):
+            from app.assistant.local_edit_completion import completed_music_gain_edit
+            completed = completed_music_gain_edit(conn, turn_id, response.get('edit_request'))
+            if completed is not None and completed == result.get('completed_local_edit'):
+                return None  # The finite save and readback are already complete; no model round is needed.
         goal={"original_turn_id":root_id,"original_instruction":authorization["original_instruction"] if authorization else root_row["user_message"],
             "workspace_id":row["workspace_id"],"member_id":row["member_id"],"task_id":context["task_id"],
             "conversation_id":row["conversation_id"],"request_context":context,"target_snapshot":context.get("target_snapshot",{}),
@@ -1633,6 +1641,11 @@ class ConversationRepository:
             **({key:value for key,value in authorization.items() if key not in {"input_sequence","original_instruction","request_context"}} if authorization else {})}
         self._write_goal(conn,{"id":root_id},goal)
         return goal
+
+    def completed_music_gain_edit(self, turn_id, locator):
+        from app.assistant.local_edit_completion import completed_music_gain_edit
+        with self._connect() as conn:
+            return completed_music_gain_edit(conn, turn_id, locator)
 
     def get_task_goal(self, turn_id: str) -> dict | None:
         with self._connect() as conn:

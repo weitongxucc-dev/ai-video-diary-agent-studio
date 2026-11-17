@@ -16,6 +16,9 @@ function setup({action='undo',loseReply=false,changeProof=()=>{}}={}) {
     fetchRequest:()=>assert.fail('no self HTTP'),businessCall:async(operation,args)=>{
       calls.push({operation,args});
       if(operation==='read_timeline_history')return {ok:true,value:{task_id:'task',items:[{operation_id:'original',operation_type:'EditAudioTimeline'}]}};
+      if(operation==='read_edit_control_context')return {ok:true,value:{task_id:'task',
+        timeline_version_id:current.timeline_version_id,timeline_sequence:current.timeline_sequence,
+        can_undo:true,can_redo:false,proposals:[]}};
       if(operation==='restore_timeline') {
         assert.equal(args.action,action);
         Object.assign(current,{timeline_version_id:'own-result',timeline_sequence:4});
@@ -69,6 +72,21 @@ test('lost restore reply advances only after reading its same-round original req
   await app.tools.get('read_current_task').execute('read',{});
   assert.equal(app.selected.timeline_version_id,'own-result');
   assert.equal(app.calls.filter(c=>c.operation==='restore_timeline').length,1);
+});
+
+test('ordinary music redo may omit the internal target after history, retaining the one-action budget',async()=>{
+  const app=setup({action:'redo'});
+  app.source.userInstruction='恢复刚才撤销的钢琴音乐，原声不变。';
+  await app.tools.get('read_edit_control_context').execute('controls',{});
+  await app.tools.get('read_edit_history').execute('history',{});
+  const result=await app.tools.get('redo_last_edit').execute('restore',{});
+  assert.equal(result.isError,false);
+  const posted=app.calls.find(call=>call.operation==='restore_timeline');
+  assert.equal(posted.args.payload.target_operation_id,undefined);
+  assert.equal(result.details.receipt.target_operation_id,'original');
+  await app.tools.get('read_current_task').execute('read',{});
+  await assert.rejects(()=>app.tools.get('redo_last_edit').execute('repeat',{}),/已提交一次/);
+  assert.equal(app.calls.filter(call=>call.operation==='restore_timeline').length,1);
 });
 
 for(const [name,changeProof] of [

@@ -633,9 +633,18 @@ class TaskAssistantTurnUseCase:
             readiness_message = execution_readiness_message(edit_request.result.get('execution_readiness'))
             if readiness_message:
                 reply += ' ' + readiness_message
+        completed_local_edit = None
+        if edit_request is not None and not any((media_job, edit_preview, execution_status, script_draft,
+                timeline_restore, quality_continuation, script_window_request, segment_revision,
+                storyboard_regeneration, script_tool, topic_candidates)):
+            completed_local_edit = self._conversations_for().completed_music_gain_edit(turn_id, edit_request.model_dump(mode='json'))
+            if completed_local_edit is not None:
+                reply = (yield SafeText(completed_local_edit['summary'], workspace_id))
         response = (yield BuildTaskResponse({'quality_continuation': quality_continuation, 'script_window_request': script_window_request, 'storyboard_regeneration': storyboard_regeneration, 'segment_revision': segment_revision, 'timeline_restore': timeline_restore, 'script_tool': script_tool, 'edit_request': edit_request, 'reply': reply, 'provider': (yield ReadSettings(workspace_id)).effective_llm_provider, 'model': (yield ReadSettings(workspace_id)).effective_llm_model, 'edit_preview': edit_preview, 'script_draft': script_draft, 'execution_action': execution_action, 'execution_status': execution_status, 'topic_candidates': topic_candidates, 'timeline_action': timeline_action, 'media_job': media_job, 'turn_id': turn_id, 'draft_version': payload.expected_draft_version + 1}))
         yield ForgetControl(turn_id)
         result = {'kind': 'task_turn', 'goal_business_actions': self.action_proofs(workspace_id, task_id, turn_id, media_job=media_job, edit_preview=edit_preview, edit_request=edit_request, execution_status=execution_status), 'edit_preview': bool(edit_preview), 'script_draft': script_draft.id if script_draft else None, 'execution_action': execution_action, 'execution_status': execution_status.get('job', {}).get('status') if isinstance(execution_status, dict) and isinstance(execution_status.get('job'), dict) else None, 'topic_candidates': bool(topic_candidates), 'timeline_action': timeline_action, 'storyboard_regeneration': (yield SerializeView(storyboard_regeneration, 'json')) if storyboard_regeneration else None, 'response': (yield SerializeView(response, 'json'))}
+        if completed_local_edit is not None:
+            result['completed_local_edit'] = completed_local_edit
         if isinstance(runtime_receipt, dict):
             for key in ('provider_usage', 'usage_status', 'trace_events'):
                 if key in runtime_receipt:

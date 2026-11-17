@@ -187,7 +187,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
     pi.registerTool({
       name: action === "undo" ? "undo_last_edit" : "redo_last_edit",
       label: action === "undo" ? "撤销原修改" : "重做原修改",
-      description: `${action === "undo" ? "撤销" : "重做"}原编辑。指定较早修改先读read_edit_history并传原target_operation_id；省略才按最近历史。保留无关后续成果，复合操作内部单项逆编辑未开放。宿主绑定原UUID、任务和所见版本，结果未知先查原请求，不换ID重放。receipt.execution_readiness是该次保存时的授权检查；not_ready不撤销保存，authorization_ready不表示设备已准入或产物已生成，null无记录。`,
+      description: `${action === "undo" ? "撤销" : "重做"}原编辑。先读read_edit_history，指定较早修改使用原target_operation_id；恢复刚才撤销的音乐可省略ID，由宿主按原指令和唯一真实历史定位，歧义不执行，不要求用户提供内部ID。其他省略目标的动作按最近历史。保留无关后续成果，复合操作内部单项逆编辑未开放。宿主绑定原UUID、任务和所见版本，结果未知先查原请求，不换ID重放。receipt.execution_readiness是该次保存时的授权检查；not_ready不撤销保存，authorization_ready不表示设备已准入或产物已生成，null无记录。`,
       parameters: {type: 'object', properties: {target_operation_id: {type: 'string', minLength: 1}}, additionalProperties: false},
       execute: async (callId: string, params: {target_operation_id?: string} = {}) => {
         const body = controlWriteContext();
@@ -195,7 +195,8 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
           if (historyControls.has(params.target_operation_id)) throw new Error('撤销或重做记录不是原编辑；撤销最近修改请省略target_operation_id，指定较早修改请选原编辑操作。本次未提交。');
           if (!historicalOperations.has(params.target_operation_id)) throw new Error('请从本次读取的真实修改历史选择原操作');
         } else if (!editControls && !historyRead) throw new Error('请先读取修改历史或当前编辑控制范围');
-        else if (editControls && !(action === 'undo' ? editControls.can_undo : editControls.can_redo))
+        else if (editControls && !(action === 'undo' ? editControls.can_undo : editControls.can_redo)
+            && !(action==='redo' && historyRead))
           throw new Error(action === 'undo' ? '当前没有可撤销的编辑' : '当前没有可重做的编辑');
         const requestId = typedRequestId(body.assistant_turn_id, callId);
         restoreAttempts.set(requestId, {action,base:{...selectedTaskVersion!},turnId:body.assistant_turn_id,

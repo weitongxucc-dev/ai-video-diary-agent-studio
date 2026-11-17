@@ -112,6 +112,55 @@ def test_targeted_restore_merged_over_an_external_version_does_not_issue_fence_p
     assert graph(state)['tracks'][0]['clips'][0]['gain_db'] == -5
 
 
+@pytest.mark.parametrize('explicit', [False, True])
+def test_plain_language_redo_resolves_unique_undone_piano_without_internal_id(state, explicit):
+    original = adopt(state)
+    undo_command, undo_options = instruction(state, original)
+    state.restore.execute(undo_command, **undo_options)
+    narration = graph(state)['tracks'][0]['clips'][0]['id']
+    save_audio(state, 'update', narration, {'gain_db': 1})
+    message = '恢复刚才撤销的钢琴音乐，原声不变。'
+    if explicit:
+        message = f'请恢复刚才撤销的钢琴音乐采用，原采用操作是 {original.operation.id}。原声不变。'
+    command, options = instruction(state, original, redo=True, message=message)
+    options['target_operation_id'] = None  # A model may omit it even when the human names it.
+    restored = state.restore.execute(command, **options)
+    assert restored.operation.payload['target_operation_id'] == original.operation.id
+    assert next(track for track in graph(state)['tracks'] if track['id'] == 'audio-music')['clips']
+    assert graph(state)['tracks'][0]['clips'][0]['gain_db'] == 1
+    assert state.restore.execute(command, **options).operation.id == restored.operation.id
+
+
+@pytest.mark.parametrize('supplied_target', [False, True])
+def test_plain_language_ambiguous_piano_cannot_be_disambiguated_by_model_argument(state, supplied_target):
+    first, second = adopt(state), adopt(state)
+    for original in (first, second):
+        command, options = instruction(state, original)
+        state.restore.execute(command, **options)
+    command, options = instruction(state, first, redo=True, message='恢复刚才撤销的钢琴音乐，原声不变。')
+    if not supplied_target:
+        options['target_operation_id'] = None
+    with state.repo._connect() as connection:
+        before = tuple(connection.iterdump())
+    with pytest.raises(EditConflict, match='无法唯一定位'):
+        state.restore.execute(command, **options)
+    with state.repo._connect() as connection:
+        assert tuple(connection.iterdump()) == before
+
+
+def test_plain_language_redo_retraction_is_not_authorization(state):
+    original = adopt(state)
+    command, options = instruction(state, original)
+    state.restore.execute(command, **options)
+    command, options = instruction(state, original, redo=True,
+        message='恢复刚才撤销的钢琴音乐，原声不变。不要恢复该钢琴音乐。')
+    options['target_operation_id'] = None
+    before = graph(state)
+    with pytest.raises(EditConflict, match='没有授权'):
+        state.restore.execute(command, **options)
+    assert graph(state) == before
+
+
 def test_same_adopted_clip_later_gain_edit_remains_a_conflict_with_original_refusal(state):
     original = adopt(state)
     clip = next(track for track in graph(state)['tracks'] if track['id'] == 'audio-music')['clips'][0]

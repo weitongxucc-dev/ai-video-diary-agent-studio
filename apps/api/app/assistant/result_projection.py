@@ -165,6 +165,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     output = json.dumps(result, ensure_ascii=False)
     preview = None
     media_job = None
+    observation_readbacks = {}
     action_result = None
     action_failed = False
     topic_result = None
@@ -210,6 +211,17 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if (latest_input is not None and event.get("type") == "tool_execution_end"
                 and ("invocation_input_id" not in details or details["invocation_input_id"] != latest_input["invocation_input_id"])):
             continue  # History remains in the SDK log; only this input owns the reply.
+        if event.get('type') == 'tool_execution_end' and event.get('toolName') == 'read_task_observations':
+            page = {} if event.get('isError') else (event.get('result') or {}).get('details') or {}
+            observation_readbacks = {}  # A newer stale/currentness read supersedes older evidence.
+            for item in page.get('observations', []):
+                observed = item.get('result') or {}
+                if (item.get('status') == 'succeeded' and item.get('stale') is False
+                        and observed.get('observation_id') == item.get('job_id')
+                        and observed.get('task_id') == page.get('task_id')
+                        and observed.get('timeline_version_id') == page.get('timeline_version_id')
+                        and isinstance(observed.get('samples'), list) and observed['samples']):
+                    observation_readbacks[item['job_id']] = observed
         if event.get('type') == 'tool_execution_end' and event.get('toolName') in {
                 'continue_task_quality_check', 'read_task_quality_continuation'}:
             details = (event.get('result') or {}).get('details') or {}
@@ -452,10 +464,14 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if action is None:
             state = {"queued":"排队中", "running":"运行中", "succeeded":"成功", "failed":"失败",
                 "interrupted":"已中断", "cancelled":"已取消"}.get(job_status, job_status or "未知")
-            answer = f"已查询原制作作业；当前作业状态：{state}。"
-            if job_status == "succeeded" and isinstance(status, dict) and status.get("video_ready"):
-                answer += "当前成片产物可用。"
-            answer += "本轮未提交新的开始或恢复请求。"
+            observed = observation_readbacks.get((media_job or {}).get('job_id'))
+            if not (settled and answer.strip() and not orchestration_failed and not unresolved_syntax_error
+                    and media_job and media_job.get('result_kind') == 'observation' and observed
+                    and observed['task_id'] == status.get('task_id')):
+                answer = f"已查询原制作作业；当前作业状态：{state}。"
+                if job_status == "succeeded" and isinstance(status, dict) and status.get("video_ready"):
+                    answer += "当前成片产物可用。"
+                answer += "本轮未提交新的开始或恢复请求。"
         elif action == "cancel":
             answer = f"取消操作已返回；当前作业状态：{job_status or '未知'}。"
         elif job_status == "queued":
