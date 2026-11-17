@@ -8,7 +8,7 @@ from app.assistant.stream_response import AssistantStreamTransport
 from app.assistant.task_turn_routes import TaskTurnHTTPAdapter, build_task_turn_router
 from app.assistant.conversation_routes import ConversationHTTPAdapter, build_conversation_router
 from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_material_library_router
-from app.materials.profile_candidates import ProfileCandidateReader
+from app.materials.profile_feedback import ProfileCandidateFeedbackReader
 from app.materials.evidence_routes import build_material_evidence_router
 from app.materials.intake_routes import MaterialIntakeHTTPAdapter, build_material_intake_router
 from app.materials.catalog_routes import MaterialCatalogHTTPAdapter, build_material_catalog_router
@@ -4644,7 +4644,7 @@ def _material_library_http_adapter():
         write_guard=_local_member_write_guard,
         library_root=lambda: settings.video_inbox_path,
         asset_response=_material_asset_response,
-        profile_candidate_for=ProfileCandidateReader(production_repo),
+        profile_candidate_for=ProfileCandidateFeedbackReader(production_repo),
         knowledge_claims_for=lambda workspace_id, item_id, user_id, diagnostic: production_repo.list_knowledge_claims(
             workspace_id, item_id,
             knowledge_version=source_repository.get_knowledge_item_readable_by(

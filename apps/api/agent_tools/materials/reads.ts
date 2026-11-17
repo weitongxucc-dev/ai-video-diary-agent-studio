@@ -61,21 +61,23 @@ export function registerMaterialReads(pi: ToolRegistrar, {request, boundSelectio
   pi.registerTool({
     name: "read_material_candidate_bundle",
     label: "读取素材候选证据包",
-    description: "读取一条已授权素材的统一候选证据包。候选、来源修订、证据、质量、授权和语言状态分开表达；unknown 或 needs_confirmation 不能当作确认事实或采用许可。只读，不修改任务或时间线。",
+    description: "读取一条已授权素材的统一候选证据包。候选、来源修订、证据、质量、授权和语言状态分开表达；unknown 或 needs_confirmation 不能当作确认事实或采用许可。提供 task_id 可回查所选人物/声音固定版本在该任务中的生成、采用和输出观察事实；无证据不推定成功。只读，不修改任务或时间线。",
     parameters: { type: "object", properties: {
       asset_id: { type: "string", minLength: 1 },
       query: { type: "string", maxLength: 120 },
       knowledge_item_id: { type: "string", minLength: 1 },
+      task_id: { type: "string", minLength: 1, description: "需回查人物或声音实际使用反馈的已授权任务 ID" },
       person_profile_id: { type: "string", minLength: 1, description: "用户明确选择的人物档案 ID，须同时提供 person_version" },
       person_version: { type: "string", minLength: 1 },
       voice_profile_id: { type: "string", minLength: 1, description: "用户明确选择的声音档案 ID，须同时提供 voice_version" },
       voice_version: { type: "string", minLength: 1 },
       limit: { type: "integer", minimum: 1, maximum: 20 },
     }, required: ["asset_id"], additionalProperties: false },
-    execute: async (_id: string, params: { asset_id: string; query?: string; knowledge_item_id?: string; person_profile_id?: string; person_version?: string; voice_profile_id?: string; voice_version?: string; limit?: number }) => {
+    execute: async (_id: string, params: { asset_id: string; query?: string; knowledge_item_id?: string; task_id?: string; person_profile_id?: string; person_version?: string; voice_profile_id?: string; voice_version?: string; limit?: number }) => {
       const query = new URLSearchParams();
       if (params.query) query.set("q", params.query);
       if (params.knowledge_item_id) query.set("knowledge_item_id", params.knowledge_item_id);
+      if (params.task_id) query.set("task_id", params.task_id);
       for (const kind of ["person", "voice"] as const) {
         const id = params[`${kind}_profile_id`], version = params[`${kind}_version`];
         if ((id === undefined) !== (version === undefined)) throw new Error("人物或声音候选必须同时提供 ID 和版本");

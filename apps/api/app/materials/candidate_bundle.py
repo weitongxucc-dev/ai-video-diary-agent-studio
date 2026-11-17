@@ -151,5 +151,5 @@ def build_candidate_bundle(
         },
         "missing_domains": [domain for domain in (["person", "voice"] if knowledge_requested else ["knowledge", "person", "voice"])
                             if domain not in included_domains],
-        "instruction": "候选、证据、授权和质量状态必须按原值解释；unknown/needs_confirmation 不能当作确认事实或采用许可。",
+        "instruction": "候选、证据、授权和质量状态必须按原值解释；unknown/needs_confirmation 不能当作确认事实或采用许可。feedback仅回读指定任务的生产事实，不提升候选状态或授予复用许可。",
     }

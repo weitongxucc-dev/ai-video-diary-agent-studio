@@ -316,3 +316,13 @@ def test_candidate_bundle_passes_explicit_profile_versions_and_rejects_partial_s
     assert out["ok"] and out["calls"][0]["path"] == path
     rejected = call(tmp_path, "read_material_candidate_bundle", {}, params={"asset_id": "asset-one", "voice_profile_id": "voice-one"})
     assert not rejected["ok"] and not rejected["calls"]
+
+
+def test_candidate_bundle_passes_task_feedback_scope(tmp_path):
+    path = "/api/production/materials/asset-one/candidate-bundle?task_id=task-one&voice_profile_id=voice-one&voice_version=v3"
+    feedback = {"schema": "profile-production-feedback/v1", "task_id": "task-one", "status": "not_used"}
+    bundle = {"schema": "candidate-bundle/v1", "candidates": [{"kind": "voice_profile", "details": {"feedback": feedback}}]}
+    out = call(tmp_path, "read_material_candidate_bundle", {path: bundle}, params={
+        "asset_id": "asset-one", "task_id": "task-one", "voice_profile_id": "voice-one", "voice_version": "v3"})
+    assert out["ok"] and out["calls"][0]["path"] == path
+    assert out["result"]["details"]["candidates"][0]["details"]["feedback"] == feedback

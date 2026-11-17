@@ -151,7 +151,8 @@ class MaterialLibraryHTTPAdapter:
 
     def candidate_bundle(self, request: Request, asset_id: str, q: str = "", limit: int = 20, knowledge_item_id: str | None = None,
                          *, person_profile_id: str | None = None, person_version: str | None = None,
-                         voice_profile_id: str | None = None, voice_version: str | None = None) -> dict[str, object]:
+                         voice_profile_id: str | None = None, voice_version: str | None = None,
+                         task_id: str | None = None) -> dict[str, object]:
         workspace_id = self._workspace_for(request)
         viewer_user_id, local_diagnostic = self._reader_for(request, workspace_id)
         try:
@@ -209,6 +210,8 @@ class MaterialLibraryHTTPAdapter:
             except (KeyError, ValueError) as exc:
                 raise HTTPException(status_code=404, detail="knowledge item not found") from exc
         selected_profiles = []
+        if task_id is not None and (not task_id or not (person_profile_id or voice_profile_id)):
+            raise HTTPException(422, '任务反馈必须指定任务ID及固定版本人物或声音候选')
         for kind, profile_id, version in (("person", person_profile_id, person_version),
                                            ("voice", voice_profile_id, voice_version)):
             if (profile_id is None) != (version is None) or profile_id == "" or version == "":
@@ -219,7 +222,8 @@ class MaterialLibraryHTTPAdapter:
                 raise HTTPException(503, "人物和声音候选读取尚未接通")
             try:
                 selected_profiles.append(self._profile_candidate_for(
-                    workspace_id, kind, profile_id, version, viewer_user_id, local_diagnostic))
+                    workspace_id, kind, profile_id, version, viewer_user_id, local_diagnostic,
+                    **({'task_id': task_id} if task_id is not None else {})))
             except (KeyError, PermissionError) as exc:
                 raise HTTPException(404, "profile not found") from exc
             except ValueError as exc:
@@ -340,10 +344,10 @@ def build_material_library_router(adapter_for, route_names: tuple[str, ...] | No
     def read_material_candidate_bundle(asset_id: str, request: Request, q: str = '', limit: int = 20,
             knowledge_item_id: str | None = None, person_profile_id: str | None = None,
             person_version: str | None = None, voice_profile_id: str | None = None,
-            voice_version: str | None = None) -> dict[str, object]:
+            voice_version: str | None = None, task_id: str | None = None) -> dict[str, object]:
         return adapter_for().candidate_bundle(request, asset_id, q, limit, knowledge_item_id,
             person_profile_id=person_profile_id, person_version=person_version,
-            voice_profile_id=voice_profile_id, voice_version=voice_version)
+            voice_profile_id=voice_profile_id, voice_version=voice_version, task_id=task_id)
 
     @router.put('/api/production/materials/{asset_id}/visibility', response_model=MaterialAssetResponse)
     def set_production_material_visibility(asset_id: str, request: Request, payload: ContentVisibilityRequest) -> MaterialAssetResponse:
