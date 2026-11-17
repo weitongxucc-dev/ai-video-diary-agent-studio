@@ -1,31 +1,9 @@
 # Windows 集成分支 1.5.2
 
-候选基线：`main` / `35f5152576b4cbb91dfc6c3d009ca2ba9fea9f28`
+本分支是唯一Windows开发线：`codex/windows-integration-1.5.2`。共用功能从main合入，Windows平台适配和未完成的本机验收继续留在本分支。
 
-当前迁移提交：`7b001dd9f901e15f0625d7ec95ce53b0fdc248c3`
+2026-11-17已同步主线数据治理、Agent恢复、Skill与资源制作能力，并补齐安装包Skill清单与资源文件。同步基线、合并验证和Windows电脑接续统一见[Windows集成记录](windows-branch-migration-2026-11-13.md)，不在此维护第二份进度。
 
-## 本轮已迁移
+Windows安装器、NSIS、API onedir与standalone资源物化代码已存在；此前“下一批再迁移安装器”的描述已失效。当前候选尚未取得Windows真机安装、Pi对话/停止、真实出片及播放证据，不能因代码合并或Mac测试通过而标为完成。
 
-- Windows 文件锁、临时目录和子进程环境：`platform_files.py`、`subprocess_environment.py` 及其调用方。
-- Agent 进程控制：Windows Job Object、停止与子孙进程回收、受控 turn 环境。
-- Pi 运行时：Windows npm shim 的 SDK 路径解析、15 秒启动检查边界、隔离环境变量。
-- 工作区凭据：Windows 凭据存储分支、缓存失效和回滚测试。
-- 相关跨平台测试和锁文件变更。
-
-## 本轮暂缓
-
-Windows Electron 安装器、NSIS、standalone API 物化和签名/发布入口暂缓到下一批。这些改动依赖 Windows 构建机和真实安装验收，不能只凭 macOS 静态检查合入 `main`。
-
-## 当前证据
-
-- macOS 定向 Python 测试：17 passed，4 skipped。
-- Python 目标模块 `compileall`：通过。
-- `git diff --check`：通过。
-- Windows 真机、安装器、Pi 实际加载和完整媒体链路：`BLOCKED`，当前环境没有 Windows 目标机；PR #146 的旧安装包证据不属于本候选。
-
-## 下一轮 Windows 验收
-
-1. 在 Windows x64 上从本分支构建并安装 preview 包。
-2. 验证 API/Web ready、工作区凭据持久化、Pi SDK 加载和停止回收。
-3. 运行 Windows 定向测试，再执行手机端/CLI 不受影响的回归检查。
-4. 只有安装、真实对话和成片链路均通过，才把暂缓的桌面打包改动迁入并创建合并请求。
+构建入口和平台依赖见[桌面说明](../apps/desktop/README.md)。旧迁移门槛及提交由Git历史追溯。
