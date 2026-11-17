@@ -545,7 +545,16 @@ class TaskAssistantTurnUseCase:
             if preview.get('related_media_job') is not None:
                 media_job = (yield RelatedMedia(task_id, turn_id, str(payload.conversation_id), preview['related_media_job']))
             edit_preview = None
-            reply = '原编辑请求定位已保存；尚未确认修改完成。' if edit_request.status == 'unknown' else '原编辑请求已回读，请查看实际状态；没有重复提交。'
+            refused_observation = edit_request.phase == 'observation' and (edit_request.status in {'rejected', 'not_submitted'}
+                or edit_request.result_status_code is not None and edit_request.result_status_code >= 400)
+            if refused_observation:
+                if not (media_job is not None and media_job.result_kind == 'observation' and media_job.status == 'succeeded'):
+                    detail = (edit_request.result or {}).get('detail') or (preview.get('failure') or {}).get('reason')
+                    reply = (yield SafeText('本次输出观察请求被拒绝：' + str(detail or '请查看原请求的具体原因。'), workspace_id))
+                # Otherwise keep the analysis and definite refusal. RelatedMedia
+                # has just verified ownership and re-read the current Job state.
+            else:
+                reply = '原编辑请求定位已保存；尚未确认修改完成。' if edit_request.status == 'unknown' else '原编辑请求已回读，请查看实际状态；没有重复提交。'
         elif isinstance(preview, dict) and preview.get('kind') == 'media_job':
             try:
                 selected = (yield SelectMediaFinish(turn_id, preview.get('media_job')))
@@ -557,6 +566,10 @@ class TaskAssistantTurnUseCase:
                 media_job = (yield ValidateMedia((yield CompletedMedia(task, turn_id, slot, contract=slot['requested_output'], input_refs=slot['input_refs']))))
             else:
                 media_job = (yield ValidateMedia((yield ReadMedia(task_id, selected.job_id))))
+            if media_job.result_kind == 'observation' and not (
+                    preview.get('observation_review') is True and media_job.status == 'succeeded'):
+                from app.assistant.projection import media_processing_state_message
+                reply = media_processing_state_message(media_job.model_dump(mode='json'))
             edit_preview = None
         elif isinstance(preview, dict) and 'script_id' in preview and ('proposal' not in preview):
             script_id = preview.get('script_id') if isinstance(preview, dict) else None

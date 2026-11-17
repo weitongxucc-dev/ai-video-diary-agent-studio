@@ -67,3 +67,65 @@ def test_pending_failed_stale_or_unrelated_observations_do_not_preserve_claimed_
     answer,_=project_business_result(result)
     assert '已查询原制作作业' in answer
     assert '已有真实采样' not in answer
+
+
+def readonly_session(**kwargs):
+    result,_=session(**kwargs)
+    result['tool_results'].pop(0)  # No execution query and no new observation submission.
+    read=result['tool_results'][0]
+    read['toolName']='read_task_media_job'
+    read['result']['details']['media_job']['status']='succeeded'
+    return result
+
+
+def test_readonly_current_observation_keeps_full_analysis_in_terminal_media_branch():
+    result=readonly_session()
+    answer,preview=project_business_result(result)
+    assert answer==result['answer']
+    assert preview['kind']=='media_job' and preview['observation_review'] is True
+    assert all(item['toolName']!='observe_task_output' for item in result['tool_results'])
+
+
+@pytest.mark.parametrize('changes', [{'stale':True},{'status':'failed'},{'observed_job':'other'},{'samples':False}])
+def test_readonly_terminal_branch_does_not_certify_invalid_observations(changes):
+    result=readonly_session(**changes)
+    answer,preview=project_business_result(result)
+    assert '已有真实采样' not in answer
+    assert 'observation_review' not in preview
+
+
+@pytest.mark.parametrize('current_status',['succeeded','stale','failed'])
+def test_terminal_media_finish_rechecks_currentness_before_retaining_analysis(current_status):
+    from types import SimpleNamespace
+    from app.assistant import task_turn_use_case as turn
+    from app.schemas import TaskMediaJobResponse
+    result=readonly_session()
+    answer,preview=project_business_result(result)
+    job=TaskMediaJobResponse(operation='output_observation',input_digest='digest',created_at='2026-11-17T08:00:00Z',
+        job_id='observation',status=current_status,result_kind='observation',result_url='/original-observation')
+    case=turn.TaskAssistantTurnUseCase(conversations_for=lambda:None,window_case_for=None,
+        read_event=None,read_intent=None,list_events=None)
+    operation=case.finish('task',SimpleNamespace(conversation_id='conversation',expected_draft_version=1),
+        'turn',answer,preview,'montage')
+    checkpoint=next(operation)
+    while not isinstance(checkpoint,turn.BuildTaskResponse):
+        if isinstance(checkpoint,turn.ReadWorkspace):
+            value='workspace'
+        elif isinstance(checkpoint,(turn.CleanText,turn.SafeText)):
+            value=checkpoint.value
+        elif isinstance(checkpoint,turn.SelectMediaFinish):
+            value=SimpleNamespace(job_id='observation',completed_slot=None)
+        elif isinstance(checkpoint,turn.ReadMedia):
+            value=job
+        elif isinstance(checkpoint,turn.ValidateMedia):
+            value=job
+        elif isinstance(checkpoint,turn.ReadSettings):
+            value=SimpleNamespace(effective_llm_provider='provider',effective_llm_model='model')
+        else:
+            pytest.fail(f'unexpected checkpoint {checkpoint}')
+        checkpoint=operation.send(value)
+    reply=checkpoint.fields['reply']
+    assert (reply==result['answer'])==(current_status=='succeeded')
+    if current_status!='succeeded':
+        assert '已有真实采样' not in reply
+    operation.close()
