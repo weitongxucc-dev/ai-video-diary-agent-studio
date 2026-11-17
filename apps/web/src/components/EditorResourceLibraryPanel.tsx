@@ -5,6 +5,7 @@ import { AudioLines, Check, Film, Grid2X2, Image as ImageIcon, List, Music2, Sli
 import type { MaterialAsset } from "@/lib/types";
 import { fileLabel, mediaLabel, roleLabel, reviewLabel } from "./material-library/material-labels";
 import styles from "./EditorResourceLibraryPanel.module.css";
+import { ResourceVisualPreview } from "./resource-library/ResourceVisualAdoption";
 
 export type EditorResourceCategory = "materials" | "skills" | "stickers" | "filters" | "effects" | "transitions" | "templates" | "subtitles" | "text" | "voice" | "music" | "sfx";
 
@@ -128,16 +129,19 @@ function CatalogResourceResults({ resources, renderResourceAction }: { resources
       const open = previewId === key;
       const preview = resource.preview.thumbnail_ref;
       const canAddAudio = resource.status === "connected" && resource.preview.kind === "audio" && resource.runtime_requirements?.engine === "EditAudioTimeline";
+      const canAddVisual = resource.status === "connected" && resource.runtime_requirements?.engine === "openfilm-html-v1"
+        && typeof resource.runtime_requirements.template_id === "string" && typeof resource.runtime_requirements.template_version === "number";
       return <article className={styles.catalogCard} key={key}>
         <div><strong>{resource.name}</strong><span>{resourceStateLabel(resource.status)} · v{resource.version}</span></div>
         <div className={styles.catalogActions}>
           <button type="button" aria-expanded={open} onClick={() => setPreviewId(open ? null : key)}>{open ? "收起预览" : "查看预览"}</button>
-          {canAddAudio ? renderResourceAction
+          {canAddAudio || canAddVisual ? renderResourceAction
             ? <button type="button" aria-expanded={adoptingId === key} onClick={() => setAdoptingId(adoptingId === key ? null : key)}>添加到作品</button>
-            : <span>打开一个作品后可添加到音轨</span>
+            : <span>{canAddVisual ? "打开一个作品后可添加到画面" : "打开一个作品后可添加到音轨"}</span>
             : <span>{resource.status === "catalog_only" ? "可浏览，采用能力尚未接通" : resource.status === "planned" ? "计划中，暂不可采用" : resource.resource_type === "skill" ? "由助手读取并按当前任务使用" : "在作品对应的编辑工具中使用"}</span>}
         </div>
         {open ? <div className={styles.catalogPreview} role="region" aria-label={`${resource.name}资源预览`}>
+          {canAddVisual ? <ResourceVisualPreview resource={resource} /> : null}
           {preview && resource.preview.kind === "audio" ? <audio controls preload="none" src={preview} aria-label={`预览：${resource.name}`} /> : null}
           {preview && resource.preview.kind === "video" ? <video controls width={640} height={360} preload="none" poster={typeof resource.runtime_requirements?.poster_ref === "string" ? resource.runtime_requirements.poster_ref : undefined} src={preview} aria-label={`预览：${resource.name}`} /> : null}
           {resource.preview.duration_seconds != null ? <span>{resource.preview.duration_seconds} 秒</span> : null}
@@ -146,7 +150,7 @@ function CatalogResourceResults({ resources, renderResourceAction }: { resources
             <p>固定版本 v{resource.version}。采用后可以从作品的版本历史撤销；浏览和试听不会修改作品。</p>
           </details>
         </div> : null}
-        {adoptingId === key && canAddAudio ? renderResourceAction?.(resource) : null}
+        {adoptingId === key && (canAddAudio || canAddVisual) ? renderResourceAction?.(resource) : null}
       </article>;
     })}
   </div>;

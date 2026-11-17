@@ -10,6 +10,7 @@ const PRODUCT_TOOL_NAMES = new Set([
   "read_current_task", "read_task_object", "read_task_edit_capabilities",
   "read_material_evidence", "read_task_observations", "observe_task_output",
   "read_editing_resource_catalog",
+  "read_video_templates", "read_visual_template",
   "read_edit_history", "read_edit_control_context", "read_timeline_restore_request",
   "preview_typed_edit", "apply_typed_edit", "read_creation_skill",
 ]);

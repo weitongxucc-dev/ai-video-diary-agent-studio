@@ -93,3 +93,13 @@ it("passes the selected audio ID and fixed version to the real adoption form", a
   fireEvent.change(screen.getByRole("searchbox", { name: "搜索音乐" }), { target: { value: "不匹配" } });
   expect(screen.getByText("没有匹配的资源，请调整搜索或类型筛选。")).toBeInTheDocument();
 });
+
+it("offers the connected original CSS adapter with its fixed template version", async () => {
+  const resource = { id: "openfilm:transition-glitch", category_id: "transitions", name: "信号故障", version: 2, status: "connected", resource_type: "css_transition", preview: { kind: "html" }, runtime_requirements: { engine: "openfilm-html-v1", template_id: "builtin_visual_openfilm-transition-glitch", template_version: 1 }, provenance: [], entrypoints: ["apply_typed_edit"] };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ categories: [], resources: [resource] }) }));
+  const action = vi.fn(() => <p>真实动画采用</p>);
+  render(<EditorResourceLibraryPanel assets={[]} selectedId={null} initialCategory="transitions" onSelect={vi.fn()} onReferenceMaterial={vi.fn()} renderResourceAction={action} />);
+  fireEvent.click(await screen.findByRole("button", { name: "添加到作品" }));
+  expect(action).toHaveBeenCalledWith(resource);
+  expect(screen.getByText("真实动画采用")).toBeInTheDocument();
+});

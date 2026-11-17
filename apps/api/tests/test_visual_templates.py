@@ -32,10 +32,17 @@ def visual_overlay(**changes):
 
 def test_catalog_pins_real_source_and_all_bundled_use_cases():
     items = list(visual_templates())
-    assert len(items) == 60
+    assert len(items) == 61
     assert {item[2].category for item in items} == {'title','chapter','callout','data','product','ending','social','reaction','chat','news','location','festival'}
     manifest = json.loads((ASSETS/'provenance.json').read_text())
     for identity, _name, definition in items:
+        if identity == 'openfilm-transition-glitch':
+            from app.creation.openfilm_transition_catalog import ASSETS as transition_assets
+            original = (transition_assets / 'overlay.css').read_bytes()
+            assert hashlib.sha256(original).hexdigest() == definition.provenance[0].source_sha256
+            assert original.decode() in definition.source
+            assert definition.bindings == [] and definition.duration_seconds == .6
+            continue
         if definition.provenance[0].license != 'CC0-1.0':
             from app.creation.rendercomp_template_catalog import ASSETS as rc_assets
             source = rc_assets / 'upstream' / Path(definition.provenance[0].path).name
@@ -57,14 +64,15 @@ def test_bundled_catalog_renders_real_frames_with_bound_chinese_text(tmp_path):
     from PIL import Image
     for identity, name, definition in visual_templates():
         # Preserve numeric/date fields and replace an actual prose binding.
-        prose = next(item for item in definition.bindings if item.kind=='text'
-            and len(item.default)>1 and not any(char.isdigit() for char in item.default))
-        definition.values[prose.key] = '科大分享'
+        if identity != 'openfilm-transition-glitch':
+            prose = next(item for item in definition.bindings if item.kind=='text'
+                and len(item.default)>1 and not any(char.isdigit() for char in item.default))
+            definition.values[prose.key] = '科大分享'
         overlay = VisualTemplateOverlay(name=name, template_id='builtin_visual_'+identity,
             template_version=1, definition=definition, start_seconds=0, end_seconds=4)
         directory = tmp_path / identity
         command, environment = frame_command(overlay.model_dump(), directory,
-            size=(480,640), first_frame=45, frame_count=1)
+            size=(480,640), first_frame=9 if identity == 'openfilm-transition-glitch' else 45, frame_count=1)
         result = subprocess.run(command,env=environment,capture_output=True,timeout=15)
         assert result.returncode == 0, (identity,result.stderr.decode(errors='replace'))
         frame_manifest(directory,1)

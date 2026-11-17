@@ -49,6 +49,8 @@ test("editing-videos is pinned and stripped to a method-only product adapter", a
   assert.equal(manifest.runtime.runnable, false);
   assert.equal(manifest.runtime.network, false);
   assert.ok(manifest.dependencies.tools.includes("read_editing_resource_catalog"));
+  assert.ok(manifest.dependencies.tools.includes("read_creation_skill"));
+  assert.ok(manifest.dependencies.tools.includes("read_visual_template"));
   assert.match(await readFile(manifest.skillPath, "utf8"), /不可用行为/);
 });
 

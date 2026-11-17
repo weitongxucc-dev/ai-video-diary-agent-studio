@@ -19,7 +19,7 @@ export function VisualTemplatePreview({definition, compact = false}: {definition
   const [document, setDocument] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice,setNotice]=useState<string|null>(null);
-  const [time, setTime] = useState(1);
+  const [time, setTime] = useState(Math.min(1, definition.duration_seconds / 2));
   const [drawn,setDrawn]=useState(false);
   const [playing, setPlaying] = useState(false);
   useEffect(()=>{
@@ -29,7 +29,7 @@ export function VisualTemplatePreview({definition, compact = false}: {definition
     observer.observe(viewport.current);return()=>observer.disconnect();
   },[document,definition.width,active]);
   useEffect(() => {
-    let active = true; setDocument(''); setError(null);setNotice(null);setDrawn(false);setFrameReady(false);
+    let active = true; setDocument(''); setError(null);setNotice(null);setDrawn(false);setFrameReady(false);setTime(Math.min(1, definition.duration_seconds / 2));
     void visualTemplateDocument(definition).then(value => {if (active) {setDocument(value.document??'');setNotice(value.reason??null);}})
       .catch(cause => {if (active) setError(String(cause.message));});
     return () => {active = false;};

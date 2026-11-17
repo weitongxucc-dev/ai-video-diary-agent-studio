@@ -86,9 +86,13 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
     assert sfx_preview.status_code == 200
     assert sfx_preview.headers["content-type"].startswith("audio/wav")
     assert sfx_preview.headers["content-disposition"].startswith("inline;")
-    transition_preview = client.get("/api/editing-resources/openfilm:transition-glitch/preview", params={"version": 2})
-    assert transition_preview.status_code == 200
-    assert transition_preview.headers["content-type"].startswith("video/mp4")
+    transition = client.get("/api/editing-resources/openfilm:transition-glitch", params={"version": 2}).json()
+    assert transition["status"] == "connected"
+    assert transition["preview"]["kind"] == "html"
+    assert transition["runtime_requirements"]["engine"] == "openfilm-html-v1"
+    assert transition["runtime_requirements"]["template_id"] == "builtin_visual_openfilm-transition-glitch"
+    assert transition["runtime_requirements"]["operation_type"] == "EditGraphicOverlay"
+    assert "read_visual_template" in transition["entrypoints"]
     transition_poster = client.get("/api/editing-resources/openfilm:transition-glitch/preview", params={"representation": "poster", "version": 2})
     assert transition_poster.status_code == 200
     assert transition_poster.headers["content-type"].startswith("image/jpeg")

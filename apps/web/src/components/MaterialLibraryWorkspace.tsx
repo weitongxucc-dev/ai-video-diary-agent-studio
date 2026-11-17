@@ -46,6 +46,7 @@ import { duration, roleLabel, analysisMessage, tagLabel, fileLabel } from './mat
 import { mediaTypeOptions, mediaTypeLabels, readMediaTypeFromUrl } from './material-library/material-filters';
 import { visibleError } from './material-library/material-errors';
 import { ResourceAudioAdoption } from "./resource-library/ResourceAudioAdoption";
+import { ResourceVisualAdoption } from "./resource-library/ResourceVisualAdoption";
 import { EditorResourceLibraryPanel, type EditorResourceCategory } from './EditorResourceLibraryPanel';
 
 export function MaterialLibraryWorkspace({
@@ -874,7 +875,10 @@ export function MaterialLibraryWorkspace({
       }} />}
     >
       {resourceMode ? <EditorResourceLibraryPanel assets={assets} selectedId={selected?.id ?? null} initialCategory={resourceCategory} onSelect={asset => selectAsset(asset)} onReferenceMaterial={asset => appendMaterialReference(asset)}
-          renderResourceAction={resourceTarget?.task ? resource => <ResourceAudioAdoption key={`${resourceTarget.task!.id}:${resource.id}:${resource.version}`} taskId={resourceTarget.task!.id} resource={resource} playheadMs={resourceTarget.taskContext?.getPlayheadMs() ?? 0} onTaskUpdated={resourceTarget.onTaskUpdated} /> : undefined} /> : <div className={`modern-library ${styles.workspace}`}>
+          renderResourceAction={resourceTarget?.task ? resource => {
+            const Adoption = resource.runtime_requirements?.engine === "openfilm-html-v1" ? ResourceVisualAdoption : ResourceAudioAdoption;
+            return <Adoption key={`${resourceTarget.task!.id}:${resource.id}:${resource.version}`} taskId={resourceTarget.task!.id} resource={resource} playheadMs={resourceTarget.taskContext?.getPlayheadMs() ?? 0} onTaskUpdated={resourceTarget.onTaskUpdated} />;
+          } : undefined} /> : <div className={`modern-library ${styles.workspace}`}>
         <MaterialLibraryToolbar summary={`已载入 ${assets.length} / ${totalCount} · 最近更新在前`} auxiliary={Boolean(page?.auxiliary)} filtered={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)}
           search={<InputGroup data-input-group aria-label="素材检索" className="library-search">
             <InputGroupAddon><Search size={16} /></InputGroupAddon>

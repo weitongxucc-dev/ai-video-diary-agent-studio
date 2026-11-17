@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "editing-videos",
-  "version": "jcss-v0.3.52-adapter.1",
+  "version": "jcss-v0.3.52-adapter.2",
   "entry": {
     "skill": "read_creation_skill:editing-videos",
     "adapter": "method-only-product-tools"
@@ -28,7 +28,8 @@
     "tools": [
       "read_current_task", "read_task_object", "read_task_edit_capabilities",
       "read_material_evidence", "read_task_observations", "observe_task_output",
-      "read_editing_resource_catalog", "read_edit_history", "read_edit_control_context",
+      "read_editing_resource_catalog", "read_creation_skill", "read_video_templates", "read_visual_template",
+      "read_edit_history", "read_edit_control_context",
       "read_timeline_restore_request", "preview_typed_edit", "apply_typed_edit"
     ]
   },

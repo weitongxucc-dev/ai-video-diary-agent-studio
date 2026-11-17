@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.creation.visual_template_catalog import visual_templates
+from app.creation.openfilm_transition_catalog import IDENTITY, TEMPLATE_ID
 
 # ``failed`` is a persisted outcome for an attempted import or adapter check;
 # it is intentionally distinct from ``planned`` (never attempted) and
@@ -194,9 +195,9 @@ def _builtin_resources() -> list[EditingResource]:
         ),
         EditingResource(
             id="openfilm:transition-glitch", category_id="transitions", name="信号故障", version=2,
-            status="catalog_only", resource_type="css_transition", preview=ResourcePreview(
-                kind="video", width=384, height=216, duration_seconds=0.6,
-                thumbnail_ref="/api/editing-resources/openfilm:transition-glitch/preview"),
+            status="connected", resource_type="css_transition", preview=ResourcePreview(
+                kind="html", width=384, height=216, duration_seconds=0.6,
+                thumbnail_ref="/api/editing-resources/openfilm:transition-glitch/preview?representation=poster&version=2"),
             provenance=[ResourceProvenance(
                 repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
                 path="transition/glitch/item.json", license="CC0-1.0", license_spdx="CC0-1.0",
@@ -204,16 +205,18 @@ def _builtin_resources() -> list[EditingResource]:
                 ResourceProvenance(
                     repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
                     path="transition/glitch/overlay.css", license="CC0-1.0", license_spdx="CC0-1.0",
-                    source_sha256="6063423ad31af44cca1fc88ed0b1bde72beb863125ebbd314265e7cb71335449"),
-                ResourceProvenance(
-                    repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
-                    path="transition/glitch/preview.mp4", license="CC0-1.0", license_spdx="CC0-1.0",
-                    source_sha256="124f033cbe6d033a91c5f12f12231f2c494d3ec8978dbdb04d058afa05adff6a")],
-            runtime_requirements={"engine": "openfilm-css-transition", "adapter": "planned", "manifest_path": "apps/api/app/resource_assets/openfilm/transition/glitch/item.json", "poster_ref": "/api/editing-resources/openfilm:transition-glitch/preview?representation=poster"},
-            entrypoints=[],
+                    source_sha256="6063423ad31af44cca1fc88ed0b1bde72beb863125ebbd314265e7cb71335449")],
+            runtime_requirements={"engine": "openfilm-html-v1", "adapter": "original-css-overlay",
+                "template_id": TEMPLATE_ID, "template_version": 1, "operation_type": "EditGraphicOverlay",
+                "duration_seconds": 0.6, "width": 1, "dependencies": [],
+                "media_requirement": "已准备 HTML 动画的桌面隔离渲染器；采用不代表成片已渲染",
+                "manifest_path": "apps/api/app/resource_assets/openfilm/transition/glitch/item.json"},
+            entrypoints=["read_visual_template", "preview_typed_edit", "apply_typed_edit"],
         ),
     ]
     for identity, name, definition in visual_templates():
+        if identity == IDENTITY:
+            continue  # The original resource remains in transitions, not a duplicate catalog item.
         resources.append(EditingResource(
             id=f"template:{identity}", category_id="templates", name=name, version=1,
             status="connected", resource_type="visual_template",
