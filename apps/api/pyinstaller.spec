@@ -36,6 +36,8 @@ _ENTRY = _SPEC_DIR / "server.py"
 # supplies __file__ under _MEIPASS/app, so preserve that declared relative layout.
 _ASSET_DIRS: list[tuple[str, str]] = [
     (str(_SPEC_DIR / 'app' / 'template_assets'), 'app/template_assets'),
+    (str(_SPEC_DIR / 'app' / 'resource_assets'), 'app/resource_assets'),
+    (str(_SPEC_DIR / 'agent_runtime' / 'skills'), 'agent_runtime/skills'),
     (str(_SPEC_DIR / "app" / "media_script.py"), "app"),
     (str(_SPEC_DIR / "model_workers" / "media_script_worker.py"), "model_workers"),
 ]

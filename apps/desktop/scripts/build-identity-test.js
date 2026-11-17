@@ -60,6 +60,7 @@ function main() {
     write(root, 'apps/api/agent_tools/diary_tools.ts', 'agent-tools-v1');
     write(root, 'apps/api/agent_runtime/host.mjs', 'sdk-bridge-v1');
     write(root, 'apps/api/agent_runtime/skills/local-edit/SKILL.md', 'edit-skill-v1');
+    write(root, 'apps/api/agent_runtime/skills/local-edit/manifest.json', '{"version":1}');
     write(root, 'apps/web/.next/standalone-bundled/apps/web/server.js', 'web-v1');
     write(root, 'apps/web/.next/standalone-bundled/apps/web/.next/BUILD_ID', 'build');
     write(root, 'apps/web/.next/standalone-bundled/apps/web/.next/app-path-routes-manifest.json', 'routes');
@@ -87,6 +88,7 @@ function main() {
       'programmatic/yaohe-mcp.mjs',
       'agent_runtime/host.mjs',
       'agent_runtime/skills/local-edit/SKILL.md',
+      'agent_runtime/skills/local-edit/manifest.json',
       'web/.next/BUILD_ID',
       'web/.next/app-path-routes-manifest.json',
       'web/.next/server/app/production/page_client-reference-manifest.js',
@@ -108,6 +110,7 @@ function main() {
       'apps/api/agent_tools/diary_tools.ts',
       'apps/api/agent_runtime/host.mjs',
       'apps/api/agent_runtime/skills/local-edit/SKILL.md',
+      'apps/api/agent_runtime/skills/local-edit/manifest.json',
     ]) assertChangesDigest(root, first, relativePath);
     if (process.platform === 'win32') assertChangesDigest(root, first, 'apps/desktop/electron-builder.windows.cjs');
     if (process.platform === 'win32') assertChangesDigest(root, first, 'apps/desktop/dist/api-server/_internal/python311.dll');
