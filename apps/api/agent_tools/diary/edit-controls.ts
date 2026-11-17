@@ -14,6 +14,27 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
   const historicalOperations = new Set<string>();
   const historyControls = new Set<string>();
   let historyRead = false;
+  const restoreAttempts = new Map<string, {action:'undo'|'redo';base:TaskVersion;turnId:string;inputId?:string;target?:string}>();
+  function followOwnedRestore(requestId:string, receipt:any) {
+    const attempt=restoreAttempts.get(requestId), proof=receipt?.owned_version_transition;
+    const source=readActionSource();
+    if (!attempt || !selectedTaskVersion || receipt.status!=='applied' || receipt.task_id!==taskId
+        || receipt.request_id!==requestId || receipt.action!==attempt.action
+        || (attempt.target && receipt.target_operation_id!==attempt.target)
+        || proof?.scope!=='same_turn_restore' || proof.task_id!==taskId || proof.request_id!==requestId
+        || proof.operation_id!==receipt.operation_id || proof.action!==attempt.action
+        || proof.assistant_turn_id!==attempt.turnId || source.turnId!==attempt.turnId
+        || (proof.input_id??undefined)!==attempt.inputId || source.inputId!==attempt.inputId
+        || proof.from?.timeline_version_id!==attempt.base.timeline_version_id
+        || proof.from?.timeline_sequence!==attempt.base.timeline_sequence
+        || selectedTaskVersion.timeline_version_id!==attempt.base.timeline_version_id
+        || selectedTaskVersion.timeline_sequence!==attempt.base.timeline_sequence
+        || typeof proof.to?.timeline_version_id!=='string' || !proof.to.timeline_version_id
+        || proof.to.timeline_version_id!==receipt.result_version_id
+        || !Number.isInteger(proof.to.timeline_sequence)
+        || proof.to.timeline_sequence!==attempt.base.timeline_sequence+1) return;
+    Object.assign(selectedTaskVersion, proof.to);
+  }
   const restorePath = (id: string) => `/api/creation-tasks/${encodeURIComponent(taskId!)}/timeline/restore-requests/${encodeURIComponent(id)}`;
   const restoreResult = (action: 'undo' | 'redo' | 'query', requestId: string, receipt: any, error?: unknown) => {
     const original = error instanceof BusinessRequestError || error instanceof BusinessResultUnknown || error instanceof RequestNotSubmitted
@@ -50,6 +71,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
     execute: async (_id: string, params: {request_id: string}) => {
       const receipt = await request(restorePath(params.request_id));
       if (receipt.task_id !== taskId || receipt.request_id !== params.request_id) throw new Error('恢复原请求身份不一致');
+      followOwnedRestore(params.request_id, receipt);
       return restoreResult('query', params.request_id, receipt);
     }});
 
@@ -176,6 +198,8 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
         else if (editControls && !(action === 'undo' ? editControls.can_undo : editControls.can_redo))
           throw new Error(action === 'undo' ? '当前没有可撤销的编辑' : '当前没有可重做的编辑');
         const requestId = typedRequestId(body.assistant_turn_id, callId);
+        restoreAttempts.set(requestId, {action,base:{...selectedTaskVersion!},turnId:body.assistant_turn_id,
+          inputId:readActionSource().inputId,target:params.target_operation_id});
         markEditControlWrite();
         let posted = false;
         try {
@@ -185,6 +209,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
           posted = true;
           const receipt = result.restore_request ?? await request(restorePath(requestId));
           if (receipt.task_id !== taskId || receipt.request_id !== requestId) throw new Error('恢复回执不属于原请求，请先查询');
+          followOwnedRestore(requestId, receipt);
           return restoreResult(action, requestId, receipt);
         } catch (error) {
           if (!posted && error instanceof RequestNotSubmitted) releaseNotSubmittedEditControl();

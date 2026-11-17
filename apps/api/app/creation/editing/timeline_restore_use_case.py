@@ -122,7 +122,32 @@ class TimelineRestoreUseCase:
 
     def read_request(self, workspace_id, task_id, request_id, actor):
         self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id), actor)
-        return self.repository.restore_requests.receipt(workspace_id, task_id, actor.user_id or actor.member_id, request_id)
+        member_id = actor.user_id or actor.member_id
+        receipt = self.repository.restore_requests.receipt(workspace_id, task_id, member_id, request_id)
+        if receipt['status'] != 'applied':
+            return receipt
+        claim = self.repository.execution_records.get_task_event(workspace_id,
+            self.repository.restore_requests.request_id(workspace_id, member_id, request_id))
+        inputs = claim.payload['inputs']
+        source = inputs.get('source') or {}
+        if not source.get('assistant_turn_id'):
+            return receipt
+        operation = self.repository.edit_records.get_edit_operation(workspace_id, receipt['operation_id'])
+        base, result = [self.repository.timeline_records.get_timeline_version(workspace_id, key)
+                        for key in (operation.base_version_id, operation.result_version_id)]
+        # A targeted restore may legally merge over later edits. Such a merge
+        # must not advance an Agent's older fence across those external edits.
+        if (base.task_id != task_id or result.task_id != task_id or result.parent_version_id != base.id
+                or result.sequence != base.sequence + 1
+                or inputs.get('expected_timeline_version_id') != base.id
+                or inputs.get('expected_timeline_sequence') != base.sequence):
+            return receipt
+        return {**receipt, 'owned_version_transition': {
+            'scope': 'same_turn_restore', 'task_id': task_id, 'request_id': str(request_id),
+            'operation_id': operation.id, 'action': receipt['action'],
+            'assistant_turn_id': source['assistant_turn_id'], 'input_id': source.get('input_id'),
+            'from': {'timeline_version_id': base.id, 'timeline_sequence': base.sequence},
+            'to': {'timeline_version_id': result.id, 'timeline_sequence': result.sequence}}}
 
     def replay(self, workspace_id, task_id, receipt):
         operation = self.repository.edit_records.get_edit_operation(workspace_id, receipt['operation_id'])

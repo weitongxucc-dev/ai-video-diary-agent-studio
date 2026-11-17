@@ -79,6 +79,14 @@ def test_original_adoption_undo_redo_keeps_later_other_audio_edits_and_original_
     monkeypatch.setattr(state.restore.montage_edits.audio_service, 'source', source_reader)
     command, options = instruction(state, original)
     undone = state.restore.execute(command, **options)
+    proof = undone.restore_request['owned_version_transition']
+    assert proof['assistant_turn_id'] == options['source']['assistant_turn_id']
+    assert proof['request_id'] == options['request_id']
+    assert proof['operation_id'] == undone.operation.id
+    assert proof['from'] == {'timeline_version_id': command.task.current_timeline_version_id,
+        'timeline_sequence': options['expected_timeline_sequence']}
+    result_version = state.repo.timeline_records.get_timeline_version('local', undone.operation.result_version_id)
+    assert proof['to'] == {'timeline_version_id': result_version.id, 'timeline_sequence': result_version.sequence}
     expected = [dict(track, clips=[] if track['id'] == 'audio-music' else track['clips']) for track in before['tracks']]
     assert graph(state)['tracks'] == expected
     assert undone.operation.payload['target_operation_id'] == original.operation.id
@@ -91,6 +99,17 @@ def test_original_adoption_undo_redo_keeps_later_other_audio_edits_and_original_
     assert state.repo.job_records.list_job_runs('local', 'task') == jobs
     assert state.path.read_bytes() == source
     assert any(connection is not None for connection in connections)
+
+
+def test_targeted_restore_merged_over_an_external_version_does_not_issue_fence_proof(state):
+    original = adopt(state)
+    command, options = instruction(state, original)
+    narration = graph(state)['tracks'][0]['clips'][0]['id']
+    later = save_audio(state, 'update', narration, {'gain_db': -5})
+    restored = state.restore.execute(command, **options)
+    assert restored.operation.base_version_id == later.operation.result_version_id
+    assert 'owned_version_transition' not in restored.restore_request
+    assert graph(state)['tracks'][0]['clips'][0]['gain_db'] == -5
 
 
 def test_same_adopted_clip_later_gain_edit_remains_a_conflict_with_original_refusal(state):
