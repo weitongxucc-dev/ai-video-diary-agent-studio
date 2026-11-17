@@ -1,29 +1,35 @@
-# Windows 分支迁移记录（2026-11-13）
+# Windows 分支集成记录
 
-## 结论
+## 当前基线与同步范围（2026-11-17）
 
-Windows 以后只在 `codex/windows-integration-1.5.2` 开发。该分支已基于 GitHub `main` 的 `be1c52e1d788cd3828633b16d4c80b82a0438b8d` 更新，当前远端提交为 `80b31e3af895f581008f8034ae999add462770d3`。
+Windows 继续只使用 `codex/windows-integration-1.5.2`。本次将主线 `54da85b1` 的已验证功能及 `738a06d8` 打包修复合入，集成提交为 `c0640f2c`、`9cb6876e`；后续文档同步沿同一分支完成，实际最新提交查 Git。本地主线两处 settings dirty 未纳入，两分钟人工通过的任务与运行数据未改动。
 
-## 已迁移
+| 同步内容 | 结果 |
+| --- | --- |
+| 数据治理 | CandidateBundle、知识claims、人物/声音反馈、跨域候选查询与固定版本回读进入Windows代码 |
+| Pi Agent | Trace/Token账本、资源导入/采用/回查/指定撤销及保存回执恢复同步；Windows Job Object、npm shim与隔离环境保留 |
+| 资源与制作 | 背景音乐混音、音量编辑、OpenFilm资源、Fluent静态贴纸、资源抽屉与版本化输出同步 |
+| CPU运行 | 主线线程预算与真实任务准备修复同步；Windows文件锁、凭据存储和进程回收适配保留 |
+| 桌面打包 | 补齐Electron中的Skill JSON清单及构建身份；PyInstaller包含资源文件与API目录使用的Skill清单，避免源码可用但安装包缺文件 |
 
-- `7565ca3f` 的桌面 Windows 预览安装器链路：electron-builder Windows 配置、API/Web 构建脚本、PyInstaller onedir、Windows standalone 资源链接和 `scripts/windows-env.ps1`。
-- 旧分支中仍有价值的 Windows 打包硬化：构建身份分块读取、Windows 凭据隐藏导入、测试结束时释放 SQLite 文件句柄、Windows 后端实验探针 `scripts/windows_backend_probe.py`。
-- `4799d385` 中唯一尚未进入 canonical 的开发入口：`apps/desktop/scripts/dev.js`，并将 `apps/desktop` 的 `dev` 命令改为跨平台入口。
-- `7b001dd9` 已经包含旧分支的 Windows 平台文件、进程归属、Pi 运行时检查和工作区凭据能力；这些内容没有再次重放旧提交。
+采用普通合并，保留两边历史；14个冲突文件是重复迁移后落后的公共功能，按主线已验版本解决。原本地 `8839103d` 与主线ledger实现等价，历史保留。没有强推，没有把尚待真机验收的Windows专用实现反向合入main。
 
-## 未迁移及原因
+## 本次验证边界
 
-- `4799d385`、`e3563f66` 的 API/runtime 文件与测试已由 `7b001dd9` 等价迁移；旧提交的历史不能直接合并到新分支。
-- 旧分支中的设计预览目录属于历史 UI 参考，不是 Windows 运行能力，也不进入 canonical Windows 开发线。
-- `18e7bb93` 只是旧分支测试隔离修补，当前 `main` 的测试夹具已包含对应隔离边界，没有单独重放。
+- Windows集成worktree运行Python定向验证：**36 passed、10 skipped**。覆盖候选查询、资源目录/贴纸采用、保存后中断恢复、打包资源布局，以及平台文件/环境；跳过项为当前macOS不能执行的Windows凭据和Job Object等测试。
+- 桌面脚本：真实electron-builder过滤复制后加载三个Skill、构建身份、配置、standalone资源物化均通过。
+- main打包布局测试2项通过，构建身份与Skill过滤加载通过。未生成安装包，未发布Release；不是全量CI通过声明。
+- 当前候选Windows真机安装、启动退出恢复、真实模型、媒体和设备播放仍未验收。历史安装包证据不代替本次候选。
 
-## 验证证据
+## Windows电脑接续
 
-- `node apps/desktop/scripts/build-identity-test.js`：PASS。
-- `node --check apps/desktop/electron-builder.windows.cjs`、`node --check apps/desktop/scripts/generate-build-identity.js`、`python3 -m py_compile scripts/windows_backend_probe.py`：通过。
-- API Windows 相关回归：34 passed，4 skipped（Windows 专属凭据用例在 macOS 跳过）。
-- Windows 真机、安装包启动/退出恢复、真实模型和真实成片尚未在 Windows 主机验收；这些仍是产品验收缺口。
+1. 在现有Windows checkout先检查 `git status` 并保留当地修改，然后fetch并继续 `codex/windows-integration-1.5.2`；干净且无分叉时使用 `git pull --ff-only`。有本地独有提交则先核对合并，不使用reset或强推覆盖。
+2. 按该分支的 `apps/desktop/README.md` 安装依赖、构建Windows preview包（`pnpm --filter ai-video-diary-studio build:win`）。Pi与Node仍是外部运行依赖，不因同步自动安装。
+3. 验证安装/启动API与Web、凭据持久化、Pi真实对话及停止后子进程回收；检查Skill目录、贴纸和音频预览，正式采用并出片、播放、撤销。
+4. CPU准备按Windows设备实际能力生成；不要复制Mac设备proof、锁、资源档、数据库或密钥。
 
-## 退役条件
+Windows发现的通用业务修复回归main；专用适配保留在本分支，获得本平台证据后再决定反向合入。后续共用功能从main同步，不再为每个功能另开Windows分支。
 
-Draft PR #146 已关闭，`windows/local-model-validation` 已删除；本记录和上述提交作为迁移与回滚依据保留，后续只从 `codex/windows-integration-1.5.2` 继续开发。
+## 已保留的历史迁移
+
+`7b001dd9` 平台文件/进程/凭据、`f9bb01f7` 预览安装器、`74bf0381` 打包硬化、`80b31e3a` 可移植开发入口均保留。Draft PR #146已关闭、旧 `windows/local-model-validation` 分支已退役；旧迁移细节查Git历史，不恢复旧开发线。
