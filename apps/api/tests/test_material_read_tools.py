@@ -305,3 +305,14 @@ def test_library_tool_summary_uses_actual_counts_and_never_claims_ocr_is_ready()
     summary = _safe_tool_result_summary("read_material_library_status", {"details": {"total_count": 151, "analysis_counts": {"ready": 1}}}, False)
     assert "151" in summary and "转写和OCR需另看分项" in summary
     assert "成功" not in _safe_tool_result_summary("search_material_library", {}, True)
+
+
+def test_candidate_bundle_passes_explicit_profile_versions_and_rejects_partial_selection(tmp_path):
+    path = "/api/production/materials/asset-one/candidate-bundle?person_profile_id=person-one&person_version=v2&voice_profile_id=voice-one&voice_version=v3"
+    bundle = {"schema": "candidate-bundle/v1", "candidates": [], "missing_domains": []}
+    out = call(tmp_path, "read_material_candidate_bundle", {path: bundle}, params={
+        "asset_id": "asset-one", "person_profile_id": "person-one", "person_version": "v2",
+        "voice_profile_id": "voice-one", "voice_version": "v3"})
+    assert out["ok"] and out["calls"][0]["path"] == path
+    rejected = call(tmp_path, "read_material_candidate_bundle", {}, params={"asset_id": "asset-one", "voice_profile_id": "voice-one"})
+    assert not rejected["ok"] and not rejected["calls"]

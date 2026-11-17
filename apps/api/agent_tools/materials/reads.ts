@@ -66,12 +66,24 @@ export function registerMaterialReads(pi: ToolRegistrar, {request, boundSelectio
       asset_id: { type: "string", minLength: 1 },
       query: { type: "string", maxLength: 120 },
       knowledge_item_id: { type: "string", minLength: 1 },
+      person_profile_id: { type: "string", minLength: 1, description: "用户明确选择的人物档案 ID，须同时提供 person_version" },
+      person_version: { type: "string", minLength: 1 },
+      voice_profile_id: { type: "string", minLength: 1, description: "用户明确选择的声音档案 ID，须同时提供 voice_version" },
+      voice_version: { type: "string", minLength: 1 },
       limit: { type: "integer", minimum: 1, maximum: 20 },
     }, required: ["asset_id"], additionalProperties: false },
-    execute: async (_id: string, params: { asset_id: string; query?: string; knowledge_item_id?: string; limit?: number }) => {
+    execute: async (_id: string, params: { asset_id: string; query?: string; knowledge_item_id?: string; person_profile_id?: string; person_version?: string; voice_profile_id?: string; voice_version?: string; limit?: number }) => {
       const query = new URLSearchParams();
       if (params.query) query.set("q", params.query);
       if (params.knowledge_item_id) query.set("knowledge_item_id", params.knowledge_item_id);
+      for (const kind of ["person", "voice"] as const) {
+        const id = params[`${kind}_profile_id`], version = params[`${kind}_version`];
+        if ((id === undefined) !== (version === undefined)) throw new Error("人物或声音候选必须同时提供 ID 和版本");
+        if (id !== undefined && version !== undefined) {
+          query.set(`${kind}_profile_id`, id);
+          query.set(`${kind}_version`, version);
+        }
+      }
       if (params.limit !== undefined) query.set("limit", String(params.limit));
       const suffix = query.toString() ? `?${query}` : "";
       const value = await read(`/api/production/materials/${encodeURIComponent(params.asset_id)}/candidate-bundle${suffix}`);

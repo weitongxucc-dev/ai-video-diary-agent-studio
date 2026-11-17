@@ -119,6 +119,7 @@ def build_candidate_bundle(
     material_matches: Iterable[Any] = (), knowledge_claims: Iterable[Any] = (),
     *, material_source_revision_for=None, material_asset=None, material_segment_for=None,
     material_quality_profile=None, material_quality_profile_for=None, knowledge_requested: bool = False,
+    profile_candidates: Iterable[dict[str, object]] = (),
 ) -> dict[str, object]:
     """Return a bounded, explicitly uncertain candidate envelope."""
     candidates = []
@@ -135,6 +136,9 @@ def build_candidate_bundle(
             quality_profile=profile,
         ))
     candidates.extend(_knowledge_candidate(item) for item in knowledge_claims)
+    profiles = list(profile_candidates)
+    candidates.extend(profiles)
+    included_domains = {item["kind"].removesuffix("_profile") for item in profiles}
     return {
         "schema": "candidate-bundle/v1",
         "candidates": candidates,
@@ -145,6 +149,7 @@ def build_candidate_bundle(
             "confirmed": sum(item["status"] == "confirmed" for item in candidates),
             "needs_confirmation": sum(item["authorization"]["status"] == "needs_confirmation" for item in candidates),
         },
-        "missing_domains": (["person", "voice"] if knowledge_requested else ["knowledge", "person", "voice"]),
+        "missing_domains": [domain for domain in (["person", "voice"] if knowledge_requested else ["knowledge", "person", "voice"])
+                            if domain not in included_domains],
         "instruction": "候选、证据、授权和质量状态必须按原值解释；unknown/needs_confirmation 不能当作确认事实或采用许可。",
     }
