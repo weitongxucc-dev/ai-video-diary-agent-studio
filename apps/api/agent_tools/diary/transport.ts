@@ -205,6 +205,10 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   if (!task) return null;
   const args = {task_id: decodeURIComponent(task[1])};
   const suffix = task[2];
+  const resourceHistory=suffix.match(/^\/audio\/resources\/([^/]+)\/history$/);
+  if(method==='GET'&&resourceHistory&&only('version')&&query.has('version'))return result('read_audio_resource_history',{...args,resource_id:decodeURIComponent(resourceHistory[1]),version:Number(query.get('version'))});
+  const audioResourceRequest=suffix.match(/^\/audio\/resource-requests\/([^/]+)$/);
+  if(method==='GET'&&audioResourceRequest&&!search)return result('read_audio_resource_request',{...args,request_id:decodeURIComponent(audioResourceRequest[1])});
   if (method === 'POST' && suffix === '/scripts/windows' && !search) return result('start_script_window',{...args,payload});
   const patchScriptSections=suffix.match(/^\/scripts\/([^/]+)\/sections$/);
   if (method === 'PATCH' && patchScriptSections && !search)
@@ -283,6 +287,7 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     if (mediaJob && !search) return result('read_task_media_job', {...args, job_id: decodeURIComponent(mediaJob[1])});
   }
   if (method !== 'POST' || !payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  if(suffix==='/audio/resources'&&!search)return result('import_audio_resource',{...args,payload});
   if (['/execution/start', '/execution/resume'].includes(suffix) && only('assistant_turn_id'))
     return result(suffix.endsWith('/start') ? 'start_creation_execution' : 'resume_creation_execution',
       {...args, assistant_turn_id: query.get('assistant_turn_id'), payload});

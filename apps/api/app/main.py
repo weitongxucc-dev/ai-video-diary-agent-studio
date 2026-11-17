@@ -305,7 +305,7 @@ from app.device_invite_accept_routes import (
     DeviceInviteAcceptResponse, build_device_invite_accept_router,
 )
 from app.content_template_routes import build_content_template_router
-from app.editing_resource_catalog import editing_resource_catalog
+from app.editing_resource_catalog import editing_resource_catalog, resource_preview_path
 from app.editing_resource_routes import build_editing_resource_router
 from app.creation.source_inputs_use_case import CreationSourceInputs
 from app.task_edit_routes import CoverConfirmationHttpAdapter, TaskEditReceiptHttpAdapter, build_task_edit_router
@@ -1726,6 +1726,17 @@ def _audio_ingress_use_case(repository=None):
     return AudioIngressUseCase(repo, audio, settings.effective_temporary_root_path / 'audio-waveforms')
 
 
+def _resource_audio_use_case():
+    from app.creation.resource_audio_use_case import ResourceAudioUseCase
+    runtime = _creation_runtime()
+    return ResourceAudioUseCase(
+        production_repo, _audio_ingress_use_case(), runtime.registrations['creation_job'].owner.task_media,
+        catalog_for=editing_resource_catalog, path_for=resource_preview_path,
+        temporary_root=settings.effective_temporary_root_path,
+        cpu_budget=lambda: _device_operation_budget("cpu_audio"),
+        receipt_for=_media_result_receipt, conversations=conversation_repo)
+
+
 def _submit_audio_ingress(task_id, request, operation, result_kind, *, audio=None, arguments=None):
     workspace_id = current_workspace_id(request)
     if audio is None:
@@ -2148,6 +2159,7 @@ def _clip_preview_submission_http_adapter():
 def _task_audio_http_router(route_names):
     return build_task_audio_router(
         catalog_for=editing_resource_catalog,
+        resource_audio_for=_resource_audio_use_case,
         submit_for=lambda: _submit_audio_ingress,
         workspace_for=lambda: current_workspace_id,
         task_for=lambda: _creation_task_or_404,
@@ -2168,7 +2180,8 @@ def _task_audio_http_router(route_names):
     )
 
 
-app.include_router(_task_audio_http_router(("import_creation_task_audio", "import_creation_task_audio_resource")))
+app.include_router(_task_audio_http_router(("import_creation_task_audio", "import_creation_task_audio_resource",
+    "read_creation_task_audio_resource_request", "read_creation_task_audio_resource_history")))
 
 
 app.include_router(_task_audio_http_router(("list_creation_task_recordings",)))
@@ -6145,6 +6158,7 @@ def _task_business(*, generation_case=None):
         native_case=None if generation_case is not None else _native_task_operations_case(),
         timeline_restores=None if generation_case is not None else _timeline_restore_use_case(),exact_case_for=_exact_preview_use_case,
         edit_controls=None if generation_case is not None else _edit_control_use_case(),
+        resource_audio=None if generation_case is not None else _resource_audio_use_case(),
         media_jobs_list=_list_goal_media_jobs,execution_capabilities=_task_execution_capability_facts,
         device_preparation=_dispatch_device_preparation, quality=_quality_application(),
         generation_case=generation_case, creator_memory=_creator_memory_facts,

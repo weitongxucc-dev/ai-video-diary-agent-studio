@@ -30,7 +30,7 @@ ASSISTANT_BUSINESS_TOOLS = {
 SCRIPT_WINDOW_TOOL_OPERATIONS = {'start_script_window':'start','patch_script_sections':'patch',
     'confirm_saved_script':'confirm','read_script_window_request':None}
 
-TASK_READ_PREVIEW_TOOLS = ("read_video_templates", "read_editing_resource_catalog", "read_agent_run_trace", "read_visual_template", "save_visual_template", "update_visual_template", "start_script_window", "patch_script_sections", "confirm_saved_script", "read_script_window_request", "prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
+TASK_READ_PREVIEW_TOOLS = ("import_audio_resource", "read_audio_resource_request", "read_audio_resource_history", "read_audio_resource_import", "read_video_templates", "read_editing_resource_catalog", "read_agent_run_trace", "read_visual_template", "save_visual_template", "update_visual_template", "start_script_window", "patch_script_sections", "confirm_saved_script", "read_script_window_request", "prepare_device_resources", "read_device_preparation", "finalize_device_preparation", "read_script_sections", "read_execution_capabilities", "read_segment_visual_decision", "read_edit_history", "read_timeline_restore_request", "read_narration_segments", "read_task_object", "read_task_edit_capabilities", "read_task_media_job",
                            "read_storyboard_regeneration",
                            "select_narration_voice", "read_narration_voice_selection",
                            "read_task_media_jobs", "read_typed_edit_request", "preview_typed_edit", "apply_typed_edit",
@@ -48,6 +48,10 @@ ASSISTANT_BUSINESS_TOOLS = {
 }
 
 _PI_TOOL_LABELS = {
+    "import_audio_resource": "导入固定资源音频",
+    "read_audio_resource_request": "回查资源音频原请求",
+    "read_audio_resource_history": "回查资源采用与撤销来源",
+    "read_audio_resource_import": "回查资源音频导入",
     "read_voice_profiles": "读取声音",
     "read_creation_request": "读取制作目标",
     "resume_creation_request": "继续原视频任务",
