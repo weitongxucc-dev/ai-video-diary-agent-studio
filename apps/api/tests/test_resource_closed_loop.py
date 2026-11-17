@@ -86,3 +86,46 @@ def test_history_is_task_scoped_and_never_infers_success_from_missing_result(tmp
     assert original['observations'][0]['job_status'] == 'succeeded'
     with repo._connect() as conn:
         assert conn.execute('SELECT count(*) FROM resource_usage_records').fetchone()[0] == 0
+
+
+def test_original_resource_journal_retains_no_job_failures_unknown_and_member_scope(tmp_path):
+    from app.creation.contracts import TaskEvent
+    from app.models import utc_now
+    repo, task_id = replay(tmp_path)
+    task = repo.task_records.get_creation_task('workspace_a', task_id)
+    records = repo.execution_records
+    inputs = {'resource_id': 'music', 'version': 1,
+              'source': {'raw_command': 'PRIVATE_INSTRUCTION'}, 'actor_identity': {'member_id': 'member'}}
+    failed, _ = records.claim_edit_request(task, 'member', 'request-failed', 'audio_resource', inputs)
+    records.save_edit_request_result(task, failed, status_code=409,
+        response={'detail': {'error':'resource_not_connected', 'reason':'PRIVATE_REASON'}})
+    records.claim_edit_request(task, 'member', 'request-unknown', 'audio_resource', inputs)
+    recorded, _ = records.claim_edit_request(task, 'member', 'request-recorded', 'audio_resource', inputs)
+    records.save_edit_request_result(task, recorded, status_code=202, response={'job_id':'import'})
+    records.append_task_event(TaskEvent('event_import_start', 'workspace_a', task_id, 'import',
+        'task_media_submitted', {'member_id':'member'}, created_at=utc_now()))
+    foreign, _ = records.claim_edit_request(task, 'other-member', 'request-foreign', 'audio_resource', inputs)
+    records.save_edit_request_result(task, foreign, status_code=404, response={})
+    wrong = {**inputs, 'version': 999}
+    records.claim_edit_request(task, 'member', 'wrong-version', 'audio_resource', wrong)
+    def readonly():
+        c = repo._connect()
+        c.execute('PRAGMA query_only=ON')
+        return c
+    reader = ResourceClosedLoopReader(readonly)
+    first = reader.read('workspace_a', task_id, 'music', 1, user_id='member')
+    assert first == reader.read('workspace_a', task_id, 'music', 1, user_id='member')
+    requests = {item['request_id']: item for item in first['requests']}
+    assert requests == {
+        'request-failed': {'request_id':'request-failed', 'status':'rejected', 'status_code':409,
+                           'job_id':None, 'error_code':'resource_not_connected'},
+        'request-unknown': {'request_id':'request-unknown', 'status':'unknown', 'job_id':None},
+        'request-recorded': {'request_id':'request-recorded', 'status':'recorded', 'job_id':'import'},
+    }
+    serialized = json.dumps(first)
+    assert 'PRIVATE_' not in serialized and 'actor_identity' not in serialized
+    # A response locator whose Job identity cannot be reconciled stays unknown.
+    with repo._connect() as c:
+        c.execute("UPDATE task_events SET payload_json=json_set(payload_json,'$.member_id','other-member') WHERE id='event_import_start'")
+    after = reader.read('workspace_a', task_id, 'music', 1, user_id='member')
+    assert next(r for r in after['requests'] if r['request_id']=='request-recorded')['status'] == 'unknown'

@@ -1,6 +1,7 @@
 """Read-only reconstruction from production facts, never the manual usage ledger."""
 from contextlib import closing
 import json
+import re
 
 from app.source_policy import knowledge_item_readable
 from app.materials.resource_governance import resource_trace_metadata
@@ -27,6 +28,41 @@ def _catalogs(value):
     elif isinstance(value, list):
         for child in value:
             yield from _catalogs(child)
+
+
+def _resource_requests(events, jobs, resource_id, version, user_id):
+    """Project the original member's journal; a missing result stays unknown."""
+    by_id = {row['id']: (row, payload) for row, payload in events}
+    job_ids = {row['id'] for row in jobs}
+    requests = []
+    for row, payload in events:
+        inputs = payload.get('inputs', {})
+        if (row['event_type'] != 'edit_request_claimed' or payload.get('phase') != 'audio_resource'
+                or not user_id or payload.get('member_id') != user_id
+                or inputs.get('resource_id') != resource_id or inputs.get('version') != version):
+            continue
+        request = {'request_id': payload['request_id'], 'status': 'unknown', 'job_id': None}
+        saved = by_id.get(row['id'] + '_result')
+        if saved is not None and saved[0]['event_type'] == 'edit_request_result':
+            result = saved[1]
+            status = result.get('status_code')
+            response = result.get('response', {})
+            if type(status) is int and status >= 400:
+                request.update(status='rejected', status_code=status)
+                detail = response.get('detail', {})
+                code = response.get('code') or response.get('error') or (detail.get('error') if isinstance(detail, dict) else None)
+                if isinstance(code, str) and re.fullmatch(r'[a-z][a-z0-9_]{0,79}', code):
+                    request['error_code'] = code
+            elif type(status) is int and 200 <= status < 300:
+                job_id = response.get('job_id')
+                start = by_id.get(f'event_{job_id}_start')
+                identity = inputs.get('actor_identity')
+                if (job_id in job_ids and start is not None and start[0]['job_id'] == job_id
+                        and isinstance(identity, dict) and identity
+                        and all(start[1].get(key) == value for key, value in identity.items())):
+                    request.update(status='recorded', job_id=job_id)
+        requests.append(request)
+    return requests
 
 
 class ResourceClosedLoopReader:
@@ -64,11 +100,13 @@ class ResourceClosedLoopReader:
             operations = rows('edit_operations', 'created_at,id')
         truncated = any(len(items) > 2000 for items in (events, jobs, artifacts, transforms, versions, operations))
         events = [(row, json.loads(row['payload_json'])) for row in events[:2000]]
+        requests = _resource_requests(events, jobs[:2000], resource_id, version, user_id)
         transforms = [(row, json.loads(row['parameters_json'])) for row in transforms[:2000]]
         selected = lambda c: c.get('id') == resource_id and c.get('version') == version
         import_jobs = {row['job_id'] for row, payload in events if any(selected(c) for c in _catalogs(payload))}
         import_jobs.update(row['job_id'] for row, payload in transforms if any(selected(c) for c in _catalogs(payload)))
         import_jobs.discard(None)
+        import_jobs.update(item['job_id'] for item in requests if item['status'] == 'recorded')
         sources = {row['logical_ref'] for row in artifacts[:2000] if row['producer_job_id'] in import_jobs}
         # Provenance graph follows registered input/output refs, not catalog labels.
         related = set(sources)
@@ -130,6 +168,7 @@ class ResourceClosedLoopReader:
         return {'schema': 'resource-closed-loop/v1', 'workspace_id': workspace_id, 'task_id': task_id,
             'resource_id': resource_id, 'resource_version': version,
             'completeness': 'partial' if truncated else 'complete',
+            'requests': requests,
             'import_job_ids': sorted(import_jobs), 'timeline_history': timeline, 'jobs': job_projection,
             'artifacts': [{'artifact_id': row['id'], 'producer_job_id': row['producer_job_id'],
                 'kind': row['kind'], 'sha256': row['sha256']} for row in related_artifacts.values()],
