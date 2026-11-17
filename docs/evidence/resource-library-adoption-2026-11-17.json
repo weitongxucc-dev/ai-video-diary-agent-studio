@@ -752,14 +752,14 @@
     ]
   },
   "remaining": [
-    "people generation feedback and unified cross-domain retrieval beyond fixed profile candidate readbacks",
+    "successful real-provider cross-domain tool use and saved-edit interruption acceptance; current provider returns 529 before action",
+    "people real generation feedback; cross-domain retrieval quality and large-library evaluation",
     "complete effect evaluation of the three method-only editing Skills",
-    "LUT and independent third-party sticker packages; additional music/sound/effect resources",
-    "cross-device and packaged Electron playback",
-    "broader natural-language history targeting beyond one uniquely identified undone music adoption",
-    "continuous live audio audition and pointer dragging not verified; saved gain changes require regenerated preview/output",
-    "process-crash and cross-device provider/Job recovery beyond bounded import-response-loss/startup recovery",
-    "general task program execution resource profile unavailable in this runtime; audio/template calibrated paths are available"
+    "LUT, animated stickers, additional music/sound/effect resources; three Fluent static stickers are connected",
+    "cross-device and packaged Electron playback; Windows, mobile and installed CLI acceptance",
+    "broader ambiguous history targeting, multiple-action crashes and cross-device provider/Job recovery",
+    "continuous live audio audition and pointer dragging unverified; saved gain changes need a regenerated output",
+    "general task program execution resource profile unavailable; audio/template calibrated paths available"
   ],
   "code_commits": [
     "ead5e5d6",
@@ -769,7 +769,10 @@
     "9c9583d6",
     "2ef5b41f",
     "9c18c7ba",
-    "624be7f"
+    "624be7f",
+    "0dca85dc",
+    "894a80a5",
+    "aedc9ca3"
   ],
   "voice_music_agent_followup": {
     "date": "2026-11-17",
@@ -5059,5 +5062,494 @@
         "evaluation_limit": "confirms currentness readback and final answer retention, not a general semantic-quality or human-listening evaluation"
       }
     }
+  },
+  "core_wave_5": {
+    "date": "2026-11-17",
+    "baseline": "1c9f22d2",
+    "code_commits": {
+      "agent": "0dca85dc",
+      "data": "894a80a5",
+      "resources": "aedc9ca3"
+    },
+    "data_governance": {
+      "schema": "candidate-discovery/v1",
+      "readback_schema": "candidate-readback/v1",
+      "real_member_api_queries": [
+        {
+          "query": "键盘",
+          "domains": {
+            "material": {
+              "status": "matched",
+              "returned_count": 2,
+              "total_count": 7,
+              "truncated": true
+            },
+            "knowledge": {
+              "status": "empty",
+              "returned_count": 0,
+              "total_count": 0,
+              "truncated": false
+            },
+            "person": {
+              "status": "empty",
+              "returned_count": 0,
+              "total_count": 0,
+              "truncated": false
+            },
+            "voice": {
+              "status": "empty",
+              "returned_count": 0,
+              "total_count": 0,
+              "truncated": false
+            }
+          },
+          "fixed_readbacks": [
+            {
+              "domain": "material",
+              "object_id": "asset_3edb319e1e9933e1",
+              "version": "2026-11-15T02:45:13.704358+00:00",
+              "status": "matched",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "query": "曜核",
+          "domains": {
+            "material": {
+              "status": "empty",
+              "returned_count": 0,
+              "total_count": 0,
+              "truncated": false
+            },
+            "knowledge": {
+              "status": "matched",
+              "returned_count": 1,
+              "total_count": 1,
+              "truncated": false
+            },
+            "person": {
+              "status": "empty",
+              "returned_count": 0,
+              "total_count": 0,
+              "truncated": false
+            },
+            "voice": {
+              "status": "empty",
+              "returned_count": 0,
+              "total_count": 0,
+              "truncated": false
+            }
+          },
+          "fixed_readbacks": [
+            {
+              "domain": "knowledge",
+              "object_id": "ki_44c00089a6c74b2493f2e1c63df3c106",
+              "version": "1",
+              "status": "matched",
+              "count": 1
+            }
+          ]
+        },
+        {
+          "query": "voice_cc",
+          "domains": {
+            "material": {
+              "status": "empty",
+              "returned_count": 0,
+              "total_count": 0,
+              "truncated": false
+            },
+            "knowledge": {
+              "status": "empty",
+              "returned_count": 0,
+              "total_count": 0,
+              "truncated": false
+            },
+            "person": {
+              "status": "empty",
+              "returned_count": 0,
+              "total_count": 0,
+              "truncated": false
+            },
+            "voice": {
+              "status": "matched",
+              "returned_count": 1,
+              "total_count": 1,
+              "truncated": false
+            }
+          },
+          "fixed_readbacks": [
+            {
+              "domain": "voice",
+              "object_id": "voice_cc",
+              "version": "v2",
+              "status": "matched",
+              "count": 1
+            }
+          ]
+        }
+      ],
+      "backend_goal_scope": "fixed task references, selected-only segment stays segment-scoped; omitted domain never searches whole library",
+      "verification": {
+        "domain_tests": 11,
+        "http_scope_tests": 4,
+        "node_transport_tests": 2
+      },
+      "unverified": [
+        "real person hit/generation feedback",
+        "successful provider use of new tools",
+        "large-library quality and bounded owner query performance"
+      ]
+    },
+    "agent_recovery": {
+      "saved_request_anchor": "edit_request_source -> original claim -> result 200 -> applied operation with matching trusted source",
+      "terminal_status_preserved": [
+        "failed",
+        "stopped"
+      ],
+      "unknown_claim_promoted": false,
+      "verification": {
+        "core_and_related_tests": 11,
+        "owned_child_crash": "real bridge-protocol subprocess; temporary database; committed edit; child terminated; original request replay and no duplicate operation",
+        "legacy_metadata_fixture_failures": 2,
+        "fixture_failure_reason": "five whole-device permit budgets absent; failure before recovery assertions; no budget weakening"
+      },
+      "real_provider_monitor": {
+        "killed": false,
+        "reason": "terminal_before_saved_running_window",
+        "turn_id": "e010afd0-89a5-43db-b216-72b00c4a3026",
+        "conversation_id": "bff313b4-a3ab-4c44-be11-cb93e141d5df",
+        "client_request_id": "8c1a07eb-e4c8-4e49-b96d-cd74483343a2",
+        "status_before": "failed"
+      },
+      "real_provider_acceptance": "blocked: provider 529 before any saved edit; no process was killed",
+      "runtime_after_restart": {
+        "api_pid": 69278,
+        "projection_tracebacks": 0
+      }
+    },
+    "resource": {
+      "ids": [
+        "fluent:sticker-red-heart",
+        "fluent:sticker-party-popper",
+        "fluent:sticker-light-bulb"
+      ],
+      "source_manifest": "apps/api/app/resource_assets/fluent-emoji/manifest.json",
+      "catalog_count": 78,
+      "svg_previews": {
+        "status": 200,
+        "mime": "image/svg+xml",
+        "count": 3
+      },
+      "adoption": {
+        "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+        "sequence": 14,
+        "timeline_version_id": "timeline_ae0afe8d168f44de8f91f71a073f3e3c",
+        "overlay": {
+          "id": "436e1ce9-c2e5-49a7-b592-2c451ba71e43",
+          "template_id": "builtin_visual_fluent-sticker-party-popper",
+          "template_version": 1,
+          "start_seconds": 1.0,
+          "end_seconds": 3.0,
+          "x": 0.75,
+          "y": 0.25,
+          "width": 0.25
+        },
+        "entry": "visible resource drawer: prepare then confirm"
+      },
+      "output": {
+        "timeline_version_id": "timeline_delivery_job_a16268d4142b411caabadd852c_render_5331e2171e33a18b2c7824c91ff693046517526e5a96bc3f6068415967f3c28b",
+        "timeline_sequence": 15,
+        "path": "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/fluent-party-popper-2026-11-17.mp4",
+        "size_bytes": 4356173,
+        "sha256": "3e0d25bd66710837df0601fc736a6819c4df1bd3e3dfc12612e7cdbfce133000",
+        "duration_seconds": 8.0,
+        "video": {
+          "codec_name": "h264",
+          "width": 1080,
+          "height": 1920,
+          "r_frame_rate": "30/1"
+        },
+        "audio": {
+          "codec_name": "aac",
+          "sample_rate": "48000",
+          "channels": 2
+        },
+        "http_version_headers_match": true,
+        "full_decode_exit_code": 0
+      },
+      "observation": {
+        "operation": "output_observation",
+        "target_refs": [],
+        "input_digest": "a8aed9b3daf5c4127e7eb8f33be14cdbf11982edabf1f3a793b397f37afc078b",
+        "created_at": "2026-11-17T08:14:22.324047Z",
+        "job_id": "job_media_109d8d23817298b75a2cd4522324c2015847ad0323a39a2ab762a70e654d10f5",
+        "status": "succeeded",
+        "result_kind": "observation",
+        "result_url": "/api/creation-tasks/task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810/media-jobs/job_media_109d8d23817298b75a2cd4522324c2015847ad0323a39a2ab762a70e654d10f5",
+        "device_request_id": "fdb419a20a2848888ca6b1a3470fd687",
+        "waiting_reason": null,
+        "base_version_id": "timeline_delivery_job_a16268d4142b411caabadd852c_render_5331e2171e33a18b2c7824c91ff693046517526e5a96bc3f6068415967f3c28b",
+        "result": {
+          "observation_id": "job_media_109d8d23817298b75a2cd4522324c2015847ad0323a39a2ab762a70e654d10f5",
+          "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+          "timeline_version_id": "timeline_delivery_job_a16268d4142b411caabadd852c_render_5331e2171e33a18b2c7824c91ff693046517526e5a96bc3f6068415967f3c28b",
+          "timeline_sequence": 15,
+          "observed_at": "2026-11-17T08:14:27.286930+00:00",
+          "target": {
+            "kind": "final",
+            "job_id": null,
+            "artifact_id": null
+          },
+          "ocr_execution": {
+            "status": "unavailable",
+            "reason": "本地 OCR 未配置或输出观察执行范围尚未标定。"
+          },
+          "output": {
+            "artifact_id": "artifact_final_mux_59a86d6fd541de4b2fb5c33bb37e41b84abccf86612e25468a43943804bc9696",
+            "artifact_kind": "rendered_video",
+            "sha256": "3e0d25bd66710837df0601fc736a6819c4df1bd3e3dfc12612e7cdbfce133000",
+            "registered_width": 1080,
+            "registered_height": 1920,
+            "size_bytes": 4356173,
+            "producer_job_id": "job_a16268d4142b411caabadd852c1a5ed2"
+          },
+          "output_role": "composed_output",
+          "material_references": [],
+          "measurement_scope": "actual_output_bounded_frames",
+          "media": {
+            "width": 1080,
+            "height": 1920,
+            "duration_seconds": 8.0,
+            "video_codec": "h264",
+            "video_frame_rate": "30/1",
+            "audio_stream_count": 1
+          },
+          "samples": [
+            {
+              "id": "frame-0",
+              "timestamp_seconds": 0.5,
+              "width": 720,
+              "height": 1280,
+              "sha256": "dc9f9b9a4b6b58e318665af0b31c79c21e6fbf7b228d230b5ee6daa88a55a661",
+              "pixel_mean_rgb": [
+                67.683,
+                72.489,
+                72.376
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            },
+            {
+              "id": "frame-1",
+              "timestamp_seconds": 2.0,
+              "width": 720,
+              "height": 1280,
+              "sha256": "baa0f8e94a47bb163980402904c1a834eac483d293e89daa7bf067e06a6baa9d",
+              "pixel_mean_rgb": [
+                82.406,
+                76.67,
+                75.12
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source",
+                "overlay:436e1ce9-c2e5-49a7-b592-2c451ba71e43"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            },
+            {
+              "id": "frame-2",
+              "timestamp_seconds": 3.5,
+              "width": 720,
+              "height": 1280,
+              "sha256": "73c80f6c6b7b2a3d0f35505db87d10f3cec793b7d6e11fc0e003a9fbad3b5776",
+              "pixel_mean_rgb": [
+                72.693,
+                72.768,
+                73.205
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            }
+          ],
+          "ocr_model_id": null,
+          "unavailable": [
+            {
+              "scope": "visual_semantics",
+              "reason": "本地合成画面的语义理解尚无受许可执行能力；像素测量不代表看懂内容。"
+            },
+            {
+              "scope": "speech_and_listening",
+              "reason": "本次只观察实际画面，没有转写或听感检查。"
+            },
+            {
+              "scope": "ocr",
+              "reason": "本地 OCR 未配置或输出观察执行范围尚未标定；未提取文字。"
+            }
+          ]
+        },
+        "failure_reason": null,
+        "repair_action": null,
+        "resource_wait": null
+      },
+      "browser": {
+        "played_to_seconds": 8,
+        "visual_sample_seconds": 2,
+        "finding": "party popper visible at upper-right, square aspect retained, no opaque bounding rectangle",
+        "screenshots_local_only": [
+          "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/yaohe-wave5-sticker-adopted.png",
+          "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/yaohe-wave5-sticker-rendered.png"
+        ],
+        "human_listening": "not newly requested or claimed"
+      },
+      "undo": {
+        "entry": "resource drawer undo this adoption",
+        "sequence": 16,
+        "timeline_version_id": "timeline_452e43a31ce248769550d09f2c8b78c4",
+        "overlay_count": 0,
+        "original_clips_and_audio_unchanged": true,
+        "historical_output_preserved": true
+      },
+      "verification": {
+        "python_passed": 17,
+        "python_skipped": 2,
+        "web_panel_and_adoption_passed_before_final_display_fix": 13,
+        "web_adoption_passed_after_final_display_fix": 4,
+        "node_manifest_sdk_passed": 9,
+        "typescript": "passed",
+        "eslint_errors": 0,
+        "eslint_img_warnings": 4
+      },
+      "boundary": "Mac browser with desktop HTML renderer; not packaged Electron or cross-device acceptance"
+    },
+    "provider_attempts": [
+      {
+        "purpose": "yaohe-wave5-discover",
+        "conversation_id": "fb62b2dc-b0c5-45b1-aa5e-5fd14bb556aa",
+        "turn_id": "5c4aa7bd-1d06-400b-a546-c771a91f01dc",
+        "client_request_id": "0e58f0c9-55ae-49a3-bead-21603a7ca7c0",
+        "status": "failed",
+        "failure": "provider_overloaded_529",
+        "http_status": 503,
+        "usage_status": "unknown",
+        "tool_events": [
+          {
+            "type": "tool_start",
+            "tool_id": 0,
+            "label": "读取当前任务（发送前）"
+          },
+          {
+            "type": "tool_end",
+            "tool_id": 0,
+            "label": "读取当前任务（发送前）",
+            "ok": true,
+            "summary": "已读取当前任务、固定输入、已确认文案和后台安排；尚未提交操作。"
+          }
+        ],
+        "no_business_mutation": true
+      },
+      {
+        "purpose": "yaohe-wave5-discover-retry",
+        "conversation_id": "e460b3c0-ce53-47c0-acc5-e7257466f061",
+        "turn_id": "8fad8993-19a7-4bd3-bb7f-89cd76f545bc",
+        "client_request_id": "a8aefc77-ccb4-4fc9-93cb-cce3d2f23904",
+        "status": "failed",
+        "failure": "provider_overloaded_529",
+        "http_status": 503,
+        "usage_status": "unknown",
+        "tool_events": [
+          {
+            "type": "tool_start",
+            "tool_id": 0,
+            "label": "读取当前任务（发送前）"
+          },
+          {
+            "type": "tool_end",
+            "tool_id": 0,
+            "label": "读取当前任务（发送前）",
+            "ok": true,
+            "summary": "已读取当前任务、固定输入、已确认文案和后台安排；尚未提交操作。"
+          }
+        ],
+        "no_business_mutation": true
+      },
+      {
+        "purpose": "yaohe-wave5-interrupt",
+        "conversation_id": "bff313b4-a3ab-4c44-be11-cb93e141d5df",
+        "turn_id": "e010afd0-89a5-43db-b216-72b00c4a3026",
+        "client_request_id": "8c1a07eb-e4c8-4e49-b96d-cd74483343a2",
+        "status": "failed",
+        "failure": "provider_overloaded_529",
+        "http_status": 503,
+        "usage_status": "unknown",
+        "tool_events": [
+          {
+            "type": "tool_start",
+            "tool_id": 0,
+            "label": "读取当前任务（发送前）"
+          },
+          {
+            "type": "tool_end",
+            "tool_id": 0,
+            "label": "读取当前任务（发送前）",
+            "ok": true,
+            "summary": "已读取当前任务、固定输入、已确认文案和后台安排；尚未提交操作。"
+          }
+        ],
+        "no_business_mutation": true
+      }
+    ],
+    "protected_task": "task_93d78477016b",
+    "protected_settings_dirty_preserved": true
   }
 }
