@@ -549,6 +549,10 @@ class DeviceResourcePreparation:
         container_bytes = max(PCM_CONTAINER_ALLOWANCE_BYTES, receipt['media']['audio']['bytes'] - math.ceil(
             shape.sample_rate * shape.channels * 4 * plan['probe_seconds']))
         audio_bytes = math.ceil(shape.sample_rate * shape.channels * 4 * delivery_duration) + container_bytes
+        # Float PCM mix and normalized narration sources coexist on disk.
+        # Each admitted input may span the full prepared source duration.
+        normalization_bytes = shape.audio_input_count * (math.ceil(delivery_duration * 192000) + PCM_CONTAINER_ALLOWANCE_BYTES)
+        audio_temporary_bytes = audio_bytes + normalization_bytes
         input_bytes = max(video_bytes + audio_bytes * shape.audio_input_count, shape.source_bytes or 0)
         output_bytes = video_bytes + audio_bytes
         timeout = max(receipt['elapsed_seconds'], receipt['elapsed_seconds'] * shape.duration_seconds / plan['probe_seconds']) * policy.measured_margin
@@ -561,8 +565,8 @@ class DeviceResourcePreparation:
             raw_frames = math.ceil(shape.width_px*shape.height_px*4*30*delivery_duration)*shape.template_count
             render = replace(render, additional_disk_bytes=render.additional_disk_bytes+raw_frames)
         audio = CpuAudioBudget(shape.audio_input_count, max(audio_bytes * shape.audio_input_count, shape.source_bytes or 0), delivery_duration,
-            delivery_duration, shape.sample_rate, shape.channels, audio_bytes, 1, timeout, rss, threads,
-            policy.sample_seconds, rss, math.ceil(audio_bytes * policy.measured_margin))
+            delivery_duration, shape.sample_rate, shape.channels, audio_temporary_bytes, 1, timeout, rss, threads,
+            policy.sample_seconds, rss, math.ceil(audio_temporary_bytes * policy.measured_margin))
         budget = replace(original, cpu_render=render, cpu_audio=audio,
             clip_preview=replace(render, max_pixel_seconds=render.max_pixel_seconds * 2),
             max_unit_input_bytes=max(original.max_unit_input_bytes, render.max_input_bytes))

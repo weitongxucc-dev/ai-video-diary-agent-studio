@@ -561,6 +561,9 @@ class MetadataEditUseCase:
             timeline_version_id=current_version.id, connection=connection)
         if tracks:
             return tracks
+        if current_version.snapshot.get('subtitle_track_ids'):
+            return [self.repository.subtitle_records.get_subtitle_track(workspace_id, task.id, track_id,
+                connection=connection) for track_id in current_version.snapshot['subtitle_track_ids']]
         if current_version.snapshot.get('subtitle_track_ids') == []:
             return []
         if montage is None:

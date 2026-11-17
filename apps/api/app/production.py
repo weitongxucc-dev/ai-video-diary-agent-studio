@@ -595,7 +595,8 @@ class ProductionRepository:
         self.montage_plan_adoption = MontagePlanAdoptionTransaction(self._connect,
             decode_task=creation_task_from_payload, read_task=self.task_records.get_creation_task,
             read_montage=self.get_creation_task_montage_plan, require_task=require_creation_task,
-            create_version=self.timeline_records.create_timeline_version)
+            create_version=self.timeline_records.create_timeline_version,
+            create_subtitle_track=self.subtitle_records.create_subtitle_track)
         self.edit_adoption = EditAdoptionTransaction(self._connect,
             require_task=require_creation_task, decode_proposal=self.edit_records.edit_proposal_from_row,
             create_intent=lambda intent, *, connection=None, source=False: self.edit_records.create_edit_intent(

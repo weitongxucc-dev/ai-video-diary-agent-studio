@@ -242,6 +242,25 @@ class SectionInputReader:
         return hashlib.sha256(json.dumps([header.id, section_id, section.content, audio.audio_reference if audio else None],
             ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
+    def has_uncomposed_sections(self, task, *, connection=None):
+        """A saved section is not composed merely because an older montage exists."""
+        with self.creation_execution_read(connection) as conn:
+            return conn.execute(
+                "SELECT 1 FROM timeline_versions v JOIN json_each(v.snapshot_json,'$.stage_segments') s "
+                "JOIN task_events e ON e.workspace_id=v.workspace_id AND e.task_id=v.task_id AND e.id=s.value "
+                "JOIN json_each(e.payload_json,'$.montage.clips') c "
+                "WHERE v.workspace_id=? AND v.task_id=? AND v.id=? "
+                "AND NOT EXISTS(SELECT 1 FROM json_each(v.snapshot_json,'$.stage_segment_invalidations') i "
+                "WHERE i.key=s.key AND json_extract(i.value,'$.publication_id')=s.value) "
+                "AND (NOT EXISTS(SELECT 1 FROM json_each(v.snapshot_json,'$.montage.clips') m "
+                "WHERE json_extract(m.value,'$.id')=json_extract(c.value,'$.id')) "
+                "OR EXISTS(SELECT 1 FROM json_each(v.snapshot_json,'$.subtitle_track_ids') ids "
+                "JOIN subtitle_tracks st ON st.workspace_id=v.workspace_id AND st.task_id=v.task_id AND st.id=ids.value "
+                "JOIN timeline_versions owner ON owner.workspace_id=st.workspace_id AND owner.id=st.timeline_version_id "
+                "WHERE NOT EXISTS(SELECT 1 FROM json_each(owner.snapshot_json,'$.montage.clips') old "
+                "WHERE json_extract(old.value,'$.id')=json_extract(c.value,'$.id')))) LIMIT 1",
+                (task.workspace_id, task.id, task.current_timeline_version_id)).fetchone() is not None
+
     def stage_segment_state(self, workspace_id, task_id, section_id, *, connection=None):
         if connection is None or not connection.in_transaction:
             with self.creation_execution_read() as reader:

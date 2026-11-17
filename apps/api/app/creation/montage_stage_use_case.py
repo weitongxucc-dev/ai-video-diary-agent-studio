@@ -82,7 +82,9 @@ def montage_dependency(repository, task, *, connection):
     checksum = hashlib.sha256()
     def add(value):
         checksum.update(json.dumps(value, sort_keys=True, default=str).encode())
-    add([snapshot.input_digest, current.current_timeline_version_id, current.narration_cache_key])
+    # Preparation measures source facts. Publishing its own resulting timeline
+    # must not invalidate the same grant; the save compares the original version.
+    add([snapshot.input_digest, current.narration_cache_key])
     narration = repository.narration_artifacts.get_narration_artifact(task.workspace_id, current.narration_cache_key, connection=connection)
     if narration is None or narration.task_id != task.id or narration.script_id != header.id:
         raise ValueError('当前创作任务的配音产物不可用')
@@ -145,8 +147,10 @@ class MontageStageUseCase:
             raise MontageStageRejected(status_code=409, detail="人物故事板必须通过当前任务的受许可连续制作入口")
         if task.confirmed_script_id is None or task.narration_cache_key is None:
             raise MontageStageRejected(status_code=409, detail="confirmed script or narration missing")
+        recompose = task.montage_plan_id is not None and self.repository.section_inputs.has_uncomposed_sections(task)
         try:
-            task = self.repository.start_creation_task_montage(workspace_id, task.id)
+            if not recompose:
+                task = self.repository.start_creation_task_montage(workspace_id, task.id)
         except ValueError as exc:
             raise stage_failure(
                 status_code=409,
@@ -157,7 +161,30 @@ class MontageStageUseCase:
                 retryable=False,
             ) from exc
         try:
-            montage, dependency = self._build_candidate(task, creation_plan, grant_context, with_dependency=True)
+            composed_version = None
+            composed_tracks = []
+            if recompose:
+                from uuid import uuid4
+                from app.creation.contracts import TimelineVersion
+                with self.repository.execution_inputs.creation_execution_read() as conn:
+                    _snapshot, dependency = montage_dependency(self.repository, task, connection=conn)
+                    current = self.repository.get_creation_task_montage_plan(workspace_id, task.id, connection=conn)
+                    base = self.repository.timeline_records.get_timeline_version(workspace_id, task.current_timeline_version_id, connection=conn)
+                montage = self.include_adopted_sections(task, creation_task_montage_plan_from_payload(current))
+                montage = replace(montage, id=f'task_montage_{uuid4().hex[:10]}', output_path=None, subtitle_path=None)
+                composed_snapshot = {**base.snapshot, 'montage':creation_task_montage_plan_to_payload(montage)}
+                for key in ('rendered_video_ref','rendered_artifact_id','creation_render_request_id','output_refs',
+                        'transform_run_id','render_input_digest','render_input_timeline_version_id',
+                        'render_input_subtitle_tracks','render_input_subtitles_visible','cover_asset_id'):
+                    composed_snapshot.pop(key, None)
+                composed_version = TimelineVersion(f'timeline_{uuid4().hex}', workspace_id, task.id,
+                    base.id, base.sequence+1, composed_snapshot, None)
+                from app.creation.section_composition_subtitles import compose_subtitles
+                composed_tracks = compose_subtitles(self.metadata, task, base, composed_version, montage)
+                if composed_tracks or 'subtitle_track_ids' in base.snapshot:
+                    composed_snapshot['subtitle_track_ids'] = [track.id for track in composed_tracks]
+            else:
+                montage, dependency = self._build_candidate(task, creation_plan, grant_context, with_dependency=True)
             if task.montage_plan_id is None:
                 montage = self.include_adopted_sections(task,montage)
             def verify_inputs(conn, current):
@@ -188,10 +215,13 @@ class MontageStageUseCase:
                 task.id,
                 montage.id,
                 creation_task_montage_plan_to_payload(montage), verify_inputs=seal_inputs,
+                result_version=composed_version,
+                result_subtitle_tracks=composed_tracks,
+                expected_current_version_id=task.current_timeline_version_id,
             )
             self.metadata.ensure_montage_base(workspace_id, task, montage, verify_inputs=verify_inputs)
         except (KeyError, MediaAuthorityError, ValueError, MontageStageRejected) as exc:
-            task = self.repository.task_records.fail_creation_task_stage(
+            task = task if recompose else self.repository.task_records.fail_creation_task_stage(
                 workspace_id,
                 task.id,
                 stage="montage",
@@ -205,7 +235,8 @@ class MontageStageUseCase:
                 error="montage_plan_failed",
                 reason="素材或配音不满足剪辑计划要求。",
                 impact=task.stage_impact or "未生成剪辑计划。",
-                repair_action=task.stage_repair_action or "审核素材后重试。",
+                repair_action=(str(exc.detail) if isinstance(exc, MontageStageRejected) else str(exc))
+                    if recompose else task.stage_repair_action or "审核素材后重试。",
                 retryable=True,
             ) from exc
         return montage
@@ -330,6 +361,8 @@ class MontageStageUseCase:
             for section_id in audio:
                 state = self.repository.section_inputs.stage_segment_state(task.workspace_id, task.id, section_id, connection=conn)
                 window = windows[section_id]
+                if state is not None and state['current_validity'] == 'invalidated':
+                    state = None  # An explicit later edit owns this section's current montage.
                 if state is not None:
                     if state['narration_reference'] != audio[section_id]['reference']:
                         raise ValueError('已采用段画面与当前配音不一致，须先恢复该段依赖')
@@ -366,10 +399,12 @@ class MontageStageUseCase:
                 ranges[clip.asset_id] = clip.source_end_seconds
             timeline = montage.audio_timeline
             created_graph = montage.narration_linkage_created_audio_timeline
-            if timeline is None or not any(track.role=='narration' for track in timeline.tracks):
-                voice = voice_timeline_from_audio(audio, windows).tracks[0]
-                other_tracks = [track.model_copy(deep=True) for track in timeline.tracks] if timeline else []
-                timeline,created_graph = AudioTimeline(tracks=[voice,*other_tracks]),True
+            voice = voice_timeline_from_audio(audio, windows).tracks[0]
+            narration = next((track for track in timeline.tracks if track.role=='narration'), None) if timeline else None
+            if narration is not None:
+                voice = narration.model_copy(update={'clips':voice.clips}, deep=True)
+            other_tracks = [track.model_copy(deep=True) for track in timeline.tracks if track.role!='narration'] if timeline else []
+            timeline,created_graph = AudioTimeline(tracks=[voice,*other_tracks]),True
             return replace(montage,cues=cues,clips=clips,duration_seconds=round(cursor,3),
                 duration_requirement=requirement.payload(),
                 audio_timeline=timeline,narration_linkage_created_audio_timeline=created_graph,

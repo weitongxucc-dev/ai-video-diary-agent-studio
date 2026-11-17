@@ -2052,7 +2052,9 @@ def upstream_stage_valid(repository, task, stage, *, connection=None):
         plan = repository.get_creation_task_montage_plan(task.workspace_id, task.id)
     except KeyError:
         return False
-    return plan.get("script_id") == task.confirmed_script_id and plan.get("status") in {"ready", "rendering", "rendered", "failed"}
+    return (plan.get("script_id") == task.confirmed_script_id
+        and plan.get("status") in {"ready", "rendering", "rendered", "failed"}
+        and not repository.section_inputs.has_uncomposed_sections(task, connection=connection))
 
 
 def montage_waiting_for_confirmation(repository, task):
