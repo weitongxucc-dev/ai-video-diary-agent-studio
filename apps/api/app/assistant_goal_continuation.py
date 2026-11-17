@@ -524,6 +524,14 @@ class GoalResultProjection:
         self.production, self.conversations = production, conversations
 
     @staticmethod
+    def has_frozen_timeline_source(source):
+        if 'expected_timeline_version_id' not in source or 'expected_timeline_sequence' not in source:
+            return False
+        version, sequence = source['expected_timeline_version_id'], source['expected_timeline_sequence']
+        return (type(sequence) is int and sequence >= 0
+                and (version is None and sequence == 0 or isinstance(version, str) and bool(version)))
+
+    @staticmethod
     def unavailable_fact(kind):
         status, reason = {
             "identity": ("waiting_identity", "interactive_identity_not_available"),
@@ -842,6 +850,8 @@ class GoalResultProjection:
                 or provenance['job_id'] != rendered['owner_id']):
             return None
         source = json.loads(located["payload_json"])
+        if not self.has_frozen_timeline_source(source['source']):
+            return None
         base = source["source"]["expected_timeline_version_id"]
         if (not self.source_belongs_to_goal(goal, source["source"])
                 or version.parent_version_id != base):
@@ -888,6 +898,8 @@ class GoalResultProjection:
         return checkpoint
 
     def execution_source_current(self, task, source, job_id, status):
+        if not self.has_frozen_timeline_source(source):
+            return False
         base = source["expected_timeline_version_id"]
         result = task.current_timeline_version_id
         if result == base:
@@ -905,6 +917,8 @@ class GoalResultProjection:
     def execution_candidate(self, row):
         located = json.loads(row["payload_json"])
         source, job_id = located["source"], located["job_id"]
+        if not self.has_frozen_timeline_source(source):
+            return None
         turn_id = source["assistant_turn_id"]
         goal = self.conversations.get_task_goal(turn_id)
         binding = self.conversations.business_turn_context(turn_id, row["workspace_id"], source["member_id"], row["task_id"], source=source)
@@ -944,13 +958,14 @@ class GoalResultProjection:
                 "source_kind": "execution", "source_id": row["id"]}))
         return event
 
-    def mark(self, candidate):
+    def mark(self, candidate, *, reason=None):
         from app.creation.contracts import TaskEvent
 
         self.production.execution_records.append_task_event(TaskEvent(id=candidate["event_id"], workspace_id=candidate["workspace_id"],
             task_id=candidate["task_id"], job_id=candidate["id"] if candidate["kind"] == "job" else None,
             event_type="assistant_business_projected", payload={"turn_id": candidate["source"]["assistant_turn_id"],
-                "source_kind": candidate["kind"], "source_id": candidate["id"]},
+                "source_kind": candidate["kind"], "source_id": candidate["id"],
+                **({'reason': reason} if reason is not None else {})},
             created_at=datetime.fromisoformat(candidate["created_at"])))
 
     def can_continue(self, binding, turn_id):
@@ -1079,6 +1094,9 @@ class GoalResultProjection:
         from app.task_audio import media_digest
 
         source = candidate["source"]
+        if not self.has_frozen_timeline_source(source):
+            self.mark(candidate, reason='source_timeline_snapshot_unverifiable')
+            return True
         workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
         member_id, turn_id = source["member_id"], source["assistant_turn_id"]
         binding = self.conversations.business_turn_context(turn_id, workspace_id, member_id, task_id, source=source)
@@ -1201,6 +1219,9 @@ class GoalResultProjection:
         from app.creation_execution import CreationExecutionActor
 
         source, _located = candidate["source"], candidate["request"]
+        if not self.has_frozen_timeline_source(source):
+            self.mark(candidate, reason='source_timeline_snapshot_unverifiable')
+            return True
         workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
         member_id = source["member_id"]
         binding = self.conversations.business_turn_context(source["assistant_turn_id"], workspace_id, member_id, task_id, source=source)
@@ -1303,6 +1324,9 @@ class GoalResultProjection:
         from app.creation_execution import CreationExecutionActor
 
         source, _located = candidate["source"], candidate["located"]
+        if not self.has_frozen_timeline_source(source):
+            self.mark(candidate, reason='source_timeline_snapshot_unverifiable')
+            return True
         workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
         member_id = source["member_id"]
         binding = self.conversations.business_turn_context(source["assistant_turn_id"], workspace_id, member_id, task_id, source=source)

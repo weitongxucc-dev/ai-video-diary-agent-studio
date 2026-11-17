@@ -55,10 +55,17 @@ class ResourceAudioUseCase:
                 actor.user_id or actor.member_id, task_id)
             if any(source.get(key) != original.get(key) for key in ('input_id', 'input_turn_id')):
                 raise AudioIngressRejected(409, '音频导入不能切换原输入')
+            snapshot = original['context'].get('target_snapshot') or {}
+            if ('timeline_version_id' not in snapshot or 'timeline_sequence' not in snapshot
+                    or type(snapshot['timeline_sequence']) is not int or snapshot['timeline_sequence'] < 0
+                    or not (snapshot['timeline_version_id'] is None and snapshot['timeline_sequence'] == 0
+                            or isinstance(snapshot['timeline_version_id'], str) and snapshot['timeline_version_id'])):
+                raise AudioIngressRejected(409, '原音频导入指令缺少可核验的冻结时间线版本')
             source = {key: source[key] for key in ('assistant_turn_id', 'input_id', 'input_turn_id') if key in source}
             source.update(workspace_id=actor.workspace_id,task_id=task_id,
                 member_id=actor.user_id or actor.member_id,conversation_id=original['conversation_id'],
-                request_id=request_id)
+                request_id=request_id,expected_timeline_version_id=snapshot['timeline_version_id'],
+                expected_timeline_sequence=snapshot['timeline_sequence'])
         if not isinstance(resource_id,str) or not resource_id or type(version) is not int or version<1:
             raise AudioIngressRejected(422,'资源标识和固定版本无效')
         inputs = {'resource_id': resource_id, 'version': version, 'source': source,
