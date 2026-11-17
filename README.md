@@ -9,6 +9,8 @@
 | 要了解什么 | 入口 |
 | --- | --- |
 | 产品范围、工作空间、共享与验收 | [产品需求](docs/product-requirements.md) |
+| 本阶段交付证据与剩余事项（1.5.2工作阶段） | [总控执行板](.project-control/1.5.2-execution-board.md) |
+| Windows 开发分支、同步范围与真机验收 | [Windows 集成记录](docs/windows-branch-migration-2026-11-13.md) |
 | 当前开发分工、允许修改的文件与接线限制 | [活动合同](.project-control/active-contract.md) |
 | 需求覆盖、验收样本与未决事项 | [版本开发清单](.project-control/0.11-development-plan.md) |
 | 界面布局、中文命名和已认可原型 | [设计规范](DESIGN.md) |
