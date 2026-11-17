@@ -25,7 +25,7 @@ export function registerAudioResourceTools(pi: ToolRegistrar, {request, taskId, 
       const request_id=typedRequestId(taskId,source.turnId,JSON.stringify([source.inputId??source.turnId,params.resource_id,params.version]));
       const query=`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/resource-requests/${request_id}`;
       let receipt;
-      try{receipt=await request(query);}catch(error){
+      try{receipt=await request(query,undefined,false);}catch(error){
         if(!(error instanceof BusinessRequestError)||error.httpStatus!==404||attempted.has(request_id))throw error;
       }
       if(!receipt){

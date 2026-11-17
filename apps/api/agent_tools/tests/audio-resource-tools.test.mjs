@@ -93,3 +93,19 @@ test('resource operations cross the existing host business pipe, never self HTTP
   assert.equal(calls[0].args.payload.assistant_turn_id,'turn');
   assert.equal(calls[2].args.version,1);
 });
+
+
+test('initial missing request does not mask the actual import rejection',async()=>{
+  const failures=[];const calls=[];const tools={};
+  const request=createBusinessRequest({taskId:'task',selectedTaskVersion:null,verifyTaskVersion:()=>{},
+    readCredentials:()=>({}),getSignal:()=>undefined,getToolCallId:()=> 'call',
+    onFailure:failure=>failures.push(failure),fetchRequest:()=>{throw Error('self HTTP forbidden');},
+    businessCall:async(operation,args)=>{calls.push(operation);return {ok:false,failure:{
+      status_code:operation==='read_audio_resource_request'?404:403,
+      reason:operation==='read_audio_resource_request'?'no original request':'actual import denied'}};}});
+  registerAudioResourceTools({registerTool:t=>{tools[t.name]=t;}},
+    {request,taskId:'task',readActionSource:()=>({turnId:'turn',inputId:'input'})});
+  await tools.import_audio_resource.execute('import',{resource_id:'music',version:1});
+  assert.deepEqual(calls,['read_audio_resource_request','import_audio_resource']);
+  assert.equal(failures.length,1);assert.equal(failures[0].reason,'actual import denied');
+});

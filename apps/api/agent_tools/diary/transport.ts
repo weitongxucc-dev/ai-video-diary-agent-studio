@@ -460,5 +460,5 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     }
   }
 
-  return (path: string, init?: RequestInit) => request(path, init);
+  return (path: string, init?: RequestInit, reportFailure = true) => request(path, init, reportFailure);
 }
