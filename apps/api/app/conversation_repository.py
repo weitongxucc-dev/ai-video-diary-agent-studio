@@ -2103,6 +2103,23 @@ class ConversationRepository:
                 response["reply"] = text
                 result.update(kind="task_turn", response=response,
                               edit_preview=bool(response.get("edit_preview")))
+            elif (current_input and row['status'] in {'failed','stopped'}
+                    and event.get('recovered_receipt') is True and event.get('phase') == 'apply'
+                    and (response_patch.get('edit_request') or {}).get('status') == 'recorded'
+                    and (response_patch.get('edit_request') or {}).get('result_status_code') == 200):
+                # A verified saved result remains readable after interruption.
+                # Keep failure/stop and all goal authority unchanged. An earlier
+                # proposal event may already describe this same applied effect.
+                response = dict(result.get('response') or {})
+                previous_request = response.get('edit_request') or {}
+                recovered = response_patch['edit_request']
+                if (not previous_request or previous_request.get('request_id') == recovered['request_id']
+                        or event.get('status') == 'confirmed'):
+                    response.update(response_patch)
+                    if not duplicate:
+                        text = text + ('\n\n' if text else '') + message
+                    response['reply'] = text
+                    result['response'] = response
             now = _now()
             conn.execute("UPDATE assistant_conversation_turns SET events_json=?,result_json=?,assistant_text=?,updated_at=? WHERE id=?",
                 (json.dumps(events, ensure_ascii=False), json.dumps(result, ensure_ascii=False), text, now, turn_id))
