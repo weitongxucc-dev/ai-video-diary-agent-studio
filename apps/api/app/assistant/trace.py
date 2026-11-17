@@ -12,6 +12,9 @@ _REFERENCE_KINDS = {
     'output_reference': 'output', 'artifact_id': 'output', 'operation_id': 'operation',
     'task_id': 'task', 'input_id': 'input', 'input_turn_id': 'turn',
     'assistant_turn_id': 'turn',
+    'timeline_version_id': 'timeline', 'base_version_id': 'timeline',
+    'result_version_id': 'timeline', 'artifact_ref': 'output',
+    'output_ref': 'output', 'observation_id': 'output',
 }
 
 
@@ -170,6 +173,7 @@ def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 20
     provider_usage = {}
     usage_source = None
     compactions = 0
+    business_events = []
     associations = [{'kind': 'conversation', 'ref': _opaque(turn.get('conversation_id'))},
                     {'kind': 'turn', 'ref': _opaque(turn.get('id'))}]
     associations = [item for item in associations if item['ref']]
@@ -177,6 +181,21 @@ def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 20
         if not isinstance(event, dict):
             continue
         event_type = event.get('type')
+        if event_type == 'business_result':
+            # These are repository-backed receipts, including late results
+            # after the model settled. Never derive them from model text.
+            refs = _nested_references(event)
+            associations.extend(refs)
+            item = {'type': 'business_result', 'status': event.get('status'),
+                    'associations': refs}
+            if isinstance(event.get('event_id'), str):
+                item['event_id'] = _opaque(event['event_id'])
+            failure = event.get('failure')
+            if isinstance(failure, dict):
+                item['failure'] = {key: failure[key] for key in ('submission_effect',)
+                                   if failure.get(key) in {'unknown', 'not_submitted', 'rejected'}}
+            business_events.append(item)
+            continue
         if event_type == 'context_compaction':
             compactions += 1
             for key in ('input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'):
@@ -216,6 +235,7 @@ def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 20
     else:
         started_at, ended_at = turn.get('created_at'), turn.get('updated_at')
         runtime_duration = _duration_between(started_at, ended_at)
+    projected.extend(business_events)
     associations.extend(runtime_associations)
     associations.extend(_nested_references(result))
     result_usage = result.get('provider_usage') if isinstance(result.get('provider_usage'), dict) else None
