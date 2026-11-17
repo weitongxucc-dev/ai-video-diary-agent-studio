@@ -80,10 +80,9 @@
       "Persist cached-audio visual planning conflicts as waiting_for_user; preserve cancelled jobs and original paid audio."
     ],
     "task_id": "task_93d78477016b",
-    "status": "production_download_decode_observation_and_mac_playback_succeeded_human_listening_pending",
+    "status": "accepted_real_production_and_mac_playback",
     "latest_job_id": "job_9c6245ca938c408ab2a7bd11cacda718",
     "limits": [
-      "New full-video human listening and slow-motion acceptance await this playback response; the earlier sound-effect confirmation does not establish this video acceptance.",
       "Output observation sampled actual frames at 5, 60 and 100 seconds; OCR, visual semantic understanding and automated speech/listening checks remain unavailable.",
       "Windows and phone playback were not tested by this Mac production run."
     ],
@@ -403,7 +402,7 @@
       "full_decode_exit_code": 0,
       "subtitle_path": "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/yaohe-current-capabilities-120s-job_9c6245ca938c408ab2a7bd11cacda718.srt",
       "subtitle_cues": 26,
-      "human_playback": "pending"
+      "human_playback": "accepted"
     },
     "output_observation": {
       "operation": "output_observation",
@@ -791,9 +790,21 @@
       "displayed_duration": "02:00",
       "visible_subtitles": true,
       "keyboard_shot_visible_after_70_seconds": true,
-      "human_listening": "pending",
+      "human_listening": "accepted",
       "reached_end": true,
       "playing_at_end": false
-    }
+    },
+    "human_acceptance": {
+      "date": "2026-11-17",
+      "answer": "声音和画面都正常，可以接受",
+      "scope": [
+        "current 120-second full video",
+        "narration",
+        "visible subtitles",
+        "keyboard slow motion"
+      ],
+      "output_sha256": "994a945c58f61e7dcca0c692754fcb7c2323d609de5234b107d7cfadab1d62c4"
+    },
+    "preparation_measured_peak_threads": 16
   }
 }
