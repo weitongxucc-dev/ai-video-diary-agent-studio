@@ -109,6 +109,14 @@ class ResourceGovernanceStore:
     def __init__(self, connection_factory: Callable[[], sqlite3.Connection]) -> None:
         self._connect = connection_factory
 
+    def read_production_history(self, workspace_id, task_id, resource_id, version, *, user_id,
+                                local_diagnostic=False):
+        """Reconstruct business history without creating or trusting manual usage rows."""
+        from app.materials.resource_closed_loop import ResourceClosedLoopReader
+        return ResourceClosedLoopReader(self._connect).read(
+            workspace_id, task_id, resource_id, version, user_id=user_id,
+            local_diagnostic=local_diagnostic)
+
     def save_manifest(self, manifest: ResourceManifest) -> ResourceManifest:
         self._validate_manifest(manifest)
         now = utc_now()
