@@ -1522,7 +1522,8 @@ def test_duplicate_start_and_restart_execute_one_persisted_job(tmp_path):
     case.scheduler.close()
 
 
-def test_failure_resume_reuses_valid_narration(tmp_path, monkeypatch):
+@pytest.mark.parametrize('entry', ['resume', 'start'])
+def test_failure_resume_reuses_valid_narration(tmp_path, monkeypatch, entry):
     from app.creation.execution_control import CreationExecutionControl
     case = _narration_units_case(tmp_path, section_count=1)
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
@@ -1541,7 +1542,18 @@ def test_failure_resume_reuses_valid_narration(tmp_path, monkeypatch):
     control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
     runtime = SimpleNamespace(scheduler=case.scheduler, registrations={'creation_job':
         SimpleNamespace(owner=case.owner, executor=case.executor)}, wake=lambda: None)
-    resumed = control.resume('local', case.task_id, case.actor, runtime, verify_media=False)
+    from datetime import timedelta
+    authorizations = TaskAuthorizationUseCase(case.repo, lambda _: 'ready')
+    case.owner.task_authorizations = authorizations
+    issued = authorizations.ensure(case.repo.task_records.get_creation_task('local', case.task_id), case.actor)
+    monkeypatch.setattr(authorizations, 'clock', lambda: issued.expires_at + timedelta(seconds=1))
+    assert authorizations.status('local', case.task_id) == 'expired'
+    if entry == 'start':
+        resumed = control.start('local', case.task_id, case.script_id, case.job.input_digest,
+            case.actor, runtime, verify_media=False)
+    else:
+        resumed = control.resume('local', case.task_id, case.actor, runtime, verify_media=False)
+    assert authorizations.status('local', case.task_id) == 'valid'
     assert resumed['job']['id'] == case.job.id
     retried = case.scheduler.pick_and_grant()
     assert retried.request_id == merge.request_id
@@ -3631,13 +3643,19 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
 
 def test_segment_video_checkpoint_precedes_remaining_narration_and_retains_version(tmp_path,monkeypatch):
     case = _segment_units_case(tmp_path,monkeypatch)
+    original_next = case.segments.next_initial
+    def next_outside_publication(job, owner, *, connection=None):
+        assert connection is None or not connection.in_transaction, 'next section planning holds publication writer'
+        return original_next(job, owner, connection=connection)
     wav_reads=_assert_wav_reads_outside_writer(monkeypatch,case)
     submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
     first = case.scheduler.pick_and_grant()
     case.executor.execute(first,case.scheduler)
     second = case.scheduler.pick_and_grant()
     assert second.unit_key.startswith('segment_video:section_1:')
+    monkeypatch.setattr(case.segments, 'next_initial', next_outside_publication)
     case.executor.execute(second,case.scheduler)
+    monkeypatch.setattr(case.segments, 'next_initial', original_next)
     context = case.segments.context('local',case.task_id,'section_1',case.actor)
     assert context['video']['kind']=='video'
     assert case.segments.video_path('local',case.task_id,'section_1',context['segment_version'],case.actor).is_file()

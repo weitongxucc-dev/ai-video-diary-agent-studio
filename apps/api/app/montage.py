@@ -780,6 +780,18 @@ def admit_creation_render(*, source_duration_s: float, input_count: int,
     }, capacity=capacity)
 
 
+def bounded_render_command(command, threads, max_output_bytes):
+    """Use the same decoder/filter/encoder limits in rendering and calibration."""
+    bounded = []
+    for argument in command:
+        if argument == '-i':
+            bounded.extend(['-threads', str(threads)])
+        bounded.append(argument)
+    bounded[2:2] = ['-filter_threads', str(threads), '-filter_complex_threads', str(threads)]
+    bounded[-1:-1] = ['-threads:v', str(threads), '-threads:a', str(threads), '-fs', str(max_output_bytes)]
+    return bounded
+
+
 class MontageRenderer:
     def __init__(
         self,
@@ -947,14 +959,7 @@ class MontageRenderer:
                 if grant is None:
                     self.runner(command)
                 else:
-                    bounded_command: list[str] = []
-                    for argument in command:
-                        if argument == "-i":
-                            bounded_command.extend(["-threads", str(threads)])
-                        bounded_command.append(argument)
-                    command = bounded_command
-                    command[2:2] = ["-filter_threads", str(threads), "-filter_complex_threads", str(threads)]
-                    command[-1:-1] = ["-threads:v", str(threads), "-fs", str(max_output_bytes)]
+                    command = bounded_render_command(command, threads, max_output_bytes)
                     temporary_paths = (self._temporary_render_paths(output_path, temporary_disk_bytes)
                         if temporary_disk_bytes is not None else ())
                     _run_granted_media_command(scheduler, grant, command, timeout_seconds=None,

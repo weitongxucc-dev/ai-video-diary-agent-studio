@@ -47,3 +47,31 @@ def preparation_video_command(plan, shape, video):
         '-c:v', plan['policy']['encoder'], '-threads', '1', '-preset', plan['policy']['encoder_preset'],
         '-crf', str(plan['policy']['encoder_crf']), '-pix_fmt', 'yuv420p', str(video)]
     return command, graphic_paths
+
+
+def preparation_delivery_command(plan, shape, video, audio):
+    """Exercise the production three-input picture/audio/caption delivery path."""
+    from app.montage import (CreationTaskMontagePlan, MontageClip, MontageRenderer,
+        bounded_render_command)
+    from app.audio_timeline import narration_audio_timeline
+
+    duration = plan['probe_seconds']
+    caption = video.with_name('delivery-caption.png')
+    with Image.new('RGBA', (shape.width_px, shape.height_px), (255, 255, 255, 32)) as image:
+        image.save(caption)
+    pictures = video.with_name('delivery-picture.ffconcat')
+    pictures.write_text(f'ffconcat version 1.0\nfile {video.name}\nduration {duration}\n', encoding='utf-8')
+    captions = video.with_name('delivery-caption.ffconcat')
+    captions.write_text(f'ffconcat version 1.0\nfile {caption.name}\nduration {duration}\nfile {caption.name}\n', encoding='utf-8')
+    output = video.with_name('delivery.mp4')
+    montage = CreationTaskMontagePlan(id='cpu-preparation', workspace_id=plan['workspace_id'],
+        task_id='cpu-preparation', script_id='cpu-preparation', script_title='CPU preparation',
+        status='ready', cues=[], clips=[MontageClip('probe', 'probe', 'probe', 'probe',
+            str(video), 0, duration, 0, duration, 1, [], False)],
+        duration_seconds=duration, low_confidence_clip_count=0,
+        audio_timeline=narration_audio_timeline('narration://artifact/cpu-preparation', duration))
+    command = MontageRenderer(video.parent).build_command(montage, audio, output, [],
+        subtitle_intervals=[], subtitle_sequence=(captions, (0, 0)), picture_sequence=pictures)
+    command[0] = plan['ffmpeg']
+    return bounded_render_command(command, 1, plan['bootstrap_budget']['cpu_render']['max_output_bytes']), (
+        output, caption, pictures, captions)

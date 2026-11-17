@@ -1083,6 +1083,7 @@ class SegmentProductionUseCase:
         retained_bytes = 0
         audio_output_bytes = 0
         pcm_preparation=None
+        continue_initial = False
 
         def measure_audio_outputs(value):
             nonlocal audio_output_bytes
@@ -1248,7 +1249,8 @@ class SegmentProductionUseCase:
                 try:
                     measure_retained()
                     scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,checkpoint_write=commit_video,
-                        next_unit_write=None if command else next_unit)
+                        next_unit_write=None)
+                    continue_initial = command is None
                     break
                 except SectionPreparationStale:
                     if preparation:
@@ -1282,6 +1284,14 @@ class SegmentProductionUseCase:
         finally:
             with executor._cancellation_lock:
                 executor._cancellations.pop(grant.request_id,None)
+
+        if continue_initial:
+            # Publication and usage are durable before preparing the next section.
+            # A restart in this gap resumes the queued job through the same entry.
+            updated = self.repository.job_records.get_job_run(job.workspace_id, job.id)
+            intent = next_creation_intent(self.repository, scheduler, updated, pcm_preparation=pcm_preparation)
+            if intent is not None:
+                scheduler.submit(intent, actor)
 
     def video_path(self, workspace_id, task_id, section_id, version, actor):
         self.require_actor(workspace_id,task_id,actor)

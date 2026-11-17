@@ -22,7 +22,7 @@ import time
 import psutil
 
 from app.audio_timeline import PCM_CONTAINER_ALLOWANCE_BYTES
-from app.cpu_preparation_video import preparation_video_command
+from app.cpu_preparation_video import preparation_video_command, preparation_delivery_command
 from app.artwork_resource_preparation import (extend_render_budget, measure_template_inputs,
     measure_native_inputs, extend_native_budget)
 from app.device_resource_configuration import backend_identity
@@ -113,6 +113,7 @@ class CpuPreparationPolicy:
     encoder_crf: int = 20
     probe_threads_per_input: int = 2
     probe_controller_threads: int = 4
+    probe_output_stream_threads: int = 4
 
     def __post_init__(self):
         if (self.id != POLICY_ID or not math.isfinite(self.recovery_rss_multiplier) or self.recovery_rss_multiplier <= 0
@@ -277,8 +278,8 @@ class DeviceResourcePreparation:
         render = CpuRenderBudget(probe_seconds, shape.width_px * shape.height_px * probe_seconds,
             shape.width_px, shape.height_px, output_limit, shape.clip_count, shape.overlay_count, output_limit, 1,
             self.policy.timeout_seconds, memory_limit, output_limit, max((psutil.cpu_count() or 1) + 2,
-                max(shape.clip_count, shape.audio_input_count, shape.overlay_count) * self.policy.probe_threads_per_input
-                + self.policy.probe_controller_threads), cpu)
+                max(3, shape.clip_count, shape.audio_input_count, shape.overlay_count) * self.policy.probe_threads_per_input
+                + self.policy.probe_controller_threads + self.policy.probe_output_stream_threads), cpu)
         render = extend_render_budget(shape, render, output_limit)
         cadence = self.policy.poll_seconds + self.policy.sample_seconds
         budget = HostBudget(100, reserve, None, output_limit, None, output_limit,
@@ -434,6 +435,12 @@ class DeviceResourcePreparation:
                 command += ['-filter_complex', graph, '-map', '[a]', '-t', str(duration), '-ar', str(shape.sample_rate),
                     '-ac', str(shape.channels), '-threads', '1', '-c:a', 'pcm_f32le', str(audio)]
                 run(command, (video, audio))
+                command, delivery_paths = preparation_delivery_command(plan, shape, video, audio)
+                delivery = run(command, (video, audio, *graphic_paths, *delivery_paths))
+                delivery_probe = {'contract': 'montage-picture-audio-caption/v1',
+                    'sha256': hashlib.sha256(delivery_paths[0].read_bytes()).hexdigest(),
+                    'bytes': delivery_paths[0].stat().st_size,
+                    'observed_resources': asdict(delivery.observed_resources)}
                 native_receipt = measure_native_inputs(shape, video, duration, self.settings, run)
                 media = {}
                 for name, path in (('video', video), ('audio', audio)):
@@ -456,7 +463,8 @@ class DeviceResourcePreparation:
                     'generation': grant.generation, 'input_digest': grant.input_digest,
                     'device': plan['device'], 'backends': plan['backends'], 'shape': plan['shape'],
                     'policy': plan['policy'], 'probe_seconds': duration, 'media': media,
-                    'elapsed_seconds': time.monotonic() - started, 'observed_resources': observations}
+                    'elapsed_seconds': time.monotonic() - started, 'observed_resources': observations,
+                    'delivery_probe': delivery_probe}
                 if native_receipt is not None:
                     receipt['native_command'] = native_receipt
                 receipt_path = self.root / 'receipts' / f'{grant.request_id}-{grant.generation}.json'

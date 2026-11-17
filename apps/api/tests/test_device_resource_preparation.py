@@ -96,6 +96,11 @@ def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_w
             assert connection.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 1
         # A modified receipt cannot be adopted just because a caller supplies facts.
         receipt_path = next((service.root / 'receipts').glob('*.json'))
+        delivery = json.loads(receipt_path.read_bytes())['delivery_probe']
+        assert delivery['contract'] == 'montage-picture-audio-caption/v1'
+        assert delivery['bytes'] > 0 and len(delivery['sha256']) == 64
+        assert delivery['observed_resources']['threads_sample_complete']
+        assert result.budget.cpu_render.max_process_threads >= delivery['observed_resources']['peak_threads']
         receipt_path.write_text('{}')
         original_profile = service.profile_path.read_bytes()
         with pytest.raises(DeviceProfileUnavailable, match='检查点不匹配'):
