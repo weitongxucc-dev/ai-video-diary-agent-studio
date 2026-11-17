@@ -67,3 +67,42 @@ it("retains a failed import Job for rereading instead of submitting another impo
   expect(api.import).toHaveBeenCalledTimes(1);
   expect(api.readJob).toHaveBeenCalledWith("task", "original", expect.any(AbortSignal));
 });
+
+it("shares gain between slider and exact input, invalidates old proposals, and prepares only the final value", async () => {
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  await screen.findByText("新作品");
+  const slider = screen.getByRole("slider", { name: "音量调节（dB）" });
+  const precise = screen.getByRole("spinbutton", { name: "音量（dB）" });
+  expect(slider).toHaveValue("-18");
+  for (const gain of [-24, -20, -12]) fireEvent.change(slider, { target: { value: String(gain) } });
+  expect(precise).toHaveValue(-12);
+  expect(api.import).not.toHaveBeenCalled();
+  expect(api.preview).not.toHaveBeenCalled();
+  fireEvent.change(precise, { target: { value: "-9" } });
+  expect(slider).toHaveValue("-9");
+  expect(slider).toHaveAttribute("aria-valuetext", "-9 dB");
+  fireEvent.click(screen.getByRole("button", { name: "准备采用" }));
+  expect(slider).toBeDisabled();
+  expect(precise).toBeDisabled();
+  await screen.findByRole("button", { name: "确认加入音轨" });
+  expect(api.preview).toHaveBeenCalledWith("task", expect.objectContaining({ values: expect.objectContaining({ gain_db: -9 }) }));
+  fireEvent.change(slider, { target: { value: "-6" } });
+  expect(screen.queryByRole("button", { name: "确认加入音轨" })).not.toBeInTheDocument();
+  expect(api.confirm).not.toHaveBeenCalled();
+  expect(api.preview).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "准备采用" }));
+  fireEvent.click(await screen.findByRole("button", { name: "确认加入音轨" }));
+  await screen.findByRole("button", { name: "撤销本次采用" });
+  expect(api.preview).toHaveBeenLastCalledWith("task", expect.objectContaining({ values: expect.objectContaining({ gain_db: -6 }) }));
+  expect(api.import).toHaveBeenCalledTimes(1);
+  expect(api.confirm).toHaveBeenCalledWith("task", "proposal");
+});
+
+it("disables gain controls when all destination tracks are locked", async () => {
+  api.read.mockResolvedValue({ ...workspace, montage: { ...workspace.montage, audio_timeline: { tracks: [{ ...workspace.montage.audio_timeline.tracks[0], locked: true }] } } });
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  await screen.findByText("新作品");
+  expect(screen.getByRole("slider", { name: "音量调节（dB）" })).toBeDisabled();
+  expect(screen.getByRole("spinbutton", { name: "音量（dB）" })).toBeDisabled();
+  expect(api.import).not.toHaveBeenCalled();
+});

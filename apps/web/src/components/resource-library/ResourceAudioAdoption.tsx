@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { getCreationTaskWorkspace, confirmCreationTaskEdit, undoCreationTaskTimeline } from "@/lib/api/creation-tasks";
 import { importCreationTaskResourceAudio, previewCreationTaskAudio, resolveCreationTaskMediaResponse, getCreationTaskMediaJob } from "@/lib/api/task-media";
 import type { CreationTaskWorkspace, CreationTaskEditPreviewResponse, CreationTaskEditOperation, TaskMediaResultMap, TaskMediaJob } from "@/lib/types";
@@ -15,6 +15,7 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
   const [trackId, setTrackId] = useState("");
   const [start, setStart] = useState(Math.max(0, playheadMs / 1000));
   const [gain, setGain] = useState(resource.category_id === "music" ? -18 : 0);
+  const gainSliderId = useId();
   const [source, setSource] = useState<TaskMediaResultMap["audio_source"] | null>(null);
   const [job, setJob] = useState<TaskMediaJob | null>(null);
   const [preview, setPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
@@ -117,6 +118,7 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
     {!applied ? <fieldset disabled={busy || !tracks.length} className={styles.adoptionFields} onChange={() => setPreview(null)}>
       <label>音轨<select value={trackId} onChange={event => setTrackId(event.target.value)}><option value="">选择音轨</option>{tracks.map(track => <option key={track.id} value={track.id}>{track.name}</option>)}</select></label>
       <label>起始位置（秒）<input type="number" min={0} max={duration} step="0.1" value={start} onChange={event => setStart(event.target.valueAsNumber)} /></label>
+      <label htmlFor={gainSliderId}>音量调节（dB）<input id={gainSliderId} type="range" min={-60} max={12} step={1} value={Number.isFinite(gain) ? gain : 0} aria-valuetext={Number.isFinite(gain) ? `${gain} dB` : undefined} onChange={event => setGain(event.target.valueAsNumber)} /></label>
       <label>音量（dB）<input type="number" min={-60} max={12} value={gain} onChange={event => setGain(event.target.valueAsNumber)} /></label>
       <p>从资源开头加入，超过作品结尾的部分会裁掉。准备后确认采用，原旁白保留。</p>
       <button type="button" disabled={!trackId || !Number.isFinite(start) || start < 0 || start >= duration || !Number.isFinite(gain) || gain < -60 || gain > 12} onClick={() => void prepare()}>{busy ? "正在准备…" : job && !source ? "读取导入结果" : "准备采用"}</button>
