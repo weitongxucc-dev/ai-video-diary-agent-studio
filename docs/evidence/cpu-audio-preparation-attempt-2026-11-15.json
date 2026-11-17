@@ -55,5 +55,745 @@
       "2d35c407cbfa4ff1a4848e3948f0434c"
     ],
     "next_action": "收敛 DATABASE_PATH、canonical device lock 和成员库到同一运行实例后，再沿同一 shape 重跑并 finalize；不复制或覆盖素材/数据库。"
+  },
+  "current_follow_up": {
+    "validated_on": "2026-11-17",
+    "database_path": "/Volumes/Dujiangyan-VM/AI视频日记/legacy-movies/agent.sqlite3",
+    "member_database": "same as task and device queue",
+    "device_lock_path": "/Users/Zhuanz/Library/Application Support/com.aivideodiary.studio/device-permit.lock",
+    "profile_revision": 12,
+    "preparation_request_id": "bd2664f132e14e89bc1ce60213c4cb8a",
+    "profile_digest": "6a7e433cbf92c50cb0f9a2bdd880f47610cba5e9bd9e678a260b844d4b798666",
+    "prepared_audio": {
+      "sample_rate": 48000,
+      "channels": 2,
+      "input_count": 4
+    },
+    "thread_root_cause": "Previous synthetic graph-only probe did not exercise the production file-decoding, audio encoding and caption-compositing path; measured delivery reached 11-12 threads against cap 8.",
+    "fix": "Measure production MontageRenderer.build_command using decoded picture, PCM audio and caption files in the original device preparation grant; bound video and audio encoder threads explicitly.",
+    "delivery_probe_measured_peak_threads": 10,
+    "published_process_thread_cap": 32,
+    "margin": 2,
+    "additional_runtime_fixes": [
+      "Revalidate the original task authorization interactively before resumed planning reads; retain revocation and guarded-automation boundaries.",
+      "Commit section publication and usage before preparing the next section outside the writer transaction.",
+      "Persist cached-audio visual planning conflicts as waiting_for_user; preserve cancelled jobs and original paid audio."
+    ],
+    "task_id": "task_93d78477016b",
+    "status": "production_download_decode_observation_and_mac_playback_succeeded_human_listening_pending",
+    "latest_job_id": "job_9c6245ca938c408ab2a7bd11cacda718",
+    "limits": [
+      "New full-video human listening and slow-motion acceptance await this playback response; the earlier sound-effect confirmation does not establish this video acceptance.",
+      "Output observation sampled actual frames at 5, 60 and 100 seconds; OCR, visual semantic understanding and automated speech/listening checks remain unavailable.",
+      "Windows and phone playback were not tested by this Mac production run."
+    ],
+    "fix_commits": [
+      "7080554f",
+      "7ccfa2c0",
+      "d9d6fbd0",
+      "dc75ed3"
+    ],
+    "recovery_verification": {
+      "passed": 6,
+      "log": "/tmp/yaohe-conflict-recovery-tests.log",
+      "covers": [
+        "publication before next planning",
+        "restart after publication",
+        "cached audio planning conflict",
+        "cancellation during planning",
+        "original paid-audio reuse"
+      ]
+    },
+    "additional_material_adoption": {
+      "user_decision": "加入键盘视频，允许画面慢放",
+      "asset_id": "asset_550e6a32460ce56a",
+      "source_duration_seconds": 22,
+      "operation_id": "operation_43723efaf3e6405b994e79296aa5cee2",
+      "timeline_version_id": "timeline_c688ed8b544749759b42393512361558",
+      "section_id": "root_factual_4",
+      "section_duration_seconds": 49.5,
+      "source_ranges": [
+        [
+          0,
+          12
+        ],
+        [
+          12,
+          22
+        ]
+      ],
+      "visual_playback_rate": 0.4444444444444444,
+      "narration_rate_changed": false
+    },
+    "cpu_120_preparation_attempt": {
+      "http_status": 409,
+      "reason": "当前执行单元尚未到达安全边界，原工作保持运行。",
+      "profile_published": false
+    },
+    "previous_profile_revision": 6,
+    "composition_fixes": [
+      "New section publications invalidate the older full montage until adopted sections are composed; use current clips and original narration without reselecting material.",
+      "Save full montage, version and subtitle tracks in one CAS transaction; output timeline publication does not invalidate its own input preparation.",
+      "Normalize absent optional cue start fields before dependency comparison.",
+      "Resolve inherited subtitle references; recompose current narration captions with the original display style; preserve old artifacts.",
+      "Prepare audio storage for simultaneous normalized narration and floating-point mix output."
+    ],
+    "preparation_history_after_revision6": [
+      {
+        "request": {
+          "request_id": "a4b5798a-749a-47f3-b1ee-6bdc4218b0e2",
+          "kind": "cpu",
+          "shape": {
+            "width_px": 1080,
+            "height_px": 1920,
+            "frame_rate": 30,
+            "duration_seconds": 120,
+            "clip_count": 21,
+            "audio_input_count": 4,
+            "sample_rate": 48000,
+            "channels": 2
+          }
+        },
+        "response": {
+          "id": "0f0bda24e52541d9920ff919f568e00d",
+          "plan_id": "1a0bf4731a6b95cbf6295defa70e885d",
+          "state": "waiting",
+          "wait_reason": null
+        },
+        "finalize": {
+          "id": "0f0bda24e52541d9920ff919f568e00d",
+          "plan_id": "1a0bf4731a6b95cbf6295defa70e885d",
+          "state": "done",
+          "wait_reason": null,
+          "profile_published": true,
+          "profile_id": "1a0bf4731a6b95cbf6295defa70e885d",
+          "revision": 7,
+          "profile_digest": "00d920afc68d570fca560e69b9e358aeb0a5fe954e9bec559deae620e9eb9d96",
+          "normal_work_started": false
+        }
+      },
+      {
+        "request": {
+          "request_id": "522edc0d-0051-46f5-9907-b80ba4c64595",
+          "kind": "montage",
+          "shape": {
+            "task_id": "task_93d78477016b"
+          }
+        },
+        "response": {
+          "id": "f9265067bdd84c5197b7e2f9492b9038",
+          "plan_id": "2e80b0acfb8b79a6594772124dce97b0",
+          "state": "waiting",
+          "wait_reason": null
+        },
+        "finalize": {
+          "id": "f9265067bdd84c5197b7e2f9492b9038",
+          "plan_id": "2e80b0acfb8b79a6594772124dce97b0",
+          "state": "done",
+          "wait_reason": null,
+          "profile_published": true,
+          "profile_id": "2e80b0acfb8b79a6594772124dce97b0",
+          "revision": 9,
+          "profile_digest": "e7077b59412886a3a983658401f305161901e3ffb31719c4797e1590553b763a",
+          "normal_work_started": false
+        }
+      },
+      {
+        "request": {
+          "request_id": "00ff2858-af6c-4e6f-94fb-86c770bf6ffd",
+          "kind": "cpu",
+          "shape": {
+            "width_px": 1080,
+            "height_px": 1920,
+            "frame_rate": 30,
+            "duration_seconds": 120,
+            "clip_count": 21,
+            "audio_input_count": 4,
+            "sample_rate": 48000,
+            "channels": 2,
+            "overlay_count": 1
+          }
+        },
+        "response": {
+          "id": "22df5adb57e44bb5b9ba1acab10493be",
+          "plan_id": "abd0ff35aa889b744c1c378022e8b493",
+          "state": "waiting",
+          "wait_reason": null
+        },
+        "finalize": {
+          "id": "22df5adb57e44bb5b9ba1acab10493be",
+          "plan_id": "abd0ff35aa889b744c1c378022e8b493",
+          "state": "done",
+          "wait_reason": null,
+          "profile_published": true,
+          "profile_id": "abd0ff35aa889b744c1c378022e8b493",
+          "revision": 10,
+          "profile_digest": "1553a6955c3dfff8b816fd7937b5dc5aca703172685187ef5ab25734490a3fc5",
+          "normal_work_started": false
+        }
+      },
+      {
+        "request": {
+          "request_id": "f7aa16ed-9dea-4f68-8fe1-4be109d002ec",
+          "kind": "cpu",
+          "shape": {
+            "width_px": 1080,
+            "height_px": 1920,
+            "frame_rate": 30,
+            "duration_seconds": 120,
+            "clip_count": 21,
+            "audio_input_count": 4,
+            "sample_rate": 48000,
+            "channels": 2,
+            "overlay_count": 4
+          }
+        },
+        "response": {
+          "id": "7edf01f0cfa747e7a30ab47d272b559a",
+          "plan_id": "3c70ca7c31dc305684d46c743799ed39",
+          "state": "waiting",
+          "wait_reason": null
+        },
+        "finalize": {
+          "id": "7edf01f0cfa747e7a30ab47d272b559a",
+          "plan_id": "3c70ca7c31dc305684d46c743799ed39",
+          "state": "done",
+          "wait_reason": null,
+          "profile_published": true,
+          "profile_id": "3c70ca7c31dc305684d46c743799ed39",
+          "revision": 11,
+          "profile_digest": "f606a5580c3d242031daf6fcb65e5703cf655a0ffc0008f665dbafdefa40e30b",
+          "normal_work_started": false
+        }
+      },
+      {
+        "request": {
+          "request_id": "0d9a4810-c8e6-4731-95a6-a34df6943460",
+          "kind": "cpu",
+          "shape": {
+            "width_px": 1080,
+            "height_px": 1920,
+            "frame_rate": 30,
+            "duration_seconds": 120,
+            "clip_count": 21,
+            "audio_input_count": 4,
+            "sample_rate": 48000,
+            "channels": 2,
+            "overlay_count": 6
+          }
+        },
+        "response": {
+          "id": "bd2664f132e14e89bc1ce60213c4cb8a",
+          "plan_id": "0d6c5230cde2f32ef558739f8c8199d2",
+          "state": "waiting",
+          "wait_reason": null
+        },
+        "layers_per_clip": [
+          4,
+          2,
+          1,
+          2,
+          3,
+          2,
+          6,
+          6,
+          5
+        ],
+        "finalize": {
+          "id": "bd2664f132e14e89bc1ce60213c4cb8a",
+          "plan_id": "0d6c5230cde2f32ef558739f8c8199d2",
+          "state": "done",
+          "wait_reason": null,
+          "profile_published": true,
+          "profile_id": "0d6c5230cde2f32ef558739f8c8199d2",
+          "revision": 12,
+          "profile_digest": "6a7e433cbf92c50cb0f9a2bdd880f47610cba5e9bd9e678a260b844d4b798666",
+          "normal_work_started": false
+        }
+      }
+    ],
+    "section_readoption": {
+      "reason": "Restore verified original section publications after legacy optional cue serialization invalidation; keyboard section explicitly adopted by user.",
+      "before_version": "timeline_fa424addcba944e1a7bac01b0c774de8",
+      "result_version": "timeline_52806963313546cd8f56f5f0560ef062",
+      "publication_refs": [
+        "event_job_02ba98147ddb405580445bbeccc9f783_segment_38ba2e58740f9744e6be92b1",
+        "event_job_02ba98147ddb405580445bbeccc9f783_segment_48f63ae622dbd4dd7913e0ce",
+        "event_job_02ba98147ddb405580445bbeccc9f783_segment_139b3417cda040ec05ed2ffa",
+        "event_job_02ba98147ddb405580445bbeccc9f783_segment_f39ab53c705710af9e40b141"
+      ],
+      "audio_regenerated": false,
+      "video_regenerated": false,
+      "verified_original_sources_and_sha256": true
+    },
+    "subtitle_recovery": {
+      "reason": "Restore subtitle display lost by controller Undo before legacy subtitle references were resolved; compose captions from the currently adopted 120-second narration.",
+      "source_timeline": "timeline_ae66ec5dc7dc49eaa5d7194630eb9c03",
+      "before_version": "timeline_5178c70c123e404a8544bd4011c49b88",
+      "result_version": "timeline_43b540f3785c4dc1b8ef8aa6e898ad63",
+      "subtitle_tracks": [
+        "subtitle_timeline_43b540f3785c4dc1b8ef8aa6e898ad63_zh-cn"
+      ],
+      "cue_count": 26,
+      "source_style_preserved": true
+    },
+    "render_inputs": {
+      "timeline_id": "timeline_43b540f3785c4dc1b8ef8aa6e898ad63",
+      "sequence": 41,
+      "clips": 9,
+      "sections": 4,
+      "duration_seconds": 120,
+      "subtitle_cues": 26,
+      "max_caption_layers_per_clip": 6,
+      "narration_regenerated": false
+    },
+    "superseded_render_failure": {
+      "job_id": "job_2842f8c877ec48d0ac59a988c70302de",
+      "reason": "temporary audio bytes 68639048 exceeded previously prepared 46145536",
+      "retained": true
+    },
+    "audio_temporary_byte_cap": 138567680,
+    "verification": [
+      {
+        "passed": 35,
+        "log": "/tmp/yaohe-composition-preparation-tests.log",
+        "scope": "prior composition and preparation checks"
+      },
+      {
+        "passed": 10,
+        "log": "/tmp/yaohe-final-correction-tests.log",
+        "scope": "normalized audio plus float/final mix, inherited subtitles, atomic composition and concurrent edit rejection"
+      },
+      {
+        "passed": 36,
+        "log": "/tmp/yaohe-composition-integrated-tests.log",
+        "scope": "integrated section rewrite, restore, dependencies and preparation"
+      },
+      {
+        "passed": 4,
+        "log": "/tmp/yaohe-caption-preservation-tests.log",
+        "scope": "picture-only composition preserves existing subtitle edits; changed narration recomposes captions; concurrent edits are not overwritten"
+      }
+    ],
+    "final_output": {
+      "job_id": "job_9c6245ca938c408ab2a7bd11cacda718",
+      "status": "succeeded",
+      "timeline_version_id": "timeline_delivery_job_9c6245ca938c408ab2a7bd11cacda718",
+      "timeline_sequence": 42,
+      "output_refs": [
+        "workspaces/local/tasks/task_93d78477016b/audio-delivery/job_9c6245ca938c408ab2a7bd11cacda718/final_mux-b5003dec93099b6f107bdfddf51057c8e20853da1f389fecc8f4d9211661c3ae.mp4",
+        "workspaces/local/tasks/task_93d78477016b/picture-fragments/job_9c6245ca938c408ab2a7bd11cacda718/fb27074834369f469e3fec876e94c3a5e2c5a91a3900ce4b89264b159e0b356b.srt"
+      ],
+      "path": "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/yaohe-current-capabilities-120s-job_9c6245ca938c408ab2a7bd11cacda718.mp4",
+      "size_bytes": 36432828,
+      "sha256": "994a945c58f61e7dcca0c692754fcb7c2323d609de5234b107d7cfadab1d62c4",
+      "duration_seconds": 120.0,
+      "video": {
+        "codec_name": "h264",
+        "width": 1080,
+        "height": 1920,
+        "r_frame_rate": "30/1"
+      },
+      "audio": {
+        "codec_name": "aac",
+        "sample_rate": "48000",
+        "channels": 2
+      },
+      "http_version_headers_match": true,
+      "full_decode_exit_code": 0,
+      "subtitle_path": "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/yaohe-current-capabilities-120s-job_9c6245ca938c408ab2a7bd11cacda718.srt",
+      "subtitle_cues": 26,
+      "human_playback": "pending"
+    },
+    "output_observation": {
+      "operation": "output_observation",
+      "target_refs": [],
+      "input_digest": "a40ad053f32f649a4a7725f8c8fed0d9b39de67130855e80611863f59e87d1b3",
+      "created_at": "2026-11-17T03:01:13.596023Z",
+      "job_id": "job_media_a40ad053f32f649a4a7725f8c8fed0d9b39de67130855e80611863f59e87d1b3",
+      "status": "succeeded",
+      "result_kind": "observation",
+      "result_url": "/api/creation-tasks/task_93d78477016b/media-jobs/job_media_a40ad053f32f649a4a7725f8c8fed0d9b39de67130855e80611863f59e87d1b3",
+      "device_request_id": "5b92579a897a4b29a9b48b81b3921c43",
+      "waiting_reason": null,
+      "base_version_id": "timeline_delivery_job_9c6245ca938c408ab2a7bd11cacda718",
+      "result": {
+        "observation_id": "job_media_a40ad053f32f649a4a7725f8c8fed0d9b39de67130855e80611863f59e87d1b3",
+        "task_id": "task_93d78477016b",
+        "timeline_version_id": "timeline_delivery_job_9c6245ca938c408ab2a7bd11cacda718",
+        "timeline_sequence": 42,
+        "observed_at": "2026-11-17T03:01:23.131455+00:00",
+        "target": {
+          "kind": "final",
+          "job_id": null,
+          "artifact_id": null
+        },
+        "ocr_execution": {
+          "status": "unavailable",
+          "reason": "本地 OCR 未配置或输出观察执行范围尚未标定。"
+        },
+        "output": {
+          "artifact_id": "artifact_final_mux_b5003dec93099b6f107bdfddf51057c8e20853da1f389fecc8f4d9211661c3ae",
+          "artifact_kind": "rendered_video",
+          "sha256": "994a945c58f61e7dcca0c692754fcb7c2323d609de5234b107d7cfadab1d62c4",
+          "registered_width": 1080,
+          "registered_height": 1920,
+          "size_bytes": 36432828,
+          "producer_job_id": "job_9c6245ca938c408ab2a7bd11cacda718"
+        },
+        "output_role": "composed_output",
+        "material_references": [
+          {
+            "clip_id": "section_montage_bcaf81123689a6f905b8b1b6_clip_0",
+            "asset_ref": "asset:asset_802e976ceea5a8f0",
+            "segment_ref": "segment:seg_02597c3b5c787344",
+            "source_time_range": [
+              12.0,
+              24.0
+            ],
+            "timeline_time_range": [
+              0.0,
+              12.0
+            ],
+            "evidence_ref_ids": [],
+            "match_score": 1.2,
+            "match_reasons": [
+              "画面要求：使用本工作区已有可用素材作旁白混剪，不安排人物正脸。",
+              "文字词重合 5%",
+              "镜头时长适配 69%",
+              "自动画面观察命中相关内容；仍需核对原片",
+              "优先使用未重复镜头",
+              "历史成片已使用 1 次，降低重复优先级"
+            ]
+          },
+          {
+            "clip_id": "section_montage_bcaf81123689a6f905b8b1b6_clip_1",
+            "asset_ref": "asset:asset_5e0cc594e86652da",
+            "segment_ref": "segment:seg_519e83ea0cb87fe1",
+            "source_time_range": [
+              0.0,
+              5.467
+            ],
+            "timeline_time_range": [
+              12.0,
+              17.466666666666665
+            ],
+            "evidence_ref_ids": [],
+            "match_score": 1.138,
+            "match_reasons": [
+              "画面要求：使用本工作区已有可用素材作旁白混剪，不安排人物正脸。",
+              "文字词重合 5%",
+              "镜头时长适配 63%",
+              "自动画面观察命中相关内容；仍需核对原片",
+              "标签依据：动作:双手在键盘上移动，手指在按键上，显示正在使用电脑。",
+              "片段观察中的主体、动作或场景命中画面要求",
+              "优先使用未重复镜头",
+              "历史成片已使用 2 次，降低重复优先级"
+            ]
+          },
+          {
+            "clip_id": "section_montage_ec52b2b506314b0f13f51bcf_clip_0",
+            "asset_ref": "asset:asset_802e976ceea5a8f0",
+            "segment_ref": "segment:seg_6e0fc362d8abdb6f",
+            "source_time_range": [
+              24.0,
+              28.033
+            ],
+            "timeline_time_range": [
+              17.466666666666665,
+              21.5
+            ],
+            "evidence_ref_ids": [],
+            "match_score": 1.155,
+            "match_reasons": [
+              "画面要求：使用本工作区已有可用素材作旁白混剪，不安排人物正脸。",
+              "文字词重合 5%",
+              "镜头时长适配 21%",
+              "自动画面观察命中相关内容；仍需核对原片",
+              "优先使用未重复镜头"
+            ]
+          },
+          {
+            "clip_id": "section_montage_ec52b2b506314b0f13f51bcf_clip_1",
+            "asset_ref": "asset:asset_5e0cc594e86652da",
+            "segment_ref": "segment:seg_519e83ea0cb87fe1",
+            "source_time_range": [
+              5.467,
+              10.9
+            ],
+            "timeline_time_range": [
+              21.5,
+              26.93333333333333
+            ],
+            "evidence_ref_ids": [],
+            "match_score": 1.069,
+            "match_reasons": [
+              "画面要求：使用本工作区已有可用素材作旁白混剪，不安排人物正脸。",
+              "文字词重合 5%",
+              "镜头时长适配 28%",
+              "自动画面观察命中相关内容；仍需核对原片",
+              "标签依据：动作:双手在键盘上移动，手指在按键上，显示正在使用电脑。",
+              "片段观察中的主体、动作或场景命中画面要求",
+              "优先使用未重复镜头",
+              "历史成片已使用 2 次，降低重复优先级"
+            ]
+          },
+          {
+            "clip_id": "section_montage_ec52b2b506314b0f13f51bcf_clip_2",
+            "asset_ref": "asset:asset_802e976ceea5a8f0",
+            "segment_ref": "segment:seg_7809c88b610f63de",
+            "source_time_range": [
+              0.0,
+              9.767
+            ],
+            "timeline_time_range": [
+              26.93333333333333,
+              36.7
+            ],
+            "evidence_ref_ids": [],
+            "match_score": 1.048,
+            "match_reasons": [
+              "画面要求：使用本工作区已有可用素材作旁白混剪，不安排人物正脸。",
+              "文字词重合 5%",
+              "镜头时长适配 62%",
+              "自动画面观察命中相关内容；仍需核对原片",
+              "优先使用未重复镜头",
+              "历史成片已使用 3 次，降低重复优先级"
+            ]
+          },
+          {
+            "clip_id": "section_montage_15324d8ef612a7e64b2b1d75_clip_0",
+            "asset_ref": "asset:asset_802e976ceea5a8f0",
+            "segment_ref": "segment:seg_7809c88b610f63de",
+            "source_time_range": [
+              9.767,
+              12.0
+            ],
+            "timeline_time_range": [
+              36.7,
+              41.900000000000006
+            ],
+            "evidence_ref_ids": [],
+            "match_score": 0.976,
+            "match_reasons": [
+              "仅画面 0.4294 倍播放以满足目标时长；原配音不变，请确认节奏",
+              "画面要求：使用本工作区已有可用素材作旁白混剪，不安排人物正脸。",
+              "文字词重合 5%",
+              "镜头时长适配 7%",
+              "自动画面观察命中相关内容；仍需核对原片",
+              "优先使用未重复镜头",
+              "历史成片已使用 3 次，降低重复优先级"
+            ]
+          },
+          {
+            "clip_id": "section_montage_15324d8ef612a7e64b2b1d75_clip_1",
+            "asset_ref": "asset:asset_3edb319e1e9933e1",
+            "segment_ref": "segment:seg_724b821647d1a113",
+            "source_time_range": [
+              0.0,
+              12.32
+            ],
+            "timeline_time_range": [
+              41.900000000000006,
+              70.5
+            ],
+            "evidence_ref_ids": [],
+            "match_score": 0.886,
+            "match_reasons": [
+              "仅画面 0.4308 倍播放以满足目标时长；原配音不变，请确认节奏",
+              "画面要求：使用本工作区已有可用素材作旁白混剪，不安排人物正脸。",
+              "文字词重合 5%",
+              "镜头时长适配 36%",
+              "自动画面观察命中相关内容；仍需核对原片",
+              "优先使用未重复镜头",
+              "历史成片已使用 15 次，降低重复优先级"
+            ]
+          },
+          {
+            "clip_id": "section_montage_73bb66ddbe0de07a1f18d6ae_clip_0",
+            "asset_ref": "asset:asset_550e6a32460ce56a",
+            "segment_ref": "segment:seg_97b33e777e5c36ce",
+            "source_time_range": [
+              0.0,
+              12.0
+            ],
+            "timeline_time_range": [
+              70.5,
+              97.5
+            ],
+            "evidence_ref_ids": [],
+            "match_score": 0.128,
+            "match_reasons": [
+              "仅画面 0.4444 倍播放以满足目标时长；原配音不变，请确认节奏",
+              "画面要求：使用本工作区已有可用素材作旁白混剪，不安排人物正脸。",
+              "文字词重合 0%",
+              "镜头时长适配 24%",
+              "优先使用未重复镜头"
+            ]
+          },
+          {
+            "clip_id": "section_montage_73bb66ddbe0de07a1f18d6ae_clip_1",
+            "asset_ref": "asset:asset_550e6a32460ce56a",
+            "segment_ref": "segment:seg_0f04b122c5dbac1d",
+            "source_time_range": [
+              12.0,
+              22.0
+            ],
+            "timeline_time_range": [
+              97.5,
+              120.0
+            ],
+            "evidence_ref_ids": [],
+            "match_score": 0.08,
+            "match_reasons": [
+              "仅画面 0.4444 倍播放以满足目标时长；原配音不变，请确认节奏",
+              "画面要求：使用本工作区已有可用素材作旁白混剪，不安排人物正脸。",
+              "文字词重合 0%",
+              "镜头时长适配 20%",
+              "优先使用未重复镜头"
+            ]
+          }
+        ],
+        "measurement_scope": "actual_output_bounded_frames",
+        "media": {
+          "width": 1080,
+          "height": 1920,
+          "duration_seconds": 120.0,
+          "video_codec": "h264",
+          "video_frame_rate": "30/1",
+          "audio_stream_count": 1
+        },
+        "samples": [
+          {
+            "id": "frame-0",
+            "timestamp_seconds": 5.0,
+            "width": 720,
+            "height": 1280,
+            "sha256": "8d10f91f982af0c555df39834289b696c1cef0398f6efc48dc3fc8907df3c7ca",
+            "pixel_mean_rgb": [
+              86.402,
+              84.697,
+              87.141
+            ],
+            "pixel_extrema_rgb": [
+              [
+                0,
+                255
+              ],
+              [
+                0,
+                255
+              ],
+              [
+                0,
+                255
+              ]
+            ],
+            "object_refs": [
+              "clip:section_montage_bcaf81123689a6f905b8b1b6_clip_0"
+            ],
+            "ocr_status": "unavailable",
+            "ocr_text": []
+          },
+          {
+            "id": "frame-1",
+            "timestamp_seconds": 60.0,
+            "width": 720,
+            "height": 1280,
+            "sha256": "bfc861e693265280cbc2fe27512c718b5845807b0b58995171656edb49829311",
+            "pixel_mean_rgb": [
+              194.102,
+              176.506,
+              201.004
+            ],
+            "pixel_extrema_rgb": [
+              [
+                0,
+                255
+              ],
+              [
+                0,
+                255
+              ],
+              [
+                0,
+                255
+              ]
+            ],
+            "object_refs": [
+              "clip:section_montage_15324d8ef612a7e64b2b1d75_clip_1"
+            ],
+            "ocr_status": "unavailable",
+            "ocr_text": []
+          },
+          {
+            "id": "frame-2",
+            "timestamp_seconds": 100.0,
+            "width": 720,
+            "height": 1280,
+            "sha256": "7dbe92050ddc74cb685bdc4d1e4e6a4e0d40ac4ef97f1f369a8a092587bc965e",
+            "pixel_mean_rgb": [
+              140.746,
+              128.859,
+              104.052
+            ],
+            "pixel_extrema_rgb": [
+              [
+                0,
+                255
+              ],
+              [
+                0,
+                255
+              ],
+              [
+                0,
+                255
+              ]
+            ],
+            "object_refs": [
+              "clip:section_montage_73bb66ddbe0de07a1f18d6ae_clip_1"
+            ],
+            "ocr_status": "unavailable",
+            "ocr_text": []
+          }
+        ],
+        "ocr_model_id": null,
+        "unavailable": [
+          {
+            "scope": "visual_semantics",
+            "reason": "本地合成画面的语义理解尚无受许可执行能力；像素测量不代表看懂内容。"
+          },
+          {
+            "scope": "speech_and_listening",
+            "reason": "本次只观察实际画面，没有转写或听感检查。"
+          },
+          {
+            "scope": "ocr",
+            "reason": "本地 OCR 未配置或输出观察执行范围尚未标定；未提取文字。"
+          }
+        ]
+      },
+      "failure_reason": null,
+      "repair_action": null,
+      "resource_wait": null
+    },
+    "desktop_playback": {
+      "application": "QuickTime Player",
+      "path": "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/yaohe-current-capabilities-120s-job_9c6245ca938c408ab2a7bd11cacda718.mp4",
+      "timeline_progress_seconds": [
+        0,
+        8.722,
+        73.744,
+        99.648,
+        120
+      ],
+      "displayed_duration": "02:00",
+      "visible_subtitles": true,
+      "keyboard_shot_visible_after_70_seconds": true,
+      "human_listening": "pending",
+      "reached_end": true,
+      "playing_at_end": false
+    }
   }
 }
