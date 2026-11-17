@@ -59,29 +59,39 @@ def test_ducking_without_active_voice_can_reduce_within_budget(voice_state):
 
 
 @pytest.mark.parametrize('voice_state', ['narration', 'original'])
-@pytest.mark.parametrize('max_input_count', [3, 4])
-def test_active_sidechain_still_refuses_linear_reduction(voice_state, max_input_count):
+def test_active_sidechain_stays_whole_or_refuses_input_budget(voice_state):
     graph = ducking_timeline(voice_state)
     hashes = {clip.source_ref: 'a' * 64 for track in graph.tracks for clip in track.clips}
-    with pytest.raises(ValueError, match='侧链'):
+    from app.creation.assembly_manifest import AudioAssemblyManifest
+    plan = plan_audio_assembly(graph, 1000, workspace_id='local', task_id='task', producer_job_id='job',
+        source_hashes=hashes, max_input_count=4, normalize_voice_sources=True)
+    leaf, = plan.units
+    assert leaf.master and not leaf.dependencies and leaf.normalize_voice_sources
+    assert leaf.graph == graph
+    assert AudioAssemblyManifest.from_payload(plan.payload()) == plan
+    with pytest.raises(ValueError, match='侧链.*预算'):
         plan_audio_assembly(graph, 1000, workspace_id='local', task_id='task', producer_job_id='job',
-            source_hashes=hashes, max_input_count=max_input_count)
+            source_hashes=hashes, max_input_count=3)
 
 
-@pytest.mark.parametrize('voice_state', ['absent', 'muted_track'])
+@pytest.mark.parametrize('voice_state', ['absent', 'muted_track', 'narration', 'original'])
 def test_actual_ducking_assembly_matches_complete_mix(tmp_path, granted_media, voice_state):
     graph = ducking_timeline(voice_state)
+    has_voice = voice_state in {'narration', 'original'}
     active = [clip for track in graph.tracks if not track.muted for clip in track.clips if not clip.muted]
     originals = {}
     for index, clip in enumerate(active):
         path = tmp_path / f'source-{index}.wav'
-        samples = [round(1800 * math.sin(2 * math.pi * (220 + index * 110) * n / 48000)) for n in range(48000)]
+        amplitude = 6000 if clip.id == 'voice-clip' else 1800
+        # Tone and silence exercise compression away from FFmpeg's EOF boundary.
+        samples = [round(amplitude * math.sin(2 * math.pi * (220 + index * 110) * n / 48000))
+            if not has_voice or n < 24000 else 0 for n in range(48000)]
         with wave.open(str(path), 'wb') as output:
             output.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
             output.writeframes(array.array('h', samples).tobytes())
         originals[clip.source_ref] = path
     hashes = {ref: hashlib.sha256(path.read_bytes()).hexdigest() for ref, path in originals.items()}
-    cap = 2
+    cap = 4 if has_voice else 2
     plan = plan_audio_assembly(graph, 1000, workspace_id='local', task_id='task', producer_job_id='job',
         source_hashes=hashes, max_input_count=cap)
     paths = dict(originals)
@@ -107,6 +117,12 @@ def test_actual_ducking_assembly_matches_complete_mix(tmp_path, granted_media, v
     actual, expected = pcm(paths[plan.final.output_ref('task')]), pcm(direct)
     assert len(actual) == len(expected)
     assert max(abs(left - right) for left, right in zip(actual, expected)) <= 2
+    if has_voice:
+        unducked = graph.model_copy(deep=True)
+        unducked.tracks[0].duck_under_voice = False
+        uncompressed = tmp_path / 'without-ducking.wav'
+        render(unducked, uncompressed, originals)
+        assert max(abs(left - right) for left, right in zip(expected, pcm(uncompressed))) > 200
     assert {ref: hashlib.sha256(path.read_bytes()).hexdigest() for ref, path in originals.items()} == hashes
 
 
