@@ -9,11 +9,22 @@ function reader(request) {
   return tool;
 }
 
-test('cross-round unknown, failure and recovered audio receipts query only the original Job',async()=>{
+// Public TaskMediaJobResponse shape: task identity is enforced by the
+// task-scoped host read, not repeated as a response field.
+function mediaReceipt(overrides={}) {
+  return {operation:'audio_import',target_refs:[],input_digest:'actual-digest',
+    created_at:'2026-11-17T04:25:26Z',job_id:'original',status:'queued',
+    result_kind:'audio_source',result_url:'/api/creation-tasks/task/media-jobs/original',
+    result:null,...overrides};
+}
+
+test('queued, running, failed and recovered audio receipts query only the original Job',async()=>{
   const calls=[];
-  const response={job_id:'original',task_id:'task',result_kind:'audio_source',status:'unknown',result:null};
+  const response=mediaReceipt();
   const request=async(path,init)=>{calls.push({path,init});return structuredClone(response);};
   assert.equal((await reader(request).execute('first',{job_id:'original'})).details.source_ref,undefined);
+  response.status='running';
+  assert.equal((await reader(request).execute('running',{job_id:'original'})).details.source_ref,undefined);
   response.status='failed';
   assert.equal((await reader(request).execute('second',{job_id:'original'})).details.source_ref,undefined);
   response.status='succeeded';response.result={source_ref:'artifact://actual',path:'/private/secret'};
@@ -26,11 +37,23 @@ test('cross-round unknown, failure and recovered audio receipts query only the o
 
 test('foreign Job or false success cannot supply an adoptable source',async()=>{
   for(const job of [
-    {job_id:'other',task_id:'task',result_kind:'audio_source',status:'succeeded',result:{source_ref:'foreign'}},
-    {job_id:'original',task_id:'foreign',result_kind:'audio_source',status:'succeeded'},
-    {job_id:'original',task_id:'task',result_kind:'graphic_source',status:'succeeded'},
-    {job_id:'original',task_id:'task',result_kind:'audio_source',status:'succeeded',result:null},
+    mediaReceipt({job_id:'other',status:'succeeded',result:{source_ref:'foreign'}}),
+    mediaReceipt({result_kind:'graphic_source',status:'succeeded'}),
+    mediaReceipt({status:'succeeded',result:null}),
   ]) await assert.rejects(reader(async()=>job).execute('read',{job_id:'original'}));
+});
+
+test('task-scoped host rejection cannot become a source or trigger another request',async()=>{
+  const calls=[];
+  const request=createBusinessRequest({taskId:'task',selectedTaskVersion:null,verifyTaskVersion:()=>{},
+    readCredentials:()=>({}),getSignal:()=>undefined,getToolCallId:()=> 'call',
+    fetchRequest:()=>{throw Error('self HTTP forbidden');},
+    businessCall:async(operation,args)=>{
+      calls.push({operation,args});
+      return {ok:false,failure:{status_code:404,reason:'Job does not belong to current task'}};
+    }});
+  await assert.rejects(reader(request).execute('read',{job_id:'foreign'}));
+  assert.deepEqual(calls,[{operation:'read_task_media_job',args:{task_id:'task',job_id:'foreign'}}]);
 });
 
 test('lost POST response across tool instances queries the stable original request without reposting',async()=>{

@@ -54,7 +54,9 @@ export function registerAudioResourceTools(pi: ToolRegistrar, {request, taskId, 
       if (!params.job_id || Object.keys(params).some(key=>key!=='job_id'))
         throw new Error('仅接受原作业身份，不接受路径或来源替换');
       const job=await request(`/api/creation-tasks/${encodeURIComponent(taskId)}/media-jobs/${encodeURIComponent(params.job_id)}`);
-      if (job.job_id!==params.job_id || job.task_id!==taskId || job.result_kind!=='audio_source')
+      // TaskMediaJobResponse has no task_id. The task-scoped read is
+      // authorized by the host, which verifies the stored Job's task/actor.
+      if (job.job_id!==params.job_id || job.result_kind!=='audio_source')
         throw new Error('原音频导入作业身份或类型不符，未采用其他来源');
       const source=job.status==='succeeded'?job.result?.source_ref:null;
       if (job.status==='succeeded' && (typeof source!=='string' || !source))
