@@ -50,6 +50,8 @@ def test_media_script_bare_sources_have_exact_frozen_layout_and_bytes(tmp_path):
     inputs = declared_data_inputs()
     assert [(source.relative_to(Path(__file__).parents[1]), destination) for source, destination in inputs] == [
         (Path('app/template_assets'), Path('app/template_assets')),
+        (Path('app/resource_assets'), Path('app/resource_assets')),
+        (Path('agent_runtime/skills'), Path('agent_runtime/skills')),
         (Path("app/media_script.py"), Path("app")),
         (Path("model_workers/media_script_worker.py"), Path("model_workers")),
     ]
@@ -61,13 +63,18 @@ def test_media_script_bare_sources_have_exact_frozen_layout_and_bytes(tmp_path):
             for original in source.rglob('*'):
                 if original.is_file():
                     assert (target/original.relative_to(source)).read_bytes() == original.read_bytes()
-            assert (target/'openfilm/provenance.json').is_file()
-            assert (target/'openfilm-clock.json').is_file()
+            if relative == Path('app/template_assets'):
+                assert (target/'openfilm/provenance.json').is_file()
+                assert (target/'openfilm-clock.json').is_file()
             continue
         target = frozen / relative / source.name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
         assert hashlib.sha256(target.read_bytes()).digest() == hashlib.sha256(source.read_bytes()).digest()
+    # Runtime reads these paths relative to the frozen Python module location.
+    assert (frozen / 'app/resource_assets/fluent-emoji/party-popper.svg').is_file()
+    assert (frozen / 'app/resource_assets/openfilm/music/minimal-ambient-piano/music.mp3').is_file()
+    assert (frozen / 'agent_runtime/skills/editing-videos/manifest.json').is_file()
     module_file = frozen / "app" / "media_script.py"
     worker = module_file.parents[1] / "model_workers" / "media_script_worker.py"
     assert worker.is_file()
