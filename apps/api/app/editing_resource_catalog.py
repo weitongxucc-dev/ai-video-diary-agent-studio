@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.creation.visual_template_catalog import visual_templates
 from app.creation.openfilm_transition_catalog import IDENTITY, TEMPLATE_ID
+from app.creation.fluent_sticker_catalog import sticker_preview_path
 
 # ``failed`` is a persisted outcome for an attempted import or adapter check;
 # it is intentionally distinct from ``planned`` (never attempted) and
@@ -217,6 +218,27 @@ def _builtin_resources() -> list[EditingResource]:
     for identity, name, definition in visual_templates():
         if identity == IDENTITY:
             continue  # The original resource remains in transitions, not a duplicate catalog item.
+        if identity.startswith('fluent-sticker-'):
+            resource_id = 'fluent:' + identity.removeprefix('fluent-')
+            resources.append(EditingResource(
+                id=resource_id, category_id='stickers', name=name, version=1,
+                status='connected', resource_type='svg_sticker',
+                preview=ResourcePreview(kind='image', width=definition.width, height=definition.height,
+                    duration_seconds=definition.duration_seconds,
+                    thumbnail_ref=f'/api/editing-resources/{resource_id}/preview?version=1'),
+                provenance=[ResourceProvenance.model_validate(item.model_dump() | {'license_spdx': 'MIT'})
+                    for item in definition.provenance],
+                runtime_requirements={'engine': definition.engine, 'adapter': 'original-svg-sticker',
+                    'template_id': f'builtin_visual_{identity}', 'template_version': 1,
+                    'operation_type': 'EditGraphicOverlay', 'dependencies': [],
+                    'width': .22, 'x': .75, 'y': .25, 'duration_seconds': definition.duration_seconds,
+                    'media_requirement': '成片渲染需要已准备 HTML 图层的桌面隔离渲染器',
+                    'attribution': 'Microsoft Fluent Emoji · Copyright (c) Microsoft Corporation. · MIT',
+                    'adoption': {'status': 'connected', 'write_boundary': 'EditProposal/TimelineVersion'},
+                    'rollback': {'mode': 'timeline-operation-undo', 'deletes_user_data': False}},
+                entrypoints=['read_video_templates', 'read_visual_template', 'preview_typed_edit', 'apply_typed_edit'],
+            ))
+            continue
         resources.append(EditingResource(
             id=f"template:{identity}", category_id="templates", name=name, version=1,
             status="connected", resource_type="visual_template",
@@ -365,6 +387,8 @@ def editing_resource_catalog() -> EditingResourceCatalog:
 
 def resource_preview_path(resource_id: str, representation: str = "media") -> Path | None:
     """Return the checked-in preview media for a catalog resource."""
+    if resource_id.startswith('fluent:'):
+        return sticker_preview_path(resource_id) if representation == 'media' else None
     root = Path(__file__).resolve().parent / "resource_assets" / "openfilm"
     paths = {
         # Keep the checked-in OpenFilm m4a as the source/provenance asset. The

@@ -58,3 +58,37 @@ it("requires a new preparation after the task head changes", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("作品已更新");
   expect(api.preview).not.toHaveBeenCalled();
 });
+
+it("adopts a sticker with editable duration and placement while preserving its square source", async () => {
+  const sticker: CatalogResource = { ...resource, id: "fluent:sticker-red-heart", name: "爱心 · Fluent", version: 1,
+    category_id: "stickers", resource_type: "svg_sticker", preview: { kind: "image", duration_seconds: 3 },
+    runtime_requirements: { engine: "openfilm-html-v1", template_id: "builtin_visual_fluent-sticker-red-heart", template_version: 1, width: .22, x: .75, y: .25 } };
+  const square = { ...visual, width: 320, height: 320, duration_seconds: 3, source: "original-svg-with-license" };
+  api.template.mockResolvedValue({ id: "builtin_visual_fluent-sticker-red-heart", version: 1, settings: { visual: square } });
+  render(<ResourceVisualAdoption taskId="task" resource={sticker} playheadMs={1000} />);
+  const prepare = screen.getByRole("button", { name: "准备采用" });
+  await waitFor(() => expect(prepare).toBeEnabled());
+  expect(screen.getByLabelText("宽度（画面 %）")).toHaveValue(22);
+  fireEvent.change(screen.getByLabelText("宽度（画面 %）"), { target: { value: "28" } });
+  expect(screen.getByLabelText("宽度（画面 %）")).toHaveValue(28);
+  fireEvent.change(screen.getByLabelText("显示时长（秒）"), { target: { value: "2" } });
+  fireEvent.change(screen.getByLabelText("宽度（画面 %）"), { target: { value: "30" } });
+  fireEvent.change(screen.getByLabelText("水平位置（%）"), { target: { value: "60" } });
+  fireEvent.change(screen.getByLabelText("垂直位置（%）"), { target: { value: "20" } });
+  expect(api.preview).not.toHaveBeenCalled();
+  fireEvent.click(prepare);
+  expect(screen.getByLabelText("宽度（画面 %）")).toBeDisabled();
+  await screen.findByRole("button", { name: "确认加入贴纸" });
+  expect(api.preview).toHaveBeenCalledWith("task", expect.objectContaining({ graphic_overlay: expect.objectContaining({
+    template_id: "builtin_visual_fluent-sticker-red-heart", start_seconds: 1, end_seconds: 3,
+    width: .3, x: .6, y: .2, definition: square,
+  }) }), { draftOnly: true });
+  fireEvent.change(screen.getByLabelText("宽度（画面 %）"), { target: { value: "105" } });
+  expect(screen.queryByRole("button", { name: "确认加入贴纸" })).not.toBeInTheDocument();
+  expect(prepare).toBeDisabled();
+  fireEvent.change(screen.getByLabelText("宽度（画面 %）"), { target: { value: "25" } });
+  fireEvent.click(prepare);
+  fireEvent.click(await screen.findByRole("button", { name: "确认加入贴纸" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("已加入贴纸图层");
+  expect(api.confirm).toHaveBeenCalledWith("task", "p1");
+});

@@ -1,0 +1,32 @@
+{
+  "repository": "https://github.com/microsoft/fluentui-emoji",
+  "revision": "1ffb34c752ecf5d402f04cfb4b392c77f57c54bc",
+  "license": "MIT",
+  "copyright": "Copyright (c) Microsoft Corporation.",
+  "license_file": "LICENSE",
+  "license_sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+  "adaptation": "Original Flat SVG bytes, displayed in the existing offline HTML host; source art unchanged.",
+  "items": [
+    {
+      "id": "fluent-sticker-red-heart",
+      "name": "爱心",
+      "file": "red-heart.svg",
+      "path": "assets/Red heart/Flat/red_heart_flat.svg",
+      "sha256": "61846b9c946736481d65dbf244fe53792d06d50405c2d5f3e40a0a06cbfe5317"
+    },
+    {
+      "id": "fluent-sticker-party-popper",
+      "name": "庆祝礼炮",
+      "file": "party-popper.svg",
+      "path": "assets/Party popper/Flat/party_popper_flat.svg",
+      "sha256": "8128c958bfc06568aa49d03cd001556a6c6223660f43c657d381e638416c51f6"
+    },
+    {
+      "id": "fluent-sticker-light-bulb",
+      "name": "灵感灯泡",
+      "file": "light-bulb.svg",
+      "path": "assets/Light bulb/Flat/light_bulb_flat.svg",
+      "sha256": "3e746a9b94051287b263e518e1f156cbfbffb45b5e0a6db6570b99d4c8c56484"
+    }
+  ]
+}

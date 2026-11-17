@@ -84,7 +84,7 @@ def build_editing_resource_router(catalog_for: Callable):
         path = resource_preview_path(resource_id, representation)
         if path is None:
             raise HTTPException(status_code=404, detail="资源预览不存在")
-        media_type = "image/jpeg" if representation == "poster" else {"audio": "audio/wav", "video": "video/mp4"}.get(item.preview.kind, "application/octet-stream")
+        media_type = "image/jpeg" if representation == "poster" else {"audio": "audio/wav", "video": "video/mp4", "image": "image/svg+xml"}.get(item.preview.kind, "application/octet-stream")
         # Resource previews are embedded by the web/Electron media controls.
         # Keep the response inline just like production material previews;
         # attachment responses are treated as downloads by Chromium and do not

@@ -132,6 +132,7 @@ function CatalogResourceResults({ resources, renderResourceAction }: { resources
       const canAddVisual = resource.status === "connected" && resource.runtime_requirements?.engine === "openfilm-html-v1"
         && typeof resource.runtime_requirements.template_id === "string" && typeof resource.runtime_requirements.template_version === "number";
       return <article className={styles.catalogCard} key={key}>
+        {preview && resource.preview.kind === "image" ? <img className={styles.stickerThumbnail} src={preview} alt={resource.name} width={64} height={64} /> : null}
         <div><strong>{resource.name}</strong><span>{resourceStateLabel(resource.status)} · v{resource.version}</span></div>
         <div className={styles.catalogActions}>
           <button type="button" aria-expanded={open} onClick={() => setPreviewId(open ? null : key)}>{open ? "收起预览" : "查看预览"}</button>
@@ -141,11 +142,13 @@ function CatalogResourceResults({ resources, renderResourceAction }: { resources
             : <span>{resource.status === "catalog_only" ? "可浏览，采用能力尚未接通" : resource.status === "planned" ? "计划中，暂不可采用" : resource.resource_type === "skill" ? "由助手读取并按当前任务使用" : "在作品对应的编辑工具中使用"}</span>}
         </div>
         {open ? <div className={styles.catalogPreview} role="region" aria-label={`${resource.name}资源预览`}>
-          {canAddVisual ? <ResourceVisualPreview resource={resource} /> : null}
+          {canAddVisual && resource.preview.kind === "html" ? <ResourceVisualPreview resource={resource} /> : null}
+          {preview && resource.preview.kind === "image" ? <img className={styles.stickerPreview} src={preview} alt={`预览：${resource.name}`} width={160} height={160} /> : null}
           {preview && resource.preview.kind === "audio" ? <audio controls preload="none" src={preview} aria-label={`预览：${resource.name}`} /> : null}
           {preview && resource.preview.kind === "video" ? <video controls width={640} height={360} preload="none" poster={typeof resource.runtime_requirements?.poster_ref === "string" ? resource.runtime_requirements.poster_ref : undefined} src={preview} aria-label={`预览：${resource.name}`} /> : null}
           {resource.preview.duration_seconds != null ? <span>{resource.preview.duration_seconds} 秒</span> : null}
           <details><summary>来源、版本与回滚</summary>
+            {typeof resource.runtime_requirements?.attribution === "string" ? <p>{resource.runtime_requirements.attribution}</p> : null}
             {resource.provenance.map((source, index) => <p key={index}>{source.repository} · {source.path} · 修订 {source.revision} · {source.license}</p>)}
             <p>固定版本 v{resource.version}。采用后可以从作品的版本历史撤销；浏览和试听不会修改作品。</p>
           </details>

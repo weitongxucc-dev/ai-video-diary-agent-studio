@@ -19,7 +19,7 @@
 .catalogHeading p { margin:0; color:var(--text-2); font-size:11px; line-height:16px; }
 .catalogHeading button { flex:0 0 auto; min-height:30px; padding:5px 8px; border:1px solid var(--border-1); border-radius:7px; background:var(--surface-1); color:var(--text-1); font:inherit; font-size:11px; cursor:pointer; }
 .catalogCard { display:grid; gap:6px; padding:11px; border:1px solid var(--border-1); border-radius:8px; background:var(--surface-1); }
-.catalogCard > div { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.catalogCard > div:not(.catalogPreview) { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .catalogCard strong { font-size:13px; font-weight:500; }
 .catalogCard span,.catalogCard p,.catalogCard small { color:var(--text-2); font-size:11px; }
 .catalogCard p,.catalogCard small { margin:0; overflow-wrap:anywhere; }
@@ -35,6 +35,8 @@
 .catalogPreview details summary { cursor:pointer; color:var(--text-1); }
 .catalogPreview video { display:block; inline-size:100%; max-block-size:220px; object-fit:contain; background:#111; }
 .catalogPreview audio { inline-size:100%; }
+.stickerThumbnail,.stickerPreview { display:block; object-fit:contain; max-inline-size:100%; }
+.stickerPreview { justify-self:center; }
 
 .adoptionFields { display:grid; gap:10px; margin:0; padding:0; border:0; min-width:0; }
 .adoptionFields label { display:grid; gap:4px; }

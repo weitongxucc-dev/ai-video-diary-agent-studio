@@ -103,3 +103,19 @@ it("offers the connected original CSS adapter with its fixed template version", 
   expect(action).toHaveBeenCalledWith(resource);
   expect(screen.getByText("真实动画采用")).toBeInTheDocument();
 });
+
+it("shows the actual SVG sticker preview, attribution and its adoption entry", async () => {
+  const resource = { id: "fluent:sticker-red-heart", category_id: "stickers", name: "爱心 · Fluent", version: 1,
+    status: "connected", resource_type: "svg_sticker", preview: { kind: "image", thumbnail_ref: "/api/editing-resources/fluent:sticker-red-heart/preview?version=1" },
+    runtime_requirements: { engine: "openfilm-html-v1", template_id: "builtin_visual_fluent-sticker-red-heart", template_version: 1, attribution: "Microsoft Fluent Emoji · MIT" },
+    provenance: [], entrypoints: ["apply_typed_edit"] };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ categories: [], resources: [resource] }) }));
+  const action = vi.fn(() => <p>贴纸采用表单</p>);
+  render(<EditorResourceLibraryPanel assets={[]} selectedId={null} initialCategory="stickers" onSelect={vi.fn()} onReferenceMaterial={vi.fn()} renderResourceAction={action} />);
+  expect(await screen.findByRole("img", { name: "爱心 · Fluent" })).toHaveAttribute("src", resource.preview.thumbnail_ref);
+  fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
+  expect(screen.getByRole("img", { name: "预览：爱心 · Fluent" })).toHaveAttribute("src", resource.preview.thumbnail_ref);
+  expect(screen.getByText("Microsoft Fluent Emoji · MIT")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "添加到作品" }));
+  expect(action).toHaveBeenCalledWith(resource);
+});

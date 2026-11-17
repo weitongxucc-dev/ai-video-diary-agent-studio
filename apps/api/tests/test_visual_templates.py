@@ -32,10 +32,19 @@ def visual_overlay(**changes):
 
 def test_catalog_pins_real_source_and_all_bundled_use_cases():
     items = list(visual_templates())
-    assert len(items) == 61
+    assert len(items) == 64
     assert {item[2].category for item in items} == {'title','chapter','callout','data','product','ending','social','reaction','chat','news','location','festival'}
     manifest = json.loads((ASSETS/'provenance.json').read_text())
     for identity, _name, definition in items:
+        if identity.startswith('fluent-sticker-'):
+            from app.creation.fluent_sticker_catalog import ASSETS as sticker_assets, sticker_manifest
+            item = next(item for item in sticker_manifest()['items'] if item['id'] == identity)
+            original = (sticker_assets / item['file']).read_bytes()
+            assert hashlib.sha256(original).hexdigest() == item['sha256'] == definition.provenance[0].source_sha256
+            assert original.decode() in definition.source
+            assert (sticker_assets / 'LICENSE').read_text() in definition.source
+            assert definition.provenance[0].license == 'MIT'
+            continue
         if identity == 'openfilm-transition-glitch':
             from app.creation.openfilm_transition_catalog import ASSETS as transition_assets
             original = (transition_assets / 'overlay.css').read_bytes()
@@ -64,7 +73,7 @@ def test_bundled_catalog_renders_real_frames_with_bound_chinese_text(tmp_path):
     from PIL import Image
     for identity, name, definition in visual_templates():
         # Preserve numeric/date fields and replace an actual prose binding.
-        if identity != 'openfilm-transition-glitch':
+        if identity != 'openfilm-transition-glitch' and not identity.startswith('fluent-sticker-'):
             prose = next(item for item in definition.bindings if item.kind=='text'
                 and len(item.default)>1 and not any(char.isdigit() for char in item.default))
             definition.values[prose.key] = '科大分享'

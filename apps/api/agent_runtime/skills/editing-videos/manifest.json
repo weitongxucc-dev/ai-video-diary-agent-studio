@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "editing-videos",
-  "version": "jcss-v0.3.52-adapter.2",
+  "version": "jcss-v0.3.52-adapter.3",
   "entry": {
     "skill": "read_creation_skill:editing-videos",
     "adapter": "method-only-product-tools"

@@ -14,6 +14,12 @@
 
 它的 manifest 还声明了 package-time 安装检查、`read_creation_skill` 只读采用入口、明确编辑授权要求，以及不删除用户数据的固定版本回滚边界。目录会同时回带 `license_spdx`、输入/输出/权限/依赖和评测状态；Skill 资源在 HTTP 资源目录中保持 `connected`，Agent Skill 目录中保持 `installed`，`Glass Pulse` 音效为 `connected`，OpenFilm 钢琴音乐为 `connected`，滤镜/LUT 仍为 `planned`。
 
+## Fluent Emoji 贴纸包
+
+`fluent:sticker-red-heart`、`fluent:sticker-party-popper`、`fluent:sticker-light-bulb` 采用 Microsoft Fluent Emoji 原始 Flat SVG；固定来源提交、逐文件 SHA-256 和 MIT 原文见 `apps/api/app/resource_assets/fluent-emoji/manifest.json`。目录预览直接返回 SVG，采用转为现有离线 HTML 模板图层，保留方形比例、位置、大小和显示区间，不引入第二渲染器。Agent 沿 `read_video_templates/read_visual_template` 和类型化编辑入口使用；`editing-videos` 方法提供相同入口。
+
+采用通过 EditProposal/TimelineVersion，撤销指定本次操作并保留历史产物；采用成功不代表已出片，重新制作后才能观察实际合成结果。真实画面、播放和撤销证据归于原资源验收 JSON，不以目录数量代表所有贴纸或音效质量。
+
 ## 采用边界
 
 - 资源进入产品时记录来源修订和文件哈希，方便回滚、复现和运行排查；这些记录用于治理，不再阻断小范围采用。
@@ -25,4 +31,4 @@
 
 ## 后续顺序
 
-资源目录、面板和受控 Skill 导入已形成第一版纵向切片。下一步按真实业务入口扩充贴纸、滤镜、LUT、音乐和音效的独立资源包，并为每类资源补齐真实预览、采用回执和输出观察；OTIO/FCPXML/EDL 交换和外部 Provider 放在稳定的资源 provenance 与时间线写入边界之后。
+资源目录、面板和受控 Skill 导入已形成第一版纵向切片。第一包 Fluent 静态贴纸已接通；下一步按真实业务入口扩充动态贴纸、滤镜、LUT、音乐和音效的独立资源包，并为每类资源补齐真实预览、采用回执和输出观察；OTIO/FCPXML/EDL 交换和外部 Provider 放在稳定的资源 provenance 与时间线写入边界之后。
