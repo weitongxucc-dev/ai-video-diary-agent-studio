@@ -3,7 +3,7 @@ import { Button } from "./ui/button";
 import { IconButton } from "./ui/icon-button";
 import { MaterialLibraryToolbar } from "./material-library/MaterialLibraryToolbar";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "./ui/input-group";
-import { useWorkspaceViewState, useWorkspacePage } from "./workbench/context";
+import { WorkbenchAssistantTargetContext, useWorkspaceViewState, useWorkspacePage } from "./workbench/context";
 import { MaterialNotesEditor } from "./material-library/MaterialNotesEditor";
 import { MaterialSegmentTags } from "./material-library/MaterialSegmentTags";
 import { MaterialSegmentEditor } from "./material-library/MaterialSegmentEditor";
@@ -24,7 +24,7 @@ import { useMaterialUsageRecords } from "./material-library/useMaterialUsageReco
 import { useMaterialBusinessObjects } from "./material-library/useMaterialBusinessObjects";
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AlertCircle, Check, Grid2X2, Plus, Info, List, LoaderCircle, RefreshCw, Search, Sparkles, X } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/AppShell";
@@ -45,6 +45,7 @@ import { useStateOptions, EMPTY_OBJECT_IDS } from './material-library/material-s
 import { duration, roleLabel, analysisMessage, tagLabel, fileLabel } from './material-library/material-labels';
 import { mediaTypeOptions, mediaTypeLabels, readMediaTypeFromUrl } from './material-library/material-filters';
 import { visibleError } from './material-library/material-errors';
+import { ResourceAudioAdoption } from "./resource-library/ResourceAudioAdoption";
 import { EditorResourceLibraryPanel, type EditorResourceCategory } from './EditorResourceLibraryPanel';
 
 export function MaterialLibraryWorkspace({
@@ -64,6 +65,7 @@ export function MaterialLibraryWorkspace({
   initialResource?: string;
 }) {
   const router = useRouter();
+  const resourceTarget = useContext(WorkbenchAssistantTargetContext);
   const page = useWorkspacePage();
   const viewActive = page?.active ?? true;
   const searchParams = useSearchParams();
@@ -871,7 +873,8 @@ export function MaterialLibraryWorkspace({
         onResult: applyMaterialAssistantResult,
       }} />}
     >
-      {resourceMode ? <EditorResourceLibraryPanel assets={assets} selectedId={selected?.id ?? null} initialCategory={resourceCategory} onSelect={asset => selectAsset(asset)} onAdopt={asset => appendMaterialReference(asset)} /> : <div className={`modern-library ${styles.workspace}`}>
+      {resourceMode ? <EditorResourceLibraryPanel assets={assets} selectedId={selected?.id ?? null} initialCategory={resourceCategory} onSelect={asset => selectAsset(asset)} onReferenceMaterial={asset => appendMaterialReference(asset)}
+          renderResourceAction={resourceTarget?.task ? resource => <ResourceAudioAdoption key={`${resourceTarget.task!.id}:${resource.id}:${resource.version}`} taskId={resourceTarget.task!.id} resource={resource} playheadMs={resourceTarget.taskContext?.getPlayheadMs() ?? 0} onTaskUpdated={resourceTarget.onTaskUpdated} /> : undefined} /> : <div className={`modern-library ${styles.workspace}`}>
         <MaterialLibraryToolbar summary={`已载入 ${assets.length} / ${totalCount} · 最近更新在前`} auxiliary={Boolean(page?.auxiliary)} filtered={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)}
           search={<InputGroup data-input-group aria-label="素材检索" className="library-search">
             <InputGroupAddon><Search size={16} /></InputGroupAddon>
