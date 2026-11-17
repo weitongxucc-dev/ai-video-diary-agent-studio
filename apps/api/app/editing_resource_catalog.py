@@ -13,6 +13,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.creation.visual_template_catalog import visual_templates
+from app.creation.openfilm_transition_catalog import IDENTITY, TEMPLATE_ID
+from app.creation.fluent_sticker_catalog import sticker_preview_path
 
 # ``failed`` is a persisted outcome for an attempted import or adapter check;
 # it is intentionally distinct from ``planned`` (never attempted) and
@@ -99,8 +101,8 @@ _CATEGORIES: tuple[EditingResourceCategory, ...] = (
         entrypoints=["read_narration_segments", "read_script_sections", "preview_typed_edit"]),
     EditingResourceCategory(id="voice", label="配音", status="connected",
         entrypoints=["read_voice_profiles"], provenance_required=True),
-    EditingResourceCategory(id="music", label="音乐", status="catalog_only",
-        entrypoints=[], provenance_required=True),
+    EditingResourceCategory(id="music", label="音乐", status="connected",
+        entrypoints=["preview_typed_edit", "apply_typed_edit"], provenance_required=True),
     EditingResourceCategory(id="sfx", label="音效", status="connected",
         entrypoints=["preview_typed_edit", "apply_typed_edit"], provenance_required=True),
 )
@@ -194,9 +196,9 @@ def _builtin_resources() -> list[EditingResource]:
         ),
         EditingResource(
             id="openfilm:transition-glitch", category_id="transitions", name="信号故障", version=2,
-            status="catalog_only", resource_type="css_transition", preview=ResourcePreview(
-                kind="video", width=384, height=216, duration_seconds=0.6,
-                thumbnail_ref="/api/editing-resources/openfilm:transition-glitch/preview"),
+            status="connected", resource_type="css_transition", preview=ResourcePreview(
+                kind="html", width=384, height=216, duration_seconds=0.6,
+                thumbnail_ref="/api/editing-resources/openfilm:transition-glitch/preview?representation=poster&version=2"),
             provenance=[ResourceProvenance(
                 repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
                 path="transition/glitch/item.json", license="CC0-1.0", license_spdx="CC0-1.0",
@@ -204,16 +206,39 @@ def _builtin_resources() -> list[EditingResource]:
                 ResourceProvenance(
                     repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
                     path="transition/glitch/overlay.css", license="CC0-1.0", license_spdx="CC0-1.0",
-                    source_sha256="6063423ad31af44cca1fc88ed0b1bde72beb863125ebbd314265e7cb71335449"),
-                ResourceProvenance(
-                    repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
-                    path="transition/glitch/preview.mp4", license="CC0-1.0", license_spdx="CC0-1.0",
-                    source_sha256="124f033cbe6d033a91c5f12f12231f2c494d3ec8978dbdb04d058afa05adff6a")],
-            runtime_requirements={"engine": "openfilm-css-transition", "adapter": "planned", "manifest_path": "apps/api/app/resource_assets/openfilm/transition/glitch/item.json", "poster_ref": "/api/editing-resources/openfilm:transition-glitch/preview?representation=poster"},
-            entrypoints=[],
+                    source_sha256="6063423ad31af44cca1fc88ed0b1bde72beb863125ebbd314265e7cb71335449")],
+            runtime_requirements={"engine": "openfilm-html-v1", "adapter": "original-css-overlay",
+                "template_id": TEMPLATE_ID, "template_version": 1, "operation_type": "EditGraphicOverlay",
+                "duration_seconds": 0.6, "width": 1, "dependencies": [],
+                "media_requirement": "已准备 HTML 动画的桌面隔离渲染器；采用不代表成片已渲染",
+                "manifest_path": "apps/api/app/resource_assets/openfilm/transition/glitch/item.json"},
+            entrypoints=["read_visual_template", "preview_typed_edit", "apply_typed_edit"],
         ),
     ]
     for identity, name, definition in visual_templates():
+        if identity == IDENTITY:
+            continue  # The original resource remains in transitions, not a duplicate catalog item.
+        if identity.startswith('fluent-sticker-'):
+            resource_id = 'fluent:' + identity.removeprefix('fluent-')
+            resources.append(EditingResource(
+                id=resource_id, category_id='stickers', name=name, version=1,
+                status='connected', resource_type='svg_sticker',
+                preview=ResourcePreview(kind='image', width=definition.width, height=definition.height,
+                    duration_seconds=definition.duration_seconds,
+                    thumbnail_ref=f'/api/editing-resources/{resource_id}/preview?version=1'),
+                provenance=[ResourceProvenance.model_validate(item.model_dump() | {'license_spdx': 'MIT'})
+                    for item in definition.provenance],
+                runtime_requirements={'engine': definition.engine, 'adapter': 'original-svg-sticker',
+                    'template_id': f'builtin_visual_{identity}', 'template_version': 1,
+                    'operation_type': 'EditGraphicOverlay', 'dependencies': [],
+                    'width': .22, 'x': .75, 'y': .25, 'duration_seconds': definition.duration_seconds,
+                    'media_requirement': '成片渲染需要已准备 HTML 图层的桌面隔离渲染器',
+                    'attribution': 'Microsoft Fluent Emoji · Copyright (c) Microsoft Corporation. · MIT',
+                    'adoption': {'status': 'connected', 'write_boundary': 'EditProposal/TimelineVersion'},
+                    'rollback': {'mode': 'timeline-operation-undo', 'deletes_user_data': False}},
+                entrypoints=['read_video_templates', 'read_visual_template', 'preview_typed_edit', 'apply_typed_edit'],
+            ))
+            continue
         resources.append(EditingResource(
             id=f"template:{identity}", category_id="templates", name=name, version=1,
             status="connected", resource_type="visual_template",
@@ -224,7 +249,42 @@ def _builtin_resources() -> list[EditingResource]:
             entrypoints=["read_video_templates", "read_visual_template"],
         ))
     resources.extend(_packaged_skill_resources())
+    resources.append(_packaged_music_resource())
     return resources
+
+
+def _packaged_music_resource() -> EditingResource:
+    manifest_path = Path(__file__).resolve().parent / "resource_assets/openfilm/music/minimal-ambient-piano/manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    source = manifest["provenance"]
+    preview_ref = f"/api/editing-resources/{manifest['id']}/preview?version={manifest['version']}"
+    return EditingResource(
+        id=manifest["id"], category_id="music", name=manifest["name"], version=manifest["version"],
+        status="connected", resource_type="music",
+        preview=ResourcePreview(kind="audio", duration_seconds=manifest["duration_seconds"], thumbnail_ref=preview_ref),
+        provenance=[ResourceProvenance(repository=source["repository"], revision=source["revision"],
+            path=source["source_path"], license=source["license"], license_spdx=source["license"],
+            source_sha256=source["source_sha256"]),
+            ResourceProvenance(repository=source["repository"], revision=source["revision"],
+                path=source["catalog_path"], license=source["license"], license_spdx=source["license"],
+                source_sha256=source["catalog_sha256"])],
+        runtime_requirements={
+            "engine": "EditAudioTimeline", "runnable": True, "tags": manifest["tags"],
+            "preview_ref": preview_ref,
+            "manifest_path": "apps/api/app/resource_assets/openfilm/music/minimal-ambient-piano/manifest.json",
+            "install_checks": {"mode": "package-time", "checks": ["source and preview SHA-256", "audio decode", "pinned catalog entry"]},
+            "adoption": {"status": "requires_task_import", "requires_explicit_edit_authorization": True,
+                "import_endpoint": "/api/creation-tasks/{task_id}/audio/resources",
+                "import_payload": {"resource_id": manifest["id"], "version": manifest["version"]},
+                "result": "读取导入 Job 原回执的 result.source_ref；预览 URL 不是可写入时间线的 source_ref。",
+                "entrypoint": "apply_typed_edit", "operation_type": "EditAudioTimeline", "action": "add",
+                "track_role": "music", "write_endpoint": "/api/creation-tasks/{task_id}/edits/exact",
+                "write_boundary": "沿当前任务授权与 expected_timeline_version_id/expected_timeline_sequence 校验采用。"},
+            "rollback": {"mode": "timeline-undo", "endpoint": "/api/creation-tasks/{task_id}/timeline/undo",
+                "deletes_user_data": False, "boundary": "携带当前版本与原请求身份撤销；保留导入的任务音频和历史版本。"},
+        },
+        entrypoints=["preview_typed_edit", "apply_typed_edit"],
+    )
 
 
 def _packaged_skill_resources() -> list[EditingResource]:
@@ -327,9 +387,15 @@ def editing_resource_catalog() -> EditingResourceCatalog:
 
 def resource_preview_path(resource_id: str, representation: str = "media") -> Path | None:
     """Return the checked-in preview media for a catalog resource."""
+    if resource_id.startswith('fluent:'):
+        return sticker_preview_path(resource_id) if representation == 'media' else None
     root = Path(__file__).resolve().parent / "resource_assets" / "openfilm"
     paths = {
-        ("openfilm:sound-glass-pulse", "media"): root / "sound" / "glass-pulse" / "sound.m4a",
+        # Keep the checked-in OpenFilm m4a as the source/provenance asset. The
+        # WAV is a tiny local preview derivative because Electron's bundled
+        # Chromium does not decode this m4a reliably in an <audio> element.
+        ("openfilm:sound-glass-pulse", "media"): root / "sound" / "glass-pulse" / "preview.wav",
+        ("openfilm:music-minimal-ambient-piano", "media"): root / "music" / "minimal-ambient-piano" / "preview.wav",
         ("openfilm:transition-glitch", "media"): root / "transition" / "glitch" / "preview.mp4",
         ("openfilm:transition-glitch", "poster"): root / "transition" / "glitch" / "poster.jpg",
     }

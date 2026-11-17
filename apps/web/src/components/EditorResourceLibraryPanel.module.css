@@ -1,4 +1,4 @@
-.panel { min-height:100%; background:var(--surface-1); color:var(--text-1); }
+.panel { container-type:inline-size; min-height:100%; background:var(--surface-1); color:var(--text-1); }
 .header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:16px 18px 12px; border-bottom:1px solid var(--border-1); }
 .eyebrow,.railLabel { color:var(--text-3); font-size:11px; letter-spacing:.04em; text-transform:uppercase; }
 .header h2 { margin:4px 0 2px; font-size:17px; font-weight:500; }
@@ -19,7 +19,7 @@
 .catalogHeading p { margin:0; color:var(--text-2); font-size:11px; line-height:16px; }
 .catalogHeading button { flex:0 0 auto; min-height:30px; padding:5px 8px; border:1px solid var(--border-1); border-radius:7px; background:var(--surface-1); color:var(--text-1); font:inherit; font-size:11px; cursor:pointer; }
 .catalogCard { display:grid; gap:6px; padding:11px; border:1px solid var(--border-1); border-radius:8px; background:var(--surface-1); }
-.catalogCard > div { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.catalogCard > div:not(.catalogPreview) { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .catalogCard strong { font-size:13px; font-weight:500; }
 .catalogCard span,.catalogCard p,.catalogCard small { color:var(--text-2); font-size:11px; }
 .catalogCard p,.catalogCard small { margin:0; overflow-wrap:anywhere; }
@@ -35,3 +35,22 @@
 .catalogPreview details summary { cursor:pointer; color:var(--text-1); }
 .catalogPreview video { display:block; inline-size:100%; max-block-size:220px; object-fit:contain; background:#111; }
 .catalogPreview audio { inline-size:100%; }
+.stickerThumbnail,.stickerPreview { display:block; object-fit:contain; max-inline-size:100%; }
+.stickerPreview { justify-self:center; }
+
+.adoptionFields { display:grid; gap:10px; margin:0; padding:0; border:0; min-width:0; }
+.adoptionFields label { display:grid; gap:4px; }
+.adoptionFields input,.adoptionFields select { min-height:32px; width:100%; padding:6px 8px; border:1px solid var(--border-1); border-radius:7px; color:var(--text-1); background:var(--surface-1); font:inherit; }
+.adoptionFields input[type="range"] { padding:0; border:0; background:transparent; accent-color:var(--accent); }
+
+/* The editor drawer can be narrow even in a wide desktop window. */
+@container (max-width:600px) {
+  .body { grid-template-columns:minmax(0,1fr); min-height:0; }
+  .rail { display:flex; flex-direction:row; overflow-x:auto; border-right:0; border-bottom:1px solid var(--border-1); }
+  .railLabel,.rail button small { display:none; }
+  .rail button { flex:0 0 auto; width:auto; min-block-size:36px; white-space:nowrap; }
+  .content { padding:12px; }
+  .toolbar { flex-wrap:wrap; }
+  .materialArea { grid-template-columns:minmax(0,1fr); min-height:0; }
+  .catalogCard > div { flex-wrap:wrap; }
+}

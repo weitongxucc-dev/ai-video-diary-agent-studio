@@ -25,6 +25,8 @@ API_ROOT = ROOT / "apps" / "api"
 sys.path.insert(0, str(API_ROOT))
 
 from app.creation.output_observation_use_case import observe_output  # noqa: E402
+from app.creation.contracts import CreationTask, TimelineVersion  # noqa: E402
+from app.creation.plan_contracts import CreationPlan  # noqa: E402
 from app.editing_resource_catalog import editing_resource_catalog  # noqa: E402
 from app.editing_resource_routes import build_editing_resource_router  # noqa: E402
 from app.materials.resource_governance import (  # noqa: E402
@@ -49,6 +51,14 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def report_path(path: Path) -> str:
+    """Keep checked-in evidence portable while allowing local absolute paths."""
+    try:
+        return str(path.resolve().relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", type=Path, default=ROOT / "output" / "acceptance")
@@ -65,9 +75,16 @@ def main() -> int:
     rendered = output_dir / "resource-adoption-glass-pulse.mp4"
     database = output_dir / "resource-adoption-governance.sqlite"
     library = output_dir / "resource-adoption-library"
-    evidence = output_dir / "resource-adoption-glass-pulse-2026-11-13.json"
+    evidence = output_dir / f"resource-adoption-glass-pulse-{datetime.now(timezone.utc).date().isoformat()}.json"
     source.unlink(missing_ok=True)
     rendered.unlink(missing_ok=True)
+    # This database is a disposable acceptance fixture.  Rebuild it on every
+    # run so INSERT OR IGNORE usage records cannot retain an older observation
+    # id and make the newly written evidence point at an empty provenance set.
+    database.unlink(missing_ok=True)
+    if library.exists():
+        shutil.rmtree(library)
+    library.mkdir(parents=True, exist_ok=True)
 
     command([
         "ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x164e63:s=320x240:r=24:d=2",
@@ -90,7 +107,7 @@ def main() -> int:
     )
     preview = preview_endpoint("openfilm:sound-glass-pulse", 1, "media")
     preview_path = Path(preview.path)
-    if not preview_path.is_file() or preview.media_type != "audio/mp4":
+    if not preview_path.is_file() or preview.media_type not in {"audio/mp4", "audio/wav"}:
         raise RuntimeError("Glass Pulse 预览路由没有解析到真实音频文件")
 
     workspace_id = "resource-acceptance-workspace"
@@ -122,6 +139,40 @@ def main() -> int:
         metadata=metadata,
     )
     store.save_manifest(manifest)
+    # Persist a real production task and TimelineVersion before recording the
+    # governance timeline stage.  The usage table remains the resource
+    # provenance index, while this version is the authoritative timeline row
+    # that the render and observation refer to.
+    plan = CreationPlan(
+        id=f"plan-{task_id}", workspace_id=workspace_id,
+        goal="验证资源采用与输出观察闭环", name="资源采用验收",
+        target_count=1, language="zh-CN", aspect_ratio="16:9",
+        duration_target_seconds=2, knowledge_references=[], source_references=[],
+        selected_voice=None, pronunciation_references=[], approved_asset_count=0,
+        approved_clip_count=0, material_rule_summary="本地资源验收",
+        model_snapshot=[], confirmation_points=[], blockers=[],
+        preflight_fingerprint=f"resource-adoption-{task_id}",
+    )
+    task = CreationTask(
+        id=task_id, workspace_id=workspace_id, plan_id=plan.id,
+        name=plan.name, scenario="resource_adoption_acceptance",
+    )
+    repo.plan_confirmation.confirm_creation_plan(plan, task)
+    timeline = repo.timeline_records.create_timeline_version(TimelineVersion(
+        id=timeline_id, workspace_id=workspace_id, task_id=task_id,
+        parent_version_id=None, sequence=1,
+        snapshot={
+            "tracks": [{"id": "resource-audio-track", "kind": "audio", "items": [{
+                "resource_id": glass.id, "manifest_id": manifest.id,
+                "source_ref": str(sound.relative_to(ROOT)),
+                "start_seconds": 0, "duration_seconds": 2,
+            }]}],
+        },
+        created_by_operation_id="resource-adoption-acceptance",
+    ))
+    persisted_timeline = repo.timeline_records.get_timeline_version(workspace_id, timeline.id)
+    if persisted_timeline.id != timeline.id or persisted_timeline.snapshot["tracks"][0]["items"][0]["resource_id"] != glass.id:
+        raise RuntimeError("真实 TimelineVersion 写入后无法回读资源引用")
     records = []
     for stage, kwargs in (
         ("adopted", {"task_id": task_id}),
@@ -149,12 +200,13 @@ def main() -> int:
     report = {
         "schema_version": 1,
         "validated_at": datetime.now(timezone.utc).isoformat(),
-        "resource": {"id": glass.id, "status": glass.status, "resource_kind": manifest.resource_kind, "version": manifest.resource_version, "source_sha256": metadata["source_sha256"], "preview_status": 200, "preview_content_type": preview.media_type, "preview_path": str(preview_path), "preview_bytes": preview_path.stat().st_size},
+        "resource": {"id": glass.id, "status": glass.status, "resource_kind": manifest.resource_kind, "version": manifest.resource_version, "source_sha256": metadata["source_sha256"], "preview_status": 200, "preview_content_type": preview.media_type, "preview_path": report_path(preview_path), "preview_bytes": preview_path.stat().st_size},
         "catalog_only_resource_left_unadopted": {"id": glitch.id, "status": glitch.status, "reason": "转场 adapter 仍为 planned，未进入执行阶段"},
-        "render": {"source": str(source), "output": str(rendered), "sha256": sha256(rendered), "size_bytes": rendered.stat().st_size, "artifact_ref": artifact_ref, "command": "ffmpeg color+sine + OpenFilm Glass Pulse sound.m4a + amix"},
+        "render": {"source": report_path(source), "output": report_path(rendered), "sha256": sha256(rendered), "size_bytes": rendered.stat().st_size, "artifact_ref": artifact_ref, "command": "ffmpeg color+sine + OpenFilm Glass Pulse sound.m4a + amix"},
         "observation": observation,
-        "governance": {"workspace_id": workspace_id, "task_id": task_id, "timeline_version_id": timeline_id, "observation_id": observation_id, "stages": [record.stage for record in records], "provenance_for_output": provenance},
+        "governance": {"workspace_id": workspace_id, "task_id": task_id, "timeline_version_id": timeline_id, "timeline_persisted": True, "timeline_snapshot": persisted_timeline.snapshot, "observation_id": observation_id, "stages": [record.stage for record in records], "provenance_for_output": provenance},
         "unverified": ["真实桌面窗口播放", "真实 provider 模型回合", "真实设备播放", "Glass Pulse 音听感主观验收"],
+        "evidence_root": report_path(output_dir),
     }
     evidence.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
     print(evidence)

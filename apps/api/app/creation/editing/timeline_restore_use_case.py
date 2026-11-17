@@ -26,6 +26,7 @@ from app.creation.projection import undo_target_versions, redo_target_versions
 from app.creation.transactions import clone_subtitle_track, clone_cover_asset, changed_stage_sections
 from app.models import utc_now
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload
+from app.audio_timeline import AudioTimeline, effective_audio_timeline
 
 if TYPE_CHECKING:
     from app.creation.contracts import CreationTask, NarrationSegment
@@ -83,6 +84,15 @@ class ClipLockRestoreScope:
     restored_locked: bool
 
 
+@dataclass(frozen=True)
+class AudioAdoptionRestoreScope:
+    operation_id: str
+    track_id: str
+    clip_id: str
+    clip_name: str = ''
+    track_role: str = ''
+
+
 class TimelineRestoreUnavailable(EditConflict):
     def __init__(self, redo: bool):
         action_label = '重做' if redo else '撤销'
@@ -114,7 +124,32 @@ class TimelineRestoreUseCase:
 
     def read_request(self, workspace_id, task_id, request_id, actor):
         self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id), actor)
-        return self.repository.restore_requests.receipt(workspace_id, task_id, actor.user_id or actor.member_id, request_id)
+        member_id = actor.user_id or actor.member_id
+        receipt = self.repository.restore_requests.receipt(workspace_id, task_id, member_id, request_id)
+        if receipt['status'] != 'applied':
+            return receipt
+        claim = self.repository.execution_records.get_task_event(workspace_id,
+            self.repository.restore_requests.request_id(workspace_id, member_id, request_id))
+        inputs = claim.payload['inputs']
+        source = inputs.get('source') or {}
+        if not source.get('assistant_turn_id'):
+            return receipt
+        operation = self.repository.edit_records.get_edit_operation(workspace_id, receipt['operation_id'])
+        base, result = [self.repository.timeline_records.get_timeline_version(workspace_id, key)
+                        for key in (operation.base_version_id, operation.result_version_id)]
+        # A targeted restore may legally merge over later edits. Such a merge
+        # must not advance an Agent's older fence across those external edits.
+        if (base.task_id != task_id or result.task_id != task_id or result.parent_version_id != base.id
+                or result.sequence != base.sequence + 1
+                or inputs.get('expected_timeline_version_id') != base.id
+                or inputs.get('expected_timeline_sequence') != base.sequence):
+            return receipt
+        return {**receipt, 'owned_version_transition': {
+            'scope': 'same_turn_restore', 'task_id': task_id, 'request_id': str(request_id),
+            'operation_id': operation.id, 'action': receipt['action'],
+            'assistant_turn_id': source['assistant_turn_id'], 'input_id': source.get('input_id'),
+            'from': {'timeline_version_id': base.id, 'timeline_sequence': base.sequence},
+            'to': {'timeline_version_id': result.id, 'timeline_sequence': result.sequence}}}
 
     def replay(self, workspace_id, task_id, receipt):
         operation = self.repository.edit_records.get_edit_operation(workspace_id, receipt['operation_id'])
@@ -127,7 +162,9 @@ class TimelineRestoreUseCase:
             receipt.get('execution_readiness'))
 
     @classmethod
-    def require_restore_instruction(cls, message, *, redo, lock_scope=None):
+    def require_restore_instruction(cls, message, *, redo, lock_scope=None, audio_scope=None):
+        if audio_scope is not None and cls.require_audio_restore_instruction(message, redo=redo, scope=audio_scope):
+            return
         if re.search('不要|不用|别|不(?:撤销|重做|取消|放弃)', message):
             raise EditConflict('当前要求没有授权这一动作，任务保持不变。')
         if lock_scope is not None and cls.require_lock_restore_instruction(message, redo=redo, scope=lock_scope):
@@ -139,6 +176,119 @@ class TimelineRestoreUseCase:
             raise EditConflict('不能用整项历史恢复代替局部修改，任务保持不变。')
         if not re.fullmatch(prefix + f'(?:整体)?(?:{verb})(?:一下)?{scope}?(?:一下|吧|吗|好吗)?[。！!？?]?', message.strip()):
             raise EditConflict('需要明确的撤销或重做原修改要求，任务保持不变。')
+
+    @staticmethod
+    def require_audio_restore_instruction(message, *, redo, scope):
+        """Bind a local adoption restore to the operation named by the human."""
+        clauses = [part.strip() for part in re.split('[，,。；;！!\n]', message) if part.strip()]
+        identity = re.compile(r'(?<![A-Za-z0-9_-])' + re.escape(scope.operation_id) + r'(?![A-Za-z0-9_-])')
+        verb = r'重做|恢复' if redo else r'撤销|回退'
+        tool = 'redo_last_edit' if redo else 'undo_last_edit'
+        action = re.compile(r'^(?:请帮我|帮我|麻烦|现在|然后|接着|请|先|再|仅|只)*'
+            + r'(?:使用\s*' + tool + r'\s*)?(?:指定(?:同一)?原(?:操作|采用|修改)\s*)?(?:' + verb + ')')
+        mentioned = set(re.findall(r'operation_[A-Za-z0-9_-]+', message))
+        named_anywhere = mentioned == {scope.operation_id}
+        reference = TimelineRestoreUseCase.audio_restore_reference(message, redo=redo)
+        natural = reference is not None and TimelineRestoreUseCase.audio_reference_matches(reference, scope)
+        bound = False
+        accepted = False
+        for clause in clauses:
+            operations = re.findall(r'operation_[A-Za-z0-9_-]+', clause)
+            if operations and any(item != scope.operation_id for item in operations):
+                bound = False
+                continue
+            named = identity.search(clause) is not None
+            if (named or bound) and re.search(r'(?:不要|不用|别|不)(?:再|实际|使用\s*' + tool + r'\s*)?(?:' + verb + ')', clause):
+                raise EditConflict('当前要求没有授权这一动作，任务保持不变。')
+            implicit = natural and clause == clauses[0] and (not mentioned or named_anywhere)
+            if action.search(clause) and (named or implicit or bound and re.search(r'该|此|同一|' + tool, clause)):
+                if re.search(r'不要|不用|别|不(?:再|实际)?(?:' + verb + ')', clause):
+                    raise EditConflict('当前要求没有授权这一动作，任务保持不变。')
+                accepted = True
+            if named or implicit:
+                bound = True
+        return accepted
+
+    @staticmethod
+    def audio_restore_reference(message, *, redo):
+        if not redo:
+            return None
+        first = re.split('[，,。；;！!\n]', message.strip())[0].strip()
+        match = re.fullmatch(r'(?:请|帮我|麻烦|现在|先)*(?:恢复|重做)(?:刚才|上次|上一次)撤销的'
+            r'(?:背景)?(钢琴(?:音乐)?|音乐)(?:采用)?', first)
+        return match[1] if match else None
+
+    @staticmethod
+    def audio_reference_matches(reference, scope):
+        return (scope.track_role == 'music' and ('钢琴' not in reference
+            or '钢琴' in scope.clip_name or 'piano' in scope.clip_name.casefold()))
+
+    def resolve_restore_instruction_target(self, task, message, *, actor, redo, target, version_id, sequence):
+        mentioned = set(re.findall(r'operation_[A-Za-z0-9_-]+', message))
+        if len(mentioned) == 1:
+            named, = mentioned
+            if target is not None and target != named:
+                raise EditConflict('恢复工具的原操作与当前用户明确指定的操作不一致')
+            return named
+        reference = self.audio_restore_reference(message, redo=redo)
+        if mentioned or reference is None:
+            return target
+        page = self.history(task.workspace_id, task.id, actor, limit=50)
+        if page['truncated']:
+            raise EditConflict('撤销历史尚未完整读取，不能唯一定位刚才撤销的音乐')
+        matches = []
+        for item in page['items']:
+            if item['operation_type'] != 'EditAudioTimeline':
+                continue
+            original = self.repository.edit_records.get_edit_operation(task.workspace_id, item['operation_id'])
+            if original.payload.get('edit', {}).get('action') != 'add':
+                continue
+            last = self.repository.restore_requests.latest_operation_restore(task.workspace_id, task.id, original.id)
+            if (last is None or last.operation_type != 'UndoTimelineVersion' or version_id is None
+                    or not self.repository.timeline_records.timeline_contains_version(task.workspace_id, task.id, version_id, last.result_version_id)):
+                continue
+            scope = self.audio_adoption_restore_scope(task, original.id, version_id, sequence)
+            if self.audio_reference_matches(reference, scope):
+                matches.append(original.id)
+        if len(matches) != 1:
+            raise EditConflict('刚才撤销的音乐无法唯一定位，请从真实修改历史确认原采用')
+        if target is not None and target != matches[0]:
+            raise EditConflict('恢复工具选择的原采用与当前唯一音乐指代不一致')
+        return matches[0]
+
+    def audio_adoption_restore_scope(self, task, operation_id, version_id, sequence):
+        if operation_id is None or version_id is None or sequence is None:
+            return None
+        original = self.repository.edit_records.get_edit_operation(task.workspace_id, operation_id)
+        edit = original.payload.get('edit', {})
+        if original.operation_type != 'EditAudioTimeline' or edit.get('action') != 'add':
+            return None
+        seen = self.repository.timeline_records.get_timeline_version(task.workspace_id, version_id)
+        if (original.task_id != task.id or seen.task_id != task.id or seen.sequence != sequence
+                or not self.repository.timeline_records.timeline_contains_version(task.workspace_id, task.id, seen.id, original.result_version_id)):
+            raise EditConflict('音频恢复所见版本不包含指定原采用')
+        before, after = [self.repository.timeline_records.get_timeline_version(task.workspace_id, key)
+                         for key in (original.base_version_id, original.result_version_id)]
+        graphs = [effective_audio_timeline(creation_task_montage_plan_from_payload(version.snapshot['montage']))
+                  for version in (before, after)]
+        old, new = [{track.id: track.model_dump() for track in graph.tracks} for graph in graphs]
+        if old.keys() != new.keys():
+            raise EditConflict('原音频采用包含音轨集合变化，不能猜测恢复范围')
+        added = []
+        for key in old:
+            left, right = old[key], new[key]
+            if {k: v for k, v in left.items() if k != 'clips'} != {k: v for k, v in right.items() if k != 'clips'}:
+                raise EditConflict('原音频采用包含其他音轨修改')
+            old_clips = {clip['id']: clip for clip in left['clips']}
+            new_clips = {clip['id']: clip for clip in right['clips']}
+            if any(new_clips.get(clip_id) != clip for clip_id, clip in old_clips.items()):
+                raise EditConflict('原音频采用包含其他片段修改')
+            added.extend((key, clip_id) for clip_id in new_clips.keys() - old_clips.keys())
+        if len(added) != 1 or added[0][0] != edit.get('target_id'):
+            raise EditConflict('指定原采用没有唯一音频片段依据')
+        track_id, clip_id = added[0]
+        clip = next(clip for clip in new[track_id]['clips'] if clip['id'] == clip_id)
+        return AudioAdoptionRestoreScope(original.id, track_id, clip_id, clip['name'], new[track_id]['role'])
 
     @staticmethod
     def require_lock_restore_instruction(message, *, redo, scope):
@@ -233,10 +383,21 @@ class TimelineRestoreUseCase:
             if source_input.get('input_id') != source['input_id']:
                 raise PermissionError('恢复动作不属于原已消费输入')
             CreationIntentUseCase.reject_discussion_only_input(source_input['raw_command'])
-            lock_scope = self.lock_restore_scope(task, target_operation_id,
-                expected_timeline_version_id, expected_timeline_sequence, redo=command.redo,
-                context=source_input['context'])
-            self.require_restore_instruction(source_input['raw_command'], redo=command.redo, lock_scope=lock_scope)
+            try:
+                previous = self.read_request(workspace_id, task_id, request_id, actor)
+            except KeyError:
+                previous = None
+            if previous is None:
+                target_operation_id = self.resolve_restore_instruction_target(task, source_input['raw_command'],
+                    actor=actor, redo=command.redo, target=target_operation_id,
+                    version_id=expected_timeline_version_id, sequence=expected_timeline_sequence)
+                lock_scope = self.lock_restore_scope(task, target_operation_id,
+                    expected_timeline_version_id, expected_timeline_sequence, redo=command.redo,
+                    context=source_input['context'])
+                audio_scope = self.audio_adoption_restore_scope(task, target_operation_id,
+                    expected_timeline_version_id, expected_timeline_sequence)
+                self.require_restore_instruction(source_input['raw_command'], redo=command.redo,
+                    lock_scope=lock_scope, audio_scope=audio_scope)
         def guarded(connection):
             self.require_actor(self.repository.task_records.get_creation_task(workspace_id, task_id, connection=connection), actor)
             if source_input is not None:
@@ -344,7 +505,8 @@ class TimelineRestoreUseCase:
             original = self.repository.edit_records.get_edit_operation(workspace_id, command.target_operation_id)
             if original.operation_type in {'AdjustVisualEffects', 'SetClipLock', 'SetClipAudio', 'ReplaceClip',
                     'SetClipTransition', 'EditGraphicOverlay', 'UpdateSubtitleCue', 'ReplaceSubtitleText',
-                    'ConfigureSubtitleTrack', 'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'}:
+                    'ConfigureSubtitleTrack', 'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'} or (
+                    original.operation_type == 'EditAudioTimeline' and original.payload.get('edit', {}).get('action') == 'add'):
                 return self.prepare_local_restore(command, original, changed_version, target_version, operation_type, action_label)
         self.verify_whole_timeline_restore(workspace_id,task_id,changed_version.id)
         subtitle_cover_undo = command.redo or changed_operation.operation_type in {
@@ -436,7 +598,7 @@ class TimelineRestoreUseCase:
                     raise EditConflict(f'{label}的实际来源依赖已变化')
                 now[key] = cls.restore_fields(now[key], old[key], wanted[key], label=label)
         order = [item['id'] for item in current if item['id'] in now]
-        order.extend(item['id'] for item in desired if item['id'] not in order)
+        order.extend(item['id'] for item in desired if item['id'] in now and item['id'] not in order)
         return [now[key] for key in order]
 
     def prepare_local_restore(self, command, original, changed_version, target_version, operation_type, action_label):
@@ -450,7 +612,8 @@ class TimelineRestoreUseCase:
             raise EditConflict('原局部操作缺少完整时间线依据')
         restored = deepcopy(current)
         derived = {'id','created_at','updated_at','status','message','output_path','subtitle_path','low_confidence_clip_count'}
-        collections = {'clips','cues','graphic_overlays'}
+        audio_adoption = original.operation_type == 'EditAudioTimeline' and original.payload.get('edit', {}).get('action') == 'add'
+        collections = {'clips','cues','graphic_overlays'} | ({'audio_timeline'} if audio_adoption else set())
         if any(expected.get(key) != desired.get(key) for key in (expected.keys() | desired.keys()) - derived - collections):
             raise EditConflict('原操作包含全局时间线变化，需核对完整依赖后恢复')
         affected_clips = [item['id'] for item in expected['clips'] if item != next((value for value in desired['clips'] if value['id']==item['id']), None)]
@@ -461,6 +624,15 @@ class TimelineRestoreUseCase:
             desired.get('graphic_overlays',[]), label='图文层', allow_membership=True)
 
         plans = [creation_task_montage_plan_from_payload(value) for value in (current, expected, desired)]
+        audio_sources = None
+        if audio_adoption:
+            # Recheck the single original adoption for GUI and Agent callers.
+            self.audio_adoption_restore_scope(task, original.id, current_version.id, current_version.sequence)
+            graphs = [effective_audio_timeline(plan).model_dump() for plan in plans]
+            restored['audio_timeline'] = self.restore_audio_adoption(*graphs)
+            from app.creation_execution import CreationExecutionActor
+            actor = CreationExecutionActor.from_event(ws, command.actor_identity or {})
+            audio_sources = (actor, self.audio_restore_source_facts(task, graphs[0], restored['audio_timeline'], actor))
         tracks = [self.montage_edits.current_subtitle_tracks(ws, task, current_version=version, montage=plan)
             for version, plan in zip((current_version, expected_version, desired_version), plans)]
         merged_tracks = self.restore_subtitle_tracks(*tracks, allow_membership=original.operation_type in {
@@ -486,10 +658,44 @@ class TimelineRestoreUseCase:
             if section_id in original_sections and section_id not in still_changed
             and current_version.snapshot.get('stage_segments',{}).get(section_id)==publication}
         controls = {'sources': sources, 'person_sources': list(person_sources.values()),
-            'stage_adoption_restore': validity, 'current_version_id': current_version.id}
+            'stage_adoption_restore': validity, 'current_version_id': current_version.id,
+            'audio_sources': audio_sources}
         return PreparedTimelineRestore(command, changed_version, target_version, plans[0],
             creation_task_montage_plan_from_payload(restored), None, None, True, operation_type, action_label,
             local_tracks=merged_tracks, local_sources=controls)
+
+    @classmethod
+    def restore_audio_adoption(cls, current, expected, desired):
+        restored = deepcopy(current)
+        old, wanted = [{track['id']: track for track in graph['tracks']} for graph in (expected, desired)]
+        now = {track['id']: track for track in restored['tracks']}
+        if old.keys() != wanted.keys():
+            raise EditConflict('原音频采用改变音轨集合，不能局部恢复')
+        for key in old:
+            if old[key] == wanted[key]:
+                continue
+            if key not in now or now[key]['role'] != old[key]['role']:
+                raise EditConflict('原音频采用的目标音轨已变化')
+            clips = cls.restore_objects(now[key]['clips'], old[key]['clips'], wanted[key]['clips'],
+                label='原采用音频片段', allow_membership=True,
+                source_fields=('source_ref', 'source_start_ms', 'source_end_ms', 'timeline_start_ms'))
+            merged = cls.restore_fields({k: v for k, v in now[key].items() if k != 'clips'},
+                {k: v for k, v in old[key].items() if k != 'clips'},
+                {k: v for k, v in wanted[key].items() if k != 'clips'}, label='原采用音轨')
+            now[key].update(merged, clips=clips)
+        return AudioTimeline.model_validate(restored).model_dump()
+
+    def audio_restore_source_facts(self, task, before, after, actor, *, connection=None):
+        graphs = [AudioTimeline.model_validate(value) for value in (before, after)]
+        facts = []
+        for reference in sorted({clip.source_ref for graph in graphs for track in graph.tracks for clip in track.clips}):
+            # TaskAudio owns source/provenance authorization. Commit rechecks
+            # use its existing connection port and the restore transaction.
+            stat = self.montage_edits.audio_service.source(task.workspace_id, task.id, reference,
+                actor=actor, connection=connection).stat()
+            facts.append({'reference': reference, 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns,
+                'ctime_ns': stat.st_ctime_ns, 'inode': stat.st_ino, 'device': stat.st_dev})
+        return facts
 
     def person_source_facts(self, task, clip, cue):
         from app.creation.person_stage_use_case import adopted_person_render_source
@@ -781,6 +987,13 @@ class TimelineRestoreUseCase:
         def verify(connection):
             if command.write_guard is not None:
                 command.write_guard(connection)
+            if prepared.local_sources.get('audio_sources') is not None:
+                actor, expected = prepared.local_sources['audio_sources']
+                current = self.audio_restore_source_facts(task,
+                    effective_audio_timeline(prepared.current_plan).model_dump(),
+                    prepared.restored_plan.audio_timeline.model_dump(), actor, connection=connection)
+                if current != expected:
+                    raise EditConflict('原音频采用的来源或许可已变化')
             for clip_id,replacement,facts in prepared.local_sources['sources']:
                 current = self.repository.clip_sources.facts(ws,task.id,clip_ids=[clip_id],replacement=replacement,
                     user_id=command.restore_member_id,local_diagnostic=False,connection=connection)

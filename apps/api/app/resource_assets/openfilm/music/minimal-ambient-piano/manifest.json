@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "id": "openfilm:music-minimal-ambient-piano",
+  "version": 1,
+  "name": "极简环境钢琴",
+  "duration_seconds": 45.035,
+  "tags": [
+    "calm",
+    "ambient",
+    "minimal",
+    "piano",
+    "morning",
+    "background",
+    "ambience"
+  ],
+  "provenance": {
+    "repository": "https://github.com/openfilm/openfilm",
+    "revision": "openfilm@0.3.2",
+    "catalog_path": "packages/openfilm/library/audio.json",
+    "catalog_sha256": "3749127caffb116a87467c7fc1edd6346391afa982123961b13c40565e88f3ec",
+    "license": "CC0-1.0",
+    "license_notice": "packages/openfilm/library/LICENSE.md",
+    "source_path": "audio/music/minimal-ambient-piano-ae1c16.mp3",
+    "source_url": "https://openfilm.dev/library/audio/music/minimal-ambient-piano-ae1c16.mp3",
+    "source_sha256": "ae1c1614d278325b6a9640ae47fd18546b722eb8f89782b3693fa7aeba2395d7"
+  },
+  "source_file": "music.mp3",
+  "preview_file": "preview.wav",
+  "preview": {
+    "sha256": "59f906e3913ea5d15a2eadf24aa1361675984ecc2a19ac4e41d026133dcee5b1",
+    "encoding": "pcm_s16le",
+    "sample_rate": 44100,
+    "channels": 2,
+    "derivation": "ffmpeg -i music.mp3 -map_metadata -1 -c:a pcm_s16le preview.wav"
+  }
+}

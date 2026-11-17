@@ -168,6 +168,14 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   const only = (...keys: string[]) => [...query.keys()].every(key => keys.includes(key) && query.getAll(key).length === 1);
   const result = (operation: string, args: Record<string, any> = {}) => ({operation, arguments: args});
   if (method === 'GET') {
+    if (pathname === '/api/creation-candidates/search' && only('q', 'limit_per_domain', 'task_id'))
+      return result('search_creation_candidates', {query: query.get('q') || '',
+        limit_per_domain: Number(query.get('limit_per_domain') || 5),
+        ...(query.has('task_id') ? {task_id: query.get('task_id')} : {})});
+    const candidate = pathname.match(/^\/api\/creation-candidates\/(material|knowledge|person|voice)\/([^/]+)$/);
+    if (candidate && only('version', 'task_id') && query.get('version'))
+      return result('read_creation_candidate', {domain: candidate[1], object_id: decodeURIComponent(candidate[2]),
+        version: query.get('version'), ...(query.has('task_id') ? {task_id: query.get('task_id')} : {})});
     const trace = pathname.match(/^\/api\/assistant\/turns\/([^/]+)\/trace$/);
     if (trace && !search) return result('read_agent_run_trace', {assistant_turn_id: decodeURIComponent(trace[1])});
     if (pathname === '/api/video-templates' && !search) return result('read_video_templates');
@@ -205,6 +213,10 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   if (!task) return null;
   const args = {task_id: decodeURIComponent(task[1])};
   const suffix = task[2];
+  const resourceHistory=suffix.match(/^\/audio\/resources\/([^/]+)\/history$/);
+  if(method==='GET'&&resourceHistory&&only('version')&&query.has('version'))return result('read_audio_resource_history',{...args,resource_id:decodeURIComponent(resourceHistory[1]),version:Number(query.get('version'))});
+  const audioResourceRequest=suffix.match(/^\/audio\/resource-requests\/([^/]+)$/);
+  if(method==='GET'&&audioResourceRequest&&!search)return result('read_audio_resource_request',{...args,request_id:decodeURIComponent(audioResourceRequest[1])});
   if (method === 'POST' && suffix === '/scripts/windows' && !search) return result('start_script_window',{...args,payload});
   const patchScriptSections=suffix.match(/^\/scripts\/([^/]+)\/sections$/);
   if (method === 'PATCH' && patchScriptSections && !search)
@@ -283,6 +295,7 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
     if (mediaJob && !search) return result('read_task_media_job', {...args, job_id: decodeURIComponent(mediaJob[1])});
   }
   if (method !== 'POST' || !payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  if(suffix==='/audio/resources'&&!search)return result('import_audio_resource',{...args,payload});
   if (['/execution/start', '/execution/resume'].includes(suffix) && only('assistant_turn_id'))
     return result(suffix.endsWith('/start') ? 'start_creation_execution' : 'resume_creation_execution',
       {...args, assistant_turn_id: query.get('assistant_turn_id'), payload});
@@ -455,5 +468,5 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     }
   }
 
-  return (path: string, init?: RequestInit) => request(path, init);
+  return (path: string, init?: RequestInit, reportFailure = true) => request(path, init, reportFailure);
 }

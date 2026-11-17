@@ -524,6 +524,68 @@ class GoalResultProjection:
         self.production, self.conversations = production, conversations
 
     @staticmethod
+    def has_frozen_timeline_source(source):
+        if 'expected_timeline_version_id' not in source or 'expected_timeline_sequence' not in source:
+            return False
+        version, sequence = source['expected_timeline_version_id'], source['expected_timeline_sequence']
+        return (type(sequence) is int and sequence >= 0
+                and (version is None and sequence == 0 or isinstance(version, str) and bool(version)))
+
+    def interrupted_edit_candidates(self, *, limit=32):
+        """Read saved direct requests that lost the SDK's final locator.
+
+        The source anchor and request/result journal already exist. This only
+        feeds the normal verified readback projector; it never calls apply.
+        """
+        from urllib.parse import quote
+        with self.production._connect() as connection:
+            rows = connection.execute(
+                "SELECT s.id,s.workspace_id,s.task_id,s.created_at,s.payload_json,c.payload_json AS claim_json,"
+                "i.constraints_json,o.base_version_id "
+                "FROM task_events s JOIN task_events c ON c.workspace_id=s.workspace_id "
+                "AND c.id=json_extract(s.payload_json,'$.request_event_id') AND c.task_id=s.task_id "
+                "JOIN task_events r ON r.workspace_id=c.workspace_id AND r.id=c.id||'_result' AND r.task_id=c.task_id "
+                "JOIN edit_operations o ON o.workspace_id=s.workspace_id AND o.task_id=s.task_id "
+                "AND o.id=json_extract(r.payload_json,'$.response.operation.id') AND o.status='applied' "
+                "JOIN edit_proposals p ON p.workspace_id=o.workspace_id AND p.id=o.proposal_id "
+                "JOIN edit_intents i ON i.workspace_id=p.workspace_id AND i.id=p.intent_id "
+                "JOIN assistant_conversation_turns t ON t.id=json_extract(s.payload_json,'$.source.assistant_turn_id') "
+                "JOIN assistant_conversation_request_receipts a ON a.turn_id=t.id AND a.outcome='consumed' "
+                "WHERE s.event_type='edit_request_source' AND c.event_type='edit_request_claimed' "
+                "AND t.status IN ('failed','stopped') AND a.workspace_id=s.workspace_id "
+                "AND a.member_id=json_extract(c.payload_json,'$.member_id') "
+                "AND json_extract(a.request_context_json,'$.task_id')=s.task_id "
+                "AND json_extract(c.payload_json,'$.phase')='apply' "
+                "AND json_extract(r.payload_json,'$.status_code')=200 "
+                "AND json_extract(r.payload_json,'$.response.operation.id') IS NOT NULL "
+                "AND json_extract(s.payload_json,'$.input_digest')=json_extract(c.payload_json,'$.input_digest') "
+                "AND NOT EXISTS (SELECT 1 FROM task_events done WHERE done.workspace_id=s.workspace_id "
+                "AND done.id='event_assistant_request_'||s.id) "
+                "AND NOT EXISTS (SELECT 1 FROM task_events located WHERE located.workspace_id=s.workspace_id "
+                "AND located.event_type='assistant_edit_request_located' "
+                "AND json_extract(located.payload_json,'$.request_event_id')=c.id) "
+                "ORDER BY s.created_at,s.id LIMIT ?", (limit,)).fetchall()
+        candidates = []
+        for row in rows:
+            anchor, claim = json.loads(row['payload_json']), json.loads(row['claim_json'])
+            source = json.loads(row['constraints_json']).get('request_source') or {}
+            if (not source or any(source.get(key) != anchor['source'].get(key) for key in (
+                    'workspace_id','task_id','member_id','conversation_id','assistant_turn_id','request_id',
+                    'input_id','input_turn_id','actor_identity'))
+                    or source.get('expected_timeline_version_id') != row['base_version_id']):
+                continue
+            if ((source.get('workspace_id'),source.get('task_id'),source.get('member_id'),source.get('request_id'))
+                    != (row['workspace_id'],row['task_id'],claim['member_id'],claim['request_id'])):
+                continue
+            locator = {'task_id':row['task_id'],'request_id':claim['request_id'],'phase':'apply','status':'unknown',
+                'query_url':f"/api/creation-tasks/{quote(row['task_id'],safe='')}/assistant/edit-requests/{quote(claim['request_id'],safe='')}?phase=apply"}
+            candidates.append({'kind':'request','id':row['id'],'workspace_id':row['workspace_id'],
+                'task_id':row['task_id'],'created_at':row['created_at'],'source':source,
+                'request':{'locator':locator,'request_event_id':anchor['request_event_id']},
+                'event_id':'event_assistant_request_'+row['id'],'recovered_receipt':True})
+        return candidates
+
+    @staticmethod
     def unavailable_fact(kind):
         status, reason = {
             "identity": ("waiting_identity", "interactive_identity_not_available"),
@@ -842,6 +904,8 @@ class GoalResultProjection:
                 or provenance['job_id'] != rendered['owner_id']):
             return None
         source = json.loads(located["payload_json"])
+        if not self.has_frozen_timeline_source(source['source']):
+            return None
         base = source["source"]["expected_timeline_version_id"]
         if (not self.source_belongs_to_goal(goal, source["source"])
                 or version.parent_version_id != base):
@@ -888,6 +952,8 @@ class GoalResultProjection:
         return checkpoint
 
     def execution_source_current(self, task, source, job_id, status):
+        if not self.has_frozen_timeline_source(source):
+            return False
         base = source["expected_timeline_version_id"]
         result = task.current_timeline_version_id
         if result == base:
@@ -905,6 +971,8 @@ class GoalResultProjection:
     def execution_candidate(self, row):
         located = json.loads(row["payload_json"])
         source, job_id = located["source"], located["job_id"]
+        if not self.has_frozen_timeline_source(source):
+            return None
         turn_id = source["assistant_turn_id"]
         goal = self.conversations.get_task_goal(turn_id)
         binding = self.conversations.business_turn_context(turn_id, row["workspace_id"], source["member_id"], row["task_id"], source=source)
@@ -944,13 +1012,14 @@ class GoalResultProjection:
                 "source_kind": "execution", "source_id": row["id"]}))
         return event
 
-    def mark(self, candidate):
+    def mark(self, candidate, *, reason=None):
         from app.creation.contracts import TaskEvent
 
         self.production.execution_records.append_task_event(TaskEvent(id=candidate["event_id"], workspace_id=candidate["workspace_id"],
             task_id=candidate["task_id"], job_id=candidate["id"] if candidate["kind"] == "job" else None,
             event_type="assistant_business_projected", payload={"turn_id": candidate["source"]["assistant_turn_id"],
-                "source_kind": candidate["kind"], "source_id": candidate["id"]},
+                "source_kind": candidate["kind"], "source_id": candidate["id"],
+                **({'reason': reason} if reason is not None else {})},
             created_at=datetime.fromisoformat(candidate["created_at"])))
 
     def can_continue(self, binding, turn_id):
@@ -1017,6 +1086,8 @@ class GoalResultProjection:
         elif result.job is not None:
             patch['media_job'] = encode_request_job(result.job, context.actor)
         projection = self.request_projection(context, result, patch)
+        if candidate.get('recovered_receipt') and result.applied is not None:
+            projection.event['recovered_receipt'] = True
         if self.commit(context, projection):
             if observe(context.source['assistant_turn_id'], projection.event):
                 wake()
@@ -1079,6 +1150,9 @@ class GoalResultProjection:
         from app.task_audio import media_digest
 
         source = candidate["source"]
+        if not self.has_frozen_timeline_source(source):
+            self.mark(candidate, reason='source_timeline_snapshot_unverifiable')
+            return True
         workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
         member_id, turn_id = source["member_id"], source["assistant_turn_id"]
         binding = self.conversations.business_turn_context(turn_id, workspace_id, member_id, task_id, source=source)
@@ -1201,6 +1275,9 @@ class GoalResultProjection:
         from app.creation_execution import CreationExecutionActor
 
         source, _located = candidate["source"], candidate["request"]
+        if not self.has_frozen_timeline_source(source):
+            self.mark(candidate, reason='source_timeline_snapshot_unverifiable')
+            return True
         workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
         member_id = source["member_id"]
         binding = self.conversations.business_turn_context(source["assistant_turn_id"], workspace_id, member_id, task_id, source=source)
@@ -1303,6 +1380,9 @@ class GoalResultProjection:
         from app.creation_execution import CreationExecutionActor
 
         source, _located = candidate["source"], candidate["located"]
+        if not self.has_frozen_timeline_source(source):
+            self.mark(candidate, reason='source_timeline_snapshot_unverifiable')
+            return True
         workspace_id, task_id = candidate["workspace_id"], candidate["task_id"]
         member_id = source["member_id"]
         binding = self.conversations.business_turn_context(source["assistant_turn_id"], workspace_id, member_id, task_id, source=source)

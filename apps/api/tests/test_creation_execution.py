@@ -1522,7 +1522,8 @@ def test_duplicate_start_and_restart_execute_one_persisted_job(tmp_path):
     case.scheduler.close()
 
 
-def test_failure_resume_reuses_valid_narration(tmp_path, monkeypatch):
+@pytest.mark.parametrize('entry', ['resume', 'start'])
+def test_failure_resume_reuses_valid_narration(tmp_path, monkeypatch, entry):
     from app.creation.execution_control import CreationExecutionControl
     case = _narration_units_case(tmp_path, section_count=1)
     submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
@@ -1541,7 +1542,18 @@ def test_failure_resume_reuses_valid_narration(tmp_path, monkeypatch):
     control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
     runtime = SimpleNamespace(scheduler=case.scheduler, registrations={'creation_job':
         SimpleNamespace(owner=case.owner, executor=case.executor)}, wake=lambda: None)
-    resumed = control.resume('local', case.task_id, case.actor, runtime, verify_media=False)
+    from datetime import timedelta
+    authorizations = TaskAuthorizationUseCase(case.repo, lambda _: 'ready')
+    case.owner.task_authorizations = authorizations
+    issued = authorizations.ensure(case.repo.task_records.get_creation_task('local', case.task_id), case.actor)
+    monkeypatch.setattr(authorizations, 'clock', lambda: issued.expires_at + timedelta(seconds=1))
+    assert authorizations.status('local', case.task_id) == 'expired'
+    if entry == 'start':
+        resumed = control.start('local', case.task_id, case.script_id, case.job.input_digest,
+            case.actor, runtime, verify_media=False)
+    else:
+        resumed = control.resume('local', case.task_id, case.actor, runtime, verify_media=False)
+    assert authorizations.status('local', case.task_id) == 'valid'
     assert resumed['job']['id'] == case.job.id
     retried = case.scheduler.pick_and_grant()
     assert retried.request_id == merge.request_id
@@ -3629,15 +3641,32 @@ def _segment_units_case(tmp_path, monkeypatch, *, declared_source=False):
     return case
 
 
-def test_segment_video_checkpoint_precedes_remaining_narration_and_retains_version(tmp_path,monkeypatch):
+@pytest.mark.parametrize('interrupt_after_publication', [False, True])
+def test_segment_video_checkpoint_precedes_remaining_narration_and_retains_version(tmp_path,monkeypatch,interrupt_after_publication):
     case = _segment_units_case(tmp_path,monkeypatch)
+    original_next = case.segments.next_initial
+    def next_outside_publication(job, owner, *, connection=None):
+        assert connection is None or not connection.in_transaction, 'next section planning holds publication writer'
+        if interrupt_after_publication:
+            raise RuntimeError('interrupted after durable section publication')
+        return original_next(job, owner, connection=connection)
     wav_reads=_assert_wav_reads_outside_writer(monkeypatch,case)
     submit_creation_stage(case.execution,case.scheduler,case.job,case.actor)
     first = case.scheduler.pick_and_grant()
     case.executor.execute(first,case.scheduler)
     second = case.scheduler.pick_and_grant()
     assert second.unit_key.startswith('segment_video:section_1:')
-    case.executor.execute(second,case.scheduler)
+    monkeypatch.setattr(case.segments, 'next_initial', next_outside_publication)
+    if interrupt_after_publication:
+        with pytest.raises(RuntimeError, match='durable section publication'):
+            case.executor.execute(second,case.scheduler)
+        assert case.scheduler._get(second.request_id).state == 'done'
+        assert case.repo.job_records.get_job_run('local',case.job.id).status == 'queued'
+    else:
+        case.executor.execute(second,case.scheduler)
+    monkeypatch.setattr(case.segments, 'next_initial', original_next)
+    if interrupt_after_publication:
+        submit_creation_stage(case.execution,case.scheduler,case.repo.job_records.get_job_run('local',case.job.id),case.actor)
     context = case.segments.context('local',case.task_id,'section_1',case.actor)
     assert context['video']['kind']=='video'
     assert case.segments.video_path('local',case.task_id,'section_1',context['segment_version'],case.actor).is_file()
@@ -3799,6 +3828,94 @@ def test_section_undo_redo_preserves_later_other_section_publication(tmp_path,mo
             voices=result.montage.audio_timeline.tracks[0].clips
             assert voices[1].source_ref==later_audio.audio_reference
     assert case.segments.video_path('local',case.task_id,'section_1',before['segment_version'],case.actor).is_file()
+
+
+@pytest.mark.parametrize('concurrent_edit', [False, True])
+@pytest.mark.parametrize('changed_narration', [False, True])
+def test_existing_montage_cannot_skip_newly_published_sections(tmp_path, monkeypatch, concurrent_edit, changed_narration):
+    from app.creation.editing.metadata_use_case import MetadataEditUseCase
+    from app.creation.montage_stage_use_case import MontageStageUseCase, MontageStageRejected, montage_dependency
+    from app.creation_execution import upstream_stage_valid
+    from app.montage import creation_task_montage_plan_from_payload
+    case = _segment_units_case(tmp_path, monkeypatch)
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    for _ in range(5):
+        case.executor.execute(case.scheduler.pick_and_grant(), case.scheduler)
+    task = case.repo.task_records.get_creation_task('local', case.task_id)
+    template = creation_task_montage_plan_from_payload(
+        case.repo.section_inputs.stage_segment_state('local', case.task_id, 'section_1')['montage'])
+    full = MontageStageUseCase.include_adopted_sections(SimpleNamespace(repository=case.repo), task, template)
+    from app.creation.transactions import changed_stage_sections
+    legacy = creation_task_montage_plan_to_payload(replace(full,
+        cues=[replace(cue, timeline_start_seconds=None) for cue in full.cues]))
+    for cue in legacy['cues']:
+        cue.pop('timeline_start_seconds')
+    normalized = creation_task_montage_plan_to_payload(creation_task_montage_plan_from_payload(legacy))
+    assert changed_stage_sections({'montage':legacy, 'stage_segments':{'section_1':'saved1','section_2':'saved2'}},
+        normalized, None, None) == []
+    stale = replace(full, id='old_montage', clips=[replace(clip, id='old_'+clip.id) for clip in full.clips])
+    if changed_narration:
+        stale = replace(stale, cues=[replace(cue, text='旧旁白') for cue in stale.cues])
+    edits = MetadataEditUseCase(case.repo, case.segments.artifact_store, output_root=tmp_path/'composition', audio_service=None)
+    case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', task.id, stale.id,
+        creation_task_montage_plan_to_payload(stale))
+    edits.ensure_montage_base('local', task, stale)
+    task = case.repo.task_records.get_creation_task('local', task.id)
+    from app.creation.contracts import SubtitleTrack, SubtitleCue
+    from app.subtitle_schedule import narration_schedule
+    base = case.repo.timeline_records.get_timeline_version('local', task.current_timeline_version_id)
+    track = SubtitleTrack('original-captions', 'local', task.id, base.id, 'zh-CN', None,
+        {'enabled': False, 'font_size': 36},
+        [SubtitleCue(cue.id, None, cue.text, caption.start_seconds, caption.end_seconds)
+            for cue, caption in zip(stale.cues, narration_schedule(stale.cues, stale.duration_seconds), strict=True)],
+        'timeline', None, 'artifacts/original.srt', 'transform_original', 'valid')
+    from app.creation.editing.metadata_use_case import execution_subtitle_track
+    from app.subtitle_tracks import render_srt
+    reference, transform = edits.publish_subtitle_text(workspace_id='local', task_id=task.id,
+        proposal_id=base.id, kind='subtitle_test_source', input_refs=[f'timeline:{base.id}'],
+        content=render_srt(execution_subtitle_track(track)), engine='subtitle-srt/v1', parameters={})
+    track = replace(track, artifact_ref=reference, transform_id=transform)
+    case.repo.subtitle_records.create_subtitle_track(track)
+    inherited = replace(base, id='inherited-captions', parent_version_id=base.id, sequence=base.sequence+1,
+        snapshot={**base.snapshot, 'subtitle_track_ids':[track.id]})
+    case.repo.timeline_records.create_timeline_version(inherited, expected_current_version_id=base.id)
+    task = case.repo.task_records.get_creation_task('local', task.id)
+    assert edits.current_subtitle_tracks('local', task)[0] == track
+    assert case.repo.section_inputs.has_uncomposed_sections(task)
+    assert not upstream_stage_valid(case.repo, task, 'montage_plan')
+    stage = MontageStageUseCase(case.repo, edits, None, None)
+    monkeypatch.setattr(stage, '_build_candidate', lambda *a, **k: pytest.fail('adopted sections must not be reselected'))
+    with case.repo.execution_inputs.creation_execution_read() as conn:
+        dependency = montage_dependency(case.repo, task, connection=conn)[1]
+    if concurrent_edit:
+        include = stage.include_adopted_sections
+        def changed_during_composition(*args):
+            result = include(*args)
+            base = case.repo.timeline_records.get_timeline_version('local', task.current_timeline_version_id)
+            case.repo.timeline_records.create_timeline_version(TimelineVersion('concurrent_edit', 'local', task.id,
+                base.id, base.sequence+1, base.snapshot, None), expected_current_version_id=base.id)
+            return result
+        monkeypatch.setattr(stage, 'include_adopted_sections', changed_during_composition)
+        with pytest.raises(MontageStageRejected, match='当前时间线已变化'):
+            stage.generate('local', task.id)
+        assert case.repo.get_creation_task_montage_plan('local', task.id)['id'] == stale.id
+        assert case.repo.task_records.get_creation_task('local', task.id).current_timeline_version_id == 'concurrent_edit'
+        case.scheduler.close()
+        return
+    composed = stage.generate('local', task.id)
+    assert [clip.id for clip in composed.clips] == [clip.id for clip in full.clips]
+    assert composed.audio_timeline == full.audio_timeline
+    task = case.repo.task_records.get_creation_task('local', task.id)
+    assert not case.repo.section_inputs.has_uncomposed_sections(task)
+    assert upstream_stage_valid(case.repo, task, 'montage_plan')
+    tracks = edits.current_subtitle_tracks('local', task)
+    assert len(tracks) == 1 and tracks[0].timeline_version_id == task.current_timeline_version_id
+    assert tracks[0].style == track.style and tracks[0].status == 'valid'
+    assert [cue.text for cue in tracks[0].cues] == [cue.text for cue in composed.cues]
+    assert case.segments.artifact_store.resolve_file(tracks[0].artifact_ref).is_file()
+    with case.repo.execution_inputs.creation_execution_read() as conn:
+        assert montage_dependency(case.repo, task, connection=conn)[1] == dependency
+    case.scheduler.close()
 
 
 def test_named_section_restore_keeps_later_user_edit_and_replays_original_request(tmp_path,monkeypatch):
@@ -5478,6 +5595,13 @@ def test_known_visual_planning_conflict_keeps_paid_audio_and_original_resume(tmp
     assert view['usage']['settled'] and view['usage']['used_output_bytes'] > 0
     assert case.scheduler.pick_and_grant() is None
     saved_usage = dict(view['usage'])
+    if not revision:
+        # A resumed job may already have all audio cached. Its planner must
+        # persist a visible conflict too, without dispatching or regenerating.
+        assert next_creation_intent(case.repo, case.scheduler, updated) is None
+        replay = case.segments.read_visual_decision('local', case.task_id, job.id, 'section_1', case.actor)
+        assert replay['status'] == 'planning_conflict' and replay['usage'] == saved_usage
+        assert case.scheduler.pick_and_grant() is None
     monkeypatch.setattr(case.segments, 'prepare_video', original)
     _require_section_visual_decision(case, monkeypatch)
     if revision:
@@ -5501,6 +5625,42 @@ def test_known_visual_planning_conflict_keeps_paid_audio_and_original_resume(tmp
     assert video.owner_id == job.id and video.unit_key.startswith('segment_video:')
     assert case.segments.visual_usage(updated) == saved_usage
     case.scheduler.cancel(video.request_id, case.actor)
+    case.scheduler.close()
+
+
+@pytest.mark.parametrize('cancel_during_planning', [False, True])
+def test_cached_audio_planning_conflict_is_visible_and_preserves_cancellation(tmp_path, monkeypatch, cancel_during_planning):
+    from app.creation.duration_requirement import DurationConflict
+    case = _visual_decision_case(tmp_path, monkeypatch)
+    # Exercise the legacy/restore path: paid audio exists without a video plan.
+    case.owner.segments = case.executor.segments = None
+    submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    grant = case.scheduler.pick_and_grant()
+    case.executor.execute(grant, case.scheduler)
+    case.owner.segments = case.executor.segments = case.segments
+    audio = case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)[0]
+    assert audio.status == 'ready'
+    requests = case.repo.job_records.list_creation_job_request_states('local', case.job.id)
+    def conflict(*args, **kwargs):
+        if cancel_during_planning:
+            case.repo.job_records.finish_job_run('local', case.job.id, status='cancelled', failure_reason='user_cancelled',
+                impact='原产物保留', repair_action='用户主动恢复')
+        raise DurationConflict('缺少后续画面，已付配音保留')
+    monkeypatch.setattr(case.segments, 'prepare_video', conflict)
+    current = case.repo.job_records.get_job_run('local', case.job.id)
+    if cancel_during_planning:
+        with pytest.raises(ValueError, match='过时冲突'):
+            case.segments.next_initial(current, case.owner)
+        assert case.segments.planning_conflict(current, 'section_1') is None
+        assert case.repo.job_records.get_job_run('local', case.job.id).status == 'cancelled'
+    else:
+        assert case.segments.next_initial(current, case.owner) is None
+        view = case.segments.read_visual_decision('local', case.task_id, case.job.id, 'section_1', case.actor)
+        assert view['status'] == 'planning_conflict' and view['audio']['persisted']
+        assert view['kept_audio_reference'] == audio.audio_reference
+        assert case.repo.job_records.get_job_run('local', case.job.id).failure_reason == 'waiting_for_user'
+    assert case.repo.job_records.list_creation_job_request_states('local', case.job.id) == requests
+    assert case.repo.narration_records.list_narration_segments('local', case.task_id, case.script_id)[0] == audio
     case.scheduler.close()
 
 

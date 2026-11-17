@@ -96,6 +96,11 @@ def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_w
             assert connection.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 1
         # A modified receipt cannot be adopted just because a caller supplies facts.
         receipt_path = next((service.root / 'receipts').glob('*.json'))
+        delivery = json.loads(receipt_path.read_bytes())['delivery_probe']
+        assert delivery['contract'] == 'montage-picture-audio-caption/v1'
+        assert delivery['bytes'] > 0 and len(delivery['sha256']) == 64
+        assert delivery['observed_resources']['threads_sample_complete']
+        assert result.budget.cpu_render.max_process_threads >= delivery['observed_resources']['peak_threads']
         receipt_path.write_text('{}')
         original_profile = service.profile_path.read_bytes()
         with pytest.raises(DeviceProfileUnavailable, match='检查点不匹配'):
@@ -250,10 +255,11 @@ def test_published_audio_budget_covers_measured_container_and_known_source_bytes
 
 
 @pytest.mark.parametrize('apply_master', [True, False])
+@pytest.mark.parametrize('normalize', [True, False])
 @pytest.mark.parametrize('duration', [9.167, 42.827])
-def test_prepared_audio_envelope_admits_the_requested_mix_with_its_container_allowance(tmp_path, monkeypatch, apply_master, duration):
+def test_prepared_audio_envelope_admits_the_requested_mix_with_its_container_allowance(tmp_path, monkeypatch, apply_master, duration, normalize):
     from fractions import Fraction
-    from app.audio_timeline import AudioTimeline
+    from app.audio_timeline import narration_audio_timeline
     from app.task_audio import audio_mix_resources
     repository, actor, access, service, paths = metadata_preparation(tmp_path, monkeypatch)
     plan_id, _ = service.prepare(CpuPreparationShape(64, 64, 30, duration, 1, 1, 48000, 2),
@@ -267,10 +273,10 @@ def test_prepared_audio_envelope_admits_the_requested_mix_with_its_container_all
         picture.max_pixel_seconds / (picture.max_width_px * picture.max_height_px))
     assert int(Fraction(str(frame_capacity)) * 30) >= round(Fraction(str(duration)) * 30)
     sample_count = round(duration * 30) * 1600
-    master = {'reference': 'prepared-master', 'uses': 1, 'size_bytes': sample_count * 4,
+    master = {'reference': 'artifacts/task/prepared-master.wav', 'path': '/prepared-master.wav', 'uses': 1, 'size_bytes': sample_count * 4,
         'duration_seconds': sample_count / 48000, 'sample_rate': 48000, 'channels': 2}
-    resources = audio_mix_resources([master], [AudioTimeline()], duration,
-        normalize_voice_sources=False, budget=result.budget.cpu_audio,
+    resources = audio_mix_resources([master], [narration_audio_timeline('artifacts/task/prepared-master.wav', sample_count / 48000)], duration,
+        normalize_voice_sources=normalize, budget=result.budget.cpu_audio,
         apply_master=apply_master, output_sample_count=sample_count)
     assert resources['max_output_bytes'] <= result.budget.cpu_audio.max_output_bytes
     assert resources['output_sample_count'] == round(duration * 30) * 1600

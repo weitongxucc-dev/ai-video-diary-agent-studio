@@ -1838,12 +1838,12 @@ class CreationJobOwnerVerifier:
         if plan.selected_person:
             refs.append(("person", plan.selected_person.profile_id, plan.selected_person.version))
         if stage == "person_edit":
-            target = self.repository.edit_records.get_edit_proposal(job.workspace_id,event["edit_proposal_id"]).operation["payload"]
+            target = self.repository.edit_records.get_edit_proposal(job.workspace_id,event["edit_proposal_id"], connection=conn).operation["payload"]
             refs.append(("person", target["person_profile_id"], target["person_version"]))
         pronunciation_scope = None
         if stage == "narration" and plan.selected_voice:
             try:
-                voice = self.repository.profile_records.get_versioned_voice_profile(request.workspace_id,
+                voice = self.repository.profile_records._get_versioned_voice_profile(conn, request.workspace_id,
                     plan.selected_voice.profile_id, plan.selected_voice.version)
             except KeyError:
                 return lambda current: "stale"
@@ -2052,7 +2052,9 @@ def upstream_stage_valid(repository, task, stage, *, connection=None):
         plan = repository.get_creation_task_montage_plan(task.workspace_id, task.id)
     except KeyError:
         return False
-    return plan.get("script_id") == task.confirmed_script_id and plan.get("status") in {"ready", "rendering", "rendered", "failed"}
+    return (plan.get("script_id") == task.confirmed_script_id
+        and plan.get("status") in {"ready", "rendering", "rendered", "failed"}
+        and not repository.section_inputs.has_uncomposed_sections(task, connection=connection))
 
 
 def montage_waiting_for_confirmation(repository, task):

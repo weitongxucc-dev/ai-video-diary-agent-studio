@@ -128,8 +128,12 @@ def plan_audio_assembly(timeline: AudioTimeline, duration_ms: int, *, workspace_
     snapshot = AudioTimeline.model_validate(timeline.model_dump())
     active = [(track, clip) for track in snapshot.tracks if not track.muted
         for clip in track.clips if not clip.muted]
-    if any(track.duck_under_voice for track, _ in active):
-        raise ValueError('侧链闪避需要完整人声状态，不能作为线性音轨分组归约')
+    has_sidechain = (any(track.role in {'narration', 'original'} for track, _ in active)
+        and any(track.duck_under_voice for track, _ in active))
+    # Sidechain compression needs the complete voice bus in one bounded mix.
+    # Without an active voice bus, ducked music remains a linear input.
+    if has_sidechain and len(active) > max_input_count:
+        raise ValueError('侧链闪避需要完整人声状态；有效输入超过单个混音单元预算，不能拆分归约')
     if any(clip.timeline_start_ms + clip.duration_ms > duration_ms for _, clip in active):
         raise ValueError('归约音轨超出已批准时间线')
     references = {clip.source_ref for _, clip in active}
@@ -170,7 +174,7 @@ def plan_audio_assembly(timeline: AudioTimeline, duration_ms: int, *, workspace_
         batch.append((track, clip))
         uses += cost
     if batch or not active:
-        leaves.append(add(graph_for(batch), normalize=normalize_voice_sources))
+        leaves.append(add(graph_for(batch), master=has_sidechain, normalize=normalize_voice_sources))
     if len(leaves) > 1 and max_input_count < 2:
         raise ValueError('多个混音片段的归约至少需要两个输入槽位')
 
@@ -185,7 +189,9 @@ def plan_audio_assembly(timeline: AudioTimeline, duration_ms: int, *, workspace_
         level = [add(intermediate_graph(level[start:start + max_input_count]),
             [unit.id for unit in level[start:start + max_input_count]])
             for start in range(0, len(level), max_input_count)]
-    add(intermediate_graph(level), [level[0].id], master=True)
+    # A complete sidechain uses the original mixer and master in a single pass.
+    if not has_sidechain:
+        add(intermediate_graph(level), [level[0].id], master=True)
     frozen_hashes = tuple(sorted(source_hashes.items()))
     digest = _digest({**instance_scope, **output_clock, 'version': version, 'duration_ms': duration_ms,
         'sources': frozen_hashes, 'units': [unit.id for unit in units]})

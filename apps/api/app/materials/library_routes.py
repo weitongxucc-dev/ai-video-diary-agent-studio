@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 from app.materials.assets import MaterialVersionConflict
 from app.materials.usage_records import MaterialUsageRecordReader
 from app.materials.contracts import MaterialAssetNote
+from app.materials.candidate_bundle import build_candidate_bundle
 from app.schemas import (
     ContentVisibilityRequest, MaterialAssetResponse, MaterialAssetTagsRequest,
     MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialAssetNotesRequest,
@@ -54,7 +55,8 @@ class MaterialLibrarySearch(Protocol):
 class MaterialLibraryHTTPAdapter:
     def __init__(self, *, records_for: Callable[[], MaterialLibraryRecords],
                  search_for: Callable[[], MaterialLibrarySearch], workspace_for,
-                 reader_for, visible, write_guard, library_root, asset_response):
+                 reader_for, visible, write_guard, library_root, asset_response, knowledge_claims_for=None,
+                 profile_candidate_for=None):
         self._records_for = records_for
         self._search_for = search_for
         self._workspace_for = workspace_for
@@ -63,6 +65,8 @@ class MaterialLibraryHTTPAdapter:
         self._write_guard = write_guard
         self._library_root = library_root
         self._asset_response = asset_response
+        self._knowledge_claims_for = knowledge_claims_for
+        self._profile_candidate_for = profile_candidate_for
 
 
     def list_production_materials(self, request: Request, limit: int=24, offset: int=0, q: str | None=None, tag: str | None=None, review_status: str | None=None, media_type: str | None=None) -> MaterialLibraryResponse:
@@ -144,6 +148,96 @@ class MaterialLibraryHTTPAdapter:
         if include_eligibility:
             return MaterialSegmentSearchResponse.model_validate({**matches, 'matches': [asdict(item) for item in matches['matches']]})
         return [MaterialSegmentMatchResponse.model_validate(asdict(item)) for item in matches]
+
+    def candidate_bundle(self, request: Request, asset_id: str, q: str = "", limit: int = 20, knowledge_item_id: str | None = None,
+                         *, person_profile_id: str | None = None, person_version: str | None = None,
+                         voice_profile_id: str | None = None, voice_version: str | None = None,
+                         task_id: str | None = None) -> dict[str, object]:
+        workspace_id = self._workspace_for(request)
+        viewer_user_id, local_diagnostic = self._reader_for(request, workspace_id)
+        try:
+            asset = self._records_for().get_asset(workspace_id, asset_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="material asset not found") from exc
+        if not self._visible(request, workspace_id, asset.visibility, asset.owner_user_id):
+            raise HTTPException(status_code=404, detail="material asset not found")
+        try:
+            matches = self._search_for().search_material_segments(
+                workspace_id, query=q, asset_ids=[asset_id], usage_roles=["a_roll", "b_roll"],
+                tags=None, min_duration_seconds=None, max_duration_seconds=None,
+                limit=limit, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic,
+                purpose="manual", include_eligibility=False,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        revision = {
+            "asset_updated_at": asset.updated_at.isoformat(),
+            "modified_at": asset.modified_at.isoformat(),
+        }
+        def segment_for(item):
+            segment_id = str(getattr(item, "segment_ref", "")).removeprefix("segment:")
+            return next((segment for segment in getattr(asset, "segments", []) if segment.id == segment_id), None)
+
+        def source_revision_for(item):
+            segment = segment_for(item)
+            return dict(segment.source_revision) if segment and segment.source_revision else revision
+
+        list_quality_profiles = getattr(self._records_for(), "list_material_quality_profiles", None)
+        if callable(list_quality_profiles):
+            profiles = list_quality_profiles(workspace_id, asset_id)
+        else:
+            governance = getattr(self._records_for(), "material_data_governance", None)
+            profiles = governance.list_quality_profiles(workspace_id, asset_id) if governance is not None else []
+
+        def quality_profile_for(item):
+            segment = segment_for(item)
+            if segment is None or not getattr(segment, "source_revision", None):
+                return None
+            expected = tuple(sorted(segment.source_revision.items()))
+            return next(
+                (
+                    profile
+                    for profile in profiles
+                    if tuple(sorted((getattr(profile, "source_revision", {}) or {}).items())) == expected
+                ),
+                None,
+            )
+
+        claims = []
+        if knowledge_item_id and self._knowledge_claims_for is not None:
+            try:
+                claims = self._knowledge_claims_for(workspace_id, knowledge_item_id, viewer_user_id, local_diagnostic)
+            except (KeyError, ValueError) as exc:
+                raise HTTPException(status_code=404, detail="knowledge item not found") from exc
+        selected_profiles = []
+        if task_id is not None and (not task_id or not (person_profile_id or voice_profile_id)):
+            raise HTTPException(422, '任务反馈必须指定任务ID及固定版本人物或声音候选')
+        for kind, profile_id, version in (("person", person_profile_id, person_version),
+                                           ("voice", voice_profile_id, voice_version)):
+            if (profile_id is None) != (version is None) or profile_id == "" or version == "":
+                raise HTTPException(422, "人物或声音候选必须同时指定ID和版本")
+            if profile_id is None:
+                continue
+            if self._profile_candidate_for is None:
+                raise HTTPException(503, "人物和声音候选读取尚未接通")
+            try:
+                selected_profiles.append(self._profile_candidate_for(
+                    workspace_id, kind, profile_id, version, viewer_user_id, local_diagnostic,
+                    **({'task_id': task_id} if task_id is not None else {})))
+            except (KeyError, PermissionError) as exc:
+                raise HTTPException(404, "profile not found") from exc
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        return build_candidate_bundle(
+            matches,
+            claims,
+            material_source_revision_for=source_revision_for,
+            material_asset=asset,
+            material_segment_for=segment_for,
+            material_quality_profile_for=quality_profile_for,
+            knowledge_requested=bool(knowledge_item_id),
+            profile_candidates=selected_profiles,
+        )
 
     def set_production_material_visibility(self, asset_id: str, request: Request, payload: ContentVisibilityRequest) -> MaterialAssetResponse:
         """显式共享或收回一条素材；响应回读同一列。"""
@@ -245,6 +339,15 @@ def build_material_library_router(adapter_for, route_names: tuple[str, ...] | No
     @router.get('/api/production/materials/search', response_model=list[MaterialSegmentMatchResponse] | MaterialSegmentSearchResponse)
     def search_production_material_segments(request: Request, q: str='', usage_role: str | None=None, tags: str | None=None, min_duration_seconds: float | None=None, max_duration_seconds: float | None=None, limit: int=20, purpose: Literal['manual', 'automatic']='manual', include_eligibility: bool=False) -> list[MaterialSegmentMatchResponse] | MaterialSegmentSearchResponse:
         return adapter_for().search_production_material_segments(request, q, usage_role, tags, min_duration_seconds, max_duration_seconds, limit, purpose, include_eligibility)
+
+    @router.get('/api/production/materials/{asset_id}/candidate-bundle')
+    def read_material_candidate_bundle(asset_id: str, request: Request, q: str = '', limit: int = 20,
+            knowledge_item_id: str | None = None, person_profile_id: str | None = None,
+            person_version: str | None = None, voice_profile_id: str | None = None,
+            voice_version: str | None = None, task_id: str | None = None) -> dict[str, object]:
+        return adapter_for().candidate_bundle(request, asset_id, q, limit, knowledge_item_id,
+            person_profile_id=person_profile_id, person_version=person_version,
+            voice_profile_id=voice_profile_id, voice_version=voice_version, task_id=task_id)
 
     @router.put('/api/production/materials/{asset_id}/visibility', response_model=MaterialAssetResponse)
     def set_production_material_visibility(asset_id: str, request: Request, payload: ContentVisibilityRequest) -> MaterialAssetResponse:

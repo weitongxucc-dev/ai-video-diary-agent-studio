@@ -57,7 +57,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None,edit_controls=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None,edit_controls=None,resource_audio=None,candidate_query=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -81,6 +81,8 @@ class TaskBusiness:
         self.execution_status=execution_status
         self.media_binding=media_binding
         self.edit_controls=edit_controls
+        self.resource_audio=resource_audio
+        self.candidate_query=candidate_query
 
     def invoke_native(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic, invocation: TaskInvocation):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -235,7 +237,7 @@ class TaskBusiness:
         binding=dict(source_binding)
         if is_script_generation(binding) and operation not in SCRIPT_GENERATION_OPERATIONS:
             raise TaskBusinessRejected('本次生成动作仅授权读取与保存原请求草稿')
-        reconcile_original=(operation in {'read_agent_run_trace','read_task_workspace','read_task_quality_check','read_task_quality_continuation','continue_task_quality_check','read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
+        reconcile_original=(operation in {'read_audio_resource_request','read_audio_resource_history','read_agent_run_trace','read_task_workspace','read_task_quality_check','read_task_quality_continuation','continue_task_quality_check','read_script_window_request','read_timeline_history','read_timeline_restore_request','read_task_observations','read_task_observation_request','read_task_media_job','read_creation_execution','read_narration_revision','read_task_edit_request','read_narration_voice_request','read_task_media_jobs','read_segment_visual_decision','apply_task_edit','preview_task_edit','select_narration_voice'}
             or operation=='observe_task_output' and (arguments.get('payload') or {}).get('request_id') is not None)
         # Section owners validate the frozen target and dependency digest at
         # commit. An unrelated timeline publication may legitimately move HEAD.
@@ -377,16 +379,16 @@ class TaskBusiness:
             **{key:sealed.get(key) if frozen.get(key) else None for key in ('profile_reference','knowledge_reference')}}
         return {**frozen,'target_snapshot':snapshot,'selected_object_refs':timeline_object_refs(items,task.id,tracks)}
 
-    def finish_goal(self, claim, reply, preview):
+    def finish_goal(self, claim, reply, preview, runtime_receipt=None):
         if isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
-            return self.finish(claim, reply, script_window_request=preview)
+            return self.finish(claim, reply, script_window_request=preview, runtime_receipt=runtime_receipt)
         if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
-            return self.finish(claim, reply, quality_continuation=preview)
+            return self.finish(claim, reply, quality_continuation=preview, runtime_receipt=runtime_receipt)
         if isinstance(preview, dict) and preview.get('kind') == 'media_job':
-            return self.finish(claim, reply, reported_media=preview['media_job'])
-        return self.finish(claim, reply)
+            return self.finish(claim, reply, reported_media=preview['media_job'], runtime_receipt=runtime_receipt)
+        return self.finish(claim, reply, runtime_receipt=runtime_receipt)
 
-    def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None, reported_media=None):
+    def finish(self, claim, reply, *, script_window_request=None, quality_continuation=None, reported_media=None, runtime_receipt=None):
         """Project real host receipts; a model's proposed result is never adopted here."""
         goal=self.conversations.get_task_goal(claim['turn_id'])
         if (goal is None or goal['current_turn_id']!=claim['turn_id'] or goal['status']!='running'
@@ -475,8 +477,13 @@ class TaskBusiness:
             'turn_id':claim['turn_id'],'goal_revision':str(goal.get('revision',0)),
             'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')}
         from fastapi.encoders import jsonable_encoder
+        result = {'kind':'task_turn','response':response,'goal_business_actions':proofs}
+        if isinstance(runtime_receipt, dict):
+            for key in ('provider_usage', 'usage_status', 'trace_events'):
+                if key in runtime_receipt:
+                    result[key] = runtime_receipt[key]
         self.conversations.finish_turn(claim['turn_id'],'completed',reply,
-            jsonable_encoder({'kind':'task_turn','response':response,'goal_business_actions':proofs}),
+            jsonable_encoder(result),
             write_guard=lambda conn:self.check(binding,Event(),float('inf'),connection=conn,check_version=False),
             completed_input_id=goal.get('source_input_id') if goal.get('source_input_turn_id')==claim['turn_id'] else None)
         return response
@@ -484,6 +491,28 @@ class TaskBusiness:
     def execute(self, operation, args, actor, task, goal, origin, sealed, guard):
         ws,task_id=task.workspace_id,task.id
         generation = is_script_generation(origin)
+        if operation=='read_audio_resource_history':
+            try:
+                return self.production.resource_governance.read_production_history(ws, task_id,
+                    args['resource_id'], args['version'], user_id=actor.user_id or actor.member_id)
+            except (KeyError,ValueError) as exc:
+                raise TaskOperationRejected('资源生产来源不存在或条件无效',
+                    kind='not_found' if isinstance(exc,KeyError) else 'invalid_input') from exc
+        if operation in {'import_audio_resource','read_audio_resource_request'}:
+            if self.resource_audio is None:
+                raise TaskBusinessRejected('资源音频用例尚未装配',kind='unavailable')
+            if operation=='read_audio_resource_request':
+                receipt=self._resource_audio_call('read',actor,task_id,args['request_id'])
+                source=receipt['submitted_input'].get('source') or {}
+                from app.assistant_goal_continuation import GoalResultProjection
+                if not source.get('assistant_turn_id') or not GoalResultProjection(self.production,self.conversations).source_belongs_to_goal(goal,source):
+                    raise TaskBusinessRejected('原资源导入请求不属于当前目标输入')
+                return receipt
+            payload=args['payload']
+            if set(payload)!={'resource_id','version','request_id','assistant_turn_id'} or payload['assistant_turn_id']!=origin['assistant_turn_id']:
+                raise TaskBusinessRejected('资源导入缺少宿主原请求与回合')
+            return self._resource_audio_call('submit',actor,task_id,resource_id=payload['resource_id'],version=payload['version'],
+                request_id=str(payload['request_id']),source=origin,write_guard=guard,runtime=self.runtime())
         if generation and (origin.get('requested_effect')!='draft' or operation not in SCRIPT_GENERATION_OPERATIONS):
             raise TaskBusinessRejected('本次生成动作不授权采用、制作或其他写入')
         if generation and operation in {'patch_script_sections','read_script_sections'} and args['script_id']!=goal['script_id']:
@@ -700,6 +729,12 @@ class TaskBusiness:
                     raise TaskBusinessRejected('任务制作摘要读取尚未装配',kind='unavailable')
                 return self.execution_status(ws,task_id,actor=actor)
             return self.read_execution(goal,actor,job_id=args.get('job_id'))
+        if operation in {'search_creation_candidates', 'read_creation_candidate'}:
+            from app.assistant.candidate_reads import read_goal_candidates
+            if self.candidate_query is None:
+                raise TaskBusinessRejected('创作候选读面尚未装配', kind='unavailable')
+            return read_goal_candidates(self.candidate_query, self.production, self.authorizations,
+                actor, task_id, sealed, operation, args)
         if operation in MATERIAL_READ_OPERATIONS:
             return read_goal_materials(self.production, self.authorizations, actor, task_id,
                 operation, args, material_facts=self.material_facts, sealed=sealed,
@@ -787,6 +822,14 @@ class TaskBusiness:
         if operation=='read_task_media_job':
             return self.media_result(task,actor,args['job_id'])
         raise TaskBusinessRejected('该操作未被授权用于原目标后台接续')
+
+    def _resource_audio_call(self, method, *args, **kwargs):
+        from app.creation.audio_ingress_use_case import AudioIngressRejected
+        try:
+            return getattr(self.resource_audio,method)(*args,**kwargs)
+        except AudioIngressRejected as exc:
+            raise TaskOperationRejected({'reason':exc.detail},kind={403:'forbidden',404:'not_found',
+                409:'conflict',422:'invalid_input',503:'unavailable'}.get(exc.status_code,'conflict')) from exc
 
     @staticmethod
     def _adoption_origin(origin,draft_only):

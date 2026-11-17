@@ -595,7 +595,8 @@ class ProductionRepository:
         self.montage_plan_adoption = MontagePlanAdoptionTransaction(self._connect,
             decode_task=creation_task_from_payload, read_task=self.task_records.get_creation_task,
             read_montage=self.get_creation_task_montage_plan, require_task=require_creation_task,
-            create_version=self.timeline_records.create_timeline_version)
+            create_version=self.timeline_records.create_timeline_version,
+            create_subtitle_track=self.subtitle_records.create_subtitle_track)
         self.edit_adoption = EditAdoptionTransaction(self._connect,
             require_task=require_creation_task, decode_proposal=self.edit_records.edit_proposal_from_row,
             create_intent=lambda intent, *, connection=None, source=False: self.edit_records.create_edit_intent(
@@ -1510,6 +1511,9 @@ class ProductionRepository:
             if current != event.payload['expected_segment_version']:
                 raise ValueError('保存视频准备前段落版本已变化')
             self.execution_records.append_task_event(event,connection=conn)
+            if event.event_type == 'segment_visual_planning_conflict':
+                conn.execute("UPDATE job_runs SET failure_reason='waiting_for_user',updated_at=? WHERE workspace_id=? AND id=?",
+                    (utc_now().isoformat(), event.workspace_id, event.job_id))
 
 
 

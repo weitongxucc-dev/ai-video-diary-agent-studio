@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "validated_at": "2026-11-15T02:18:57.877000+00:00",
+  "runtime": {
+    "api_base": "http://127.0.0.1:8000",
+    "api_process": "uvicorn app.main:create_app --factory --port 8000"
+  },
+  "replay": {
+    "turn_id": "08e0fa9c-26a4-43b6-a497-3d4160fe678a",
+    "conversation_id": "8fb1c882-198c-4a63-8fb7-f77c91e9d13d",
+    "endpoint": "/api/assistant/turns/08e0fa9c-26a4-43b6-a497-3d4160fe678a/trace",
+    "cli_command": "curl GET /api/assistant/turns/08e0fa9c-26a4-43b6-a497-3d4160fe678a/trace with X-Local-Member-Token",
+    "cli_exit_code": 0,
+    "cli_state": "done",
+    "status": "completed",
+    "event_count": 5,
+    "events_returned": 5,
+    "tool_counts": {},
+    "duration_ms": 1292,
+    "retry_count": 0,
+    "usage_status": "known",
+    "usage_source": "provider",
+    "provider_usage": {
+      "input": 7118,
+      "output": 75,
+      "cacheRead": 185,
+      "cacheWrite": 0,
+      "totalTokens": 7378
+    },
+    "usage_ledger": {
+      "turn_count": 1,
+      "usage_status_counts": {
+        "known": 1,
+        "estimated": 0,
+        "unknown": 0
+      },
+      "measured_usage": {
+        "input": 7118,
+        "output": 75,
+        "cacheRead": 185,
+        "cacheWrite": 0,
+        "totalTokens": 7378
+      },
+      "estimated_usage": null
+    },
+    "event_types": [
+      "agent_start",
+      "turn_start",
+      "turn_end",
+      "agent_end",
+      "agent_settled"
+    ],
+    "started_at": "2026-11-15T02:18:56.585000+00:00",
+    "ended_at": "2026-11-15T02:18:57.877000+00:00",
+    "failure_class": null
+  },
+  "interpretation": {
+    "trace_replay": "passed",
+    "token_accounting": "known: provider usage is persisted on the completed Agent turn and included in the conversation ledger",
+    "raw_prompt_or_arguments_exposed": false,
+    "cli_contract_repaired": "usage_ledger, session_id and pagination metadata are now accepted and preserved",
+    "agent_runtime_receipt": "runtime-only usage and trace metadata are kept out of business preview validation and stored at turn result top level"
+  },
+  "limits": [
+    "本次真实回合验证的是只读环境确认，不代表完整视频生产链路已验收。",
+    "真实外接手机或其他物理设备播放尚未执行；当前仅完成本机扬声器路径。",
+    "用户已确认第二次播放时实际听到声音；未对音色、杂音或音量作质量评价。"
+  ],
+  "provider_receipt": {
+    "status": "passed",
+    "integration": "direct_provider_request_using_same_workspace_settings",
+    "provider": "minimax",
+    "model": "MiniMax-M3",
+    "endpoint": "https://api.minimax.cn/v1/chat/completions",
+    "http_status": 200,
+    "elapsed_ms": 1432,
+    "response_id": "0748411998a6362980661e18122828f1",
+    "usage": {
+      "input": 216,
+      "output": 64,
+      "totalTokens": 280,
+      "cacheRead": 128
+    },
+    "raw_usage": {
+      "total_tokens": 280,
+      "total_characters": 0,
+      "prompt_tokens": 216,
+      "completion_tokens": 64,
+      "completion_tokens_details": {
+        "reasoning_tokens": 63
+      },
+      "prompt_tokens_details": {
+        "cached_tokens": 128
+      }
+    },
+    "finish_reason": "length",
+    "api_key_exposed": false,
+    "interpretation": "真实 provider 已返回可核验 usage；这次请求只读，不等同于 Agent Trace 回合已绑定 provider usage。"
+  },
+  "agent_integration_attempt": {
+    "status": "passed",
+    "endpoint": "/api/assistant/plan/turn",
+    "turn_ids": [
+      "08e0fa9c-26a4-43b6-a497-3d4160fe678a"
+    ],
+    "observed_success": "真实 Minimax provider 回合 completed；runtime-only provider usage 不再进入 CreationPlanPreviewResponse 校验，Trace 返回 provider usage、usage_status=known、5 个运行事件和 1292ms duration。",
+    "historical_failed_turn_ids": [
+      "a8483901-a120-40a9-8f2b-9c7634a4be8b"
+    ],
+    "historical_failure": "旧版本曾把 provider_usage-only runtime receipt 错误当成 plan/edit preview；该历史失败保留用于回归说明。",
+    "not_counted_as": "完整视频生产或真实物理设备验收"
+  },
+  "media_playback": {
+    "source_audio": {
+      "validated_at": "2026-11-15T01:43:28Z",
+      "source": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/sound.m4a",
+      "playback_command": "afplay source on default macOS output device",
+      "playback_exit_code": 0,
+      "playback_elapsed_ms": 1792,
+      "stderr": "",
+      "ffprobe": {
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "aac",
+            "codec_long_name": "AAC (Advanced Audio Coding)",
+            "profile": "LC",
+            "codec_type": "audio",
+            "codec_tag_string": "mp4a",
+            "codec_tag": "0x6134706d",
+            "mime_codec_string": "mp4a.40.2",
+            "sample_fmt": "fltp",
+            "sample_rate": "48000",
+            "channels": 1,
+            "channel_layout": "mono",
+            "bits_per_sample": 0,
+            "initial_padding": 0,
+            "id": "0x1",
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/48000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 33600,
+            "duration": "0.700000",
+            "bit_rate": "52646",
+            "nb_frames": "34",
+            "extradata_size": 5,
+            "disposition": {
+              "default": 1,
+              "dub": 0,
+              "original": 0,
+              "comment": 0,
+              "lyrics": 0,
+              "karaoke": 0,
+              "forced": 0,
+              "hearing_impaired": 0,
+              "visual_impaired": 0,
+              "clean_effects": 0,
+              "attached_pic": 0,
+              "timed_thumbnails": 0,
+              "non_diegetic": 0,
+              "captions": 0,
+              "descriptions": 0,
+              "metadata": 0,
+              "dependent": 0,
+              "still_image": 0,
+              "multilayer": 0
+            },
+            "tags": {
+              "language": "und",
+              "handler_name": "SoundHandler"
+            }
+          }
+        ],
+        "format": {
+          "filename": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/sound.m4a",
+          "nb_streams": 1,
+          "nb_programs": 0,
+          "nb_stream_groups": 0,
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "format_long_name": "QuickTime / MOV",
+          "start_time": "0.000000",
+          "duration": "0.700000",
+          "size": "5690",
+          "bit_rate": "65028",
+          "probe_score": 100,
+          "tags": {
+            "major_brand": "M4A ",
+            "minor_version": "512",
+            "compatible_brands": "M4A isomiso2",
+            "encoder": "Lavf62.12.101"
+          }
+        }
+      },
+      "output_device": "MacBook Air扬声器",
+      "device_path_verified": true,
+      "subjective_listening": "pending_human_confirmation",
+      "status": "device_reached"
+    },
+    "output_mp4": {
+      "path": "output/acceptance/resource-adoption-glass-pulse.mp4",
+      "playback_command": "afplay output/acceptance/resource-adoption-glass-pulse.mp4",
+      "exit_code": 0,
+      "output_device": "MacBook Air扬声器",
+      "device_path_verified": true,
+      "subjective_listening": "pending_human_confirmation"
+    },
+    "interpretation": "系统已把资源音频和成片音轨送到默认扬声器；程序退出码只能证明播放路径完成，不能替代人的听感确认。",
+    "replay_2": {
+      "validated_at": "2026-11-15T01:52:45Z",
+      "replay_index": 2,
+      "source_audio": {
+        "path": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/sound.m4a",
+        "command": "afplay",
+        "exit_code": 0
+      },
+      "output_mp4": {
+        "path": "output/acceptance/resource-adoption-glass-pulse.mp4",
+        "command": "afplay",
+        "exit_code": 0
+      },
+      "output_device": "MacBook Air扬声器",
+      "device_path_verified": true,
+      "playback_elapsed_ms": 4612,
+      "subjective_listening": "pending_human_confirmation"
+    },
+    "human_confirmation": {
+      "status": "heard",
+      "reported_by": "user",
+      "reported_at": "2026-11-15T01:52:45Z",
+      "statement": "听到了",
+      "quality_assessment": "not_provided"
+    }
+  },
+  "acceptance_status": {
+    "persisted_trace_replay": "passed",
+    "direct_provider_usage_receipt": "passed",
+    "provider_usage_bound_into_agent_trace": "passed",
+    "resource_audio_device_path": "passed",
+    "human_listening": "heard_quality_unrated",
+    "agent_trace_real_provider_replay": "passed"
+  },
+  "prior_replay": {
+    "turn_id": "4e90e5ee-f018-4712-b3cf-b22cd0834756",
+    "conversation_id": "c15b7122-e4f5-4b75-a054-2b6aac655bad",
+    "endpoint": "/api/assistant/turns/4e90e5ee-f018-4712-b3cf-b22cd0834756/trace",
+    "cli_command": "node scripts/yaohe.mjs --config <0600 local config> run trace 4e90e5ee-f018-4712-b3cf-b22cd0834756",
+    "cli_exit_code": 0,
+    "cli_state": "done",
+    "status": "completed",
+    "event_count": 4,
+    "events_returned": 4,
+    "tool_counts": {
+      "读取素材库状态": 1,
+      "读取当前工作区": 1
+    },
+    "duration_ms": 11348,
+    "retry_count": 0,
+    "usage_status": "unknown",
+    "usage_source": null,
+    "provider_usage": null,
+    "usage_ledger": {
+      "turn_count": 1,
+      "usage_status_counts": {
+        "known": 0,
+        "estimated": 0,
+        "unknown": 1
+      },
+      "measured_usage": null,
+      "estimated_usage": null
+    },
+    "event_types": [
+      "tool_start",
+      "tool_start",
+      "tool_end",
+      "tool_end"
+    ]
+  }
+}

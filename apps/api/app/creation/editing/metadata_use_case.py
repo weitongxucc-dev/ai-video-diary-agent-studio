@@ -40,7 +40,7 @@ from app.creation.editing.sources import EditSourceVerifier
 from app.creation.editing.affected import affected_source_clip_ids
 from app.creation.editing.subtitles import apply_subtitle_cue
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
-from app.audio_timeline import narration_audio_timeline
+from app.audio_timeline import effective_audio_timeline
 from app.graphic_sources import resolve_graphic_source
 from app.graphic_overlays import validate_overlays
 from app.transitions import dissolve_frames
@@ -148,9 +148,6 @@ def narration_linkage_spans(plan: CreationTaskMontagePlan) -> list[tuple[str, in
         spans.append((cue.id, offset, span_ms))
         offset += span_ms
     return spans
-
-def effective_audio_timeline(plan: CreationTaskMontagePlan) -> AudioTimeline:
-    return plan.audio_timeline or narration_audio_timeline(plan.narration_audio_path or '', plan.duration_seconds)
 
 def refresh_montage_review_state(plan) -> None:
     plan.low_confidence_clip_count = sum((clip.needs_confirmation for clip in plan.clips))
@@ -561,6 +558,9 @@ class MetadataEditUseCase:
             timeline_version_id=current_version.id, connection=connection)
         if tracks:
             return tracks
+        if current_version.snapshot.get('subtitle_track_ids'):
+            return [self.repository.subtitle_records.get_subtitle_track(workspace_id, task.id, track_id,
+                connection=connection) for track_id in current_version.snapshot['subtitle_track_ids']]
         if current_version.snapshot.get('subtitle_track_ids') == []:
             return []
         if montage is None:

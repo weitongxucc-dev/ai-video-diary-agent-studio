@@ -295,6 +295,25 @@ def test_unreadable_event_says_so_instead_of_a_fake_reason():
     assert "无法读取" in str(caught.value)
 
 
+def test_runtime_usage_without_business_preview_is_a_runtime_receipt():
+    value = {
+        "type": "creation_session_result", "protocol": 1,
+        "owner": "pi-coding-agent-sdk", "status": "settled",
+        "answer": "已连接。", "tool_results": [],
+        "provider_usage": {"input": 12, "output": 4, "totalTokens": 16},
+        "usage_status": "known",
+        "trace_events": [{"type": "model_end", "at_ms": 10}],
+    }
+    answer, preview = read_sdk_result(json.dumps(value))
+    assert answer == "已连接。"
+    assert preview == {
+        "kind": "runtime_receipt",
+        "provider_usage": {"input": 12, "output": 4, "totalTokens": 16},
+        "usage_status": "known",
+        "trace_events": [{"type": "model_end", "at_ms": 10}],
+    }
+
+
 @pytest.mark.parametrize("stdout,stderr", [
     ('{"error":"invalid api key"}', ""),
     ("", "401 Unauthorized"),

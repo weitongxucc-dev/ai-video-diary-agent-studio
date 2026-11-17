@@ -108,7 +108,7 @@ test("SDK owns two editing rounds, safe steering/follow-up, persisted history an
   } finally { current?.session.dispose(); await rm(cwd, { recursive: true, force: true }); }
 });
 
-test("read_creation_skill discovers a packaged method and rejects direct execution or unknown names", async () => {
+for (const skillName of ["openfilm-replicate", "editing-videos"]) test(`read_creation_skill reads ${skillName} and rejects direct execution or unknown names`, async () => {
   const cwd = await mkdtemp(join(tmpdir(), "diary-sdk-skill-") );
   let current;
   try {
@@ -124,7 +124,7 @@ test("read_creation_skill discovers a packaged method and rejects direct executi
     current.session.agent.streamFunction = () => {
       const stream = new AssistantMessageEventStream();
       const content = calls++ === 0
-        ? [{ type: "toolCall", id: "skill-read", name: "read_creation_skill", arguments: { name: "openfilm-replicate" } }]
+        ? [{ type: "toolCall", id: "skill-read", name: "read_creation_skill", arguments: { name: skillName } }]
         : [{ type: "text", text: "已读取方法。" }];
       const answer = syntheticMessage(content);
       queueMicrotask(() => { stream.push({ type: "done", reason: answer.stopReason, message: answer }); stream.end(answer); });
@@ -134,7 +134,10 @@ test("read_creation_skill discovers a packaged method and rejects direct executi
     assert.equal(calls, 2);
     const skillResult = current.session.messages.find(message => message.role === "toolResult" && message.toolCallId === "skill-read");
     assert.ok(skillResult);
-    assert.match(JSON.stringify(skillResult), /openfilm-replicate/);
+    assert.equal(skillResult.isError, false);
+    assert.equal(skillResult.details.manifest.name, skillName);
+    assert.equal(skillResult.details.manifest.runtime.runnable, false);
+    assert.equal(skillResult.details.manifest.adoption.requires_explicit_edit_authorization, true);
     assert.match(JSON.stringify(skillResult), /method-only/);
     assert.match(JSON.stringify(skillResult), /runnable/);
     assert.match(JSON.stringify(skillResult), /false/);
@@ -143,7 +146,7 @@ test("read_creation_skill discovers a packaged method and rejects direct executi
     current.session.agent.streamFunction = () => {
       const stream = new AssistantMessageEventStream();
       const answer = syntheticMessage(calls++ === 0
-        ? [{ type: "toolCall", id: "skill-run", name: "run_creation_skill", arguments: { name: "openfilm-replicate" } }]
+        ? [{ type: "toolCall", id: "skill-run", name: "run_creation_skill", arguments: { name: skillName } }]
         : [{ type: "text", text: "直接运行入口不可用。" }]);
       queueMicrotask(() => { stream.push({ type: "done", reason: answer.stopReason, message: answer }); stream.end(answer); });
       return stream;

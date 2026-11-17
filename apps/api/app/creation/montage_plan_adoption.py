@@ -10,13 +10,14 @@ from app.persistence_json import _json_payload
 
 
 class MontagePlanAdoptionTransaction:
-    def __init__(self, connection_factory, *, decode_task, read_task, read_montage, require_task, create_version):
+    def __init__(self, connection_factory, *, decode_task, read_task, read_montage, require_task, create_version, create_subtitle_track):
         self._connect = connection_factory
         self._decode_task = decode_task
         self._read_task = read_task
         self._read_montage = read_montage
         self._require_task = require_task
         self._create_version = create_version
+        self._create_subtitle_track = create_subtitle_track
 
     def save_creation_task_montage_plan(
         self,
@@ -27,6 +28,8 @@ class MontagePlanAdoptionTransaction:
         *, connection: sqlite3.Connection | None = None,
         verify_inputs=None,
         expected_current_version_id: str | None | Literal[False] = False,
+        result_version: _TimelineVersion | None = None,
+        result_subtitle_tracks=(),
     ) -> tuple[_CreationTask, dict[str, object]]:
         status = str(payload.get("status", ""))
         if status not in {"waiting_for_user", "ready", "rendering", "rendered", "failed"}:
@@ -35,7 +38,8 @@ class MontagePlanAdoptionTransaction:
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 self.save_creation_task_montage_plan(workspace_id, task_id, plan_id, payload,
-                    connection=conn, expected_current_version_id=expected_current_version_id, verify_inputs=verify_inputs)
+                    connection=conn, expected_current_version_id=expected_current_version_id, verify_inputs=verify_inputs,
+                    result_version=result_version, result_subtitle_tracks=result_subtitle_tracks)
             return self._read_task(workspace_id, task_id), self._read_montage(workspace_id, task_id)
         conn = connection
         task_row = conn.execute(
@@ -103,6 +107,17 @@ class MontagePlanAdoptionTransaction:
             "UPDATE creation_tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND id = ?",
             (_json_payload(task), now.isoformat(), task.workspace_id, task.id),
         )
+        if result_version is not None:
+            if (result_version.workspace_id, result_version.task_id, result_version.snapshot.get('montage', {}).get('id')) != (
+                    workspace_id, task_id, plan_id) or expected_current_version_id is False:
+                raise ValueError('合并段落必须绑定同一任务、剪辑计划和原时间线')
+            self._create_version(result_version, connection=conn, expected_current_version_id=expected_current_version_id)
+            if result_version.snapshot.get('subtitle_track_ids', []) != [track.id for track in result_subtitle_tracks]:
+                raise ValueError('合并字幕必须与结果时间线一致')
+            for track in result_subtitle_tracks:
+                if (track.workspace_id, track.task_id, track.timeline_version_id) != (workspace_id, task_id, result_version.id):
+                    raise ValueError('合并字幕必须属于同一任务和结果版本')
+                self._create_subtitle_track(track, connection=conn)
         return task, payload
 
     def publish_creation_task_render(

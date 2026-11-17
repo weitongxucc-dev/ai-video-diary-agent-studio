@@ -4,6 +4,11 @@ import type { CreationTaskNarration } from '../types/creation-tasks';
 import type { CreationTaskEditPreviewResponse } from '../types/task-edits';
 import { API_BASE, apiUrl, authorizedFetch } from './transport';
 import { CreationPlanApiError, creationPlanRequest } from './creation-transport';
+export function importCreationTaskResourceAudio(taskId: string, resourceId: string, version: number): Promise<TaskMediaResultMap["audio_source"] | TaskMediaJob> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/resources`, {
+        method: "POST", body: JSON.stringify({ resource_id: resourceId, version }),
+    });
+}
 export function previewCreationTaskAudio(taskId: string, input: AudioEditInput): Promise<CreationTaskEditPreviewResponse | TaskMediaJob> {
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/preview?draft=true`, { method: "POST", body: JSON.stringify(input) });
 }

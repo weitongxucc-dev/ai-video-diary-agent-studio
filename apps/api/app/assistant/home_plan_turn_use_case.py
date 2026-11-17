@@ -96,6 +96,7 @@ class BuildCompletedResponse:
     request_result: dict | None
     preview: object
     material_result: MaterialResult | None
+    runtime_receipt: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -132,8 +133,11 @@ class HomePlanTurnUseCase:
 
     def execute(self, turn_id: str, message: str, *, material_selection: dict | None = None):
         preview = None
+        runtime_receipt = None
         try:
             reply, preview = yield RunPlanning()
+            if isinstance(preview, dict) and preview.get("kind") == "runtime_receipt":
+                runtime_receipt, preview = preview, None
             if isinstance(preview, dict) and preview.get("kind") == "creation_request":
                 saved_request = preview["request"]
                 save_only = re.search(r"只(?:先)?保存|仅保存|不(?:要|用)(?:准备|规划|出)(?:方案|计划)", message)
@@ -141,6 +145,9 @@ class HomePlanTurnUseCase:
                     latest = yield ReadOwnedRequest(saved_request["id"])
                     try:
                         next_reply, next_preview = yield ContinuePlanning(latest)
+                        if isinstance(next_preview, dict) and next_preview.get("kind") == "runtime_receipt":
+                            runtime_receipt = next_preview
+                            next_preview = None
                         if isinstance(next_preview, dict) and next_preview.get("kind") == "creation_request":
                             reply, preview = next_reply, next_preview
                     except AssistantUnavailable as exc:
@@ -186,13 +193,18 @@ class HomePlanTurnUseCase:
             request_result = yield RecoverSavedRequest(self.get_turn(turn_id))
             if request_result is not None:
                 preview = None
-        rendered = yield BuildCompletedResponse(reply, request_result, preview, material_result)
+        rendered = yield BuildCompletedResponse(reply, request_result, preview, material_result, runtime_receipt)
         facts = rendered.facts
         creation_request, plan_preview = facts["creation_request"], facts["plan_preview"]
-        self.finish_turn(turn_id, "completed", facts["reply"], {
+        result = {
             "kind": "creation_request" if creation_request else "plan_preview" if plan_preview else "material_result" if material_result else "conversation",
             "creation_request_id": creation_request["id"] if creation_request else None,
             "plan_preview": plan_preview,
             "response": facts,
-        })
+        }
+        if isinstance(runtime_receipt, dict):
+            for key in ("provider_usage", "usage_status", "trace_events"):
+                if key in runtime_receipt:
+                    result[key] = runtime_receipt[key]
+        self.finish_turn(turn_id, "completed", facts["reply"], result)
         return HomeTurnResult(rendered, completed=True)

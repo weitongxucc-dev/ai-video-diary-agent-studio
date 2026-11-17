@@ -80,7 +80,9 @@ def test_source_range_creates_real_task_without_script_or_analysis_segment(sourc
     clip, = montage.clips
     assert clip.segment_id is None and clip.cue_id is None and clip.manually_selected
     assert (clip.source_path, clip.source_start_seconds, clip.source_end_seconds) == (case.reference, 1.25, 7.75)
-    track, = montage.audio_timeline.tracks
+    track, music, effect = montage.audio_timeline.tracks
+    assert (music.role, effect.role) == ('music', 'effect')
+    assert music.clips == effect.clips == [] and music.duck_under_voice
     voice, = track.clips
     assert track.role == "original" and voice.source_ref == case.reference
     assert (voice.source_start_ms, voice.source_end_ms, voice.timeline_start_ms) == (1250, 7750, 0)
@@ -194,7 +196,9 @@ def test_source_creation_keeps_filesystem_and_identity_outside_writer(source_cas
     monkeypatch.setattr(Path, "stat", observed_stat)
     receipt = case.use_case.create(replace(case.command, preserve_audio=False), case.actor)
     version = case.repo.timeline_records.get_timeline_version("local", receipt["timeline_version_id"])
-    assert version.snapshot["montage"]["audio_timeline"]["tracks"] == []
+    tracks = version.snapshot["montage"]["audio_timeline"]["tracks"]
+    assert [track['role'] for track in tracks] == ['music', 'effect']
+    assert all(track['clips'] == [] for track in tracks)
 
 
 @pytest.mark.parametrize("reject_guard", [False, True])

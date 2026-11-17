@@ -7,7 +7,7 @@ import { WorkspaceAudio } from "./workbench/WorkspaceMedia";
 import { useWorkspaceViewState } from "./workbench/context";
 
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { apiUrl, importCreationTaskAudio, listenCreationTaskAudio, getCreationTaskAudioWaveform, getCreationTaskMediaJob, resolveCreationTaskMediaResponse, cancelCreationTaskMediaJob, taskMediaJobLabel, TaskMediaJobError } from "@/lib/api";
 import type { AudioEditInput, AudioTimeline, TimelineAudioClip, TimelineAudioTrack, TaskMediaJob } from "@/lib/types";
 import ui from "./VideoEditor.module.css";
@@ -207,6 +207,7 @@ export function AudioTimelineInspector({ track, clip, versionId, playhead, busy,
   busy: boolean; onPreview: (input: AudioEditInput) => void; onDraftChange: () => void;
 }) {
   const target = clip ?? track;
+  const gainSliderId = useId();
   const [values, setValues] = useWorkspaceViewState<Record<string, unknown>>(`audio-inspector:${versionId}:${target.id}`+".values", {});
 
   function update(key: string, value: unknown, apply = false) {
@@ -215,15 +216,19 @@ export function AudioTimelineInspector({ track, clip, versionId, playhead, busy,
     if (apply) submit(clip ? "update" : "track", next);
   }
   function commit() {
-    if (!busy && Object.keys(values).length && Object.values(values).every(value => value !== ""))
+    if (!busy && !locked && Object.keys(values).length && Object.values(values).every(value => value !== "")
+      && (values.gain_db === undefined || (Number(values.gain_db) >= -60 && Number(values.gain_db) <= 12)))
       submit(clip ? "update" : "track", values);
   }
   function submit(action: AudioEditInput["action"], changes: Record<string,unknown>) { onPreview({ base_version_id:versionId, target_id:target.id, action,values:changes }); }
   const locked = track.locked || Boolean(clip?.locked);
-  const number = (key: string, initial: number, label: string, factor=1) => <label className={ui.field}>{label}<input aria-label={label} type="number" step={factor===1000 ? .1 : 1} disabled={busy || locked} required value={values[key] === "" ? "" : Number(values[key] ?? initial)/factor} onChange={event => update(key, event.target.value === "" ? "" : Number(event.target.value)*factor)} onBlur={event => {if(event.currentTarget.validity.valid) commit();}} /></label>;
-  return <form className={ui.inspector} aria-label="已选音频详情" onSubmit={event => { event.preventDefault(); submit(clip ? "update":"track",values); }}>
+  const gain = values.gain_db === "" ? target.gain_db : Number(values.gain_db ?? target.gain_db);
+  const number = (key: string, initial: number, label: string, factor=1) => <label className={ui.field}>{label}<input aria-label={label} type="number" min={key === "gain_db" ? -60 : undefined} max={key === "gain_db" ? 12 : undefined} step={factor===1000 ? .1 : 1} disabled={busy || locked} required value={values[key] === "" ? "" : Number(values[key] ?? initial)/factor} onChange={event => update(key, event.target.value === "" ? "" : Number(event.target.value)*factor)} onBlur={event => {if(event.currentTarget.validity.valid) commit();}} /></label>;
+  return <form className={ui.inspector} aria-label="已选音频详情" onSubmit={event => { event.preventDefault(); commit(); }}>
     <h3>{target.name}</h3>
     <p>{clip ? `${(clip.timeline_start_ms/1000).toFixed(1)}–${((clip.timeline_start_ms+(clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000).toFixed(1)} 秒 · ${track.name}` : "整条音轨"}</p>
+    <label className={ui.field} htmlFor={gainSliderId}>音量调节（dB）<input id={gainSliderId} type="range" min={-60} max={12} step={1} value={gain} aria-valuetext={`${gain} dB`} disabled={busy || locked}
+      onChange={event => update("gain_db", event.target.valueAsNumber)} onBlur={commit} /></label>
     {number("gain_db",target.gain_db,"音量（dB）")}
     <label className={ui.actionRow}>静音<input aria-label="音频静音" type="checkbox" disabled={busy || locked} checked={Boolean(values.muted ?? target.muted)} onChange={event => update("muted",event.target.checked,true)} /></label>
     {clip ? <>

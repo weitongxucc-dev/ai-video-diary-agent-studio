@@ -3,10 +3,11 @@ import {checkArguments, id} from './arguments.mjs';
 import {taskPath, taskSnapshot} from './task-binding.mjs';
 
 const TRACE_FIELDS = new Set([
-  'turn_id','conversation_id','status','sequence','created_at','updated_at',
+  'turn_id','conversation_id','session_id','status','sequence','created_at','updated_at',
   'events','event_count','tool_counts','compaction_count','provider_usage',
   'usage_status','usage_source','associations','business_status','evidence_candidates',
-  'started_at','ended_at','duration_ms','failure_class','retry_count',
+  'started_at','ended_at','duration_ms','failure_class','retry_count','usage_ledger',
+  'events_returned','next_before',
 ]);
 const USAGE_STATUSES = new Set(['known','estimated','unknown']);
 const TRACE_STATUSES = new Set(['queued','running','completed','failed','stopped','unknown']);
@@ -34,6 +35,29 @@ function usage(value) {
     if (value[key] !== undefined) result[key] = nonNegativeInteger(value[key],`provider_usage.${key}`);
   }
   return Object.keys(result).length ? result : null;
+}
+
+function usageLedger(value) {
+  if (value === undefined || value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new CliError('运行追踪用量账本无法核验',4);
+  }
+  const counts = value.usage_status_counts;
+  if (!counts || typeof counts !== 'object' || Array.isArray(counts)
+      || Object.entries(counts).some(([key,count]) => !['known','estimated','unknown'].includes(key)
+        || !Number.isSafeInteger(count) || count < 0)) {
+    throw new CliError('运行追踪用量账本状态计数无法核验',4);
+  }
+  const turnCount = value.turn_count;
+  if (!Number.isSafeInteger(turnCount) || turnCount < 0) {
+    throw new CliError('运行追踪用量账本回合数无法核验',4);
+  }
+  return {
+    turn_count: turnCount,
+    usage_status_counts: {...counts},
+    measured_usage: usage(value.measured_usage),
+    estimated_usage: usage(value.estimated_usage),
+  };
 }
 
 function associations(value) {
@@ -91,6 +115,11 @@ function projectTrace(value, requestedTurn) {
   if (usageStatus === 'known' && !providerUsage) throw new CliError('运行追踪标记已知用量但没有实测数据',4);
   const events = value.events === undefined ? [] : value.events;
   if (!Array.isArray(events) || events.length > 200) throw new CliError('运行追踪事件数量无法核验',4);
+  const eventsReturned = value.events_returned === undefined
+    ? events.length : nonNegativeInteger(value.events_returned,'events_returned');
+  if (eventsReturned > value.event_count) throw new CliError('运行追踪返回事件数量无法核验',4);
+  const nextBefore = value.next_before === null || value.next_before === undefined
+    ? null : nonNegativeInteger(value.next_before,'next_before');
   const toolCounts = value.tool_counts === undefined ? {} : value.tool_counts;
   if (!toolCounts || typeof toolCounts !== 'object' || Array.isArray(toolCounts)
       || Object.entries(toolCounts).some(([key,count]) => typeof key !== 'string' || !Number.isSafeInteger(count) || count < 0)) {
@@ -99,15 +128,19 @@ function projectTrace(value, requestedTurn) {
   const projected = {
     turn_id:turnId,
     conversation_id:string(value.conversation_id,'conversation_id'),
+    session_id:value.session_id === null || value.session_id === undefined ? null : string(value.session_id,'session_id'),
     status,
     sequence:nonNegativeInteger(value.sequence,'sequence'),
     events:events.map(event),
     event_count:nonNegativeInteger(value.event_count,'event_count'),
+    events_returned:eventsReturned,
+    next_before:nextBefore,
     tool_counts:{...toolCounts},
     compaction_count:nonNegativeInteger(value.compaction_count,'compaction_count'),
     provider_usage:providerUsage,
     usage_status:usageStatus,
     usage_source:value.usage_source === null || value.usage_source === undefined ? null : string(value.usage_source,'usage_source'),
+    usage_ledger:usageLedger(value.usage_ledger),
     associations:associations(value.associations),
     business_status:value.business_status === null || value.business_status === undefined ? null : string(value.business_status,'business_status'),
     evidence_candidates:Array.isArray(value.evidence_candidates) ? value.evidence_candidates.map(candidate => ({

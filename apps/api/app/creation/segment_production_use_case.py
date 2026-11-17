@@ -920,11 +920,12 @@ class SegmentProductionUseCase:
                 if audio is None or audio.status != 'ready':
                     decided = True
                 elif state is None or state['narration_reference'] != audio.audio_reference:
-                    candidate = section, audio
+                    candidate = section, audio, self.repository.section_inputs.stage_section_version(
+                        task.workspace_id, task.id, section.id, connection=conn)
                     decided = True
         if candidate is None:
             return None
-        section, audio = candidate
+        section, audio, expected_version = candidate
         try:
             self.repository.execution_records.get_task_event(job.workspace_id,self.video_preparation_id(job,section.id),connection=connection)
         except KeyError:
@@ -933,17 +934,39 @@ class SegmentProductionUseCase:
             if connection is not None and connection.in_transaction:
                 raise ValueError('段落视频输入须先在写事务外准备')
             record = self.repository.narration_artifacts.get_narration_artifact(job.workspace_id,audio.audio_reference.removeprefix('narration://artifact/'))
-            prepared = self.prepare_video(job,event,task,section.id,record,owner,text=audio.text)
+            from app.creation.duration_requirement import DurationConflict
+            try:
+                prepared = self.prepare_video(job,event,task,section.id,record,owner,text=audio.text)
+            except DurationConflict as error:
+                prepared = self.planning_conflict_event(job,task,section.id,record,error)
+                prepared = replace(prepared, payload={**prepared.payload, 'expected_segment_version': expected_version})
             conflict = self.planning_conflict(job, section.id)
             if conflict is not None:
-                prepared = replace(prepared, payload={**prepared.payload, 'request_id': conflict.payload['request_id']})
+                if prepared.event_type == 'segment_visual_planning_conflict':
+                    return None  # Keep the original conflict and paid-audio receipt immutable.
+                prepared = replace(prepared, payload={**prepared.payload, 'request_id': conflict.payload.get('request_id')})
             def verify_preparation(conn):
                 current_job = self.repository.job_records.get_job_run(job.workspace_id, job.id, connection=conn)
                 current_task = self.repository.task_records.get_creation_task(job.workspace_id, task.id, connection=conn)
+                if prepared.event_type == 'segment_visual_planning_conflict':
+                    current_snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(
+                        job.workspace_id, task.id, connection=conn)
+                    current_audio = self.repository.section_inputs.read_creation_section_input(
+                        current_snapshot.task, current_snapshot.script_header, section.id, connection=conn)['audio']
+                    if (current_job.status != 'queued' or current_job.input_digest != job.input_digest
+                            or current_snapshot.input_digest != job.input_digest
+                            or current_audio is None or current_audio.status != 'ready'
+                            or current_audio.audio_reference != audio.audio_reference):
+                        raise ValueError('原作业或已保存配音在规划期间变化，不能保存过时冲突')
+                    if owner.authorization_verdict(current_task, self.actor_from_event(job.workspace_id, event),
+                            'render', connection=conn, check_scope=False) != 'ready':
+                        raise PermissionError('原画面规划授权不可用')
+                    self.require_settled_narration(current_job, connection=conn)
+                    return
                 self._validate_visual_decision(current_job, current_task,
                     self.actor_from_event(job.workspace_id, event), owner, prepared.payload, connection=conn)
             self.repository.save_segment_video_preparation(prepared, write_guard=verify_preparation)
-            if prepared.event_type == 'segment_visual_decision_required':
+            if prepared.event_type in {'segment_visual_decision_required', 'segment_visual_planning_conflict'}:
                 return None
         key, _resources = self.video_facts(job, event, task, section.id, owner, connection=connection)
         return SubmissionIntent(job.workspace_id, 'creation_job', job.id, job.input_digest, key, SchedulePolicy())
@@ -1083,6 +1106,7 @@ class SegmentProductionUseCase:
         retained_bytes = 0
         audio_output_bytes = 0
         pcm_preparation=None
+        continue_initial = False
 
         def measure_audio_outputs(value):
             nonlocal audio_output_bytes
@@ -1248,7 +1272,8 @@ class SegmentProductionUseCase:
                 try:
                     measure_retained()
                     scheduler.complete_unit(grant,checkpoint_database_path=self.repository.database_path,checkpoint_write=commit_video,
-                        next_unit_write=None if command else next_unit)
+                        next_unit_write=None)
+                    continue_initial = command is None
                     break
                 except SectionPreparationStale:
                     if preparation:
@@ -1282,6 +1307,14 @@ class SegmentProductionUseCase:
         finally:
             with executor._cancellation_lock:
                 executor._cancellations.pop(grant.request_id,None)
+
+        if continue_initial:
+            # Publication and usage are durable before preparing the next section.
+            # A restart in this gap resumes the queued job through the same entry.
+            updated = self.repository.job_records.get_job_run(job.workspace_id, job.id)
+            intent = next_creation_intent(self.repository, scheduler, updated, pcm_preparation=pcm_preparation)
+            if intent is not None:
+                scheduler.submit(intent, actor)
 
     def video_path(self, workspace_id, task_id, section_id, version, actor):
         self.require_actor(workspace_id,task_id,actor)

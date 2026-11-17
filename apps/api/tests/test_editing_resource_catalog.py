@@ -16,7 +16,7 @@ def test_manifest_keeps_navigation_categories_separate_from_resource_items():
     statuses = {item.id: item.status for item in catalog.categories}
     assert statuses["templates"] == "connected"
     assert statuses["voice"] == "connected"
-    assert statuses["music"] == "catalog_only"
+    assert statuses["music"] == "connected"
     assert statuses["sfx"] == "connected"
     assert statuses["filters"] == "planned"
     skills, total = search_editing_resources(catalog, category="skills", limit=100)
@@ -84,10 +84,15 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
 
     sfx_preview = client.get("/api/editing-resources/openfilm:sound-glass-pulse/preview")
     assert sfx_preview.status_code == 200
-    assert sfx_preview.headers["content-type"].startswith("audio/mp4")
-    transition_preview = client.get("/api/editing-resources/openfilm:transition-glitch/preview", params={"version": 2})
-    assert transition_preview.status_code == 200
-    assert transition_preview.headers["content-type"].startswith("video/mp4")
+    assert sfx_preview.headers["content-type"].startswith("audio/wav")
+    assert sfx_preview.headers["content-disposition"].startswith("inline;")
+    transition = client.get("/api/editing-resources/openfilm:transition-glitch", params={"version": 2}).json()
+    assert transition["status"] == "connected"
+    assert transition["preview"]["kind"] == "html"
+    assert transition["runtime_requirements"]["engine"] == "openfilm-html-v1"
+    assert transition["runtime_requirements"]["template_id"] == "builtin_visual_openfilm-transition-glitch"
+    assert transition["runtime_requirements"]["operation_type"] == "EditGraphicOverlay"
+    assert "read_visual_template" in transition["entrypoints"]
     transition_poster = client.get("/api/editing-resources/openfilm:transition-glitch/preview", params={"representation": "poster", "version": 2})
     assert transition_poster.status_code == 200
     assert transition_poster.headers["content-type"].startswith("image/jpeg")

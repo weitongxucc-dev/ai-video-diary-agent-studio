@@ -5,6 +5,8 @@ from pathlib import Path
 
 from app.creation.visual_template_contracts import VisualTemplate
 from app.creation.rendercomp_template_catalog import rendercomp_templates
+from app.creation.openfilm_transition_catalog import IDENTITY, glitch_template
+from app.creation.fluent_sticker_catalog import fluent_stickers
 
 ASSETS = Path(__file__).parents[1] / 'template_assets' / 'openfilm'
 # Keep published IDs/order stable; additional resources come from the pinned catalog.
@@ -94,6 +96,8 @@ def visual_templates():
         yield identity, name, definition
 
     yield from rendercomp_templates()
+    yield IDENTITY, '信号故障 · OpenFilm Glitch', glitch_template()
+    yield from fluent_stickers()
 
 
 def trusted_inline_visual(definition):

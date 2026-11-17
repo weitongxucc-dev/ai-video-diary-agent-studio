@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type { CreationTaskWorkspace, TimelineAudioTrack } from "@/lib/types";
 import { listenCreationTaskAudio, getCreationTaskMediaJob } from "@/lib/api";
 import { AudioTimelineInspector, AudioTimelineTracks } from "../AudioTimelineEditor";
@@ -35,6 +36,38 @@ it("sends an exact gain submission without changing the source range",()=>{
   fireEvent.click(screen.getByRole("button",{name:"保存音频草稿"}));
   expect(preview).toHaveBeenCalledWith({base_version_id:"version",target_id:"clip",action:"update",values:{gain_db:-12}});
   expect(track.clips[0].source_start_ms).toBe(1000);
+});
+
+it.each(["clip", "track"])("keeps %s gain controls synchronized and submits only after leaving the slider", async target => {
+  const preview = vi.fn();
+  const user = userEvent.setup();
+  render(<AudioTimelineInspector track={track} clip={target === "clip" ? track.clips[0] : null} versionId="version" playhead={5} busy={false} onPreview={preview} onDraftChange={vi.fn()} />);
+  const slider = screen.getByRole("slider", { name: "音量调节（dB）" });
+  const precise = screen.getByRole("spinbutton", { name: "音量（dB）" });
+  await user.tab();
+  expect(slider).toHaveFocus();
+  for (const gain of [-20, -18, -12]) fireEvent.change(slider, { target: { value: String(gain) } });
+  expect(precise).toHaveValue(-12);
+  expect(slider).toHaveAttribute("aria-valuetext", "-12 dB");
+  expect(preview).not.toHaveBeenCalled();
+  await user.tab();
+  expect(precise).toHaveFocus();
+  expect(preview).toHaveBeenCalledExactlyOnceWith({ base_version_id: "version", target_id: target === "clip" ? "clip" : "music", action: target === "clip" ? "update" : "track", values: { gain_db: -12 } });
+  fireEvent.change(precise, { target: { value: "-6" } });
+  expect(slider).toHaveValue("-6");
+});
+
+it.each(["busy", "track-locked", "clip-locked"])("disables both gain controls and pending blur submission when %s", state => {
+  const preview = vi.fn();
+  const props = { track, clip: track.clips[0], versionId: "version", playhead: 5, busy: false, onPreview: preview, onDraftChange: vi.fn() };
+  const { rerender } = render(<AudioTimelineInspector {...props} />);
+  const slider = screen.getByRole("slider", { name: "音量调节（dB）" });
+  fireEvent.change(slider, { target: { value: "-9" } });
+  rerender(<AudioTimelineInspector {...props} busy={state === "busy"} track={{ ...track, locked: state === "track-locked" }} clip={{ ...track.clips[0], locked: state === "clip-locked" }} />);
+  expect(slider).toBeDisabled();
+  expect(screen.getByRole("spinbutton", { name: "音量（dB）" })).toBeDisabled();
+  fireEvent.blur(slider);
+  expect(preview).not.toHaveBeenCalled();
 });
 
 it("does not present a late mix after the selected audio changes", async () => {

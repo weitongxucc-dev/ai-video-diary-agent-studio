@@ -290,6 +290,7 @@ class CreationExecutionControl:
         try:
             latest = self.execution.latest(workspace_id, task_id)
             if latest is not None and latest.input_digest == digest:
+                self._refresh_interactive_authorization(workspace_id, task_id, actor, runtime, write_guard)
                 self.execution.validate_input_snapshot(workspace_id, task_id, script_id, digest)
                 return self.resume(workspace_id, task_id, actor, runtime, verify_media=verify_media,
                     write_guard=write_guard, execution_source=execution_source)
@@ -310,8 +311,17 @@ class CreationExecutionControl:
         result = self.status(workspace_id, task_id, verify_media=verify_media)
         return result
 
+    def _refresh_interactive_authorization(self, workspace_id, task_id, actor, runtime, write_guard):
+        # A resumed local session may outlive its task grant. Revalidate the
+        # original identity/scope before planning reads; automation keeps its guard.
+        authorizations = runtime.registrations['creation_job'].owner.task_authorizations
+        if write_guard is None and authorizations is not None:
+            task = self.repository.task_records.get_creation_task(workspace_id, task_id)
+            authorizations.ensure(task, actor, interactive=True)
+
     def resume(self, workspace_id, task_id, actor, runtime, *, verify_media: bool, write_guard=None, execution_source=None):
         try:
+            self._refresh_interactive_authorization(workspace_id, task_id, actor, runtime, write_guard)
             latest = self.execution.latest(workspace_id, task_id)
             owner = runtime.registrations['creation_job'].owner
             if latest is not None and latest.status == 'succeeded' and self.render_valid(

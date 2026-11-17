@@ -91,6 +91,35 @@ def test_governance_read_returns_closure_without_treating_candidates_as_facts(tm
         "unavailable_quality_metrics": 1}
     assert "不是自动采用许可" in details["instruction"]
 
+def test_candidate_bundle_read_preserves_explicit_uncertainty(tmp_path):
+    bundle = {
+        "schema": "candidate-bundle/v1",
+        "candidates": [{"kind": "material_segment", "status": "candidate",
+                        "authorization": {"status": "needs_confirmation"}}],
+        "summary": {"total": 1, "material_candidates": 1, "knowledge_candidates": 0,
+                     "confirmed": 0, "needs_confirmation": 1},
+        "missing_domains": ["person", "voice"],
+    }
+    out = call(tmp_path, "read_material_candidate_bundle",
+               {"/api/production/materials/asset-one/candidate-bundle": bundle},
+               params={"asset_id": "asset-one"})
+    assert out["ok"]
+    assert out["result"]["details"]["schema"] == "candidate-bundle/v1"
+    assert out["result"]["details"]["candidates"][0]["authorization"]["status"] == "needs_confirmation"
+    assert "read_material_candidate_bundle" in out["names"]
+
+def test_candidate_bundle_can_request_a_visible_knowledge_version(tmp_path):
+    bundle = {"schema": "candidate-bundle/v1", "candidates": [],
+              "summary": {"total": 0, "material_candidates": 0, "knowledge_candidates": 0,
+                           "confirmed": 0, "needs_confirmation": 0},
+              "missing_domains": ["person", "voice"]}
+    out = call(tmp_path, "read_material_candidate_bundle", {
+        "/api/production/materials/asset-one/candidate-bundle?knowledge_item_id=knowledge-one": bundle,
+    }, params={"asset_id": "asset-one", "knowledge_item_id": "knowledge-one"})
+    assert out["ok"]
+    assert len(out["calls"]) == 1
+    assert out["calls"][0]["path"] == "/api/production/materials/asset-one/candidate-bundle?knowledge_item_id=knowledge-one"
+
 def test_unselected_library_reads_all_real_pages_but_sends_only_aggregate_counts(tmp_path, asset):
     assets = [{**asset, "id": f"asset-{index}", "analysis_status": ["pending", "ready", "blocked", "failed"][index % 4]} for index in range(151)]
     out = call(tmp_path, "read_material_library_status", {
@@ -276,3 +305,24 @@ def test_library_tool_summary_uses_actual_counts_and_never_claims_ocr_is_ready()
     summary = _safe_tool_result_summary("read_material_library_status", {"details": {"total_count": 151, "analysis_counts": {"ready": 1}}}, False)
     assert "151" in summary and "转写和OCR需另看分项" in summary
     assert "成功" not in _safe_tool_result_summary("search_material_library", {}, True)
+
+
+def test_candidate_bundle_passes_explicit_profile_versions_and_rejects_partial_selection(tmp_path):
+    path = "/api/production/materials/asset-one/candidate-bundle?person_profile_id=person-one&person_version=v2&voice_profile_id=voice-one&voice_version=v3"
+    bundle = {"schema": "candidate-bundle/v1", "candidates": [], "missing_domains": []}
+    out = call(tmp_path, "read_material_candidate_bundle", {path: bundle}, params={
+        "asset_id": "asset-one", "person_profile_id": "person-one", "person_version": "v2",
+        "voice_profile_id": "voice-one", "voice_version": "v3"})
+    assert out["ok"] and out["calls"][0]["path"] == path
+    rejected = call(tmp_path, "read_material_candidate_bundle", {}, params={"asset_id": "asset-one", "voice_profile_id": "voice-one"})
+    assert not rejected["ok"] and not rejected["calls"]
+
+
+def test_candidate_bundle_passes_task_feedback_scope(tmp_path):
+    path = "/api/production/materials/asset-one/candidate-bundle?task_id=task-one&voice_profile_id=voice-one&voice_version=v3"
+    feedback = {"schema": "profile-production-feedback/v1", "task_id": "task-one", "status": "not_used"}
+    bundle = {"schema": "candidate-bundle/v1", "candidates": [{"kind": "voice_profile", "details": {"feedback": feedback}}]}
+    out = call(tmp_path, "read_material_candidate_bundle", {path: bundle}, params={
+        "asset_id": "asset-one", "task_id": "task-one", "voice_profile_id": "voice-one", "voice_version": "v3"})
+    assert out["ok"] and out["calls"][0]["path"] == path
+    assert out["result"]["details"]["candidates"][0]["details"]["feedback"] == feedback

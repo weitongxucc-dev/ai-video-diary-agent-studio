@@ -1183,7 +1183,7 @@ class TaskMediaJobs:
         payload = {"operation": operation, "arguments": arguments, "result_kind": result_kind,
                    "input_facts": facts, "resources": resources, **actor.identity_payload()}
         digest = media_digest(payload)
-        job_id = "job_media_" + digest
+        job_id = "job_media_" + media_digest([task_id, digest])
         run = JobRun(id=job_id, workspace_id=actor.workspace_id, task_id=task_id, kind=TASK_MEDIA_KIND,
             idempotency_key=f"task-media:{task_id}:{digest}", input_digest=digest)
         payload["input_digest"] = digest

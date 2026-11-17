@@ -2,6 +2,7 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 import type {ToolRegistrar, ActionSource} from './contracts.ts';
 
 const inputBoundActions = new Set([
+  'import_audio_resource','read_audio_resource_request','read_audio_resource_import','read_audio_resource_history',
   'create_source_task', 'read_source_task',
   'save_visual_template', 'update_visual_template',
   'apply_typed_edit', 'preview_typed_edit', 'preview_media_script', 'preview_media_script_tool',

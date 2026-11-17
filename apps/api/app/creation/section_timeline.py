@@ -444,9 +444,6 @@ class SectionDependencyInputs:
 def section_timeline_dependencies(montage, section_id) -> dict:
     """Full-plan callers retain the same validation and dependency encoding."""
     cues = [cue for cue in montage.get('cues', []) if cue['source_section_id'] == section_id]
-    ids = {cue['id'] for cue in cues}
-    if not any(clip['cue_id'] in ids for clip in montage.get('clips', [])):
-        return {'cues': deepcopy(cues), 'clips': []}
     clips = [{**clip, '_position': index} for index, clip in enumerate(montage.get('clips', []))]
     return section_dependency_facts(SectionDependencyInputs(cues,
         [cue['id'] for cue in montage.get('cues', [])], clips,
@@ -460,6 +457,10 @@ def section_timeline_dependencies(montage, section_id) -> dict:
 
 def section_dependency_facts(inputs: SectionDependencyInputs) -> dict:
     cues = deepcopy(inputs.cues)
+    for cue in cues:
+        # Older saved cues omit the optional explicit start; decoding them adds
+        # None. That serialization change must not invalidate rendered sections.
+        cue.setdefault('timeline_start_seconds', None)
     ids = {cue['id'] for cue in cues}
     if not any(clip['cue_id'] in ids for clip in inputs.clip_clocks):
         return {'cues': cues, 'clips': []}

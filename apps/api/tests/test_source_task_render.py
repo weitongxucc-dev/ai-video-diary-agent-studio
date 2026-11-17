@@ -20,8 +20,8 @@ from test_creation_execution import _render_version_fixture
 from test_host_resource_probes import _render_budget
 
 
-@pytest.mark.parametrize('ripple_cut', [False, True])
-def test_source_video_renders_original_sound_without_script_or_narration(tmp_path, monkeypatch, ripple_cut):
+@pytest.mark.parametrize('ripple_cut,preserve_audio', [(False, True), (True, True), (False, False)])
+def test_source_video_renders_requested_sound_without_script_or_narration(tmp_path, monkeypatch, ripple_cut, preserve_audio):
     repo, _, _, _, actor, execution, owner, scheduler, _, members = _render_version_fixture(tmp_path)
     store = ArtifactStore(tmp_path / 'source-artifacts')
     settings = SimpleNamespace(video_output_path=str(tmp_path/'source-output'),
@@ -34,7 +34,7 @@ def test_source_video_renders_original_sound_without_script_or_narration(tmp_pat
     monkeypatch.setattr(main, 'local_members_service', members)
     asset = repo.get_asset('local', 'asset_1')
     receipt = SourceTaskUseCase(repo, lambda current: 'ready' if current == actor else 'unauthorized').create(
-        SourceTaskCommand(str(uuid4()), asset.id, asset.updated_at, 0, 2, '原片真实音轨', '16:9', True), actor)
+        SourceTaskCommand(str(uuid4()), asset.id, asset.updated_at, 0, 2, '原片真实音轨', '16:9', preserve_audio), actor)
     task_id = receipt['task_id']
     expected_duration = 2
     if ripple_cut:
@@ -87,7 +87,8 @@ def test_source_video_renders_original_sound_without_script_or_narration(tmp_pat
         assert abs(float(next(s for s in probe['streams'] if s['codec_type']=='video')['duration'])-expected_duration) < .04
         decoded = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output), '-t', '1', '-vn',
             '-ac', '1', '-ar', '16000', '-f', 's16le', '-'], check=True, capture_output=True).stdout
-        assert max(abs(value) for value in array('h', decoded)) > 500
+        peak = max(abs(value) for value in array('h', decoded))
+        assert peak > 500 if preserve_audio else peak == 0
         assert store.resolve_file(montage['subtitle_path']).read_text().strip() == ''
         assert not repo.script_records.list_creation_task_scripts('local', task_id)
         assert not repo.narration_records.list_narration_segments('local', task_id, None)

@@ -323,9 +323,9 @@ class TaskAssistantTurnUseCase:
         self._window_case_for = window_case_for
         self._read_event, self._read_intent, self._list_events = read_event, read_intent, list_events
 
-    def finish_goal(self, business, claim, reply, preview):
+    def finish_goal(self, business, claim, reply, preview, runtime_receipt=None):
         message = (yield CleanText(reply, claim['goal']['workspace_id']))
-        return business.finish_goal(claim, message, preview)
+        return business.finish_goal(claim, message, preview, runtime_receipt=runtime_receipt)
 
     def run_goal(self, claim, fresh):
         goal, context, business = claim['goal'], claim['request_context'], fresh['business']
@@ -392,7 +392,8 @@ class TaskAssistantTurnUseCase:
                 tail = sanitizer.feed('', final=True)
                 if tail:
                     self._conversations_for().append_event(turn_id, {'type': 'text_delta', 'delta': tail})
-                yield from self.finish_goal(business, claim, reply, preview)
+                runtime_receipt = preview if isinstance(preview, dict) and preview.get('kind') == 'runtime_receipt' else None
+                yield from self.finish_goal(business, claim, reply, None if runtime_receipt else preview, runtime_receipt)
             except AssistantUnavailable as exc:
                 failure_message = safe_text(str(exc))
                 self._conversations_for().finish_turn(turn_id, 'failed', failure_message, result={
@@ -454,9 +455,31 @@ class TaskAssistantTurnUseCase:
             yield ForgetControl(turn_id)
             self._conversations_for().finish_turn(turn_id, 'failed', result={'kind': 'failure', 'message': (yield SafeText(str(exc), workspace_id))})
             raise TurnRejected(status_code=503, detail=str(exc)) from exc
-        return (yield from self.finish(task_id, payload, turn_id, reply, preview, trusted_stage))
+        runtime_receipt = preview if isinstance(preview, dict) and preview.get('kind') == 'runtime_receipt' else None
+        return (yield from self.finish(task_id, payload, turn_id, reply, None if runtime_receipt else preview, trusted_stage, runtime_receipt=runtime_receipt))
 
-    def finish(self, task_id, payload, turn_id, reply, preview, trusted_stage):
+    def finish(self, task_id, payload, turn_id, reply, preview, trusted_stage, *, runtime_receipt=None):
+        # SDK evidence belongs to the invocation even when its business receipt
+        # fails the final ownership check. Mixed business/runtime receipts carry
+        # the same evidence as runtime-only replies.
+        runtime = {key: preview[key] for key in ('provider_usage', 'usage_status', 'trace_events')
+                   if isinstance(preview, dict) and key in preview}
+        runtime.update(runtime_receipt or {})
+        try:
+            return (yield from self._finish(task_id, payload, turn_id, reply, preview,
+                                           trusted_stage, runtime_receipt=runtime))
+        except (TurnRejected, MediaResultRejected, ValidationError) as exc:
+            workspace_id = (yield ReadWorkspace())
+            message = (yield SafeText(str(getattr(exc, 'detail', exc)), workspace_id))
+            saved = self._conversations_for().get_turn(turn_id) or {}
+            result = {**(saved.get('result') or {}), **runtime,
+                      'kind': 'failure', 'reason': 'final_receipt_rejected', 'message': message}
+            self._conversations_for().finish_turn(turn_id, 'failed', result=result)
+            if isinstance(exc, TurnRejected):
+                raise
+            raise TurnRejected(getattr(exc, 'status_code', 502), message) from exc
+
+    def _finish(self, task_id, payload, turn_id, reply, preview, trusted_stage, *, runtime_receipt=None):
         workspace_id = (yield ReadWorkspace())
         reply = (yield CleanText(reply, workspace_id))
         script_draft = None
@@ -522,7 +545,16 @@ class TaskAssistantTurnUseCase:
             if preview.get('related_media_job') is not None:
                 media_job = (yield RelatedMedia(task_id, turn_id, str(payload.conversation_id), preview['related_media_job']))
             edit_preview = None
-            reply = '原编辑请求定位已保存；尚未确认修改完成。' if edit_request.status == 'unknown' else '原编辑请求已回读，请查看实际状态；没有重复提交。'
+            refused_observation = edit_request.phase == 'observation' and (edit_request.status in {'rejected', 'not_submitted'}
+                or edit_request.result_status_code is not None and edit_request.result_status_code >= 400)
+            if refused_observation:
+                if not (media_job is not None and media_job.result_kind == 'observation' and media_job.status == 'succeeded'):
+                    detail = (edit_request.result or {}).get('detail') or (preview.get('failure') or {}).get('reason')
+                    reply = (yield SafeText('本次输出观察请求被拒绝：' + str(detail or '请查看原请求的具体原因。'), workspace_id))
+                # Otherwise keep the analysis and definite refusal. RelatedMedia
+                # has just verified ownership and re-read the current Job state.
+            else:
+                reply = '原编辑请求定位已保存；尚未确认修改完成。' if edit_request.status == 'unknown' else '原编辑请求已回读，请查看实际状态；没有重复提交。'
         elif isinstance(preview, dict) and preview.get('kind') == 'media_job':
             try:
                 selected = (yield SelectMediaFinish(turn_id, preview.get('media_job')))
@@ -534,6 +566,10 @@ class TaskAssistantTurnUseCase:
                 media_job = (yield ValidateMedia((yield CompletedMedia(task, turn_id, slot, contract=slot['requested_output'], input_refs=slot['input_refs']))))
             else:
                 media_job = (yield ValidateMedia((yield ReadMedia(task_id, selected.job_id))))
+            if media_job.result_kind == 'observation' and not (
+                    preview.get('observation_review') is True and media_job.status == 'succeeded'):
+                from app.assistant.projection import media_processing_state_message
+                reply = media_processing_state_message(media_job.model_dump(mode='json'))
             edit_preview = None
         elif isinstance(preview, dict) and 'script_id' in preview and ('proposal' not in preview):
             script_id = preview.get('script_id') if isinstance(preview, dict) else None
@@ -610,9 +646,23 @@ class TaskAssistantTurnUseCase:
             readiness_message = execution_readiness_message(edit_request.result.get('execution_readiness'))
             if readiness_message:
                 reply += ' ' + readiness_message
+        completed_local_edit = None
+        if edit_request is not None and not any((media_job, edit_preview, execution_status, script_draft,
+                timeline_restore, quality_continuation, script_window_request, segment_revision,
+                storyboard_regeneration, script_tool, topic_candidates)):
+            completed_local_edit = self._conversations_for().completed_music_gain_edit(turn_id, edit_request.model_dump(mode='json'))
+            if completed_local_edit is not None:
+                reply = (yield SafeText(completed_local_edit['summary'], workspace_id))
         response = (yield BuildTaskResponse({'quality_continuation': quality_continuation, 'script_window_request': script_window_request, 'storyboard_regeneration': storyboard_regeneration, 'segment_revision': segment_revision, 'timeline_restore': timeline_restore, 'script_tool': script_tool, 'edit_request': edit_request, 'reply': reply, 'provider': (yield ReadSettings(workspace_id)).effective_llm_provider, 'model': (yield ReadSettings(workspace_id)).effective_llm_model, 'edit_preview': edit_preview, 'script_draft': script_draft, 'execution_action': execution_action, 'execution_status': execution_status, 'topic_candidates': topic_candidates, 'timeline_action': timeline_action, 'media_job': media_job, 'turn_id': turn_id, 'draft_version': payload.expected_draft_version + 1}))
         yield ForgetControl(turn_id)
-        self._conversations_for().finish_turn(turn_id, 'completed', reply, {'kind': 'task_turn', 'goal_business_actions': self.action_proofs(workspace_id, task_id, turn_id, media_job=media_job, edit_preview=edit_preview, edit_request=edit_request, execution_status=execution_status), 'edit_preview': bool(edit_preview), 'script_draft': script_draft.id if script_draft else None, 'execution_action': execution_action, 'execution_status': execution_status.get('job', {}).get('status') if isinstance(execution_status, dict) and isinstance(execution_status.get('job'), dict) else None, 'topic_candidates': bool(topic_candidates), 'timeline_action': timeline_action, 'storyboard_regeneration': (yield SerializeView(storyboard_regeneration, 'json')) if storyboard_regeneration else None, 'response': (yield SerializeView(response, 'json'))})
+        result = {'kind': 'task_turn', 'goal_business_actions': self.action_proofs(workspace_id, task_id, turn_id, media_job=media_job, edit_preview=edit_preview, edit_request=edit_request, execution_status=execution_status), 'edit_preview': bool(edit_preview), 'script_draft': script_draft.id if script_draft else None, 'execution_action': execution_action, 'execution_status': execution_status.get('job', {}).get('status') if isinstance(execution_status, dict) and isinstance(execution_status.get('job'), dict) else None, 'topic_candidates': bool(topic_candidates), 'timeline_action': timeline_action, 'storyboard_regeneration': (yield SerializeView(storyboard_regeneration, 'json')) if storyboard_regeneration else None, 'response': (yield SerializeView(response, 'json'))}
+        if completed_local_edit is not None:
+            result['completed_local_edit'] = completed_local_edit
+        if isinstance(runtime_receipt, dict):
+            for key in ('provider_usage', 'usage_status', 'trace_events'):
+                if key in runtime_receipt:
+                    result[key] = runtime_receipt[key]
+        self._conversations_for().finish_turn(turn_id, 'completed', reply, result)
         registered_goal = (yield RegisterGoal(turn_id))
         if registered_goal is not None:
             yield BindGoalScope(registered_goal)

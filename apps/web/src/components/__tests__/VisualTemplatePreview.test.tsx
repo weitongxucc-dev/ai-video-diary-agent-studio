@@ -43,3 +43,10 @@ it("waits for a loaded frame and a nonzero visible viewport before sending draw 
   act(()=>resize([{target,contentRect:{width:500}} as ResizeObserverEntry],{} as ResizeObserver));
   await waitFor(()=>expect(draw).toHaveBeenCalledWith(expect.objectContaining({kind:"draw",bindings:definition.bindings}),"*"));
 });
+
+it("starts a short transition inside its active duration instead of after it has disappeared", async () => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+  render(<VisualTemplatePreview definition={{ ...definition, duration_seconds: .6 }} />);
+  await screen.findByTitle("视觉模板画面");
+  expect(screen.getByRole("slider", { name: "模板预览时刻" })).toHaveValue("0.3");
+});

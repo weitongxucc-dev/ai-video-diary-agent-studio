@@ -165,6 +165,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     output = json.dumps(result, ensure_ascii=False)
     preview = None
     media_job = None
+    submitted_media_jobs = set()
+    observation_readbacks = {}
     action_result = None
     action_failed = False
     topic_result = None
@@ -210,6 +212,17 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if (latest_input is not None and event.get("type") == "tool_execution_end"
                 and ("invocation_input_id" not in details or details["invocation_input_id"] != latest_input["invocation_input_id"])):
             continue  # History remains in the SDK log; only this input owns the reply.
+        if event.get('type') == 'tool_execution_end' and event.get('toolName') == 'read_task_observations':
+            page = {} if event.get('isError') else (event.get('result') or {}).get('details') or {}
+            observation_readbacks = {}  # A newer stale/currentness read supersedes older evidence.
+            for item in page.get('observations', []):
+                observed = item.get('result') or {}
+                if (item.get('status') == 'succeeded' and item.get('stale') is False
+                        and observed.get('observation_id') == item.get('job_id')
+                        and observed.get('task_id') == page.get('task_id')
+                        and observed.get('timeline_version_id') == page.get('timeline_version_id')
+                        and isinstance(observed.get('samples'), list) and observed['samples']):
+                    observation_readbacks[item['job_id']] = observed
         if event.get('type') == 'tool_execution_end' and event.get('toolName') in {
                 'continue_task_quality_check', 'read_task_quality_continuation'}:
             details = (event.get('result') or {}).get('details') or {}
@@ -355,11 +368,26 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                 if event.get("toolName") in {"preview_typed_edit", "read_task_media_job", "read_typed_edit_request", "preview_media_script", "preview_media_script_tool", "read_media_script_request", "observe_task_output", "read_task_observation_request"}:
                     kind = "edit_preview"
                 if kind == "edit_preview" and details.get("kind") == "task_media_job":
-                    media_job = details["media_job"]
+                    candidate = details['media_job']
+                    job_id = candidate.get('job_id')
+                    if event.get('toolName') in {'preview_typed_edit', 'preview_media_script',
+                            'preview_media_script_tool', 'observe_task_output'}:
+                        submitted_media_jobs.add(job_id)
+                        media_job = candidate
+                    elif not submitted_media_jobs or job_id == (media_job or {}).get('job_id'):
+                        # A read may refresh this invocation's actual receipt;
+                        # unrelated historical reads cannot replace it.
+                        media_job = candidate
                 if details.get("kind") == kind:
                     preview = details.get("preview")
                     if kind == "topic_generation":
                         preview = {"kind": "topic_generation", "topics": details.get("topics")}
+    def current_observation_review(job, task_id=None):
+        observed = observation_readbacks.get((job or {}).get('job_id'))
+        return bool(settled and answer.strip() and not orchestration_failed and not unresolved_syntax_error
+            and job and job.get('result_kind') == 'observation' and observed
+            and (task_id is None or observed['task_id'] == task_id))
+
     if script_window_result is not None:
         return script_window_message(script_window_result),script_window_result
     if script_window_attempted:
@@ -394,13 +422,14 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                 explanation="对话没有得到完整回复，日志里没有留下能说明原因的信息，拿不到更具体的原因。",
             )
         raise _fail(cause)
+    related_media_job = media_job if media_job is not None and media_job.get('job_id') in submitted_media_jobs else None
     if script_tool_status is not None and preview is None:
-        if media_job is not None:
-            script_tool_status = {**script_tool_status, "related_media_job": media_job}
+        if related_media_job is not None:
+            script_tool_status = {**script_tool_status, "related_media_job": related_media_job}
         return "工具写入尚未取得可核验结果；原定位和输入已保留，只读取结果，不重复写入。", script_tool_status
     if script_tool_result is not None and preview is None:
-        if media_job is not None:
-            script_tool_result = {**script_tool_result, "related_media_job": media_job}
+        if related_media_job is not None:
+            script_tool_result = {**script_tool_result, "related_media_job": related_media_job}
         action = script_tool_result.get("action")
         message = {"save": "可复用图片工具已保存；未应用图片或生成成片。", "query": "已回读原工具创建结果，不代表其他新输入已经保存。",
                    "update": "可复用工具的新版本已保存；既有媒体保持不变。", "revoke": "工具已停用；已存在的合法图片和视频仍保留。"}.get(action, "工具实际回执已返回。")
@@ -410,15 +439,26 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     if quality_continuation is not None:
         return quality_continuation_message(quality_continuation), quality_continuation
     if edit_request_status is not None and preview is None:
-        if media_job is not None:
-            edit_request_status = {**edit_request_status, "related_media_job": media_job}
+        if related_media_job is not None:
+            edit_request_status = {**edit_request_status, "related_media_job": related_media_job}
         message = "请求尚未返回可核验结果；原请求定位已保留，先回读结果，不重复提交。"
         if edit_request_status.get("status") == "not_submitted":
             message = "本次请求未提交；原请求定位和具体原因已保留。"
         elif edit_request_status.get("status") == "rejected":
             message = "本次请求已被拒绝；请按实际原因处理，未沿该请求应用修改。"
-        if media_job is not None:
+            reason = (edit_request_status.get('failure') or {}).get('reason')
+            if isinstance(reason, str) and reason:
+                message += ' 原因：' + reason
+        if related_media_job is not None:
             message += " 先前已经返回的后台作业回执仍保留；不表示图层已应用或成片已生成。"
+            observed = related_media_job.get('result') or {}
+            if (settled and answer.strip() and related_media_job.get('result_kind') == 'observation'
+                    and related_media_job.get('status') == 'succeeded'
+                    and observed.get('observation_id') == related_media_job.get('job_id')
+                    and observed.get('samples')):
+                # The finish boundary re-reads this same-turn Job and checks
+                # currentness before retaining the analysis alongside refusal.
+                message = answer + '\n\n' + message
         return message, edit_request_status
     if kind == "plan_preview" and request_planning_failed and preview is None:
         raise _fail(FAILURE_TOOL_FAILED, explanation="制作目标没有返回可核验的保存回执，本轮没有确认新任务或成片。")
@@ -452,10 +492,11 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if action is None:
             state = {"queued":"排队中", "running":"运行中", "succeeded":"成功", "failed":"失败",
                 "interrupted":"已中断", "cancelled":"已取消"}.get(job_status, job_status or "未知")
-            answer = f"已查询原制作作业；当前作业状态：{state}。"
-            if job_status == "succeeded" and isinstance(status, dict) and status.get("video_ready"):
-                answer += "当前成片产物可用。"
-            answer += "本轮未提交新的开始或恢复请求。"
+            if not current_observation_review(media_job, status.get('task_id')):
+                answer = f"已查询原制作作业；当前作业状态：{state}。"
+                if job_status == "succeeded" and isinstance(status, dict) and status.get("video_ready"):
+                    answer += "当前成片产物可用。"
+                answer += "本轮未提交新的开始或恢复请求。"
         elif action == "cancel":
             answer = f"取消操作已返回；当前作业状态：{job_status or '未知'}。"
         elif job_status == "queued":
@@ -501,6 +542,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if media_job.get("status") == "succeeded" and isinstance(proposal, dict) and proposal.get("operation") and proposal.get("preview"):
             preview, media_job = result, None
     if kind == "edit_preview" and media_job is not None:
+        preserve_observation_review = current_observation_review(media_job)
         if media_job.get("result_kind") == "graphic_source":
             source = media_job.get("result")
             if media_job.get("status") == "succeeded" and isinstance(source, dict) and source.get("source_ref") and source.get("artifact_id"):
@@ -509,9 +551,11 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                 answer = "图片来源程序已安排，后台尚未返回成功来源；未应用图层或生成成片。"
             else:
                 answer = "图片来源程序尚无可用成功结果，请按实际作业状态与原因处理；未应用图层或生成成片。"
-        else:
+        elif not preserve_observation_review:
             answer = media_processing_state_message(media_job)
         preview = {"kind": "media_job", "media_job": media_job}
+        if preserve_observation_review:
+            preview['observation_review'] = True
     elif kind == "edit_preview" and preview is not None:
         # The proposal is the business result; the model's final text stays in
         # the Pi session as evidence and does not define confirmation effects.
@@ -567,18 +611,21 @@ def read_sdk_result(output: str, kind: str = "edit_preview") -> tuple[str, dict 
     measured = {key: value for key, value in (usage or {}).items()
                 if key in {"input", "output", "cacheRead", "cacheWrite", "totalTokens"}
                 and type(value) is int and value >= 0}
+    runtime = None
     if result.get("usage_status") == "known" and measured:
-        runtime = {"provider_usage": measured, "usage_status": "known"}
-        if preview is None:
+        runtime = {"kind": "runtime_receipt", "provider_usage": measured, "usage_status": "known"}
+        if preview is not None and isinstance(preview, dict):
+            preview = {**preview, **{key: value for key, value in runtime.items() if key != "kind"}}
+        elif preview is None:
             preview = runtime
-        elif isinstance(preview, dict):
-            preview = {**preview, **runtime}
     trace_events = result.get("trace_events")
     if isinstance(trace_events, list) and trace_events:
         safe_trace = [event for event in trace_events[:1000]
                       if isinstance(event, dict) and isinstance(event.get("type"), str)]
         if preview is None:
-            preview = {"trace_events": safe_trace}
+            preview = {"kind": "runtime_receipt", "trace_events": safe_trace}
+        elif isinstance(preview, dict) and preview.get("kind") == "runtime_receipt":
+            preview = {**preview, "trace_events": safe_trace}
         elif isinstance(preview, dict):
             preview = {**preview, "trace_events": safe_trace}
     return answer, preview

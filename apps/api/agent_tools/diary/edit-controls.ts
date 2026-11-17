@@ -14,6 +14,27 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
   const historicalOperations = new Set<string>();
   const historyControls = new Set<string>();
   let historyRead = false;
+  const restoreAttempts = new Map<string, {action:'undo'|'redo';base:TaskVersion;turnId:string;inputId?:string;target?:string}>();
+  function followOwnedRestore(requestId:string, receipt:any) {
+    const attempt=restoreAttempts.get(requestId), proof=receipt?.owned_version_transition;
+    const source=readActionSource();
+    if (!attempt || !selectedTaskVersion || receipt.status!=='applied' || receipt.task_id!==taskId
+        || receipt.request_id!==requestId || receipt.action!==attempt.action
+        || (attempt.target && receipt.target_operation_id!==attempt.target)
+        || proof?.scope!=='same_turn_restore' || proof.task_id!==taskId || proof.request_id!==requestId
+        || proof.operation_id!==receipt.operation_id || proof.action!==attempt.action
+        || proof.assistant_turn_id!==attempt.turnId || source.turnId!==attempt.turnId
+        || (proof.input_id??undefined)!==attempt.inputId || source.inputId!==attempt.inputId
+        || proof.from?.timeline_version_id!==attempt.base.timeline_version_id
+        || proof.from?.timeline_sequence!==attempt.base.timeline_sequence
+        || selectedTaskVersion.timeline_version_id!==attempt.base.timeline_version_id
+        || selectedTaskVersion.timeline_sequence!==attempt.base.timeline_sequence
+        || typeof proof.to?.timeline_version_id!=='string' || !proof.to.timeline_version_id
+        || proof.to.timeline_version_id!==receipt.result_version_id
+        || !Number.isInteger(proof.to.timeline_sequence)
+        || proof.to.timeline_sequence!==attempt.base.timeline_sequence+1) return;
+    Object.assign(selectedTaskVersion, proof.to);
+  }
   const restorePath = (id: string) => `/api/creation-tasks/${encodeURIComponent(taskId!)}/timeline/restore-requests/${encodeURIComponent(id)}`;
   const restoreResult = (action: 'undo' | 'redo' | 'query', requestId: string, receipt: any, error?: unknown) => {
     const original = error instanceof BusinessRequestError || error instanceof BusinessResultUnknown || error instanceof RequestNotSubmitted
@@ -50,6 +71,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
     execute: async (_id: string, params: {request_id: string}) => {
       const receipt = await request(restorePath(params.request_id));
       if (receipt.task_id !== taskId || receipt.request_id !== params.request_id) throw new Error('恢复原请求身份不一致');
+      followOwnedRestore(params.request_id, receipt);
       return restoreResult('query', params.request_id, receipt);
     }});
 
@@ -165,7 +187,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
     pi.registerTool({
       name: action === "undo" ? "undo_last_edit" : "redo_last_edit",
       label: action === "undo" ? "撤销原修改" : "重做原修改",
-      description: `${action === "undo" ? "撤销" : "重做"}原编辑。指定较早修改先读read_edit_history并传原target_operation_id；省略才按最近历史。保留无关后续成果，复合操作内部单项逆编辑未开放。宿主绑定原UUID、任务和所见版本，结果未知先查原请求，不换ID重放。receipt.execution_readiness是该次保存时的授权检查；not_ready不撤销保存，authorization_ready不表示设备已准入或产物已生成，null无记录。`,
+      description: `${action === "undo" ? "撤销" : "重做"}原编辑。先读read_edit_history，指定较早修改使用原target_operation_id；恢复刚才撤销的音乐可省略ID，由宿主按原指令和唯一真实历史定位，歧义不执行，不要求用户提供内部ID。其他省略目标的动作按最近历史。保留无关后续成果，复合操作内部单项逆编辑未开放。宿主绑定原UUID、任务和所见版本，结果未知先查原请求，不换ID重放。receipt.execution_readiness是该次保存时的授权检查；not_ready不撤销保存，authorization_ready不表示设备已准入或产物已生成，null无记录。`,
       parameters: {type: 'object', properties: {target_operation_id: {type: 'string', minLength: 1}}, additionalProperties: false},
       execute: async (callId: string, params: {target_operation_id?: string} = {}) => {
         const body = controlWriteContext();
@@ -173,9 +195,12 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
           if (historyControls.has(params.target_operation_id)) throw new Error('撤销或重做记录不是原编辑；撤销最近修改请省略target_operation_id，指定较早修改请选原编辑操作。本次未提交。');
           if (!historicalOperations.has(params.target_operation_id)) throw new Error('请从本次读取的真实修改历史选择原操作');
         } else if (!editControls && !historyRead) throw new Error('请先读取修改历史或当前编辑控制范围');
-        else if (editControls && !(action === 'undo' ? editControls.can_undo : editControls.can_redo))
+        else if (editControls && !(action === 'undo' ? editControls.can_undo : editControls.can_redo)
+            && !(action==='redo' && historyRead))
           throw new Error(action === 'undo' ? '当前没有可撤销的编辑' : '当前没有可重做的编辑');
         const requestId = typedRequestId(body.assistant_turn_id, callId);
+        restoreAttempts.set(requestId, {action,base:{...selectedTaskVersion!},turnId:body.assistant_turn_id,
+          inputId:readActionSource().inputId,target:params.target_operation_id});
         markEditControlWrite();
         let posted = false;
         try {
@@ -185,6 +210,7 @@ export function registerEditControls(pi: ToolRegistrar, {request, taskId, select
           posted = true;
           const receipt = result.restore_request ?? await request(restorePath(requestId));
           if (receipt.task_id !== taskId || receipt.request_id !== requestId) throw new Error('恢复回执不属于原请求，请先查询');
+          followOwnedRestore(requestId, receipt);
           return restoreResult(action, requestId, receipt);
         } catch (error) {
           if (!posted && error instanceof RequestNotSubmitted) releaseNotSubmittedEditControl();

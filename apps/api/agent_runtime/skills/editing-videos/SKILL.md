@@ -17,8 +17,11 @@ description: 受控适配 joshcirre/editing-videos 的编辑判断方法：先�
 2. 用 `read_material_evidence` 读取真实素材、转录、字幕和时间证据；用 `read_task_observations`、`observe_task_output` 读取已有预览或成片观察。没有证据时保持未知，不凭经验虚构镜头或事实。
 3. 按内容形成编辑提案：先处理目标和结构，再处理节奏、停顿、重复、镜头覆盖、B-roll、字幕/标题、声音和复核。每项记录时间区间、依据、未覆盖项和需要用户确认的取舍。
 4. 通过 `read_editing_resource_catalog` 选择真实可用的素材、模板、音效和技能；`catalog_only/planned` 资源只能说明缺口，不能当成已安装能力。
+   视觉资源先用 `read_creation_skill` 读取 `visual-template` 方法，再用 `read_video_templates` 按名称检索、`read_visual_template` 读取真实返回的固定 ID/版本和完整 definition。资源目录只给分类时，不据分类猜 ID。OpenFilm Glitch 用 query="Glitch" 检索，它是原 CSS 的 0.6 秒覆盖动画：经 `EditGraphicOverlay` 添加 kind=template 图层，width=1，definition 画幅与作品一致，保留 provenance；start/end 围绕真实切点且不得越过作品边界。它不改两侧镜头的源区间，也不是内置 SetClipTransition 的替代名称。
 5. 用户要求先看方案时使用 `preview_typed_edit`；只有明确授权并且能力声明允许时才使用 `apply_typed_edit`。所有写入必须经过现有 `EditProposal/TimelineVersion`。
+   独立贴纸可通过 `read_video_templates` 用 query="Fluent" 检索爱心、庆祝礼炮、灵感灯泡，再读取固定版源码；按 `EditGraphicOverlay` 的模板图层采用。保留原 SVG、MIT 许可和 provenance；definition 仍为正方形，图层 width 控制画面宽度占比，x/y 表示中心位置，start/end 为实际显示区间。静态贴纸可以调整显示时长，不把它声明成动画生成或人物/品牌素材。保留用户已有图层，不遮挡受保护字幕和主要人物；采用后通过实际输出观察位置、比例、透明边缘和入出时间。
 6. 采用后回读版本、编辑历史、输出观察和失败状态；交付时分别说明技术检查、视觉/音频观察和仍未验证的真实媒体验收。
+   Glitch 采用后按原任务媒体能力执行渲染，在图层开始前、开始后约 0.18 秒（彩色条纹）、0.3 秒（暗色跳帧）、结束后观察实际输出，核对原动画、入出透明、原声音保留及源码来源。HTML 动画需要现有桌面隔离渲染器和对应设备准备；没有许可时回报具体缺口，不能改用相似内置效果或把草稿采用说成输出完成。
 
 ## 不可用行为
 

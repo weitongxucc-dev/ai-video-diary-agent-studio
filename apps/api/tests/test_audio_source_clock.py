@@ -37,6 +37,7 @@ def metadata_probe(tmp_path, monkeypatch):
         video={'streams': [{'duration': '2', 'disposition': {'attached_pic': 0}}], 'format': {'duration': '2'}})
     monkeypatch.setattr(audio, '_audio_grant_resources', lambda scheduler, grant: resources)
     def run(scheduler, grant, command, **options):
+        assert command[0] == 'ffprobe'  # Metadata checks must not decode the input.
         stream = command[command.index('-select_streams')+1]
         state.calls.append(stream)
         assert options['deadline_monotonic'] is not None
@@ -45,6 +46,30 @@ def metadata_probe(tmp_path, monkeypatch):
     state.probe = lambda: audio.probe_audio_metadata(source, scheduler=object(), grant=object(),
         deadline_monotonic=time.monotonic()+5)
     return state
+
+
+@pytest.mark.parametrize('output', [False, True])
+@pytest.mark.parametrize('measured,exceeded', [
+    ({'sample_rate': '96000'}, {'采样率': ('96000 Hz', '48000 Hz')}),
+    ({'channels': 6}, {'声道数': ('6 声道', '2 声道')}),
+    ({'duration': '114.4'}, {'时长': ('114.4 秒', '3 秒')}),
+    ({'sample_rate': '96000', 'channels': 6, 'duration': '114.4'},
+     {'采样率': ('96000 Hz', '48000 Hz'), '声道数': ('6 声道', '2 声道'), '时长': ('114.4 秒', '3 秒')}),
+])
+def test_audio_probe_reports_only_exceeded_specs_and_stage_before_decode(metadata_probe, output, measured, exceeded):
+    state = metadata_probe
+    state.audio['streams'][0].update(measured)
+    with pytest.raises(ValueError) as error:
+        audio.probe_audio_metadata(state.source, scheduler=object(), grant=object(),
+            deadline_monotonic=time.monotonic()+5, output=output)
+    message = str(error.value)
+    assert message.startswith(('输出' if output else '输入') + '音频规格超出本次许可声明')
+    for label, (actual, limit) in exceeded.items():
+        assert f'{label}实测 {actual}，许可上限 {limit}' in message
+    for label in {'采样率', '声道数', '时长'} - exceeded.keys():
+        assert label not in message
+    assert ('未通过输出核验' if output else '未进入解码或 DSP') in message
+    assert state.calls == ['a:0']
 
 
 def test_sealed_video_uses_picture_clock_while_retaining_real_short_audio(metadata_probe, tmp_path):

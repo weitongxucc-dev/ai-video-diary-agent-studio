@@ -47,3 +47,11 @@ uv run --project apps/api python scripts/validate_resource_adoption.py
 ## 尚未覆盖
 
 本轮证明的是本地真实资源、真实 ffmpeg 成片和治理持久化闭环；真实桌面窗口播放、真实 provider Agent 回合、真实设备播放和人工听感仍需单独验收。
+
+## 2026-11-14 增补：真实 TimelineVersion 回放
+
+在保留上次 2026-11-13 证据的基础上，`scripts/validate_resource_adoption.py` 现会在同一临时生产库中创建并确认 `CreationTask`，写入真实 `TimelineVersion`，再通过 `get_timeline_version` 回读资源引用。治理表的 `timeline`、`render` 和 `output_observation` 记录继续引用同一个 `timeline-resource-acceptance-v1`，因此时间线关联不再只是治理表里的合成 ID。
+
+2026-11-14 回放结果：实际时间线行数 1、任务行数 1，`timeline_persisted=true`，时间线快照引用 `openfilm:sound-glass-pulse`，`provenance_for_output` 回读到 1 条 `output_observation` 记录；三帧输出观察通过，成片 SHA-256 仍为 `a08d68777f67e607771c048c3bd232e098b7ba976164f9761ac02afb0b78dda1`。动态日期证据见 [`docs/evidence/resource-adoption-glass-pulse-2026-11-14.json`](evidence/resource-adoption-glass-pulse-2026-11-14.json)。
+
+本次仍未覆盖真实桌面窗口播放、人工听感、真实 provider Agent 回合和真实设备播放；像素观察与音频流检查不能替代这些验收。
