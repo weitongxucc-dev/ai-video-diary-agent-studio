@@ -459,6 +459,27 @@ class TaskAssistantTurnUseCase:
         return (yield from self.finish(task_id, payload, turn_id, reply, None if runtime_receipt else preview, trusted_stage, runtime_receipt=runtime_receipt))
 
     def finish(self, task_id, payload, turn_id, reply, preview, trusted_stage, *, runtime_receipt=None):
+        # SDK evidence belongs to the invocation even when its business receipt
+        # fails the final ownership check. Mixed business/runtime receipts carry
+        # the same evidence as runtime-only replies.
+        runtime = {key: preview[key] for key in ('provider_usage', 'usage_status', 'trace_events')
+                   if isinstance(preview, dict) and key in preview}
+        runtime.update(runtime_receipt or {})
+        try:
+            return (yield from self._finish(task_id, payload, turn_id, reply, preview,
+                                           trusted_stage, runtime_receipt=runtime))
+        except (TurnRejected, MediaResultRejected, ValidationError) as exc:
+            workspace_id = (yield ReadWorkspace())
+            message = (yield SafeText(str(getattr(exc, 'detail', exc)), workspace_id))
+            saved = self._conversations_for().get_turn(turn_id) or {}
+            result = {**(saved.get('result') or {}), **runtime,
+                      'kind': 'failure', 'reason': 'final_receipt_rejected', 'message': message}
+            self._conversations_for().finish_turn(turn_id, 'failed', result=result)
+            if isinstance(exc, TurnRejected):
+                raise
+            raise TurnRejected(getattr(exc, 'status_code', 502), message) from exc
+
+    def _finish(self, task_id, payload, turn_id, reply, preview, trusted_stage, *, runtime_receipt=None):
         workspace_id = (yield ReadWorkspace())
         reply = (yield CleanText(reply, workspace_id))
         script_draft = None

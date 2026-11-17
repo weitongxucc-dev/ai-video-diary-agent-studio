@@ -13,6 +13,7 @@ from app.assistant import task_turn_use_case as task
 from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.creation.native_task_operations import NativeOperationHandler
 from app.assistant.input_delivery import AssistantInputDelivery
+from app.assistant.projection import _safe_business_failure, _safe_compaction_event
 from app.assistant.result_projection import (
     resolve_quality_continuation, resolve_segment_revision, resolve_timeline_restore,
 )
@@ -175,11 +176,35 @@ class TaskTurnHTTPAdapter:
             raise HTTPException(exc.status_code, exc.detail) from exc
 
     def _run(self, stage, request, on_event):
+        sanitizer = self._stream_for().sanitizer(stage.workspace_id) if on_event is None else None
         def record_event(event):
             self.case().record_window_event(event, workspace_id=stage.workspace_id,
                 member_id=stage.member_id, task_id=stage.task_id, turn_id=stage.turn_id)
             if on_event is not None:
                 on_event(event)
+            else:
+                # SSE persists in its publisher; ordinary JSON requests need
+                # the same safe history without depending on that publisher.
+                safe = None
+                if event.get('type') == 'context_compaction':
+                    safe = _safe_compaction_event(event)
+                elif event.get('type') == 'text_delta':
+                    delta = sanitizer.feed(str(event.get('delta', '')))
+                    if delta:
+                        safe = {'type': 'text_delta', 'delta': delta}
+                elif event.get('type') in {'tool_start', 'tool_end'}:
+                    safe = {key: value for key, value in event.items()
+                            if key in {'type', 'tool_id', 'label', 'ok', 'summary'}}
+                    if isinstance(event.get('failure'), dict):
+                        safe['failure'] = _safe_business_failure(event['failure'])
+                if safe is not None:
+                    def redact(value):
+                        if isinstance(value, str):
+                            return self._safe_text(value, stage.workspace_id)
+                        if isinstance(value, dict):
+                            return {key: redact(item) for key, item in value.items()}
+                        return value
+                    self._conversations_for().append_event(stage.turn_id, redact(safe))
 
         native_actor = self._request_actor(request, stage.workspace_id)
         native_binding = {'workspace_id':stage.workspace_id, 'member_id':stage.member_id,
