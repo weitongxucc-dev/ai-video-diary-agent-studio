@@ -765,5 +765,2987 @@
     "fa6db9e7",
     "3f3c1934",
     "5532a80d"
-  ]
+  ],
+  "voice_music_agent_followup": {
+    "date": "2026-11-17",
+    "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+    "scope": "8 second original audio plus catalog piano; protected 120 second task unchanged",
+    "commits": {
+      "sidechain": "df407931",
+      "production_history": "fa2bcd88",
+      "agent_resources": "c6d423ae",
+      "request_history": "490a0ba1",
+      "trace_terminal_failure": "17df52e4",
+      "audio_spec_error": "e78d665b",
+      "public_import_receipt": "95cb7b78",
+      "import_failure_attribution": "8b8c9407",
+      "volume_sliders": "f3639679",
+      "targeted_audio_restore": "98ba5117",
+      "frozen_source_startup_recovery": "cd0df1a9",
+      "same_turn_restore_readback": "3376bb8a"
+    },
+    "tests": {
+      "sidechain_real_audio_and_boundaries": 10,
+      "sidechain_production_consumer": 2,
+      "linear_reduction_regression": 2,
+      "governance_joint": 16,
+      "agent_python": 24,
+      "agent_node": 24,
+      "audio_admission_diagnostics": 9,
+      "agent_public_receipt_node": 25,
+      "agent_public_receipt_python": 27
+    },
+    "lost_response_recovery": {
+      "request_id": "d917d8d1-b58b-4279-a555-f97fc1f1e8cf",
+      "request": {
+        "resource_id": "openfilm:sound-glass-pulse",
+        "version": 1,
+        "request_id": "d917d8d1-b58b-4279-a555-f97fc1f1e8cf"
+      },
+      "fault": "client closed connection after sending complete request; no response consumed",
+      "recovered_request": {
+        "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+        "request_id": "d917d8d1-b58b-4279-a555-f97fc1f1e8cf",
+        "status": "recorded",
+        "submitted_input": {
+          "resource_id": "openfilm:sound-glass-pulse",
+          "version": 1,
+          "source": null,
+          "actor_identity": {
+            "member_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353"
+      },
+      "recovered_job": {
+        "operation": "audio_import",
+        "target_refs": [],
+        "input_digest": "890803884c197992b654f3adf15111b64c3e478f86c3ec45755c18e768aa5b30",
+        "created_at": "2026-11-17T04:26:43.412163Z",
+        "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353",
+        "status": "succeeded",
+        "result_kind": "audio_source",
+        "result_url": "/api/creation-tasks/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/media-jobs/job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353",
+        "device_request_id": "e9c2a453de044eb198ac8043d46c1f42",
+        "waiting_reason": null,
+        "base_version_id": null,
+        "result": {
+          "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353/9ef06b5f536e53e6570b21b11bc758dc15ed881cb625415a3ebf55528a865348.wav",
+          "name": "玻璃脉冲.wav",
+          "duration_ms": 704,
+          "catalog_resource": {
+            "id": "openfilm:sound-glass-pulse",
+            "version": 1,
+            "provenance": [
+              {
+                "repository": "https://github.com/openfilm/library",
+                "revision": "19b26b60c1286b412c01ad64971263ae0e2aef13",
+                "path": "sound/glass-pulse/item.json",
+                "license": "CC0-1.0",
+                "license_spdx": "CC0-1.0",
+                "source_sha256": "6ea217ac251cfb1b90ab7f52b7a50ecc92ac827d017df83f1273aad3757fbef2",
+                "asset_license": null,
+                "font_license": null,
+                "model_license": null,
+                "service_terms": null
+              },
+              {
+                "repository": "https://github.com/openfilm/library",
+                "revision": "19b26b60c1286b412c01ad64971263ae0e2aef13",
+                "path": "sound/glass-pulse/sound.m4a",
+                "license": "CC0-1.0",
+                "license_spdx": "CC0-1.0",
+                "source_sha256": "c7f8f926893726ae02093ca5d64f5006c3e020b592b5de753bf6de9acaf71a38",
+                "asset_license": null,
+                "font_license": null,
+                "model_license": null,
+                "service_terms": null
+              }
+            ]
+          },
+          "source_sha256": "c8dee998c51463d7a43a18472cf40a2204f7a8743edae7783efccce783bd1c0b"
+        },
+        "failure_reason": null,
+        "repair_action": null,
+        "resource_wait": null
+      },
+      "same_request_replay": {
+        "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353",
+        "status": "succeeded",
+        "same_original_job": true
+      },
+      "submission_event_count": 1
+    },
+    "definite_failure": {
+      "request": {
+        "resource_id": "openfilm:sound-glass-pulse",
+        "version": 999,
+        "request_id": "07738d0d-0b4b-47d3-8dce-10c829ce27c7"
+      },
+      "http_status": 404,
+      "original_request": {
+        "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+        "request_id": "07738d0d-0b4b-47d3-8dce-10c829ce27c7",
+        "status": "rejected",
+        "submitted_input": {
+          "resource_id": "openfilm:sound-glass-pulse",
+          "version": 999,
+          "source": null,
+          "actor_identity": {
+            "member_id": "00000000-0000-0000-0000-000000000001"
+          }
+        },
+        "job_id": null,
+        "submission_effect": "not_submitted",
+        "status_code": 404
+      }
+    },
+    "prior_production_history": {
+      "schema": "resource-closed-loop/v1",
+      "workspace_id": "local",
+      "task_id": "task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+      "resource_id": "openfilm:music-minimal-ambient-piano",
+      "resource_version": 1,
+      "completeness": "complete",
+      "import_job_ids": [
+        "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc"
+      ],
+      "timeline_history": [
+        {
+          "timeline_version_id": "timeline_e73fec7c1c584883bf5cf4581f55a020",
+          "sequence": 2,
+          "parent_version_id": "timeline_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+          "resource_present": true,
+          "transition": "added",
+          "operation_id": "operation_0760d38fd813426c8f08aebb127a5651",
+          "operation_type": "EditAudioTimeline"
+        },
+        {
+          "timeline_version_id": "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+          "sequence": 3,
+          "parent_version_id": "timeline_e73fec7c1c584883bf5cf4581f55a020",
+          "resource_present": true,
+          "transition": "retained",
+          "operation_id": null,
+          "operation_type": "unknown"
+        },
+        {
+          "timeline_version_id": "timeline_ef9e769d4c5041e4b3f7bf6756db866d",
+          "sequence": 4,
+          "parent_version_id": "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+          "resource_present": false,
+          "transition": "removed",
+          "operation_id": "operation_5626d225a8164930b3eebe431f43421d",
+          "operation_type": "UndoTimelineVersion"
+        }
+      ],
+      "jobs": [
+        {
+          "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc",
+          "kind": "creation_task_media",
+          "status": "succeeded",
+          "failure_reason": null,
+          "repair_action": null
+        },
+        {
+          "job_id": "job_media_14b546a4e68a9631e3bde73e7f0501d692e7c24ab39907b23ae2b5c36ccd0673",
+          "kind": "creation_task_media",
+          "status": "succeeded",
+          "failure_reason": null,
+          "repair_action": null
+        },
+        {
+          "job_id": "job_8b4aa7a0ebff4e4e89bde8b0163661bd",
+          "kind": "creation_task_execution",
+          "status": "failed",
+          "failure_reason": "侧链闪避需要完整人声状态，不能作为线性音轨分组归约",
+          "repair_action": "检查首个失败原因后继续制作。"
+        },
+        {
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "kind": "creation_task_execution",
+          "status": "succeeded",
+          "failure_reason": null,
+          "repair_action": null
+        },
+        {
+          "job_id": "job_media_166364075a80ea3cddf03446ea290cd61e0fd17b332e3228286aadeb7082eff6",
+          "kind": "creation_task_media",
+          "status": "succeeded",
+          "failure_reason": null,
+          "repair_action": null
+        },
+        {
+          "job_id": "job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b",
+          "kind": "creation_task_media",
+          "status": "succeeded",
+          "failure_reason": null,
+          "repair_action": null
+        }
+      ],
+      "artifacts": [
+        {
+          "artifact_id": "artifact_f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0",
+          "producer_job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc",
+          "kind": "audio_source",
+          "sha256": "59f906e3913ea5d15a2eadf24aa1361675984ecc2a19ac4e41d026133dcee5b1"
+        },
+        {
+          "artifact_id": "artifact_audio_assembly_40483696d3b57b9f5c405eb0a8be005111ff89548faacbca641d795e75fdcdd6",
+          "producer_job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "kind": "audio_assembly_fragment",
+          "sha256": "2933c92563d07a1d8b53c67fe366df0b6b231d8b628aeff41b3ab499aae241ca"
+        },
+        {
+          "artifact_id": "artifact_audio_assembly_a6f2617024ef0a883c779f65d83e964712f81a9a99bc962f197b6a525d304ad8",
+          "producer_job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "kind": "audio_assembly_fragment",
+          "sha256": "a41018f6173ff05f5e885f7e6f35d20dd7f6f8beae51cb165bd941cc22de8b9e"
+        },
+        {
+          "artifact_id": "artifact_audio_encode_c0423b5297856d72b2ad9fd299ec093be8c13fb092f91010c254c55e4f2c3f2f",
+          "producer_job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "kind": "audio_encode",
+          "sha256": "b39d25ed85f09ea6aeec65d9857acc37604d3caaec28abaec728ef45d34a10e6"
+        },
+        {
+          "artifact_id": "artifact_final_mux_a5abe1b414ca880ae6bba015de2a8768d05b4239ab547a2225ed56ee1be64015",
+          "producer_job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "kind": "rendered_video",
+          "sha256": "349a3f24581e01e8fafdee5fa4874d47f6ad5a49d67ea8a13bda745bf1bba85e"
+        }
+      ],
+      "transforms": [
+        {
+          "transform_id": "transform_f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0",
+          "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc",
+          "status": "succeeded",
+          "type": "audio_source"
+        },
+        {
+          "transform_id": "transform_audio_assembly_40483696d3b57b9f5c405eb0a8be005111ff89548faacbca641d795e75fdcdd6",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "status": "succeeded",
+          "type": "audio_assembly"
+        },
+        {
+          "transform_id": "transform_audio_assembly_a6f2617024ef0a883c779f65d83e964712f81a9a99bc962f197b6a525d304ad8",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "status": "succeeded",
+          "type": "audio_assembly"
+        },
+        {
+          "transform_id": "transform_artifact_audio_encode_c0423b5297856d72b2ad9fd299ec093be8c13fb092f91010c254c55e4f2c3f2f",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "status": "succeeded",
+          "type": "audio_encode"
+        },
+        {
+          "transform_id": "transform_artifact_final_mux_a5abe1b414ca880ae6bba015de2a8768d05b4239ab547a2225ed56ee1be64015",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "status": "succeeded",
+          "type": "final_mux"
+        },
+        {
+          "transform_id": "transform_delivery_adoption_job_ee6d44f6cd814af389c906b0de5425e3",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "status": "succeeded",
+          "type": "montage_delivery"
+        }
+      ],
+      "observations": [
+        {
+          "event_id": "event_job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b_result",
+          "job_id": "job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b",
+          "observation_id": "job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b",
+          "timeline_version_id": "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+          "artifact_id": "artifact_final_mux_a5abe1b414ca880ae6bba015de2a8768d05b4239ab547a2225ed56ee1be64015",
+          "validation": "unknown",
+          "reason": "结果事件须结合原Job终态判断，未重新验证文件或媒体",
+          "job_status": "succeeded"
+        }
+      ],
+      "events": [
+        {
+          "event_id": "event_job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc_f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0_input",
+          "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc",
+          "event_type": "task_media_input",
+          "matched_refs": [],
+          "trace": {
+            "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc"
+          }
+        },
+        {
+          "event_id": "event_job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc_result",
+          "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc",
+          "event_type": "task_media_result",
+          "matched_refs": [
+            "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc/f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0.wav"
+          ],
+          "trace": {
+            "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc"
+          }
+        },
+        {
+          "event_id": "event_job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc_start",
+          "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc",
+          "event_type": "task_media_submitted",
+          "matched_refs": [],
+          "trace": {
+            "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc"
+          }
+        },
+        {
+          "event_id": "event_job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc_verified",
+          "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc",
+          "event_type": "task_media_verified",
+          "matched_refs": [
+            "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc/f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0.wav"
+          ],
+          "trace": {
+            "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc"
+          }
+        },
+        {
+          "event_id": "event_job_media_14b546a4e68a9631e3bde73e7f0501d692e7c24ab39907b23ae2b5c36ccd0673_start",
+          "job_id": "job_media_14b546a4e68a9631e3bde73e7f0501d692e7c24ab39907b23ae2b5c36ccd0673",
+          "event_type": "task_media_submitted",
+          "matched_refs": [
+            "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc/f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0.wav",
+            "timeline_e73fec7c1c584883bf5cf4581f55a020"
+          ],
+          "trace": {
+            "job_id": "job_media_14b546a4e68a9631e3bde73e7f0501d692e7c24ab39907b23ae2b5c36ccd0673"
+          }
+        },
+        {
+          "event_id": "event_job_8b4aa7a0ebff4e4e89bde8b0163661bd_picture_fragment_manifest",
+          "job_id": "job_8b4aa7a0ebff4e4e89bde8b0163661bd",
+          "event_type": "picture_fragment_manifest",
+          "matched_refs": [
+            "timeline_e73fec7c1c584883bf5cf4581f55a020"
+          ],
+          "trace": {
+            "job_id": "job_8b4aa7a0ebff4e4e89bde8b0163661bd"
+          }
+        },
+        {
+          "event_id": "event_job_ee6d44f6cd814af389c906b0de5425e3_picture_fragment_manifest",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "event_type": "picture_fragment_manifest",
+          "matched_refs": [
+            "timeline_e73fec7c1c584883bf5cf4581f55a020"
+          ],
+          "trace": {
+            "job_id": "job_ee6d44f6cd814af389c906b0de5425e3"
+          }
+        },
+        {
+          "event_id": "event_job_ee6d44f6cd814af389c906b0de5425e3_audio_assembly_a455b397eee1fc8c5d3dd66571bf4fc3736d104f29edfb1f5fa0bd82f0d7094b",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "event_type": "creation_audio_assembly_plan",
+          "matched_refs": [
+            "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/assembly/audio/40483696d3b57b9f5c405eb0a8be005111ff89548faacbca641d795e75fdcdd6.wav",
+            "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc/f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0.wav"
+          ],
+          "trace": {
+            "job_id": "job_ee6d44f6cd814af389c906b0de5425e3"
+          }
+        },
+        {
+          "event_id": "event_job_ee6d44f6cd814af389c906b0de5425e3_render_queued_7c5be4d6ba904d13a55fe82a45a673ce",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "event_type": "creation_execution_stage",
+          "matched_refs": [
+            "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/assembly/audio/40483696d3b57b9f5c405eb0a8be005111ff89548faacbca641d795e75fdcdd6.wav"
+          ],
+          "trace": {
+            "job_id": "job_ee6d44f6cd814af389c906b0de5425e3"
+          }
+        },
+        {
+          "event_id": "event_job_ee6d44f6cd814af389c906b0de5425e3_audio_delivery_manifest",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "event_type": "audio_delivery_manifest",
+          "matched_refs": [
+            "artifact_audio_assembly_a6f2617024ef0a883c779f65d83e964712f81a9a99bc962f197b6a525d304ad8",
+            "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/assembly/audio/a6f2617024ef0a883c779f65d83e964712f81a9a99bc962f197b6a525d304ad8.wav"
+          ],
+          "trace": {
+            "job_id": "job_ee6d44f6cd814af389c906b0de5425e3"
+          }
+        },
+        {
+          "event_id": "event_job_ee6d44f6cd814af389c906b0de5425e3_audio_encode_resources_c0423b5297856d72b2ad9fd299ec093be8c13fb092f91010c254c55e4f2c3f2f",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "event_type": "audio_delivery_resources",
+          "matched_refs": [
+            "artifact_audio_assembly_a6f2617024ef0a883c779f65d83e964712f81a9a99bc962f197b6a525d304ad8"
+          ],
+          "trace": {
+            "job_id": "job_ee6d44f6cd814af389c906b0de5425e3"
+          }
+        },
+        {
+          "event_id": "event_job_ee6d44f6cd814af389c906b0de5425e3_render_queued_9aa1a1a1d77e467da4ac5a158e9c0705",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "event_type": "creation_execution_stage",
+          "matched_refs": [
+            "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/assembly/audio/a6f2617024ef0a883c779f65d83e964712f81a9a99bc962f197b6a525d304ad8.wav"
+          ],
+          "trace": {
+            "job_id": "job_ee6d44f6cd814af389c906b0de5425e3"
+          }
+        },
+        {
+          "event_id": "event_job_ee6d44f6cd814af389c906b0de5425e3_final_mux_resources_a5abe1b414ca880ae6bba015de2a8768d05b4239ab547a2225ed56ee1be64015",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "event_type": "audio_delivery_resources",
+          "matched_refs": [
+            "artifact_audio_encode_c0423b5297856d72b2ad9fd299ec093be8c13fb092f91010c254c55e4f2c3f2f"
+          ],
+          "trace": {
+            "job_id": "job_ee6d44f6cd814af389c906b0de5425e3"
+          }
+        },
+        {
+          "event_id": "event_job_ee6d44f6cd814af389c906b0de5425e3_render_queued_76546e0d28db4413b04e174efd5fdd68",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "event_type": "creation_execution_stage",
+          "matched_refs": [
+            "workspaces/local/tasks/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/audio-delivery/job_ee6d44f6cd814af389c906b0de5425e3/audio_encode-c0423b5297856d72b2ad9fd299ec093be8c13fb092f91010c254c55e4f2c3f2f.mp4"
+          ],
+          "trace": {
+            "job_id": "job_ee6d44f6cd814af389c906b0de5425e3"
+          }
+        },
+        {
+          "event_id": "event_job_ee6d44f6cd814af389c906b0de5425e3_delivery_adopted",
+          "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+          "event_type": "render_succeeded",
+          "matched_refs": [
+            "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+            "workspaces/local/tasks/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/audio-delivery/job_ee6d44f6cd814af389c906b0de5425e3/final_mux-a5abe1b414ca880ae6bba015de2a8768d05b4239ab547a2225ed56ee1be64015.mp4"
+          ],
+          "trace": {
+            "job_id": "job_ee6d44f6cd814af389c906b0de5425e3"
+          }
+        },
+        {
+          "event_id": "event_job_media_166364075a80ea3cddf03446ea290cd61e0fd17b332e3228286aadeb7082eff6_start",
+          "job_id": "job_media_166364075a80ea3cddf03446ea290cd61e0fd17b332e3228286aadeb7082eff6",
+          "event_type": "task_media_submitted",
+          "matched_refs": [
+            "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc/f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0.wav",
+            "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3"
+          ],
+          "trace": {
+            "job_id": "job_media_166364075a80ea3cddf03446ea290cd61e0fd17b332e3228286aadeb7082eff6"
+          }
+        },
+        {
+          "event_id": "event_job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b_result",
+          "job_id": "job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b",
+          "event_type": "task_media_result",
+          "matched_refs": [
+            "artifact_final_mux_a5abe1b414ca880ae6bba015de2a8768d05b4239ab547a2225ed56ee1be64015",
+            "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3"
+          ],
+          "trace": {
+            "job_id": "job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b"
+          }
+        },
+        {
+          "event_id": "event_job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b_start",
+          "job_id": "job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b",
+          "event_type": "task_media_submitted",
+          "matched_refs": [
+            "artifact_final_mux_a5abe1b414ca880ae6bba015de2a8768d05b4239ab547a2225ed56ee1be64015",
+            "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc/f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0.wav",
+            "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+            "workspaces/local/tasks/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/audio-delivery/job_ee6d44f6cd814af389c906b0de5425e3/final_mux-a5abe1b414ca880ae6bba015de2a8768d05b4239ab547a2225ed56ee1be64015.mp4"
+          ],
+          "trace": {
+            "request_id": "8b911116-0b34-47a4-b6a7-aa795e8f74c6",
+            "job_id": "job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b"
+          }
+        },
+        {
+          "event_id": "event_edit_request_b47499a355a1d5c3d04bffc45c802ae7545961ee098186bde5f60b9324010425",
+          "job_id": null,
+          "event_type": "edit_request_claimed",
+          "matched_refs": [
+            "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3"
+          ],
+          "trace": {}
+        },
+        {
+          "event_id": "event_edit_request_b47499a355a1d5c3d04bffc45c802ae7545961ee098186bde5f60b9324010425_result",
+          "job_id": null,
+          "event_type": "edit_request_result",
+          "matched_refs": [
+            "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3"
+          ],
+          "trace": {}
+        },
+        {
+          "event_id": "event_edit_request_d4a55c912872749358dc2147c920d242d79dfa9d57cdbc306e9443d640d58a2e",
+          "job_id": null,
+          "event_type": "edit_request_claimed",
+          "matched_refs": [
+            "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3"
+          ],
+          "trace": {}
+        }
+      ],
+      "current_resource_present": false,
+      "media_validation": "unknown",
+      "instruction": "只回读原始生产记录；未读取磁盘、执行媒体、创建采用或覆盖失败。结果事件不等于Job成功，移除不删除历史。"
+    },
+    "real_provider": {
+      "turn_id": "4247a4aa-5e76-4997-838f-ce701afb87df",
+      "http_status": 502,
+      "failure": "先前媒体回执不属于本轮真实目标",
+      "turn_state_before_recovery": "running",
+      "trace_usage_before_fix": "not saved; cannot reconstruct tokens from guesses"
+    },
+    "real_mix_production": {
+      "job_id": "job_d74a08129e1c45a4a397f5b1fe165e4f",
+      "timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe165e4f",
+      "timeline_sequence": 3,
+      "path": "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/voice-piano-sidechain-2026-11-17.mp4",
+      "sha256": "c1d5e4db9bbec52f5c80111c544dadda2275db7fa7485fba2b92af8d998198c8",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 1080,
+            "height": 1920
+          },
+          {
+            "codec_name": "aac",
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 2
+          }
+        ],
+        "format": {
+          "duration": "8.000000"
+        }
+      },
+      "full_decode_exit_code": 0,
+      "version_headers_match": true,
+      "audio_timeline": {
+        "format_version": 1,
+        "tracks": [
+          {
+            "id": "audio-original",
+            "name": "原声",
+            "role": "original",
+            "gain_db": 0.0,
+            "muted": false,
+            "locked": false,
+            "duck_under_voice": false,
+            "clips": [
+              {
+                "id": "audio-source",
+                "source_ref": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                "name": "VID_20260529_122252_preview.mp4",
+                "source_start_ms": 10000,
+                "source_end_ms": 18000,
+                "playback_rate": 1.0,
+                "timeline_start_ms": 0,
+                "gain_db": 0.0,
+                "fade_in_ms": 0,
+                "fade_out_ms": 0,
+                "muted": false,
+                "locked": false,
+                "denoise_db": 0.0,
+                "loudness_target_lufs": null,
+                "gain_points": [],
+                "envelope_offset_ms": 0,
+                "envelope_duration_ms": null,
+                "editor_gain_points": []
+              }
+            ]
+          },
+          {
+            "id": "audio-music",
+            "name": "音乐",
+            "role": "music",
+            "gain_db": 0.0,
+            "muted": false,
+            "locked": false,
+            "duck_under_voice": true,
+            "clips": [
+              {
+                "id": "audio-591b21e5c5af44d2",
+                "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+                "name": "极简氛围钢琴",
+                "source_start_ms": 0,
+                "source_end_ms": 8000,
+                "playback_rate": 1.0,
+                "timeline_start_ms": 0,
+                "gain_db": -18.0,
+                "fade_in_ms": 0,
+                "fade_out_ms": 0,
+                "muted": false,
+                "locked": false,
+                "denoise_db": 0.0,
+                "loudness_target_lufs": null,
+                "gain_points": [],
+                "envelope_offset_ms": 0,
+                "envelope_duration_ms": null,
+                "editor_gain_points": []
+              }
+            ]
+          },
+          {
+            "id": "audio-effects",
+            "name": "音效",
+            "role": "effect",
+            "gain_db": 0.0,
+            "muted": false,
+            "locked": false,
+            "duck_under_voice": false,
+            "clips": []
+          }
+        ]
+      }
+    },
+    "human_listening": {
+      "status": "not_accepted",
+      "user_feedback": "配音似乎太小了，没有听清",
+      "file": "output/acceptance/voice-piano-sidechain-2026-11-17.mp4",
+      "replayed_in": "QuickTime Player",
+      "followup": "第二版原声增强但用户未听见钢琴；第三版已生成且用户确认钢琴可听见，详见audibility_v3。"
+    },
+    "cpu_preparation": {
+      "request": {
+        "request_id": "13082340-420b-4f32-a215-e8481947053a",
+        "kind": "cpu",
+        "shape": {
+          "width_px": 1080,
+          "height_px": 1920,
+          "frame_rate": 30,
+          "duration_seconds": 120,
+          "clip_count": 21,
+          "audio_input_count": 4,
+          "sample_rate": 96000,
+          "channels": 2,
+          "overlay_count": 6,
+          "source_bytes": 10963397
+        }
+      },
+      "response": {
+        "id": "872dc57fae9d4b2b934e8ff810547991",
+        "plan_id": "34d32a6842d4cbc16fedd5466cf5e6c1",
+        "state": "waiting",
+        "wait_reason": null
+      },
+      "latest_status": {
+        "id": "872dc57fae9d4b2b934e8ff810547991",
+        "plan_id": "34d32a6842d4cbc16fedd5466cf5e6c1",
+        "state": "done",
+        "wait_reason": null
+      },
+      "finalize": {
+        "id": "872dc57fae9d4b2b934e8ff810547991",
+        "plan_id": "34d32a6842d4cbc16fedd5466cf5e6c1",
+        "state": "done",
+        "wait_reason": null,
+        "profile_published": true,
+        "profile_id": "34d32a6842d4cbc16fedd5466cf5e6c1",
+        "revision": 14,
+        "profile_digest": "1df0aa97cdc0493d20a98d210f5871b7df2faf727cabfce55f561ca8381cf9b5",
+        "normal_work_started": false
+      }
+    },
+    "failed_production": {
+      "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+      "task_execution": {
+        "task_kind": "source_video_edit",
+        "next_required_stage": "render",
+        "not_applicable_preparation_kinds": [
+          "narration",
+          "montage"
+        ]
+      },
+      "job": {
+        "id": "job_6addb9ecb1ee4a23afd2550c3b7eb78f",
+        "workspace_id": "local",
+        "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+        "kind": "creation_task_execution",
+        "idempotency_key": "creation-execution:task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421:f1dd7d60cffe417a2192b03ec56ab4a891d5e98c7f4195a32062b16a9cf99c92",
+        "input_digest": "f1dd7d60cffe417a2192b03ec56ab4a891d5e98c7f4195a32062b16a9cf99c92",
+        "status": "failed",
+        "progress": 66,
+        "attempt": 2,
+        "output_refs": [],
+        "failure_reason": "实际音频规格超出本次许可声明，未进入解码或 DSP",
+        "impact": "当前制作未完成，上游产物保留。",
+        "repair_action": "检查首个失败原因后继续制作。",
+        "created_at": "2026-11-17T04:27:26.493471Z",
+        "started_at": "2026-11-17T04:27:36.451063Z",
+        "finished_at": "2026-11-17T04:27:37.199437Z",
+        "updated_at": "2026-11-17T04:27:37.199437Z"
+      },
+      "stages": [
+        {
+          "stage": "render",
+          "status": "completed",
+          "reason": null,
+          "at": "2026-11-17T04:27:35.905728+00:00"
+        },
+        {
+          "stage": "render",
+          "status": "failed",
+          "reason": "实际音频规格超出本次许可声明，未进入解码或 DSP",
+          "at": "2026-11-17T04:27:37.199437+00:00"
+        }
+      ],
+      "current_stage": "render",
+      "waiting_reason": null,
+      "status_updated_at": "2026-11-17T04:27:37.199437+00:00",
+      "input_rejection": null,
+      "narration_usage": {
+        "budget": null,
+        "scope": null,
+        "used_seconds": 0,
+        "used_output_bytes": 0,
+        "consumption_known": true,
+        "unsettled": []
+      },
+      "visual_decisions": {
+        "items": [],
+        "total_count": 0,
+        "truncated": false
+      },
+      "video_ready": false,
+      "cover_status": "pending",
+      "cover_message": "尚未生成封面，请单独制作或选择封面。"
+    },
+    "manual_import": {
+      "request": {
+        "resource_id": "openfilm:music-minimal-ambient-piano",
+        "version": 1,
+        "request_id": "26040573-6437-45d9-bd2c-485963a9b85e"
+      },
+      "receipt": {
+        "operation": "audio_import",
+        "target_refs": [],
+        "input_digest": "0c9b76a317d5a4a83cdd1cd58c409b979197121ce429ace154fab10dfa580dbf",
+        "created_at": "2026-11-17T04:35:23.995160Z",
+        "job_id": "job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698",
+        "status": "queued",
+        "result_kind": "audio_source",
+        "result_url": "/api/creation-tasks/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/media-jobs/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698",
+        "device_request_id": "2d0b4a9f99534ccb9cd96c6c53121194",
+        "waiting_reason": null,
+        "base_version_id": null,
+        "result": null,
+        "failure_reason": null,
+        "repair_action": null,
+        "resource_wait": null
+      },
+      "result": {
+        "operation": "audio_import",
+        "target_refs": [],
+        "input_digest": "0c9b76a317d5a4a83cdd1cd58c409b979197121ce429ace154fab10dfa580dbf",
+        "created_at": "2026-11-17T04:35:23.995160Z",
+        "job_id": "job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698",
+        "status": "succeeded",
+        "result_kind": "audio_source",
+        "result_url": "/api/creation-tasks/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/media-jobs/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698",
+        "device_request_id": "2d0b4a9f99534ccb9cd96c6c53121194",
+        "waiting_reason": null,
+        "base_version_id": null,
+        "result": {
+          "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+          "name": "极简环境钢琴.wav",
+          "duration_ms": 45035,
+          "catalog_resource": {
+            "id": "openfilm:music-minimal-ambient-piano",
+            "version": 1,
+            "provenance": [
+              {
+                "repository": "https://github.com/openfilm/openfilm",
+                "revision": "openfilm@0.3.2",
+                "path": "audio/music/minimal-ambient-piano-ae1c16.mp3",
+                "license": "CC0-1.0",
+                "license_spdx": "CC0-1.0",
+                "source_sha256": "ae1c1614d278325b6a9640ae47fd18546b722eb8f89782b3693fa7aeba2395d7",
+                "asset_license": null,
+                "font_license": null,
+                "model_license": null,
+                "service_terms": null
+              },
+              {
+                "repository": "https://github.com/openfilm/openfilm",
+                "revision": "openfilm@0.3.2",
+                "path": "packages/openfilm/library/audio.json",
+                "license": "CC0-1.0",
+                "license_spdx": "CC0-1.0",
+                "source_sha256": "3749127caffb116a87467c7fc1edd6346391afa982123961b13c40565e88f3ec",
+                "asset_license": null,
+                "font_license": null,
+                "model_license": null,
+                "service_terms": null
+              }
+            ]
+          },
+          "source_sha256": "59f906e3913ea5d15a2eadf24aa1361675984ecc2a19ac4e41d026133dcee5b1"
+        },
+        "failure_reason": null,
+        "repair_action": null,
+        "resource_wait": null
+      }
+    },
+    "manual_adoption": {
+      "operation": {
+        "id": "operation_eeb4681c9b9743d18662c88cf482792d",
+        "workspace_id": "local",
+        "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+        "proposal_id": "proposal_dcbff7d133b4445e9fb325b84f3f9e2b",
+        "operation_type": "EditAudioTimeline",
+        "payload": {
+          "base_version_id": "timeline_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+          "audio_timeline": {
+            "format_version": 1,
+            "tracks": [
+              {
+                "id": "audio-original",
+                "name": "原声",
+                "role": "original",
+                "gain_db": 0.0,
+                "muted": false,
+                "locked": false,
+                "duck_under_voice": false,
+                "clips": [
+                  {
+                    "id": "audio-source",
+                    "source_ref": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                    "name": "VID_20260529_122252_preview.mp4",
+                    "source_start_ms": 10000,
+                    "source_end_ms": 18000,
+                    "playback_rate": 1.0,
+                    "timeline_start_ms": 0,
+                    "gain_db": 0.0,
+                    "fade_in_ms": 0,
+                    "fade_out_ms": 0,
+                    "muted": false,
+                    "locked": false,
+                    "denoise_db": 0.0,
+                    "loudness_target_lufs": null,
+                    "gain_points": [],
+                    "envelope_offset_ms": 0,
+                    "envelope_duration_ms": null
+                  }
+                ]
+              },
+              {
+                "id": "audio-music",
+                "name": "音乐",
+                "role": "music",
+                "gain_db": 0.0,
+                "muted": false,
+                "locked": false,
+                "duck_under_voice": true,
+                "clips": [
+                  {
+                    "id": "audio-591b21e5c5af44d2",
+                    "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+                    "name": "极简氛围钢琴",
+                    "source_start_ms": 0,
+                    "source_end_ms": 8000,
+                    "playback_rate": 1.0,
+                    "timeline_start_ms": 0,
+                    "gain_db": -18.0,
+                    "fade_in_ms": 0,
+                    "fade_out_ms": 0,
+                    "muted": false,
+                    "locked": false,
+                    "denoise_db": 0.0,
+                    "loudness_target_lufs": null,
+                    "gain_points": [],
+                    "envelope_offset_ms": 0,
+                    "envelope_duration_ms": null
+                  }
+                ]
+              },
+              {
+                "id": "audio-effects",
+                "name": "音效",
+                "role": "effect",
+                "gain_db": 0.0,
+                "muted": false,
+                "locked": false,
+                "duck_under_voice": false,
+                "clips": []
+              }
+            ]
+          },
+          "edit": {
+            "base_version_id": "timeline_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+            "action": "add",
+            "target_id": "audio-music",
+            "values": {
+              "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+              "name": "极简氛围钢琴",
+              "source_start_ms": 0,
+              "source_end_ms": 8000,
+              "timeline_start_ms": 0,
+              "gain_db": -18
+            },
+            "raw_command": "添加极简氛围钢琴 v1，保留原声，背景音乐-18dB"
+          },
+          "expected_audio_timeline": {
+            "format_version": 1,
+            "tracks": [
+              {
+                "id": "audio-original",
+                "name": "原声",
+                "role": "original",
+                "gain_db": 0.0,
+                "muted": false,
+                "locked": false,
+                "duck_under_voice": false,
+                "clips": [
+                  {
+                    "id": "audio-source",
+                    "source_ref": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                    "name": "VID_20260529_122252_preview.mp4",
+                    "source_start_ms": 10000,
+                    "source_end_ms": 18000,
+                    "playback_rate": 1.0,
+                    "timeline_start_ms": 0,
+                    "gain_db": 0.0,
+                    "fade_in_ms": 0,
+                    "fade_out_ms": 0,
+                    "muted": false,
+                    "locked": false,
+                    "denoise_db": 0.0,
+                    "loudness_target_lufs": null,
+                    "gain_points": [],
+                    "envelope_offset_ms": 0,
+                    "envelope_duration_ms": null
+                  }
+                ]
+              },
+              {
+                "id": "audio-music",
+                "name": "音乐",
+                "role": "music",
+                "gain_db": 0.0,
+                "muted": false,
+                "locked": false,
+                "duck_under_voice": true,
+                "clips": []
+              },
+              {
+                "id": "audio-effects",
+                "name": "音效",
+                "role": "effect",
+                "gain_db": 0.0,
+                "muted": false,
+                "locked": false,
+                "duck_under_voice": false,
+                "clips": []
+              }
+            ]
+          }
+        },
+        "base_version_id": "timeline_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+        "result_version_id": "timeline_c129f81d6a7a479b952173aafe72f2b9",
+        "status": "applied",
+        "failure_reason": null,
+        "created_at": "2026-11-17T04:36:10.607714Z",
+        "applied_at": "2026-11-17T04:36:10.607714Z"
+      },
+      "montage": {
+        "graphic_overlays": [],
+        "aspect_ratio": "9:16",
+        "presenter_share_target": 0,
+        "presenter_share_actual": 0.0,
+        "id": "montage_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+        "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+        "script_id": null,
+        "script_title": "",
+        "status": "ready",
+        "cues": [],
+        "clips": [
+          {
+            "transition_in_seconds": 0.0,
+            "fade_envelope_rate": 1.0,
+            "fade_envelope_offset_frames": 0.0,
+            "fade_envelope_duration_frames": null,
+            "visual_effects": {
+              "fade_in_seconds": 0.0,
+              "fade_out_seconds": 0.0,
+              "zoom": 1.0,
+              "offset_x": 0.0,
+              "offset_y": 0.0,
+              "rotation": 0.0,
+              "beauty_strength": 0.0,
+              "skin_exposure": 0.0,
+              "exposure": 0.0,
+              "contrast": 1.0,
+              "saturation": 1.0,
+              "temperature": 0.0
+            },
+            "fit_mode": "fit",
+            "crop_x": 0.5,
+            "crop_y": 0.5,
+            "id": "clip-source",
+            "cue_id": null,
+            "asset_id": "asset_09fc843b007dc641",
+            "segment_id": null,
+            "source_reference": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+            "source_start_seconds": 10.0,
+            "source_end_seconds": 18.0,
+            "timeline_start_seconds": 0.0,
+            "timeline_end_seconds": 8.0,
+            "match_score": 0.0,
+            "match_reasons": [
+              "用户明确选择原片区间"
+            ],
+            "needs_confirmation": false,
+            "role": "a_roll",
+            "locked": false,
+            "manually_selected": true,
+            "person_render_id": null
+          }
+        ],
+        "duration_seconds": 8.0,
+        "low_confidence_clip_count": 0,
+        "audio_timeline": {
+          "format_version": 1,
+          "tracks": [
+            {
+              "id": "audio-original",
+              "name": "原声",
+              "role": "original",
+              "gain_db": 0.0,
+              "muted": false,
+              "locked": false,
+              "duck_under_voice": false,
+              "clips": [
+                {
+                  "id": "audio-source",
+                  "source_ref": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                  "name": "VID_20260529_122252_preview.mp4",
+                  "source_start_ms": 10000,
+                  "source_end_ms": 18000,
+                  "playback_rate": 1.0,
+                  "timeline_start_ms": 0,
+                  "gain_db": 0.0,
+                  "fade_in_ms": 0,
+                  "fade_out_ms": 0,
+                  "muted": false,
+                  "locked": false,
+                  "denoise_db": 0.0,
+                  "loudness_target_lufs": null,
+                  "gain_points": [],
+                  "envelope_offset_ms": 0,
+                  "envelope_duration_ms": null,
+                  "editor_gain_points": []
+                }
+              ]
+            },
+            {
+              "id": "audio-music",
+              "name": "音乐",
+              "role": "music",
+              "gain_db": 0.0,
+              "muted": false,
+              "locked": false,
+              "duck_under_voice": true,
+              "clips": [
+                {
+                  "id": "audio-591b21e5c5af44d2",
+                  "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+                  "name": "极简氛围钢琴",
+                  "source_start_ms": 0,
+                  "source_end_ms": 8000,
+                  "playback_rate": 1.0,
+                  "timeline_start_ms": 0,
+                  "gain_db": -18.0,
+                  "fade_in_ms": 0,
+                  "fade_out_ms": 0,
+                  "muted": false,
+                  "locked": false,
+                  "denoise_db": 0.0,
+                  "loudness_target_lufs": null,
+                  "gain_points": [],
+                  "envelope_offset_ms": 0,
+                  "envelope_duration_ms": null,
+                  "editor_gain_points": []
+                }
+              ]
+            },
+            {
+              "id": "audio-effects",
+              "name": "音效",
+              "role": "effect",
+              "gain_db": 0.0,
+              "muted": false,
+              "locked": false,
+              "duck_under_voice": false,
+              "clips": []
+            }
+          ]
+        },
+        "narration_reference": null,
+        "output_url": null,
+        "subtitle_url": null,
+        "message": "音轨已更新，可以试听或重新渲染成片。",
+        "created_at": "2026-11-17T04:15:00.393469Z",
+        "updated_at": "2026-11-17T04:36:10.643273Z"
+      },
+      "narration": null,
+      "restore_request": null,
+      "execution_readiness": {
+        "status": "authorization_ready",
+        "reason_code": null,
+        "device_admission": "not_checked"
+      }
+    },
+    "output_observation": {
+      "request": {
+        "expected_timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe165e4f",
+        "expected_timeline_sequence": 3,
+        "target": {
+          "kind": "final"
+        },
+        "sample_times_seconds": [
+          1,
+          4,
+          7
+        ],
+        "request_id": "b1bb3bd8-13f1-4e84-a8de-57bce2afec34"
+      },
+      "receipt": {
+        "operation": "output_observation",
+        "target_refs": [],
+        "input_digest": "8d27d0c01d43e6a5e3dfccd5ea01e2eee9e84caa1d6158b590770fac9b2fe6c4",
+        "created_at": "2026-11-17T04:37:39.116542Z",
+        "job_id": "job_media_247a4c2cdb5ab6a5d9f7fc1fae5f700211466b3af5773085acc241972d3caa22",
+        "status": "queued",
+        "result_kind": "observation",
+        "result_url": "/api/creation-tasks/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/media-jobs/job_media_247a4c2cdb5ab6a5d9f7fc1fae5f700211466b3af5773085acc241972d3caa22",
+        "device_request_id": "8c95dcf2e2694b8eab662c4b6f8c258d",
+        "waiting_reason": null,
+        "base_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe165e4f",
+        "result": null,
+        "failure_reason": null,
+        "repair_action": null,
+        "resource_wait": null
+      },
+      "latest": {
+        "operation": "output_observation",
+        "target_refs": [],
+        "input_digest": "8d27d0c01d43e6a5e3dfccd5ea01e2eee9e84caa1d6158b590770fac9b2fe6c4",
+        "created_at": "2026-11-17T04:37:39.116542Z",
+        "job_id": "job_media_247a4c2cdb5ab6a5d9f7fc1fae5f700211466b3af5773085acc241972d3caa22",
+        "status": "succeeded",
+        "result_kind": "observation",
+        "result_url": "/api/creation-tasks/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/media-jobs/job_media_247a4c2cdb5ab6a5d9f7fc1fae5f700211466b3af5773085acc241972d3caa22",
+        "device_request_id": "8c95dcf2e2694b8eab662c4b6f8c258d",
+        "waiting_reason": null,
+        "base_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe165e4f",
+        "result": {
+          "observation_id": "job_media_247a4c2cdb5ab6a5d9f7fc1fae5f700211466b3af5773085acc241972d3caa22",
+          "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+          "timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe165e4f",
+          "timeline_sequence": 3,
+          "observed_at": "2026-11-17T04:37:44.022930+00:00",
+          "target": {
+            "kind": "final",
+            "job_id": null,
+            "artifact_id": null
+          },
+          "ocr_execution": {
+            "status": "unavailable",
+            "reason": "本地 OCR 未配置或输出观察执行范围尚未标定。"
+          },
+          "output": {
+            "artifact_id": "artifact_final_mux_127455989800a4d9267457f5aa066c6d95bfeaae5dc7b16b952b8a3cc998ddc2",
+            "artifact_kind": "rendered_video",
+            "sha256": "c1d5e4db9bbec52f5c80111c544dadda2275db7fa7485fba2b92af8d998198c8",
+            "registered_width": 1080,
+            "registered_height": 1920,
+            "size_bytes": 4339199,
+            "producer_job_id": "job_d74a08129e1c45a4a397f5b1fe165e4f"
+          },
+          "output_role": "composed_output",
+          "material_references": [],
+          "measurement_scope": "actual_output_bounded_frames",
+          "media": {
+            "width": 1080,
+            "height": 1920,
+            "duration_seconds": 8.0,
+            "video_codec": "h264",
+            "video_frame_rate": "30/1",
+            "audio_stream_count": 1
+          },
+          "samples": [
+            {
+              "id": "frame-0",
+              "timestamp_seconds": 1.0,
+              "width": 720,
+              "height": 1280,
+              "sha256": "9946be0dbec4b21ca9e9de5d5cd37979257668e39990b336e598fcf5b4805bcc",
+              "pixel_mean_rgb": [
+                78.969,
+                77.482,
+                74.887
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            },
+            {
+              "id": "frame-1",
+              "timestamp_seconds": 4.0,
+              "width": 720,
+              "height": 1280,
+              "sha256": "b6c281ac923a8c6f4806f423316289fb2129c2aa7ba18f525093875ea551dbea",
+              "pixel_mean_rgb": [
+                68.515,
+                72.318,
+                73.334
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            },
+            {
+              "id": "frame-2",
+              "timestamp_seconds": 7.0,
+              "width": 720,
+              "height": 1280,
+              "sha256": "e472425802589c2382b7d6ed8594d663cf626291df9e19e7f6d161dad8b0e710",
+              "pixel_mean_rgb": [
+                83.696,
+                79.233,
+                74.778
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            }
+          ],
+          "ocr_model_id": null,
+          "unavailable": [
+            {
+              "scope": "visual_semantics",
+              "reason": "本地合成画面的语义理解尚无受许可执行能力；像素测量不代表看懂内容。"
+            },
+            {
+              "scope": "speech_and_listening",
+              "reason": "本次只观察实际画面，没有转写或听感检查。"
+            },
+            {
+              "scope": "ocr",
+              "reason": "本地 OCR 未配置或输出观察执行范围尚未标定；未提取文字。"
+            }
+          ]
+        },
+        "failure_reason": null,
+        "repair_action": null,
+        "resource_wait": null
+      }
+    },
+    "browser_playback": {
+      "duration_seconds": 8,
+      "current_time_seconds": 8,
+      "ended": true,
+      "muted": false,
+      "media_error": null,
+      "screenshot": "output/acceptance/voice-piano-playback-2026-11-17.jpg"
+    },
+    "request_history": [
+      {
+        "schema": "resource-closed-loop/v1",
+        "workspace_id": "local",
+        "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+        "resource_id": "openfilm:sound-glass-pulse",
+        "resource_version": 1,
+        "completeness": "complete",
+        "requests": [
+          {
+            "request_id": "d917d8d1-b58b-4279-a555-f97fc1f1e8cf",
+            "status": "recorded",
+            "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353"
+          }
+        ],
+        "import_job_ids": [
+          "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353"
+        ],
+        "timeline_history": [],
+        "jobs": [
+          {
+            "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353",
+            "kind": "creation_task_media",
+            "status": "succeeded",
+            "failure_reason": null,
+            "repair_action": null
+          }
+        ],
+        "artifacts": [
+          {
+            "artifact_id": "artifact_9ef06b5f536e53e6570b21b11bc758dc15ed881cb625415a3ebf55528a865348",
+            "producer_job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353",
+            "kind": "audio_source",
+            "sha256": "c8dee998c51463d7a43a18472cf40a2204f7a8743edae7783efccce783bd1c0b"
+          }
+        ],
+        "transforms": [
+          {
+            "transform_id": "transform_9ef06b5f536e53e6570b21b11bc758dc15ed881cb625415a3ebf55528a865348",
+            "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353",
+            "status": "succeeded",
+            "type": "audio_source"
+          }
+        ],
+        "observations": [],
+        "events": [
+          {
+            "event_id": "event_job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353_9ef06b5f536e53e6570b21b11bc758dc15ed881cb625415a3ebf55528a865348_input",
+            "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353",
+            "event_type": "task_media_input",
+            "matched_refs": [],
+            "trace": {
+              "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353"
+            }
+          },
+          {
+            "event_id": "event_job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353_result",
+            "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353",
+            "event_type": "task_media_result",
+            "matched_refs": [
+              "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353/9ef06b5f536e53e6570b21b11bc758dc15ed881cb625415a3ebf55528a865348.wav"
+            ],
+            "trace": {
+              "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353"
+            }
+          },
+          {
+            "event_id": "event_job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353_start",
+            "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353",
+            "event_type": "task_media_submitted",
+            "matched_refs": [],
+            "trace": {
+              "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353"
+            }
+          },
+          {
+            "event_id": "event_job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353_verified",
+            "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353",
+            "event_type": "task_media_verified",
+            "matched_refs": [
+              "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353/9ef06b5f536e53e6570b21b11bc758dc15ed881cb625415a3ebf55528a865348.wav"
+            ],
+            "trace": {
+              "job_id": "job_media_66a4888998cf4630969c7a9e6963a8703a3247187cb6ba8664734e04f1073353"
+            }
+          }
+        ],
+        "current_resource_present": false,
+        "media_validation": "unknown",
+        "instruction": "只回读原始生产记录；未读取磁盘、执行媒体、创建采用或覆盖失败。结果事件不等于Job成功，移除不删除历史。"
+      },
+      {
+        "schema": "resource-closed-loop/v1",
+        "workspace_id": "local",
+        "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+        "resource_id": "openfilm:sound-glass-pulse",
+        "resource_version": 999,
+        "completeness": "complete",
+        "requests": [
+          {
+            "request_id": "07738d0d-0b4b-47d3-8dce-10c829ce27c7",
+            "status": "rejected",
+            "job_id": null,
+            "status_code": 404
+          }
+        ],
+        "import_job_ids": [],
+        "timeline_history": [],
+        "jobs": [],
+        "artifacts": [],
+        "transforms": [],
+        "observations": [],
+        "events": [],
+        "current_resource_present": false,
+        "media_validation": "unknown",
+        "instruction": "只回读原始生产记录；未读取磁盘、执行媒体、创建采用或覆盖失败。结果事件不等于Job成功，移除不删除历史。"
+      }
+    ],
+    "agent_adoption": {
+      "response": {
+        "turn_id": "abc886a2-20f8-45a7-b6a3-f290ccfc9054",
+        "turn_status": "completed",
+        "provider": "minimax",
+        "model": "MiniMax-M3",
+        "edit_request_id": "1a7d7af7-9eb3-513e-a46d-bf3373eba567",
+        "operation": {
+          "id": "operation_93fa3f9413c44d1c838241aebec5e5f0",
+          "operation_type": "EditAudioTimeline",
+          "status": "applied",
+          "base_version_id": "timeline_0918bd99a64b4e598b8e3f57258a0c4e",
+          "result_version_id": "timeline_ccba04d552634820974ded3274637258"
+        }
+      },
+      "trace": {
+        "turn_id": "abc886a2-20f8-45a7-b6a3-f290ccfc9054",
+        "status": "completed",
+        "event_count": 37,
+        "tool_counts": {
+          "读取当前任务（发送前）": 1,
+          "读取真实编辑能力": 1,
+          "导入固定资源音频": 1,
+          "记录本次要求": 1,
+          "回查资源音频原请求": 1,
+          "读取任务媒体作业": 1,
+          "回查资源音频导入": 1,
+          "读取预览作业结果": 2,
+          "回查资源采用与撤销来源": 2,
+          "准备类型化修改预览": 1,
+          "保存明确修改": 1,
+          "读取任务对象细节": 2
+        },
+        "provider_usage": {
+          "input": 216627,
+          "output": 7148,
+          "cacheRead": 646946,
+          "cacheWrite": 0,
+          "totalTokens": 870721
+        },
+        "usage_status": "known",
+        "usage_ledger": {
+          "turn_count": 3,
+          "usage_status_counts": {
+            "known": 1,
+            "estimated": 0,
+            "unknown": 2
+          },
+          "measured_usage": {
+            "input": 216627,
+            "output": 7148,
+            "cacheRead": 646946,
+            "cacheWrite": 0,
+            "totalTokens": 870721
+          },
+          "estimated_usage": null
+        },
+        "failure_class": "http_404",
+        "query_url": "/api/assistant/turns/abc886a2-20f8-45a7-b6a3-f290ccfc9054/trace"
+      },
+      "boundary": "Provider completed import, adopted piano, and read history. Specialized import tool falsely rejected missing task_id; provider used general media read. Fix 95cb7b78 requires live replay."
+    },
+    "audibility_revision": {
+      "edits": [
+        {
+          "request": {
+            "operation_type": "EditAudioTimeline",
+            "audio_edit": {
+              "target_id": "audio-source",
+              "action": "update",
+              "values": {
+                "loudness_target_lufs": -16
+              }
+            },
+            "request_id": "21371f7d-394c-482d-bd22-31b056b78ac2",
+            "expected_timeline_version_id": "timeline_ccba04d552634820974ded3274637258",
+            "expected_timeline_sequence": 5
+          },
+          "receipt": {
+            "operation": {
+              "id": "operation_53d8029f60e1443daa51e8a59f5f25e9",
+              "workspace_id": "local",
+              "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+              "proposal_id": "proposal_metadata_452a61e1cc3e6697b4fcc89c8d424d8ff95bd27cca0103afeb31474515c2b445",
+              "operation_type": "EditAudioTimeline",
+              "payload": {
+                "base_version_id": "timeline_ccba04d552634820974ded3274637258",
+                "expected_audio_timeline": {
+                  "format_version": 1,
+                  "tracks": [
+                    {
+                      "id": "audio-original",
+                      "name": "原声",
+                      "role": "original",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": false,
+                      "clips": [
+                        {
+                          "id": "audio-source",
+                          "source_ref": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                          "name": "VID_20260529_122252_preview.mp4",
+                          "source_start_ms": 10000,
+                          "source_end_ms": 18000,
+                          "playback_rate": 1.0,
+                          "timeline_start_ms": 0,
+                          "gain_db": 0.0,
+                          "fade_in_ms": 0,
+                          "fade_out_ms": 0,
+                          "muted": false,
+                          "locked": false,
+                          "denoise_db": 0.0,
+                          "loudness_target_lufs": null,
+                          "gain_points": [],
+                          "envelope_offset_ms": 0,
+                          "envelope_duration_ms": null
+                        }
+                      ]
+                    },
+                    {
+                      "id": "audio-music",
+                      "name": "音乐",
+                      "role": "music",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": true,
+                      "clips": [
+                        {
+                          "id": "audio-2a9feafc09964244",
+                          "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+                          "name": "极简环境钢琴",
+                          "source_start_ms": 0,
+                          "source_end_ms": 8000,
+                          "playback_rate": 1.0,
+                          "timeline_start_ms": 0,
+                          "gain_db": -18.0,
+                          "fade_in_ms": 0,
+                          "fade_out_ms": 0,
+                          "muted": false,
+                          "locked": false,
+                          "denoise_db": 0.0,
+                          "loudness_target_lufs": null,
+                          "gain_points": [],
+                          "envelope_offset_ms": 0,
+                          "envelope_duration_ms": null
+                        }
+                      ]
+                    },
+                    {
+                      "id": "audio-effects",
+                      "name": "音效",
+                      "role": "effect",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": false,
+                      "clips": []
+                    }
+                  ]
+                },
+                "audio_timeline": {
+                  "format_version": 1,
+                  "tracks": [
+                    {
+                      "id": "audio-original",
+                      "name": "原声",
+                      "role": "original",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": false,
+                      "clips": [
+                        {
+                          "id": "audio-source",
+                          "source_ref": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                          "name": "VID_20260529_122252_preview.mp4",
+                          "source_start_ms": 10000,
+                          "source_end_ms": 18000,
+                          "playback_rate": 1.0,
+                          "timeline_start_ms": 0,
+                          "gain_db": 0.0,
+                          "fade_in_ms": 0,
+                          "fade_out_ms": 0,
+                          "muted": false,
+                          "locked": false,
+                          "denoise_db": 0.0,
+                          "loudness_target_lufs": -16.0,
+                          "gain_points": [],
+                          "envelope_offset_ms": 0,
+                          "envelope_duration_ms": null
+                        }
+                      ]
+                    },
+                    {
+                      "id": "audio-music",
+                      "name": "音乐",
+                      "role": "music",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": true,
+                      "clips": [
+                        {
+                          "id": "audio-2a9feafc09964244",
+                          "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+                          "name": "极简环境钢琴",
+                          "source_start_ms": 0,
+                          "source_end_ms": 8000,
+                          "playback_rate": 1.0,
+                          "timeline_start_ms": 0,
+                          "gain_db": -18.0,
+                          "fade_in_ms": 0,
+                          "fade_out_ms": 0,
+                          "muted": false,
+                          "locked": false,
+                          "denoise_db": 0.0,
+                          "loudness_target_lufs": null,
+                          "gain_points": [],
+                          "envelope_offset_ms": 0,
+                          "envelope_duration_ms": null
+                        }
+                      ]
+                    },
+                    {
+                      "id": "audio-effects",
+                      "name": "音效",
+                      "role": "effect",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": false,
+                      "clips": []
+                    }
+                  ]
+                },
+                "edit": {
+                  "base_version_id": "timeline_ccba04d552634820974ded3274637258",
+                  "action": "update",
+                  "target_id": "audio-source",
+                  "values": {
+                    "loudness_target_lufs": -16.0
+                  },
+                  "raw_command": "精确音频编辑"
+                }
+              },
+              "base_version_id": "timeline_ccba04d552634820974ded3274637258",
+              "result_version_id": "timeline_54c4d1f728384717b09a5d423175903e",
+              "status": "applied",
+              "failure_reason": null,
+              "created_at": "2026-11-17T04:48:16.135004Z",
+              "applied_at": "2026-11-17T04:48:16.135004Z"
+            },
+            "montage": {
+              "graphic_overlays": [],
+              "aspect_ratio": "9:16",
+              "presenter_share_target": 0,
+              "presenter_share_actual": 0.0,
+              "id": "montage_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+              "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+              "script_id": null,
+              "script_title": "",
+              "status": "ready",
+              "cues": [],
+              "clips": [
+                {
+                  "transition_in_seconds": 0.0,
+                  "fade_envelope_rate": 1.0,
+                  "fade_envelope_offset_frames": 0.0,
+                  "fade_envelope_duration_frames": null,
+                  "visual_effects": {
+                    "fade_in_seconds": 0.0,
+                    "fade_out_seconds": 0.0,
+                    "zoom": 1.0,
+                    "offset_x": 0.0,
+                    "offset_y": 0.0,
+                    "rotation": 0.0,
+                    "beauty_strength": 0.0,
+                    "skin_exposure": 0.0,
+                    "exposure": 0.0,
+                    "contrast": 1.0,
+                    "saturation": 1.0,
+                    "temperature": 0.0
+                  },
+                  "fit_mode": "fit",
+                  "crop_x": 0.5,
+                  "crop_y": 0.5,
+                  "id": "clip-source",
+                  "cue_id": null,
+                  "asset_id": "asset_09fc843b007dc641",
+                  "segment_id": null,
+                  "source_reference": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                  "source_start_seconds": 10.0,
+                  "source_end_seconds": 18.0,
+                  "timeline_start_seconds": 0.0,
+                  "timeline_end_seconds": 8.0,
+                  "match_score": 0.0,
+                  "match_reasons": [
+                    "用户明确选择原片区间"
+                  ],
+                  "needs_confirmation": false,
+                  "role": "a_roll",
+                  "locked": false,
+                  "manually_selected": true,
+                  "person_render_id": null
+                }
+              ],
+              "duration_seconds": 8.0,
+              "low_confidence_clip_count": 0,
+              "audio_timeline": {
+                "format_version": 1,
+                "tracks": [
+                  {
+                    "id": "audio-original",
+                    "name": "原声",
+                    "role": "original",
+                    "gain_db": 0.0,
+                    "muted": false,
+                    "locked": false,
+                    "duck_under_voice": false,
+                    "clips": [
+                      {
+                        "id": "audio-source",
+                        "source_ref": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                        "name": "VID_20260529_122252_preview.mp4",
+                        "source_start_ms": 10000,
+                        "source_end_ms": 18000,
+                        "playback_rate": 1.0,
+                        "timeline_start_ms": 0,
+                        "gain_db": 0.0,
+                        "fade_in_ms": 0,
+                        "fade_out_ms": 0,
+                        "muted": false,
+                        "locked": false,
+                        "denoise_db": 0.0,
+                        "loudness_target_lufs": -16.0,
+                        "gain_points": [],
+                        "envelope_offset_ms": 0,
+                        "envelope_duration_ms": null,
+                        "editor_gain_points": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "audio-music",
+                    "name": "音乐",
+                    "role": "music",
+                    "gain_db": 0.0,
+                    "muted": false,
+                    "locked": false,
+                    "duck_under_voice": true,
+                    "clips": [
+                      {
+                        "id": "audio-2a9feafc09964244",
+                        "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+                        "name": "极简环境钢琴",
+                        "source_start_ms": 0,
+                        "source_end_ms": 8000,
+                        "playback_rate": 1.0,
+                        "timeline_start_ms": 0,
+                        "gain_db": -18.0,
+                        "fade_in_ms": 0,
+                        "fade_out_ms": 0,
+                        "muted": false,
+                        "locked": false,
+                        "denoise_db": 0.0,
+                        "loudness_target_lufs": null,
+                        "gain_points": [],
+                        "envelope_offset_ms": 0,
+                        "envelope_duration_ms": null,
+                        "editor_gain_points": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "audio-effects",
+                    "name": "音效",
+                    "role": "effect",
+                    "gain_db": 0.0,
+                    "muted": false,
+                    "locked": false,
+                    "duck_under_voice": false,
+                    "clips": []
+                  }
+                ]
+              },
+              "narration_reference": null,
+              "output_url": null,
+              "subtitle_url": null,
+              "message": "修改已保存到草稿；明确生成后更新成片。",
+              "created_at": "2026-11-17T04:15:00.393469Z",
+              "updated_at": "2026-11-17T04:48:16.160365Z"
+            },
+            "narration": null,
+            "restore_request": null,
+            "execution_readiness": {
+              "status": "authorization_ready",
+              "reason_code": null,
+              "device_admission": "not_checked"
+            }
+          }
+        },
+        {
+          "request": {
+            "operation_type": "EditAudioTimeline",
+            "audio_edit": {
+              "target_id": "audio-music",
+              "action": "track",
+              "values": {
+                "gain_db": -8
+              }
+            },
+            "request_id": "9a3d9e14-7997-44d2-9815-a7c0d25c786e",
+            "expected_timeline_version_id": "timeline_54c4d1f728384717b09a5d423175903e",
+            "expected_timeline_sequence": 6
+          },
+          "receipt": {
+            "operation": {
+              "id": "operation_28163e97dbcf415da7e22769a9cdb5bd",
+              "workspace_id": "local",
+              "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+              "proposal_id": "proposal_metadata_2a867ddcdfe2d955331dcfbd804379553863430ba13c4aa10c739ce857bf5b9c",
+              "operation_type": "EditAudioTimeline",
+              "payload": {
+                "base_version_id": "timeline_54c4d1f728384717b09a5d423175903e",
+                "expected_audio_timeline": {
+                  "format_version": 1,
+                  "tracks": [
+                    {
+                      "id": "audio-original",
+                      "name": "原声",
+                      "role": "original",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": false,
+                      "clips": [
+                        {
+                          "id": "audio-source",
+                          "source_ref": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                          "name": "VID_20260529_122252_preview.mp4",
+                          "source_start_ms": 10000,
+                          "source_end_ms": 18000,
+                          "playback_rate": 1.0,
+                          "timeline_start_ms": 0,
+                          "gain_db": 0.0,
+                          "fade_in_ms": 0,
+                          "fade_out_ms": 0,
+                          "muted": false,
+                          "locked": false,
+                          "denoise_db": 0.0,
+                          "loudness_target_lufs": -16.0,
+                          "gain_points": [],
+                          "envelope_offset_ms": 0,
+                          "envelope_duration_ms": null
+                        }
+                      ]
+                    },
+                    {
+                      "id": "audio-music",
+                      "name": "音乐",
+                      "role": "music",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": true,
+                      "clips": [
+                        {
+                          "id": "audio-2a9feafc09964244",
+                          "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+                          "name": "极简环境钢琴",
+                          "source_start_ms": 0,
+                          "source_end_ms": 8000,
+                          "playback_rate": 1.0,
+                          "timeline_start_ms": 0,
+                          "gain_db": -18.0,
+                          "fade_in_ms": 0,
+                          "fade_out_ms": 0,
+                          "muted": false,
+                          "locked": false,
+                          "denoise_db": 0.0,
+                          "loudness_target_lufs": null,
+                          "gain_points": [],
+                          "envelope_offset_ms": 0,
+                          "envelope_duration_ms": null
+                        }
+                      ]
+                    },
+                    {
+                      "id": "audio-effects",
+                      "name": "音效",
+                      "role": "effect",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": false,
+                      "clips": []
+                    }
+                  ]
+                },
+                "audio_timeline": {
+                  "format_version": 1,
+                  "tracks": [
+                    {
+                      "id": "audio-original",
+                      "name": "原声",
+                      "role": "original",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": false,
+                      "clips": [
+                        {
+                          "id": "audio-source",
+                          "source_ref": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                          "name": "VID_20260529_122252_preview.mp4",
+                          "source_start_ms": 10000,
+                          "source_end_ms": 18000,
+                          "playback_rate": 1.0,
+                          "timeline_start_ms": 0,
+                          "gain_db": 0.0,
+                          "fade_in_ms": 0,
+                          "fade_out_ms": 0,
+                          "muted": false,
+                          "locked": false,
+                          "denoise_db": 0.0,
+                          "loudness_target_lufs": -16.0,
+                          "gain_points": [],
+                          "envelope_offset_ms": 0,
+                          "envelope_duration_ms": null
+                        }
+                      ]
+                    },
+                    {
+                      "id": "audio-music",
+                      "name": "音乐",
+                      "role": "music",
+                      "gain_db": -8.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": true,
+                      "clips": [
+                        {
+                          "id": "audio-2a9feafc09964244",
+                          "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+                          "name": "极简环境钢琴",
+                          "source_start_ms": 0,
+                          "source_end_ms": 8000,
+                          "playback_rate": 1.0,
+                          "timeline_start_ms": 0,
+                          "gain_db": -18.0,
+                          "fade_in_ms": 0,
+                          "fade_out_ms": 0,
+                          "muted": false,
+                          "locked": false,
+                          "denoise_db": 0.0,
+                          "loudness_target_lufs": null,
+                          "gain_points": [],
+                          "envelope_offset_ms": 0,
+                          "envelope_duration_ms": null
+                        }
+                      ]
+                    },
+                    {
+                      "id": "audio-effects",
+                      "name": "音效",
+                      "role": "effect",
+                      "gain_db": 0.0,
+                      "muted": false,
+                      "locked": false,
+                      "duck_under_voice": false,
+                      "clips": []
+                    }
+                  ]
+                },
+                "edit": {
+                  "base_version_id": "timeline_54c4d1f728384717b09a5d423175903e",
+                  "action": "track",
+                  "target_id": "audio-music",
+                  "values": {
+                    "gain_db": -8.0
+                  },
+                  "raw_command": "精确音频编辑"
+                }
+              },
+              "base_version_id": "timeline_54c4d1f728384717b09a5d423175903e",
+              "result_version_id": "timeline_6e82e0720035495b90881414c26cc360",
+              "status": "applied",
+              "failure_reason": null,
+              "created_at": "2026-11-17T04:48:16.290071Z",
+              "applied_at": "2026-11-17T04:48:16.290071Z"
+            },
+            "montage": {
+              "graphic_overlays": [],
+              "aspect_ratio": "9:16",
+              "presenter_share_target": 0,
+              "presenter_share_actual": 0.0,
+              "id": "montage_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+              "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+              "script_id": null,
+              "script_title": "",
+              "status": "ready",
+              "cues": [],
+              "clips": [
+                {
+                  "transition_in_seconds": 0.0,
+                  "fade_envelope_rate": 1.0,
+                  "fade_envelope_offset_frames": 0.0,
+                  "fade_envelope_duration_frames": null,
+                  "visual_effects": {
+                    "fade_in_seconds": 0.0,
+                    "fade_out_seconds": 0.0,
+                    "zoom": 1.0,
+                    "offset_x": 0.0,
+                    "offset_y": 0.0,
+                    "rotation": 0.0,
+                    "beauty_strength": 0.0,
+                    "skin_exposure": 0.0,
+                    "exposure": 0.0,
+                    "contrast": 1.0,
+                    "saturation": 1.0,
+                    "temperature": 0.0
+                  },
+                  "fit_mode": "fit",
+                  "crop_x": 0.5,
+                  "crop_y": 0.5,
+                  "id": "clip-source",
+                  "cue_id": null,
+                  "asset_id": "asset_09fc843b007dc641",
+                  "segment_id": null,
+                  "source_reference": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                  "source_start_seconds": 10.0,
+                  "source_end_seconds": 18.0,
+                  "timeline_start_seconds": 0.0,
+                  "timeline_end_seconds": 8.0,
+                  "match_score": 0.0,
+                  "match_reasons": [
+                    "用户明确选择原片区间"
+                  ],
+                  "needs_confirmation": false,
+                  "role": "a_roll",
+                  "locked": false,
+                  "manually_selected": true,
+                  "person_render_id": null
+                }
+              ],
+              "duration_seconds": 8.0,
+              "low_confidence_clip_count": 0,
+              "audio_timeline": {
+                "format_version": 1,
+                "tracks": [
+                  {
+                    "id": "audio-original",
+                    "name": "原声",
+                    "role": "original",
+                    "gain_db": 0.0,
+                    "muted": false,
+                    "locked": false,
+                    "duck_under_voice": false,
+                    "clips": [
+                      {
+                        "id": "audio-source",
+                        "source_ref": "workspace://历史成片_待审核/VID_20260529_122252_preview.mp4",
+                        "name": "VID_20260529_122252_preview.mp4",
+                        "source_start_ms": 10000,
+                        "source_end_ms": 18000,
+                        "playback_rate": 1.0,
+                        "timeline_start_ms": 0,
+                        "gain_db": 0.0,
+                        "fade_in_ms": 0,
+                        "fade_out_ms": 0,
+                        "muted": false,
+                        "locked": false,
+                        "denoise_db": 0.0,
+                        "loudness_target_lufs": -16.0,
+                        "gain_points": [],
+                        "envelope_offset_ms": 0,
+                        "envelope_duration_ms": null,
+                        "editor_gain_points": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "audio-music",
+                    "name": "音乐",
+                    "role": "music",
+                    "gain_db": -8.0,
+                    "muted": false,
+                    "locked": false,
+                    "duck_under_voice": true,
+                    "clips": [
+                      {
+                        "id": "audio-2a9feafc09964244",
+                        "source_ref": "artifacts/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698/b156d14c464df0315654f5bbc997269aa56a0759f727ff0aba722c7582bbd970.wav",
+                        "name": "极简环境钢琴",
+                        "source_start_ms": 0,
+                        "source_end_ms": 8000,
+                        "playback_rate": 1.0,
+                        "timeline_start_ms": 0,
+                        "gain_db": -18.0,
+                        "fade_in_ms": 0,
+                        "fade_out_ms": 0,
+                        "muted": false,
+                        "locked": false,
+                        "denoise_db": 0.0,
+                        "loudness_target_lufs": null,
+                        "gain_points": [],
+                        "envelope_offset_ms": 0,
+                        "envelope_duration_ms": null,
+                        "editor_gain_points": []
+                      }
+                    ]
+                  },
+                  {
+                    "id": "audio-effects",
+                    "name": "音效",
+                    "role": "effect",
+                    "gain_db": 0.0,
+                    "muted": false,
+                    "locked": false,
+                    "duck_under_voice": false,
+                    "clips": []
+                  }
+                ]
+              },
+              "narration_reference": null,
+              "output_url": null,
+              "subtitle_url": null,
+              "message": "修改已保存到草稿；明确生成后更新成片。",
+              "created_at": "2026-11-17T04:15:00.393469Z",
+              "updated_at": "2026-11-17T04:48:16.305770Z"
+            },
+            "narration": null,
+            "restore_request": null,
+            "execution_readiness": {
+              "status": "authorization_ready",
+              "reason_code": null,
+              "device_admission": "not_checked"
+            }
+          }
+        }
+      ],
+      "render_start": {
+        "request": {
+          "script_id": null,
+          "input_digest": "f1dd7d60cffe417a2192b03ec56ab4a891d5e98c7f4195a32062b16a9cf99c92",
+          "requirements_confirmed": true
+        },
+        "receipt": {
+          "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+          "task_execution": {
+            "task_kind": "source_video_edit",
+            "next_required_stage": "render",
+            "not_applicable_preparation_kinds": [
+              "narration",
+              "montage"
+            ]
+          },
+          "job": {
+            "id": "job_d74a08129e1c45a4a397f5b1fe165e4f",
+            "workspace_id": "local",
+            "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+            "kind": "creation_task_execution",
+            "idempotency_key": "creation-execution:task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421:f1dd7d60cffe417a2192b03ec56ab4a891d5e98c7f4195a32062b16a9cf99c92:retry:1",
+            "input_digest": "f1dd7d60cffe417a2192b03ec56ab4a891d5e98c7f4195a32062b16a9cf99c92",
+            "status": "queued",
+            "progress": 66,
+            "attempt": 4,
+            "output_refs": [
+              "workspaces/local/tasks/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/audio-delivery/job_d74a08129e1c45a4a397f5b1fe165e4f/final_mux-127455989800a4d9267457f5aa066c6d95bfeaae5dc7b16b952b8a3cc998ddc2.mp4"
+            ],
+            "failure_reason": null,
+            "impact": null,
+            "repair_action": null,
+            "created_at": "2026-11-17T04:36:27.526173Z",
+            "started_at": "2026-11-17T04:36:52.689713Z",
+            "finished_at": null,
+            "updated_at": "2026-11-17T04:48:44.706021Z"
+          },
+          "stages": [
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T04:36:36.975442+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T04:36:41.132242+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T04:36:52.022679+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T04:36:57.774715+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "pending",
+              "reason": null,
+              "at": "2026-11-17T04:48:44.706021+00:00"
+            }
+          ],
+          "current_stage": "render",
+          "waiting_reason": null,
+          "status_updated_at": "2026-11-17T04:48:44.806857+00:00",
+          "input_rejection": null,
+          "narration_usage": {
+            "budget": null,
+            "scope": null,
+            "used_seconds": 0,
+            "used_output_bytes": 0,
+            "consumption_known": true,
+            "unsettled": []
+          },
+          "visual_decisions": {
+            "items": [],
+            "total_count": 0,
+            "truncated": false
+          },
+          "video_ready": false,
+          "cover_status": "pending",
+          "cover_message": "尚未生成封面，请单独制作或选择封面。"
+        }
+      },
+      "output": {
+        "path": "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/voice-piano-audibility-v2-2026-11-17.mp4",
+        "sha256": "290697c5499dfba200f23f5d39663b00f99d5cf2fd632e0faeb39f98d6bdb023",
+        "timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe_render_e391fe02b64a247a6984655d9d4c564376932b010fe49316b17e0cd56227ec71",
+        "timeline_sequence": 8,
+        "duration": "8.000000",
+        "audio": {
+          "codec_name": "aac",
+          "sample_rate": "48000",
+          "channels": 2
+        },
+        "version_headers_match": true,
+        "decode_exit_code": 0
+      },
+      "human_listening": {
+        "status": "not_accepted",
+        "feedback": "没有听到钢琴声",
+        "player": "QuickTime Player"
+      },
+      "measurements": {
+        "v1_mean_db": -26.8,
+        "v1_peak_db": -8.6,
+        "v2_mean_db": -19.6,
+        "v2_peak_db": -1.6,
+        "piano_source_first8s_mean_db": -29.4,
+        "piano_source_first8s_peak_db": -6.2,
+        "note": "RMS/peak measurements are not LUFS or human listening acceptance"
+      }
+    },
+    "audibility_v3": {
+      "parameters": {
+        "voice_loudness_target_lufs": -16,
+        "music_loudness_target_lufs": -20,
+        "music_clip_gain_db": 0,
+        "music_track_gain_db": -3,
+        "duck_under_voice": true
+      },
+      "output": {
+        "path": "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/voice-piano-balance-v3-2026-11-17.mp4",
+        "sha256": "693fab43c90a71d8eebecf3bffc32df79fdd75636ee7e4827404fc03b01a7059",
+        "timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe_render_602eba1a1ea860f6dcac4072c6d48b1e8d04f7859dccee78c911b1225daa24dd",
+        "timeline_sequence": 11,
+        "duration": "8.000000",
+        "audio": {
+          "codec_name": "aac",
+          "sample_rate": "48000",
+          "channels": 2
+        },
+        "version_headers_match": true,
+        "decode_exit_code": 0
+      },
+      "observation": {
+        "operation": "output_observation",
+        "target_refs": [],
+        "input_digest": "d0a270d5e19946a74dc1af8b09aa2439230d038f5edd084cc8b50ecf627848a9",
+        "created_at": "2026-11-17T04:57:42.109621Z",
+        "job_id": "job_media_aa4cfbbb2fd1138400a44b842093b99826e0bfce663d109be42a79549c4f321b",
+        "status": "succeeded",
+        "result_kind": "observation",
+        "result_url": "/api/creation-tasks/task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421/media-jobs/job_media_aa4cfbbb2fd1138400a44b842093b99826e0bfce663d109be42a79549c4f321b",
+        "device_request_id": "0707bd6aca2c4980a7cfcf3ca5755e4a",
+        "waiting_reason": null,
+        "base_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe_render_602eba1a1ea860f6dcac4072c6d48b1e8d04f7859dccee78c911b1225daa24dd",
+        "result": {
+          "observation_id": "job_media_aa4cfbbb2fd1138400a44b842093b99826e0bfce663d109be42a79549c4f321b",
+          "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+          "timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe_render_602eba1a1ea860f6dcac4072c6d48b1e8d04f7859dccee78c911b1225daa24dd",
+          "timeline_sequence": 11,
+          "observed_at": "2026-11-17T04:57:47.507688+00:00",
+          "target": {
+            "kind": "final",
+            "job_id": null,
+            "artifact_id": null
+          },
+          "ocr_execution": {
+            "status": "unavailable",
+            "reason": "本地 OCR 未配置或输出观察执行范围尚未标定。"
+          },
+          "output": {
+            "artifact_id": "artifact_final_mux_44df4375bcbcaab2df57f7596e568dc8b282d6457fa8e225e1edda9ce6ac186b",
+            "artifact_kind": "rendered_video",
+            "sha256": "693fab43c90a71d8eebecf3bffc32df79fdd75636ee7e4827404fc03b01a7059",
+            "registered_width": 1080,
+            "registered_height": 1920,
+            "size_bytes": 4339612,
+            "producer_job_id": "job_d74a08129e1c45a4a397f5b1fe165e4f"
+          },
+          "output_role": "composed_output",
+          "material_references": [],
+          "measurement_scope": "actual_output_bounded_frames",
+          "media": {
+            "width": 1080,
+            "height": 1920,
+            "duration_seconds": 8.0,
+            "video_codec": "h264",
+            "video_frame_rate": "30/1",
+            "audio_stream_count": 1
+          },
+          "samples": [
+            {
+              "id": "frame-0",
+              "timestamp_seconds": 1.0,
+              "width": 720,
+              "height": 1280,
+              "sha256": "9946be0dbec4b21ca9e9de5d5cd37979257668e39990b336e598fcf5b4805bcc",
+              "pixel_mean_rgb": [
+                78.969,
+                77.482,
+                74.887
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            },
+            {
+              "id": "frame-1",
+              "timestamp_seconds": 4.0,
+              "width": 720,
+              "height": 1280,
+              "sha256": "b6c281ac923a8c6f4806f423316289fb2129c2aa7ba18f525093875ea551dbea",
+              "pixel_mean_rgb": [
+                68.515,
+                72.318,
+                73.334
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            },
+            {
+              "id": "frame-2",
+              "timestamp_seconds": 7.0,
+              "width": 720,
+              "height": 1280,
+              "sha256": "e472425802589c2382b7d6ed8594d663cf626291df9e19e7f6d161dad8b0e710",
+              "pixel_mean_rgb": [
+                83.696,
+                79.233,
+                74.778
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            }
+          ],
+          "ocr_model_id": null,
+          "unavailable": [
+            {
+              "scope": "visual_semantics",
+              "reason": "本地合成画面的语义理解尚无受许可执行能力；像素测量不代表看懂内容。"
+            },
+            {
+              "scope": "speech_and_listening",
+              "reason": "本次只观察实际画面，没有转写或听感检查。"
+            },
+            {
+              "scope": "ocr",
+              "reason": "本地 OCR 未配置或输出观察执行范围尚未标定；未提取文字。"
+            }
+          ]
+        },
+        "failure_reason": null,
+        "repair_action": null,
+        "resource_wait": null
+      },
+      "human_listening": {
+        "feedback": "能听到钢琴声了，这个背景音乐的强度应该是可以通过自然语言或者是程序的拉动去放大缩小的。",
+        "piano_audible": true,
+        "full_balance_acceptance": "not explicitly stated",
+        "requested_control": "natural language and draggable volume control"
+      },
+      "playback": {
+        "app": "QuickTime Player",
+        "started": true
+      }
+    },
+    "agent_resource_readback_and_undo_rejection": {
+      "turn_id": "3814bada-b963-4b68-88ae-d6af1e08b476",
+      "status": "stopped",
+      "event_count": 33,
+      "tool_counts": {
+        "读取当前任务（发送前）": 1,
+        "读取修改历史": 2,
+        "回查资源采用与撤销来源": 2,
+        "回查资源音频导入": 1,
+        "记录本次要求": 1,
+        "撤销原修改": 1,
+        "重做原修改": 1,
+        "查询原撤销重做请求": 1,
+        "读取任务对象细节": 2,
+        "保存明确修改": 2,
+        "读取当前修改": 1,
+        "准备类型化修改预览": 1
+      },
+      "usage_status": "unknown",
+      "provider_usage": null,
+      "compaction_count": 1,
+      "read_audio_resource_import": "succeeded",
+      "undo": "rejected by old global restore instruction check; no undo performed",
+      "stop_reason": "business edits finished; long tail context compaction stopped using formal stop endpoint",
+      "token_boundary": "provider usage unavailable remains unknown"
+    },
+    "volume_control": {
+      "contract": "Timeline audio track/clip gain_db shared by natural-language editing, range control and numeric input",
+      "range_db": [
+        -60,
+        12
+      ],
+      "commit": "slider draft is persisted on blur/save; does not remix an already encoded MP4 live",
+      "gui_verification": {
+        "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+        "method": "keyboard ArrowRight then Tab",
+        "before_blur": {
+          "sequence": 2,
+          "original_track_gain_db": 0
+        },
+        "after_blur": {
+          "sequence": 3,
+          "original_track_gain_db": 1
+        },
+        "screenshot": "output/acceptance/audio-volume-slider-2026-11-17.jpg"
+      },
+      "natural_language_real_round": {
+        "instruction": "把背景钢琴音乐调大3分贝，原声保持不变。保存修改后告诉我调整前后的音乐音量。",
+        "turn_id": "f50c1ea6-7b90-41fb-8333-9799846a3c15",
+        "timeline_version_id": "timeline_e569968325eb467e86428f2f8c4a21cb",
+        "timeline_sequence": 6,
+        "music_clip_gain_before_db": -18,
+        "music_clip_gain_after_db": -15,
+        "original_track_gain_db": 1,
+        "music_track_gain_db": 0,
+        "provider_turns": [
+          {
+            "turn_id": "f50c1ea6-7b90-41fb-8333-9799846a3c15",
+            "status": "completed",
+            "usage_status": "known",
+            "provider_usage": {
+              "input": 97323,
+              "output": 2053,
+              "cacheRead": 187136,
+              "cacheWrite": 0,
+              "totalTokens": 286512
+            }
+          },
+          {
+            "turn_id": "77a9a2ce-82bb-51f2-9ea0-ac1aab83555f",
+            "status": "completed",
+            "usage_status": "known",
+            "provider_usage": {
+              "input": 101742,
+              "output": 1239,
+              "cacheRead": 100821,
+              "cacheWrite": 0,
+              "totalTokens": 203802
+            }
+          }
+        ],
+        "gui_after_reload": {
+          "music_slider_db": -15,
+          "music_numeric_input_db": -15,
+          "save_button_disabled": true,
+          "screenshot": "output/acceptance/audio-volume-natural-language-2026-11-17.png"
+        },
+        "rendered_after_this_edit": false
+      },
+      "verification_limit": "Slider keyboard/blur persistence and natural-language edit share the stored gain; continuous live audition and pointer dragging were not verified."
+    },
+    "startup_recovery": {
+      "observed_failure": "KeyError: expected_timeline_version_id in assistant business candidate projection after audio resource import",
+      "cause": "resource import stripped the frozen timeline source fields",
+      "status": "restored",
+      "original_job_and_request_records": "retained",
+      "commit": "cd0df1a9",
+      "api_port": 8000,
+      "verified_old_source_markers": 1,
+      "regression": "128 passed; independent read-only diff review accepted",
+      "restart_entrypoint": "app.main:create_app --factory",
+      "second_restart_with_same_turn_fix": "API restored with 3376bb8a and original environment; original request/history and same-turn reads verified"
+    },
+    "targeted_audio_restore": {
+      "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+      "original_adoption_operation_id": "operation_c9084b7a74b1475d9cfe2ee8a9e191fc",
+      "undo": {
+        "turn_id": "d3fab6b1-af60-4d08-90ee-148ad12f5606",
+        "receipt": {
+          "kind": "timeline_restore_request",
+          "action": "query",
+          "request_id": "ab4cf470-f666-5a70-9e3f-f9a04c845483",
+          "receipt": {
+            "request_id": "ab4cf470-f666-5a70-9e3f-f9a04c845483",
+            "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+            "action": "undo",
+            "target_operation_id": "operation_c9084b7a74b1475d9cfe2ee8a9e191fc",
+            "status": "applied",
+            "operation_id": "operation_4403c84bfe5642cdac32250208a2851c",
+            "result_version_id": "timeline_ef3257a2be7b4ac8add0391e2274e2a2",
+            "execution_readiness": {
+              "status": "authorization_ready",
+              "reason_code": null,
+              "device_admission": "not_checked"
+            },
+            "failure": null
+          },
+          "failure": null
+        },
+        "sequence": 4,
+        "tracks": [
+          {
+            "id": "audio-original",
+            "gain_db": 1.0,
+            "clip_count": 1
+          },
+          {
+            "id": "audio-music",
+            "gain_db": 0.0,
+            "clip_count": 0
+          },
+          {
+            "id": "audio-effects",
+            "gain_db": 0.0,
+            "clip_count": 0
+          }
+        ],
+        "current_resource_present": false,
+        "usage_status": "known",
+        "provider_usage": {
+          "input": 118435,
+          "output": 4081,
+          "cacheRead": 674900,
+          "cacheWrite": 0,
+          "totalTokens": 797416
+        },
+        "known_gap": "Same-turn readback failure fixed by 3376bb8a; subsequent real redo and object readback passed."
+      },
+      "redo_rejected_attempts": [
+        {
+          "turn_id": "0a16d975-f8e4-4204-b3f7-5f6e98c5869b",
+          "status": "completed",
+          "business_result": "rejected, original adoption not restored",
+          "receipt": {
+            "kind": "timeline_restore_request",
+            "action": "redo",
+            "request_id": "76cede66-d3f5-5182-b7ab-54259020b574",
+            "receipt": null,
+            "failure": {
+              "reason": "不能用整项历史恢复代替局部修改，任务保持不变。",
+              "repair_action": "读取当前对象和原请求，按拒绝原因修订后再提交。",
+              "error": "http_409",
+              "stage": "business_request",
+              "request_id": "76cede66-d3f5-5182-b7ab-54259020b574",
+              "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+              "submission_effect": "rejected",
+              "query_url": "/api/creation-tasks/task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810"
+            }
+          },
+          "usage_status": "known",
+          "provider_usage": {
+            "input": 245338,
+            "output": 2959,
+            "cacheRead": 367668,
+            "cacheWrite": 0,
+            "totalTokens": 615965
+          },
+          "compaction_events": 0
+        },
+        {
+          "turn_id": "097e5539-2430-4523-85aa-cf65b49d2333",
+          "status": "completed",
+          "business_result": "rejected, original adoption not restored",
+          "receipt": {
+            "kind": "timeline_restore_request",
+            "action": "redo",
+            "request_id": "41884af5-ca33-58ad-bc25-9b8be73a9d73",
+            "receipt": null,
+            "failure": {
+              "reason": "不能用整项历史恢复代替局部修改，任务保持不变。",
+              "repair_action": "读取当前对象和原请求，按拒绝原因修订后再提交。",
+              "error": "http_409",
+              "stage": "business_request",
+              "request_id": "41884af5-ca33-58ad-bc25-9b8be73a9d73",
+              "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+              "submission_effect": "rejected",
+              "query_url": "/api/creation-tasks/task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810"
+            }
+          },
+          "usage_status": "known",
+          "provider_usage": {
+            "input": 84162,
+            "output": 6624,
+            "cacheRead": 530636,
+            "cacheWrite": 0,
+            "totalTokens": 621422
+          },
+          "compaction_events": 2
+        }
+      ],
+      "redo": {
+        "turn_id": "421d6aa7-2603-450e-93dd-3d81389740c1",
+        "receipt": {
+          "kind": "timeline_restore_request",
+          "action": "redo",
+          "request_id": "f07ec8e0-a792-5b24-baa7-29e8303f309e",
+          "receipt": {
+            "request_id": "f07ec8e0-a792-5b24-baa7-29e8303f309e",
+            "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+            "action": "redo",
+            "target_operation_id": "operation_c9084b7a74b1475d9cfe2ee8a9e191fc",
+            "status": "applied",
+            "operation_id": "operation_a07020c473ab4ae6bb45ad31c6751cc4",
+            "result_version_id": "timeline_f38b3341700a458dbe25002a61685e37",
+            "execution_readiness": {
+              "status": "authorization_ready",
+              "reason_code": null,
+              "device_admission": "not_checked"
+            },
+            "failure": null,
+            "owned_version_transition": {
+              "scope": "same_turn_restore",
+              "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+              "request_id": "f07ec8e0-a792-5b24-baa7-29e8303f309e",
+              "operation_id": "operation_a07020c473ab4ae6bb45ad31c6751cc4",
+              "action": "redo",
+              "assistant_turn_id": "421d6aa7-2603-450e-93dd-3d81389740c1",
+              "input_id": null,
+              "from": {
+                "timeline_version_id": "timeline_ef3257a2be7b4ac8add0391e2274e2a2",
+                "timeline_sequence": 4
+              },
+              "to": {
+                "timeline_version_id": "timeline_f38b3341700a458dbe25002a61685e37",
+                "timeline_sequence": 5
+              }
+            }
+          },
+          "failure": null
+        },
+        "sequence": 5,
+        "tracks": [
+          {
+            "id": "audio-original",
+            "gain_db": 1.0,
+            "clip_count": 1
+          },
+          {
+            "id": "audio-music",
+            "gain_db": 0.0,
+            "clip_count": 1
+          },
+          {
+            "id": "audio-effects",
+            "gain_db": 0.0,
+            "clip_count": 0
+          }
+        ],
+        "current_resource_present": true,
+        "usage_status": "known",
+        "provider_usage": {
+          "input": 29223,
+          "output": 2035,
+          "cacheRead": 390784,
+          "cacheWrite": 0,
+          "totalTokens": 422042
+        },
+        "same_turn_readback": "resource history and task object reads succeeded after restore",
+        "fix_commit": "3376bb8a",
+        "tests": {
+          "node": 17,
+          "python": 47
+        }
+      },
+      "remaining_language_limit": "First redo phrasing put action before named operation and was rejected. Next round omitted target_operation_id. Explicit target parameter succeeded; broad natural-language history targeting not accepted.",
+      "governance_timeline_history": [
+        {
+          "timeline_version_id": "timeline_d0f3567db9c7433db2023aa6bd93e65d",
+          "sequence": 2,
+          "parent_version_id": "timeline_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+          "resource_present": true,
+          "transition": "added",
+          "operation_id": "operation_c9084b7a74b1475d9cfe2ee8a9e191fc",
+          "operation_type": "EditAudioTimeline"
+        },
+        {
+          "timeline_version_id": "timeline_7d68a0ddf39646859bd7e5d46889d15d",
+          "sequence": 3,
+          "parent_version_id": "timeline_d0f3567db9c7433db2023aa6bd93e65d",
+          "resource_present": true,
+          "transition": "retained",
+          "operation_id": "operation_74092098c7304ce3ac2815a565ef2a7f",
+          "operation_type": "EditAudioTimeline"
+        },
+        {
+          "timeline_version_id": "timeline_ef3257a2be7b4ac8add0391e2274e2a2",
+          "sequence": 4,
+          "parent_version_id": "timeline_7d68a0ddf39646859bd7e5d46889d15d",
+          "resource_present": false,
+          "transition": "removed",
+          "operation_id": "operation_4403c84bfe5642cdac32250208a2851c",
+          "operation_type": "UndoTimelineVersion"
+        },
+        {
+          "timeline_version_id": "timeline_f38b3341700a458dbe25002a61685e37",
+          "sequence": 5,
+          "parent_version_id": "timeline_ef3257a2be7b4ac8add0391e2274e2a2",
+          "resource_present": true,
+          "transition": "added",
+          "operation_id": "operation_a07020c473ab4ae6bb45ad31c6751cc4",
+          "operation_type": "RedoTimelineVersion"
+        }
+      ]
+    },
+    "final_mix_governance_readback": {
+      "task_id": "task_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+      "current_resource_present": true,
+      "timeline_history": [
+        {
+          "timeline_version_id": "timeline_c129f81d6a7a479b952173aafe72f2b9",
+          "sequence": 2,
+          "parent_version_id": "timeline_source_867d49458ce6f42eb51bdd0db5c260f892632967596fbb144e64c06416333421",
+          "resource_present": true,
+          "transition": "added",
+          "operation_id": "operation_eeb4681c9b9743d18662c88cf482792d",
+          "operation_type": "EditAudioTimeline"
+        },
+        {
+          "timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe165e4f",
+          "sequence": 3,
+          "parent_version_id": "timeline_c129f81d6a7a479b952173aafe72f2b9",
+          "resource_present": true,
+          "transition": "retained",
+          "operation_id": null,
+          "operation_type": "unknown"
+        },
+        {
+          "timeline_version_id": "timeline_0918bd99a64b4e598b8e3f57258a0c4e",
+          "sequence": 4,
+          "parent_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe165e4f",
+          "resource_present": false,
+          "transition": "removed",
+          "operation_id": "operation_984f207679d649d1ada04e000b51cec5",
+          "operation_type": "UndoTimelineVersion"
+        },
+        {
+          "timeline_version_id": "timeline_ccba04d552634820974ded3274637258",
+          "sequence": 5,
+          "parent_version_id": "timeline_0918bd99a64b4e598b8e3f57258a0c4e",
+          "resource_present": true,
+          "transition": "added",
+          "operation_id": "operation_93fa3f9413c44d1c838241aebec5e5f0",
+          "operation_type": "EditAudioTimeline"
+        },
+        {
+          "timeline_version_id": "timeline_54c4d1f728384717b09a5d423175903e",
+          "sequence": 6,
+          "parent_version_id": "timeline_ccba04d552634820974ded3274637258",
+          "resource_present": true,
+          "transition": "retained",
+          "operation_id": "operation_53d8029f60e1443daa51e8a59f5f25e9",
+          "operation_type": "EditAudioTimeline"
+        },
+        {
+          "timeline_version_id": "timeline_6e82e0720035495b90881414c26cc360",
+          "sequence": 7,
+          "parent_version_id": "timeline_54c4d1f728384717b09a5d423175903e",
+          "resource_present": true,
+          "transition": "retained",
+          "operation_id": "operation_28163e97dbcf415da7e22769a9cdb5bd",
+          "operation_type": "EditAudioTimeline"
+        },
+        {
+          "timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe_render_e391fe02b64a247a6984655d9d4c564376932b010fe49316b17e0cd56227ec71",
+          "sequence": 8,
+          "parent_version_id": "timeline_6e82e0720035495b90881414c26cc360",
+          "resource_present": true,
+          "transition": "retained",
+          "operation_id": null,
+          "operation_type": "unknown"
+        },
+        {
+          "timeline_version_id": "timeline_19e182d08f51421da2131703439f838b",
+          "sequence": 9,
+          "parent_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe_render_e391fe02b64a247a6984655d9d4c564376932b010fe49316b17e0cd56227ec71",
+          "resource_present": true,
+          "transition": "retained",
+          "operation_id": "operation_51544d78ce8d47588bb03701a045cc18",
+          "operation_type": "EditAudioTimeline"
+        },
+        {
+          "timeline_version_id": "timeline_853bc9c0df6c42108949237c695963e3",
+          "sequence": 10,
+          "parent_version_id": "timeline_19e182d08f51421da2131703439f838b",
+          "resource_present": true,
+          "transition": "retained",
+          "operation_id": "operation_ee20bdb2c471404fbb547bb7afcee636",
+          "operation_type": "EditAudioTimeline"
+        },
+        {
+          "timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe_render_602eba1a1ea860f6dcac4072c6d48b1e8d04f7859dccee78c911b1225daa24dd",
+          "sequence": 11,
+          "parent_version_id": "timeline_853bc9c0df6c42108949237c695963e3",
+          "resource_present": true,
+          "transition": "retained",
+          "operation_id": null,
+          "operation_type": "unknown"
+        }
+      ],
+      "import_job_ids": [
+        "job_media_1e32aea1faa3cb5fc4f2e5331fa1d930273304cd48d295931d6258d5ee647698"
+      ],
+      "observations": [
+        {
+          "event_id": "event_job_media_247a4c2cdb5ab6a5d9f7fc1fae5f700211466b3af5773085acc241972d3caa22_result",
+          "job_id": "job_media_247a4c2cdb5ab6a5d9f7fc1fae5f700211466b3af5773085acc241972d3caa22",
+          "observation_id": "job_media_247a4c2cdb5ab6a5d9f7fc1fae5f700211466b3af5773085acc241972d3caa22",
+          "timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe165e4f",
+          "artifact_id": "artifact_final_mux_127455989800a4d9267457f5aa066c6d95bfeaae5dc7b16b952b8a3cc998ddc2",
+          "validation": "unknown",
+          "reason": "结果事件须结合原Job终态判断，未重新验证文件或媒体",
+          "job_status": "succeeded"
+        },
+        {
+          "event_id": "event_job_media_aa4cfbbb2fd1138400a44b842093b99826e0bfce663d109be42a79549c4f321b_result",
+          "job_id": "job_media_aa4cfbbb2fd1138400a44b842093b99826e0bfce663d109be42a79549c4f321b",
+          "observation_id": "job_media_aa4cfbbb2fd1138400a44b842093b99826e0bfce663d109be42a79549c4f321b",
+          "timeline_version_id": "timeline_delivery_job_d74a08129e1c45a4a397f5b1fe_render_602eba1a1ea860f6dcac4072c6d48b1e8d04f7859dccee78c911b1225daa24dd",
+          "artifact_id": "artifact_final_mux_44df4375bcbcaab2df57f7596e568dc8b282d6457fa8e225e1edda9ce6ac186b",
+          "validation": "unknown",
+          "reason": "结果事件须结合原Job终态判断，未重新验证文件或媒体",
+          "job_status": "succeeded"
+        }
+      ],
+      "media_validation": "unknown"
+    }
+  }
 }
