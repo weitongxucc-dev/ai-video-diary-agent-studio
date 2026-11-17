@@ -8,11 +8,11 @@
 
 对已登记 Skill 可调用 `GET /api/editing-resources/{resource_id}/preflight?version=1` 回查安装前检查、能力声明、采用和回滚边界。该接口只读，不下载、不安装、不连接外部服务；运行时仍须先通过包内 manifest 校验。
 
-底部资源在产品上按以下类型组织：素材、技能、模板、字幕、配音、音效、音乐、文本/贴纸、滤镜、转场和动效。当前生产入口已经接通的是素材检索、受控 Skill 读取、模板/视觉组件、字幕、配音、OpenFilm `Glass Pulse` 音效、画面效果、文本/贴纸和内置转场。OpenFilm `Glitch` 已进入目录并可预览，但 CSS 转场写入适配仍未完成，因此保持 `catalog_only`；音乐仍是 `catalog_only`，滤镜/LUT 是 `planned`。
+底部资源在产品上按以下类型组织：素材、技能、模板、字幕、配音、音效、音乐、文本/贴纸、滤镜、转场和动效。当前生产入口已经接通的是素材检索、受控 Skill 读取、模板/视觉组件、字幕、配音、OpenFilm `Glass Pulse` 音效、画面效果、文本/贴纸和内置转场。OpenFilm `Glitch` v2 已通过固定版视觉模板接通原 CSS 的0.6秒覆盖动画，支持预览、采用和撤销；它不混合两侧片段或更改源区间；OpenFilm「极简环境钢琴」已接通导入、采用、混音和撤销，滤镜/LUT 是 `planned`。
 
-当前随版本发布的外部 Skill 包括 `cut-as-code-video-cut`（WhiteTowerAI/cut-as-code，`a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4`）和 `openfilm-replicate`（openfilm/skill-replicate，`eef1ee5eda2a2aaeec60a3f133d73b86dd53c053`）。二者只作为方法文档适配进入曜核，必须通过 `read_creation_skill` 和现有任务工具执行；网络、Shell、任意代码、外部下载及第三方运行时均未导入。
+当前随版本发布的外部 Skill 包括 `cut-as-code-video-cut`（WhiteTowerAI/cut-as-code，`a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4`）和 `openfilm-replicate`（openfilm/skill-replicate，`eef1ee5eda2a2aaeec60a3f133d73b86dd53c053`），以及 `editing-videos`（joshcirre/editing-videos，`7a68b6070c3afc3be82396fb252e36340d1bf70f`）。三者只作为方法文档适配进入曜核，必须通过 `read_creation_skill` 和现有任务工具执行；网络、Shell、任意代码、外部下载及第三方运行时均未导入。
 
-它的 manifest 还声明了 package-time 安装检查、`read_creation_skill` 只读采用入口、明确编辑授权要求，以及不删除用户数据的固定版本回滚边界。目录会同时回带 `license_spdx`、输入/输出/权限/依赖和评测状态；Skill 资源在 HTTP 资源目录中保持 `connected`，Agent Skill 目录中保持 `installed`，`Glass Pulse` 音效为 `connected`，音乐仍为 `catalog_only`，滤镜/LUT 仍为 `planned`。
+它的 manifest 还声明了 package-time 安装检查、`read_creation_skill` 只读采用入口、明确编辑授权要求，以及不删除用户数据的固定版本回滚边界。目录会同时回带 `license_spdx`、输入/输出/权限/依赖和评测状态；Skill 资源在 HTTP 资源目录中保持 `connected`，Agent Skill 目录中保持 `installed`，`Glass Pulse` 音效为 `connected`，OpenFilm 钢琴音乐为 `connected`，滤镜/LUT 仍为 `planned`。
 
 ## 采用边界
 
@@ -25,4 +25,4 @@
 
 ## 后续顺序
 
-资源目录、面板和受控 Skill 导入已形成第一版纵向切片。下一步按真实业务入口补齐贴纸、滤镜、LUT、音乐和音效的独立资源包，并为每类资源补齐真实预览、采用回执和输出观察；OTIO/FCPXML/EDL 交换和外部 Provider 放在稳定的资源 provenance 与时间线写入边界之后。
+资源目录、面板和受控 Skill 导入已形成第一版纵向切片。下一步按真实业务入口扩充贴纸、滤镜、LUT、音乐和音效的独立资源包，并为每类资源补齐真实预览、采用回执和输出观察；OTIO/FCPXML/EDL 交换和外部 Provider 放在稳定的资源 provenance 与时间线写入边界之后。

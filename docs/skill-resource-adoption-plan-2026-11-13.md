@@ -20,7 +20,7 @@
 
 | OpenFilm Replicate Skill | [openfilm/skill-replicate](https://github.com/openfilm/skill-replicate)，`eef1ee5eda2a2aaeec60a3f133d73b86dd53c053` | MIT | `study → render → compare → look` 的参考视频分析与受控复核方法 | OpenFilm 自己的 CLI、服务账号和第二套生产事实源 |
 
-该 Skill 的运行声明是 `method-only`、`runnable=false`、关闭 network/shell/arbitrary code；当前证据是 manifest 校验和工具契约测试，不代表真实媒体生产已经完成。
+该 Skill 的运行声明是 `method-only`、`runnable=false`、关闭 network/shell/arbitrary code；manifest 与工具契约已有验证；2026-11-17 的真实 provider 已读取 editing-videos 方法并调用模板回查和有界输出观察。该回合证明方法可被读取并用于工具执行，仍不等于全部方法效果评估完成。
 
 ## 下一批候选
 
@@ -65,10 +65,10 @@
 | 模板 | `connected` | 当前仓库内的 OpenFilm HTML/RenderComp 视觉模板及 provenance |
 | 字幕/文本 | `connected` | ASR、字幕、文本叠加和编辑提案入口 |
 | 配音 | `connected` | 工作区授权的版本化声音档案和配音入口 |
-| 音乐 | `connected` | OpenFilm 0.3.2「极简环境钢琴」，45.035 秒；固定来源、MP3、WAV 预览和 manifest；通过任务音频导入、编辑提案、时间线采用/撤销；无有效人声的音乐合成已修复，旁白/原声侧链分组渲染仍有限制 |
+| 音乐 | `connected` | OpenFilm 0.3.2「极简环境钢琴」，45.035 秒；固定来源、MP3、WAV 预览和 manifest；通过任务音频导入、编辑提案、时间线采用/撤销；有声场侧链混音已生成8秒正式成片；第三版人工确认钢琴可听见，完整音质与跨设备尚未验收 |
 | 音效 | `connected` | 已接入 OpenFilm `Glass Pulse`（本地 m4a、预览路由和固定 provenance）；更多音效继续按同一目录接入 |
 
-当前第一批直接复制到产品的 OpenFilm 社区资源：`openfilm:sound-glass-pulse` 已可预览并进入音频编辑入口；`openfilm:transition-glitch` 已进入资源目录并可预览，因曜核当前还没有 CSS 转场写入适配，暂标 `catalog_only`，不会伪装成已可采用。
+当前第一批直接复制到产品的 OpenFilm 社区资源：`openfilm:sound-glass-pulse` 已可预览并进入音频编辑入口；`openfilm:transition-glitch` v2 已通过 `builtin_visual_openfilm-transition-glitch` v1 接通原 CSS，按0.6秒覆盖动画进入图文层、正式渲染和撤销；不混合两侧片段。
 
 当前不把外部服务的下载器和第二套生产运行时直接接入产品。具体媒体、字体、声音模型和示例媒体可以直接纳入小范围产品使用；进入时记录来源、固定版本和文件哈希，便于资源面板、回滚和真实输出排查。
 
@@ -76,6 +76,6 @@
 
 1. 先完成数据治理真实闭环，让候选资源、采用、任务引用、渲染和输出观察能回读同一条关联链。
 2. 再完成 Agent 的统一 Trace、provider usage、Token 状态和最小回放评测。
-3. 立即接入 OpenFilm 的资源库和 Replicate Skill，`editing-videos` 已适配；后续 `ai-video-editing-skill` 继续映射到同一套工具和回执。
+3. 扩充已接通的 OpenFilm 资源库，并评估现有三个方法 Skill 的实际效果；下一候选 `ai-video-editing-skill` 仍须固定版本并映射到同一套工具和回执。
 
-本轮真实采用、渲染、输出观察、浏览器播放与撤销结果见[2026-11-17 原始证据](evidence/resource-library-adoption-2026-11-17.json)。带有效旁白/原声且启用音乐闪避的组装仍受限；本轮没有新增人工听感或 Electron/跨设备通过记录。
+本轮真实采用、渲染、输出观察、浏览器播放与撤销结果见[2026-11-17 原始证据](evidence/resource-library-adoption-2026-11-17.json)。带有效旁白/原声且启用音乐闪避的组装已产出8秒正式成片；前两版听感未通过，第三版用户确认钢琴可听见。自然语言音量修改与界面滑块共用已保存参数，尚未验证实时随拖随听、完整音质或 Electron/跨设备播放。

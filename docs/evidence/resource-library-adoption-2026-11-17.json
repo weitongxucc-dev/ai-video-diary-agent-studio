@@ -752,21 +752,24 @@
     ]
   },
   "remaining": [
-    "cross-domain retrieval and feedback beyond candidate projection",
-    "complete editing-videos method evaluation",
-    "Glitch CSS transition adoption",
-    "LUT and independent sticker packages",
-    "cross-device playback",
-    "broader natural-language history targeting: rejected redo phrasing and omitted model target remain unaccepted",
-    "continuous live audio audition and pointer dragging not verified; gain changes require a regenerated preview/output",
-    "successful edit followed by no-progress continuation status needs refinement",
-    "process-crash and cross-device provider/Job recovery beyond this bounded import-response-loss and startup recovery case"
+    "people generation feedback and unified cross-domain retrieval beyond fixed profile candidate readbacks",
+    "complete effect evaluation of the three method-only editing Skills",
+    "LUT and independent third-party sticker packages; additional music/sound/effect resources",
+    "cross-device and packaged Electron playback",
+    "broader natural-language history targeting beyond one uniquely identified undone music adoption",
+    "continuous live audio audition and pointer dragging not verified; saved gain changes require regenerated preview/output",
+    "process-crash and cross-device provider/Job recovery beyond bounded import-response-loss/startup recovery",
+    "general task program execution resource profile unavailable in this runtime; audio/template calibrated paths are available"
   ],
   "code_commits": [
     "ead5e5d6",
     "fa6db9e7",
     "3f3c1934",
-    "5532a80d"
+    "5532a80d",
+    "9c9583d6",
+    "2ef5b41f",
+    "9c18c7ba",
+    "624be7f"
   ],
   "voice_music_agent_followup": {
     "date": "2026-11-17",
@@ -3748,6 +3751,1313 @@
         }
       ],
       "media_validation": "unknown"
+    }
+  },
+  "core_wave_4": {
+    "resource": {
+      "code_commit": "9c9583d6",
+      "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+      "resource_id": "openfilm:transition-glitch",
+      "resource_version": 2,
+      "template_id": "builtin_visual_openfilm-transition-glitch",
+      "template_version": 1,
+      "source_sha256": "6063423ad31af44cca1fc88ed0b1bde72beb863125ebbd314265e7cb71335449",
+      "adoption": "real browser resource panel; sequence 7; 3.7-4.3 seconds; other picture/audio unchanged",
+      "render": {
+        "id": "job_a16268d4142b411caabadd852c1a5ed2",
+        "workspace_id": "local",
+        "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+        "kind": "creation_task_execution",
+        "idempotency_key": "creation-execution:task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810:0ffa968445a4b6430ec461254e33643139263912ae2fabd5f7e58ed02173a592",
+        "input_digest": "0ffa968445a4b6430ec461254e33643139263912ae2fabd5f7e58ed02173a592",
+        "status": "succeeded",
+        "progress": 100,
+        "attempt": 4,
+        "output_refs": [
+          "workspaces/local/tasks/task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810/audio-delivery/job_a16268d4142b411caabadd852c1a5ed2/final_mux-df7ddc2b8a05165c70b88252bb549fb34b37e5a216b5993e31c3f3ee14d2acf2.mp4"
+        ],
+        "failure_reason": null,
+        "impact": null,
+        "repair_action": null,
+        "created_at": "2026-11-17T05:45:09.549162Z",
+        "started_at": "2026-11-17T05:46:19.463439Z",
+        "finished_at": "2026-11-17T05:46:24.680591Z",
+        "updated_at": "2026-11-17T05:46:24.680591Z"
+      },
+      "output": {
+        "sha256": "18607f4b3d01141876387168aa16445feaed4eaa00a9961324597b4915ea4d23",
+        "bytes": 4337796,
+        "headers": {
+          "x-timeline-version-id": "timeline_delivery_job_a16268d4142b411caabadd852c1a5ed2",
+          "x-timeline-sequence": "8"
+        },
+        "decode_exit": 0
+      },
+      "observations": [
+        {
+          "observation_id": "job_media_0299502571f87a4e70f43bfd8f0441919ead524c535d402d6e7620d5a86cc62e",
+          "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+          "timeline_version_id": "timeline_delivery_job_a16268d4142b411caabadd852c1a5ed2",
+          "timeline_sequence": 8,
+          "observed_at": "2026-11-17T05:47:54.890055+00:00",
+          "target": {
+            "kind": "final",
+            "job_id": null,
+            "artifact_id": null
+          },
+          "ocr_execution": {
+            "status": "unavailable",
+            "reason": "本地 OCR 未配置或输出观察执行范围尚未标定。"
+          },
+          "output": {
+            "artifact_id": "artifact_final_mux_df7ddc2b8a05165c70b88252bb549fb34b37e5a216b5993e31c3f3ee14d2acf2",
+            "artifact_kind": "rendered_video",
+            "sha256": "18607f4b3d01141876387168aa16445feaed4eaa00a9961324597b4915ea4d23",
+            "registered_width": 1080,
+            "registered_height": 1920,
+            "size_bytes": 4337796,
+            "producer_job_id": "job_a16268d4142b411caabadd852c1a5ed2"
+          },
+          "output_role": "composed_output",
+          "material_references": [],
+          "measurement_scope": "actual_output_bounded_frames",
+          "media": {
+            "width": 1080,
+            "height": 1920,
+            "duration_seconds": 8.0,
+            "video_codec": "h264",
+            "video_frame_rate": "30/1",
+            "audio_stream_count": 1
+          },
+          "samples": [
+            {
+              "id": "frame-0",
+              "timestamp_seconds": 4.4,
+              "width": 720,
+              "height": 1280,
+              "sha256": "29c24f1b12a3179acd6fe3991632eeb0ab24947ea9a5a071f16422476e408117",
+              "pixel_mean_rgb": [
+                73.719,
+                79.911,
+                79.868
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            }
+          ],
+          "ocr_model_id": null,
+          "unavailable": [
+            {
+              "scope": "visual_semantics",
+              "reason": "本地合成画面的语义理解尚无受许可执行能力；像素测量不代表看懂内容。"
+            },
+            {
+              "scope": "speech_and_listening",
+              "reason": "本次只观察实际画面，没有转写或听感检查。"
+            },
+            {
+              "scope": "ocr",
+              "reason": "本地 OCR 未配置或输出观察执行范围尚未标定；未提取文字。"
+            }
+          ]
+        },
+        {
+          "observation_id": "job_media_25087fc68e959957754bfb83a5e4043321308f51abd02fe17ab6318db12fa272",
+          "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+          "timeline_version_id": "timeline_delivery_job_a16268d4142b411caabadd852c1a5ed2",
+          "timeline_sequence": 8,
+          "observed_at": "2026-11-17T05:47:51.340061+00:00",
+          "target": {
+            "kind": "final",
+            "job_id": null,
+            "artifact_id": null
+          },
+          "ocr_execution": {
+            "status": "unavailable",
+            "reason": "本地 OCR 未配置或输出观察执行范围尚未标定。"
+          },
+          "output": {
+            "artifact_id": "artifact_final_mux_df7ddc2b8a05165c70b88252bb549fb34b37e5a216b5993e31c3f3ee14d2acf2",
+            "artifact_kind": "rendered_video",
+            "sha256": "18607f4b3d01141876387168aa16445feaed4eaa00a9961324597b4915ea4d23",
+            "registered_width": 1080,
+            "registered_height": 1920,
+            "size_bytes": 4337796,
+            "producer_job_id": "job_a16268d4142b411caabadd852c1a5ed2"
+          },
+          "output_role": "composed_output",
+          "material_references": [],
+          "measurement_scope": "actual_output_bounded_frames",
+          "media": {
+            "width": 1080,
+            "height": 1920,
+            "duration_seconds": 8.0,
+            "video_codec": "h264",
+            "video_frame_rate": "30/1",
+            "audio_stream_count": 1
+          },
+          "samples": [
+            {
+              "id": "frame-0",
+              "timestamp_seconds": 3.6,
+              "width": 720,
+              "height": 1280,
+              "sha256": "fcb19560374539f6d1d2c75fbb031ce9b0f3b4acae64647bc6c31402ba74376f",
+              "pixel_mean_rgb": [
+                71.0,
+                71.899,
+                72.722
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            },
+            {
+              "id": "frame-1",
+              "timestamp_seconds": 3.88,
+              "width": 720,
+              "height": 1280,
+              "sha256": "bda38c196bef92f2672a6657c1774af68197458a92578c41c2b114f8670fb151",
+              "pixel_mean_rgb": [
+                60.909,
+                55.031,
+                63.699
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source",
+                "overlay:6eec29c7-7e9a-451f-b660-66a20d43faca"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            },
+            {
+              "id": "frame-2",
+              "timestamp_seconds": 4.0,
+              "width": 720,
+              "height": 1280,
+              "sha256": "08937ffe1e6135da58797fba3e0043532be7c45f48b3de2d0a7178f7980cf87a",
+              "pixel_mean_rgb": [
+                4.279,
+                5.239,
+                5.656
+              ],
+              "pixel_extrema_rgb": [
+                [
+                  0,
+                  147
+                ],
+                [
+                  0,
+                  253
+                ],
+                [
+                  0,
+                  255
+                ]
+              ],
+              "object_refs": [
+                "clip:clip-source",
+                "overlay:6eec29c7-7e9a-451f-b660-66a20d43faca"
+              ],
+              "ocr_status": "unavailable",
+              "ocr_text": []
+            }
+          ],
+          "ocr_model_id": null,
+          "unavailable": [
+            {
+              "scope": "visual_semantics",
+              "reason": "本地合成画面的语义理解尚无受许可执行能力；像素测量不代表看懂内容。"
+            },
+            {
+              "scope": "speech_and_listening",
+              "reason": "本次只观察实际画面，没有转写或听感检查。"
+            },
+            {
+              "scope": "ocr",
+              "reason": "本地 OCR 未配置或输出观察执行范围尚未标定；未提取文字。"
+            }
+          ]
+        }
+      ],
+      "cpu_preparation": {
+        "id": "a076be86ed4344cd853f4fc82905527f",
+        "plan_id": "dcab8099e558eec7ae4927cccbff0c2c",
+        "state": "done",
+        "wait_reason": null,
+        "profile_published": true,
+        "profile_id": "dcab8099e558eec7ae4927cccbff0c2c",
+        "revision": 15,
+        "profile_digest": "b71b504bdf77331251974ffa90cf4acff7f0584b047953c607dcc282205621de",
+        "normal_work_started": false
+      },
+      "initial_preparation_rejection": "409 renderer environment absent; restarted same canonical API with existing desktop renderer paths, then measured preparation",
+      "provider_skill_turn": {
+        "turn_id": "5b9c3db7-5acd-4e1b-98ae-54ffb99680ab",
+        "status": "completed",
+        "usage_status": "known",
+        "provider_usage": {
+          "input": 115394,
+          "output": 5921,
+          "cacheRead": 541030,
+          "cacheWrite": 0,
+          "totalTokens": 662345
+        },
+        "tools": [
+          {
+            "name": "read_creation_skill",
+            "status": "succeeded"
+          },
+          {
+            "name": "read_visual_template",
+            "status": "succeeded"
+          },
+          {
+            "name": "read_task_object",
+            "status": "succeeded"
+          },
+          {
+            "name": "read_creation_execution",
+            "status": "succeeded"
+          },
+          {
+            "name": "read_task_quality_check",
+            "status": "succeeded"
+          },
+          {
+            "name": "observe_task_output",
+            "status": "succeeded"
+          },
+          {
+            "name": "observe_task_output",
+            "status": "succeeded"
+          },
+          {
+            "name": "read_task_media_job",
+            "status": "succeeded"
+          },
+          {
+            "name": "read_task_media_job",
+            "status": "succeeded"
+          },
+          {
+            "name": "read_task_observations",
+            "status": "succeeded"
+          }
+        ]
+      },
+      "host_visual_review": "bounded extracted frames show original picture, cyan/red stripes, dark frame, then original picture; not semantic/OCR/audio or human acceptance",
+      "human_acceptance": "not_requested",
+      "screenshot": "output/acceptance/glitch-resource-adopted-2026-11-17.png",
+      "sample_sheet": "output/acceptance/openfilm-glitch-frames-2026-11-17.jpg",
+      "browser_playback": "played to 00:08/00:08",
+      "undo": {
+        "via": "real resource panel",
+        "sequence": 9,
+        "overlay_count": 0,
+        "audio_preserved": true,
+        "clips_preserved": true
+      }
+    },
+    "data_governance": {
+      "real_voice_candidate": {
+        "kind": "voice_profile",
+        "ref": "voice:voice_cc",
+        "asset_ref": null,
+        "status": "candidate",
+        "quality": {
+          "status": "unknown",
+          "reason": "未执行媒体质量测量"
+        },
+        "source_revision": {
+          "profile_version": "v2",
+          "current_profile_version": "v2"
+        },
+        "evidence": {
+          "status": "available",
+          "source": {
+            "asset_id": "voice_source_8b77f261dc827503964a5ed70ba50ed7",
+            "segment_id": null,
+            "start_seconds": null,
+            "end_seconds": null
+          }
+        },
+        "authorization": {
+          "status": "policy_allowed",
+          "purpose": "narration",
+          "reasons": [],
+          "use_state": "available",
+          "visibility": "private",
+          "grants": [
+            {
+              "id": "authorization_voice_cc",
+              "version": "v1",
+              "status": "active"
+            },
+            {
+              "id": "authorization_voice_cc",
+              "version": "v1",
+              "status": "active"
+            }
+          ]
+        },
+        "language": {
+          "status": "declared",
+          "value": "zh"
+        },
+        "details": {
+          "display_name": "",
+          "runtime_status": "unknown",
+          "runtime_reason": "仅读取版本和用途策略，未检查参考媒体、模型或生成执行能力"
+        },
+        "feedback": {
+          "schema": "profile-production-feedback/v1",
+          "task_id": "task_93d78477016b",
+          "profile_id": "voice_cc",
+          "profile_version": "v2",
+          "status": "evidence_found",
+          "completeness": "complete",
+          "task_reference": true,
+          "stages": {
+            "task_reference": "referenced",
+            "generation": [
+              "ready"
+            ],
+            "timeline": "recorded",
+            "output": "registered",
+            "observation": "recorded"
+          },
+          "generations": [
+            {
+              "kind": "narration_segment",
+              "record_id": "narration_segment_1be9ab71d7eeca5c226e",
+              "status": "ready",
+              "output_reference_recorded": true,
+              "failure_reason": null
+            },
+            {
+              "kind": "narration_segment",
+              "record_id": "narration_segment_4801063e43834cd002dc",
+              "status": "ready",
+              "output_reference_recorded": true,
+              "failure_reason": null
+            },
+            {
+              "kind": "narration_segment",
+              "record_id": "narration_segment_8dc928562cf59ceac4de",
+              "status": "ready",
+              "output_reference_recorded": true,
+              "failure_reason": null
+            },
+            {
+              "kind": "narration_segment",
+              "record_id": "narration_segment_63b13f074786c6a40b48",
+              "status": "ready",
+              "output_reference_recorded": true,
+              "failure_reason": null
+            }
+          ],
+          "jobs": [
+            {
+              "job_id": "job_7fe289807b2043c7b2cf891e85cd5c34",
+              "kind": "creation_task_execution",
+              "status": "failed",
+              "failure_reason": "进程组线程数 11 > 上限 8。请核对本次实测与场景预算后再运行。"
+            },
+            {
+              "job_id": "job_0e869eb622194eb58a38467509dafdf8",
+              "kind": "creation_task_execution",
+              "status": "failed",
+              "failure_reason": "进程组线程数 12 > 上限 8。请核对本次实测与场景预算后再运行。"
+            },
+            {
+              "job_id": "job_cb600d990ade43edbdd2b437822246fa",
+              "kind": "creation_task_execution",
+              "status": "failed",
+              "failure_reason": "段落视频输入须先在写事务外准备"
+            },
+            {
+              "job_id": "job_02ba98147ddb405580445bbeccc9f783",
+              "kind": "creation_task_execution",
+              "status": "cancelled",
+              "failure_reason": "user_cancelled"
+            },
+            {
+              "job_id": "job_9c6245ca938c408ab2a7bd11cacda718",
+              "kind": "creation_task_execution",
+              "status": "succeeded",
+              "failure_reason": null
+            },
+            {
+              "job_id": "job_media_a40ad053f32f649a4a7725f8c8fed0d9b39de67130855e80611863f59e87d1b3",
+              "kind": "creation_task_media",
+              "status": "succeeded",
+              "failure_reason": null
+            }
+          ],
+          "timeline_history": [
+            {
+              "timeline_version_id": "timeline_1e48ff3c84ef4a0da8edc82715e84b3e",
+              "sequence": 1,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "added"
+            },
+            {
+              "timeline_version_id": "timeline_57c871ce0c9b4e2083250bffed4e6091",
+              "sequence": 2,
+              "profile_present": true,
+              "operation_id": "operation_b940c7680b96453db62719bbd5472e97",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_9cb2f6e831cd4f7ea0d74368616daf1c",
+              "sequence": 3,
+              "profile_present": true,
+              "operation_id": "operation_793b48b89d674006a71f0c194e11a535",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_cc4c83166ae24041bcd15df1f4d6974d",
+              "sequence": 4,
+              "profile_present": true,
+              "operation_id": "operation_7c799796072b4007904bde563ad719ed",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_afc74e79f32348fb8eee096ce8a42a63",
+              "sequence": 5,
+              "profile_present": true,
+              "operation_id": "operation_5bf9ab5ae2e744158c5de91dce23fec1",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_32d2b5d622b944fcab65921671e2e150",
+              "sequence": 6,
+              "profile_present": true,
+              "operation_id": "operation_bea0ff4cbfca4498a71c4cd366e63b47",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_5c35ccd9665b4ff397579402a20a998d",
+              "sequence": 7,
+              "profile_present": true,
+              "operation_id": "operation_fb1cca620f82496ab970f28dd1108107",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_1376b3f0872946e99c46874a2d9e6c65",
+              "sequence": 8,
+              "profile_present": true,
+              "operation_id": "operation_cc5862b2b101410aac3408a833a185c7",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_85f35e44b1c049a6a1e83258655c68bf",
+              "sequence": 9,
+              "profile_present": true,
+              "operation_id": "operation_2e5aa00632f94fd79f0a0f34e77874be",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_fc64d174ea1a4d4cabcff96649f5b915",
+              "sequence": 10,
+              "profile_present": true,
+              "operation_id": "operation_dfe46599a7f34b0ca85aafc0dc62c78d",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_e8f50ab2d1d7416e83f923e6c20a6ad5",
+              "sequence": 11,
+              "profile_present": true,
+              "operation_id": "operation_bfcae19ba73e402f88eea2ccace99e6b",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_8860c9b0e09c4c4ea32275aaeb924ff4",
+              "sequence": 12,
+              "profile_present": true,
+              "operation_id": "operation_cc5016d1d1f14b0a9f28f99e4bf51023",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_b9381a98521e4319abbd894fef4c4ef5",
+              "sequence": 13,
+              "profile_present": true,
+              "operation_id": "operation_5943d1ae37f242b2884e29808005e1ba",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_8e2c6bc1fa5c4a32b794bfb2c64926cc",
+              "sequence": 14,
+              "profile_present": true,
+              "operation_id": "operation_7b2876c0d0e84c0b875fa99058096edc",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_4fccc0838930450b94ad9b77b7823d50",
+              "sequence": 15,
+              "profile_present": true,
+              "operation_id": "operation_bb4d7d112b024785b84dbb6eb884991d",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_66f1361b5e074556b3b4d15faf364866",
+              "sequence": 16,
+              "profile_present": true,
+              "operation_id": "operation_93e12d07182f495b8e33fbf0699c114d",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_a39dc76d9a7344dd87f67196b30be07b",
+              "sequence": 17,
+              "profile_present": true,
+              "operation_id": "operation_2f8391b4c97a434ca53ce5e09061abd1",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_9d05c43e1dc1447ab6bae65ad7398d62",
+              "sequence": 18,
+              "profile_present": true,
+              "operation_id": "operation_91cefa33807a48f8ac300f2eda715fb9",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_994cdcd1245f47aeaa5a88bca369e444",
+              "sequence": 19,
+              "profile_present": true,
+              "operation_id": "operation_00b62ab2d3344573a688b8345948e926",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_d303248910cd496c89d36d8e4aa72698",
+              "sequence": 20,
+              "profile_present": true,
+              "operation_id": "operation_3a4c3a7cd98941e591298b86a68257e6",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_9644fe8033f146448e568c6a419735b2",
+              "sequence": 21,
+              "profile_present": true,
+              "operation_id": "operation_43cd20df31c04d8292b8df8f932036bd",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_73f4c8b3b8e2441e9561fc154b228368",
+              "sequence": 22,
+              "profile_present": true,
+              "operation_id": "operation_3c413aa4b06a4b15a0b7f26ba175e231",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_bb716e22a28d4ce591c06b885462873e",
+              "sequence": 23,
+              "profile_present": true,
+              "operation_id": "operation_74756fe961aa4029a1bb9a5f01a62529",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_00d9ba8193c04b9d995cb5049d014ec2",
+              "sequence": 24,
+              "profile_present": true,
+              "operation_id": "operation_274b9b1c5cf94bd69cbb7b6436f294f2",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_9ea7048248ce4241b96b0f15d93f4413",
+              "sequence": 25,
+              "profile_present": true,
+              "operation_id": "operation_d4a2e8b9963b414c9f4ec01a413300a3",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_2b8f77f85150477287a0f1ae8e8f1759",
+              "sequence": 26,
+              "profile_present": true,
+              "operation_id": "operation_4680f907ec994e32abb7918fa6fe625b",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_job_61476d74f9a94d07be3f18933bd1e084",
+              "sequence": 27,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_3828f0d795a74dec931ddcb9a43c875d",
+              "sequence": 28,
+              "profile_present": true,
+              "operation_id": "operation_35fe02b740e841a0a1763e234c1e46d7",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_72f61554e7db4c00bf4f57279e91103b",
+              "sequence": 29,
+              "profile_present": true,
+              "operation_id": "operation_86cc63c96fe441dab3440bab3f4cc021",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_7914151e4cbb4f0e9b11075af27d8ee3",
+              "sequence": 30,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_c11acabcd40f4f5bbe395947ac36fa44",
+              "sequence": 31,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_8107f45579154f069a2504e409aa4a0f",
+              "sequence": 32,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_c688ed8b544749759b42393512361558",
+              "sequence": 33,
+              "profile_present": true,
+              "operation_id": "operation_43723efaf3e6405b994e79296aa5cee2",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_ae66ec5dc7dc49eaa5d7194630eb9c03",
+              "sequence": 34,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_fa424addcba944e1a7bac01b0c774de8",
+              "sequence": 35,
+              "profile_present": true,
+              "operation_id": "operation_2279dfd24baf4da7a6e8694a8fe32ebc",
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_0a54bb48781b49a0bc55703465cf66c4",
+              "sequence": 36,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_063f694cc7fc46eb86b2f6e8fb300543",
+              "sequence": 37,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_982b8a957e1e407c8bc96d06a07bb246",
+              "sequence": 38,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_52806963313546cd8f56f5f0560ef062",
+              "sequence": 39,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_5178c70c123e404a8544bd4011c49b88",
+              "sequence": 40,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_43b540f3785c4dc1b8ef8aa6e898ad63",
+              "sequence": 41,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            },
+            {
+              "timeline_version_id": "timeline_delivery_job_9c6245ca938c408ab2a7bd11cacda718",
+              "sequence": 42,
+              "profile_present": true,
+              "operation_id": null,
+              "transition": "retained"
+            }
+          ],
+          "current_profile_present": true,
+          "artifacts": [
+            {
+              "artifact_id": "artifact_job_02ba98147ddb405580445bbeccc9f783_38ba2e58740f9744e6be_rendered_video",
+              "kind": "rendered_video",
+              "producer_job_id": "job_02ba98147ddb405580445bbeccc9f783",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_job_02ba98147ddb405580445bbeccc9f783_38ba2e58740f9744e6be_subtitle_track",
+              "kind": "subtitle_track",
+              "producer_job_id": "job_02ba98147ddb405580445bbeccc9f783",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_job_02ba98147ddb405580445bbeccc9f783_48f63ae622dbd4dd7913_rendered_video",
+              "kind": "rendered_video",
+              "producer_job_id": "job_02ba98147ddb405580445bbeccc9f783",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_job_02ba98147ddb405580445bbeccc9f783_48f63ae622dbd4dd7913_subtitle_track",
+              "kind": "subtitle_track",
+              "producer_job_id": "job_02ba98147ddb405580445bbeccc9f783",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_job_02ba98147ddb405580445bbeccc9f783_139b3417cda040ec05ed_rendered_video",
+              "kind": "rendered_video",
+              "producer_job_id": "job_02ba98147ddb405580445bbeccc9f783",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_job_02ba98147ddb405580445bbeccc9f783_139b3417cda040ec05ed_subtitle_track",
+              "kind": "subtitle_track",
+              "producer_job_id": "job_02ba98147ddb405580445bbeccc9f783",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_job_02ba98147ddb405580445bbeccc9f783_f39ab53c705710af9e40_rendered_video",
+              "kind": "rendered_video",
+              "producer_job_id": "job_02ba98147ddb405580445bbeccc9f783",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_job_02ba98147ddb405580445bbeccc9f783_f39ab53c705710af9e40_subtitle_track",
+              "kind": "subtitle_track",
+              "producer_job_id": "job_02ba98147ddb405580445bbeccc9f783",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_subtitles_fb27074834369f469e3fec876e94c3a5e2c5a91a3900ce4b89264b159e0b356b",
+              "kind": "subtitle_track",
+              "producer_job_id": "job_9c6245ca938c408ab2a7bd11cacda718",
+              "output_linked": true
+            },
+            {
+              "artifact_id": "artifact_audio_assembly_cf2bb005a8e22cbf5be1726e743e7c0741d922303850071b96a3f53f60167103",
+              "kind": "audio_assembly_fragment",
+              "producer_job_id": "job_9c6245ca938c408ab2a7bd11cacda718",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_audio_assembly_d48858371833b280a26f2342e92b1ea6cfaa41c03c6cfcb00493e00bcf3eb8b5",
+              "kind": "audio_assembly_fragment",
+              "producer_job_id": "job_9c6245ca938c408ab2a7bd11cacda718",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_audio_encode_8d8eb72ec6c13c8c35d058f33c4bd3409b1741759c2a511cc5ec3fe0f11973b7",
+              "kind": "audio_encode",
+              "producer_job_id": "job_9c6245ca938c408ab2a7bd11cacda718",
+              "output_linked": false
+            },
+            {
+              "artifact_id": "artifact_final_mux_b5003dec93099b6f107bdfddf51057c8e20853da1f389fecc8f4d9211661c3ae",
+              "kind": "rendered_video",
+              "producer_job_id": "job_9c6245ca938c408ab2a7bd11cacda718",
+              "output_linked": true
+            }
+          ],
+          "observations": [
+            {
+              "observation_id": "job_media_a40ad053f32f649a4a7725f8c8fed0d9b39de67130855e80611863f59e87d1b3",
+              "job_id": "job_media_a40ad053f32f649a4a7725f8c8fed0d9b39de67130855e80611863f59e87d1b3",
+              "timeline_version_id": "timeline_delivery_job_9c6245ca938c408ab2a7bd11cacda718",
+              "artifact_id": "artifact_final_mux_b5003dec93099b6f107bdfddf51057c8e20853da1f389fecc8f4d9211661c3ae",
+              "job_status": "succeeded"
+            }
+          ],
+          "media_validation": "unknown",
+          "instruction": "not_used仅表示本次有界记录内没有使用证据，不证明从未使用。原记录分别表达引用、生成、采用与输出观察；ready或Job成功不代表人工视听验收，历史使用不授予当前复用许可。"
+        }
+      },
+      "unrelated_task_feedback": {
+        "schema": "profile-production-feedback/v1",
+        "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+        "profile_id": "voice_cc",
+        "profile_version": "v2",
+        "status": "not_used",
+        "completeness": "complete",
+        "task_reference": false,
+        "stages": {
+          "task_reference": "not_recorded",
+          "generation": [
+            "not_recorded"
+          ],
+          "timeline": "not_recorded",
+          "output": "not_recorded",
+          "observation": "not_recorded"
+        },
+        "generations": [],
+        "jobs": [],
+        "timeline_history": [],
+        "current_profile_present": false,
+        "artifacts": [],
+        "observations": [],
+        "media_validation": "unknown",
+        "instruction": "not_used仅表示本次有界记录内没有使用证据，不证明从未使用。原记录分别表达引用、生成、采用与输出观察；ready或Job成功不代表人工视听验收，历史使用不授予当前复用许可。"
+      },
+      "tests": {
+        "profile_and_candidate": 31,
+        "agent_tool": 40
+      },
+      "person_generation_live": "not_verified; no live person generation requested",
+      "mode": "read_only; original task and production records unchanged"
+    },
+    "agent": {
+      "code_commit": "9c18c7ba",
+      "scope": "unique undone music restore; finite gain completion; current observation reply projection",
+      "tests": {
+        "python_main_reported_by_owner": 177,
+        "python_execution_projection_subset": 5,
+        "python_final_observation_projection": 10,
+        "node_restore_and_version": 19,
+        "py_compile": "passed",
+        "diff_check": "passed"
+      },
+      "finite_gain": {
+        "instruction": "把背景钢琴音乐调小3分贝，原声保持不变。保存修改后告诉我调整前后的音乐音量。",
+        "turn_id": "c6b12e11-b75f-4d56-adf7-eb3c69c3197e",
+        "reply": "钢琴片段音量已从 -15 dB 调整为 -18 dB。音乐轨音量仍为 0 dB。原声保持不变。修改已保存，可撤销。",
+        "completion": {
+          "scope": "single_music_gain_edit",
+          "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+          "request_id": "cbb985bb-5c41-5bdb-9dca-7eedd5a946b2",
+          "operation_id": "operation_f0babf494f7e406fa8ec199f6e31c791",
+          "target_id": "audio-b5508ca95c66428d",
+          "base_version_id": "timeline_27c7a66d68474e449a13cb95813a3c6b",
+          "result_version_id": "timeline_cf9e89ae454841bb85cb0f15070ecbb2",
+          "gain_before_db": -15.0,
+          "gain_after_db": -18.0,
+          "target_kind": "clip",
+          "summary": "钢琴片段音量已从 -15 dB 调整为 -18 dB。音乐轨音量仍为 0 dB。原声保持不变。修改已保存，可撤销。"
+        },
+        "continuation": {
+          "type": "business_result",
+          "event_id": "event_assistant_proposal_proposal_metadata_9f90d4474c7ccd965dab7d184b41bb31fbb08e4b04689409adfa332e9cea2726_confirmed",
+          "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+          "phase": "apply",
+          "job_id": null,
+          "proposal_id": "proposal_metadata_9f90d4474c7ccd965dab7d184b41bb31fbb08e4b04689409adfa332e9cea2726",
+          "base_version_id": "timeline_27c7a66d68474e449a13cb95813a3c6b",
+          "result_version_id": "timeline_cf9e89ae454841bb85cb0f15070ecbb2",
+          "status": "confirmed",
+          "actionable": false,
+          "operation_id": "operation_f0babf494f7e406fa8ec199f6e31c791",
+          "waiting_reason": "当前草稿已保存；这次修改尚未反映到成片。"
+        },
+        "trace": {
+          "status": "completed",
+          "provider_usage": {
+            "input": 240669,
+            "output": 1653,
+            "cacheRead": 359607,
+            "cacheWrite": 0,
+            "totalTokens": 601929
+          },
+          "usage_status": "known",
+          "usage_source": "provider",
+          "tool_counts": {
+            "读取当前任务（发送前）": 1,
+            "读取任务对象细节": 3,
+            "保存明确修改": 2
+          },
+          "compaction_count": 0
+        },
+        "before_sequence": 9,
+        "after_sequence": 10,
+        "original_track_gain_db": 1,
+        "rendered_this_change": false,
+        "goal_continuation_created": false
+      },
+      "redo": {
+        "instruction": "恢复刚才撤销的钢琴音乐，原声保持不变。",
+        "turn_id": "2b29c972-9cd0-467b-b4b6-9f34a05247db",
+        "status": "completed",
+        "receipt": {
+          "request_id": "22ee5484-3f01-5fe9-98c7-486ade3cdf05",
+          "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+          "action": "redo",
+          "target_operation_id": "operation_c9084b7a74b1475d9cfe2ee8a9e191fc",
+          "status": "applied",
+          "operation_id": "operation_c34c7e4869b144f7a973dcda6b1dc312",
+          "result_version_id": "timeline_8f15dc9e586f413391d595ca9e7aa245",
+          "execution_readiness": {
+            "status": "authorization_ready",
+            "reason_code": null,
+            "device_admission": "not_checked"
+          },
+          "failure": null,
+          "owned_version_transition": {
+            "scope": "same_turn_restore",
+            "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+            "request_id": "22ee5484-3f01-5fe9-98c7-486ade3cdf05",
+            "operation_id": "operation_c34c7e4869b144f7a973dcda6b1dc312",
+            "action": "redo",
+            "assistant_turn_id": "2b29c972-9cd0-467b-b4b6-9f34a05247db",
+            "input_id": null,
+            "from": {
+              "timeline_version_id": "timeline_9bc5a3acb83a455b92c5c407e2534d58",
+              "timeline_sequence": 11
+            },
+            "to": {
+              "timeline_version_id": "timeline_8f15dc9e586f413391d595ca9e7aa245",
+              "timeline_sequence": 12
+            }
+          }
+        },
+        "trace": {
+          "status": "completed",
+          "usage_status": "known",
+          "provider_usage": {
+            "input": 248271,
+            "output": 5582,
+            "cacheRead": 359335,
+            "cacheWrite": 0,
+            "totalTokens": 613188
+          },
+          "usage_source": "provider",
+          "tool_counts": {
+            "读取当前任务（发送前）": 1,
+            "读取修改历史": 2,
+            "读取任务对象细节": 4,
+            "重做原修改": 2,
+            "读取当前修改": 1
+          },
+          "compaction_count": 2
+        },
+        "compaction_events": [
+          {
+            "step": 10,
+            "type": "compaction_start",
+            "at": "2026-11-17T06:02:23.770000+00:00",
+            "event_id": "82b51e63bcd2975e7584",
+            "status": "started"
+          },
+          {
+            "step": 11,
+            "type": "compaction_end",
+            "at": "2026-11-17T06:04:42.126000+00:00",
+            "event_id": "7192bde98b9dc738e0d4",
+            "status": "completed",
+            "duration_ms": 138356
+          }
+        ],
+        "before_sequence": 11,
+        "after_sequence": 12,
+        "music_gain_db": -18,
+        "original_track_gain_db": 1,
+        "model_given_internal_operation_id": false
+      },
+      "observation_reply": {
+        "status": "blocked_by_real_502_before_final_response",
+        "turn_id": "9661078d-7bab-4d81-a22c-0b1550c84e0f",
+        "http_status": 502,
+        "reason": "先前媒体回执不属于本轮真实目标",
+        "current_observation_job": "job_media_d0aec26f52773c9130f41a528bf754460104d2714c9befbc5b0c7e6527cff32d",
+        "current_observation_status": "succeeded",
+        "old_observations_stale": true,
+        "cause_under_review": "historical read overwrote latest media job then attached to current rejected request; preserve original binding checks",
+        "original_model_answer_persisted": true,
+        "resolution": "fixed by 624be7f; persisted facts replay and final real provider readback passed; original failed turn preserved"
+      },
+      "restored_output": {
+        "execution": {
+          "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+          "task_execution": {
+            "task_kind": "source_video_edit",
+            "next_required_stage": null,
+            "not_applicable_preparation_kinds": [
+              "narration",
+              "montage"
+            ]
+          },
+          "job": {
+            "id": "job_a16268d4142b411caabadd852c1a5ed2",
+            "workspace_id": "local",
+            "task_id": "task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810",
+            "kind": "creation_task_execution",
+            "idempotency_key": "creation-execution:task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810:0ffa968445a4b6430ec461254e33643139263912ae2fabd5f7e58ed02173a592",
+            "input_digest": "0ffa968445a4b6430ec461254e33643139263912ae2fabd5f7e58ed02173a592",
+            "status": "succeeded",
+            "progress": 100,
+            "attempt": 8,
+            "output_refs": [
+              "workspaces/local/tasks/task_source_889aaedc15ec59de482c5c2dcf465681a04c0d72efe248be8fa13e3c59454810/audio-delivery/job_a16268d4142b411caabadd852c1a5ed2/final_mux-5b1996ebd247be3c75d1f0cbd07871d8d1566e049219fcde3b2be77e0b30e67d.mp4"
+            ],
+            "failure_reason": null,
+            "impact": null,
+            "repair_action": null,
+            "created_at": "2026-11-17T05:45:09.549162Z",
+            "started_at": "2026-11-17T06:06:11.169542Z",
+            "finished_at": "2026-11-17T06:06:16.535731Z",
+            "updated_at": "2026-11-17T06:06:16.535731Z"
+          },
+          "stages": [
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T05:46:09.254748+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T05:46:13.121605+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T05:46:18.770386+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T05:46:24.680548+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "pending",
+              "reason": null,
+              "at": "2026-11-17T06:05:45.927823+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T06:05:55.547205+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T06:05:59.886549+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T06:06:10.518255+00:00"
+            },
+            {
+              "stage": "render",
+              "status": "completed",
+              "reason": null,
+              "at": "2026-11-17T06:06:16.535689+00:00"
+            }
+          ],
+          "current_stage": null,
+          "waiting_reason": null,
+          "status_updated_at": "2026-11-17T06:06:16.535731+00:00",
+          "input_rejection": null,
+          "narration_usage": {
+            "budget": null,
+            "scope": null,
+            "used_seconds": 0,
+            "used_output_bytes": 0,
+            "consumption_known": true,
+            "unsettled": []
+          },
+          "visual_decisions": {
+            "items": [],
+            "total_count": 0,
+            "truncated": false
+          },
+          "video_ready": true,
+          "cover_status": "pending",
+          "cover_message": "尚未生成封面，请单独制作或选择封面。",
+          "output_version": {
+            "job_id": "job_a16268d4142b411caabadd852c1a5ed2",
+            "base_version": {
+              "timeline_version_id": "timeline_8f15dc9e586f413391d595ca9e7aa245",
+              "timeline_sequence": 12
+            },
+            "result_version": {
+              "timeline_version_id": "timeline_delivery_job_a16268d4142b411caabadd852c_render_13ebe8bedd35fe33704ba3cee7b8ca549012d4b8ed54b88fc049e6674c284b01",
+              "timeline_sequence": 13
+            }
+          }
+        },
+        "check": {
+          "path": "/Volumes/Dujiangyan-VM/AI视频日记/repositories/main/output/acceptance/agent-music-restore-2026-11-17.mp4",
+          "sha256": "b7038beef3f3116bc1789200696a00e15b51fc8b0b9b1e92e1b612234d50b4be",
+          "bytes": 4338254,
+          "headers": {
+            "Content-Type": "video/mp4",
+            "X-Timeline-Version-Id": "timeline_delivery_job_a16268d4142b411caabadd852c_render_13ebe8bedd35fe33704ba3cee7b8ca549012d4b8ed54b88fc049e6674c284b01",
+            "X-Timeline-Sequence": "13"
+          },
+          "probe": {
+            "programs": [],
+            "stream_groups": [],
+            "streams": [
+              {
+                "codec_name": "h264",
+                "width": 1080,
+                "height": 1920
+              },
+              {
+                "codec_name": "aac",
+                "sample_rate": "48000",
+                "channels": 2
+              }
+            ],
+            "format": {
+              "duration": "8.000000"
+            }
+          },
+          "decode_exit": 0,
+          "decode_errors": "",
+          "human_listening": "not performed for this new output",
+          "cross_device": "not checked"
+        },
+        "note": "same formal production job resumed with new render unit; historical Glitch output and seq8 evidence retained separately"
+      },
+      "historical_receipt_fix": {
+        "tests_passed": 23,
+        "persisted_fact_replay": {
+          "mode": "bounded reconstruction from persisted API receipts and original final text; no writes or new provider call",
+          "original_failed_turn": "9661078d-7bab-4d81-a22c-0b1550c84e0f",
+          "current_job": "job_media_d0aec26f52773c9130f41a528bf754460104d2714c9befbc5b0c7e6527cff32d",
+          "historical_job": "job_media_25087fc68e959957754bfb83a5e4043321308f51abd02fe17ab6318db12fa272",
+          "current_bound": "job_media_d0aec26f52773c9130f41a528bf754460104d2714c9befbc5b0c7e6527cff32d",
+          "historical_identity_rejected": true,
+          "refusal_source": "original persisted business_result status rejected; original tool event http_422",
+          "projected_kind": "edit_request_status",
+          "projected_status": "rejected",
+          "analysis_retained": true,
+          "refusal_retained": true
+        },
+        "code_commit": "624be7f",
+        "final_regression_passed": 31,
+        "final_observation_tests_passed": 18
+      },
+      "observation_readback_followup": {
+        "turn_id": "b1b69474-7f45-4f84-b63e-3b707d5a577f",
+        "status": "completed",
+        "reply": "实际输出检查已完成；请按分项证据查看结果，未提供的语义或听感不能当作已通过。",
+        "job_id": "job_media_d0aec26f52773c9130f41a528bf754460104d2714c9befbc5b0c7e6527cff32d",
+        "output_sha256": "b7038beef3f3116bc1789200696a00e15b51fc8b0b9b1e92e1b612234d50b4be",
+        "version": "timeline_delivery_job_a16268d4142b411caabadd852c_render_13ebe8bedd35fe33704ba3cee7b8ca549012d4b8ed54b88fc049e6674c284b01",
+        "provider_usage": {
+          "input": 51011,
+          "output": 3714,
+          "cacheRead": 144960,
+          "cacheWrite": 0,
+          "totalTokens": 199685
+        },
+        "usage_status": "known",
+        "resolution": "direct branch fixed by 624be7f; original answer replay and final real provider readback passed"
+      },
+      "readonly_observation_fix": {
+        "code_commit": "624be7f",
+        "real_answer_replay": {
+          "mode": "bounded replay of original provider answer and actual persisted current observation",
+          "original_turn_id": "b1b69474-7f45-4f84-b63e-3b707d5a577f",
+          "answer_retained": true,
+          "preview_kind": "media_job",
+          "observation_review": true,
+          "current_version": "timeline_delivery_job_a16268d4142b411caabadd852c_render_13ebe8bedd35fe33704ba3cee7b8ca549012d4b8ed54b88fc049e6674c284b01",
+          "sample_times": [
+            1.0,
+            4.0,
+            7.0
+          ]
+        }
+      },
+      "final_readonly_provider_acceptance": {
+        "turn_id": "a4fca0d1-a0c8-4895-a271-28ab98277698",
+        "status": "completed",
+        "reply": "当前这版成片是 8 秒竖屏成片，1 秒、4 秒、7 秒三处各已有一次抽帧检查，这批结果未过期、对应现在的第 13 版时间线，与本次质检所针对的那份成片是同一份；另外两次抽帧（约 3.6/3.9/4 秒和 4.4 秒）来自更早的版本、当时画面里还有一层现在已不存在的角标，因此不能代表当前画面。实际画面检查只到像素层面：三帧均为缩略尺寸画面，明暗正常、没有纯黑或纯色，都指向同一段原片取景，三帧之间的色彩数值有变化，说明画面确实在动。声音方面的局限是：成片确实带有一条音轨、质检也没有报出媒体层面的错误，但这次观察没有做转写也没有做听感判断，所以“存在音频流”不等于“听得见内容”，原声与背景音乐是否真出声、是否与画面匹配都未能由此确认。未确认项包括：本地文字识别与画面语义理解不可用，因此画面里有没有文字、字是否易读无从判断，除 1/4/7 秒之外的其他片段没有检查，且本轮只做了回读，没有编辑、没有重新制作，也没有新增任何检查。",
+        "trace": {
+          "status": "completed",
+          "usage_status": "known",
+          "provider_usage": {
+            "input": 47993,
+            "output": 2224,
+            "cacheRead": 94080,
+            "cacheWrite": 0,
+            "totalTokens": 144297
+          },
+          "usage_source": "provider",
+          "tool_counts": {
+            "读取当前任务（发送前）": 1,
+            "读取原成片质检": 1,
+            "读取实际结果检查": 1,
+            "记录本次要求": 1
+          },
+          "compaction_count": 0
+        },
+        "timeline_sequence_after": 13,
+        "observation_job_count_after": 3,
+        "new_render_or_observation": false,
+        "original_failed_turn_retained": "9661078d-7bab-4d81-a22c-0b1550c84e0f",
+        "evaluation_limit": "confirms currentness readback and final answer retention, not a general semantic-quality or human-listening evaluation"
+      }
     }
   }
 }
