@@ -34,12 +34,80 @@ def test_manifest_bounds_each_reduction_and_keeps_absolute_gain_envelopes():
     assert changed.digest != plan.digest and changed.final.id != plan.final.id
 
 
-def test_nonlinear_sidechain_is_not_silently_replaced_by_linear_reduction():
-    graph = timeline(['artifacts/source'])
-    graph.tracks[0].role = 'music'
-    graph.tracks[0].duck_under_voice = True
+def ducking_timeline(voice_state):
+    music = TimelineAudioTrack(id='music', name='闪避音乐', role='music', duck_under_voice=True,
+        clips=[TimelineAudioClip(id=f'music-{i}', name=f'音乐{i}', source_ref=f'artifacts/music-{i}',
+            source_start_ms=0, source_end_ms=1000, timeline_start_ms=0) for i in range(3)])
+    voice = TimelineAudioTrack(id='voice', name='人声', role='original' if voice_state == 'original' else 'narration',
+        muted=voice_state == 'muted_track', clips=[] if voice_state == 'empty' else [
+            TimelineAudioClip(id='voice-clip', name='人声', source_ref='artifacts/voice', muted=voice_state == 'muted_clip',
+                source_start_ms=0, source_end_ms=1000, timeline_start_ms=0)])
+    return AudioTimeline(tracks=[music] + ([] if voice_state == 'absent' else [voice]))
+
+
+@pytest.mark.parametrize('voice_state', ['absent', 'empty', 'muted_track', 'muted_clip'])
+def test_ducking_without_active_voice_can_reduce_within_budget(voice_state):
+    graph = ducking_timeline(voice_state)
+    before = graph.model_dump()
+    plan = plan_audio_assembly(graph, 1000, workspace_id='local', task_id='task', producer_job_id='job',
+        source_hashes={f'artifacts/music-{i}': 'a' * 64 for i in range(3)}, max_input_count=2)
+    leaves = [unit for unit in plan.units if not unit.dependencies]
+    assert len(leaves) == 2
+    assert all(len(unit.input_refs) <= 2 for unit in plan.units)
+    assert all(track.duck_under_voice for unit in leaves for track in unit.graph.tracks)
+    assert graph.model_dump() == before
+
+
+@pytest.mark.parametrize('voice_state', ['narration', 'original'])
+@pytest.mark.parametrize('max_input_count', [3, 4])
+def test_active_sidechain_still_refuses_linear_reduction(voice_state, max_input_count):
+    graph = ducking_timeline(voice_state)
+    hashes = {clip.source_ref: 'a' * 64 for track in graph.tracks for clip in track.clips}
     with pytest.raises(ValueError, match='侧链'):
-        plan_audio_assembly(graph, 1000, workspace_id='local', task_id='task', producer_job_id='job', source_hashes={'artifacts/source': 'a' * 64}, max_input_count=5)
+        plan_audio_assembly(graph, 1000, workspace_id='local', task_id='task', producer_job_id='job',
+            source_hashes=hashes, max_input_count=max_input_count)
+
+
+@pytest.mark.parametrize('voice_state', ['absent', 'muted_track'])
+def test_actual_ducking_assembly_matches_complete_mix(tmp_path, granted_media, voice_state):
+    graph = ducking_timeline(voice_state)
+    active = [clip for track in graph.tracks if not track.muted for clip in track.clips if not clip.muted]
+    originals = {}
+    for index, clip in enumerate(active):
+        path = tmp_path / f'source-{index}.wav'
+        samples = [round(1800 * math.sin(2 * math.pi * (220 + index * 110) * n / 48000)) for n in range(48000)]
+        with wave.open(str(path), 'wb') as output:
+            output.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
+            output.writeframes(array.array('h', samples).tobytes())
+        originals[clip.source_ref] = path
+    hashes = {ref: hashlib.sha256(path.read_bytes()).hexdigest() for ref, path in originals.items()}
+    cap = 2
+    plan = plan_audio_assembly(graph, 1000, workspace_id='local', task_id='task', producer_job_id='job',
+        source_hashes=hashes, max_input_count=cap)
+    paths = dict(originals)
+
+    def render(candidate, path, refs, *, master=True):
+        with granted_media([paths[ref] for ref in refs]) as context:
+            render_audio_mix(candidate, 1, paths.__getitem__, path, apply_master=master,
+                scheduler=context.scheduler, grant=context.grant, deadline_monotonic=context.deadline_monotonic,
+                max_output_bytes=context.max_output_bytes, threads=context.threads)
+
+    def pcm(path):
+        with wave.open(str(path), 'rb') as source:
+            assert source.getframerate() == 48000 and source.getnframes() == 48000
+            return array.array('h', source.readframes(source.getnframes()))
+
+    for unit in plan.units:
+        assert len(unit.input_refs) <= cap
+        output = tmp_path / f'{unit.id}.wav'
+        render(unit.graph, output, unit.input_refs, master=unit.master)
+        paths[unit.output_ref('task')] = output
+    direct = tmp_path / 'direct.wav'
+    render(graph, direct, originals)
+    actual, expected = pcm(paths[plan.final.output_ref('task')]), pcm(direct)
+    assert len(actual) == len(expected)
+    assert max(abs(left - right) for left, right in zip(actual, expected)) <= 2
+    assert {ref: hashlib.sha256(path.read_bytes()).hexdigest() for ref, path in originals.items()} == hashes
 
 
 def test_actual_twenty_source_float_reduction_matches_one_master_mix(tmp_path, granted_media):

@@ -168,6 +168,8 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
     execute: async () => {
       const data = await request("/api/video-templates");
       const templateCount = Array.isArray(data.items) ? data.items.length : 0;
+      const catalog = await request("/api/editing-resource-catalog?limit=100");
+      const audioResources = (catalog.resources ?? []).filter((item:any) => ["music", "sfx"].includes(item.category_id));
       const resources = [
         {id: "materials", label: "素材", status: "connected", entrypoints: ["find_materials", "read_material_evidence"], provenance_required: true},
         {id: "templates", label: "模板", status: templateCount ? "connected" : "catalog_only", entrypoints: ["read_video_templates", "read_visual_template"], count: templateCount, provenance_required: true},
@@ -176,7 +178,7 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
         {id: "effects", label: "画面效果", status: "connected", entrypoints: ["preview_typed_edit", "apply_typed_edit"], provenance_required: false},
         {id: "transitions", label: "转场", status: "connected", entrypoints: ["preview_typed_edit", "apply_typed_edit"], provenance_required: false},
         {id: "text_stickers", label: "文本/贴纸", status: "connected", entrypoints: ["read_task_object", "preview_typed_edit"], provenance_required: true},
-        {id: "audio_library", label: "音乐/音效", status: "catalog_only", entrypoints: [], provenance_required: true},
+        {id: "audio_library", label: "音乐/音效", status: audioResources.some((item:any) => item.status === "connected") ? "connected" : "catalog_only", entrypoints: ["preview_typed_edit", "apply_typed_edit"], resources: audioResources, provenance_required: true},
         {id: "motion_runtime", label: "动效运行时", status: "connected", entrypoints: ["read_visual_template"], provenance_required: true},
         {id: "filters_lut", label: "滤镜/LUT", status: "planned", entrypoints: [], provenance_required: true},
       ];

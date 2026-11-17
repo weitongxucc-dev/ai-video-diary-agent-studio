@@ -261,12 +261,18 @@ class AudioIngressUseCase:
         suffix = Path(audio.filename or '').suffix.lower()
         if suffix not in {'.wav', '.mp3', '.m4a', '.aac', '.flac'}:
             raise AudioIngressRejected(status_code=422, detail='请选择 WAV、MP3、M4A、AAC 或 FLAC 音频')
+        parameters = {'name': Path(audio.filename or '音频').name[:120]}
+        catalog_resource = event['arguments'].get('catalog_resource')
+        if catalog_resource is not None:
+            # Catalog identity is provenance, not a resolvable media dependency.
+            parameters.update(catalog_resource=catalog_resource, source_sha256=audio.source_sha256)
         try:
-            record = self.task_audio.publish(workspace_id, task_id, kind='audio_source', parameters={'name': Path(audio.filename or '音频').name[:120]}, input_refs=[], operation='upload', media_input={'staged_input': audio.staged_input, 'sha256': audio.source_sha256}, suffix=suffix, execution=(context, job, event, actor))
+            record = self.task_audio.publish(workspace_id, task_id, kind='audio_source', parameters=parameters, input_refs=[], operation='upload', media_input={'staged_input': audio.staged_input, 'sha256': audio.source_sha256}, suffix=suffix, execution=(context, job, event, actor))
             duration = self.task_audio.probe(self.task_audio.source(workspace_id, task_id, record.logical_ref, actor=actor), context=context)
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             raise AudioIngressRejected(status_code=422, detail='音频导入失败，请检查文件格式、时长及外接盘。') from exc
-        return {'source_ref': record.logical_ref, 'name': Path(audio.filename or '音频').name[:120], 'duration_ms': round(duration * 1000)}
+        return {'source_ref': record.logical_ref, 'name': Path(audio.filename or '音频').name[:120], 'duration_ms': round(duration * 1000),
+                **({'catalog_resource': catalog_resource, 'source_sha256': audio.source_sha256} if catalog_resource is not None else {})}
 
     def save_recording(self, job, event, actor, context):
         workspace_id, task_id = (job.workspace_id, job.task_id)

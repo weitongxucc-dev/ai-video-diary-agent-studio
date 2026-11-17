@@ -13,12 +13,15 @@ import subprocess
 from tempfile import TemporaryDirectory
 import threading
 import time
-from typing import Callable, Literal
+from typing import Callable, Literal, TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked
+
+if TYPE_CHECKING:
+    from app.montage import CreationTaskMontagePlan
 
 
 AUDIO_MIX_CONTRACT_VERSION = 'audio-mix/v2'
@@ -315,13 +318,34 @@ def audio_edit_preview_range(before: AudioTimeline, after: AudioTimeline, edit: 
     return start, min(duration_seconds, start+10)
 
 
+def effective_audio_timeline(plan: CreationTaskMontagePlan) -> AudioTimeline:
+    if plan.script_id is None and plan.audio_timeline is not None:
+        return with_resource_audio_tracks(plan.audio_timeline)
+    return plan.audio_timeline or narration_audio_timeline(plan.narration_audio_path or '', plan.duration_seconds)
+
+
+def with_resource_audio_tracks(timeline: AudioTimeline) -> AudioTimeline:
+    """Supply missing editable resource roles without changing existing audio."""
+    tracks = list(timeline.tracks)
+    roles = {track.role for track in tracks}
+    ids = {track.id for track in tracks} | {clip.id for track in tracks for clip in track.clips}
+    for role, base_id, name in (("music", "audio-music", "音乐"), ("effect", "audio-effects", "音效")):
+        if role in roles:
+            continue
+        track_id, suffix = base_id, 2
+        while track_id in ids:
+            track_id = f"{base_id}-{suffix}"
+            suffix += 1
+        tracks.append(TimelineAudioTrack(id=track_id, name=name, role=role, duck_under_voice=role == "music"))
+        ids.add(track_id)
+    return AudioTimeline.model_validate({**timeline.model_dump(), "tracks": tracks})
+
+
 def narration_audio_timeline(reference: str, duration_seconds: float) -> AudioTimeline:
-    return AudioTimeline(tracks=[TimelineAudioTrack(id="audio-narration", name="配音", role="narration", clips=[
+    return with_resource_audio_tracks(AudioTimeline(tracks=[TimelineAudioTrack(id="audio-narration", name="配音", role="narration", clips=[
         TimelineAudioClip(id="audio-narration-main", name="当前配音", source_ref=reference,
                           source_start_ms=0, source_end_ms=round(duration_seconds * 1000), timeline_start_ms=0),
-    ]), TimelineAudioTrack(id="audio-original", name="原声", role="original"),
-        TimelineAudioTrack(id="audio-music", name="音乐", role="music", duck_under_voice=True),
-        TimelineAudioTrack(id="audio-effects", name="音效", role="effect")])
+    ]), TimelineAudioTrack(id="audio-original", name="原声", role="original")]))
 
 
 def rebind_narration_audio(timeline: AudioTimeline, old_reference: str, new_reference: str,

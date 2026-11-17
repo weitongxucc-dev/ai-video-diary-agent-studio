@@ -1,14 +1,44 @@
 """Task audio HTTP and artifact access; ingress, editing and recording transactions remain owner-owned."""
 from fastapi import APIRouter, Request, UploadFile, File
+from pydantic import BaseModel, ConfigDict, Field
 from app.audio_timeline import AudioEditRequest, AudioListenRequest
+from app.editing_resource_catalog import resource_preview_path
 from app.schemas import CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskEditPreviewResponse
 
-def build_task_audio_router(*, submit_for, workspace_for, task_for, ingress_for, outputs_for, ingress_error_type_for, http_error_type_for, narration_for, records_for, media_kind_for, actor_for, runtime_for, actor_type_for, audio_for, file_response_for, preview_for, route_names) -> APIRouter:
+
+class CatalogAudioImportRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    resource_id: str = Field(min_length=1, max_length=160)
+    version: int = Field(ge=1, strict=True)
+
+
+def build_task_audio_router(*, catalog_for, submit_for, workspace_for, task_for, ingress_for, outputs_for, ingress_error_type_for, http_error_type_for, narration_for, records_for, media_kind_for, actor_for, runtime_for, actor_type_for, audio_for, file_response_for, preview_for, route_names) -> APIRouter:
     router = APIRouter()
 
     @router.post('/api/creation-tasks/{task_id}/audio/import')
     def import_creation_task_audio(task_id: str, request: Request, audio: UploadFile=File(...)):
         return submit_for()(task_id, request, 'audio_import', 'audio_source', audio=audio)
+
+    @router.post('/api/creation-tasks/{task_id}/audio/resources')
+    def import_creation_task_audio_resource(task_id: str, request: Request, payload: CatalogAudioImportRequest):
+        item = next((item for item in catalog_for().resources
+                     if item.id == payload.resource_id and item.version == payload.version), None)
+        if item is None:
+            raise http_error_type_for()(status_code=404, detail='资源版本不存在')
+        if item.preview.kind != 'audio':
+            raise http_error_type_for()(status_code=422, detail='此资源不是音频')
+        if item.status != 'connected':
+            raise http_error_type_for()(status_code=409, detail='音频资源尚未接通')
+        path = resource_preview_path(item.id)
+        if path is None:
+            raise http_error_type_for()(status_code=404, detail='资源音频文件不存在')
+        catalog_resource = {'id': item.id, 'version': item.version,
+                            'provenance': [entry.model_dump(mode='json') for entry in item.provenance]}
+        with path.open('rb') as stream:
+            audio = UploadFile(file=stream, filename=f'{item.name}{path.suffix}')
+            return submit_for()(task_id, request, 'audio_import', 'audio_source', audio=audio,
+                                arguments={'catalog_resource': catalog_resource})
 
     @router.get('/api/creation-tasks/{task_id}/audio/recordings')
     def list_creation_task_recordings(task_id: str, request: Request):

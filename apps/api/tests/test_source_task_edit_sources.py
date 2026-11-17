@@ -5,12 +5,73 @@ import json
 import pytest
 
 from app.artifact_store import ArtifactStore
-from app.creation.editing.metadata_use_case import MetadataEditUseCase, metadata_edit_command
+from app.audio_timeline import AudioEditRequest, AudioTimeline, TimelineAudioTrack, with_resource_audio_tracks
+from app.creation.editing.metadata_use_case import MetadataEditUseCase, effective_audio_timeline, metadata_edit_command
+from app.creation.editing.timeline_restore_use_case import TimelineRestoreCommand, TimelineRestoreUseCase, TimelineOutputQualification
 from app.creation.editing.sources import EditSourceVerifier
 from app.materials.contracts import MaterialSegment
 from app.montage import creation_task_montage_plan_from_payload
 from app.task_audio import TaskAudio
 from test_source_task_use_case import source_case as source_case
+
+
+@pytest.mark.parametrize('preserve_audio', [False, True])
+@pytest.mark.parametrize('legacy', [False, True])
+def test_source_resource_tracks_adopt_persist_and_undo(source_case, tmp_path, monkeypatch, preserve_audio, legacy):
+    case = source_case
+    # Reproduce the previous source-task writer in an isolated database.
+    with monkeypatch.context() as old_writer:
+        if legacy:
+            old_writer.setattr('app.creation.source_task_use_case.with_resource_audio_tracks', lambda graph: graph)
+        receipt = case.use_case.create(replace(case.command, preserve_audio=preserve_audio), case.actor)
+    task = case.repo.task_records.get_creation_task('local', receipt['task_id'])
+    before = case.repo.get_creation_task_montage_plan('local', task.id)
+    plan = creation_task_montage_plan_from_payload(before)
+    effective = effective_audio_timeline(plan)
+    assert [track.role for track in effective.tracks] == (['original'] if preserve_audio else []) + ['music', 'effect']
+    assert [clip.source_ref for track in effective.tracks for clip in track.clips] == ([case.reference] if preserve_audio else [])
+    assert plan.audio_timeline.model_dump() == before['audio_timeline']
+    assert case.repo.get_creation_task_montage_plan('local', task.id) == before
+    store = ArtifactStore(tmp_path / 'outputs')
+    editor = MetadataEditUseCase(case.repo, store, output_root=tmp_path / 'outputs',
+        audio_service=TaskAudio(case.repo, store, tmp_path / 'temporary'))
+    music = next(track for track in effective.tracks if track.role == 'music')
+    edit = AudioEditRequest(base_version_id=task.current_timeline_version_id, action='add', target_id=music.id,
+        values={'source_ref': case.reference, 'name': '资源采用元数据样本', 'source_start_ms': 0,
+                'source_end_ms': 1000, 'timeline_start_ms': 0, 'gain_db': -12})
+    identity = {'member_id': case.actor.member_id, 'local_diagnostic': False}
+    command = metadata_edit_command(task, identity, 'EditAudioTimeline',
+        {'base_version_id': task.current_timeline_version_id, 'audio_edit': edit.model_dump()})
+    result = editor.save(task, command, audio_edit=edit, audio_actor=case.actor)
+    saved = case.repo.get_creation_task_montage_plan('local', task.id)
+    assert next(track for track in saved['audio_timeline']['tracks'] if track['role'] == 'music')['clips'][0]['source_ref'] == case.reference
+    assert saved['clips'] == before['clips'] and saved['cues'] == before['cues']
+    assert [track for track in saved['audio_timeline']['tracks'] if track['role'] == 'original'] == [
+        track for track in before['audio_timeline']['tracks'] if track['role'] == 'original']
+    version = case.repo.timeline_records.get_timeline_version('local', result.operation.result_version_id)
+    assert version.parent_version_id == receipt['timeline_version_id']
+    assert version.snapshot['montage']['audio_timeline'] == saved['audio_timeline']
+    restore = TimelineRestoreUseCase(case.repo, editor)
+    current = case.repo.task_records.get_creation_task('local', task.id)
+    prepared = restore.prepare_restore(TimelineRestoreCommand('local', current, False))
+    restore.apply_restore(prepared, TimelineOutputQualification(prepared, False))
+    restored = case.repo.get_creation_task_montage_plan('local', task.id)
+    assert restored['audio_timeline'] == before['audio_timeline']
+    assert restored['clips'] == before['clips'] and restored['cues'] == before['cues']
+    assert all(not track.clips for track in effective_audio_timeline(
+        creation_task_montage_plan_from_payload(restored)).tracks if track.role in {'music', 'effect'})
+
+
+def test_resource_track_defaults_preserve_existing_roles_and_object_ids():
+    custom = TimelineAudioTrack(id='custom-music', name='已有音乐', role='music', gain_db=-8, muted=True, locked=True)
+    collision = TimelineAudioTrack(id='audio-effects', name='原声', role='original')
+    original = AudioTimeline(tracks=[custom, collision])
+    effective = with_resource_audio_tracks(original)
+    assert effective.tracks[:2] == original.tracks
+    assert len(original.tracks) == 2
+    assert effective.tracks[2].role == 'effect' and effective.tracks[2].id == 'audio-effects-2'
+    assert effective.tracks[2].clips == []
+    assert with_resource_audio_tracks(effective) == effective
 
 
 @pytest.fixture

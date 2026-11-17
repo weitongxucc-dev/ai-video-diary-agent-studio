@@ -2147,6 +2147,7 @@ def _clip_preview_submission_http_adapter():
 
 def _task_audio_http_router(route_names):
     return build_task_audio_router(
+        catalog_for=editing_resource_catalog,
         submit_for=lambda: _submit_audio_ingress,
         workspace_for=lambda: current_workspace_id,
         task_for=lambda: _creation_task_or_404,
@@ -2167,7 +2168,7 @@ def _task_audio_http_router(route_names):
     )
 
 
-app.include_router(_task_audio_http_router(("import_creation_task_audio",)))
+app.include_router(_task_audio_http_router(("import_creation_task_audio", "import_creation_task_audio_resource")))
 
 
 app.include_router(_task_audio_http_router(("list_creation_task_recordings",)))

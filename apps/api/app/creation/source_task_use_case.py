@@ -9,7 +9,7 @@ import math
 import stat
 from uuid import UUID
 
-from app.audio_timeline import AudioTimeline, TimelineAudioClip, TimelineAudioTrack
+from app.audio_timeline import AudioTimeline, TimelineAudioClip, TimelineAudioTrack, with_resource_audio_tracks
 from app.creation.contracts import CreationTask, TaskEvent, TimelineVersion
 from app.creation.plan_contracts import CreationPlan
 from app.creation_execution import CreationExecutionActor
@@ -166,7 +166,7 @@ class SourceTaskUseCase:
                 timeline_end_seconds=duration, match_score=0, match_reasons=["用户明确选择原片区间"],
                 needs_confirmation=False, role="a_roll", manually_selected=True, fit_mode="fit")],
             duration_seconds=duration, low_confidence_clip_count=0, aspect_ratio=command.aspect_ratio,
-            audio_timeline=audio)
+            audio_timeline=with_resource_audio_tracks(audio))
         payload = creation_task_montage_plan_to_payload(montage)
         receipt = {"request_id": request_id, "status": "created", "plan_id": plan_id, "task_id": task_id,
                    "montage_plan_id": montage_id, "timeline_version_id": version_id, "source_media": source_media}

@@ -1,5 +1,5 @@
 """Original source facts, rechecked at the repository's direct-edit commit boundary."""
-from app.audio_timeline import AudioEditRequest, apply_audio_edit, narration_audio_timeline
+from app.audio_timeline import AudioEditRequest, apply_audio_edit, effective_audio_timeline
 from app.creation.editing.picture import EditConflict
 from app.montage import creation_task_montage_plan_from_payload
 from dataclasses import asdict, replace
@@ -156,7 +156,7 @@ class EditSourceVerifier:
         if action['operation_type'] == 'EditAudioTimeline' and clip_ids is None:
             plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(
                 command.workspace_id, command.task_id, connection=connection))
-            graph = plan.audio_timeline or narration_audio_timeline(plan.narration_audio_path or '', plan.duration_seconds)
+            graph = effective_audio_timeline(plan)
             edit = action['audio_edit']
             after = apply_audio_edit(graph, AudioEditRequest(base_version_id=command.base_version_id,
                 action=edit['action'], target_id=edit['target_id'], values=edit['values']), round(plan.duration_seconds*1000))
@@ -164,7 +164,7 @@ class EditSourceVerifier:
         if action['operation_type'] == 'EditCompoundTimeline' and clip_ids is None:
             plan = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(
                 command.workspace_id, command.task_id, connection=connection))
-            graph = plan.audio_timeline or narration_audio_timeline(plan.narration_audio_path or '', plan.duration_seconds)
+            graph = effective_audio_timeline(plan)
             return self.audio_facts(command, graph)
         ids = clip_ids if clip_ids is not None else (action.get('clip_ids') or list(action.get('expected_clips', {}))) if action['operation_type'] == 'AdjustVisualEffects' else (
             [action['clip_id']] if action.get('clip_id') else [])

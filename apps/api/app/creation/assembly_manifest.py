@@ -128,7 +128,10 @@ def plan_audio_assembly(timeline: AudioTimeline, duration_ms: int, *, workspace_
     snapshot = AudioTimeline.model_validate(timeline.model_dump())
     active = [(track, clip) for track in snapshot.tracks if not track.muted
         for clip in track.clips if not clip.muted]
-    if any(track.duck_under_voice for track, _ in active):
+    has_sidechain = (any(track.role in {'narration', 'original'} for track, _ in active)
+        and any(track.duck_under_voice for track, _ in active))
+    # Without an active voice bus, the existing mixer treats ducked music as linear.
+    if has_sidechain:
         raise ValueError('侧链闪避需要完整人声状态，不能作为线性音轨分组归约')
     if any(clip.timeline_start_ms + clip.duration_ms > duration_ms for _, clip in active):
         raise ValueError('归约音轨超出已批准时间线')

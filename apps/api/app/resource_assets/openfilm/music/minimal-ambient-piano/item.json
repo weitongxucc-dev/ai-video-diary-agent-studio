@@ -1,0 +1,26 @@
+{
+  "id": "audio/music/minimal-ambient-piano-ae1c16.mp3",
+  "cat": "music",
+  "group": "calm",
+  "name": {
+    "en": "Minimal ambient piano",
+    "zh-CN": "极简环境钢琴",
+    "ja": "ミニマル環境ピアノ",
+    "ko": "미니멀 앰비언트 피아노",
+    "es": "Piano ambiental minimalista"
+  },
+  "kind": "sound",
+  "durationMs": 45035,
+  "cover": "audio/covers/calm-03.jpg",
+  "tags": [
+    "calm",
+    "ambient",
+    "minimal",
+    "piano",
+    "morning",
+    "background",
+    "ambience"
+  ],
+  "energy": 2,
+  "bpm": 70
+}

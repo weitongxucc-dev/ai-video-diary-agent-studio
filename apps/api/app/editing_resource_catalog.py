@@ -99,8 +99,8 @@ _CATEGORIES: tuple[EditingResourceCategory, ...] = (
         entrypoints=["read_narration_segments", "read_script_sections", "preview_typed_edit"]),
     EditingResourceCategory(id="voice", label="配音", status="connected",
         entrypoints=["read_voice_profiles"], provenance_required=True),
-    EditingResourceCategory(id="music", label="音乐", status="catalog_only",
-        entrypoints=[], provenance_required=True),
+    EditingResourceCategory(id="music", label="音乐", status="connected",
+        entrypoints=["preview_typed_edit", "apply_typed_edit"], provenance_required=True),
     EditingResourceCategory(id="sfx", label="音效", status="connected",
         entrypoints=["preview_typed_edit", "apply_typed_edit"], provenance_required=True),
 )
@@ -224,7 +224,42 @@ def _builtin_resources() -> list[EditingResource]:
             entrypoints=["read_video_templates", "read_visual_template"],
         ))
     resources.extend(_packaged_skill_resources())
+    resources.append(_packaged_music_resource())
     return resources
+
+
+def _packaged_music_resource() -> EditingResource:
+    manifest_path = Path(__file__).resolve().parent / "resource_assets/openfilm/music/minimal-ambient-piano/manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    source = manifest["provenance"]
+    preview_ref = f"/api/editing-resources/{manifest['id']}/preview?version={manifest['version']}"
+    return EditingResource(
+        id=manifest["id"], category_id="music", name=manifest["name"], version=manifest["version"],
+        status="connected", resource_type="music",
+        preview=ResourcePreview(kind="audio", duration_seconds=manifest["duration_seconds"], thumbnail_ref=preview_ref),
+        provenance=[ResourceProvenance(repository=source["repository"], revision=source["revision"],
+            path=source["source_path"], license=source["license"], license_spdx=source["license"],
+            source_sha256=source["source_sha256"]),
+            ResourceProvenance(repository=source["repository"], revision=source["revision"],
+                path=source["catalog_path"], license=source["license"], license_spdx=source["license"],
+                source_sha256=source["catalog_sha256"])],
+        runtime_requirements={
+            "engine": "EditAudioTimeline", "runnable": True, "tags": manifest["tags"],
+            "preview_ref": preview_ref,
+            "manifest_path": "apps/api/app/resource_assets/openfilm/music/minimal-ambient-piano/manifest.json",
+            "install_checks": {"mode": "package-time", "checks": ["source and preview SHA-256", "audio decode", "pinned catalog entry"]},
+            "adoption": {"status": "requires_task_import", "requires_explicit_edit_authorization": True,
+                "import_endpoint": "/api/creation-tasks/{task_id}/audio/resources",
+                "import_payload": {"resource_id": manifest["id"], "version": manifest["version"]},
+                "result": "读取导入 Job 原回执的 result.source_ref；预览 URL 不是可写入时间线的 source_ref。",
+                "entrypoint": "apply_typed_edit", "operation_type": "EditAudioTimeline", "action": "add",
+                "track_role": "music", "write_endpoint": "/api/creation-tasks/{task_id}/edits/exact",
+                "write_boundary": "沿当前任务授权与 expected_timeline_version_id/expected_timeline_sequence 校验采用。"},
+            "rollback": {"mode": "timeline-undo", "endpoint": "/api/creation-tasks/{task_id}/timeline/undo",
+                "deletes_user_data": False, "boundary": "携带当前版本与原请求身份撤销；保留导入的任务音频和历史版本。"},
+        },
+        entrypoints=["preview_typed_edit", "apply_typed_edit"],
+    )
 
 
 def _packaged_skill_resources() -> list[EditingResource]:
@@ -333,6 +368,7 @@ def resource_preview_path(resource_id: str, representation: str = "media") -> Pa
         # WAV is a tiny local preview derivative because Electron's bundled
         # Chromium does not decode this m4a reliably in an <audio> element.
         ("openfilm:sound-glass-pulse", "media"): root / "sound" / "glass-pulse" / "preview.wav",
+        ("openfilm:music-minimal-ambient-piano", "media"): root / "music" / "minimal-ambient-piano" / "preview.wav",
         ("openfilm:transition-glitch", "media"): root / "transition" / "glitch" / "preview.mp4",
         ("openfilm:transition-glitch", "poster"): root / "transition" / "glitch" / "poster.jpg",
     }

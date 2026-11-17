@@ -16,7 +16,7 @@ def test_manifest_keeps_navigation_categories_separate_from_resource_items():
     statuses = {item.id: item.status for item in catalog.categories}
     assert statuses["templates"] == "connected"
     assert statuses["voice"] == "connected"
-    assert statuses["music"] == "catalog_only"
+    assert statuses["music"] == "connected"
     assert statuses["sfx"] == "connected"
     assert statuses["filters"] == "planned"
     skills, total = search_editing_resources(catalog, category="skills", limit=100)
