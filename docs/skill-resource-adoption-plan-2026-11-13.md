@@ -12,6 +12,7 @@
 | --- | --- | --- | --- | --- |
 | `cut-as-code-video-cut` | [WhiteTowerAI/cut-as-code](https://github.com/WhiteTowerAI/cut-as-code)，`a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4` | 仓库和该方法文档为 MIT | 证据驱动的 keep/drop 判断、镜头与时间线复核方法 | 外部脚本、模型、字体、示例媒体、Pexels、云服务 |
 | `openfilm-replicate` | [openfilm/skill-replicate](https://github.com/openfilm/skill-replicate)，`eef1ee5eda2a2aaeec60a3f133d73b86dd53c053` | MIT | 参考视频的镜头、节奏、构图与输出观察方法适配 | OpenFilm CLI、测量脚本、渲染运行时、外部服务和参考媒体 |
+| `editing-videos` | [joshcirre/editing-videos](https://github.com/joshcirre/editing-videos)，`7a68b6070c3afc3be82396fb252e36340d1bf70f` | MIT | 已随产品发布的方法 Skill：节奏、B-roll、字幕、声音和回查；实际 `read_creation_skill` 契约测试通过 | JCSS、外部 CLI、脚本和独立渲染运行时 |
 
 | OpenFilm 文本/视觉模板 | [openfilm/openfilm](https://github.com/openfilm/openfilm)，曜核已落地的固定 revision `758b1a3888819bf191db191f690c4ca2fcb292af` | OpenFilm 库声明 CC0 | 标题、下三分之一、标注、新闻条、社交引导、章节、片尾等可编辑 HTML/JSON 模板 | OpenFilm Studio、CLI 和第二套时间线运行时 |
 
@@ -27,7 +28,6 @@
 
 | 优先级 | 项目 | 来源 | 预期用途 | 进入条件 |
 | --- | --- | --- | --- | --- |
-| A | `editing-videos` | [joshcirre/editing-videos](https://github.com/joshcirre/editing-videos) | 编辑判断方法：节奏、删减、B-roll、字幕、声音和复核 | 固定 commit 后直接改写为曜核方法 Skill；只调用曜核已有素材证据和编辑提案工具 |
 | B | `ai-video-editing-skill` | [minhducxD/ai-video-editing-skill](https://github.com/minhducxD/ai-video-editing-skill) | 素材盘点、导出检查和媒体质量门禁 | 固定 commit 后直接映射到曜核输出观察；不引入第二套事实源 |
 
 ## 只做研究，不进入当前运行时
@@ -57,7 +57,7 @@
 | 分类 | 当前状态 | 实际内容 |
 | --- | --- | --- |
 | 素材 | `connected` | 工作区用户素材、素材证据和检索入口 |
-| 技能 | `connected` | 固定版本的 `cut-as-code-video-cut` 与 `openfilm-replicate` 方法适配 |
+| 技能 | `connected` | 固定版本的 `cut-as-code-video-cut`、`openfilm-replicate`、`editing-videos` 方法适配 |
 | 贴纸 | `connected` | 曜核文本/贴纸叠加编辑能力；独立第三方贴纸包尚未导入 |
 | 滤镜 | `planned` | 有画面效果执行代码，但没有独立 LUT 资源包 |
 | 特效 | `connected` | 曜核参数化淡入、淡出、暖色调等效果 |
@@ -65,7 +65,7 @@
 | 模板 | `connected` | 当前仓库内的 OpenFilm HTML/RenderComp 视觉模板及 provenance |
 | 字幕/文本 | `connected` | ASR、字幕、文本叠加和编辑提案入口 |
 | 配音 | `connected` | 工作区授权的版本化声音档案和配音入口 |
-| 音乐 | `catalog_only` | 只有目录状态，没有随产品发布的曲库 |
+| 音乐 | `connected` | OpenFilm 0.3.2「极简环境钢琴」，45.035 秒；固定来源、MP3、WAV 预览和 manifest；通过任务音频导入、编辑提案、时间线采用/撤销；无有效人声的音乐合成已修复，旁白/原声侧链分组渲染仍有限制 |
 | 音效 | `connected` | 已接入 OpenFilm `Glass Pulse`（本地 m4a、预览路由和固定 provenance）；更多音效继续按同一目录接入 |
 
 当前第一批直接复制到产品的 OpenFilm 社区资源：`openfilm:sound-glass-pulse` 已可预览并进入音频编辑入口；`openfilm:transition-glitch` 已进入资源目录并可预览，因曜核当前还没有 CSS 转场写入适配，暂标 `catalog_only`，不会伪装成已可采用。
@@ -76,4 +76,6 @@
 
 1. 先完成数据治理真实闭环，让候选资源、采用、任务引用、渲染和输出观察能回读同一条关联链。
 2. 再完成 Agent 的统一 Trace、provider usage、Token 状态和最小回放评测。
-3. 立即接入 OpenFilm 的资源库和 Replicate Skill，再把 `editing-videos`、`ai-video-editing-skill` 逐个适配到同一套工具和回执。
+3. 立即接入 OpenFilm 的资源库和 Replicate Skill，`editing-videos` 已适配；后续 `ai-video-editing-skill` 继续映射到同一套工具和回执。
+
+本轮真实采用、渲染、输出观察、浏览器播放与撤销结果见[2026-11-17 原始证据](evidence/resource-library-adoption-2026-11-17.json)。带有效旁白/原声且启用音乐闪避的组装仍受限；本轮没有新增人工听感或 Electron/跨设备通过记录。

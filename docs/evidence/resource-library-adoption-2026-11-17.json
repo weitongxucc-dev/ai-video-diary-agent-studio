@@ -1,0 +1,769 @@
+{
+  "date": "2026-11-17",
+  "scope": [
+    "data governance candidates",
+    "persistent agent trace",
+    "resource audio adoption"
+  ],
+  "data_governance": {
+    "api_read": "passed",
+    "tests": {
+      "candidate_and_tool": 56,
+      "same_connection_capture": 13
+    },
+    "candidate_projection": {
+      "schema": "candidate-bundle/v1",
+      "missing_domains": [
+        "knowledge",
+        "person"
+      ],
+      "candidates": [
+        {
+          "kind": "material_segment",
+          "ref": "segment:seg_519e83ea0cb87fe1",
+          "status": "candidate",
+          "source_revision": {
+            "asset_updated_at": "2026-11-15T02:45:13.590149+00:00",
+            "modified_at": "2026-08-25T04:38:04.016025+00:00"
+          },
+          "authorization": {
+            "status": "needs_confirmation",
+            "use_state": "available",
+            "visibility": "private",
+            "owner_known": true,
+            "purpose": "manual"
+          }
+        },
+        {
+          "kind": "voice_profile",
+          "ref": "voice:voice_cc",
+          "status": "candidate",
+          "source_revision": {
+            "profile_version": "v2",
+            "current_profile_version": "v2"
+          },
+          "authorization": {
+            "status": "policy_allowed",
+            "purpose": "narration",
+            "reasons": [],
+            "use_state": "available",
+            "visibility": "private",
+            "grants": [
+              {
+                "id": "authorization_voice_cc",
+                "version": "v1",
+                "status": "active"
+              },
+              {
+                "id": "authorization_voice_cc",
+                "version": "v1",
+                "status": "active"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "agent_trace": {
+    "evidence_kind": "reread_existing_real_provider_turn",
+    "turn_id": "08e0fa9c-26a4-43b6-a497-3d4160fe678a",
+    "usage_status": "known",
+    "provider_usage": {
+      "input": 7118,
+      "output": 75,
+      "cacheRead": 185,
+      "cacheWrite": 0,
+      "totalTokens": 7378
+    },
+    "event_count": 5,
+    "business_receipt_replay": "persistent tests passed; this provider turn has no business_result",
+    "tests": {
+      "python": 25,
+      "cli": 6
+    }
+  },
+  "resource": {
+    "resource_id": "openfilm:music-minimal-ambient-piano",
+    "version": 1,
+    "task": {
+      "request": {
+        "request_id": "81047b06-29b9-4d06-8e22-aca28b06bac5",
+        "asset_id": "asset_5e0cc594e86652da",
+        "expected_asset_updated_at": "2026-11-15T02:45:13.590149Z",
+        "source_start_seconds": 0,
+        "source_end_seconds": 6,
+        "name": "资源库音乐采用 · 修复后验收",
+        "aspect_ratio": "9:16",
+        "preserve_audio": false
+      },
+      "receipt": {
+        "request_id": "81047b06-29b9-4d06-8e22-aca28b06bac5",
+        "status": "created",
+        "plan_id": "plan_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+        "task_id": "task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+        "montage_plan_id": "montage_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+        "timeline_version_id": "timeline_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+        "source_media": {
+          "asset_id": "asset_5e0cc594e86652da",
+          "asset_updated_at": "2026-11-15T02:45:13.590149+00:00",
+          "source_ref": "workspace://真实Broll_待审核/pexels_4629176_laptop_workspace.mp4",
+          "source_start_seconds": 0.0,
+          "source_end_seconds": 6.0,
+          "aspect_ratio": "9:16",
+          "preserve_audio": false,
+          "file_signature": {
+            "size_bytes": "24195252",
+            "mtime_ns": "1787632684016025132",
+            "ctime_ns": "1787636951403564145",
+            "inode": "59805"
+          }
+        }
+      }
+    },
+    "prior_attempt": {
+      "task_id": "task_source_7df791624eed4a829744ae2de1d026bb0e85dbb4b66a71113b3a327451d9b6f5",
+      "job_id": "job_media_e60bbbd802abb9c1d09b764050b505835c0ae662b5af5d91bde607cc68066d92",
+      "retained": true,
+      "issue": "catalog provenance was mistakenly encoded as executable input_refs; retained unchanged, not accepted"
+    },
+    "tests": {
+      "source_creation_edit_undo": 48,
+      "source_ffmpeg_scenarios": 3,
+      "music_authority_import": 5,
+      "cross_task_job_identity": 2,
+      "web_resource_panel_and_adoption": 10,
+      "typescript": "passed",
+      "no_voice_audio_assembly": 10,
+      "web_adoption_after_live_fixes": 3
+    },
+    "render_attempt_before_fix": {
+      "task_id": "task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+      "task_execution": {
+        "task_kind": "source_video_edit",
+        "next_required_stage": "render",
+        "not_applicable_preparation_kinds": [
+          "narration",
+          "montage"
+        ]
+      },
+      "job": {
+        "id": "job_8b4aa7a0ebff4e4e89bde8b0163661bd",
+        "workspace_id": "local",
+        "task_id": "task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+        "kind": "creation_task_execution",
+        "idempotency_key": "creation-execution:task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16:55b8fbaad14d23b17f2f1328c5521f51fd04ddb8f3ad0a2c3390cd6905aece95",
+        "input_digest": "55b8fbaad14d23b17f2f1328c5521f51fd04ddb8f3ad0a2c3390cd6905aece95",
+        "status": "failed",
+        "progress": 0,
+        "attempt": 1,
+        "output_refs": [],
+        "failure_reason": "侧链闪避需要完整人声状态，不能作为线性音轨分组归约",
+        "impact": "当前制作未完成，上游产物保留。",
+        "repair_action": "检查首个失败原因后继续制作。",
+        "created_at": "2026-11-17T03:55:47.292152Z",
+        "started_at": "2026-11-17T03:55:47.825223Z",
+        "finished_at": "2026-11-17T03:55:54.587761Z",
+        "updated_at": "2026-11-17T03:55:54.587761Z"
+      },
+      "stages": [
+        {
+          "stage": "render",
+          "status": "failed",
+          "reason": "侧链闪避需要完整人声状态，不能作为线性音轨分组归约",
+          "at": "2026-11-17T03:55:54.587761+00:00"
+        }
+      ],
+      "current_stage": "render",
+      "waiting_reason": null,
+      "status_updated_at": "2026-11-17T03:55:54.587761+00:00",
+      "input_rejection": null,
+      "narration_usage": {
+        "budget": null,
+        "scope": null,
+        "used_seconds": 0,
+        "used_output_bytes": 0,
+        "consumption_known": true,
+        "unsettled": []
+      },
+      "visual_decisions": {
+        "items": [],
+        "total_count": 0,
+        "truncated": false
+      },
+      "video_ready": false,
+      "cover_status": "pending",
+      "cover_message": "尚未生成封面，请单独制作或选择封面。"
+    },
+    "import": {
+      "operation": "audio_import",
+      "target_refs": [],
+      "input_digest": "e60bbbd802abb9c1d09b764050b505835c0ae662b5af5d91bde607cc68066d92",
+      "created_at": "2026-11-17T03:54:24.422636Z",
+      "job_id": "job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc",
+      "status": "succeeded",
+      "result_kind": "audio_source",
+      "result_url": "/api/creation-tasks/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/media-jobs/job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc",
+      "device_request_id": "753baf4abe5e4a92878c8b0b1e814e2c",
+      "waiting_reason": null,
+      "base_version_id": null,
+      "result": {
+        "source_ref": "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc/f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0.wav",
+        "name": "极简环境钢琴.wav",
+        "duration_ms": 45035,
+        "catalog_resource": {
+          "id": "openfilm:music-minimal-ambient-piano",
+          "version": 1,
+          "provenance": [
+            {
+              "repository": "https://github.com/openfilm/openfilm",
+              "revision": "openfilm@0.3.2",
+              "path": "audio/music/minimal-ambient-piano-ae1c16.mp3",
+              "license": "CC0-1.0",
+              "license_spdx": "CC0-1.0",
+              "source_sha256": "ae1c1614d278325b6a9640ae47fd18546b722eb8f89782b3693fa7aeba2395d7",
+              "asset_license": null,
+              "font_license": null,
+              "model_license": null,
+              "service_terms": null
+            },
+            {
+              "repository": "https://github.com/openfilm/openfilm",
+              "revision": "openfilm@0.3.2",
+              "path": "packages/openfilm/library/audio.json",
+              "license": "CC0-1.0",
+              "license_spdx": "CC0-1.0",
+              "source_sha256": "3749127caffb116a87467c7fc1edd6346391afa982123961b13c40565e88f3ec",
+              "asset_license": null,
+              "font_license": null,
+              "model_license": null,
+              "service_terms": null
+            }
+          ]
+        },
+        "source_sha256": "59f906e3913ea5d15a2eadf24aa1361675984ecc2a19ac4e41d026133dcee5b1"
+      },
+      "failure_reason": null,
+      "repair_action": null,
+      "resource_wait": null
+    },
+    "adoption": {
+      "timeline_version_id": "timeline_e73fec7c1c584883bf5cf4581f55a020",
+      "timeline_sequence": 2,
+      "audio_timeline": {
+        "format_version": 1,
+        "tracks": [
+          {
+            "id": "audio-music",
+            "name": "音乐",
+            "role": "music",
+            "gain_db": 0.0,
+            "muted": false,
+            "locked": false,
+            "duck_under_voice": true,
+            "clips": [
+              {
+                "id": "audio-f8915b8076a24a33",
+                "source_ref": "artifacts/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/job_media_32aa869d4a0a9146dc9d5c099f701478814398c45d0e500dce3bdeedb64167cc/f12cce06d71d04303d1bb6283716dc9ef64c9f730a50d4c41f9ed93792b8c0a0.wav",
+                "name": "极简环境钢琴",
+                "source_start_ms": 0,
+                "source_end_ms": 6000,
+                "playback_rate": 1.0,
+                "timeline_start_ms": 0,
+                "gain_db": -18.0,
+                "fade_in_ms": 0,
+                "fade_out_ms": 0,
+                "muted": false,
+                "locked": false,
+                "denoise_db": 0.0,
+                "loudness_target_lufs": null,
+                "gain_points": [],
+                "envelope_offset_ms": 0,
+                "envelope_duration_ms": null,
+                "editor_gain_points": []
+              }
+            ]
+          },
+          {
+            "id": "audio-effects",
+            "name": "音效",
+            "role": "effect",
+            "gain_db": 0.0,
+            "muted": false,
+            "locked": false,
+            "duck_under_voice": false,
+            "clips": []
+          }
+        ]
+      },
+      "gui_status": "已加入当前作品音轨。重新渲染后会进入成片。"
+    },
+    "fixed_failures": [
+      "catalog provenance incorrectly treated as executable input dependency",
+      "cross-task identical audio collided on global Job ID",
+      "resource importer wrongly required edit-preview base version",
+      "music-only render incorrectly rejected by unconditional sidechain reduction guard",
+      "resource undo treated render-only version advancement as a later business edit; authoritative restore now checks exact operation and latest head"
+    ],
+    "execution": {
+      "task_id": "task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+      "task_execution": {
+        "task_kind": "source_video_edit",
+        "next_required_stage": null,
+        "not_applicable_preparation_kinds": [
+          "narration",
+          "montage"
+        ]
+      },
+      "job": {
+        "id": "job_ee6d44f6cd814af389c906b0de5425e3",
+        "workspace_id": "local",
+        "task_id": "task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+        "kind": "creation_task_execution",
+        "idempotency_key": "creation-execution:task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16:55b8fbaad14d23b17f2f1328c5521f51fd04ddb8f3ad0a2c3390cd6905aece95:retry:1",
+        "input_digest": "55b8fbaad14d23b17f2f1328c5521f51fd04ddb8f3ad0a2c3390cd6905aece95",
+        "status": "succeeded",
+        "progress": 100,
+        "attempt": 5,
+        "output_refs": [
+          "workspaces/local/tasks/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/audio-delivery/job_ee6d44f6cd814af389c906b0de5425e3/final_mux-a5abe1b414ca880ae6bba015de2a8768d05b4239ab547a2225ed56ee1be64015.mp4"
+        ],
+        "failure_reason": null,
+        "impact": null,
+        "repair_action": null,
+        "created_at": "2026-11-17T04:04:58.827572Z",
+        "started_at": "2026-11-17T04:05:17.091639Z",
+        "finished_at": "2026-11-17T04:05:21.135826Z",
+        "updated_at": "2026-11-17T04:05:21.135826Z"
+      },
+      "stages": [
+        {
+          "stage": "render",
+          "status": "completed",
+          "reason": null,
+          "at": "2026-11-17T04:05:05.897493+00:00"
+        },
+        {
+          "stage": "render",
+          "status": "completed",
+          "reason": null,
+          "at": "2026-11-17T04:05:08.465427+00:00"
+        },
+        {
+          "stage": "render",
+          "status": "completed",
+          "reason": null,
+          "at": "2026-11-17T04:05:10.934074+00:00"
+        },
+        {
+          "stage": "render",
+          "status": "completed",
+          "reason": null,
+          "at": "2026-11-17T04:05:16.445935+00:00"
+        },
+        {
+          "stage": "render",
+          "status": "completed",
+          "reason": null,
+          "at": "2026-11-17T04:05:21.135771+00:00"
+        }
+      ],
+      "current_stage": null,
+      "waiting_reason": null,
+      "status_updated_at": "2026-11-17T04:05:21.135826+00:00",
+      "input_rejection": null,
+      "narration_usage": {
+        "budget": null,
+        "scope": null,
+        "used_seconds": 0,
+        "used_output_bytes": 0,
+        "consumption_known": true,
+        "unsettled": []
+      },
+      "visual_decisions": {
+        "items": [],
+        "total_count": 0,
+        "truncated": false
+      },
+      "video_ready": true,
+      "cover_status": "pending",
+      "cover_message": "尚未生成封面，请单独制作或选择封面。",
+      "output_version": {
+        "job_id": "job_ee6d44f6cd814af389c906b0de5425e3",
+        "base_version": {
+          "timeline_version_id": "timeline_e73fec7c1c584883bf5cf4581f55a020",
+          "timeline_sequence": 2
+        },
+        "result_version": {
+          "timeline_version_id": "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+          "timeline_sequence": 3
+        }
+      }
+    },
+    "resume": {
+      "task_id": "task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+      "task_execution": {
+        "task_kind": "source_video_edit",
+        "next_required_stage": "render",
+        "not_applicable_preparation_kinds": [
+          "narration",
+          "montage"
+        ]
+      },
+      "job": {
+        "id": "job_ee6d44f6cd814af389c906b0de5425e3",
+        "workspace_id": "local",
+        "task_id": "task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+        "kind": "creation_task_execution",
+        "idempotency_key": "creation-execution:task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16:55b8fbaad14d23b17f2f1328c5521f51fd04ddb8f3ad0a2c3390cd6905aece95:retry:1",
+        "input_digest": "55b8fbaad14d23b17f2f1328c5521f51fd04ddb8f3ad0a2c3390cd6905aece95",
+        "status": "queued",
+        "progress": 0,
+        "attempt": 0,
+        "output_refs": [],
+        "failure_reason": null,
+        "impact": null,
+        "repair_action": null,
+        "created_at": "2026-11-17T04:04:58.827572Z",
+        "started_at": null,
+        "finished_at": null,
+        "updated_at": "2026-11-17T04:04:58.827576Z"
+      },
+      "stages": [],
+      "current_stage": "render",
+      "waiting_reason": null,
+      "status_updated_at": "2026-11-17T04:04:58.854376+00:00",
+      "input_rejection": null,
+      "narration_usage": {
+        "budget": null,
+        "scope": null,
+        "used_seconds": 0,
+        "used_output_bytes": 0,
+        "consumption_known": true,
+        "unsettled": []
+      },
+      "visual_decisions": {
+        "items": [],
+        "total_count": 0,
+        "truncated": false
+      },
+      "video_ready": false,
+      "cover_status": "pending",
+      "cover_message": "尚未生成封面，请单独制作或选择封面。"
+    },
+    "output": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "h264",
+          "codec_type": "video",
+          "width": 1080,
+          "height": 1920
+        },
+        {
+          "codec_name": "aac",
+          "codec_type": "audio",
+          "sample_rate": "48000",
+          "channels": 2
+        }
+      ],
+      "format": {
+        "duration": "6.000000",
+        "size": "1730005"
+      },
+      "sha256": "349a3f24581e01e8fafdee5fa4874d47f6ad5a49d67ea8a13bda745bf1bba85e",
+      "decode_exit": 0,
+      "decode_stderr": ""
+    },
+    "observation": {
+      "operation": "output_observation",
+      "target_refs": [],
+      "input_digest": "0c8d8ff8dda46001805b099cb96ada7462b00d4b59685afc7204474b50fc862c",
+      "created_at": "2026-11-17T04:05:47.852491Z",
+      "job_id": "job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b",
+      "status": "succeeded",
+      "result_kind": "observation",
+      "result_url": "/api/creation-tasks/task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16/media-jobs/job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b",
+      "device_request_id": "59b9fd62a76d4b0dba60fdb1931753f8",
+      "waiting_reason": null,
+      "base_version_id": "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+      "result": {
+        "observation_id": "job_media_7519caab2f5139de67b408ac2e9bf89dfad1f8e0cb917a9d5c5d5be79a33fc6b",
+        "task_id": "task_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+        "timeline_version_id": "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+        "timeline_sequence": 3,
+        "observed_at": "2026-11-17T04:05:52.029716+00:00",
+        "target": {
+          "kind": "final",
+          "job_id": null,
+          "artifact_id": null
+        },
+        "ocr_execution": {
+          "status": "unavailable",
+          "reason": "本地 OCR 未配置或输出观察执行范围尚未标定。"
+        },
+        "output": {
+          "artifact_id": "artifact_final_mux_a5abe1b414ca880ae6bba015de2a8768d05b4239ab547a2225ed56ee1be64015",
+          "artifact_kind": "rendered_video",
+          "sha256": "349a3f24581e01e8fafdee5fa4874d47f6ad5a49d67ea8a13bda745bf1bba85e",
+          "registered_width": 1080,
+          "registered_height": 1920,
+          "size_bytes": 1730005,
+          "producer_job_id": "job_ee6d44f6cd814af389c906b0de5425e3"
+        },
+        "output_role": "composed_output",
+        "material_references": [],
+        "measurement_scope": "actual_output_bounded_frames",
+        "media": {
+          "width": 1080,
+          "height": 1920,
+          "duration_seconds": 6.0,
+          "video_codec": "h264",
+          "video_frame_rate": "30/1",
+          "audio_stream_count": 1
+        },
+        "samples": [
+          {
+            "id": "frame-0",
+            "timestamp_seconds": 1.0,
+            "width": 720,
+            "height": 1280,
+            "sha256": "d2ef1247f419f565865f6b09b23086b77a913ab00524fe9fda4ce1bc91a5badf",
+            "pixel_mean_rgb": [
+              50.278,
+              43.128,
+              33.827
+            ],
+            "pixel_extrema_rgb": [
+              [
+                0,
+                255
+              ],
+              [
+                0,
+                244
+              ],
+              [
+                0,
+                255
+              ]
+            ],
+            "object_refs": [
+              "clip:clip-source"
+            ],
+            "ocr_status": "unavailable",
+            "ocr_text": []
+          },
+          {
+            "id": "frame-1",
+            "timestamp_seconds": 3.0,
+            "width": 720,
+            "height": 1280,
+            "sha256": "b1516a0951a92c43622ddc78c2e3f347fe08765ba3432909e2ad2bbfd05af347",
+            "pixel_mean_rgb": [
+              48.585,
+              41.256,
+              30.334
+            ],
+            "pixel_extrema_rgb": [
+              [
+                0,
+                255
+              ],
+              [
+                0,
+                253
+              ],
+              [
+                0,
+                255
+              ]
+            ],
+            "object_refs": [
+              "clip:clip-source"
+            ],
+            "ocr_status": "unavailable",
+            "ocr_text": []
+          },
+          {
+            "id": "frame-2",
+            "timestamp_seconds": 5.0,
+            "width": 720,
+            "height": 1280,
+            "sha256": "dc707d5a09418d4698bfdf4f21c364ca814af1c458f7e59348978572c449874b",
+            "pixel_mean_rgb": [
+              49.397,
+              42.16,
+              31.467
+            ],
+            "pixel_extrema_rgb": [
+              [
+                0,
+                255
+              ],
+              [
+                0,
+                247
+              ],
+              [
+                0,
+                255
+              ]
+            ],
+            "object_refs": [
+              "clip:clip-source"
+            ],
+            "ocr_status": "unavailable",
+            "ocr_text": []
+          }
+        ],
+        "ocr_model_id": null,
+        "unavailable": [
+          {
+            "scope": "visual_semantics",
+            "reason": "本地合成画面的语义理解尚无受许可执行能力；像素测量不代表看懂内容。"
+          },
+          {
+            "scope": "speech_and_listening",
+            "reason": "本次只观察实际画面，没有转写或听感检查。"
+          },
+          {
+            "scope": "ocr",
+            "reason": "本地 OCR 未配置或输出观察执行范围尚未标定；未提取文字。"
+          }
+        ]
+      },
+      "failure_reason": null,
+      "repair_action": null,
+      "resource_wait": null
+    },
+    "undo": {
+      "timeline_version_id": "timeline_ef9e769d4c5041e4b3f7bf6756db866d",
+      "sequence": 4,
+      "audio_timeline": {
+        "format_version": 1,
+        "tracks": [
+          {
+            "id": "audio-music",
+            "name": "音乐",
+            "role": "music",
+            "gain_db": 0.0,
+            "muted": false,
+            "locked": false,
+            "duck_under_voice": true,
+            "clips": []
+          },
+          {
+            "id": "audio-effects",
+            "name": "音效",
+            "role": "effect",
+            "gain_db": 0.0,
+            "muted": false,
+            "locked": false,
+            "duck_under_voice": false,
+            "clips": []
+          }
+        ]
+      },
+      "gui_status": "已撤销本次音轨采用，导入资源和历史版本仍保留。",
+      "versions": [
+        {
+          "id": "timeline_ef9e769d4c5041e4b3f7bf6756db866d",
+          "sequence": 4,
+          "parent_version_id": "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+          "created_at": "2026-11-17T04:07:41.361211Z",
+          "is_current": true,
+          "shot_count": 1,
+          "subtitle_track_count": 0,
+          "narration_segment_count": 0,
+          "operation_id": "operation_5626d225a8164930b3eebe431f43421d",
+          "operation_type": "UndoTimelineVersion",
+          "target_refs": [
+            "timeline:timeline_e73fec7c1c584883bf5cf4581f55a020"
+          ],
+          "source_request_id": null
+        },
+        {
+          "id": "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+          "sequence": 3,
+          "parent_version_id": "timeline_e73fec7c1c584883bf5cf4581f55a020",
+          "created_at": "2026-11-17T04:05:21.134753Z",
+          "is_current": false,
+          "shot_count": 1,
+          "subtitle_track_count": 0,
+          "narration_segment_count": 0,
+          "operation_id": null,
+          "operation_type": null,
+          "target_refs": [],
+          "source_request_id": null
+        },
+        {
+          "id": "timeline_e73fec7c1c584883bf5cf4581f55a020",
+          "sequence": 2,
+          "parent_version_id": "timeline_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+          "created_at": "2026-11-17T03:55:22.136142Z",
+          "is_current": false,
+          "shot_count": 1,
+          "subtitle_track_count": 0,
+          "narration_segment_count": 0,
+          "operation_id": "operation_0760d38fd813426c8f08aebb127a5651",
+          "operation_type": "EditAudioTimeline",
+          "target_refs": [
+            "audio:audio-music"
+          ],
+          "source_request_id": null
+        },
+        {
+          "id": "timeline_source_e6a33a60456f26d8a9485503f72afe5f425aedbe0b2ed2846a41c8d92ed2ad16",
+          "sequence": 1,
+          "parent_version_id": null,
+          "created_at": "2026-11-17T03:50:40.104651Z",
+          "is_current": false,
+          "shot_count": 1,
+          "subtitle_track_count": 0,
+          "narration_segment_count": 0,
+          "operation_id": null,
+          "operation_type": null,
+          "target_refs": [],
+          "source_request_id": null
+        }
+      ]
+    },
+    "playback": {
+      "surface": "Chrome actual product player",
+      "duration_seconds": 6,
+      "current_time_seconds": 6,
+      "ended": true,
+      "muted": false,
+      "media_error": null,
+      "human_listening": "not confirmed this round",
+      "native_electron": "not checked this round"
+    },
+    "download": {
+      "path": "output/acceptance/resource-library-piano-2026-11-17.mp4",
+      "timeline_version_id": "timeline_delivery_job_ee6d44f6cd814af389c906b0de5425e3",
+      "timeline_sequence": 3
+    },
+    "screenshots": [
+      "output/acceptance/resource-library-adopted-2026-11-17.jpg",
+      "output/acceptance/resource-library-rendered-2026-11-17.jpg",
+      "output/acceptance/resource-library-undo-2026-11-17.jpg"
+    ]
+  },
+  "remaining": [
+    "real provider to background Job failure/recovery acceptance",
+    "cross-domain retrieval and feedback beyond candidate projection",
+    "complete editing-videos method evaluation",
+    "Glitch CSS transition adoption",
+    "LUT and independent sticker packages",
+    "cross-device playback",
+    "active narration/original-audio sidechain reduction remains rejected; single-master expansion not accepted"
+  ],
+  "code_commits": [
+    "ead5e5d6",
+    "fa6db9e7",
+    "3f3c1934",
+    "5532a80d"
+  ]
+}
