@@ -263,7 +263,7 @@ Agent 收到“做一条 45 秒视频，展示进料过程并说明维护简单�
 | 知识资料与版本 | KnowledgeItem、KnowledgeClaim | `source_items`、`knowledge_items`、版本表、原始文件、授权表和 `knowledge_claims` 真实持久化；显式解析参数会生成候选断言 | 上传、解析、版本、详情、搜索、共享、撤权和断言查询/确认 | Markdown、PDF、Office 等解析已有 | 任务可固定资料版本，脚本/选题保留资料引用 | 知识库可编辑、查看版本、来源、断言和证据定位 | **局部已落地**：知识断言与状态流转已建立；冲突编排、语义索引和 Agent 统一消费仍未验收 |
 | 人物与声音资产 | PersonProfile、VoiceProfile、Authorization | 独立版本表、授权表、发音词典、采样任务和预览记录 | 注册、版本、授权、预览和任务选择已有 | 参考媒体检查、声音采样和口型同步入口已有 | 任务按显式 profile/version/authorization 消费 | 页面能查看和撤销部分授权 | **局部**：版本和用途授权已形成基础，但人物/声音已进入候选包的版本、来源引用和用途授权投影；指定任务的实际生成、时间线、产物及观察反馈已按固定版本只读投影；统一跨域索引和人物真实生成验收仍未完成 |
 | 检索与索引新鲜度 | IndexRecord、全文/结构化/向量索引 | `material_index_records` 已记录 visual features 与 material search 的源修订、摘要、模型/规则、覆盖范围和状态；源文件变化会标记 `stale`；`material_index_rebuild_jobs` 记录重建状态和失败恢复 | 素材数据治理和字段查询接口已提供 | CLIP 查询向量、片段特征和文件/model fingerprint 已有；搜索结果会标记过期的 material index | Agent 使用服务端候选，不直接读库 | 可查询过期状态和重建任务，客户端状态展示尚未验收 | **局部已落地**：索引状态、重建任务和失败状态已进入候选链路；知识库语义索引仍缺失 |
-| Agent 候选包 | CandidateBundle | 没有独立 CandidateBundle 事实表；方案 payload 保存候选快照 | 搜索响应返回 `MaterialSegmentMatch`，窗口采用回执保存 `material_adoption` | 服务端先做权限、用途、时长和分析状态过滤，再做文字/视觉排序；采用前重新检查素材与证据 | Agent 工具看到候选依据，窗口采用沿用同一批候选，不在采用时重新排名 | 用户能看到候选依据、采用者和采用时间 | **统一只读候选投影已接入**：`candidate-bundle/v1` 联合素材、知识 claims 和显式选择的版本化人物/声音；复核当前及历史版可见性与当前授权，未知运行能力保持 unknown。可选 task_id 回查人物/声音固定版本的生成状态、Job 成败、时间线与输出观察；没有证据或有界截断分别保留 not_used/unknown，不提升候选状态。声音已有真实任务回读，人物与统一跨域检索仍需验收 |
+| Agent 候选包 | CandidateBundle | 没有独立 CandidateBundle 事实表；方案 payload 保存候选快照 | 搜索响应返回 `MaterialSegmentMatch`，窗口采用回执保存 `material_adoption` | 服务端先做权限、用途、时长和分析状态过滤，再做文字/视觉排序；采用前重新检查素材与证据 | Agent 工具看到候选依据，窗口采用沿用同一批候选，不在采用时重新排名 | 用户能看到候选依据、采用者和采用时间 | **统一只读候选投影已接入**：`candidate-bundle/v1` 联合素材、知识 claims 和显式选择的版本化人物/声音；复核当前及历史版可见性与当前授权，未知运行能力保持 unknown。可选 task_id 回查人物/声音固定版本的生成状态、Job 成败、时间线与输出观察；没有证据或有界截断分别保留 not_used/unknown，不提升候选状态。声音已有真实任务回读；跨域读取用例及接口见下节，人物真实生成与生产规模仍需验收 |
 | 纠正和使用反馈 | CorrectionRecord、UsageRecord、UsageHeat | 片段修改、未匹配纠正和 `material_segment_usage` 已持久化；新记录写入 `task_id` 与 `timeline_version_id` | 片段修改、未匹配纠正和使用记录读取已有，历史旧行明确标为未记录 | 边界变化会保留旧纠正；真实渲染按实际任务和时间线版本写入使用记录 | 任务采用素材后可回查精确任务/版本，输出观察再回带同一素材证据 | 用户能改描述、标签、用途并查看使用任务和输出观察来源 | **本轮素材生产链路闭环**：通用纠正历史、替换原因、保留/跳过反馈和热度计算仍未完成 |
 | 多语言语义 | 语言版本、字段 canonical 映射 | 知识、声音和发音对象有语言字段，素材标签/说明大多是自由文本 | 任务可传语言和资料版本 | ASR/VLM/视觉向量按当前配置运行 | Agent 可用中英文查询，但没有统一跨语言字段映射 | 用户界面有中英文文案，但资产语义没有对照管理 | **局部**：语言能力存在于若干模块，尚未成为全资产治理约束 |
 
@@ -284,6 +284,14 @@ Agent 收到“做一条 45 秒视频，展示进料过程并说明维护简单�
 定向证据为：数据治理与知识专项 `517 passed`；候选→schema 接缝、精确任务/时间线使用记录和真实输出观察回带专项 `12 passed`。旧使用记录没有时间线版本时继续返回当前任务版本并标记为 `current`，不能把历史行猜成某个版本。
 
 参考视频阶段已完成第一步：复用受治理的 `MaterialAsset`、逻辑片段和 `EvidenceRef`，持久化 `study/shot list`，并提供绑定当前任务与时间线版本的结构 `compare`。study 创建前必须有当前源修订的素材分析；源文件修订变化会把 study 标记为 `stale`。当前 compare 只输出可验证的时长、镜头数和节奏结构指标，视觉与音频观察明确为 `unavailable`，仍需实际输出的有界帧/音频检查，不能把结构指标或单一相似度分数当成逐镜头复刻验收。
+
+## 跨域候选发现与固定回读
+
+`CrossDomainCandidateQuery` 复用素材检索、知识仓储和人物/声音档案，不新建事实库。`GET /api/creation-candidates/search?q=...&limit_per_domain=...` 返回 `candidate-discovery/v1`；查询为1–120字，每域1–20条，分别报告命中数、截断、unknown/unavailable。域为 `material/knowledge/person/voice`，各域排序不能当作统一质量分。
+
+候选提供 `domain/object_id/version`，通过 `GET /api/creation-candidates/{domain}/{object_id}?version=...` 回读 `candidate-readback/v1` 及原 CandidateBundle。素材修订变化拒绝旧回读；知识、人物、声音固定版本仍复核当前可见性与授权。可选 `task_id` 只关联已有任务反馈，不授权采用。
+
+Agent 的 `search_creation_candidates`、`read_creation_candidate` 复用该用例。前台按成员可见范围发现，后台只读原任务及封存引用；仅选择一个片段时不能扩大为整条素材。缺省域返回 `not_in_goal_scope`，不能退回全库。查询不创建采用记录、不写时间线，真实验收沿当前执行板及原任务回执。
 
 ## 12. 参考视频 study 与结构 compare（2026-11-13）
 

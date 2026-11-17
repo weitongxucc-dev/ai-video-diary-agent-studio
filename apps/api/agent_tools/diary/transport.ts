@@ -168,6 +168,14 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   const only = (...keys: string[]) => [...query.keys()].every(key => keys.includes(key) && query.getAll(key).length === 1);
   const result = (operation: string, args: Record<string, any> = {}) => ({operation, arguments: args});
   if (method === 'GET') {
+    if (pathname === '/api/creation-candidates/search' && only('q', 'limit_per_domain', 'task_id'))
+      return result('search_creation_candidates', {query: query.get('q') || '',
+        limit_per_domain: Number(query.get('limit_per_domain') || 5),
+        ...(query.has('task_id') ? {task_id: query.get('task_id')} : {})});
+    const candidate = pathname.match(/^\/api\/creation-candidates\/(material|knowledge|person|voice)\/([^/]+)$/);
+    if (candidate && only('version', 'task_id') && query.get('version'))
+      return result('read_creation_candidate', {domain: candidate[1], object_id: decodeURIComponent(candidate[2]),
+        version: query.get('version'), ...(query.has('task_id') ? {task_id: query.get('task_id')} : {})});
     const trace = pathname.match(/^\/api\/assistant\/turns\/([^/]+)\/trace$/);
     if (trace && !search) return result('read_agent_run_trace', {assistant_turn_id: decodeURIComponent(trace[1])});
     if (pathname === '/api/video-templates' && !search) return result('read_video_templates');

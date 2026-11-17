@@ -9,6 +9,7 @@ from app.assistant.task_turn_routes import TaskTurnHTTPAdapter, build_task_turn_
 from app.assistant.conversation_routes import ConversationHTTPAdapter, build_conversation_router
 from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_material_library_router
 from app.materials.profile_feedback import ProfileCandidateFeedbackReader
+from app.candidate_query_routes import build_candidate_query_router
 from app.materials.evidence_routes import build_material_evidence_router
 from app.materials.intake_routes import MaterialIntakeHTTPAdapter, build_material_intake_router
 from app.materials.catalog_routes import MaterialCatalogHTTPAdapter, build_material_catalog_router
@@ -4634,6 +4635,11 @@ app.include_router(build_home_router(
 ))
 
 
+def _candidate_query():
+    from app.materials.candidate_query import CrossDomainCandidateQuery
+    return CrossDomainCandidateQuery(production_repo, source_repository)
+
+
 def _material_library_http_adapter():
     return MaterialLibraryHTTPAdapter(
         records_for=lambda: production_repo,
@@ -4789,6 +4795,8 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('get_unmatched_material_corrections',)))
 
 
+app.include_router(build_candidate_query_router(query_for=_candidate_query, workspace_for=current_workspace_id,
+    reader_for=_content_identity_http_adapter().reader, task_for=_readable_creation_task))
 app.include_router(build_material_library_router(_material_library_http_adapter, ('search_production_material_segments', 'read_material_candidate_bundle')))
 
 
@@ -6159,6 +6167,7 @@ def _task_business(*, generation_case=None):
         timeline_restores=None if generation_case is not None else _timeline_restore_use_case(),exact_case_for=_exact_preview_use_case,
         edit_controls=None if generation_case is not None else _edit_control_use_case(),
         resource_audio=None if generation_case is not None else _resource_audio_use_case(),
+        candidate_query=_candidate_query(),
         media_jobs_list=_list_goal_media_jobs,execution_capabilities=_task_execution_capability_facts,
         device_preparation=_dispatch_device_preparation, quality=_quality_application(),
         generation_case=generation_case, creator_memory=_creator_memory_facts,

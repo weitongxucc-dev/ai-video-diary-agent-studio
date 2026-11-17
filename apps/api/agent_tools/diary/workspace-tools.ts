@@ -4,6 +4,7 @@ import {registerMaterialEvidence} from '../materials/evidence.ts';
 import {fileURLToPath} from 'node:url';
 import {loadSkillManifests} from '../../agent_runtime/skills/manifest.mjs';
 import {registerAudioResourceTools} from './audio-resource-tools.ts';
+import {registerCreationCandidates} from './creation-candidates.ts';
 
 const packagedSkillsRoot = fileURLToPath(new URL('../../agent_runtime/skills/', import.meta.url));
 
@@ -17,6 +18,7 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
   request: BusinessRequest; taskId: string | undefined; stage: string | undefined; selectedRefs: string[]; selectedProfile: any; selectedKnowledge: any; isTaskRead: () => boolean; verifyTaskVersion: (workspace: any) => void; getEditCapabilities: () => any; readMaterialSelection: () => any; readActionSource: () => {turnId?: string};
 }) {
   const materialSelection = readMaterialSelection();
+  registerCreationCandidates(pi, request, taskId);
   registerAudioResourceTools(pi, {request, taskId, readActionSource});
   registerMaterialEvidence(pi, request);
   registerMaterialTools(pi, {

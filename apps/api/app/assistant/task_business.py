@@ -57,7 +57,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None,edit_controls=None,resource_audio=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None,edit_controls=None,resource_audio=None,candidate_query=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -82,6 +82,7 @@ class TaskBusiness:
         self.media_binding=media_binding
         self.edit_controls=edit_controls
         self.resource_audio=resource_audio
+        self.candidate_query=candidate_query
 
     def invoke_native(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic, invocation: TaskInvocation):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -728,6 +729,12 @@ class TaskBusiness:
                     raise TaskBusinessRejected('任务制作摘要读取尚未装配',kind='unavailable')
                 return self.execution_status(ws,task_id,actor=actor)
             return self.read_execution(goal,actor,job_id=args.get('job_id'))
+        if operation in {'search_creation_candidates', 'read_creation_candidate'}:
+            from app.assistant.candidate_reads import read_goal_candidates
+            if self.candidate_query is None:
+                raise TaskBusinessRejected('创作候选读面尚未装配', kind='unavailable')
+            return read_goal_candidates(self.candidate_query, self.production, self.authorizations,
+                actor, task_id, sealed, operation, args)
         if operation in MATERIAL_READ_OPERATIONS:
             return read_goal_materials(self.production, self.authorizations, actor, task_id,
                 operation, args, material_facts=self.material_facts, sealed=sealed,
