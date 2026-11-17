@@ -54,7 +54,7 @@ import { HelpPanel } from "@/components/HelpPanel";
 import { KeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { CommandPalette, type CommandPaletteItem } from "@/components/CommandPalette";
 import { listCreationTasks, listLocalMembers, type LocalMember } from "@/lib/api";
-import { initialTaskListFacts, applyTaskFactUpdates, applyTaskListSnapshot } from "./creation-task/task-list-facts";
+import { initialTaskListFacts, applyTaskFactUpdates, applyTaskListSnapshot, CREATION_TASKS_CHANGED_EVENT } from "./creation-task/task-list-facts";
 import { creationTaskShortStatus } from "@/lib/creation-task-status";
 import type { CreationTask } from "@/lib/types";
 
@@ -362,6 +362,12 @@ export function AppShellFrame({
     void refreshRecentTasks();
     return () => { ++taskReadSequence.current; };
   }, [pathname, refreshRecentTasks]);
+
+  useEffect(() => {
+    const refresh = () => { void refreshRecentTasks(true); };
+    window.addEventListener(CREATION_TASKS_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(CREATION_TASKS_CHANGED_EVENT, refresh);
+  }, [refreshRecentTasks]);
 
   const hasRunningTask = recentTasks.some(task => task.status === "running" || task.stage_status === "running");
   useEffect(() => {

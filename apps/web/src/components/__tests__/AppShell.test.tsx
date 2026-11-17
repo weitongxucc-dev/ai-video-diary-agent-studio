@@ -48,6 +48,7 @@ vi.mock("@/lib/api", () => ({
 
 import { WorkbenchAssistantTargetContext, WorkspacePanelContext } from "../workbench/context";
 import { getCurrentAssistantConversation } from "@/lib/api";
+import { CREATION_TASKS_CHANGED_EVENT } from "../creation-task/task-list-facts";
 function QuickInspectorLauncher() { const panel = useContext(WorkspacePanelContext); return <button onClick={panel.openQuickInspector}>编辑镜头参数</button>; }
 
 import { AppShell, AppShellFrame } from "@/components/AppShell";
@@ -118,6 +119,15 @@ afterEach(() => {
 });
 
 describe("AppShell", () => {
+  it("refreshes an initially empty sidebar after a persisted task adoption without navigating", async () => {
+    apiMocks.listCreationTasks.mockResolvedValue({ items: [], total_count: 0 });
+    render(<AppShell conversation={<p>对话</p>}><p>首页</p></AppShell>);
+    await screen.findByText("还没有创作任务");
+    apiMocks.listCreationTasks.mockResolvedValue({ items: [creationTask({ name: "刚采用的视频" })], total_count: 1 });
+    act(() => window.dispatchEvent(new Event(CREATION_TASKS_CHANGED_EVENT)));
+    expect(await screen.findByRole("link", { name: /刚采用的视频/ })).toBeInTheDocument();
+    expect(screen.queryByText("还没有创作任务")).not.toBeInTheDocument();
+  });
 
   it("opens only one help panel while the retained workbench is inactive", () => {
     pathname = "/settings";

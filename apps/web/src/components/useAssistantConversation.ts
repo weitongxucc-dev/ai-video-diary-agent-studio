@@ -77,7 +77,7 @@ async function readScriptWindow(turn: AssistantConversationTurn): Promise<Assist
 const settledBusinessStatuses = new Set(["confirmed", "rejected", "cancelled", "failed", "stale", "stopped", "expired"]);
 const activeGoalStatuses = new Set(["running", "waiting_result", "waiting_adoption", "waiting_identity", "waiting_unknown"]);
 
-function assistantTurnGoalRefreshState(turn: AssistantConversationTurn) {
+export function assistantTurnGoalRefreshState(turn: AssistantConversationTurn) {
   const goal = turn.result?.goal_continuation;
   if (!goal || typeof goal !== "object") return null;
   const value = goal as Record<string, unknown>;

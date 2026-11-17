@@ -17,6 +17,7 @@ import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMate
 import { assistantTaskTurnResult, assistantTurnScriptWindowRequest, useAssistantConversation } from "@/components/useAssistantConversation";
 import { AssistantConversationPanel, AssistantFailureMessage } from "@/components/AssistantConversationPanel";
 import { editExecutionReadinessMessage } from './creation-task/stage-labels';
+import { CREATION_TASKS_CHANGED_EVENT } from './creation-task/task-list-facts';
 
 import type { MaterialUsageContext } from "./ui/material-usage";
 
@@ -120,6 +121,12 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const assistant = useAssistantConversation({ scope_kind: scopeKind, scope_id: scopeId });
   const persistedConversation = assistant.conversation;
   const isCurrentConversation = assistant.isCurrentConversation;
+  const adoptionRevision = JSON.stringify(persistedConversation?.turns.flatMap(turn =>
+    turn.events.filter(event => event.type === 'business_result' && 'phase' in event && event.phase === 'creation')
+      .map(event => [turn.id, event])) ?? []);
+  useEffect(() => {
+    if (adoptionRevision !== '[]') window.dispatchEvent(new Event(CREATION_TASKS_CHANGED_EVENT));
+  }, [adoptionRevision]);
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [requestBinding, setRequestBinding] = useState<{ id: string; conversationId: string; revision: number } | null>(null);

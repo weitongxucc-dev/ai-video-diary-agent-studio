@@ -1,5 +1,9 @@
 import type { CreationTask } from "@/lib/types";
 
+// Invalidate collection readers after a durable task adoption; the API remains
+// the only authority for membership and visibility.
+export const CREATION_TASKS_CHANGED_EVENT = "yaohe:creation-tasks-changed";
+
 // The complete GET owns collection membership; task props carry finite facts only.
 export type CreationTaskListFacts = { complete: boolean; items: CreationTask[] };
 

@@ -535,7 +535,10 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         else:
             lines.append("制作目标尚待规划，可以在工作台准备当前这组具体方案。")
         lines.append("尚未生成成片；后续进度以独立任务的实际结果为准。")
-        return "\n".join(lines), preview
+        # The request is a business receipt, not the conversational answer.
+        # Replacing the answer here discarded explanations and responses to
+        # steering inputs as soon as the streamed turn was persisted.
+        return answer.strip() or "\n".join(lines), preview
     if kind == "edit_preview" and media_job is not None:
         result = media_job.get("result")
         proposal = result.get("proposal") if isinstance(result, dict) else None

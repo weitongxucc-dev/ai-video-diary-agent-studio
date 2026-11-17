@@ -16,6 +16,15 @@ from app.conversation_repository import ConversationRepository
 from test_audio_ingress_application import audio_state, pcm_bytes
 
 
+def test_agent_tools_can_be_constructed_without_starting_audio_runtime(tmp_path, monkeypatch):
+    audio_state(tmp_path, monkeypatch)
+    monkeypatch.setattr(main, 'device_runtime', None)
+    def forbidden():
+        pytest.fail('Constructing Agent tools must not start a device runtime')
+    monkeypatch.setattr(main, '_creation_runtime', forbidden)
+    assert main._task_business().resource_audio is not None
+
+
 def setup_case(tmp_path, monkeypatch):
     repo,actor,media,runtime,*_=audio_state(tmp_path,monkeypatch)
     path=tmp_path/'resource.wav'
