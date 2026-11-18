@@ -39,8 +39,10 @@ class RecoveryBlocked(RuntimeError):
 class PriorDeviceWorkPending(RecoveryBlocked):
     """A previous business database still owns unfinished device work."""
 
+    user_message = "上次使用的曜核还有制作或设备准备任务待处理。请回到原来的曜核查看该任务，处理后重新打开当前应用。"
+
     def __init__(self):
-        super().__init__("上次使用的曜核还有制作或设备准备任务待处理。请回到原来的曜核查看该任务，处理后重新打开当前应用。")
+        super().__init__("前一业务库仍有未处理设备请求，不能切换协调者")
 
 
 class StaleGrantInput(PermissionError):

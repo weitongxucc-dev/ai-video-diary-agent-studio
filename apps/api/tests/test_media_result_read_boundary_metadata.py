@@ -224,7 +224,7 @@ def test_cold_media_result_reads_preserve_currentness_privacy_and_history(tmp_pa
                 scheduler=requests, last_error=error, running=False, start=forbidden))
             response = client.get(url)
             assert response.status_code == 503
-            assert response.json()['detail'] == (str(previous_work) if error is previous_work else '整机制作许可已停止，须核查许可后才能继续')
+            assert response.json()['detail'] == (previous_work.user_message if error is previous_work else '整机制作许可已停止，须核查许可后才能继续')
             assert snapshot() == before
     assert snapshot() == before
 

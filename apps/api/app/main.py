@@ -1892,7 +1892,7 @@ def _media_result_receipt(media, job, actor, runtime):
 
 
 def _device_runtime_unavailable(error):
-    detail = str(error) if isinstance(error, PriorDeviceWorkPending) else "整机制作许可已停止，须核查许可后才能继续"
+    detail = error.user_message if isinstance(error, PriorDeviceWorkPending) else "整机制作许可已停止，须核查许可后才能继续"
     return HTTPException(status_code=503, detail=detail)
 
 
