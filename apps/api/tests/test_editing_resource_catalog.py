@@ -104,7 +104,7 @@ def test_resource_detail_returns_404_for_unknown_version():
 
 
 def test_failed_is_a_supported_import_outcome_without_promoting_the_resource():
-    catalog = editing_resource_catalog()
+    editing_resource_catalog()
     assert "failed" in ("connected", "catalog_only", "planned", "failed")
     response = client.get("/api/editing-resource-catalog", params={"status": "failed"})
     assert response.status_code == 200

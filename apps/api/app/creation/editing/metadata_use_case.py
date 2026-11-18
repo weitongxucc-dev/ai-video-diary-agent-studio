@@ -57,7 +57,6 @@ if TYPE_CHECKING:
     from app.creation.narration_artifacts import NarrationArtifactRecord
     from app.creation.contracts import TimelineVersion
     from app.montage import CreationTaskMontagePlan
-    from app.audio_timeline import AudioTimeline
 
 
 

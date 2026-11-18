@@ -13,7 +13,8 @@ def test_route_reads_use_member_identity_and_never_accept_client_scope():
         read=lambda workspace,**args:calls.append((workspace,args)) or {'schema':'candidate-readback/v1'})
     app=FastAPI()
     def task_for(request,task_id):
-        if task_id!='own':raise HTTPException(404)
+        if task_id != 'own':
+            raise HTTPException(404)
     app.include_router(build_candidate_query_router(query_for=lambda:case,
         workspace_for=lambda request:'workspace',reader_for=lambda request,workspace:('member',False),task_for=task_for))
     client=TestClient(app)
