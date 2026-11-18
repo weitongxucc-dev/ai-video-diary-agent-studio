@@ -79,6 +79,45 @@ describe("persistent creation request panel", () => {
     expect(screen.queryByText("reserved-0")).not.toBeInTheDocument();
   });
 
+  it("prepares two language deliveries for the same product brief", async () => {
+    const request = header({ target_count: 2, output_relation: "variants", status: "awaiting_plan" });
+    api.get.mockResolvedValue(request);
+    api.prepare.mockResolvedValue(proposed());
+    render(<CreationRequestPanel requestId={request.id} scopeKey="member" isCurrentScope={() => true} />);
+    fireEvent.click(await screen.findByRole("button", { name: "准备中文版和英文版" }));
+    await waitFor(() => expect(api.prepare).toHaveBeenCalledWith(request.id, {
+      expected_revision: request.revision,
+      goals: [
+        { goal: request.goal, name: expect.stringContaining("中文版"), requirements: { language: "zh-CN" } },
+        { goal: request.goal, name: expect.stringContaining("英文版"), requirements: { language: "en-US" } },
+      ],
+    }));
+    expect(api.confirm).not.toHaveBeenCalled();
+  });
+
+  it("binds each delivery to its selected voice version and language", async () => {
+    const request = header({ target_count: 2, output_relation: "variants", status: "awaiting_plan" });
+    api.get.mockResolvedValue(request);
+    api.prepare.mockResolvedValue(proposed());
+    voiceApi.list.mockResolvedValue({ items: [
+      { id: "studio-zh", version: "v2", display_name: "中文讲解", language: "zh", runnable: true },
+      { id: "studio-en", version: "v3", display_name: "English narrator", language: "en", runnable: true },
+    ] });
+    const user = userEvent.setup();
+    render(<CreationRequestPanel requestId={request.id} scopeKey="member" isCurrentScope={() => true} />);
+    await user.click(await screen.findByText("分别指定中英文声音"));
+    await user.click(await screen.findByRole("combobox", { name: "中文版声音" }));
+    expect(screen.queryByRole("option", { name: "English narrator · v3" })).toBeNull();
+    await user.click(await screen.findByRole("option", { name: "中文讲解 · v2" }));
+    await user.click(screen.getByRole("combobox", { name: "英文版声音" }));
+    await user.click(await screen.findByRole("option", { name: "English narrator · v3" }));
+    await user.click(screen.getByRole("button", { name: "准备中文版和英文版" }));
+    expect(api.prepare).toHaveBeenCalledWith(request.id, { expected_revision: request.revision, goals: [
+      expect.objectContaining({ requirements: { language: "zh-CN", selected_voice: { profile_id: "studio-zh", version: "v2" } } }),
+      expect.objectContaining({ requirements: { language: "en-US", selected_voice: { profile_id: "studio-en", version: "v3" } } }),
+    ] });
+  });
+
   it("uses the exact single goal without another relationship or per-item question", async () => {
     const single = header({ goal: "做一条键盘演示", target_count: 1, output_relation: "single", status: "awaiting_plan" });
     api.get.mockResolvedValue(single); api.prepare.mockResolvedValue(single);
@@ -183,6 +222,9 @@ async function choosePersonalVoice() {
 
 it("selects an existing runnable voice for this request and rechecks exact frozen goals with the saved CAS revision", async () => {
   const before = proposed();
+  const english = before.current_window!.entries[1].plan!;
+  english.language = "en-US";
+  english.aspect_ratio = "16:9";
   before.requirements = { ...before.requirements, presenter_share_target: 0,
     selected_knowledge: { knowledge_item_id: "facts-owned", version: "2" },
     template_id: "template-real", template_version: 3, selected_person: { profile_id: "person-real", version: "v1" } };
@@ -198,7 +240,10 @@ it("selects an existing runnable voice for this request and rechecks exact froze
   await choosePersonalVoice();
   fireEvent.click(screen.getByRole("button", { name: "保存声音并重新核对" }));
   await waitFor(() => expect(api.prepare).toHaveBeenCalledWith("request-a", { expected_revision: 7,
-    goals: before.current_window!.entries.map(entry => ({ goal: entry.plan!.goal, name: entry.plan!.name })) }));
+    goals: [
+      { goal: before.current_window!.entries[0].plan!.goal, name: before.current_window!.entries[0].plan!.name },
+      { goal: english.goal, name: english.name, requirements: { language: "en-US", aspect_ratio: "16:9" } },
+    ] }));
   expect(api.update).toHaveBeenCalledWith("request-a", { expected_revision: 6, output_relation: before.output_relation,
     requirements: { ...before.requirements, selected_voice: { profile_id: availableVoice.id, version: "v2" } } });
   expect(api.replan).not.toHaveBeenCalled();

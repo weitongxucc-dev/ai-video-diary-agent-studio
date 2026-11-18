@@ -7,10 +7,8 @@ const { pipeline } = require('stream/promises');
 // Reading the intake binding is a loopback metadata call; a slow answer is
 // treated as a closed import rather than an open-ended wait.
 const MATERIAL_BINDING_TIMEOUT_MS = 8000;
-// Mirrors apps/api/app/video.py SUPPORTED_VIDEO_EXTENSIONS. Anything else the
-// user picks cannot be registered by intake, so it is reported as skipped
-// instead of being copied into the monitored directory.
-const MATERIAL_IMPORT_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v']);
+// Video entries in apps/api/app/materials/contracts.py MATERIAL_MEDIA_BY_SUFFIX.
+const MATERIAL_IMPORT_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm'];
 // `_已处理` is the archive segment apps/api/app/production.py already skips in
 // all three scan paths, so staged copies are invisible to intake.
 const MATERIAL_STAGING_SEGMENTS = ['_已处理', '.import-staging'];
@@ -476,7 +474,7 @@ function createMaterialImporter({ recordLifecycle, fileSystem = defaultFileSyste
       await assertHardLinkSupported(runDirectory);
       for (const sourcePath of picked) {
         const fileName = path.basename(sourcePath);
-        if (!MATERIAL_IMPORT_EXTENSIONS.has(path.extname(fileName).toLowerCase())) {
+        if (!MATERIAL_IMPORT_EXTENSIONS.includes(path.extname(fileName).slice(1).toLowerCase())) {
           skipped.push(fileName);
           continue;
         }
@@ -527,4 +525,4 @@ function createMaterialImporter({ recordLifecycle, fileSystem = defaultFileSyste
   return { importMaterials, resolveTrustedMaterialDirectory, removeOwnedPath, removeEmptyRunDirectory, isPathInside, assertHardLinkSupported };
 }
 
-module.exports = { createMaterialImporter };
+module.exports = { createMaterialImporter, MATERIAL_IMPORT_EXTENSIONS };

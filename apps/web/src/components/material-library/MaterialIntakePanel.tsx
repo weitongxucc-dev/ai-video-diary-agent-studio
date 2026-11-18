@@ -88,7 +88,7 @@ export function MaterialIntakePanel({ intake, intakeError, intakeBusy, busy, imp
                     : null}
                   {!importResult.error && importResult.copied.length === 0 && !importResult.canceled
                     && importResult.failures.length === 0 && importResult.skipped.length > 0
-                    ? `没有可导入的文件：${importResult.skipped.join("、")}。仅支持 mp4、mov、m4v。`
+                    ? `没有可导入的文件：${importResult.skipped.join("、")}。仅支持 MP4、MOV、M4V、WebM。`
                     : null}
                   {importResult.failures.length > 0
                     ? `导入失败 ${importResult.failures.length} 个：${importResult.failures.map((entry) => `${entry.sourceName}（${entry.error}）`).join("；")}`

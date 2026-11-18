@@ -12,7 +12,7 @@ from app.material_hash import (
     MaterialHashCandidate, MaterialHashResult,
     material_hash_candidate as _material_hash_candidate,
 )
-from app.video import SUPPORTED_VIDEO_EXTENSIONS
+from app.materials.contracts import material_media_type_for
 
 
 class MaterialHashIntake:
@@ -48,7 +48,7 @@ class MaterialHashIntake:
         candidates: list[MaterialHashCandidate] = []
         for path in sorted(root.rglob("*")):
             if (path.is_symlink() or not path.is_file()
-                    or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS
+                    or material_media_type_for(path) != "video"
                     or "_已处理" in path.parts):
                 continue
             resolved = path.resolve()

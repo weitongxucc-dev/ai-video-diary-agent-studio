@@ -9,11 +9,8 @@ import sqlite3
 
 from app.materials.analysis import _material_analysis_public_error
 from app.materials.assets import MaterialAssetStore
-from app.materials.contracts import MaterialAsset
+from app.materials.contracts import MaterialAsset, material_media_type_for
 from app.materials.source_files import MaterialSourceFileAccess
-# Only direct-link import admits non-video media. The directory scan whitelist
-# (SUPPORTED_VIDEO_EXTENSIONS) is unchanged: nothing else starts watching these.
-from app.video import SUPPORTED_VIDEO_EXTENSIONS
 
 
 class MaterialIntakeUseCase:
@@ -42,7 +39,7 @@ class MaterialIntakeUseCase:
             if (
                 not path.is_file()
                 or path.is_symlink()
-                or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS
+                or material_media_type_for(path) != "video"
                 or "_已处理" in path.parts
             ):
                 continue
@@ -70,7 +67,8 @@ class MaterialIntakeUseCase:
         now = time.time()
         claimed: list[tuple[str, str]] = []
         for path in sorted(root.rglob("*")):
-            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS or "_已处理" in path.parts:
+            if (path.is_symlink() or not path.is_file()
+                    or material_media_type_for(path) != "video" or "_已处理" in path.parts):
                 continue
             resolved = path.resolve()
             if not resolved.is_relative_to(root.resolve()):

@@ -228,12 +228,12 @@ async function main() {
 
     // ── Unsupported extension ─────────────────────────
     await check('skips unsupported extensions and still imports the rest', async () => {
-      const source = makeSource('clip-b.mov');
+      const source = makeSource('clip-b.webm');
       const skipped = makeSource('notes.txt', 16);
       const result = await importMaterials({ port, pickSources: async () => [skipped, source] });
       assert.deepEqual(plain(result.skipped), ['notes.txt']);
       assert.equal(result.copied.length, 1);
-      assert.ok(fs.existsSync(path.join(boundDir, 'clip-b.mov')));
+      assert.ok(fs.existsSync(path.join(boundDir, 'clip-b.webm')));
     });
 
     // ── Cancel ─────────────────────────────────────────
