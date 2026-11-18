@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { CreationRequest } from "@/lib/types";
-import { confirmCreationRequestWindow, getCreationRequest, getCreationRequestItems, prepareCreationRequestWindow, replanCreationRequestWindow, updateCreationRequest, type CreationRequestItems } from "@/lib/creation-request-api";
+import type { CreationPlanPreview, CreationRequest } from "@/lib/types";
+import { confirmCreationRequestWindow, getCreationRequest, getCreationRequestItems, prepareCreationRequestWindow, replanCreationRequestWindow, updateCreationRequest, type CreationRequestItems, type DeliveryGoal } from "@/lib/creation-request-api";
 import { listVoiceProfiles, mediaProfilesErrorMessage, type VoiceProfile } from "@/lib/media-profiles-api";
 import { AppSelect, AppSelectOption } from "./AppSelect";
 import { creationTaskShortStatus } from "@/lib/creation-task-status";
@@ -19,6 +19,20 @@ const voiceKey = (voice: { id: string; version: string }) => JSON.stringify([voi
 const voiceLanguages = { zh: "中文", en: "英文", "zh-en": "中英混合" };
 const requestStates = { awaiting_clarification: "需要补充条件", awaiting_plan: "待规划", awaiting_confirmation: "方案待确认", active: "已建立任务" };
 const taskStates = { created: "待开始", running: "处理中", waiting_for_user: "等待确认", completed: "已完成", failed: "需要处理" };
+
+function goalForVoiceChange(plan: CreationPlanPreview, defaults: CreationRequest["requirements"]): DeliveryGoal {
+  const requirements: DeliveryGoal["requirements"] = {};
+  if (plan.language !== defaults.language) requirements.language = plan.language;
+  if (plan.aspect_ratio !== defaults.aspect_ratio) requirements.aspect_ratio = plan.aspect_ratio;
+  if (plan.duration_target_seconds !== defaults.duration_target_seconds) requirements.duration_target_seconds = plan.duration_target_seconds;
+  if (plan.presenter_share_target !== undefined && plan.presenter_share_target !== defaults.presenter_share_target) {
+    requirements.presenter_share_target = plan.presenter_share_target;
+  }
+  if (plan.lipsync_quality !== undefined && plan.lipsync_quality !== defaults.lipsync_quality) requirements.lipsync_quality = plan.lipsync_quality;
+  if (plan.selected_person !== undefined && (plan.selected_person?.profile_id !== defaults.selected_person?.profile_id ||
+      plan.selected_person?.version !== defaults.selected_person?.version)) requirements.selected_person = plan.selected_person;
+  return { goal: plan.goal, name: plan.name, ...(Object.keys(requirements).length ? { requirements } : {}) };
+}
 
 export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goalsDraft = "", onGoalsDraftChange }: {
   requestId: string; scopeKey: string; isCurrentScope: () => boolean; goalsDraft?: string; onGoalsDraftChange?: (text: string) => void;
@@ -38,7 +52,7 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
   const [voices, setVoices] = useState<{ identity: string; items: VoiceProfile[]; loading: boolean; error: string | null } | null>(null);
   const [voiceSelection, setVoiceSelection] = useState("");
   const [voiceRead, setVoiceRead] = useState(0);
-  const [recheckGoals, setRecheckGoals] = useState<{ identity: string; revision: number; goals: { goal: string; name?: string }[] } | null>(null);
+  const [recheckGoals, setRecheckGoals] = useState<{ identity: string; revision: number; goals: DeliveryGoal[] } | null>(null);
   function changeGoals(text: string) { setGoalsText(text); onGoalsDraftChange?.(text); }
 
   async function load() {
@@ -113,7 +127,7 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
 
   async function saveVoiceAndRecheck() {
     if (pending || !value || !window || !canChooseVoice || !chosenVoice || !scopeCheck.current()) return;
-    const goals = window.entries.map(entry => ({ goal: entry.plan!.goal, name: entry.plan!.name ?? undefined }));
+    const goals = window.entries.map(entry => goalForVoiceChange(entry.plan!, value.requirements));
     const operation = ++sequence.current;
     const current = () => operation === sequence.current && identity === currentIdentity.current && scopeCheck.current();
     setPending(true); setError(null);
@@ -141,6 +155,15 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
   const goals = single && value ? [value.goal] : goalsText.split("\n").map(line => line.trim()).filter(Boolean);
   const limit = Math.min(8, remaining);
   const validGoals = goals.length > 0 && goals.length <= limit && new Set(goals).size === goals.length;
+  function prepareLanguageVersions() {
+    if (!value) return;
+    const commonName = Array.from(value.requirements.name || value.goal).slice(0, 100).join("");
+    const versions: DeliveryGoal[] = [
+      { goal: value.goal, name: commonName + " · 中文版", requirements: { language: "zh-CN" } },
+      { goal: value.goal, name: commonName + " · 英文版", requirements: { language: "en-US" } },
+    ];
+    void mutate(() => prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: versions }));
+  }
   const tasks = items?.items.filter(item => item.task !== null) ?? [];
 
   return <section className={ui.panel} aria-label="创作目标">
@@ -164,7 +187,10 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
           const next = await prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: retryGoals });
           setRecheckGoals(previous => previous?.identity === identity ? null : previous); return next;
         })}>重新核对已保存声音的方案</button></section> : null}
-      {window?.status === "proposed" ? <section className={ui.section} aria-label="本组制作方案"><h3>本组 {window.entries.length} 条方案</h3><div className={ui.entries}>{window.entries.map(entry => <article className={ui.entry} key={entry.ordinal}><strong>第 {entry.ordinal} 条 · {entry.plan?.name}</strong>{entry.plan ? <><p>{entry.plan.goal}</p><p className={ui.note}>{entry.plan.aspect_ratio} · {entry.plan.duration_target_seconds} 秒</p>{entry.plan.blockers.map((blocker, index) => <p key={index}>{blocker.impact} {blocker.repair_action}</p>)}<details><summary>查看可用内容与制作依据</summary><PreflightFacts preview={entry.plan} /></details></> : null}</article>)}</div><button className={ui.primary} type="button" disabled={pending || !window.entries.length || window.entries.some(entry => !entry.plan?.confirmable)} onClick={() => void mutate(() => confirmCreationRequestWindow(requestId, window.id, { expected_revision: value.revision, input_fingerprint: window.input_fingerprint }))}>确认创建本组任务</button><button className={ui.button} type="button" disabled={pending} onClick={() => void mutate(() => replanCreationRequestWindow(requestId, window.id, value.revision))}>重新核对本组方案</button></section> : remaining > 0 && value.status !== "awaiting_clarification" && value.output_relation !== null ? <section className={ui.section}><h3>{value.confirmed_count ? "准备下一组方案" : "准备方案"}</h3>{!single ? <><label htmlFor={`request-goals-${requestId}`}>每行写一条视频的具体目标</label><textarea className={ui.goals} id={`request-goals-${requestId}`} value={goalsText} onChange={event => changeGoals(event.target.value)} disabled={pending} /><p className={ui.note}>本次可准备 1–{limit} 条；分别写清主题、版本差异或分集内容。</p>{goals.length > limit ? <p role="alert">本次最多准备 {limit} 条，请减少本组目标。</p> : new Set(goals).size !== goals.length ? <p role="alert">请分别写出每条视频的具体目标。</p> : null}</> : null}<button className={ui.primary} type="button" disabled={pending || !validGoals} onClick={() => void mutate(() => prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: goals.map(goal => ({ goal })) }), true)}>准备本组方案</button></section> : null}
+      {window?.status === "proposed" ? <section className={ui.section} aria-label="本组制作方案"><h3>本组 {window.entries.length} 条方案</h3><div className={ui.entries}>{window.entries.map(entry => <article className={ui.entry} key={entry.ordinal}><strong>第 {entry.ordinal} 条 · {entry.plan?.name}</strong>{entry.plan ? <><p>{entry.plan.goal}</p><p className={ui.note}>{entry.plan.aspect_ratio} · {entry.plan.duration_target_seconds} 秒</p>{entry.plan.blockers.map((blocker, index) => <p key={index}>{blocker.impact} {blocker.repair_action}</p>)}<details><summary>查看可用内容与制作依据</summary><PreflightFacts preview={entry.plan} /></details></> : null}</article>)}</div><button className={ui.primary} type="button" disabled={pending || !window.entries.length || window.entries.some(entry => !entry.plan?.confirmable)} onClick={() => void mutate(() => confirmCreationRequestWindow(requestId, window.id, { expected_revision: value.revision, input_fingerprint: window.input_fingerprint }))}>确认创建本组任务</button><button className={ui.button} type="button" disabled={pending} onClick={() => void mutate(() => replanCreationRequestWindow(requestId, window.id, value.revision))}>重新核对本组方案</button></section> : remaining > 0 && value.status !== "awaiting_clarification" && value.output_relation !== null ? <section className={ui.section}><h3>{value.confirmed_count ? "准备下一组方案" : "准备方案"}</h3>
+        {value.output_relation === "variants" && remaining >= 2 && !goalsText.trim() ?
+          <button className={ui.button} type="button" disabled={pending} onClick={prepareLanguageVersions}>准备中文版和英文版</button> : null}
+        {!single ? <><label htmlFor={`request-goals-${requestId}`}>每行写一条视频的具体目标</label><textarea className={ui.goals} id={`request-goals-${requestId}`} value={goalsText} onChange={event => changeGoals(event.target.value)} disabled={pending} /><p className={ui.note}>本次可准备 1–{limit} 条；分别写清主题、版本差异或分集内容。</p>{goals.length > limit ? <p role="alert">本次最多准备 {limit} 条，请减少本组目标。</p> : new Set(goals).size !== goals.length ? <p role="alert">请分别写出每条视频的具体目标。</p> : null}</> : null}<button className={ui.primary} type="button" disabled={pending || !validGoals} onClick={() => void mutate(() => prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: goals.map(goal => ({ goal })) }), true)}>准备本组方案</button></section> : null}
       {tasks.length || items?.has_more ? <section className={ui.section} aria-label="已创建的任务"><h3>已创建的任务</h3><div className={ui.entries}>{tasks.map(entry => <article className={ui.entry} key={entry.ordinal}><a href={`/tasks/${encodeURIComponent(entry.task!.id)}`}>第 {entry.ordinal} 条 · {entry.task!.name}</a><p className={ui.note}>{creationTaskShortStatus(entry.task!.stage_status, entry.task!.stage)}</p></article>)}</div><div className={ui.actions}><button className={ui.button} disabled={pending} type="button" onClick={() => void readPage(0)}>返回首组任务</button>{items?.has_more && items.next_after_ordinal !== null ? <button className={ui.button} disabled={pending} type="button" onClick={() => void readPage(items.next_after_ordinal!)}>查看下一组任务</button> : null}</div></section> : null}
     </>}
     {error ? <div className={ui.error} role="alert"><AssistantFailureMessage message={error} /></div> : null}
