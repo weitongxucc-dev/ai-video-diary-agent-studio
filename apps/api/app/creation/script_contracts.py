@@ -27,7 +27,7 @@ class ScriptGenerationRun:
     retryable: bool | None = None
     started_at: datetime = field(default_factory=utc_now)
     finished_at: datetime | None = None
-    run_kind: Literal["generation", "assistant_reply_transfer", "provided_copy"] = "generation"
+    run_kind: Literal["generation", "manual_draft", "assistant_reply_transfer", "provided_copy"] = "generation"
     source_reply_reference: dict[str, str] | None = None
 
 @dataclass

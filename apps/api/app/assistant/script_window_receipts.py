@@ -59,6 +59,9 @@ def project_script_window_request(details, *, expected_operation=None, is_error=
                 result['affected_section_ids']=ids
         else:
             result.update(status='unknown',submission_effect='unknown')
+    elif (matching and status == 'failed' and receipt.get('operation') == operation
+          and receipt.get('submission_effect') == 'rejected'):
+        result.update(status='rejected',submission_effect='rejected')
     elif matching and status in {'unknown','failed'}:
         result.update(status=status,submission_effect='unknown')
     else:

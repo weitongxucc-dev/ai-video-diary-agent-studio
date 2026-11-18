@@ -61,7 +61,7 @@ def test_window_receipt_finishes_conversation_without_full_script_projection(api
     assert '不代表完整稿已采用' in result.reply
     persisted = conversations.get_turn(turn['id'])
     assert persisted['result']['response']['script_window_request']['request_id'] == str(payload.request_id)
-    assert len(calls) == 1
+    assert calls == []
 
 
 def test_new_consumed_input_does_not_inherit_previous_window_projection(tmp_path):
@@ -153,4 +153,4 @@ def test_tool_receipt_survives_model_end_before_final_response(api_state, monkey
         assert response.json()['script_window_request'] == window
     assert conversations.record_script_window_request(seen[0], 'local', member, 'task', window) is False
     assert conversations.get_turn(seen[0])['result'] == turn['result']
-    assert len(calls) == 1
+    assert calls == []

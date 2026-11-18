@@ -1770,9 +1770,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} sourceMedia={workspace.plan.source_media} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact={activeView !== "review"} preview={executionPreview} execution={execution} busy={busy !== null} onRefreshPreview={() => void changeExecution(executionController.recheckRequirements)} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}{activeView === "review" && !executionPreview && !execution?.job ? <p className={styles.notice}>还没有制作安排。可以先查看文案、配音与剪辑。</p> : null}
         </div>
 
-        {activeView === "topic" && task.stage === "topic" ? <TopicSelection topics={topics} selectedTopicId={selectedTopicId} topicTitleDraft={topicTitleDraft} knowledgeCount={workspace.plan.knowledge_references.length} sourceCount={workspace.plan.source_references.length} busy={busy}
+        {activeView === "topic" && task.stage === "topic" ? <TopicSelection topics={topics} selectedTopicId={selectedTopicId} topicTitleDraft={topicTitleDraft} knowledgeCount={workspace.plan.knowledge_references.length} sourceCount={workspace.plan.source_references.length} busy={busy} stageStatus={task.stage_status}
           onSelect={(id, title) => { setSelectedTopicId(id); setTopicTitleDraft(title); }} onTitleChange={setTopicTitleDraft}
           onGenerate={() => void run("topics", () => generateCreationTaskTopics(task.id), "选题已生成，等待选择。")}
+          onRefresh={() => void refresh(true).catch(cause => setError(errorDetails(cause)))}
           onConfirm={() => { if (selectedTopicId) void run("topic-confirm", async () => {
             const saved = await confirmCreationTaskTopic(task.id, selectedTopicId, { title: topicTitleDraft.trim() });
             const confirmed = saved.candidates.find(candidate => candidate.id === saved.selected_topic_id);
