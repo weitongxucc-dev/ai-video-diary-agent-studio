@@ -4985,6 +4985,79 @@ describe("作品视图与真实版本",()=>{
   const publish=getWorkspaceViewControl(/^发布与数据：/);fireEvent.click(publish);
   expect(screen.getByLabelText("剪辑成片预览")).toBeVisible();expect(screen.getByRole("link",{name:"打开发布工作区"})).toHaveAttribute("href","/history");
  });
+ it("keeps the pending review and plan language visible while browsing the edit", async () => {
+  const initial = subtitleCoverWorkspace();
+  initial.plan.language = "en-US";
+  mocks.getWorkspace.mockResolvedValue(initial);
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);
+  const review = screen.getByRole("button", { name: "成片待检查" });
+  expect(review).toBeVisible();
+  expect(screen.getByText("方案英文")).toBeVisible();
+  expect(screen.queryByRole("menu", { name: "制作进度与恢复" })).not.toBeInTheDocument();
+  review.focus();
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByLabelText("剪辑成片预览")).toBeVisible();
+  expect(document.querySelector("[data-editor-workspace]")).toHaveAttribute("data-active-view", "review");
+  expect(review).toHaveFocus();
+ });
+ it("shows the running job step without guessing from the selected tab or plan", () => {
+  const initial = subtitleCoverWorkspace();
+  initial.task = { ...initial.task, stage: "montage", stage_status: "running" };
+  const execution: CreationExecutionStatus = {
+    task_id: initial.task.id, current_stage: "narration", waiting_reason: null, status_updated_at: null,
+    job: { id: "job-1", kind: "creation_task_execution", status: "running", progress: 0,
+      failure_reason: null, impact: null, repair_action: null },
+    stages: [], video_ready: false, cover_status: "pending", cover_message: null,
+  };
+  const onOpen = vi.fn();
+  const navigation = (receipt: CreationExecutionStatus) =>
+    <Tabs value="montage"><TaskViewNavigation workspace={initial} execution={receipt} activeView="montage" onOpen={onOpen}/></Tabs>;
+  const { rerender } = render(navigation(execution));
+  expect(screen.getByRole("status")).toHaveTextContent("生成配音，正在处理");
+  rerender(navigation({ ...execution, current_stage: "montage_plan", job: { ...execution.job!, status: "queued", failure_reason: "waiting_for_user" } }));
+  const waiting = screen.getByRole("button", { name: "安排镜头与人物口型，待处理" });
+  fireEvent.click(waiting);
+  expect(onOpen).toHaveBeenCalledWith("montage");
+  rerender(navigation({ ...execution, task_id: "other-task" }));
+  expect(screen.getByRole("status")).toHaveTextContent("正在剪辑");
+ });
+ it("keeps the selected shot, playhead and unsaved script on a round trip between views", async () => {
+  const initial = subtitleCoverWorkspace();
+  initial.task = { ...initial.task, can_revise_script: true };
+  initial.plan.language = "zh-CN/en-US";
+  initial.scripts = [{
+    id: initial.task.confirmed_script_id!, task_id: initial.task.id, run_id: "run-1", topic_id: "topic-1",
+    title: "已采用的文案", language: "en-US", selection_status: "confirmed",
+    created_at: initial.task.created_at, updated_at: initial.task.updated_at, confirmed_at: initial.task.updated_at,
+    draft_complete: true, sections_loaded: true, sections_total_count: 1,
+    sections: [{ id: "section-1", title: "Opening", content: "The saved copy", visual_prompt: "Product detail", evidence_reference_ids: [] }],
+  }];
+  initial.montage!.clips = [{
+    id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1", source_reference: "workspace://clip.mp4",
+    source_start_seconds: 0, source_end_seconds: 3, timeline_start_seconds: 0, timeline_end_seconds: 3,
+    match_score: 0.9, match_reasons: [], needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false,
+  }];
+  mocks.getWorkspace.mockResolvedValue(initial);
+  const slot: WorkspacePageSlot = { id: "/tasks/task-1", href: "/tasks/task-1", active: true, updateShell: vi.fn(), viewState: new Map() };
+  render(<WorkspacePageContext.Provider value={slot}>
+    <CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>
+  </WorkspacePageContext.Provider>);
+
+  fireEvent.click(openStoryboardClip(1));
+  const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+  player.currentTime = 2.25;
+  fireEvent.seeked(player);
+  fireEvent.click(getWorkspaceViewControl(/^文案：/));
+  fireEvent.change(await screen.findByRole("textbox", { name: "第 1 段正文" }), { target: { value: "Unsaved revised copy" } });
+  expect(screen.getByText("确认稿英文")).toBeVisible();
+  expect(screen.getByLabelText("剪辑成片预览")).toBe(player);
+  fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
+  expect(openStoryboardClip(1)).toHaveAttribute("aria-pressed", "true");
+  expect(player.currentTime).toBe(2.25);
+  fireEvent.click(getWorkspaceViewControl(/^文案：/));
+  expect(await screen.findByRole("textbox", { name: "第 1 段正文" })).toHaveValue("Unsaved revised copy");
+  expect(mocks.saveScriptDraft).not.toHaveBeenCalled();
+ });
  it("distinguishes the actual confirmed script and the unconfirmed latest draft",async()=>{
   const initial=subtitleCoverWorkspace();const original={id:"original-script",task_id:initial.task.id,run_id:"fixture-run",topic_id:"fixture-topic",title:"文案",language:"zh-CN" as const,selection_status:"confirmed" as const,created_at:initial.task.created_at,updated_at:initial.task.updated_at,confirmed_at:initial.task.updated_at,estimated_duration_seconds:3,draft_complete: true, sections_loaded: true as const, sections_total_count: 1, sections:[{id:"fixture-section",title:"正文",content:"固定正文",visual_prompt:"已有测试画面",evidence_reference_ids:[]}],warnings:[]};
   const confirmed={...original,id:"confirmed-script",title:"实际确认稿",selection_status:"confirmed" as const,sections:[{...original.sections[0],content:"已经确认的正文"}]};
@@ -5007,7 +5080,12 @@ describe("作品视图与真实版本",()=>{
   const initial=subtitleCoverWorkspace();const job={id:"complete-job",kind:"creation_task_montage_render" as const,status:"succeeded" as const,progress:100,attempt:1,started_at:initial.task.created_at,finished_at:initial.task.updated_at,updated_at:initial.task.updated_at,elapsed_seconds:12,failure_reason:null,impact:null,repair_action:null,wait_estimate_seconds:null,processing_estimate_seconds:null,estimate_basis:null};
   mocks.getJobProgress.mockResolvedValue({task_id:initial.task.id,current:job,items:[job],total_count:1});mocks.getWorkspace.mockResolvedValue(initial);
   renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);await waitFor(()=>expect(mocks.getJobProgress).toHaveBeenCalled());
-  expect(screen.queryByText(/进度 100%/)).not.toBeVisible();openEditingStatusTray();fireEvent.click(screen.getByRole("button",{name:"运行详情"}));const panel=await screen.findByRole("dialog",{name:"运行详情"});expect(panel).toHaveTextContent("进度 100%");
+  const progress = screen.queryByText(/进度 100%/);
+  if (progress) expect(progress).not.toBeVisible();
+  openEditingStatusTray();
+  fireEvent.click(screen.getByRole("button", { name: "运行详情" }));
+  const panel = await screen.findByRole("dialog", { name: "运行详情" });
+  expect(panel).toHaveTextContent(/成片输出.*已完成/);
   fireEvent.click(within(panel).getByText("任务版本与时间"));expect(within(panel).getByText(`版本 ${initial.task.timeline_sequence}`)).toBeVisible();
  });
 });

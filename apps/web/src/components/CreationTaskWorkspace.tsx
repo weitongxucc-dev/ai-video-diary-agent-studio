@@ -56,7 +56,6 @@ import type { AssistantTurnRecord } from './creation-task/assistant-history';
 import { queuedEditNotice } from './creation-task/edit-context';
 import { productStages, stageLabels, defaultWorkspaceView, productStageState } from './creation-task/stage-navigation';
 import { errorDetails } from './creation-task/request-errors';
-import { executionStageLabels } from './creation-task/execution-labels';
 import { assistantHistoryTurns } from './creation-task/assistant-history';
 import { TaskIssue } from './creation-task/TaskIssue';
 import { Inspector, SubtitleCoverInspector } from './creation-task/TaskInspector';
@@ -913,16 +912,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function openView(view: WorkspaceView) {
-    setSelectedOverlayId(null);
+    if (view === activeView) return;
     setSavingTemplate(false);
     setActiveView(view);
-    if (!(["montage", "review"].includes(activeView) && ["montage", "review"].includes(view))) {
-      setSelectedClipId(null);
-      playheadRef.current = null;
-    }
-    setSelectedCueId(null);
-    setSelectedNarrationSegmentId(null);
-    setSelectedCover(false);
     invalidateEditPreview();
   }
 
@@ -1743,13 +1735,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       toolbarActions={<><TaskSaveState busy={busy !== null} pending={Boolean(editPreview)} dirty={Boolean(editorDraft || quickInspector && clipDraftChanged)} saved={isEditor} /><TaskOutputActions shareOpen={sharingOpen} onShare={() => setSharingOpen(true)} onSave={isEditor ? () => { void saveVideo(); } : undefined} busy={busy !== null} canSave={Boolean(task.output_ready && workspace.montage?.output_url)} /></>} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
       <HomeCardDialog kind="config" open={sharingOpen} title="任务与方案共享" onClose={() => setSharingOpen(false)}>{sharingControls}</HomeCardDialog>
       <Tabs value={activeView} onValueChange={value => { const view = value as WorkspaceView; if (canOpenStage(view, workspace)) openEditingView(view); }} onChangeCapture={() => { navigationReadRevision.current += 1; }} data-editor-workspace="" data-active-view={activeView} className={[hasTimeline ? `${editorUi.workspace} ${styles.timelineWorkspace}` : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
-        <TaskViewNavigation editingActions={isEditor ? (!hasTimeline ? timelineActions : undefined) : selectedReferenceAction} workspace={workspace} activeView={activeView} onOpen={openEditingView} />
+        <TaskViewNavigation editingActions={isEditor ? (!hasTimeline ? timelineActions : undefined) : selectedReferenceAction} workspace={workspace} execution={execution} activeView={activeView} onOpen={openEditingView} />
         {workspace.montage ? <div className={styles.persistentStage}><VideoEditingStage onEditSubtitle={id => { openEditingView("subtitle_cover"); selectCue(id); }} timelineActions={timelineActions} editError={error?.message} selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? subtitleTrack => <AudioTimelineTracks sharedTimeScale subtitleTrack={subtitleTrack} onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} taskId={task.id} versionId={task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} taskId={task.id} versionId={task.current_timeline_version_id} narrationCacheKey={task.narration_cache_key} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /></div> : null}
         <EditorPaneMount docked={hasTimeline && !isEditor} hidden={auxiliaryHidden} homeClassName={styles.taskPaneHome} mountClassName={hasTimeline && !isEditor ? styles.taskPaneDock : styles.taskPaneHome}><EditingStatusTray actionLabel={error || executionError ? "查看原因" : localConfirmation ? "查看修改" : execution?.job?.status === "running" || execution?.job?.status === "queued" ? "查看进度" : task.output_ready ? "检查成片" : "制作与检查"} revealReason={error ?? executionError ?? pendingMetadataSave ?? pendingTimelineRestore} compact={hasTimeline && isEditor} attention={Boolean(error || executionError || task.stage_status === "failed" || task.stage_status === "waiting_for_user" || localConfirmation || pendingMetadataSave || pendingTimelineRestore)} status={error ? "修改未完成" : executionError ? "制作未完成" : (pendingMetadataSave || pendingTimelineRestore ? "操作结果待核对" : execution?.job?.status === "running" ? "后台制作中" : execution?.job?.status === "queued" ? "制作已排队" : localConfirmation ? "修改方案待确认" : task.stage_status === "failed" ? task.stage_reason ?? "制作未完成" : creationTaskShortStatus(task.stage_status, task.stage))}>
         <MediaVisibility visible={!auxiliaryHidden}><TabsContent value={activeView} hidden={auxiliaryHidden} className={hasTimeline ? [styles.auxiliaryBody, isEditor ? styles.editingAuxiliary : ""].filter(Boolean).join(" ") : styles.workspaceBody}>
         <header className={hasTimeline ? styles.stageRuntime : styles.stageHeading} data-timeline-version={task.timeline_sequence}>
           {!hasTimeline ? <div><h2>{productStages.find(stage => stage.id === activeView)?.title}</h2><span className={styles.stateBadge}>{activeView === task.stage ? creationTaskStatusPresentation(task.stage_status, task.stage).label : productStageState(activeView, workspace, workspace.subtitle_tracks.some(track => track.status === "valid") && workspace.cover_asset?.status === "valid").detail}</span></div> : null}
-          {execution?.job && ["queued", "running"].includes(execution.job.status) ? <span className={styles.runtimeState} role="status">连续制作：{execution.job.status === "queued" ? "已排队" : "后台制作中"}{execution.current_stage ? ` · ${executionStageLabels[execution.current_stage]}` : ""}</span> : null}
           <JobProgressPanel graphicEditor={<GraphicOverlayEditor onMediaPreview={input=>void previewExactEdit(input,true)} taskId={task.id} versionId={task.current_timeline_version_id} items={workspace.montage?.graphic_overlays ?? []}
             selectedId={null} duration={workspace.montage?.duration_seconds ?? 0} busy={busy !== null}
             onPreview={input => void previewExactEdit(input)} onDraftChange={() => {invalidateEditPreview(); setEditorDraft(true);}} />}
