@@ -41,8 +41,6 @@ class MaterialLibraryRecords(Protocol):
                          review_status=None, media_type=None, include_private=True,
                          viewer_user_id=None, local_diagnostic=False): ...
     def get_asset(self, workspace_id, asset_id): ...
-    def update_asset_tags(self, workspace_id, asset_id, user_tags, *, expected_asset_updated_at=None): ...
-    def update_assets_tags_batch(self, workspace_id, asset_ids, *, add, remove): ...
     def update_asset_notes(self, workspace_id, notes): ...
     def set_asset_visibility(self, workspace_id, asset_id, visibility): ...
     def update_asset_use_state(self, workspace_id, asset_id, use_state): ...
@@ -88,11 +86,17 @@ class MaterialLibraryHTTPAdapter:
         return MaterialLibraryResponse(assets=[self._asset_response(asset) for asset in assets], total_count=total, limit=limit, offset=offset, has_more=offset + len(assets) < total)
 
     def update_material_asset_tags(self, asset_id: str, request: Request, payload: MaterialAssetTagsRequest) -> MaterialAssetResponse:
-        self.get_production_material(asset_id, request)
+        workspace_id = self._workspace_for(request)
+        actor = self._reader_for(request, workspace_id)
         try:
-            asset = self._records_for().update_asset_tags(self._workspace_for(request), asset_id, payload.user_tags, expected_asset_updated_at=payload.expected_asset_updated_at)
+            asset = self._records_for().material_assets.update_asset_tags(
+                workspace_id, asset_id, payload.user_tags, expected_asset_updated_at=payload.expected_asset_updated_at,
+                editor_identity=actor,
+            )
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail='素材不属于当前工作区') from exc
+            raise HTTPException(status_code=404, detail='material asset not found') from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except MaterialVersionConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
@@ -100,10 +104,16 @@ class MaterialLibraryHTTPAdapter:
         return self._asset_response(asset)
 
     def update_material_asset_tags_batch(self, request: Request, payload: MaterialBatchTagsRequest) -> MaterialBatchTagsResponse:
+        workspace_id = self._workspace_for(request)
+        actor = self._reader_for(request, workspace_id)
         try:
-            assets = self._records_for().update_assets_tags_batch(self._workspace_for(request), payload.asset_ids, add=payload.add, remove=payload.remove)
+            assets = self._records_for().material_assets.update_assets_tags_batch(
+                workspace_id, payload.asset_ids, add=payload.add, remove=payload.remove, editor_identity=actor,
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail='所选素材有不属于当前工作区的项目，未做任何修改') from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return MaterialBatchTagsResponse(assets=[self._asset_response(asset) for asset in assets])
