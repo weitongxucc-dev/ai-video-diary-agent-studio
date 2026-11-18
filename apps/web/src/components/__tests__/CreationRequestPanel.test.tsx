@@ -95,6 +95,29 @@ describe("persistent creation request panel", () => {
     expect(api.confirm).not.toHaveBeenCalled();
   });
 
+  it("binds each delivery to its selected voice version and language", async () => {
+    const request = header({ target_count: 2, output_relation: "variants", status: "awaiting_plan" });
+    api.get.mockResolvedValue(request);
+    api.prepare.mockResolvedValue(proposed());
+    voiceApi.list.mockResolvedValue({ items: [
+      { id: "studio-zh", version: "v2", display_name: "中文讲解", language: "zh", runnable: true },
+      { id: "studio-en", version: "v3", display_name: "English narrator", language: "en", runnable: true },
+    ] });
+    const user = userEvent.setup();
+    render(<CreationRequestPanel requestId={request.id} scopeKey="member" isCurrentScope={() => true} />);
+    await user.click(await screen.findByText("分别指定中英文声音"));
+    await user.click(await screen.findByRole("combobox", { name: "中文版声音" }));
+    expect(screen.queryByRole("option", { name: "English narrator · v3" })).toBeNull();
+    await user.click(await screen.findByRole("option", { name: "中文讲解 · v2" }));
+    await user.click(screen.getByRole("combobox", { name: "英文版声音" }));
+    await user.click(await screen.findByRole("option", { name: "English narrator · v3" }));
+    await user.click(screen.getByRole("button", { name: "准备中文版和英文版" }));
+    expect(api.prepare).toHaveBeenCalledWith(request.id, { expected_revision: request.revision, goals: [
+      expect.objectContaining({ requirements: { language: "zh-CN", selected_voice: { profile_id: "studio-zh", version: "v2" } } }),
+      expect.objectContaining({ requirements: { language: "en-US", selected_voice: { profile_id: "studio-en", version: "v3" } } }),
+    ] });
+  });
+
   it("uses the exact single goal without another relationship or per-item question", async () => {
     const single = header({ goal: "做一条键盘演示", target_count: 1, output_relation: "single", status: "awaiting_plan" });
     api.get.mockResolvedValue(single); api.prepare.mockResolvedValue(single);

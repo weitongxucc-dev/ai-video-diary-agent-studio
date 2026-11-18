@@ -6,6 +6,7 @@ import { confirmCreationRequestWindow, getCreationRequest, getCreationRequestIte
 import { listVoiceProfiles, mediaProfilesErrorMessage, type VoiceProfile } from "@/lib/media-profiles-api";
 import { AppSelect, AppSelectOption } from "./AppSelect";
 import { creationTaskShortStatus } from "@/lib/creation-task-status";
+import { BilingualDeliveryControls, type VoiceChoice } from "./creation-task/BilingualDeliveryControls";
 import { WorkSourceImport } from "./creation-task/WorkSourceImport";
 import { WorkMaterialImport } from "./creation-task/WorkMaterialImport";
 import { PreflightFacts } from "./CreateProductionTaskForm";
@@ -157,12 +158,12 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
   const goals = single && value ? [value.goal] : goalsText.split("\n").map(line => line.trim()).filter(Boolean);
   const limit = Math.min(8, remaining);
   const validGoals = goals.length > 0 && goals.length <= limit && new Set(goals).size === goals.length;
-  function prepareLanguageVersions() {
+  function prepareLanguageVersions(voices: { zh?: VoiceChoice; en?: VoiceChoice }) {
     if (!value) return;
     const commonName = Array.from(value.requirements.name || value.goal).slice(0, 100).join("");
     const versions: DeliveryGoal[] = [
-      { goal: value.goal, name: commonName + " · 中文版", requirements: { language: "zh-CN" } },
-      { goal: value.goal, name: commonName + " · 英文版", requirements: { language: "en-US" } },
+      { goal: value.goal, name: commonName + " · 中文版", requirements: { language: "zh-CN", ...(voices.zh && { selected_voice: voices.zh }) } },
+      { goal: value.goal, name: commonName + " · 英文版", requirements: { language: "en-US", ...(voices.en && { selected_voice: voices.en }) } },
     ];
     void mutate(() => prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: versions }));
   }
@@ -192,7 +193,7 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
         })}>重新核对已保存声音的方案</button></section> : null}
       {window?.status === "proposed" ? <section className={ui.section} aria-label="本组制作方案"><h3>本组 {window.entries.length} 条方案</h3><div className={ui.entries}>{window.entries.map(entry => <article className={ui.entry} key={entry.ordinal}><strong>第 {entry.ordinal} 条 · {entry.plan?.name}</strong>{entry.plan ? <><p>{entry.plan.goal}</p><p className={ui.note}>{entry.plan.aspect_ratio} · {entry.plan.duration_target_seconds} 秒</p>{entry.plan.blockers.map((blocker, index) => <p key={index}>{blocker.impact} {blocker.repair_action}</p>)}<details><summary>查看可用内容与制作依据</summary><PreflightFacts preview={entry.plan} /></details></> : null}</article>)}</div><button className={ui.primary} type="button" disabled={pending || !window.entries.length || window.entries.some(entry => !entry.plan?.confirmable)} onClick={() => void mutate(() => confirmCreationRequestWindow(requestId, window.id, { expected_revision: value.revision, input_fingerprint: window.input_fingerprint }))}>确认创建本组任务</button><button className={ui.button} type="button" disabled={pending} onClick={() => void mutate(() => replanCreationRequestWindow(requestId, window.id, value.revision))}>重新核对本组方案</button></section> : remaining > 0 && value.status !== "awaiting_clarification" && value.output_relation !== null ? <section className={ui.section}><h3>{value.confirmed_count ? "准备下一组方案" : "准备方案"}</h3>
         {value.output_relation === "variants" && remaining >= 2 && !goalsText.trim() ?
-          <button className={ui.button} type="button" disabled={pending} onClick={prepareLanguageVersions}>准备中文版和英文版</button> : null}
+          <BilingualDeliveryControls key={identity} pending={pending} onPrepare={prepareLanguageVersions} /> : null}
         {!single ? <><label htmlFor={`request-goals-${requestId}`}>每行写一条视频的具体目标</label><textarea className={ui.goals} id={`request-goals-${requestId}`} value={goalsText} onChange={event => changeGoals(event.target.value)} disabled={pending} /><p className={ui.note}>本次可准备 1–{limit} 条；分别写清主题、版本差异或分集内容。</p>{goals.length > limit ? <p role="alert">本次最多准备 {limit} 条，请减少本组目标。</p> : new Set(goals).size !== goals.length ? <p role="alert">请分别写出每条视频的具体目标。</p> : null}</> : null}<button className={ui.primary} type="button" disabled={pending || !validGoals} onClick={() => void mutate(() => prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: goals.map(goal => ({ goal })) }), true)}>准备本组方案</button></section> : null}
       {tasks.length || items?.has_more ? <section className={ui.section} aria-label="已创建的任务"><h3>已创建的任务</h3><div className={ui.entries}>{tasks.map(entry => <article className={ui.entry} key={entry.ordinal}><a href={`/tasks/${encodeURIComponent(entry.task!.id)}`}>第 {entry.ordinal} 条 · {entry.task!.name}</a><p className={ui.note}>{creationTaskShortStatus(entry.task!.stage_status, entry.task!.stage)}</p></article>)}</div><div className={ui.actions}><button className={ui.button} disabled={pending} type="button" onClick={() => void readPage(0)}>返回首组任务</button>{items?.has_more && items.next_after_ordinal !== null ? <button className={ui.button} disabled={pending} type="button" onClick={() => void readPage(items.next_after_ordinal!)}>查看下一组任务</button> : null}</div></section> : null}
     </>}
