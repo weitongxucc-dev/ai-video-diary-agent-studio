@@ -71,10 +71,11 @@ it("does not apply a late identity reply after leaving templates", async () => {
 });
 
 
-it("keeps the template page return target frozen and cancels a late repair after it is hidden", async () => {
+it("uses the registered return target and discards a pending repair across hide and reopen", async () => {
   seed();
-  const slot = { id: "/templates", href: `/templates?return_to=${encodeURIComponent(preflightReturnUrl(id, fields.template!))}`, updateShell: vi.fn(), viewState: new Map<string, unknown>() };
-  const content = (active: boolean) => <WorkspacePageContext.Provider value={{ ...slot, active }}><TemplateLibraryWorkspace offline={false} templates={[selected]} /></WorkspacePageContext.Provider>;
+  const returnTarget = encodeURIComponent(preflightReturnUrl(id, fields.template!)).replace("%3F", "?");
+  const slot = { id: "/templates", href: `/templates?return_to=${returnTarget}#details`, updateShell: vi.fn(), viewState: new Map<string, unknown>() };
+  const content = (active: boolean, href = slot.href) => <WorkspacePageContext.Provider value={{ ...slot, active, href }}><TemplateLibraryWorkspace offline={false} templates={[selected]} /></WorkspacePageContext.Provider>;
   const view = render(content(true));
   await screen.findByRole("button", { name: "换用此模板并返回创作" });
   mocks.raw = "return_to=https%3A%2F%2Fevil.test";
@@ -84,9 +85,14 @@ it("keeps the template page return target frozen and cancels a late repair after
   mocks.scope.mockReturnValueOnce(new Promise(done => { resolve = done; }));
   fireEvent.click(screen.getByRole("button", { name: "换用此模板并返回创作" }));
   view.rerender(content(false));
+  view.rerender(content(true));
+  expect(screen.getByRole("button", { name: "换用此模板并返回创作" })).toBeEnabled();
   await act(async () => resolve(scope));
   expect(loadPreflightDraft(sessionStorage, scope, id)).toEqual(fields);
   expect(mocks.push).not.toHaveBeenCalled();
-  view.rerender(content(true));
-  expect(screen.getByRole("button", { name: "换用此模板并返回创作" })).toBeEnabled();
+  view.rerender(content(true, `/templates?${mocks.raw}`));
+  expect(await screen.findByRole("alert")).toHaveTextContent("地址无效");
+  expect(screen.queryByRole("button", { name: "换用此模板并返回创作" })).not.toBeInTheDocument();
+  expect(loadPreflightDraft(sessionStorage, scope, id)).toEqual(fields);
+  expect(mocks.push).not.toHaveBeenCalled();
 });

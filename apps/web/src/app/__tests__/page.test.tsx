@@ -141,12 +141,15 @@ describe("HomePage workspace overview", () => {
     });
   });
 
-  it("renders the real shell assistant region and the seven real overview metrics", async () => {
+  it("opens the assistant on demand and shows the seven real overview metrics", async () => {
     render(<HomePage />);
 
-    // Real AppShell provides the assistant region; real composer is inside it.
-    const assistant = await screen.findByRole("region", { name: "创作助手" });
-    expect(within(assistant).getByRole("textbox", { name: "制作要求" })).toHaveAttribute("placeholder", "想做什么，或想怎么改？");
+    expect(screen.queryByRole("region", { name: "曜核哈力斯" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开曜核哈力斯" }));
+    const assistant = await screen.findByRole("region", { name: "曜核哈力斯" });
+    const input = within(assistant).getByRole("textbox", { name: "制作要求" });
+    await waitFor(() => expect(input).toBeEnabled());
+    expect(input).toHaveAttribute("placeholder", "想做什么，或想怎么改？");
 
     // 概览读服务端聚合：七项都是真实数值，不是占位横线。
     fireEvent.click(await screen.findByRole("button", { name: "查看内容统计范围" }));
@@ -164,15 +167,15 @@ describe("HomePage workspace overview", () => {
     search = "new=1";
     render(<HomePage />);
 
-    const assistant = await screen.findByRole("region", { name: "创作助手" });
-    const input = within(assistant).getByRole("textbox", { name: "制作要求" }) as HTMLTextAreaElement;
+    const assistant = await screen.findByRole("region", { name: "曜核哈力斯" });
+    const input = within(assistant).getByRole("textbox", { name: "制作要求" });
     // 既有创作入口：带 ?new=1 打开首页时输入框直接获得焦点。
     await waitFor(() => expect(document.activeElement).toBe(input));
 
     // 首页队列按真实 task_id 进入既有任务路由，不用依赖另一份任务列表。
-    const queue = (await screen.findByRole("heading", { name: "创作任务" })).closest("section") as HTMLElement;
+    const queue = await screen.findByRole("region", { name: "创作任务看板" });
     fireEvent.click(within(queue).getByRole("button", { name: /waiting_for_user 任务/ }));
     const detail = await screen.findByRole("dialog", { name: /waiting_for_user 任务/ });
-    expect(detail.querySelector('a[href="/tasks/task-waiting_for_user"]')).toBeInTheDocument();
+    expect(within(detail).getByRole("link")).toHaveAttribute("href", "/tasks/task-waiting_for_user");
   });
 });
