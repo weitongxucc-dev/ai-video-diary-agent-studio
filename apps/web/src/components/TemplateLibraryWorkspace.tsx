@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { ArrowRight, ChevronRight, History, Layers3, Library, Pencil, Search, WifiOff } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type CSSProperties } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { boundedPreflightReturn, readPreflightDraftScope, resolvePreflightRepairContext, replacePreflightDraftTemplate, sameDraftScope, savePreflightRepairContext, type PreflightRepairContext } from "@/lib/preflight-draft";
-import { useWorkspacePage, useWorkspaceSearchParams } from "./workbench/context";
+import { useWorkspacePage } from "./workbench/context";
 import { AppShell } from "@/components/AppShell";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { createVideoTemplateVersion } from "@/lib/video-template-api";
@@ -46,17 +46,28 @@ const emptyCopy: Record<TemplateView, { title: string; hint: string; href: strin
 
 export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: { offline: boolean; templates: VideoTemplate[]; catalog?: ContentTemplate[] }) {
   const router = useRouter();
-  const pageActive = useWorkspacePage()?.active ?? true;
+  const page = useWorkspacePage();
+  const pageActive = page?.active ?? true;
+  const params = useSearchParams();
+  // A retained template page owns the return address it was opened with.
+  const rawReturn = (page ? new URL(page.href, "http://localhost").searchParams : params)?.get("return_to") ?? null;
   const activeRef = useRef(pageActive);
-  useLayoutEffect(() => { activeRef.current = pageActive; }, [pageActive]);
-  const rawReturn = useWorkspaceSearchParams().get("return_to");
   const repairRevision = useRef(0);
   const [repairContext, setRepairContext] = useState<PreflightRepairContext | null>(null);
   const [repairReady, setRepairReady] = useState(false);
   const [repairBusy, setRepairBusy] = useState(false);
   const [repairError, setRepairError] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    const revision = repairRevision.current;
+    activeRef.current = pageActive;
+    if (!pageActive) setRepairBusy(false);
+    return () => {
+      activeRef.current = false;
+      repairRevision.current = revision + 1;
+    };
+  }, [pageActive, rawReturn]);
   useEffect(() => {
-    let active = true; const request = ++repairRevision.current;
+    let active = true;
     setRepairContext(null); setRepairReady(false); setRepairError(null); setRepairBusy(false);
     if (rawReturn !== null && !boundedPreflightReturn(rawReturn, window.location.origin)) { setRepairError("返回创作地址无效，没有回退其他草稿。"); return; }
     void readPreflightDraftScope().then(scope => {
@@ -65,7 +76,7 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
       if (value && rawReturn !== null) savePreflightRepairContext(window.sessionStorage, scope, value.target.draftId, value.draft.template);
       setRepairContext(value); setRepairReady(true);
     }).catch(cause => { if (active) setRepairError(`不能读取修复上下文：${cause instanceof Error ? cause.message : "读取失败"}`); });
-    return () => { active = false; repairRevision.current = request + 1; };
+    return () => { active = false; };
   }, [rawReturn]);
   async function handleUseDraftTemplate(item: VideoTemplate) {
     if (!activeRef.current || !repairContext || !repairReady || repairBusy) return;

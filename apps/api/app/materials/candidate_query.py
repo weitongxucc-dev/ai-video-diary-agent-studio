@@ -4,6 +4,7 @@ No new index or candidate persistence. None scope means visible discovery;
 an explicit scope is closed: omitted domains cannot search the library.
 """
 from app.materials.candidate_bundle import build_candidate_bundle
+from app.materials.contracts import material_usage_eligibility
 from app.materials.knowledge_discovery import KnowledgeCandidateDiscovery
 from app.materials.profile_discovery import ProfileCandidateDiscovery, domain_result
 from app.source_policy import knowledge_item_readable
@@ -74,7 +75,10 @@ class CrossDomainCandidateQuery:
     def _material_candidate(self, workspace_id, match, user_id, local_diagnostic):
         asset = self._asset(workspace_id, match.asset_ref.removeprefix('asset:'), user_id, local_diagnostic)
         segment = next((item for item in asset.segments if 'segment:' + item.id == match.segment_ref), None)
-        if segment is None:
+        # Ranking and candidate projection read the asset separately. A later
+        # source range must never be attached to the evidence for an older one.
+        if (segment is None or not material_usage_eligibility(asset, segment, purpose='manual').eligible
+                or (segment.start_seconds, segment.end_seconds) != (match.start_seconds, match.end_seconds)):
             raise KeyError(match.segment_ref)
         revision = segment.source_revision or {'asset_updated_at': asset.updated_at.isoformat(),
                                                'modified_at': asset.modified_at.isoformat()}
@@ -148,8 +152,10 @@ class CrossDomainCandidateQuery:
             asset = self._asset(workspace_id, object_id, user_id, local_diagnostic)
             if asset.updated_at.isoformat() != version:
                 raise KeyError(object_id)
+            references = [dict(ref, asset_version=version) for ref in refs] if refs is not None else [
+                {'asset_id': object_id, 'asset_version': version}]
             result = self._materials(workspace_id, query='', user_id=user_id, limit=20,
-                local_diagnostic=local_diagnostic, references=refs if refs is not None else [{'asset_id': object_id}])
+                local_diagnostic=local_diagnostic, references=references)
             candidates = result['candidates']
             bundle = build_candidate_bundle()
             bundle['candidates'] = candidates

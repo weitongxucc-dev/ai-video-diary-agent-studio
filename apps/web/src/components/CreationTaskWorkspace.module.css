@@ -590,14 +590,20 @@
 .workSection .sectionHeading h2, .workSection .emptyAction h2 { font-size:15px; }
 
 .scriptReview [role="tabpanel"] > .workSection { border:0; padding:12px 0 0; background:transparent; }
-.runtimeState { color:var(--text-2); font-size:13px; }
 
-.viewNavigation { display:flex; align-items:center; gap:4px; min-height:36px; flex-shrink:0; padding:0 10px; background:var(--surface-1); }
-.viewNavigation [role="tab"] { height:28px; padding:0 8px; gap:5px; border-radius:5px; }
-.viewTools { display:flex; align-items:center; min-width:0; margin-left:auto; }
-.viewNavigation > [data-slot="tabs-list"] { min-width:0; overflow:auto; }
-.viewNavigation > button { flex-shrink:0; }
-
+.viewNavigation { display:flex; flex-wrap:wrap; align-items:center; gap:0 var(--space-1); min-height:var(--space-6); flex-shrink:0; padding-inline:var(--space-2); background:var(--surface-1); }
+.viewNavigation [role="tab"] { height:var(--space-6); padding-inline:var(--space-2); gap:var(--space-1); }
+.viewNavigation [role="tab"]:focus-visible { outline-offset:-2px; }
+.viewNavigation > [data-slot="tabs-list"] { min-width:0; max-width:100%; overflow-x:auto; }
+.viewTools { display:flex; flex-wrap:wrap; align-items:center; min-width:0; }
+.viewTools:empty { display:none; }
+.viewProgress { display:flex; align-items:center; gap:var(--space-1); min-width:0; max-width:100%; margin-inline-start:auto; }
+.viewProgress > button { flex:none; }
+.viewFacts { display:flex; align-items:center; flex-wrap:wrap; gap:0 var(--space-2); min-width:0; min-height:var(--space-6); color:var(--text-2); font-size:var(--font-size-meta); line-height:var(--line-meta); }
+.viewFacts [data-tone="warning"] { color:var(--warning); }
+.viewFacts [data-tone="danger"] { color:var(--danger); }
+.locateStage { min-height:var(--space-5); border:0; padding:0; background:transparent; color:inherit; font:inherit; text-align:start; text-decoration:underline; text-underline-offset:0.2em; cursor:pointer; }
+.locateStage:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 .segmentVideoPreview { display:grid; gap:8px; margin-top:16px; }
 .segmentVideoPreview video { display:block; width:100%; max-height:440px; background:var(--surface-2); border:1px solid var(--border-1); border-radius:8px; }
 .segmentVideoPreview p, .segmentProductionList p, .segmentUsage p { margin:0; color:var(--text-2); font-size:13px; line-height:var(--line-body); }
@@ -622,14 +628,14 @@
 .editingAuxiliary :global([data-production-summary]) { display:contents; }
 .editingAuxiliary :global([data-production-summary] > div:empty) { display:none; }
 
-.statusTray { position:relative; flex:0 0 auto; min-width:0; border-top:1px solid var(--border-1); background:var(--surface-1); }
-.statusSummary { display:flex; width:100%; min-height:34px; padding:4px 16px; gap:8px; border-radius:0; font-weight:400; color:var(--text-2); }
+.statusTray { display:flex; flex:0 0 auto; flex-direction:column; min-width:0; max-block-size:36%; border-top:1px solid var(--border-1); background:var(--surface-1); }
+.statusSummary { display:flex; flex:none; width:100%; min-height:34px; padding:4px 16px; gap:8px; border-radius:0; font-weight:400; color:var(--text-2); }
 .statusSummary > span:nth-child(2) { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .statusDot { flex:0 0 6px; width:6px; height:6px; border-radius:50%; background:var(--text-3); }
 .statusDot[data-attention] { background:var(--warning); }
 .statusAction { display:flex; align-items:center; flex-shrink:0; gap:6px; margin-left:auto; }
 .statusSummary[aria-expanded="true"] .statusAction svg { transform:rotate(180deg); }
-.statusContents { position:absolute; bottom:100%; inset-inline:0; z-index:40; max-height:min(480px,70vh); overflow:auto; border-block:1px solid var(--border-1); background:var(--surface-1); box-shadow:0 -8px 24px #0000000a; }
+.statusContents { min-block-size:0; overflow:auto; overscroll-behavior:contain; border-top:1px solid var(--border-1); }
 .statusContents > header { position:sticky; top:0; display:flex; align-items:center; justify-content:space-between; padding:4px 12px 4px 16px; background:var(--surface-1); z-index:1; border-bottom:1px solid var(--border-1); }
 .statusContents .auxiliaryBody { display:grid; max-height:none; padding:12px 16px; border:0; gap:12px; }
 

@@ -451,17 +451,22 @@ def build_audio_mix_command(
             index += 1
     def mix(labels: list[str], label: str):
         filters.append("".join(f"[{item}]" for item in labels) + f"amix=inputs={len(labels)}:normalize=0:dropout_transition=0[{label}]")
-    if voices:
-        mix(voices, "voices")
-        if ducked:
-            filters.append(f"[voices]asplit={len(ducked)+1}[voiceout]" + "".join(f"[key{i}]" for i in range(len(ducked))))
-            regular.append("voiceout")
-            for i, label in enumerate(ducked):
-                filters.append(f"[{label}][key{i}]sidechaincompress=threshold=0.03:ratio=6:attack=20:release=400[duck{i}]")
-                regular.append(f"duck{i}")
-        else:
-            regular.append("voices")
+    if voices and ducked:
+        # FFmpeg 8.0.1 can produce different sidechain PCM as decoded frames
+        # arrive in different orders. Use matching sample blocks and keep the
+        # short final block at its original length.
+        for label in [*voices, *ducked]:
+            filters.append(f"[{label}]asetnsamples=n=1024:p=0[{label}_blocks]")
+        mix([f"{label}_blocks" for label in voices], "voices")
+        filters.append(f"[voices]asplit={len(ducked)+1}[voiceout]" + "".join(f"[key{i}]" for i in range(len(ducked))))
+        regular.append("voiceout")
+        for i, label in enumerate(ducked):
+            filters.append(f"[{label}_blocks][key{i}]sidechaincompress=threshold=0.03:ratio=6:attack=20:release=400[duck{i}]")
+            regular.append(f"duck{i}")
     else:
+        if voices:
+            mix(voices, "voices")
+            regular.append("voices")
         regular.extend(ducked)
     if regular:
         mix(regular, "mixed")

@@ -4,7 +4,6 @@ from fastapi.responses import JSONResponse
 from fastapi import APIRouter, Request, UploadFile, File
 from pydantic import BaseModel, ConfigDict, Field
 from app.audio_timeline import AudioEditRequest, AudioListenRequest
-from app.editing_resource_catalog import resource_preview_path
 from app.schemas import CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskEditPreviewResponse
 
 

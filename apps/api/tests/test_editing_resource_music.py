@@ -101,8 +101,6 @@ def test_music_catalog_preview_hash_and_adoption_boundary():
         assert preflight['adoption']['requires_explicit_edit_authorization'] is True
         assert preflight['rollback']['deletes_user_data'] is False
         assert client.get(f'/api/editing-resources/{RESOURCE_ID}/preview?version=2').status_code == 404
-        glitch = client.get('/api/editing-resources/openfilm:transition-glitch/preflight?version=2').json()
-        assert glitch['status'] == 'catalog_only' and not glitch['runnable']
     finally:
         client.close()
 

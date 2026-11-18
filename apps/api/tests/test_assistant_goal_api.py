@@ -810,7 +810,10 @@ def test_consumed_input_observes_existing_job_then_resumes_without_starting_agai
         state.workspace_id,state.task.id).current_timeline_version_id == state.version.id
 
 
-@pytest.mark.parametrize("mutation", ["none", "watched_input", "older_goal_locator", "source_trimmed", "scripted_short", "hash", "version", "preview", "foreign_goal", "no_video", "pending", "unknown"])
+@pytest.mark.parametrize("mutation", [
+    "none", "watched_input", "older_goal_locator", "source_trimmed", "scripted_short",
+    "hash", "version", "missing_base_sequence", "preview", "foreign_task", "foreign_goal", "no_video", "pending", "unknown",
+])
 def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending(monkeypatch, mutation, tmp_path):
     # Real SQL selection with host/media-reader seams; this is not media acceptance.
     import sqlite3
@@ -835,9 +838,14 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
         'registered_width':1080,'registered_height':1920,'size_bytes':100,'producer_job_id':'render-child',
         'logical_ref':'artifacts/task/video.mp4','mtime_ns':1,'ctime_ns':2}
     source = {'job_id':'execution','input_digest':'b'*64,'source':{'assistant_turn_id':'producer',
-        'expected_timeline_version_id':'base','conversation_id':chat['id'],'member_id':'member'}}
+        'workspace_id':'workspace','task_id':'task','conversation_id':chat['id'],'member_id':'member',
+        'expected_timeline_version_id':'base','expected_timeline_sequence':1}}
+    if mutation == 'missing_base_sequence':
+        del source['source']['expected_timeline_sequence']
+    if mutation == 'foreign_task':
+        source['source']['task_id'] = 'other-task'
     connection.execute('INSERT INTO device_work_requests VALUES(?,?,?,?)',('render-request','workspace','execution','done'))
-    connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('locator','workspace','task','execution',
+    connection.execute('INSERT INTO task_events VALUES(?,?,?,?,?,?)',('locator','workspace',source['source']['task_id'],'execution',
         'assistant_execution_located',json.dumps(source)))
     if mutation == 'older_goal_locator':
         for identifier, patch in [('foreign-locator', {'assistant_turn_id':'other-producer'}),
@@ -917,10 +925,13 @@ def test_bounded_checkpoint_requires_same_goal_current_final_hash_and_no_pending
             {'phase': 'execution', 'status': 'succeeded'},
             {'observations': {'observations': [saved_observation]}}, task, version, None, business) is None
     if mutation in {'none','watched_input','older_goal_locator','source_trimmed','scripted_short'}:
-        assert checkpoint['scope']=='production_and_output_observation' and checkpoint['sha256']=='a'*64
+        assert checkpoint is not None
+        assert checkpoint['scope']=='production_and_output_observation' and checkpoint['sha256']==output['sha256']
+        assert (checkpoint['job_id'], checkpoint['observation_job_id'], checkpoint['timeline_version_id']) == (
+            'execution', 'observation', version.id)
+        assert checkpoint['status'] == ('incomplete' if mutation == 'scripted_short' else 'completed')
         assert checkpoint['unavailable']==result['unavailable']
         if mutation in {'source_trimmed', 'scripted_short'}:
-            assert checkpoint['status'] == ('completed' if mutation == 'source_trimmed' else 'incomplete')
             assert checkpoint['delivery_duration']['target_duration_seconds'] == (15.64 if mutation == 'source_trimmed' else 16)
     else:
         assert checkpoint is None

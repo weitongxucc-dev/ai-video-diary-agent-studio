@@ -102,7 +102,10 @@ class ResourceClosedLoopReader:
         events = [(row, json.loads(row['payload_json'])) for row in events[:2000]]
         requests = _resource_requests(events, jobs[:2000], resource_id, version, user_id)
         transforms = [(row, json.loads(row['parameters_json'])) for row in transforms[:2000]]
-        selected = lambda c: c.get('id') == resource_id and c.get('version') == version
+
+        def selected(catalog):
+            return catalog.get('id') == resource_id and catalog.get('version') == version
+
         import_jobs = {row['job_id'] for row, payload in events if any(selected(c) for c in _catalogs(payload))}
         import_jobs.update(row['job_id'] for row, payload in transforms if any(selected(c) for c in _catalogs(payload)))
         import_jobs.discard(None)

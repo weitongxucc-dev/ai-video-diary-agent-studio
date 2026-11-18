@@ -103,6 +103,56 @@ def test_material_readback_and_goal_segment_scope_do_not_rebind_changed_versions
         query.read('workspace_a',domain='material',object_id='asset',version=asset.updated_at.isoformat(),user_id='member')
 
 
+@pytest.mark.parametrize('change', ['reference_only', 'excluded', 'segment_excluded', 'source_range'])
+def test_material_discovery_drops_ranked_candidate_changed_during_readback(tmp_path, monkeypatch, change):
+    repo, sources, _, asset, _, _ = seed(tmp_path)
+    workspace = 'workspace_a'
+    original_search = repo.material_search.search_material_segments
+
+    def search_then_change(*args, **kwargs):
+        result = original_search(*args, **kwargs)
+        assert len(result['matches']) == 1
+        if change in {'reference_only', 'excluded'}:
+            repo.update_asset_use_state(workspace, asset.id, change)
+        elif change == 'segment_excluded':
+            segment = asset.segments[0]
+            repo.update_segment(workspace, asset.id, segment.id, usage_role='exclude',
+                review_status=segment.review_status, description=segment.description, transcript=segment.transcript)
+        else:
+            current = repo.get_asset(workspace, asset.id)
+            current.segments = [replace(current.segments[0], start_seconds=1)]
+            repo._save_asset(current)
+        return result
+
+    monkeypatch.setattr(repo.material_search, 'search_material_segments', search_then_change)
+    material = search(repo, sources)['domains']['material']
+    assert material['candidates'] == []
+    assert material['status'] == 'unknown'
+    # The source remains available to the material library for management.
+    assert repo.list_assets(workspace, viewer_user_id='member')[0].id == asset.id
+
+
+def test_material_fixed_readback_does_not_mix_a_concurrent_asset_revision(tmp_path, monkeypatch):
+    repo, sources, _, asset, _, _ = seed(tmp_path)
+    workspace = 'workspace_a'
+    version = asset.updated_at.isoformat()
+    original_search = repo.material_search.search_material_segments
+
+    def search_then_change(*args, **kwargs):
+        result = original_search(*args, **kwargs)
+        assert len(result['matches']) == 1
+        current = repo.get_asset(workspace, asset.id)
+        current.user_description = 'new description on a newer revision'
+        repo._save_asset(current)
+        return result
+
+    monkeypatch.setattr(repo.material_search, 'search_material_segments', search_then_change)
+    result = CrossDomainCandidateQuery(repo, sources).read(
+        workspace, domain='material', object_id=asset.id, version=version, user_id='member')
+    assert result['candidates'] == []
+    assert result['status'] == 'unavailable'
+
+
 def test_knowledge_historical_version_and_current_visibility_remain_owned(tmp_path):
     repo,sources,_,_,_,_=seed(tmp_path)
     sources.edit_knowledge_item('workspace_a','knowledge',expected_version='1',title='new notes',

@@ -168,16 +168,18 @@ def test_quality_turn_persists_owner_receipt_for_original_input(failed_quality, 
         claim = {'turn_id': turn_id, 'goal': goal}
         def finish(details):
             return main._task_turn_http_adapter().finish_goal(business, claim, '质检通过，视频完成', details)
+        with pytest.raises((HTTPException, TaskBusinessRejected)):
+            finish({**preview, 'invocation_input_id': 'another-input'})
+        assert business.conversations.get_turn(turn_id)['status'] == 'running'
     else:
+        # Rejection at the HTTP finish boundary terminates the turn. The
+        # cross-input test below exercises it on a separate turn.
         request = Request({'type': 'http', 'method': 'POST', 'path': '/', 'headers': [
             (key.lower().encode(), value.encode()) for key, value in system[4].items()]})
         payload = SimpleNamespace(conversation_id=binding['conversation_id'], expected_draft_version=1)
         def finish(details):
             return main._task_turn_http_adapter().finish('task', request, payload,
             turn_id, '质检通过，视频完成', details, 'review').model_dump(mode='json')
-    with pytest.raises((HTTPException, TaskBusinessRejected)):
-        finish({**preview, 'invocation_input_id': 'another-input'})
-    assert business.conversations.get_turn(turn_id)['status'] == 'running'
     response = finish(preview)
     assert response['quality_continuation'] == expected
     assert response.get('edit_preview') is None
@@ -211,6 +213,7 @@ def test_completed_quality_response_replays_and_new_turn_rejects_old_input(faile
     replay = main._task_turn_http_adapter().replay(binding['turn_id'], CreationTaskAssistantTurnResponse,
         provider='unused', model='unused', draft_version=99)
     assert replay == result and replay.quality_continuation.status == 'unknown'
+    original = conversations.get_turn(binding['turn_id'])
     chat = conversations.get(binding['conversation_id'], 'local', binding['member_id'])
     chat = conversations.save_draft(chat['id'], 'local', binding['member_id'], '新的问题', chat['draft_version'])
     turn, _ = conversations.create_turn_idempotent(chat['id'], 'local', binding['member_id'],
@@ -221,6 +224,12 @@ def test_completed_quality_response_replays_and_new_turn_rejects_old_input(faile
             conversation_id=chat['id'], expected_draft_version=chat['draft_version']),
             turn['id'], '旧结果', details, 'review')
     assert invalid.value.status_code == 502
-    fresh = conversations.get_turn(turn['id'])
-    assert fresh['status'] == 'running' and fresh['result'] is None
+    reopened = ConversationRepository(conversations.database_path)
+    fresh = reopened.get_turn(turn['id'])
+    assert fresh['status'] == 'failed'
+    assert fresh['result']['kind'] == 'failure'
+    assert fresh['result']['reason'] == 'final_receipt_rejected'
+    assert '质检回执不属于当前任务输入' in fresh['result']['message']
+    assert 'response' not in fresh['result']
+    assert reopened.get_turn(binding['turn_id']) == original
     assert starts == []

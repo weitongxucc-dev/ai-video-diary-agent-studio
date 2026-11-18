@@ -57,7 +57,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None,edit_controls=None,resource_audio=None,candidate_query=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None,edit_controls=None,resource_audio_for=None,candidate_query=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -81,7 +81,7 @@ class TaskBusiness:
         self.execution_status=execution_status
         self.media_binding=media_binding
         self.edit_controls=edit_controls
-        self.resource_audio=resource_audio
+        self.resource_audio_for=resource_audio_for
         self.candidate_query=candidate_query
 
     def invoke_native(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic, invocation: TaskInvocation):
@@ -499,10 +499,11 @@ class TaskBusiness:
                 raise TaskOperationRejected('资源生产来源不存在或条件无效',
                     kind='not_found' if isinstance(exc,KeyError) else 'invalid_input') from exc
         if operation in {'import_audio_resource','read_audio_resource_request'}:
-            if self.resource_audio is None:
+            if self.resource_audio_for is None:
                 raise TaskBusinessRejected('资源音频用例尚未装配',kind='unavailable')
+            resource_audio=self.resource_audio_for()
             if operation=='read_audio_resource_request':
-                receipt=self._resource_audio_call('read',actor,task_id,args['request_id'])
+                receipt=self._resource_audio_call(resource_audio.read,actor,task_id,args['request_id'])
                 source=receipt['submitted_input'].get('source') or {}
                 from app.assistant_goal_continuation import GoalResultProjection
                 if not source.get('assistant_turn_id') or not GoalResultProjection(self.production,self.conversations).source_belongs_to_goal(goal,source):
@@ -511,7 +512,7 @@ class TaskBusiness:
             payload=args['payload']
             if set(payload)!={'resource_id','version','request_id','assistant_turn_id'} or payload['assistant_turn_id']!=origin['assistant_turn_id']:
                 raise TaskBusinessRejected('资源导入缺少宿主原请求与回合')
-            return self._resource_audio_call('submit',actor,task_id,resource_id=payload['resource_id'],version=payload['version'],
+            return self._resource_audio_call(resource_audio.submit,actor,task_id,resource_id=payload['resource_id'],version=payload['version'],
                 request_id=str(payload['request_id']),source=origin,write_guard=guard,runtime=self.runtime())
         if generation and (origin.get('requested_effect')!='draft' or operation not in SCRIPT_GENERATION_OPERATIONS):
             raise TaskBusinessRejected('本次生成动作不授权采用、制作或其他写入')
@@ -823,10 +824,10 @@ class TaskBusiness:
             return self.media_result(task,actor,args['job_id'])
         raise TaskBusinessRejected('该操作未被授权用于原目标后台接续')
 
-    def _resource_audio_call(self, method, *args, **kwargs):
+    def _resource_audio_call(self, action, *args, **kwargs):
         from app.creation.audio_ingress_use_case import AudioIngressRejected
         try:
-            return getattr(self.resource_audio,method)(*args,**kwargs)
+            return action(*args,**kwargs)
         except AudioIngressRejected as exc:
             raise TaskOperationRejected({'reason':exc.detail},kind={403:'forbidden',404:'not_found',
                 409:'conflict',422:'invalid_input',503:'unavailable'}.get(exc.status_code,'conflict')) from exc

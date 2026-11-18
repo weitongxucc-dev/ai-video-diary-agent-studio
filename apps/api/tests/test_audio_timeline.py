@@ -339,14 +339,16 @@ def test_extracted_audio_obeys_updated_source_material_restriction(tmp_path, use
     for ref in (reference, extracted.logical_ref, processed.logical_ref):
         with pytest.raises(ValueError, match='使用限制'):
             service.source(task.workspace_id, task.id, ref)
-    from types import SimpleNamespace
+    from app.montage import CreationTaskMontagePlan
     from app import main as main_module
     monkeypatch.setattr(main_module, 'production_repo', repo)
     monkeypatch.setattr(main_module, 'artifact_store', service.artifact_store)
     timeline = AudioTimeline(tracks=[TimelineAudioTrack(id='original', name='原声', role='original', clips=[TimelineAudioClip(
         id='extracted', name='镜头原声', source_ref=processed.logical_ref,
         source_start_ms=0, source_end_ms=4000, timeline_start_ms=0)])])
-    plan = SimpleNamespace(task_id=task.id, clips=[], audio_timeline=timeline)
+    plan = CreationTaskMontagePlan(id='montage', workspace_id=task.workspace_id, task_id=task.id,
+        script_id=None, script_title=task.name, status='ready', cues=[], clips=[], duration_seconds=4,
+        low_confidence_clip_count=0, audio_timeline=timeline)
     renderer = main_module._picture_preview_renderer()
     with pytest.raises(ValueError, match='使用限制'):
         renderer.validate_material_use(task.workspace_id, plan)

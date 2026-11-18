@@ -41,7 +41,7 @@ import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMate
 import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AppShell } from "@/components/AppShell";
 import { HomeCommandComposer } from "@/components/HomeCommandComposer";
-import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, getCreationTaskAssistantHistory, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, getCreationTaskEditRequest, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
+import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, getCreationTaskEditRequest, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
 import type { CreationTask, AssistantConversationTurn, CreationTaskQualityCheck, CreationTaskExactEditInput, CreationTaskClipMetadataInput, CreationTaskMetadataSaveInput, CreationTaskEditPreviewResponse, CreationTaskAssistantTurnResponse, CreationTaskRecording, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState, CreationExecutionStatus, MontageClipCandidate } from "@/lib/types";
 import styles from "./CreationTaskWorkspace.module.css";
 import { AudioTimelineTracks, AudioTimelineInspector } from "./AudioTimelineEditor";
@@ -52,12 +52,9 @@ import { VideoEditingStage, VideoClipInspector, VideoClipQuickEditor, createVide
 import editorUi from "./VideoEditor.module.css";
 import type { BusyAction, PendingLocalEdit } from './creation-task/edit-context';
 import type { WorkspaceView } from './creation-task/stage-navigation';
-import type { AssistantTurnRecord } from './creation-task/assistant-history';
 import { queuedEditNotice } from './creation-task/edit-context';
 import { productStages, stageLabels, defaultWorkspaceView, productStageState } from './creation-task/stage-navigation';
 import { errorDetails } from './creation-task/request-errors';
-import { executionStageLabels } from './creation-task/execution-labels';
-import { assistantHistoryTurns } from './creation-task/assistant-history';
 import { TaskIssue } from './creation-task/TaskIssue';
 import { Inspector, SubtitleCoverInspector } from './creation-task/TaskInspector';
 import { ConfirmedTopicView } from './creation-task/TopicStage';
@@ -66,7 +63,7 @@ import { NarrationResultView, SegmentProductionPanel } from './creation-task/Nar
 import { PersonStageView } from './creation-task/PersonStage';
 import { CreationExecutionPanel } from './creation-task/CreationExecutionPanel';
 import { EditPreviewCard } from './creation-task/EditPreviewCard';
-import { ContextCommandBar } from './creation-task/TaskConversation';
+import { ContextCommandBar, TaskConversationHistory } from './creation-task/TaskConversation';
 import { PrepareMaterialsView } from './creation-task/PrepareMaterialsView';
 import { PublishStageView } from './creation-task/PublishStageView';
 import { FinalVideoQualityCheck } from './creation-task/FinalVideoQualityCheck';
@@ -303,7 +300,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [recordings, setRecordings] = useState<CreationTaskRecording[]>([]);
   const [recordingsError, setRecordingsError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [assistantTurns, setAssistantTurns] = useState<AssistantTurnRecord[]>([]);
   const [assistantConfigured, setAssistantConfigured] = useState(false);
   useEffect(() => {
     void getRuntimeSettings().then((runtime) => {
@@ -396,16 +392,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
-  useEffect(() => {
-    let active = true;
-    setAssistantTurns([]);
-    void getCreationTaskAssistantHistory(task.id).then((history) => {
-      if (!active) return;
-      const turns = assistantHistoryTurns(history.items);
-      setAssistantTurns(turns);
-    }).catch((cause) => { if (active) setError(errorDetails(cause)); });
-    return () => { active = false; };
-  }, [task.id]);
   const latestScript = workspace.scripts[0] ?? null;
   const [manualScriptOpen, setManualScriptOpen] = useWorkspaceViewState("manual-script-open", false);
   const manualForGeneration = useRef(manualScriptOpen); manualForGeneration.current = manualScriptOpen;
@@ -913,16 +899,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function openView(view: WorkspaceView) {
-    setSelectedOverlayId(null);
+    if (view === activeView) return;
     setSavingTemplate(false);
     setActiveView(view);
-    if (!(["montage", "review"].includes(activeView) && ["montage", "review"].includes(view))) {
-      setSelectedClipId(null);
-      playheadRef.current = null;
-    }
-    setSelectedCueId(null);
-    setSelectedNarrationSegmentId(null);
-    setSelectedCover(false);
     invalidateEditPreview();
   }
 
@@ -1058,11 +1037,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         setError(errorDetails(cause));
         if (activeView === "script") {
           await refresh(false, () => ownsRequest() && revision === editContextRevision.current && (!requestConversationId || assistantConversation.isCurrentConversation(requestConversationId))).catch(() => undefined);
-          const history = await getCreationTaskAssistantHistory(task.id).catch(() => null);
-          if (history && ownsRequest() && revision === editContextRevision.current) {
-            const turns = assistantHistoryTurns(history.items);
-            setAssistantTurns(turns);
-          }
         }
       }
     } finally {
@@ -1721,16 +1695,26 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     || (activeView === "narration" && workspace.narration)
     || (activeView === "subtitle_cover" && activeSubtitleTrack)
   );
+  const legacyHistory = <TaskConversationHistory key={task.id} taskId={task.id} />;
   const conversation = hasContextConversation
-    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { generationReadOwner.current = null; assistantRequestSequence.current += 1; previewRequestSequence.current += 1; invalidateEditPreview(); setBusy(null); setError(null); }} assistantTurns={assistantTurns} assistantConfigured={assistantConfigured} onClearReference={() => setDetachedReference(selectedEditContext?.ref ?? null)} materialContextLabel={selectedTaskReference ? null : selectedMaterialReference?.label ?? null} selectedContextLabel={!selectedTaskReference ? null : isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedTaskReference ? "说说怎么改" : selectedMaterialReference ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} />
-    : <HomeCommandComposer task={task} onTaskUpdated={() => { void refresh(true); }} />;
+    ? <ContextCommandBar localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { generationReadOwner.current = null; assistantRequestSequence.current += 1; previewRequestSequence.current += 1; invalidateEditPreview(); setBusy(null); setError(null); }} legacyHistory={legacyHistory} assistantConfigured={assistantConfigured} onClearReference={() => setDetachedReference(selectedEditContext?.ref ?? null)} materialContextLabel={selectedTaskReference ? null : selectedMaterialReference?.label ?? null} selectedContextLabel={!selectedTaskReference ? null : isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedTaskReference ? "说说怎么改" : selectedMaterialReference ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} />
+    : <HomeCommandComposer task={task} legacyHistory={legacyHistory} onTaskUpdated={() => { void refresh(true); }} />;
 
   const selectedReferenceAction = hasContextConversation ? <SelectedObjectReferenceAction onReference={referenceSelectedObject} referenceLabel={selectedEditContext && selectedEditContext.kind !== "cover" ? `引用${selectedEditContext.label}到对话` : undefined} /> : undefined;
   const timelineActions = isEditor ? <TimelineEditingActions busy={busy !== null} canUndo={Boolean(task.can_undo)} canRedo={Boolean(task.can_redo)} onUndo={() => { void undoTimeline(); }} onRedo={() => { void undoTimeline(true); }} onRecord={() => setRecordingOpen(true)} onHistory={() => setHistoryOpen(true)} referenceAction={selectedReferenceAction} /> : undefined;
   const openEditingView = (view: WorkspaceView) => { panel.revealTaskPanel(); openView(view); };
+  const [stageDetailsRequest, setStageDetailsRequest] = useState<object | null>(null);
+  const automaticDetailsReason = error ?? executionError ?? pendingMetadataSave ?? pendingTimelineRestore;
+  const detailsRevealReason = useMemo(() => stageDetailsRequest
+    ? { request: stageDetailsRequest, reason: automaticDetailsReason }
+    : automaticDetailsReason, [stageDetailsRequest, automaticDetailsReason]);
+  function openCurrentStage() {
+    openEditingView(task.stage);
+    if (task.stage === "montage" && hasTimeline) setStageDetailsRequest({});
+  }
   const auxiliaryHidden = hasTimeline && !isEditor && (panel.resourceOpen || panel.inspectorOpen || panel.conversationFocused);
   return (
-    <AppShell editingPane={hasTimeline && !isEditor ? activeView : undefined} closeBlockedReason={recordingOpen ? "录音窗口仍打开，请先保存或结束录音，再关闭作品页签。" : undefined} assistantContext={{ task, onTaskUpdated: () => { void refresh(true); }, taskContext: {
+    <AppShell editingPane={hasTimeline && !isEditor ? activeView : undefined} closeBlockedReason={recordingOpen ? "录音窗口仍打开，请先保存或结束录音，再关闭作品页签。" : undefined} assistantContext={{ task, legacyHistory, onTaskUpdated: () => { void refresh(true); }, taskContext: {
       timelinePresent: hasTimeline,
       materialUsage: workspace.montage && task.current_timeline_version_id ? { taskId: task.id, taskName: task.name, versionId: task.current_timeline_version_id, clips: workspace.montage.clips, selectedClipId } : undefined,
       stage: activeView,
@@ -1743,13 +1727,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       toolbarActions={<><TaskSaveState busy={busy !== null} pending={Boolean(editPreview)} dirty={Boolean(editorDraft || quickInspector && clipDraftChanged)} saved={isEditor} /><TaskOutputActions shareOpen={sharingOpen} onShare={() => setSharingOpen(true)} onSave={isEditor ? () => { void saveVideo(); } : undefined} busy={busy !== null} canSave={Boolean(task.output_ready && workspace.montage?.output_url)} /></>} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
       <HomeCardDialog kind="config" open={sharingOpen} title="任务与方案共享" onClose={() => setSharingOpen(false)}>{sharingControls}</HomeCardDialog>
       <Tabs value={activeView} onValueChange={value => { const view = value as WorkspaceView; if (canOpenStage(view, workspace)) openEditingView(view); }} onChangeCapture={() => { navigationReadRevision.current += 1; }} data-editor-workspace="" data-active-view={activeView} className={[hasTimeline ? `${editorUi.workspace} ${styles.timelineWorkspace}` : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
-        <TaskViewNavigation editingActions={isEditor ? (!hasTimeline ? timelineActions : undefined) : selectedReferenceAction} workspace={workspace} activeView={activeView} onOpen={openEditingView} />
+        <TaskViewNavigation editingActions={isEditor ? (!hasTimeline ? timelineActions : undefined) : selectedReferenceAction} workspace={workspace} execution={execution} activeView={activeView} onOpen={openEditingView} onLocateStage={openCurrentStage} />
         {workspace.montage ? <div className={styles.persistentStage}><VideoEditingStage onEditSubtitle={id => { openEditingView("subtitle_cover"); selectCue(id); }} timelineActions={timelineActions} editError={error?.message} selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? subtitleTrack => <AudioTimelineTracks sharedTimeScale subtitleTrack={subtitleTrack} onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} taskId={task.id} versionId={task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} taskId={task.id} versionId={task.current_timeline_version_id} narrationCacheKey={task.narration_cache_key} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /></div> : null}
-        <EditorPaneMount docked={hasTimeline && !isEditor} hidden={auxiliaryHidden} homeClassName={styles.taskPaneHome} mountClassName={hasTimeline && !isEditor ? styles.taskPaneDock : styles.taskPaneHome}><EditingStatusTray actionLabel={error || executionError ? "查看原因" : localConfirmation ? "查看修改" : execution?.job?.status === "running" || execution?.job?.status === "queued" ? "查看进度" : task.output_ready ? "检查成片" : "制作与检查"} revealReason={error ?? executionError ?? pendingMetadataSave ?? pendingTimelineRestore} compact={hasTimeline && isEditor} attention={Boolean(error || executionError || task.stage_status === "failed" || task.stage_status === "waiting_for_user" || localConfirmation || pendingMetadataSave || pendingTimelineRestore)} status={error ? "修改未完成" : executionError ? "制作未完成" : (pendingMetadataSave || pendingTimelineRestore ? "操作结果待核对" : execution?.job?.status === "running" ? "后台制作中" : execution?.job?.status === "queued" ? "制作已排队" : localConfirmation ? "修改方案待确认" : task.stage_status === "failed" ? task.stage_reason ?? "制作未完成" : creationTaskShortStatus(task.stage_status, task.stage))}>
+        <EditorPaneMount docked={hasTimeline && !isEditor} hidden={auxiliaryHidden} homeClassName={styles.taskPaneHome} mountClassName={hasTimeline && !isEditor ? styles.taskPaneDock : styles.taskPaneHome}><EditingStatusTray actionLabel={error || executionError ? "查看原因" : localConfirmation ? "查看修改" : execution?.job?.status === "running" || execution?.job?.status === "queued" ? "查看进度" : task.output_ready ? "检查成片" : "制作与检查"} revealReason={detailsRevealReason} compact={hasTimeline && isEditor} attention={Boolean(error || executionError || task.stage_status === "failed" || task.stage_status === "waiting_for_user" || localConfirmation || pendingMetadataSave || pendingTimelineRestore)} status={error ? "修改未完成" : executionError ? "制作未完成" : (pendingMetadataSave || pendingTimelineRestore ? "操作结果待核对" : execution?.job?.status === "running" ? "后台制作中" : execution?.job?.status === "queued" ? "制作已排队" : localConfirmation ? "修改方案待确认" : task.stage_status === "failed" ? task.stage_reason ?? "制作未完成" : creationTaskShortStatus(task.stage_status, task.stage))}>
         <MediaVisibility visible={!auxiliaryHidden}><TabsContent value={activeView} hidden={auxiliaryHidden} className={hasTimeline ? [styles.auxiliaryBody, isEditor ? styles.editingAuxiliary : ""].filter(Boolean).join(" ") : styles.workspaceBody}>
         <header className={hasTimeline ? styles.stageRuntime : styles.stageHeading} data-timeline-version={task.timeline_sequence}>
           {!hasTimeline ? <div><h2>{productStages.find(stage => stage.id === activeView)?.title}</h2><span className={styles.stateBadge}>{activeView === task.stage ? creationTaskStatusPresentation(task.stage_status, task.stage).label : productStageState(activeView, workspace, workspace.subtitle_tracks.some(track => track.status === "valid") && workspace.cover_asset?.status === "valid").detail}</span></div> : null}
-          {execution?.job && ["queued", "running"].includes(execution.job.status) ? <span className={styles.runtimeState} role="status">连续制作：{execution.job.status === "queued" ? "已排队" : "后台制作中"}{execution.current_stage ? ` · ${executionStageLabels[execution.current_stage]}` : ""}</span> : null}
           <JobProgressPanel graphicEditor={<GraphicOverlayEditor onMediaPreview={input=>void previewExactEdit(input,true)} taskId={task.id} versionId={task.current_timeline_version_id} items={workspace.montage?.graphic_overlays ?? []}
             selectedId={null} duration={workspace.montage?.duration_seconds ?? 0} busy={busy !== null}
             onPreview={input => void previewExactEdit(input)} onDraftChange={() => {invalidateEditPreview(); setEditorDraft(true);}} />}
@@ -1764,6 +1747,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={!editRequestRecoveryReady || busy !== null || pendingMetadataSave !== null || pendingTimelineRestore !== null} onClick={() => { if (!editRequestRecoveryReady || editRequestOperation.current || pendingMetadataSaveRef.current || pendingTimelineRestoreRef.current) return; void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。"); } } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
         {executionError ? <TaskIssue stage={task.stage} reason={executionError.code === "device_budget_unavailable" ? "这台设备还没有完成制作资源标定，暂时不能开始制作。" : executionError.message} impact={executionError.impact} repair={executionError.repairAction} code={executionError.code}>{executionError.code === "device_budget_unavailable" ? <><Link href="/health">检查运行情况</Link><details className={styles.traceDetails}><summary>制作资源诊断</summary><p>{executionError.message}</p></details></> : null}{task.confirmed_script_id || workspace.plan.source_media ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(executionController.recheckRequirements)} type="button">{workspace.plan.source_media ? "重新核对原片制作要求" : "重新核对文案和制作要求"}</button> : null}</TaskIssue> : null}
         {!error && !executionError && task.stage_status === "failed" && activeView === task.stage && (task.stage_reason || task.stage_impact) ? <TaskIssue stage={task.stage} reason={task.stage_reason} impact={task.stage_impact} repair={task.stage_repair_action} label={`${stageLabels[activeView]}失败`} /> : null}
+        {(task.confirmed_script_id || workspace.plan.source_media) && (executionPreview || execution?.job) && ["script", "narration", "montage"].includes(activeView) ? <CreationExecutionPanel storyboard={{ ...executionController.storyboard,
+          canSubmit: executionController.storyboard.canSubmit && storyboardInput !== null }}
+          onRegenerateStoryboard={() => void changeStoryboard()} onReadStoryboard={() => void changeStoryboard(true)} visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}
+          visualError={executionController.visualError} visualReadRequired={executionController.visualReadRequired} onReadVisualDecision={executionController.readVisualDecision}
+          onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} sourceMedia={workspace.plan.source_media} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact preview={executionPreview} execution={execution} busy={busy !== null} onRefreshPreview={() => void changeExecution(executionController.recheckRequirements)} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
         <NativeOperationsPanel key={`native-${task.id}`} taskId={task.id}
           adoptedRefs={(workspace.montage?.graphic_overlays ?? []).flatMap(overlay=>overlay.kind==='image'?[overlay.source_ref]:[])}
           canPrepare={busy===null && Boolean(task.current_timeline_version_id && workspace.montage && workspace.montage.duration_seconds>0)}
@@ -1826,11 +1814,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "prepare" ? <PrepareMaterialsView matches={workspace.plan.material_matches} approvedAssetCount={workspace.plan.approved_asset_count} approvedClipCount={workspace.plan.approved_clip_count} /> : null}
         {activeView === "person" ? <PersonStageView busy={busy !== null} onGenerate={generatePersonRender} onOpenNarration={() => openView("narration")} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} narration={workspace.narration} renders={workspace.person_renders} selectedPerson={workspace.plan.selected_person} lipsyncQuality={workspace.plan.lipsync_quality} presenterShareTarget={workspace.plan.presenter_share_target ?? workspace.montage?.presenter_share_target ?? null} presenterShareActual={workspace.montage?.presenter_share_actual} capability={workspace.person_render_capability} portraitAvailable={workspace.portrait_available} /> : null}
         {activeView === "publish" ? <PublishStageView ready={Boolean(workspace.montage?.output_url)} onOpenReview={() => openView("review")} /> : null}
-        {(task.confirmed_script_id || workspace.plan.source_media) && (executionPreview || execution?.job) && ["script", "narration", "montage"].includes(activeView) ? <CreationExecutionPanel storyboard={{ ...executionController.storyboard,
-          canSubmit: executionController.storyboard.canSubmit && storyboardInput !== null }}
-          onRegenerateStoryboard={() => void changeStoryboard()} onReadStoryboard={() => void changeStoryboard(true)} visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}
-          visualError={executionController.visualError} visualReadRequired={executionController.visualReadRequired} onReadVisualDecision={executionController.readVisualDecision}
-          onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} sourceMedia={workspace.plan.source_media} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact preview={executionPreview} execution={execution} busy={busy !== null} onRefreshPreview={() => void changeExecution(executionController.recheckRequirements)} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
         {recordingOpen ? <HomeCardDialog title="电脑录音" onClose={() => setRecordingOpen(false)}>{workspace.scripts.filter(script => script.id === task.confirmed_script_id).map(script => <div key={script.id}><p>录音提词：以下按页显示已确认文案，不是全文载入。</p><ConfirmedScriptView script={script}/></div>)}<DesktopVoiceRecorder onRecorded={submitRecordedVoice} onCancel={() => setRecordingOpen(false)} /></HomeCardDialog> : null}
         </TabsContent></MediaVisibility></EditingStatusTray></EditorPaneMount>
       </Tabs>

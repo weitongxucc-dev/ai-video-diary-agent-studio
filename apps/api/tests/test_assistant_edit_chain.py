@@ -1,15 +1,18 @@
 """Assistant edits through real isolated repositories; no model or production data."""
+import json
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
 import app.main as main
 from app.montage import creation_task_montage_plan_to_payload
+from assistant_turn_control_fixtures import isolate_assistant_turn_control
 from test_material_edit_qualification import material_edit_state as material_edit_state  # noqa: F401
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state  # noqa: F401
 from test_linked_timeline_reorder import _build_linked_state, _cues, _plan
-from test_task_assistant_timeline_snapshot import task_client as task_client  # noqa: F401
 
 
 @pytest.fixture
@@ -280,19 +283,86 @@ def test_candidate_source_span_and_role_follow_existing_exact_speed_invariant(ma
     assert bool(response.json()) is expected
 
 
-def test_task_turn_captures_and_passes_service_material_snapshot(task_client, monkeypatch):
-    create, _production, conversations, calls, member = task_client
-    client, headers, payload = create(0)
-    selection = {"scope": "segment", "asset_id": "asset", "segment_id": "segment",
-        "expected_updated_at": "2026-10-11T00:00:00+00:00", "expected_segment_updated_at": "2026-10-11T00:00:00+00:00"}
-    payload["expected_reference_version"] = 0
-    monkeypatch.setattr(main, "_assistant_turn_scope", lambda *_: ("montage", ["clip:trusted"]))
-    monkeypatch.setattr(main, "_assistant_task_clip_material_selection", lambda *_: selection)
-    response = client.post("/api/creation-tasks/task/assistant/turn", headers=headers, json=payload)
+@pytest.mark.parametrize("submitted_list_saved", [False, True], ids=["no-original-list", "original-list-saved"])
+def test_task_turn_captures_and_passes_service_material_snapshot(material_edit_state, monkeypatch, request, submitted_list_saved):
+    state = material_edit_state
+    isolate_assistant_turn_control(monkeypatch, request)
+    monkeypatch.setattr(main, "settings", replace(main.settings, database_path=str(state.production.database_path)))
+    monkeypatch.setattr(main, "_workspace_settings_for", lambda _: SimpleNamespace(
+        effective_llm_provider="fixture", effective_llm_model="fixture", effective_llm_api_key=None))
+    conversations, member = main.conversation_repo, state.member.member_id
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
+    timeline = state.production.timeline_records.get_timeline_version(state.workspace_id, task.current_timeline_version_id)
+    asset = state.production.get_asset(state.workspace_id, state.clip.asset_id)
+    author, _ = state.members.join(state.members.create_invite_code(), "共享素材所有者")
+    state.production.material_assets.save_asset(replace(asset, owner_user_id=author.member_id))
+    asset = state.production.set_asset_visibility(state.workspace_id, asset.id, "shared")
+    segment = next(item for item in asset.segments if item.id == state.clip.segment_id)
+    selection = {"scope": "segment", "asset_id": asset.id, "segment_id": segment.id,
+        "expected_updated_at": asset.updated_at.isoformat(), "expected_segment_updated_at": segment.updated_at.isoformat(),
+        "start_seconds": segment.start_seconds, "end_seconds": segment.end_seconds}
+    conversation = conversations.create(state.workspace_id, member, "task", task.id)
+    message = "核对所选镜头的原素材。"
+    draft = conversations.save_draft(conversation["id"], state.workspace_id, member, message, 0)
+    selected = state.client.patch(f"/api/assistant/conversations/{conversation['id']}/reference", json={
+        "expected_reference_version": 0,
+        "selected_reference": {"kind": "shot", "object_id": state.clip.id, "label": "当前镜头",
+                               "task_id": task.id, "version": timeline.id},
+    })
+    assert selected.status_code == 200, selected.text
+    selected_refs = [f"clip:{state.clip.id}"]
+    payload = {
+        "conversation_id": conversation["id"], "client_request_id": str(uuid4()), "message": message,
+        "expected_draft_version": draft["draft_version"], "expected_reference_version": selected.json()["reference_version"],
+        "context_stage": "montage", "selected_object_refs": selected_refs if submitted_list_saved else [],
+        "expected_timeline_version_id": timeline.id, "expected_timeline_sequence": timeline.sequence,
+    }
+    calls = []
+
+    def run(_settings, **kwargs):
+        calls.append(kwargs)
+        return "已核对原素材。", None
+
+    monkeypatch.setattr(main, "run_task_turn", run)
+    endpoint = state.base_url + "/assistant/turn"
+    response = state.client.post(endpoint, json=payload)
     assert response.status_code == 200, response.text
-    context = conversations.request_context(payload["client_request_id"], payload["conversation_id"], "qa", member)
+    args = (payload["client_request_id"], conversation["id"], state.workspace_id, member)
+    context = conversations.request_context(*args)
     assert context["target_snapshot"]["material_selection"] == calls[0]["material_selection"] == selection
+    assert calls[0]["selected_refs"] == selected_refs
+    assert context.get("submitted_object_refs") == (selected_refs if submitted_list_saved else None)
+
+    updated = state.production.set_asset_visibility(state.workspace_id, asset.id, asset.visibility)
+    assert updated.updated_at != asset.updated_at
     monkeypatch.setattr(main, "_assistant_task_clip_material_selection", lambda *_: pytest.fail("replay must not rebind material revisions"))
-    replay = client.post("/api/creation-tasks/task/assistant/turn", headers=headers, json=payload)
+    replay = state.client.post(endpoint, json=payload)
     assert replay.status_code == 200, replay.text
+    assert replay.json() == response.json()
+    # A receipt without the raw list has the same stored shape as the old CLI's receipt.
+    retry_payload = {**payload, "selected_object_refs": [] if submitted_list_saved else selected_refs}
+    altered = state.client.post(endpoint, json=retry_payload)
+    assert altered.status_code == 409, altered.text
+    locator = f"/api/assistant/conversations/{conversation['id']}/requests/{payload['client_request_id']}"
+    if submitted_list_saved:
+        assert "此请求身份已用于其他内容或对话范围" in altered.text and locator not in altered.text
+    else:
+        assert f"GET {locator}" in altered.text
+        stream = state.client.post(endpoint, headers={"Accept": "text/event-stream"}, json=retry_payload)
+        assert stream.status_code == 200, stream.text
+        events = [json.loads(line.removeprefix("data: ")) for line in stream.text.splitlines() if line.startswith("data: ")]
+        assert [(event["type"], event["status"]) for event in events] == [("error", 409)]
+        assert f"GET {locator}" in events[0]["message"]
+
+        changed_message = state.client.post(endpoint, json={**retry_payload, "message": "核对另一条要求。"})
+        assert changed_message.status_code == 409 and locator not in changed_message.text
+        original = state.client.get(locator)
+        assert original.status_code == 200 and original.json()["turn_id"] == response.json()["turn_id"]
+        assert original.json()["request_context"] == context
+
+        state.production.set_asset_visibility(state.workspace_id, asset.id, "private")
+        denied = state.client.post(endpoint, json=retry_payload)
+        assert denied.status_code == 404 and locator not in denied.text
+    assert conversations.request_context(*args) == context
+    assert len(conversations.list_turns(conversation["id"])) == 1
     assert len(calls) == 1

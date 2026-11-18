@@ -6,6 +6,7 @@ DTO rendering answer finite checkpoints; durable owners keep their transactions.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from functools import partial
 from uuid import UUID
 from pydantic import ValidationError
 from app.assistant.failures import AssistantUnavailable
@@ -15,7 +16,8 @@ from app.assistant.projection import _safe_business_failure, _safe_compaction_ev
 from app.creation.media_result_use_case import MediaResultRejected
 from app.assistant.turn_admission_use_case import (
     TurnRejected, ReadWorkspace, CleanText, ResolveTurnScope, ReadTaskClipMaterial,
-    ProfileSnapshot, KnowledgeSnapshot, AccessTask, RegisterControl,
+    ProfileSnapshot, KnowledgeSnapshot, AccessTask, RegisterControl, ReadTimelineForTask,
+    ReadMaterialSnapshot, ValidateReference,
 )
 
 
@@ -102,6 +104,7 @@ class BeginTurn:
     expected_draft_version: object
     request_context: object
     expected_reference_version: object
+    authorize_replay: object
 
 @dataclass(frozen=True)
 class ReplayTurn:
@@ -419,25 +422,48 @@ class TaskAssistantTurnUseCase:
             raise TurnRejected(status_code=404, detail='creation task not found')
         member_id = (yield ReadMember(workspace_id))
         previous_context = self._conversations_for().request_context(str(payload.client_request_id), str(payload.conversation_id), workspace_id, member_id)
-        current_version = None
-        if task.current_timeline_version_id is not None:
-            try:
-                current_version = (yield ReadTimeline(workspace_id, task.current_timeline_version_id))
-            except KeyError as exc:
-                raise TurnRejected(status_code=409, detail='当前任务的时间线版本不可用') from exc
-            if current_version.task_id != task.id:
-                raise TurnRejected(status_code=409, detail='当前时间线不属于此任务')
-        task_version = {'timeline_version_id': task.current_timeline_version_id, 'timeline_sequence': current_version.sequence if current_version is not None else 0}
-        if previous_context is None and payload.expected_timeline_sequence is not None and (payload.expected_timeline_sequence != task_version['timeline_sequence'] or payload.expected_timeline_version_id != task.current_timeline_version_id):
-            raise TurnRejected(status_code=409, detail={'error': 'creation_task_timeline_version_conflict', 'message': '当前任务版本已变化，请重新查看选中对象后发送。'})
-        trusted_stage, trusted_refs = (yield ResolveTurnScope(workspace_id, task, payload))
-        material_selection = previous_context.get('target_snapshot', {}).get('material_selection') if previous_context is not None else (yield ReadTaskClipMaterial(task, trusted_refs))
-        profile_reference = (yield ProfileSnapshot(payload.selected_profile_reference.kind, payload.selected_profile_reference.profile_id, payload.selected_profile_reference.version)) if payload.selected_profile_reference is not None else None
         message = payload.message.strip()
         if (yield CleanText(message, workspace_id)) != message:
             raise TurnRejected(status_code=422, detail='请勿在创作要求中粘贴密钥或口令。')
-        knowledge_reference = (yield KnowledgeSnapshot(payload.selected_knowledge_reference.knowledge_item_id, payload.selected_knowledge_reference.version, payload.selected_knowledge_reference.locator)) if payload.selected_knowledge_reference is not None else None
-        turn_id, created, _turn = (yield BeginTurn(str(payload.conversation_id), 'task', task_id, message, payload.client_request_id, payload.expected_draft_version, {'kind': 'task', 'task_id': task_id, 'stage': trusted_stage, 'selected_object_refs': sorted(trusted_refs), 'playhead_ms': payload.playhead_ms, 'expected_timeline_version_id': payload.expected_timeline_version_id, 'expected_timeline_sequence': payload.expected_timeline_sequence, 'profile_reference': asdict(payload.selected_profile_reference) if payload.selected_profile_reference else None, 'knowledge_reference': asdict(payload.selected_knowledge_reference) if payload.selected_knowledge_reference else None, 'target_snapshot': {**task_version, 'profile_reference': profile_reference, 'knowledge_reference': knowledge_reference, **({'material_selection': material_selection} if len(trusted_refs) == 1 and trusted_refs[0].startswith('clip:') else {})}}, expected_reference_version=payload.expected_reference_version))
+        request_context = {
+            'kind': 'task', 'task_id': task_id, 'stage': payload.context_stage,
+            'selected_object_refs': sorted(payload.selected_object_refs), 'playhead_ms': payload.playhead_ms,
+            'expected_timeline_version_id': payload.expected_timeline_version_id,
+            'expected_timeline_sequence': payload.expected_timeline_sequence,
+            'profile_reference': asdict(payload.selected_profile_reference) if payload.selected_profile_reference else None,
+            'knowledge_reference': asdict(payload.selected_knowledge_reference) if payload.selected_knowledge_reference else None,
+        }
+        if payload.expected_reference_version is not None and payload.selected_object_refs:
+            # Admission replaces selected_object_refs with the saved selection's
+            # effective refs. Keep the nonempty submitted list in request identity.
+            request_context['submitted_object_refs'] = request_context['selected_object_refs']
+        # Replay still checks request identity in BeginTurn. Only new input is
+        # eligible for work on the current stage, selection and timeline.
+        if previous_context is None:
+            current_version = None
+            if task.current_timeline_version_id is not None:
+                try:
+                    current_version = (yield ReadTimeline(workspace_id, task.current_timeline_version_id))
+                except KeyError as exc:
+                    raise TurnRejected(status_code=409, detail='当前任务的时间线版本不可用') from exc
+                if current_version.task_id != task.id:
+                    raise TurnRejected(status_code=409, detail='当前时间线不属于此任务')
+            task_version = {'timeline_version_id': task.current_timeline_version_id,
+                            'timeline_sequence': current_version.sequence if current_version is not None else 0}
+            if payload.expected_timeline_sequence is not None and (payload.expected_timeline_sequence != task_version['timeline_sequence'] or payload.expected_timeline_version_id != task.current_timeline_version_id):
+                raise TurnRejected(status_code=409, detail={'error': 'creation_task_timeline_version_conflict', 'message': '当前任务版本已变化，请重新查看选中对象后发送。'})
+            trusted_stage, trusted_refs = (yield ResolveTurnScope(workspace_id, task, payload))
+            material_selection = (yield ReadTaskClipMaterial(task, trusted_refs))
+            profile_reference = (yield ProfileSnapshot(payload.selected_profile_reference.kind, payload.selected_profile_reference.profile_id, payload.selected_profile_reference.version)) if payload.selected_profile_reference is not None else None
+            knowledge_reference = (yield KnowledgeSnapshot(payload.selected_knowledge_reference.knowledge_item_id, payload.selected_knowledge_reference.version, payload.selected_knowledge_reference.locator)) if payload.selected_knowledge_reference is not None else None
+            target_snapshot = {**task_version, 'profile_reference': profile_reference, 'knowledge_reference': knowledge_reference}
+            if len(trusted_refs) == 1 and trusted_refs[0].startswith('clip:'):
+                target_snapshot['material_selection'] = material_selection
+            request_context.update(stage=trusted_stage, selected_object_refs=sorted(trusted_refs), target_snapshot=target_snapshot)
+        turn_id, created, _turn = (yield BeginTurn(
+            str(payload.conversation_id), 'task', task_id, message, payload.client_request_id,
+            payload.expected_draft_version, request_context, expected_reference_version=payload.expected_reference_version,
+            authorize_replay=partial(self.authorize_replay, task_id)))
         if not created:
             replay_settings = (yield ReadSettings(workspace_id))
             return (yield ReplayTurn(turn_id, provider=replay_settings.effective_llm_provider, model=replay_settings.effective_llm_model, draft_version=payload.expected_draft_version + 1))
@@ -457,6 +483,41 @@ class TaskAssistantTurnUseCase:
             raise TurnRejected(status_code=503, detail=str(exc)) from exc
         runtime_receipt = preview if isinstance(preview, dict) and preview.get('kind') == 'runtime_receipt' else None
         return (yield from self.finish(task_id, payload, turn_id, reply, None if runtime_receipt else preview, trusted_stage, runtime_receipt=runtime_receipt))
+
+    def authorize_replay(self, task_id, workspace_id, member_id, context):
+        """Read the original references under current access, without rebinding them."""
+        if context.get('kind') != 'task' or context.get('task_id') != task_id:
+            raise TurnRejected(409, '此请求身份已用于其他内容或对话范围。')
+        task, current_member = yield AccessTask(task_id)
+        if (task.workspace_id, current_member) != (workspace_id, member_id):
+            raise TurnRejected(404, '对话不存在或当前成员无权访问。')
+
+        if profile := context.get('profile_reference'):
+            yield ProfileSnapshot(profile['kind'], profile['profile_id'], profile['version'])
+        if knowledge := context.get('knowledge_reference'):
+            yield KnowledgeSnapshot(knowledge['knowledge_item_id'], knowledge['version'], knowledge.get('locator'))
+
+        reference = context.get('selected_reference')
+        references = reference['items'] if reference and reference['kind'] == 'selection' else [reference] if reference else []
+        material_selections = []
+        timeline_versions = set()
+        for item in references:
+            if item['kind'] == 'material':
+                material_selections.append(item['selection'])
+            elif item['kind'] in {'shot', 'narration', 'audio', 'subtitle', 'effect'}:
+                if item['task_id'] != task_id:
+                    raise TurnRejected(404, '引用不属于当前可读任务。')
+                timeline_versions.add(item['version'])
+            else:
+                yield ValidateReference(item)
+        for version_id in timeline_versions:
+            yield ReadTimelineForTask(workspace_id, task_id, version_id)
+
+        if clip_material := (context.get('target_snapshot') or {}).get('material_selection'):
+            material_selections.append(clip_material)
+        for selection in material_selections:
+            # Only access to the saved asset/segment matters when reading old work.
+            yield ReadMaterialSnapshot({**selection, 'expected_updated_at': None, 'expected_segment_updated_at': None})
 
     def finish(self, task_id, payload, turn_id, reply, preview, trusted_stage, *, runtime_receipt=None):
         # SDK evidence belongs to the invocation even when its business receipt

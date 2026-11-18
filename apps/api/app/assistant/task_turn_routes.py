@@ -119,10 +119,12 @@ class TaskTurnHTTPAdapter:
         return self._drive(self.case().finish(task_id, payload, turn_id, reply, preview, trusted_stage), request)
 
     def begin(self, request, conversation_id, scope_kind, scope_id, message, client_request_id,
-              expected_draft_version, request_context, on_event, *, expected_reference_version=None):
+              expected_draft_version, request_context, on_event, *, expected_reference_version=None,
+              authorize_replay=None):
         return self._drive(self._admission().begin(conversation_id, scope_kind, scope_id, message,
             client_request_id, expected_draft_version, request_context,
-            expected_reference_version=expected_reference_version), request, on_event=on_event)
+            expected_reference_version=expected_reference_version, authorize_replay=authorize_replay),
+            request, on_event=on_event)
 
     def input_context(self, request, context, reference):
         return self._drive(self._admission().freeze_input(context, reference), request)
@@ -310,7 +312,8 @@ class TaskTurnHTTPAdapter:
         if isinstance(stage, task.BeginTurn):
             return self.begin(request, stage.conversation_id, stage.scope_kind, stage.scope_id,
                 stage.message, stage.client_request_id, stage.expected_draft_version,
-                stage.request_context, on_event, expected_reference_version=stage.expected_reference_version)
+                stage.request_context, on_event, expected_reference_version=stage.expected_reference_version,
+                authorize_replay=stage.authorize_replay)
         if isinstance(stage, task.ReplayTurn):
             return self.replay(stage.turn_id, CreationTaskAssistantTurnResponse,
                 provider=stage.provider, model=stage.model, draft_version=stage.draft_version)
