@@ -228,6 +228,39 @@ def test_query_after_lost_render_post_keeps_read_semantics_and_edit_receipt():
     assert "未新增制作请求" in reply and result["status"]["video_ready"]
 
 
+def test_saved_edit_does_not_hide_later_execution_failure(metadata_http_state, monkeypatch):
+    from types import SimpleNamespace
+    state = metadata_http_state
+    conversations = ConversationRepository(state.repo.database_path)
+    monkeypatch.setattr(main, "conversation_repo", conversations)
+    monkeypatch.setattr(main, "_goal_service", lambda: SimpleNamespace(register_turn=lambda *_: None))
+    monkeypatch.setattr(main, "_wake_assistant_continuations", lambda: None)
+    turn = source_turn(state, conversations)
+    request_id = str(uuid4())
+    response = state.client.post(state.url + "/edits/exact", json={
+        "operation_type": "UpdateSubtitleCue", "cue_id": "cue", "text": "文档生成",
+        "request_id": request_id, "assistant_turn_id": turn["id"],
+        "expected_timeline_version_id": state.base.id, "expected_timeline_sequence": state.base.sequence})
+    assert response.status_code == 200, response.text
+    details = {"kind": "edit_applied", "task_id": state.task.id, "request_id": request_id,
+               "phase": "apply", "query_url": state.url + "/assistant/edit-requests/" + request_id + "?phase=apply"}
+    failure = "整机制作许可已停止，须核查许可后才能继续"
+    reply, preview = project_business_result(completion(
+        event("apply_typed_edit", details),
+        event("resume_creation_execution", {"kind": "execution_action_failed", "failure": {"reason": failure}}, failed=True),
+        answer="成片已经完成"))
+    request = Request({"type": "http", "headers": [(b"x-local-member-token", state.token.encode())]})
+    payload = main.CreationTaskAssistantTurnRequest(conversation_id=turn["conversation_id"],
+        message="修改字幕并更新成片", client_request_id=uuid4(), expected_draft_version=1, context_stage="montage")
+    result = main._task_turn_http_adapter().finish(state.task.id, request, payload, turn["id"], reply, preview, "montage")
+    saved = conversations.get_turn(turn["id"])
+    assert result.timeline_action == "apply" and result.execution_status is None
+    assert result.edit_request.result["operation"]["status"] == "applied"
+    for text in (reply, result.reply, saved["assistant_text"]):
+        assert failure in text and "没有取得成功提交回执" in text
+        assert "成片已经完成" not in text
+
+
 @pytest.mark.parametrize("field,value", [("answer", "字幕529"), ("tool_results", [{"type": "tool_execution_end", "result": {"details": {"duration": 529}}}])])
 def test_ordinary_content_529_is_not_provider_overload(field, value):
     from app.assistant.failures import _classify_output

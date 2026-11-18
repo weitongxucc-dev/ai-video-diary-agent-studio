@@ -169,6 +169,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     observation_readbacks = {}
     action_result = None
     action_failed = False
+    action_failure = {}
     topic_result = None
     script_result = None
     script_window_result = None
@@ -339,6 +340,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                 render_configuration_failed = "DEVICE_CPU_RENDER_" in result_text
             if event.get("toolName") in action_tools:
                 action_failed = bool(event.get("isError"))
+                action_failure = _safe_business_failure(((event.get("result") or {}).get("details") or {}).get("failure")) if action_failed else {}
                 if not action_failed:
                     details = (event.get("result") or {}).get("details") or {}
                     if details.get("kind") == "execution_action":
@@ -407,7 +409,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
             return ("修改已保存，后续制作已有实际回执；完成状态以当前作业为准。" if action else
                     "修改已保存；已读取原制作作业，本轮未新增制作请求。") + readiness_message, {
                 **action_result, "kind": "execution_action" if action else "execution_result", "applied_edit": edit_applied}
-        return ("修改已保存，可撤销；后续制作没有取得成功提交回执。" if action_failed else
+        failure_message = f" 原因：{action_failure['reason']}" if action_failure.get('reason') else ''
+        return ("修改已保存，可撤销；后续制作没有取得成功提交回执。" + failure_message if action_failed else
                 "修改已保存到可撤销的时间线版本；本次尚未重新生成视频。") + readiness_message, edit_applied
     if (action_failed and action_result is None) or topic_failed:
         if render_configuration_failed:
@@ -535,7 +538,10 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         else:
             lines.append("制作目标尚待规划，可以在工作台准备当前这组具体方案。")
         lines.append("尚未生成成片；后续进度以独立任务的实际结果为准。")
-        return "\n".join(lines), preview
+        # The request is a business receipt, not the conversational answer.
+        # Replacing the answer here discarded explanations and responses to
+        # steering inputs as soon as the streamed turn was persisted.
+        return answer.strip() or "\n".join(lines), preview
     if kind == "edit_preview" and media_job is not None:
         result = media_job.get("result")
         proposal = result.get("proposal") if isinstance(result, dict) else None

@@ -1049,7 +1049,9 @@ def test_original_input_and_late_receipts_are_separate_creation_results():
     event = {"type": "tool_execution_end", "toolName": "prepare_creation_window", "isError": False,
              "result": {"details": {"kind": "plan_preview", "invocation_input_id": "original-turn", "preview": {"kind": "creation_request", "request": request}}}}
     completion = {"status": "settled", "answer": "已保存", "input_id": "original-turn", "tool_results": [event]}
-    assert project_business_result(completion, "plan_preview")[1]["request"]["id"] == "request-real"
+    reply, receipt = project_business_result(completion, "plan_preview")
+    assert reply == completion["answer"]
+    assert receipt["request"]["id"] == "request-real"
     completion["input_id"] = "follow-up"
     assert project_business_result(completion, "plan_preview")[1] is None
 

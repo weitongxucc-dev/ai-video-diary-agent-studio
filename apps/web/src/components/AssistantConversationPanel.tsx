@@ -23,7 +23,7 @@ import { getAssistantCapabilities, getAssistantTurnTrace, taskMediaJobLabel, tas
 import type { AssistantConversationTurn, AssistantScriptToolReceipt, AssistantToolFailure, ResourceAdmissionReceipt } from "@/lib/types";
 import type { AssistantInputReceipt, AssistantStoryboardRegeneration, AssistantScriptWindowRequest, AssistantTurnTrace } from "@/lib/types/assistant";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
-import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal, assistantTurnScriptWindowRequest, assistantScriptWindowReadKey } from "./useAssistantConversation";
+import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal, assistantTurnScriptWindowRequest, assistantScriptWindowReadKey, assistantTurnGoalRefreshState } from "./useAssistantConversation";
 
 const commandDescriptions: Record<string, { title: string; description: string; icon: typeof Plus }> = {
   "/new": { title: "新对话", description: "保留历史，开始新一段对话", icon: Plus },
@@ -118,6 +118,8 @@ const goalReasonLabels: Record<string, string> = {
   original_reference_authorization_changed: "原引用的权限已改变，暂不能继续操作。",
   adoption_result_not_current: "已采用的修改不再是当前版本，需要重新核验。",
   new_user_turn: "你已发送新要求，原目标停止自动接续。",
+  new_user_instruction: "后续消息已结束这次自动接续；视频任务和素材仍保留。",
+  continue_adopted_creation_task: "视频任务已创建，尚未开始制作。",
   no_new_business_action: "本轮没有取得新的业务动作；已有结果仍保留。",
 };
 const executionStageLabels: Record<string, string> = {
@@ -285,6 +287,12 @@ function AssistantTurnTracePanel({ turn, reading }: { turn: AssistantConversatio
 }
 
 function TurnContent({ turn, reading, latest }: { turn: AssistantConversationTurn; reading?: ReadingState; latest: boolean }) {
+  const goal = turn.result?.kind === "creation_task_adopted" ? assistantTurnGoalRefreshState(turn) : null;
+  if (goal) return <div className="assistant-markdown-wrap">
+    <p>{goalStateLabels[goal.status] ?? "任务状态待核实"}。</p>
+    {goal.waiting_reason && goalReasonLabels[goal.waiting_reason] ? <p>{goalReasonLabels[goal.waiting_reason]}</p> : null}
+    <Link className="assistant-text-action" href={`/tasks/${encodeURIComponent(goal.task_id)}`}>打开这个视频任务</Link>
+  </div>;
   return <div className="assistant-markdown-wrap">{turn.assistant_text ? <ConversationMessage className="assistant-markdown" savedOpen={reading?.get(`${turn.id}:message`, latest) ?? latest} onOpenChange={open => reading?.save(`${turn.id}:message`, open)}><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.assistant_text}</ReactMarkdown></ConversationMessage> : null}
   </div>;
 }
@@ -436,6 +444,9 @@ function ResourceWaitReceipt({ receipt, reading, readingKey }: {
 const inputStatusLabels = { accepted: "已接收，等待 Agent 处理", consumed: "Agent 正在处理", completed: "Agent 已处理此输入", withdrawn: "已撤回", rejected: "未执行", interrupted: "处理已中断" };
 
 function InputReceipt({ item, reading, onWithdraw }: { item: AssistantInputReceipt; reading?: ReadingState; onWithdraw?: (id: string) => void }) {
+  if (item.status === "completed" && !item.understanding && !item.business_effect && (!item.reason || item.reason === "waiting_agent")) {
+    return <ConversationMessage className="assistant-user-message" savedOpen>{item.message}</ConversationMessage>;
+  }
   return <div className="assistant-input-receipt" data-input-status={item.status}>
     <ReadingDetails reading={reading} readingKey={`input:${item.input_id}`} defaultOpen={item.status === "rejected" || item.status === "interrupted"}>
       <summary><span className="assistant-input-message">{item.message}</span><span className="assistant-input-state">{inputStatusLabels[item.status]}</span></summary>
@@ -542,9 +553,9 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
     {businessContinuation ? <p className="assistant-stream-status">继续完成原要求</p> : null}
     <TurnTools turn={turn} reading={reading}/>
     <AssistantTurnTracePanel turn={turn} reading={reading}/>
+    {inputReceipts.length ? <div className="assistant-turn-inputs" aria-label="本轮补充要求">{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</div> : null}
     <TurnContent turn={turn} reading={reading} latest={latest} />
     {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
-    {inputReceipts.length ? <ReadingDetails reading={reading} readingKey={`${turn.id}:inputs`} defaultOpen={inputReceipts.some(item => item.status === "rejected" || item.status === "interrupted")} className="assistant-turn-inputs"><summary>追加要求记录 · {inputReceipts.length}</summary>{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</ReadingDetails> : null}
     {resultSummary ? <TurnResult summary={resultSummary} summaryInHeading={summaryInHeading} reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult) && (resultNeedsAttention || !turn.assistant_text.trim())}>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
       {storyboardSummary && storyboardSummary !== resultSummary ? <p>{storyboardSummary}</p> : null}

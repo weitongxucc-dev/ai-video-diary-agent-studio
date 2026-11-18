@@ -193,6 +193,17 @@ function goalTaskConversation(status = "waiting_result") {
 }
 
 describe("actual goal progress", () => {
+  it("shows the current adopted-task checkpoint instead of stale waiting prose", () => {
+    const saved = goalTaskConversation("invalidated");
+    const turn = saved.turns[0];
+    turn.assistant_text = "任务已采用，等待接续制作。";
+    turn.result!.kind = "creation_task_adopted";
+    (turn.result!.goal_continuation as Record<string, unknown>).waiting_reason = "new_user_instruction";
+    render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前任务" />);
+    expect(screen.getByText("原目标已停止接续。")).toBeVisible();
+    expect(screen.queryByText("任务已采用，等待接续制作。")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "打开这个视频任务" })).toHaveAttribute("href", "/tasks/task-one");
+  });
   it("shows verified production completion without claiming output inspection or reviving an old failure", () => {
     const saved = goalTaskConversation("production_completed");
     saved.turns[0].status = "failed";
@@ -2100,7 +2111,7 @@ it("keeps pending inputs bounded near the composer and settled receipts in their
   expect(withdrawInput).toHaveBeenCalledWith("input-two");
   const original = rendered.container.querySelector('[data-turn-id="turn-one"]')!;
   expect(original).toHaveTextContent(receipt.message);
-  expect(original).toHaveTextContent("Agent 已处理此输入");
+  expect(original).not.toHaveTextContent("Agent 已处理此输入");
   expect(screen.getAllByText(receipt.message)).toHaveLength(1);
   expect(rendered.container.querySelector('[data-turn-id="turn-two"]')).not.toHaveTextContent(receipt.message);
   expect(screen.getByRole("textbox")).toHaveValue("下一条未发送草稿");

@@ -1729,9 +1729,11 @@ def _audio_ingress_use_case(repository=None):
 
 def _resource_audio_use_case():
     from app.creation.resource_audio_use_case import ResourceAudioUseCase
-    runtime = _creation_runtime()
+    # Reading receipts and assembling Agent tools must work before the device
+    # is calibrated. Execution obtains its runtime at the submission boundary.
+    media, _ = _media_result_read_components()
     return ResourceAudioUseCase(
-        production_repo, _audio_ingress_use_case(), runtime.registrations['creation_job'].owner.task_media,
+        production_repo, _audio_ingress_use_case(), media,
         catalog_for=editing_resource_catalog, path_for=resource_preview_path,
         temporary_root=settings.effective_temporary_root_path,
         cpu_budget=lambda: _device_operation_budget("cpu_audio"),

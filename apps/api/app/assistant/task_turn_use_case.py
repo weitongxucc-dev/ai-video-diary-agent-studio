@@ -539,7 +539,9 @@ class TaskAssistantTurnUseCase:
             edit_request = (yield ReadAppliedEdit(task_id, turn_id, preview))
             timeline_action = 'apply'
             edit_preview = None
-            reply = '修改已保存，可撤销；重新生成后可播放更新的成片。'
+            # The projection already distinguishes a committed edit from a
+            # failed subsequent render. Do not erase that outcome here.
+            reply = reply.strip() or '修改已保存，可撤销；本次尚未重新生成视频。'
         elif isinstance(preview, dict) and preview.get('kind') == 'edit_request_status':
             edit_request = (yield ResolveEditRequest(task_id, turn_id, preview))
             if preview.get('related_media_job') is not None:
