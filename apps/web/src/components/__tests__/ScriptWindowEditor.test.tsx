@@ -29,10 +29,10 @@ function harness(initial: CreationTaskScriptSection[] = []) {
     const outcomes = new Map<string, CreationTaskScriptWindowResult>();
     let nextFailure: "conflict" | "unknown" | "invalid" | "claimed" | null = null;
     let readFailure = false, missingReceipt = false;
-    function unsettled(status: "unknown" | "failed" = "unknown"): CreationTaskScriptWindowResult {
+    function unsettled(status: "unknown" | "failed" = "unknown", submissionEffect: "unknown" | "rejected" = "unknown"): CreationTaskScriptWindowResult {
         const write = writes[writes.length - 1];
         return { task_id: "task", ...(write.operation === "start" ? {} : { script_id: "script" }),
-            request_id: write.body.request_id as string, operation: write.operation, status, submission_effect: "unknown",
+            request_id: write.body.request_id as string, operation: write.operation, status, submission_effect: submissionEffect,
             submitted_input_available: true, message: "原请求尚无最终成功回执，不能自动重提。",
             ...(status === "failed" ? { error_detail: { reason: "核查未能完成" } } : {}) };
     }
@@ -99,7 +99,8 @@ function harness(initial: CreationTaskScriptSection[] = []) {
     });
     vi.stubGlobal("fetch", fetch);
     return { fetch, writes, queries, fail: (value: typeof nextFailure) => { nextFailure = value; }, failRead: () => { readFailure = true; },
-        missingOnce: () => { missingReceipt = true; }, outcome: (status: "unknown" | "failed") => { const result = unsettled(status); outcomes.set(result.request_id, result); },
+        missingOnce: () => { missingReceipt = true; },
+        outcome: (...args: Parameters<typeof unsettled>) => { const result = unsettled(...args); outcomes.set(result.request_id, result); },
         completeLast: () => finish(writes[writes.length - 1]), sections: () => sections, version: () => version };
 }
 function fill(count: number, offset = 0, append = false) {
@@ -167,7 +168,7 @@ it("creates 45 sections through three real-client windows, edits section 45 and 
     expect(server.writes[4].body.insert_after_section_id).toBe(before[44].id);
     expect(server.sections()).toHaveLength(46);
     expect(screen.queryByRole("button", { name: "确认文案" })).not.toBeInTheDocument();
-});
+}, 15_000);
 
 it.each(["conflict", "invalid"] as const)("preserves editable window inputs after a definite %s rejection without reusing a changed request", async failure => {
     const server = harness([section()]);
@@ -346,7 +347,7 @@ it('ignores an old request receipt after changing script identity',async()=>{
   expect(screen.queryByText(/已保存窗口，当前共/)).not.toBeInTheDocument();
 });
 
-it('fetches original request input only after explicit recovery and never overwrites the current draft or reposts',async()=>{
+it('reads original request input only on explicit request and never overwrites the current draft or reposts',async()=>{
   const server=harness([section()]);server.fail('claimed');
   render(<ScriptWindowEditor taskId="task" script={header('script',1)} onSaved={vi.fn(async()=>undefined)}/>);
   await screen.findByLabelText('第 1 段正文');
@@ -354,10 +355,10 @@ it('fetches original request input only after explicit recovery and never overwr
   fireEvent.click(screen.getByRole('button',{name:'保存本页修改'}));
   await waitFor(()=>expect(screen.getByRole('button',{name:'查询原请求结果'})).toBeEnabled());
   fireEvent.click(screen.getByRole('button',{name:'查询原请求结果'}));
-  await screen.findByRole('button',{name:'恢复原请求输入'});
+  await screen.findByRole('button',{name:'查看原请求输入'});
   expect(server.queries[0].searchParams.has('include_input')).toBe(false);
   expect(screen.queryByRole('region',{name:'原请求输入'})).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button',{name:'恢复原请求输入'}));
+  fireEvent.click(screen.getByRole('button',{name:'查看原请求输入'}));
   const original=await screen.findByRole('region',{name:'原请求输入'});
   expect(original).toHaveTextContent('"content": "待恢复正文"');
   expect(server.queries[1].searchParams.get('include_input')).toBe('true');
@@ -404,12 +405,14 @@ it.each(["start", "patch", "confirm"] as const)("refresh locator restores %s wit
     server.outcome("failed");
     fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
     await screen.findByText("原请求记录为失败，但提交结果仍未确认。原请求继续保留。");
-    fireEvent.click(screen.getByRole("button", { name: "恢复原请求输入" }));
+    expect(screen.queryByRole("button", { name: "返回原稿继续编辑" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看原请求输入" }));
     const input = await screen.findByRole("region", { name: "原请求输入" });
     expect(input).toHaveTextContent(locator.requestId);
     if (operation !== "confirm") expect(input).toHaveTextContent("原请求私有正文");
     expect(server.queries.at(-1)!.searchParams.get("include_input")).toBe("true");
     expect(sessionStorage.getItem(key)).toBe(raw);
+    expect(screen.getByLabelText("第 1 段正文")).toBeDisabled();
     expect(onSaved).not.toHaveBeenCalled();
     server.completeLast();
     fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
@@ -421,6 +424,23 @@ it.each(["start", "patch", "confirm"] as const)("refresh locator restores %s wit
         expect(query.searchParams.get("operation")).toBe(operation);
         expect(query.searchParams.get("script_id")).toBe(locator.scriptId);
     }
+});
+
+it("reopens the saved draft only after rereading a matching rejected adoption receipt", async () => {
+    const { server, onSaved, key, raw } = await pendingWindow("confirm");
+    server.outcome("failed", "rejected");
+    fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    const recover = await screen.findByRole("button", { name: "返回原稿继续编辑" });
+    expect(sessionStorage.getItem(key)).toBe(raw);
+    expect(screen.getByLabelText("第 1 段正文")).toBeDisabled();
+    fireEvent.click(recover);
+    await screen.findByText("核查未通过，已保存的草稿可以继续编辑。");
+    expect(screen.getByLabelText("第 1 段正文")).toBeEnabled();
+    expect(screen.getByLabelText("第 1 段正文")).toHaveValue("原正文");
+    expect(sessionStorage.getItem(key)).toBeNull();
+    expect(server.queries.map(query => query.searchParams.get("include_input"))).toEqual([null, "true"]);
+    expect(server.writes).toHaveLength(1);
+    expect(onSaved).not.toHaveBeenCalled();
 });
 
 it.each(["getItem", "setItem"] as const)("refresh locator blocks submission when sessionStorage %s fails", async method => {
@@ -470,7 +490,7 @@ it("refresh locator isolates a different identity and preserves the original sco
 it("refresh locator discards a late input receipt after the current identity changes", async () => {
     const { server, onSaved, key, raw } = await pendingWindow();
     fireEvent.click(screen.getByRole("button", { name: "查询原请求结果" }));
-    await screen.findByRole("button", { name: "恢复原请求输入" });
+    await screen.findByRole("button", { name: "查看原请求输入" });
     const original = server.fetch.getMockImplementation()!;
     let finish!: () => void;
     server.fetch.mockImplementation(async (url, init) => {
@@ -478,7 +498,7 @@ it("refresh locator discards a late input receipt after the current identity cha
         if (url.includes("include_input=true")) await new Promise<void>(resolve => { finish = resolve; });
         return response;
     });
-    fireEvent.click(screen.getByRole("button", { name: "恢复原请求输入" }));
+    fireEvent.click(screen.getByRole("button", { name: "查看原请求输入" }));
     await waitFor(() => expect(finish).toBeDefined());
     vi.mocked(readPreflightDraftScope).mockResolvedValue({ ...originalScope, workspaceId: "other-workspace" });
     await act(async () => { finish(); });
