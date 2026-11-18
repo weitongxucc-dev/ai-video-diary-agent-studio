@@ -4,6 +4,7 @@ import Link from "next/link";
 import NextImage from "next/image";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { WorkMaterialImport } from "./WorkMaterialImport";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { apiUrl, getProductionMaterials } from "@/lib/api";
 import type { MaterialAsset, MaterialSegmentMatch } from "@/lib/types";
@@ -88,6 +89,7 @@ export function PrepareMaterialsView({ matches, approvedAssetCount, approvedClip
           <h2>本次任务素材</h2>
           <p>回看方案检索候选与当前使用范围；候选不代表已采用镜头。补充或调整素材后需重新检查真实条件。</p>
         </div>
+        <WorkMaterialImport />
         <span className={styles.artifactStatus}><CheckCircle2 size={15}/>{matches.length ? `方案已记录 ${matches.length} 个检索候选` : "方案尚无匹配片段"}</span>
       </div>
       <div className={styles.artifactGrid}>
