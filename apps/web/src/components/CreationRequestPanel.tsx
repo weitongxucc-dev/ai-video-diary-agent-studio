@@ -9,6 +9,8 @@ import { creationTaskShortStatus } from "@/lib/creation-task-status";
 import { BilingualDeliveryControls, type VoiceChoice } from "./creation-task/BilingualDeliveryControls";
 import { WorkSourceImport } from "./creation-task/WorkSourceImport";
 import { WorkMaterialImport } from "./creation-task/WorkMaterialImport";
+import { WorkMaterialReview } from "./creation-task/WorkMaterialReview";
+import { DeviceProductionStatus } from "./DeviceProductionStatus";
 import { PreflightFacts } from "./CreateProductionTaskForm";
 import { AssistantFailureMessage } from "./AssistantConversationPanel";
 import ui from "./CreationRequestPanel.module.css";
@@ -55,6 +57,7 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
   const [voices, setVoices] = useState<{ identity: string; items: VoiceProfile[]; loading: boolean; error: string | null } | null>(null);
   const [voiceSelection, setVoiceSelection] = useState("");
   const [voiceRead, setVoiceRead] = useState(0);
+  const [changedMaterialPlan, setChangedMaterialPlan] = useState<string | null>(null);
   const [recheckGoals, setRecheckGoals] = useState<{ identity: string; revision: number; goals: DeliveryGoal[] } | null>(null);
   function changeGoals(text: string) { setGoalsText(text); onGoalsDraftChange?.(text); }
 
@@ -74,7 +77,7 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
     } finally { if (current()) setPending(false); }
   }
   useEffect(() => {
-    setLoaded(null); setItems(null); setGoalsText(goalsDraft); setVoices(null); setVoiceSelection(""); setRecheckGoals(null);
+    setLoaded(null); setItems(null); setGoalsText(goalsDraft); setVoices(null); setVoiceSelection(""); setRecheckGoals(null); setChangedMaterialPlan(null);
     void load();
     return () => { sequence.current += 1; };
   }, [identity]);
@@ -106,6 +109,8 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
   }
 
   const window = value?.current_window;
+  const materialPlanKey = `${identity}:${value?.revision}:${window?.id}`;
+  const needsMaterialRecheck = changedMaterialPlan === materialPlanKey;
   const canChooseVoice = window?.status === "proposed" && value?.confirmed_count === 0;
   const boundVoice = value?.requirements.selected_voice;
   const boundVoiceKey = boundVoice ? voiceKey({ id: boundVoice.profile_id, version: boundVoice.version }) : "";
@@ -191,7 +196,30 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
           const next = await prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: retryGoals });
           setRecheckGoals(previous => previous?.identity === identity ? null : previous); return next;
         })}>重新核对已保存声音的方案</button></section> : null}
-      {window?.status === "proposed" ? <section className={ui.section} aria-label="本组制作方案"><h3>本组 {window.entries.length} 条方案</h3><div className={ui.entries}>{window.entries.map(entry => <article className={ui.entry} key={entry.ordinal}><strong>第 {entry.ordinal} 条 · {entry.plan?.name}</strong>{entry.plan ? <><p>{entry.plan.goal}</p><p className={ui.note}>{entry.plan.aspect_ratio} · {entry.plan.duration_target_seconds} 秒</p>{entry.plan.blockers.map((blocker, index) => <p key={index}>{blocker.impact} {blocker.repair_action}</p>)}<details><summary>查看可用内容与制作依据</summary><PreflightFacts preview={entry.plan} /></details></> : null}</article>)}</div><button className={ui.primary} type="button" disabled={pending || !window.entries.length || window.entries.some(entry => !entry.plan?.confirmable)} onClick={() => void mutate(() => confirmCreationRequestWindow(requestId, window.id, { expected_revision: value.revision, input_fingerprint: window.input_fingerprint }))}>确认创建本组任务</button><button className={ui.button} type="button" disabled={pending} onClick={() => void mutate(() => replanCreationRequestWindow(requestId, window.id, value.revision))}>重新核对本组方案</button></section> : remaining > 0 && value.status !== "awaiting_clarification" && value.output_relation !== null ? <section className={ui.section}><h3>{value.confirmed_count ? "准备下一组方案" : "准备方案"}</h3>
+      {window?.status === "proposed" ? <section className={ui.section} aria-label="本组制作方案">
+        <h3>本组 {window.entries.length} 条方案</h3>
+        <DeviceProductionStatus />
+        <div className={ui.entries}>{window.entries.map(entry => <article className={ui.entry} key={entry.ordinal}>
+          <strong>第 {entry.ordinal} 条 · {entry.plan?.name}</strong>
+          {entry.plan ? <>
+            <p>{entry.plan.goal}</p>
+            <p className={ui.note}>{entry.plan.aspect_ratio} · {entry.plan.duration_target_seconds} 秒 · {entry.plan.approved_clip_count} 个补充镜头</p>
+            {entry.plan.blockers.map((blocker, index) => <p key={index}>{blocker.impact} {blocker.repair_action}</p>)}
+            <details><summary>查看可用内容与制作依据</summary><PreflightFacts preview={entry.plan} /></details>
+          </> : null}
+        </article>)}</div>
+        {needsMaterialRecheck ? <p role="status">片段用途已保存。请重新核对本组方案后再确认。</p> : null}
+        <div className={ui.actions}>
+          <WorkMaterialReview key={materialPlanKey} disabled={pending} matches={window.entries.flatMap(entry => entry.plan?.material_matches ?? [])}
+            onSaved={() => {
+              if (scopeCheck.current() && identity === currentIdentity.current) setChangedMaterialPlan(materialPlanKey);
+            }} />
+          <button className={ui.button} type="button" disabled={pending}
+            onClick={() => void mutate(() => replanCreationRequestWindow(requestId, window.id, value.revision))}>重新核对本组方案</button>
+          <button className={ui.primary} type="button" disabled={pending || needsMaterialRecheck || !window.entries.length || window.entries.some(entry => !entry.plan?.confirmable)}
+            onClick={() => void mutate(() => confirmCreationRequestWindow(requestId, window.id, { expected_revision: value.revision, input_fingerprint: window.input_fingerprint }))}>确认创建本组任务</button>
+        </div>
+      </section> : remaining > 0 && value.status !== "awaiting_clarification" && value.output_relation !== null ? <section className={ui.section}><h3>{value.confirmed_count ? "准备下一组方案" : "准备方案"}</h3>
         {value.output_relation === "variants" && remaining >= 2 && !goalsText.trim() ?
           <BilingualDeliveryControls key={identity} pending={pending} onPrepare={prepareLanguageVersions} /> : null}
         {!single ? <><label htmlFor={`request-goals-${requestId}`}>每行写一条视频的具体目标</label><textarea className={ui.goals} id={`request-goals-${requestId}`} value={goalsText} onChange={event => changeGoals(event.target.value)} disabled={pending} /><p className={ui.note}>本次可准备 1–{limit} 条；分别写清主题、版本差异或分集内容。</p>{goals.length > limit ? <p role="alert">本次最多准备 {limit} 条，请减少本组目标。</p> : new Set(goals).size !== goals.length ? <p role="alert">请分别写出每条视频的具体目标。</p> : null}</> : null}<button className={ui.primary} type="button" disabled={pending || !validGoals} onClick={() => void mutate(() => prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: goals.map(goal => ({ goal })) }), true)}>准备本组方案</button></section> : null}

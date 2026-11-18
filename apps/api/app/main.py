@@ -4865,7 +4865,7 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('review_production_material',)))
 
 
-app.include_router(build_material_library_router(_material_library_http_adapter, ('update_production_material_segment',)))
+app.include_router(build_material_library_router(_material_library_http_adapter, ('update_production_material_segment', 'confirm_material_segment_usage')))
 
 
 

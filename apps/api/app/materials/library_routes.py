@@ -13,10 +13,11 @@ from typing import Callable, Literal, Protocol
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
+from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from app.materials.assets import MaterialVersionConflict
 from app.materials.usage_records import MaterialUsageRecordReader
-from app.materials.contracts import MaterialAssetNote
+from app.materials.contracts import AssetUsageRole, MaterialAssetNote
 from app.materials.candidate_bundle import build_candidate_bundle
 from app.schemas import (
     ContentVisibilityRequest, MaterialAssetResponse, MaterialAssetTagsRequest,
@@ -25,6 +26,14 @@ from app.schemas import (
     MaterialSegmentMatchResponse, MaterialSegmentSearchResponse,
     MaterialUseStateRequest, MaterialReviewRequest, MaterialSegmentUpdateRequest,
 )
+
+
+class MaterialSegmentUsageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    usage_role: AssetUsageRole
+    expected_asset_updated_at: AwareDatetime
+    expected_segment_updated_at: AwareDatetime
 
 
 class MaterialLibraryRecords(Protocol):
@@ -38,9 +47,6 @@ class MaterialLibraryRecords(Protocol):
     def set_asset_visibility(self, workspace_id, asset_id, visibility): ...
     def update_asset_use_state(self, workspace_id, asset_id, use_state): ...
     def update_asset_review(self, workspace_id, asset_id, *, review_status, usage_role='unassigned'): ...
-    def update_segment(self, workspace_id, asset_id, segment_id, *, description, transcript,
-                       review_status, usage_role=None, user_tags=None, collection_ids=None,
-                       expected_asset_updated_at=None, expected_segment_updated_at=None): ...
     material_usage_records: MaterialUsageRecordReader
     material_assets: MaterialAssetStore
 
@@ -296,17 +302,48 @@ class MaterialLibraryHTTPAdapter:
             raise HTTPException(status_code=404, detail='material asset not found') from exc
         return self._asset_response(asset)
 
-    def update_production_material_segment(self, asset_id: str, segment_id: str, request: Request, payload: MaterialSegmentUpdateRequest) -> MaterialAssetResponse:
-        self.get_production_material(asset_id, request)
+    def confirm_material_segment_usage(self, asset_id: str, segment_id: str, request: Request,
+                                       payload: MaterialSegmentUsageRequest) -> MaterialAssetResponse:
+        workspace_id = self._workspace_for(request)
+        actor = self._reader_for(request, workspace_id)
         try:
-            asset = self._records_for().update_segment(self._workspace_for(request), asset_id, segment_id, description=payload.description, transcript=payload.transcript, review_status=payload.review_status, usage_role=payload.usage_role, user_tags=payload.user_tags, collection_ids=payload.collection_ids, expected_asset_updated_at=payload.expected_asset_updated_at, expected_segment_updated_at=payload.expected_segment_updated_at)
+            asset = self._records_for().material_assets.update_segment(
+                workspace_id, asset_id, segment_id, usage_role=payload.usage_role,
+                expected_asset_updated_at=payload.expected_asset_updated_at,
+                expected_segment_updated_at=payload.expected_segment_updated_at,
+                editor_identity=actor, confirm_automatic_usage=True,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="素材或片段不存在。") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         except MaterialVersionConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail='material segment not found') from exc
         return self._asset_response(asset)
+
+    def update_production_material_segment(self, asset_id: str, segment_id: str, request: Request,
+                                           payload: MaterialSegmentUpdateRequest) -> MaterialAssetResponse:
+        workspace_id = self._workspace_for(request)
+        actor = self._reader_for(request, workspace_id)
+        try:
+            asset = self._records_for().material_assets.update_segment(
+                workspace_id, asset_id, segment_id, description=payload.description, transcript=payload.transcript,
+                review_status=payload.review_status, usage_role=payload.usage_role, user_tags=payload.user_tags,
+                collection_ids=payload.collection_ids, expected_asset_updated_at=payload.expected_asset_updated_at,
+                expected_segment_updated_at=payload.expected_segment_updated_at, editor_identity=actor,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="素材或片段不存在。") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except MaterialVersionConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return self._asset_response(asset)
+
 
 def build_material_library_router(adapter_for, route_names: tuple[str, ...] | None = None) -> APIRouter:
     """Keep registration at the host's original positions among other families."""
@@ -368,6 +405,11 @@ def build_material_library_router(adapter_for, route_names: tuple[str, ...] | No
     @router.put('/api/production/materials/{asset_id}/review', response_model=MaterialAssetResponse)
     def review_production_material(asset_id: str, request: Request, payload: MaterialReviewRequest) -> MaterialAssetResponse:
         return adapter_for().review_production_material(asset_id, request, payload)
+
+    @router.patch('/api/production/materials/{asset_id}/segments/{segment_id}/usage-role', response_model=MaterialAssetResponse)
+    def confirm_material_segment_usage(asset_id: str, segment_id: str, request: Request,
+                                       payload: MaterialSegmentUsageRequest) -> MaterialAssetResponse:
+        return adapter_for().confirm_material_segment_usage(asset_id, segment_id, request, payload)
 
     @router.put('/api/production/materials/{asset_id}/segments/{segment_id}', response_model=MaterialAssetResponse)
     def update_production_material_segment(asset_id: str, segment_id: str, request: Request, payload: MaterialSegmentUpdateRequest) -> MaterialAssetResponse:

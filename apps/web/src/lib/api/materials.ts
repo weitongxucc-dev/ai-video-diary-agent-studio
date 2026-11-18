@@ -158,7 +158,19 @@ export function updateMaterialUseState(assetId: string, useState: MaterialAsset[
         method: "PUT", body: JSON.stringify({ use_state: useState }),
     });
 }
+export function confirmMaterialSegmentUsage(assetId: string, segmentId: string, input: {
+    usage_role: MaterialAsset["segments"][number]["usage_role"];
+    expected_asset_updated_at: string;
+    expected_segment_updated_at: string;
+}): Promise<MaterialAsset> {
+    return request(`/api/production/materials/${encodeURIComponent(assetId)}/segments/${encodeURIComponent(segmentId)}/usage-role`, {
+        method: "PATCH", body: JSON.stringify(input),
+    });
+}
+
 export function updateProductionMaterialSegment(assetId: string, segmentId: string, input: {
+    expected_asset_updated_at?: string;
+    expected_segment_updated_at?: string;
     description: string;
     transcript: string;
     review_status: "raw" | "approved" | "rejected";

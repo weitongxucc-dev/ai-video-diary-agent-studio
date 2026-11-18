@@ -411,6 +411,8 @@ it.each([
   expect(within(screen.getByLabelText("系统标签")).getByText(`用途:${oldLabel}`)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
   await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "segment", {
+    expected_asset_updated_at: initial.assets[0].updated_at,
+    expected_segment_updated_at: segment.updated_at,
     description: segment.description, transcript: segment.transcript, review_status: segment.review_status,
     usage_role: chosen, user_tags: segment.user_tags, collection_ids: [],
   }));
