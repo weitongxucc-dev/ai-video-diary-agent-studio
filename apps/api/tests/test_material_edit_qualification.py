@@ -136,3 +136,103 @@ def test_manual_choice_keeps_not_for_automation_but_automatic_list_excludes(mate
     automatic = main_module._creation_task_montage_candidates(state.workspace_id, state.montage, state.clip, automation_only=True, viewer_user_id=viewer)
     assert state.asset.id in {item.asset_id for item in manual}
     assert state.asset.id not in {item.asset_id for item in automatic}
+
+
+@pytest.mark.parametrize("crowded_ranking", ["manual_search", "montage_candidates"])
+def test_described_replacement_ranks_eligible_candidates_before_limit(material_edit_state, tmp_path, crowded_ranking):
+    state = material_edit_state
+    workspace = state.workspace_id
+    query = "特制蓝色齿轮"
+    state.asset.segments[0].description = query
+    state.production._save_asset(state.asset)
+
+    # One additional file supplies more than a page of overlapping choices.
+    path = tmp_path / "other-candidates.mp4"
+    path.write_bytes(b"metadata-only fixture")
+    asset_id = "other-candidates"
+    manual_only = crowded_ranking == "manual_search"
+    description = query if manual_only else state.montage.cues[0].text
+    state.production._save_asset(replace(
+        state.asset, id=asset_id, file_name=path.name, path=str(path),
+        size_bytes=path.stat().st_size,
+        modified_at=datetime.fromtimestamp(path.stat().st_mtime, timezone.utc),
+        use_state="not_for_automation" if manual_only else "available",
+        segments=[replace(
+            state.asset.segments[0], id=f"other-{index}", asset_id=asset_id,
+            description=description, user_tags=[query] if manual_only else [],
+        ) for index in range(25)],
+    ))
+
+    candidates_url = f"{state.base_url}/montage/clips/{state.clip.id}/candidates"
+    manual_list = state.client.get(candidates_url)
+    assert manual_list.status_code == 200, manual_list.text
+    assert len(manual_list.json()) == 24
+    automatic_list = state.client.get(f"{candidates_url}?for_automation=true")
+    assert automatic_list.status_code == 200, automatic_list.text
+    automatic_ids = [item["asset_id"] for item in automatic_list.json()]
+    assert (state.clip.asset_id, state.clip.segment_id) not in {
+        (item["asset_id"], item["segment_id"]) for item in automatic_list.json()
+    }
+    if manual_only:
+        ordinary = state.production.material_search.search_material_segments(
+            workspace, query=query, usage_roles=["a_roll", "b_roll"], min_duration_seconds=4,
+            limit=24, viewer_user_id=state.member.member_id,
+        )
+        assert {item.asset_ref for item in ordinary} == {f"asset:{asset_id}"}
+        assert state.asset.id in automatic_ids
+        assert asset_id not in automatic_ids
+    else:
+        assert state.asset.id not in {item["asset_id"] for item in manual_list.json()}
+        assert automatic_ids == [asset_id] * 24
+
+    before = _current(state)
+    response = state.client.post(f"{state.base_url}/edits/preview", json={
+        "raw_command": f"把这个镜头换成{query}", "context_stage": "montage",
+        "selected_object_refs": [f"clip:{state.clip.id}"],
+    })
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert proposal["operation"]["payload"]["asset_id"] == state.asset.id
+    assert _current(state) == before
+    confirmed = state.client.post(f"{state.base_url}/edits/{proposal['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    assert (state.clip.id, state.asset.id, state.asset.segments[0].id) in _current(state)[1]
+
+
+def test_described_replacement_uses_source_duration_at_current_speed(material_edit_state):
+    state = material_edit_state
+    query = "特制蓝色齿轮"
+    segment = state.asset.segments[0]
+    state.asset.segments = [replace(segment, start_seconds=1, end_seconds=3, description=query)]
+    state.production._save_asset(state.asset)
+    speed_edit = state.client.post(f"{state.base_url}/edits/exact", json={
+        "operation_type": "ChangeClipSpeed", "clip_id": state.clip.id, "playback_rate": 0.5,
+    })
+    assert speed_edit.status_code == 200, speed_edit.text
+
+    request = {"context_stage": "montage", "selected_object_refs": [f"clip:{state.clip.id}"]}
+    before = _current(state)
+    unmatched = state.client.post(f"{state.base_url}/edits/preview", json={
+        **request, "raw_command": "把这个镜头换成北极企鹅",
+    })
+    assert unmatched.status_code == 409, unmatched.text
+    assert unmatched.json()["detail"]["error"] == "replacement_clip_unavailable"
+    assert _current(state) == before
+
+    response = state.client.post(f"{state.base_url}/edits/preview", json={
+        **request, "raw_command": f"把这个镜头换成{query}",
+    })
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert "1.0–3.0 秒" in proposal["preview"]["after"]["detail"]
+    confirmed = state.client.post(f"{state.base_url}/edits/{proposal['id']}/confirm")
+    assert confirmed.status_code == 200, confirmed.text
+    montage = creation_task_montage_plan_from_payload(
+        state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
+    )
+    clip = next(item for item in montage.clips if item.id == state.clip.id)
+    assert (clip.asset_id, clip.segment_id) == (state.asset.id, segment.id)
+    assert (clip.source_start_seconds, clip.source_end_seconds) == (1, 3)
+    assert (clip.timeline_start_seconds, clip.timeline_end_seconds) == (
+        state.clip.timeline_start_seconds, state.clip.timeline_end_seconds,
+    )
