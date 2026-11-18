@@ -50,7 +50,10 @@ do {
             try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
             let observations = (request.results ?? []).compactMap { observation -> TextObservation? in
                 guard let text = observation.topCandidates(1).first else { return nil }
-                let box = observation.boundingBox
+                // Vision can extend a detected line past the image edge.
+                let imageBounds = CGRect(x: 0, y: 0, width: 1, height: 1)
+                let box = observation.boundingBox.intersection(imageBounds)
+                guard !box.isNull, !box.isEmpty else { return nil }
                 return TextObservation(text: text.string, confidence: text.confidence,
                     box: [box.minX, 1 - box.maxY, box.width, box.height])
             }
