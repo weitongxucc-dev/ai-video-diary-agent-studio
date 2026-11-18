@@ -52,7 +52,8 @@ class ProfilePreviewOwner:
         voice = narration_inputs.voice
         source = self.repository.profile_reference_input(voice, viewer_user_id=reader)
         service = self.services[run.preview_type]
-        if not service.provider.ready or service.provider.model_id != run.model_id:
+        provider = service.provider if run.preview_type == "voice" else service.provider_for_model(run.model_id)
+        if not provider.ready or provider.model_id != run.model_id:
             raise ValueError("预览模型不可用或已变化")
         if run.preview_type == "voice":
             budget = self.narration_budget

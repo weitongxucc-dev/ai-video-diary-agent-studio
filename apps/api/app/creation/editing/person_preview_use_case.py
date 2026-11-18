@@ -12,6 +12,8 @@ from app.montage import creation_task_montage_plan_from_payload
 import re
 from app.montage import select_presenter_sections
 from app.models import utc_now
+from app.avatar_lipsync import select_lipsync_provider
+from app.lipsync_models import planned_lipsync_model_id
 from uuid import uuid4
 from app.creation.editing.metadata_use_case import EditPreviewRejected, edit_preview_failure, effective_audio_timeline, logical_montage_output_refs
 
@@ -38,7 +40,7 @@ class PersonPreviewUseCase:
             cue = next((item for item in montage.cues if item.id == clip.cue_id))
             segment = self.repository.narration_records.get_narration_segment(workspace_id, task.id, cue.narration_segment_id)
             creation_plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
-            person_provider = self.provider(creation_plan.lipsync_quality)
+            person_provider = self.provider_for_plan(creation_plan)
             current_render = self.repository.person_renders.get_person_render(workspace_id, task.id, clip.person_render_id) if clip.person_render_id else None
         except (KeyError, StopIteration) as exc:
             raise EditPreviewRejected(status_code=404, detail='creation task person edit target not found') from exc
@@ -145,6 +147,11 @@ class PersonPreviewUseCase:
         return self.provider_for_quality(quality,self.latentsync_provider,self.avatar_lipsync_provider)
 
 
+    def provider_for_plan(self, plan):
+        provider = self.provider(plan.lipsync_quality)
+        return select_lipsync_provider(provider, planned_lipsync_model_id(plan, provider.model_id))
+
+
     def render_matches_narration(self, render: PersonRender, segment: NarrationSegment, transforms: list[TransformRun]) -> bool:
         from app.avatar_lipsync import _authorization_failure
         matching = [item for item in transforms if item.transform_type == 'person_render' and item.status == 'succeeded' and (item.input_digest == render.cache_key) and render.artifact_ref and (render.artifact_ref in item.output_refs) and segment.audio_reference and (segment.audio_reference in item.input_refs) and (item.parameters.get('language') == segment.language) and item.parameters.get('presenter_input_facts')]
@@ -165,4 +172,8 @@ class PersonPreviewUseCase:
 
     @staticmethod
     def provider_for_quality(quality,latentsync_provider,avatar_lipsync_provider):
-        return latentsync_provider if quality == "high" else avatar_lipsync_provider
+        if quality == "high":
+            return latentsync_provider
+        if quality == "fast":
+            return avatar_lipsync_provider
+        raise ValueError("未知口型档位")

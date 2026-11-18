@@ -12,7 +12,7 @@ export function LipSyncQualitySelect({ value, onChange, disabled = false }: {
     <div className="lipsync-quality__options">
       <label className={value === "high" ? "is-selected" : ""}>
         <input checked={value === "high"} name="lipsync-quality" onChange={() => onChange("high")} type="radio" value="high" />
-        <span><strong>高精度</strong><small>LatentSync · 等待较久</small></span>
+        <span><strong>高精度</strong><small>LatentSync 1.6 · 512</small></span>
       </label>
       <label className={value === "fast" ? "is-selected" : ""}>
         <input checked={value === "fast"} name="lipsync-quality" onChange={() => onChange("fast")} type="radio" value="fast" />

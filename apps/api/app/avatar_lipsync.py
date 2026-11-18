@@ -14,6 +14,8 @@ from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Literal, Protocol
 
 import app.profiles.contracts as _owner_app_profiles_contracts
+from app.lipsync_models import LATENTSYNC_15_MODEL_ID, LATENTSYNC_16_CODE_REVISION, LATENTSYNC_16_MODEL_ID
+from app.model_runtime import LATENTSYNC_16_512
 from app.profiles.contracts import AuthorizationStatus as AuthorizationStatus, Authorization, ProfileReference as ProfileReference, PersonProfile, VoiceProfile, PronunciationEntry as PronunciationEntry, profile_use_failure, profile_cache_identity, _authorization_cache_identity
 from app.voice_clone import MediaRuntimeFailure
 from app.media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
@@ -126,8 +128,10 @@ class UnavailableAvatarAndLipSyncProvider:
     model_id = "avatar-lipsync-unconfigured"
     supported_languages: tuple[str, ...] = ()
 
-    def __init__(self, message: str = "人物口型能力尚未配置。") -> None:
+    def __init__(self, message: str = "人物口型能力尚未配置。", *, model_id: str | None = None) -> None:
         self._message = message
+        if model_id is not None:
+            self.model_id = model_id
 
     @property
     def ready(self) -> bool:
@@ -316,6 +320,7 @@ class LatentSyncAvatarAndLipSyncProvider(SubprocessAvatarAndLipSyncProvider):
             self.worker_path,
             self.worker_path.with_name("latentsync_entry.py"),
             self.runtime_root / "inference_fidelity.py",
+            self.runtime_root / "scripts" / "inference.py",
             self.runtime_root / "dependencies" / "mlx" / "nn" / "__init__.py",
             self.runtime_root / "upstream" / "latentsync" / "utils" / "affine_transform.py",
             self.runtime_root / "checkpoints" / "latentsync_unet_mlx.safetensors",
@@ -344,6 +349,44 @@ class LatentSyncAvatarAndLipSyncProvider(SubprocessAvatarAndLipSyncProvider):
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
             raise subprocess.SubprocessError(detail[-4000:] or f"exit {completed.returncode}")
+
+
+class LatentSync16Provider(SubprocessAvatarAndLipSyncProvider):
+    def __init__(self, catalog, legacy):
+        self.catalog, self.legacy = catalog, legacy
+        runtime = catalog.latentsync_runtime
+        super().__init__(runtime_path=runtime.python, worker_path=runtime.worker,
+                         runtime_root=runtime.root, model_id=LATENTSYNC_16_MODEL_ID,
+                         supported_languages=("zh",))
+
+    @property
+    def ready(self) -> bool:
+        return self.catalog.status(LATENTSYNC_16_512).ready
+
+    @property
+    def message(self) -> str:
+        return self.catalog.status(LATENTSYNC_16_512).message
+
+    def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
+        # Hash the actual installed checkpoint before sending any media.
+        state = self.catalog.verify(LATENTSYNC_16_512)
+        if not state.ready:
+            raise subprocess.SubprocessError(state.message)
+        super()._run_command([*command, "--weights-root", str(Path(state.model_path).resolve()),
+                              "--code-revision", LATENTSYNC_16_CODE_REVISION],
+                             grant_context=grant_context, output_paths=output_paths)
+
+
+def select_lipsync_provider(default, model_id: str):
+    if default.model_id == model_id:
+        return default
+    legacy = getattr(default, "legacy", None)
+    if legacy is not None and legacy.model_id == model_id:
+        return legacy
+    return UnavailableAvatarAndLipSyncProvider(
+        f"任务固定的口型模型 {model_id} 尚未配置，请恢复该版本或明确另选模型。",
+        model_id=model_id,
+    )
 
 
 class AvatarAndLipSyncService:
@@ -509,9 +552,14 @@ class AvatarPreviewService:
 
     capability_id = "avatar_lipsync"
 
-    def __init__(self, output_root: str | Path, provider: AvatarAndLipSyncProvider) -> None:
+    def __init__(self, output_root: str | Path, provider: AvatarAndLipSyncProvider, *,
+                 alternatives: tuple[AvatarAndLipSyncProvider, ...] = ()) -> None:
         self.output_root = Path(output_root).expanduser().resolve()
         self.provider = provider
+        self.alternatives = {item.model_id: item for item in alternatives}
+
+    def provider_for_model(self, model_id: str):
+        return self.alternatives.get(model_id) or select_lipsync_provider(self.provider, model_id)
 
     def request(
         self,
@@ -539,6 +587,7 @@ class AvatarPreviewService:
         from app.profiles.preview_contracts import MediaPreviewRunRecord
 
         records = repository.preview_records if preview_records is None else preview_records
+        provider = self.provider_for_model(model_id)
 
         request = repository.profile_inputs.resolve_avatar_lipsync_request(
             workspace_id=workspace_id,
@@ -576,7 +625,7 @@ class AvatarPreviewService:
         identity = _avatar_preview_identity(
             request,
             capability_id=self.capability_id,
-            provider_model_id=self.provider.model_id,
+            provider_model_id=provider.model_id,
         )
         identity = hashlib.sha256(json.dumps([identity, viewer_user_id, local_diagnostic]).encode()).hexdigest()
         if reference_failure is not None:
@@ -628,16 +677,16 @@ class AvatarPreviewService:
                 impact="已记录的人物口型预览输出不可用，不能作为成功结果复用。",
                 repair_action="确认输出目录后显式重试人物口型预览。",
             )
-        if not self.provider.ready:
+        if not provider.ready:
             return self._finish(
                 records,
                 running,
                 status="unavailable",
                 reason="capability_unavailable",
                 impact="人物口型预览能力未配置，未生成视频。",
-                repair_action=self.provider.message,
+                repair_action=provider.message,
             )
-        if request.language not in self.provider.supported_languages:
+        if request.language not in provider.supported_languages:
             return self._finish(
                 records,
                 running,
@@ -680,7 +729,7 @@ class AvatarPreviewService:
             raise PermissionError("独立预览需要准确的media_preview单位许可")
         from app.granted_subprocess import GrantedCommandError
         try:
-            result = AvatarAndLipSyncService(self.output_root, self.provider).render(request,
+            result = AvatarAndLipSyncService(self.output_root, provider).render(request,
                 repository=repository, grant_context=grant_context, viewer_user_id=viewer_user_id,
                 local_diagnostic=local_diagnostic)
         except (GrantedCommandError, PermissionError) as exc:
@@ -786,7 +835,7 @@ def _authorization_failure(request: AvatarAndLipSyncRequest) -> str | None:
             return "voice_person_version_mismatch"
     elif request.voice.person_version:
         return "voice_person_mismatch"
-    if request.voice.language != request.language:
+    if request.voice.language not in {request.language, "zh-en"}:
         return "language_mismatch"
     for profile, kind in ((request.person, "person_likeness"), (request.voice, "voice")):
         failure = profile_use_failure(profile, content_type=kind, usage_scope="avatar_lipsync")
@@ -952,23 +1001,28 @@ def _valid_avatar_preview_output(output_path: str | None, output_root: Path) -> 
 
 def avatar_lipsync_provider_from_settings(
     settings: Settings,
-    *, quality: Literal["high", "fast"] = "fast",
+    *, quality: Literal["high", "fast"] = "high", catalog=None,
 ) -> AvatarAndLipSyncProvider:
     if quality == "high":
-        if not settings.latentsync_runtime_python_path or not settings.latentsync_root_path or not settings.latentsync_pose_root_path:
-            return UnavailableAvatarAndLipSyncProvider("高精度口型环境尚未配置。")
-        return LatentSyncAvatarAndLipSyncProvider(
-            runtime_path=settings.latentsync_runtime_python_path,
-            worker_path=settings.latentsync_worker_path,
-            runtime_root=settings.latentsync_root_path,
-            pose_root=settings.latentsync_pose_root_path,
-            model_id="latentsync-1.5-mlx-fidelity-brow",
-            supported_languages=("zh",),
-        )
+        if catalog is None:
+            from app.runtime_health import model_catalog_from_settings
+            catalog = model_catalog_from_settings(settings)
+        if settings.latentsync_runtime_python_path and settings.latentsync_root_path and settings.latentsync_pose_root_path:
+            legacy = LatentSyncAvatarAndLipSyncProvider(
+                runtime_path=settings.latentsync_runtime_python_path,
+                worker_path=settings.latentsync_worker_path,
+                runtime_root=settings.latentsync_root_path,
+                pose_root=settings.latentsync_pose_root_path,
+                model_id=LATENTSYNC_15_MODEL_ID, supported_languages=("zh",),
+            )
+        else:
+            legacy = UnavailableAvatarAndLipSyncProvider("原任务的 LatentSync 1.5 环境尚未配置。",
+                                                        model_id=LATENTSYNC_15_MODEL_ID)
+        return LatentSync16Provider(catalog, legacy)
     runtime = settings.avatar_model_runtime_python_path
     runtime_root = settings.avatar_model_root_path
     if not runtime or not runtime_root:
-        return UnavailableAvatarAndLipSyncProvider()
+        return UnavailableAvatarAndLipSyncProvider(model_id=settings.avatar_model_id)
     return SubprocessAvatarAndLipSyncProvider(
         runtime_path=runtime,
         worker_path=settings.avatar_model_worker_path,

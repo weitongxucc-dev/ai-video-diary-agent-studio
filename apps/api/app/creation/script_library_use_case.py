@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
+from app.lipsync_models import LATENTSYNC_16_MODEL_ID
 from app.creation.script_draft_use_case import ScriptDraftRejected, ScriptDraftUseCase
 from app.production import ProductionRepository
 from app.creation.plan_contracts import CreationPlan, CreationPlanKnowledgeReference, CreationPlanSourceReference
@@ -209,6 +210,7 @@ class ScriptLibraryUseCase:
             name=payload.name.strip(), goal=f"复用文案：{entry['name']}（版本{entry['version']}），待重新确认正文",
             target_count=1, language=entry['language'], aspect_ratio=payload.aspect_ratio,
             duration_target_seconds=payload.duration_target_seconds,
+            lipsync_quality="high", lipsync_model_id=LATENTSYNC_16_MODEL_ID,
             knowledge_references=knowledge, source_references=sources,
             selected_voice=None, pronunciation_references=[], approved_asset_count=0, approved_clip_count=0,
             material_rule_summary="复用稿尚未选材，确认正文后沿当前任务继续", model_snapshot=[],

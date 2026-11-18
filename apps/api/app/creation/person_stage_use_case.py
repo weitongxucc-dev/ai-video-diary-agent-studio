@@ -98,8 +98,10 @@ class PersonStageUseCase:
             raise PersonStageRejected(status_code=409, detail='人物制作必须通过已确认任务的继续制作入口取得专属设备许可')
         grant_context.check()
         task = self.task_or_missing(workspace_id, task_id)
-        quality = payload.lipsync_quality or self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id).lipsync_quality
-        provider = self.person_preview.provider(quality)
+        plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
+        if payload.lipsync_quality is not None and payload.lipsync_quality != plan.lipsync_quality:
+            raise PersonStageRejected(status_code=409, detail='口型档位与已确认的任务方案不一致')
+        provider = self.person_preview.provider_for_plan(plan)
         if not provider.ready:
             raise capability_unavailable('avatar_lipsync', message=provider.message, impact='人物片段未生成，当前任务等待人物制作完成，尚未生成成片。', repair_action='配置本地人物口型运行环境后重试。')
         try:
@@ -234,11 +236,12 @@ class PersonStageUseCase:
     def apply_segment_edit(self, workspace_id, task, proposal, *, grant_context=None, generated_render=None, connection=None):
         operation_type = proposal.operation['operation_type']
         operation_payload = proposal.operation['payload']
-        planned_quality = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id).lipsync_quality
+        plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
+        planned_quality = plan.lipsync_quality
         chosen_quality = operation_payload.get('lipsync_quality', planned_quality)
         if chosen_quality != planned_quality:
             raise PersonStageRejected(status_code=409, detail='口型档位与当前任务方案不一致，请重新预览')
-        person_provider = self.person_preview.provider(chosen_quality)
+        person_provider = self.person_preview.provider_for_plan(plan)
         required_strings = {key: operation_payload.get(key) for key in ('clip_id', 'cue_id', 'narration_segment_id', 'person_profile_id', 'person_version', 'expected_asset_id', 'expected_segment_id', 'motion', 'expression', 'base_version_id')}
         if any((not isinstance(value, str) or not value for value in required_strings.values())):
             raise PersonStageRejected(status_code=409, detail='invalid person segment edit operation')

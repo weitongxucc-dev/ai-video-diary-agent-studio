@@ -375,7 +375,7 @@ it("keeps the template identity through preview and confirmation", async () => {
   fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!);
   await screen.findByRole("button", { name: "确认并创建任务" });
   expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ template_id: "template_one", template_version: 3, goal: "新的主题", duration_target_seconds: 30, aspect_ratio: "9:16" }));
-  expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ lipsync_quality: "fast" }));
+  expect(mocks.previewCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ lipsync_quality: "high" }));
   fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));
   await waitFor(() => expect(mocks.confirmCreationPlan).toHaveBeenLastCalledWith(expect.objectContaining({ template_id: "template_one", template_version: 3 })));
 });

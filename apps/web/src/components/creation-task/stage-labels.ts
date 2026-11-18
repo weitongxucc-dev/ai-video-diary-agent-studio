@@ -33,6 +33,8 @@ export function capabilityLabel(available: boolean) {
     return available ? "可用" : "不可用";
 }
 export function lipsyncLabel(modelId: string | null | undefined) {
+    if (modelId === "latentsync-1.6-512") return "高精度 · LatentSync 1.6 · 512";
+    if (modelId === "latentsync-1.5-mlx-fidelity-brow") return "高精度 · LatentSync 1.5";
     return modelId?.startsWith("latentsync-")
         ? "高精度 · LatentSync"
         : modelId?.toLowerCase().includes("musetalk") ? "低精度 · MuseTalk" : modelId ? "其他口型" : "未配置";
