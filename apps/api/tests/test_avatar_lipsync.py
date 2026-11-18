@@ -362,6 +362,51 @@ def test_render_rejects_unsupported_language_before_provider_or_cache(tmp_path, 
     assert result.failure_code == "language_unavailable"
 
 
+@pytest.mark.parametrize(
+    ("quality", "model_id", "language", "reaches_worker"),
+    [
+        ("high", LATENTSYNC_16_MODEL_ID, "en", True),
+        ("high", LATENTSYNC_16_MODEL_ID, "zh-en", False),
+        ("high", LATENTSYNC_15_MODEL_ID, "en", False),
+        ("fast", None, "en", False),
+    ],
+)
+def test_lipsync_worker_language_matches_the_pinned_model(
+    tmp_path, monkeypatch, quality, model_id, language, reaches_worker,
+):
+    settings = Settings(
+        avatar_model_runtime_python_path=str(tmp_path / "fast-python"),
+        avatar_model_root_path=str(tmp_path / "fast-root"),
+        latentsync_runtime_python_path=str(tmp_path / "legacy-python"),
+        latentsync_root_path=str(tmp_path / "legacy-root"),
+        latentsync_pose_root_path=str(tmp_path / "pose"),
+    )
+    default = avatar_lipsync_provider_from_settings(settings, quality=quality)
+    provider = select_lipsync_provider(default, model_id or default.model_id)
+    monkeypatch.setattr(type(provider), "ready", property(lambda _: True))
+    worker_requests = []
+
+    def runner(command):
+        request_path = Path(command[command.index("--request") + 1])
+        worker_requests.append(json.loads(request_path.read_text(encoding="utf-8")))
+        response_path = Path(command[command.index("--response") + 1])
+        response_path.write_text(
+            json.dumps({"schema_version": 1, "status": "provider_rejected", "reason": "test worker"}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(provider, "_runner", runner)
+    request = replace(_request(tmp_path), model_id=provider.model_id, language=language)
+    result = AvatarAndLipSyncService(tmp_path / "outputs", provider).render(request)
+
+    if reaches_worker:
+        assert result.status == "provider_rejected"
+        assert [(item["model_id"], item["language"]) for item in worker_requests] == [(model_id, language)]
+    else:
+        assert result.failure_code == "language_unavailable"
+        assert worker_requests == []
+
+
 def test_person_command_preserves_constraints_and_rejects_partial_execution():
     import pytest
     from app.avatar_lipsync import compile_person_edit_command

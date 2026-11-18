@@ -357,7 +357,7 @@ class LatentSync16Provider(SubprocessAvatarAndLipSyncProvider):
         runtime = catalog.latentsync_runtime
         super().__init__(runtime_path=runtime.python, worker_path=runtime.worker,
                          runtime_root=runtime.root, model_id=LATENTSYNC_16_MODEL_ID,
-                         supported_languages=("zh",))
+                         supported_languages=("zh", "en"))
 
     @property
     def ready(self) -> bool:

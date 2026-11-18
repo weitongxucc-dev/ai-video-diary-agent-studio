@@ -53,6 +53,8 @@ describe("uncreated task repair return", () => {
     fireEvent.change(screen.getByLabelText("目标时长（秒）"), { target: { value: fields.duration } });
     await chooseSelectValue(screen.getByLabelText("任务声音"), "voice-a:v2");
     await chooseSelectValue(screen.getByLabelText("任务人物"), "person-b:p3");
+    expect(screen.getByRole("radio", { name: /高精度/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: /低精度/ }));
     check(); await screen.findByText("缺少资料"); fireEvent.click(screen.getByRole("button", { name: "补充知识资料" }));
     await waitFor(() => expect(mocks.assign).toHaveBeenCalledTimes(1));
     const resource = new URL(mocks.assign.mock.calls[0][0], window.location.origin);
@@ -71,14 +73,15 @@ describe("uncreated task repair return", () => {
     expect(screen.getByLabelText("制作目标")).toHaveValue(fields.goal); expect(screen.getByLabelText("任务名称（可选）")).toHaveValue(fields.name);
     expect(screen.getByLabelText("成片数量")).toHaveValue(1); expect(screen.getByLabelText("目标时长（秒）")).toHaveValue(30);
     expect(screen.getByLabelText("任务声音")).toHaveAttribute("data-selected-value", "voice-a:v2"); expect(screen.getByLabelText("任务人物")).toHaveAttribute("data-selected-value", "person-b:p3");
-    expect(mocks.preview).toHaveBeenLastCalledWith(expect.objectContaining({ goal: fields.goal, target_count: 1, duration_target_seconds: 30, template_id: template.id, template_version: 3, selected_voice: fields.voicePin, selected_person: fields.personPin }));
+    expect(screen.getByRole("radio", { name: /低精度/ })).toBeChecked();
+    expect(mocks.preview).toHaveBeenLastCalledWith(expect.objectContaining({ goal: fields.goal, lipsync_quality: "fast", target_count: 1, duration_target_seconds: 30, template_id: template.id, template_version: 3, selected_voice: fields.voicePin, selected_person: fields.personPin }));
     expect(mocks.confirm).not.toHaveBeenCalled();
     savePreflightDraft(sessionStorage, scope, nextId, fields);
     mocks.confirm.mockRejectedValueOnce(new Error("真实确认失败")); fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("真实确认失败"); expect(loadPreflightDraft(sessionStorage, scope, draftId)).toEqual(saved);
     fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));
     await waitFor(() => expect(mocks.assign).toHaveBeenLastCalledWith(expect.stringContaining("/tasks/real-task?")));
-    expect(mocks.confirm).toHaveBeenLastCalledWith(expect.objectContaining({ preflight_fingerprint: "n".repeat(64), duration_target_seconds: 30 }));
+    expect(mocks.confirm).toHaveBeenLastCalledWith(expect.objectContaining({ preflight_fingerprint: "n".repeat(64), duration_target_seconds: 30, lipsync_quality: "fast" }));
     expect(loadPreflightDraft(sessionStorage, scope, draftId)).toBeNull(); expect(loadPreflightDraft(sessionStorage, scope, nextId)).toEqual(fields);
     expect(resolvePreflightRepairContext(sessionStorage, scope, null, window.location.origin)).toBeNull();
   });
