@@ -21,9 +21,11 @@ Windows 继续只使用 `codex/windows-integration-1.5.2`。本次将主线 `54d
 - main打包布局测试2项通过，构建身份与Skill过滤加载通过。未生成安装包，未发布Release；不是全量CI通过声明。
 - 当前候选Windows真机安装、启动退出恢复、真实模型、媒体和设备播放仍未验收。历史安装包证据不代替本次候选。
 
-## 当前接手基线（2026-11-18）
+## 接手基线（2026-11-18）
 
 接手时 Windows 分支为 `241ea35c`，共同祖先为 `f3d7a443`。本批已将主线 `8d229ed0` 合并并推送到原 Windows 分支（集成提交 `082de123`），包含 `cd19ec70` 的回复保留及新安装任务工具修复，以及 `8d229ed0` 的制作失败回报。合并后的助手失败回执定向用例在 macOS 通过四项；Windows 原生安装与真实媒体仍须该平台实测。同步时重新比较实际提交，保留 Windows 独有历史和当地改动。
+
+企业剪辑助手首批共享改动见 [PR #161](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/pull/161)。在 Windows 的原分支运行 `git log --first-parent --merges -5 --oneline` 可定位最近同步；用 `git merge-base --is-ancestor <共享提交> HEAD` 核对待测版本是否已包含该改动。
 
 ## Windows电脑接续
 
