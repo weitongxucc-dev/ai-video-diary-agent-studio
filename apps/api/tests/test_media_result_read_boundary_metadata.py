@@ -214,14 +214,17 @@ def test_cold_media_result_reads_preserve_currentness_privacy_and_history(tmp_pa
             task_authorizations=media.task_authorizations))
         assert main._media_result_read_components() == (media, requests)
         assert client.get(url).json() == pending
-    for registrations, error in (({'creation_job': registration}, RuntimeError('declared stopped driver')),
+    from app.device_scheduler import PriorDeviceWorkPending
+    previous_work = PriorDeviceWorkPending()
+    for registrations, error in (({'creation_job': registration}, previous_work),
+                                 ({'creation_job': registration}, RuntimeError('declared stopped driver')),
                                  ({}, None)):
         with monkeypatch.context() as unavailable:
             unavailable.setattr(main, 'device_runtime', SimpleNamespace(registrations=registrations,
                 scheduler=requests, last_error=error, running=False, start=forbidden))
             response = client.get(url)
             assert response.status_code == 503
-            assert response.json()['detail'] == '整机制作许可已停止，须核查许可后才能继续'
+            assert response.json()['detail'] == (previous_work.user_message if error is previous_work else '整机制作许可已停止，须核查许可后才能继续')
             assert snapshot() == before
     assert snapshot() == before
 

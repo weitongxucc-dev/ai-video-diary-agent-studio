@@ -337,6 +337,13 @@ class CreationPlanPreflightUseCase:
                 repair_action="检查所选档位的本地口型环境，或主动选择另一档／将露脸占比调到 0%。",
                 stage="avatar_lipsync", blocks_confirmation=False,
             ))
+        elif selected_lipsync_provider is not None and requested_voice_language not in selected_lipsync_provider.supported_languages:
+            blockers.append(CreationPlanBlocker(
+                reason="language_unavailable",
+                impact="所选口型模型不支持这个版本的语言，人物片段无法生成。",
+                repair_action="请选择支持该语言的口型模型，或将这个版本的露脸占比设为 0%。",
+                stage="avatar_lipsync", blocks_confirmation=False,
+            ))
         if not approved_clips and payload.presenter_share_target < 100:
             blockers.append(
                 CreationPlanBlocker(

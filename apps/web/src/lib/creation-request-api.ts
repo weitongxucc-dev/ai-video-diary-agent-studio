@@ -1,6 +1,13 @@
 import { request } from "./api";
 import type { CreationPlanInput, CreationRequest, CreationRequestOutputRelation } from "./types";
 
+export type DeliveryGoal = {
+  goal: string;
+  name?: string;
+  requirements?: Partial<Pick<CreationPlanInput,
+    "language" | "aspect_ratio" | "duration_target_seconds" | "presenter_share_target" | "lipsync_quality" | "selected_voice" | "selected_person">>;
+};
+
 export type CreationRequestEntry = NonNullable<CreationRequest["current_window"]>["entries"][number];
 export type CreationRequestItems = { items: CreationRequestEntry[]; next_after_ordinal: number | null; has_more: boolean };
 
@@ -26,7 +33,7 @@ export function updateCreationRequest(id: string, input: {
 }
 
 export function prepareCreationRequestWindow(id: string, input: {
-  expected_revision: number; goals: { goal: string; name?: string }[];
+  expected_revision: number; goals: DeliveryGoal[];
 }): Promise<CreationRequest> {
   return request(`/api/creation-requests/${encodeURIComponent(id)}/windows`, { method: "POST", body: JSON.stringify(input) });
 }

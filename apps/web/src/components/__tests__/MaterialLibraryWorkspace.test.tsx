@@ -841,7 +841,7 @@ it("explains which files were skipped as unsupported", async () => {
   const status = await screen.findByText(/没有可导入的文件：notes\.txt/);
   expect(status).toHaveAttribute("role", "status");
   expect(status).toHaveTextContent("notes.txt");
-  expect(status).toHaveTextContent("仅支持 mp4、mov、m4v");
+  expect(status).toHaveTextContent("仅支持 MP4、MOV、M4V、WebM");
 });
 
 it("surfaces a cleanup warning without turning a completed copy into a failure", async () => {

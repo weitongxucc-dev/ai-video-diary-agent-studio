@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { MATERIAL_IMPORT_EXTENSIONS } = require('./material-import');
 
 function createNativeFiles({ dialog, shell, getWindow }) {
   async function choose(options) {
@@ -20,7 +21,7 @@ function createNativeFiles({ dialog, shell, getWindow }) {
     const result = await dialog.showOpenDialog(getWindow(), {
       properties: ['openFile', 'multiSelections'],
       title: '选择要导入的本地素材',
-      filters: [{ name: '视频素材', extensions: ['mp4', 'mov', 'm4v'] }],
+      filters: [{ name: '视频素材', extensions: MATERIAL_IMPORT_EXTENSIONS }],
     });
     if (result.canceled || result.filePaths.length === 0) return [];
     return result.filePaths;

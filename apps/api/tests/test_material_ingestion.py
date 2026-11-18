@@ -179,10 +179,13 @@ def scheduled_hash_no_execution(monkeypatch):
     assert MaterialIngestionService.run_granted_probe is forbidden
 
 
-def test_scheduled_hash_requires_grant_and_persists_probe_dependency(tmp_path: Path, scheduled_hash_no_execution) -> None:
+@pytest.mark.parametrize("suffix", [".mp4", ".webm"])
+def test_scheduled_hash_requires_grant_and_persists_probe_dependency(
+    tmp_path: Path, scheduled_hash_no_execution, suffix: str,
+) -> None:
     duration = Mock(return_value=1.0)
     repo, library = make_repo(tmp_path, duration)
-    source = library / "clip.mp4"
+    source = library / f"clip{suffix}"
     source.write_bytes(b"bounded source")
     repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library))
     with pytest.raises(ValueError, match="必须显式注入"):
