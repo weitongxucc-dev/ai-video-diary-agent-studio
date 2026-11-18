@@ -228,16 +228,21 @@ def test_json_parsing_error_after_real_read_is_not_cleared_by_later_success():
 
 def test_later_unknown_overlay_keeps_both_original_locator_and_successful_source_job():
     job = {"job_id": "script-job", "result_kind": "graphic_source", "status": "succeeded", "result": SOURCE}
+    submitted = {**job, "status": "queued", "result": None}
+    historical = {**job, "job_id": "earlier-script-job"}
     locator = {"kind": "edit_request_status", "phase": "preview", "status": "result_unknown",
                "request_id": "original-overlay-id", "query_url": "/original-overlay-query"}
-    output = "\n".join(json.dumps(event) for event in [
+    output = _settled_events(
+        {"type": "tool_execution_end", "toolName": "preview_media_script", "isError": False,
+         "result": {"details": {"kind": "task_media_job", "media_job": submitted}}},
         {"type": "tool_execution_end", "toolName": "read_task_media_job", "isError": False,
          "result": {"details": {"kind": "task_media_job", "media_job": job}}},
         {"type": "tool_execution_end", "toolName": "preview_typed_edit", "isError": True, "result": {"details": locator}},
         {"type": "tool_execution_end", "toolName": "codemode", "isError": True, "result": {"details": {}}},
         _completed_source_codemode("later-read"),
-        {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "later failed"}]}},
-        {"type": "agent_settled"}])
+        {"type": "tool_execution_end", "toolName": "read_task_media_job", "isError": False,
+         "result": {"details": {"kind": "task_media_job", "media_job": historical}}},
+    )
     answer, result = project_event_fixture(output)
     assert result == {**locator, "related_media_job": job}
     assert "不重复提交" in answer and "作业回执仍保留" in answer
