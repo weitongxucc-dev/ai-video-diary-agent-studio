@@ -175,7 +175,7 @@ def test_task_retry_returns_original_receipt_after_stage_advances(task_client, s
     else:
         assert retry.json() == first.json()
 
-    for change in ({"context_stage": "narration"}, {"selected_object_refs": ["clip:unrelated"]},
+    for change in ({"context_stage": "narration"}, {"playhead_ms": 1},
                    {"expected_reference_version": 1}, {"expected_draft_version": 2},
                    {"message": "另一条创作指令。"}):
         changed = client.post(endpoint, headers=headers, json={**payload, **change})

@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from app.assistant.references import AssistantReferenceConflict, timeline_object_refs
 from app.conversation_repository import (
     ConversationDraftVersionConflict, ConversationReferenceVersionConflict,
-    ConversationTurnAlreadyRunning, ConversationTurnRequestConflict,
+    ConversationTurnAlreadyRunning, ConversationTurnObjectRefsUnverifiable, ConversationTurnRequestConflict,
 )
 
 
@@ -181,6 +181,13 @@ class TurnAdmissionUseCase:
                 conversation_id, workspace_id, member_id, message, str(client_request_id),
                 expected_draft_version, request_context,
                 expected_reference_version=expected_reference_version)
+        except ConversationTurnObjectRefsUnverifiable as exc:
+            if authorize_replay is None:
+                raise TurnRejected(409, str(exc)) from exc
+            yield from self.verify_original_request_access(
+                client_request_id, conversation_id, workspace_id, member_id, authorize_replay)
+            locator = f"/api/assistant/conversations/{conversation_id}/requests/{client_request_id}"
+            raise TurnRejected(409, f"{exc} 请用 GET {locator} 回查原请求。") from exc
         except (ConversationReferenceVersionConflict, ConversationTurnAlreadyRunning,
                 ConversationTurnRequestConflict) as exc:
             raise TurnRejected(409, str(exc)) from exc
@@ -197,16 +204,20 @@ class TurnAdmissionUseCase:
         elif authorize_replay is not None:
             # A concurrent send can commit the receipt after the initial read.
             # Verify access to the committed request before announcing its turn.
-            original_context = self._conversations_for().request_context(
-                str(client_request_id), conversation_id, workspace_id, member_id)
-            if original_context is None:
-                raise TurnRejected(404, "原请求不存在或当前成员无权访问。")
-            yield from authorize_replay(workspace_id, member_id, original_context)
+            yield from self.verify_original_request_access(
+                client_request_id, conversation_id, workspace_id, member_id, authorize_replay)
         yield EmitTurnEvent({"type": "turn_started", "turn_id": turn["id"], "turn_state": turn["status"],
                             "draft_version": expected_draft_version + 1})
         if not created and turn["status"] != "running":
             yield EmitTurnEvent({"type": "turn_status", "turn_id": turn["id"], "turn_state": turn["status"]})
         return turn["id"], created, turn
+
+    def verify_original_request_access(self, client_request_id, conversation_id, workspace_id, member_id, authorize_replay):
+        original_context = self._conversations_for().request_context(
+            str(client_request_id), conversation_id, workspace_id, member_id)
+        if original_context is None:
+            raise TurnRejected(404, "原请求不存在或当前成员无权访问。")
+        yield from authorize_replay(workspace_id, member_id, original_context)
 
     def freeze_input(self, context, reference):
         items = reference["items"] if reference and reference["kind"] == "selection" else [reference] if reference else []
