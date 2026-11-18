@@ -9,20 +9,27 @@ import { Tooltip } from "../ui/tooltip";
 import { useEditorDockHost } from "../workbench/EditorDock";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { canOpenStage, productStages, productStageState, type WorkspaceView } from "./stage-navigation";
-import { executionStageLabels } from "./execution-labels";
+import { executionStageLabels, jobStatusLabel } from "./execution-labels";
 import styles from "../CreationTaskWorkspace.module.css";
 
 const languageLabels = { "zh-CN": "中文", "en-US": "英文", "zh-CN/en-US": "中英双语" };
 
 function stagePresentation(task: CreationTaskWorkspace["task"], execution: CreationExecutionStatus | null) {
   const job = execution?.job;
+  const stage = execution?.current_stage ? executionStageLabels[execution.current_stage] : "连续制作";
   if (job?.status === "queued" || job?.status === "running") {
-    const stage = execution?.current_stage ? executionStageLabels[execution.current_stage] : null;
     const waiting = job.status === "queued" && job.failure_reason === "waiting_for_user";
     return {
-      text: `${stage ?? "连续制作"}，${waiting ? "待处理" : job.status === "queued" ? "已排队" : "正在处理"}`,
+      text: `${stage}，${waiting ? "待处理" : job.status === "queued" ? "已排队" : "正在处理"}`,
       tone: waiting ? "warning" : "running",
       canLocate: waiting,
+    };
+  }
+  if (job?.kind === "creation_task_execution" && (job.status === "failed" || job.status === "interrupted" || job.status === "cancelled")) {
+    return {
+      text: `${stage}，${jobStatusLabel(job.status)}`,
+      tone: job.status === "failed" ? "danger" : "warning",
+      canLocate: true,
     };
   }
   return {
@@ -32,12 +39,13 @@ function stagePresentation(task: CreationTaskWorkspace["task"], execution: Creat
   };
 }
 
-export function TaskViewNavigation({ workspace, execution, activeView, onOpen, editingActions }: {
+export function TaskViewNavigation({ workspace, execution, activeView, onOpen, onLocateStage, editingActions }: {
   editingActions?: ReactNode;
   workspace: CreationTaskWorkspace;
   execution?: CreationExecutionStatus | null;
   activeView: WorkspaceView;
   onOpen: (view: WorkspaceView) => void;
+  onLocateStage: () => void;
 }) {
   const toolsRef = useEditorDockHost("tools");
   const views = [{ id: "montage", label: "剪辑", icon: Clapperboard }, { id: "subtitle_cover", label: "字幕与封面", icon: Captions }, { id: "script", label: "文案", icon: FileText }] as const;
@@ -58,8 +66,8 @@ export function TaskViewNavigation({ workspace, execution, activeView, onOpen, e
     <div className={styles.viewProgress}>
       <div className={styles.viewFacts}>
         <span>{confirmed ? "确认稿" : draft ? "草稿" : "方案"}{language}</span>
-        <span role="status" data-tone={stage.tone}>
-          {stage.canLocate ? <button className={styles.locateStage} type="button" onClick={() => onOpen(task.stage)}>{stage.text}</button> : stage.text}
+        <span role="status" aria-label="当前制作阶段" data-tone={stage.tone}>
+          {stage.canLocate ? <button className={styles.locateStage} type="button" onClick={onLocateStage}>{stage.text}</button> : stage.text}
         </span>
       </div>
       <DropdownMenu><DropdownMenuTrigger render={<IconButton label="制作进度" />}><ListChecks /></DropdownMenuTrigger>

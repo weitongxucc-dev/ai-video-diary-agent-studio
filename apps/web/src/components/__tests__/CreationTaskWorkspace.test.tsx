@@ -1185,7 +1185,9 @@ describe("CreationTaskWorkspace", () => {
       topic_candidates: null }));
     await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledWith(initial.task.id,
       expect.objectContaining({ message: "就按已确认的文案开始制作并回报当前作业状态", context_stage: "subtitle_cover" }), expect.any(Function)));
-    expect(await screen.findByText(/连续制作：已排队/)).toBeInTheDocument();
+    const stage = await screen.findByRole("status", { name: "当前制作阶段" });
+    expect(stage).toBeVisible();
+    expect(stage).toHaveTextContent("连续制作，已排队");
     expect(screen.getByText("提交连续制作 · 已返回")).toBeInTheDocument();
     await waitFor(() => expect(input).toHaveFocus());
   });
@@ -1379,7 +1381,12 @@ describe("CreationTaskWorkspace", () => {
     mocks.getWorkspace.mockResolvedValue(initial);
     mocks.resumeExecution.mockResolvedValue(queueStatus("queued"));
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    openEditingStatusTray();
+    const failure = await screen.findByRole("button", { name: "人物口型，失败" });
+    expect(failure).toBeVisible();
+    expect(screen.queryByRole("region", { name: "制作状态" })).not.toBeInTheDocument();
+    failure.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(failure).toHaveFocus();
     expect(await screen.findByRole("region", { name: "制作状态" })).toHaveTextContent("输出磁盘写入失败");
     expect(screen.getByRole("region", { name: "制作状态" })).toHaveTextContent("人物口型");
     openEditingStatusTray();
@@ -4789,7 +4796,9 @@ describe("作业进度读数", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(16000); });
       await act(async () => { await Promise.resolve(); });
       expect(mocks.getJobProgress.mock.calls.length).toBeGreaterThan(1);
-      await screen.findByText(/连续制作：后台制作中/);
+      const stage = await screen.findByRole("status", { name: "当前制作阶段" });
+      expect(stage).toBeVisible();
+      expect(stage).toHaveTextContent("生成成片和字幕，正在处理");
       fireEvent.click(within(panel).getByRole("button",{name:"运行详情"}));expect(await screen.findByRole("dialog",{name:"运行详情"})).toHaveTextContent("进度 5%");
     } finally { vi.useRealTimers(); }
   });
@@ -4964,7 +4973,7 @@ describe("作品视图与真实版本",()=>{
  it("reopens the selected subtitle view and dispatches a different view only once", async () => {
   const user=userEvent.setup(), onOpen=vi.fn();
   const initial=subtitleCoverWorkspace();
-  render(<Tabs value="subtitle_cover" onValueChange={onOpen}><TaskViewNavigation workspace={initial} activeView="subtitle_cover" onOpen={onOpen}/></Tabs>);
+  render(<Tabs value="subtitle_cover" onValueChange={onOpen}><TaskViewNavigation workspace={initial} activeView="subtitle_cover" onOpen={onOpen} onLocateStage={vi.fn()}/></Tabs>);
   const nav=screen.getByRole("tablist",{name:"作品视图"});
   const subtitle=within(nav).getByRole("tab",{name:/^字幕与封面：/});
   expect(subtitle).toHaveAttribute("aria-selected","true");
@@ -5009,15 +5018,17 @@ describe("作品视图与真实版本",()=>{
       failure_reason: null, impact: null, repair_action: null },
     stages: [], video_ready: false, cover_status: "pending", cover_message: null,
   };
-  const onOpen = vi.fn();
+  const onLocateStage = vi.fn();
   const navigation = (receipt: CreationExecutionStatus) =>
-    <Tabs value="montage"><TaskViewNavigation workspace={initial} execution={receipt} activeView="montage" onOpen={onOpen}/></Tabs>;
+    <Tabs value="montage"><TaskViewNavigation workspace={initial} execution={receipt} activeView="montage" onOpen={vi.fn()} onLocateStage={onLocateStage}/></Tabs>;
   const { rerender } = render(navigation(execution));
   expect(screen.getByRole("status")).toHaveTextContent("生成配音，正在处理");
   rerender(navigation({ ...execution, current_stage: "montage_plan", job: { ...execution.job!, status: "queued", failure_reason: "waiting_for_user" } }));
   const waiting = screen.getByRole("button", { name: "安排镜头与人物口型，待处理" });
   fireEvent.click(waiting);
-  expect(onOpen).toHaveBeenCalledWith("montage");
+  expect(onLocateStage).toHaveBeenCalledOnce();
+  rerender(navigation({ ...execution, current_stage: null, job: { ...execution.job!, status: "interrupted" } }));
+  expect(screen.getByRole("button", { name: "连续制作，已中断" })).toBeVisible();
   rerender(navigation({ ...execution, task_id: "other-task" }));
   expect(screen.getByRole("status")).toHaveTextContent("正在剪辑");
  });
