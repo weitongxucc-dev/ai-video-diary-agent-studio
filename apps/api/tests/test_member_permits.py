@@ -914,6 +914,7 @@ def _stream_person_executor(case, monkeypatch, boundary):
     from types import SimpleNamespace
     from app.artifact_store import ArtifactStore
     from app.avatar_lipsync import AvatarAndLipSyncResult
+    from app.creation.editing.person_preview_use_case import PersonPreviewUseCase
     from app.creation.person_stage_use_case import PersonStageUseCase
     from app.creation_execution import CreationJobUnitExecutor
     from app.video_jobs import VideoJobRunner
@@ -949,7 +950,8 @@ def _stream_person_executor(case, monkeypatch, boundary):
     monkeypatch.setattr(module, 'AvatarAndLipSyncService', PaidProvider)
     root = case.tmp_path/'stream-output'
     root.mkdir(exist_ok=True)
-    stage = PersonStageUseCase(case.repo, metadata, SimpleNamespace(provider=lambda quality: provider),
+    preview = PersonPreviewUseCase(case.repo, metadata, SimpleNamespace(model_id='fixture-high'), provider)
+    stage = PersonStageUseCase(case.repo, metadata, preview,
         VideoJobRunner(case.repo.job_records), SimpleNamespace(video_output_path=root))
     def forbidden(*args, **kwargs):
         pytest.fail('person stream must not hydrate whole input DTOs or execute a worker')
