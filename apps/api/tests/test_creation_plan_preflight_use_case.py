@@ -13,6 +13,7 @@ import pytest
 from app import main
 from app.creation.video_template_routes import VideoTemplateHTTPAdapter
 from app.creation.plan_preflight_use_case import CreationPlanPreflightUseCase
+from app.lipsync_models import LATENTSYNC_16_MODEL_ID
 from app.source_types import source_item_identity
 from app.materials.contracts import MaterialSegmentMatch
 from app.creation.video_template_records import VideoTemplate
@@ -81,7 +82,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
                 state="unavailable", ready=False, message="metadata only")]
 
     class ProviderFacts:
-        model_id, message = "declared-lipsync", "metadata unavailable"
+        model_id, message = LATENTSYNC_16_MODEL_ID, "metadata unavailable"
 
         @property
         def ready(self):
@@ -155,9 +156,10 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
         "sources", "materials", "search", "voice.pin", "person.pin", "catalog"]
     assert trace == zero_trace
     assert (zero.language, zero.aspect_ratio, zero.duration_target_seconds,
-            zero.presenter_share_target, zero.lipsync_quality) == ("zh-CN", "16:9", 30, 0, "fast")
+            zero.presenter_share_target, zero.lipsync_quality) == ("zh-CN", "16:9", 30, 0, "high")
+    assert zero.lipsync_model_id == LATENTSYNC_16_MODEL_ID
     assert inputs[0].provided_fields == omitted.model_fields_set | {
-        "language", "aspect_ratio", "duration_target_seconds", "presenter_share_target", "lipsync_quality"}
+        "language", "aspect_ratio", "duration_target_seconds", "presenter_share_target"}
     assert (inputs[0].selected_knowledge, inputs[0].selected_voice, inputs[0].selected_person) == (
         ("knowledge-fixed", "1"), ("absent-voice", "v7"), ("absent-person", "v8"))
     assert [(x.id, x.version, x.title) for x in zero.knowledge_references] == [("knowledge-fixed", "1", "固定资料")]
@@ -165,7 +167,7 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     assert zero.source_references[0].identity == source_item_identity(source) == "06e2443a3a33afc383efaf1d80dece9b0ea5b0407d9a801a89900d5d6a519bba"
     assert zero.material_matches == [match] and (zero.approved_asset_count, zero.approved_clip_count) == (1, 1)
     assert [x.reason for x in zero.blockers] == ["voice_reference_missing"]
-    assert zero.preflight_fingerprint == "f0d89c8c53d963447aac4c7de07e46f5ff7d81c6cb93160bd0104881595b0509"
+    assert zero.preflight_fingerprint == "db5daea8774a1f8cb8b5ea6d751e0a598cc82f35ac12c46b279e670baec660ea"
     invocations.append({"kind": "preview_omitted_zero", "trace": list(trace),
         "fingerprint": zero.preflight_fingerprint, "provided_fields": sorted(inputs[0].provided_fields)})
     trace.clear()
@@ -174,10 +176,11 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     positive = main._creation_plan_preflight_http_adapter().preflight(request, workspace, explicit, automation_scope=scope)
     assert trace == zero_trace + ["provider:high", "provider.ready", "provider.ready", "provider.ready"]
     assert positive.presenter_share_target == 20 and positive.lipsync_quality == "high"
+    assert positive.lipsync_model_id == LATENTSYNC_16_MODEL_ID
     assert inputs[1].provided_fields == explicit.model_fields_set | {"language", "aspect_ratio", "duration_target_seconds"}
     assert inputs[1].selected_knowledge == inputs[0].selected_knowledge
     assert [x.reason for x in positive.blockers] == ["voice_reference_missing", "'absent-person'", "person_render_unavailable"]
-    assert positive.preflight_fingerprint == "f736664a4a19d8edfd9843b321b629400d7910195432a03aad4b1651c9a5707d"
+    assert positive.preflight_fingerprint == "7317f4f6e6a6c75884768ec5b39bd968e864b9e37934b3ef5b6cd3158aa29a0e"
     assert all(not x.blocks_confirmation for x in positive.blockers)
     invocations.append({"kind": "confirm_explicit_positive", "trace": list(trace),
         "fingerprint": positive.preflight_fingerprint, "provided_fields": sorted(inputs[1].provided_fields)})
@@ -253,7 +256,8 @@ def selected_dependencies():
     def prepare(frozen=None):
         return case.prepare("ws", payload, template=None, reader_user_id="reader", local_diagnostic=False, frozen_plan=frozen)
     baseline = prepare()
-    frozen = {"knowledge_references":[asdict(x) for x in baseline.knowledge_references],
+    frozen = {"lipsync_model_id": baseline.lipsync_model_id,
+        "knowledge_references":[asdict(x) for x in baseline.knowledge_references],
         "source_references":[], "material_matches":[asdict(x) for x in baseline.material_matches]}
     return state, prepare, baseline, frozen
 

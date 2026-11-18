@@ -272,6 +272,8 @@ class Settings:
     latentsync_runtime_python_path: str | None = None
     latentsync_root_path: str | None = None
     latentsync_pose_root_path: str | None = None
+    latentsync_16_root_path: str | None = None
+    latentsync_16_runtime_python_path: str | None = None
     draft_background_music_path: str | None = None
     supabase_url: str | None = None
     supabase_publishable_key: str | None = None
@@ -487,6 +489,9 @@ class Settings:
             or str(Path(model_root_path).parent / "model-runtimes" / "latentsync-mlx-candidate"),
             latentsync_pose_root_path=values.get("LATENTSYNC_POSE_ROOT_PATH")
             or str(Path(model_root_path) / "LatentSync-1.5" / "pose"),
+            latentsync_16_root_path=values.get("LATENTSYNC_16_ROOT_PATH")
+            or str(Path(model_root_path).parent / "model-runtimes" / "latentsync-1.6-cuda"),
+            latentsync_16_runtime_python_path=values.get("LATENTSYNC_16_RUNTIME_PYTHON_PATH"),
             draft_background_music_path=values.get("DRAFT_BACKGROUND_MUSIC_PATH"),
             supabase_url=values.get("SUPABASE_URL"),
             supabase_publishable_key=values.get("SUPABASE_PUBLISHABLE_KEY"),

@@ -234,8 +234,8 @@ def test_payload_only_tag_mutation_preserves_existing_column_visibility_semantic
         conn.execute("UPDATE material_assets SET visibility='shared' WHERE id='first'")
     store = MaterialAssetStore(connect)
     saved = store.update_asset_tags(WORKSPACE, "first", ["人工标签"])
-    assert saved.visibility == "private"
-    assert store.get_asset(WORKSPACE, "first").visibility == "shared"
+    assert saved.visibility == "shared"
+    assert saved == store.get_asset(WORKSPACE, "first")
     with connect() as conn:
         row = conn.execute("SELECT visibility, payload FROM material_assets WHERE id='first'").fetchone()
     assert row["visibility"] == "shared"

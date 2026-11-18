@@ -4,6 +4,7 @@ import wave
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,7 +14,9 @@ from app.avatar_lipsync import (
     AvatarAndLipSyncService,
     PersonProfile,
     SubprocessAvatarAndLipSyncProvider,
+    LatentSync16Provider,
     LatentSyncAvatarAndLipSyncProvider,
+    select_lipsync_provider,
     UnavailableAvatarAndLipSyncProvider,
     VoiceProfile,
     avatar_lipsync_cache_key,
@@ -22,6 +25,7 @@ from app.avatar_lipsync import (
     _probe_avatar_output,
 )
 from app.config import Settings
+from app.lipsync_models import LATENTSYNC_15_MODEL_ID, LATENTSYNC_16_MODEL_ID, planned_lipsync_model_id
 
 
 @pytest.fixture(scope="module")
@@ -145,10 +149,18 @@ def test_high_and_low_use_distinct_models_without_fallback(tmp_path):
     )
     high = avatar_lipsync_provider_from_settings(settings, quality="high")
     low = avatar_lipsync_provider_from_settings(settings, quality="fast")
-    assert isinstance(high, LatentSyncAvatarAndLipSyncProvider)
-    assert high.model_id != low.model_id
+    assert isinstance(high, LatentSync16Provider)
+    assert high.model_id == LATENTSYNC_16_MODEL_ID != low.model_id
     assert high.ready is False and low.ready is False
-    assert "高精度" in high.message
+    assert "LatentSync 1.6" in high.message
+    historical = SimpleNamespace(lipsync_quality="high", lipsync_model_id=None, model_snapshot=[])
+    old_id = planned_lipsync_model_id(historical, high.model_id)
+    assert old_id == LATENTSYNC_15_MODEL_ID
+    legacy = select_lipsync_provider(high, old_id)
+    assert isinstance(legacy, LatentSyncAvatarAndLipSyncProvider)
+    assert legacy.model_id == old_id
+    new = SimpleNamespace(**{**vars(historical), "lipsync_model_id": LATENTSYNC_16_MODEL_ID})
+    assert select_lipsync_provider(high, planned_lipsync_model_id(new, high.model_id)) is high
     request = _request(tmp_path)
     high_request = replace(request, model_id=high.model_id)
     low_request = replace(request, model_id=low.model_id)
@@ -350,6 +362,51 @@ def test_render_rejects_unsupported_language_before_provider_or_cache(tmp_path, 
     assert result.failure_code == "language_unavailable"
 
 
+@pytest.mark.parametrize(
+    ("quality", "model_id", "language", "reaches_worker"),
+    [
+        ("high", LATENTSYNC_16_MODEL_ID, "en", True),
+        ("high", LATENTSYNC_16_MODEL_ID, "zh-en", False),
+        ("high", LATENTSYNC_15_MODEL_ID, "en", False),
+        ("fast", None, "en", False),
+    ],
+)
+def test_lipsync_worker_language_matches_the_pinned_model(
+    tmp_path, monkeypatch, quality, model_id, language, reaches_worker,
+):
+    settings = Settings(
+        avatar_model_runtime_python_path=str(tmp_path / "fast-python"),
+        avatar_model_root_path=str(tmp_path / "fast-root"),
+        latentsync_runtime_python_path=str(tmp_path / "legacy-python"),
+        latentsync_root_path=str(tmp_path / "legacy-root"),
+        latentsync_pose_root_path=str(tmp_path / "pose"),
+    )
+    default = avatar_lipsync_provider_from_settings(settings, quality=quality)
+    provider = select_lipsync_provider(default, model_id or default.model_id)
+    monkeypatch.setattr(type(provider), "ready", property(lambda _: True))
+    worker_requests = []
+
+    def runner(command):
+        request_path = Path(command[command.index("--request") + 1])
+        worker_requests.append(json.loads(request_path.read_text(encoding="utf-8")))
+        response_path = Path(command[command.index("--response") + 1])
+        response_path.write_text(
+            json.dumps({"schema_version": 1, "status": "provider_rejected", "reason": "test worker"}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(provider, "_runner", runner)
+    request = replace(_request(tmp_path), model_id=provider.model_id, language=language)
+    result = AvatarAndLipSyncService(tmp_path / "outputs", provider).render(request)
+
+    if reaches_worker:
+        assert result.status == "provider_rejected"
+        assert [(item["model_id"], item["language"]) for item in worker_requests] == [(model_id, language)]
+    else:
+        assert result.failure_code == "language_unavailable"
+        assert worker_requests == []
+
+
 def test_person_command_preserves_constraints_and_rejects_partial_execution():
     import pytest
     from app.avatar_lipsync import compile_person_edit_command
@@ -501,8 +558,9 @@ def test_high_quality_uses_configured_packaged_worker(tmp_path):
                         latentsync_pose_root_path="/test/pose",
                         latentsync_worker_path=str(worker))
     provider = avatar_lipsync_provider_from_settings(settings, quality="high")
-    assert isinstance(provider, LatentSyncAvatarAndLipSyncProvider)
-    assert provider.worker_path == worker
+    assert isinstance(provider, LatentSync16Provider)
+    assert provider.worker_path == worker.with_name("latentsync_16_worker.py")
+    assert select_lipsync_provider(provider, LATENTSYNC_15_MODEL_ID).worker_path == worker
 
 
 def test_presenter_provider_and_cache_timing_use_the_same_grant_runner(tmp_path):
@@ -588,3 +646,21 @@ def test_granted_person_provider_preserves_actual_fast_and_high_argv(tmp_path, q
     assert calls[0][1]["output_paths"] == (output,)
     assert "timeout" not in calls[0][1]  # The Grant owns the remaining unit deadline.
     assert calls[0][1]["env"]["HF_HUB_OFFLINE"] == "1"
+
+
+def test_latentsync_16_stages_a_dependency_without_symlink_privileges(tmp_path, monkeypatch):
+    import errno
+
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "model_workers"))
+    import latentsync_16_worker
+
+    source = tmp_path / "upstream.pt"
+    destination = tmp_path / "stage.pt"
+    source.write_bytes(b"model dependency")
+
+    def cross_volume(*_args):
+        raise OSError(errno.EXDEV, "cross-volume link")
+
+    monkeypatch.setattr(latentsync_16_worker.os, "link", cross_volume)
+    latentsync_16_worker._stage_file(source, destination)
+    assert destination.read_bytes() == source.read_bytes()

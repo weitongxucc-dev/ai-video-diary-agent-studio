@@ -223,10 +223,10 @@ class ScriptRecordStore:
             return script
 
     def start_script_generation(
-        self, run: ScriptGenerationRun, *, write_guard=None, connection=None
+        self, run: ScriptGenerationRun, *, write_guard=None, connection=None, manual_draft=False
     ) -> tuple[CreationTask, ScriptGenerationRun]:
-        if run.run_kind != "generation" or run.source_reply_reference is not None:
-            raise ValueError("对话回复移交不能伪装成模型生成运行")
+        if run.run_kind != ("manual_draft" if manual_draft else "generation") or run.source_reply_reference is not None:
+            raise ValueError("文案记录类型与当前保存入口不一致")
         if run.status != "running":
             raise ValueError("文案运行必须以 running 状态开始")
         with self._connect() if connection is None else nullcontext(connection) as conn:
@@ -675,17 +675,20 @@ class ScriptRecordStore:
             if not reference_id or item != expected.get(reference_id):
                 raise ValueError("文案输入来源与当前方案的固定版本不一致")
 
-    def save_reviewed_script_generation(
+    def save_script_candidate(
         self, run, script, *, write_guard=None, result_write=None
     ):
-        """Persist an already-reviewed candidate and its original receipt atomically."""
+        """Persist a script candidate and its request receipt in one transaction."""
+        manual_draft = run.run_kind == "manual_draft"
+        if manual_draft and (script.draft_complete or script.selection_status != "draft"):
+            raise ValueError("手写首窗只能保存为待核查草稿")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
-            self.start_script_generation(run, connection=conn)
+            self.start_script_generation(run, connection=conn, manual_draft=manual_draft)
             return self.complete_script_generation(
-                run.id, script, connection=conn, result_write=result_write
+                run.id, script, connection=conn, result_write=result_write, manual_draft=manual_draft
             )
 
     def complete_script_generation(
@@ -696,6 +699,7 @@ class ScriptRecordStore:
         write_guard=None,
         result_write=None,
         connection=None,
+        manual_draft=False,
     ) -> tuple[CreationTask, ScriptGenerationRun, CreationTaskScript]:
         if not script.title.strip() or not script.sections:
             raise ValueError("文案必须包含标题和正文")
@@ -722,8 +726,8 @@ class ScriptRecordStore:
             )
             if run.status != "running":
                 raise ValueError("文案运行不是可完成状态")
-            if run.run_kind != "generation":
-                raise ValueError("回复移交记录不能作为模型生成运行完成")
+            if run.run_kind != ("manual_draft" if manual_draft else "generation"):
+                raise ValueError("文案记录类型与当前保存入口不一致")
             task_row = conn.execute(
                 "SELECT payload FROM creation_tasks WHERE workspace_id = ? AND id = ?",
                 (run.workspace_id, run.task_id),
@@ -754,11 +758,12 @@ class ScriptRecordStore:
                 raise ValueError("文案引用了本次模型输入之外的资料")
             now = utc_now()
             run.status = "succeeded"
-            run.route_snapshot = {
-                **run.route_snapshot,
-                "availability": "succeeded",
-                "checked_at": now,
-            }
+            if not manual_draft:
+                run.route_snapshot = {
+                    **run.route_snapshot,
+                    "availability": "succeeded",
+                    "checked_at": now,
+                }
             run.finished_at = now
             script.updated_at = now
             conn.execute(
@@ -1401,9 +1406,16 @@ class ScriptRecordStore:
                     "submitted_input"
                 ]
             if error:
-                result["error_detail"] = json.loads(error["payload_json"])[
-                    "error_detail"
-                ]
+                detail = json.loads(error["payload_json"])["error_detail"]
+                result["error_detail"] = detail
+                # Older review failures used this impact before declaring the write effect.
+                if isinstance(detail, dict) and (
+                    detail.get("submission_effect") == "rejected"
+                    or (detail.get("error") == "script_review_invalid"
+                        and detail.get("impact") == "本轮修订未保存，原有草稿和任务保持原样。")
+                ):
+                    result["submission_effect"] = "rejected"
+                    result["message"] = "已核对原请求，核查失败，未保存本次修改或采用文案。"
             if script_id is not None:
                 result["script_id"] = script_id
             return result
@@ -1449,17 +1461,16 @@ class ScriptRecordStore:
             "total_count": len(script.sections),
             "affected_section_ids": [part.id for part in script.sections],
         }
-        self._record_script_section_review(
-            connection,
-            script.workspace_id,
-            script.task_id,
-            script.id,
-            script.sections,
-            binding_digest=binding_digest,
-            layout_digest=script_layout_digest(
-                connection, script.workspace_id, script.id
-            ),
-        )
+        if binding_digest is not None:
+            self._record_script_section_review(
+                connection,
+                script.workspace_id,
+                script.task_id,
+                script.id,
+                script.sections,
+                binding_digest=binding_digest,
+                layout_digest=script_layout_digest(connection, script.workspace_id, script.id),
+            )
         self.append_task_event(
             TaskEvent(
                 key,

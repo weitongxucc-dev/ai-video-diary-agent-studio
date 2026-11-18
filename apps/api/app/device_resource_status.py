@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import sys
 
+from app.device_paths import device_lock_path
+from app.device_scheduler import production_device_blocker
 from app.device_resource_configuration import resolve_device_resources
 from app.device_resource_profile import DeviceProfileUnavailable
 
@@ -14,11 +16,12 @@ def preparation_actor_scope(actor, environment):
     return hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def resource_preparation_status(settings, environment, model_catalog, actor):
+def resource_preparation_status(settings, environment, model_catalog, actor, *, runtime_error=None):
     configured = bool(settings.device_resource_mode == 'normal'
         and settings.device_resource_profile_path and environment.get('DEVICE_ID'))
     status = {'actor_scope': preparation_actor_scope(actor, environment), 'platform': sys.platform,
         'cpu_preparation_supported': sys.platform == 'darwin', 'preparation_configured': configured,
+        'production_blocker': production_device_blocker(Path(settings.database_path), device_lock_path(), runtime_error),
         'profile_status': 'unprepared', 'revision': None, 'available_operations': []}
     if not settings.device_resource_profile_path or not Path(settings.device_resource_profile_path).is_file():
         return status

@@ -4865,7 +4865,7 @@ app.include_router(build_material_library_router(_material_library_http_adapter,
 app.include_router(build_material_library_router(_material_library_http_adapter, ('review_production_material',)))
 
 
-app.include_router(build_material_library_router(_material_library_http_adapter, ('update_production_material_segment',)))
+app.include_router(build_material_library_router(_material_library_http_adapter, ('update_production_material_segment', 'confirm_material_segment_usage')))
 
 
 
@@ -5832,7 +5832,8 @@ def _dispatch_device_preparation(action, *, actor, request_id, shape=None, kind=
 app.include_router(build_device_preparation_router(
     authorized_actor=lambda request: _require_permit_actor(request, current_workspace_id(request)),
     application=_device_preparation_application,
-    profile_status=lambda actor: resource_preparation_status(settings, os.environ, model_catalog, actor),
+    profile_status=lambda actor: resource_preparation_status(settings, os.environ, model_catalog, actor,
+        runtime_error=device_runtime.last_error if device_runtime is not None else None),
     actor_scope=lambda actor: preparation_actor_scope(actor, os.environ)))
 
 

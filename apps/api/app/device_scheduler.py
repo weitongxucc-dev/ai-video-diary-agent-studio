@@ -45,6 +45,77 @@ class PriorDeviceWorkPending(RecoveryBlocked):
         super().__init__("前一业务库仍有未处理设备请求，不能切换协调者")
 
 
+def _check_database_switch(database_path: Path, data: dict[str, object]) -> None:
+    old = data.get("database_path")
+    if not old or Path(str(old)) == database_path:
+        return
+    old_path = Path(str(old))
+    if not old_path.is_file():
+        raise RecoveryBlocked("前一业务库不可用，不能确认其待办已处理")
+    try:
+        with sqlite3.connect(f"file:{quote(str(old_path))}?mode=ro", uri=True) as old_conn:
+            old_conn.execute("BEGIN")  # All prior-dataset facts share one read snapshot.
+            pending = old_conn.execute(
+                """SELECT 1 FROM device_work_requests
+                WHERE state IN ('waiting', 'blocked', 'granted', 'yield_requested') LIMIT 1"""
+            ).fetchone()
+            old_permit = old_conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()
+            if pending and old_conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_runs'"
+            ).fetchone():
+                pending = old_conn.execute(
+                    """SELECT 1 FROM device_work_requests AS request
+                    WHERE request.state IN ('waiting', 'blocked', 'granted', 'yield_requested')
+                    AND NOT (
+                        request.state IS 'blocked'
+                        AND request.wait_reason IS 'input_stale'
+                        AND request.last_grant_generation IS NULL
+                        AND request.owner_type IS 'creation_job'
+                        AND EXISTS (
+                            SELECT 1 FROM job_runs AS job
+                            WHERE job.id = request.owner_id
+                              AND job.workspace_id = request.workspace_id
+                              AND job.kind = 'creation_task_execution'
+                              AND job.status = 'succeeded'
+                        )
+                    ) LIMIT 1"""
+                ).fetchone()
+    except sqlite3.Error as exc:
+        raise RecoveryBlocked("前一业务库的待办无法核查") from exc
+    if pending:
+        raise PriorDeviceWorkPending()
+    if old_permit is None or old_permit[0] != "free":
+        raise RecoveryBlocked("前一业务库仍有未处理设备请求，不能切换协调者")
+
+
+def _load_device_ledger(ledger_path: Path) -> dict[str, object]:
+    try:
+        data = json.loads(ledger_path.read_text())
+        if data["state"] not in {"free", "held", "reconciling"} or not isinstance(data["generation"], int):
+            raise ValueError("invalid ledger")
+        return data
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RecoveryBlocked("全机许可记录不可核查") from exc
+
+def production_device_blocker(database_path: Path, lock_path: Path, runtime_error: Exception | None) -> str | None:
+    """Read the current handoff condition without starting a scheduler or claiming a permit."""
+    if isinstance(runtime_error, PriorDeviceWorkPending):
+        return runtime_error.user_message
+    if runtime_error is not None:
+        return "本机制作调度已停止，请检查设备状态后重新打开应用。"
+    ledger_path = lock_path.with_name(lock_path.name + ".state")
+    try:
+        if ledger_path.is_file():
+            _check_database_switch(database_path.resolve(), _load_device_ledger(ledger_path))
+        elif lock_path.exists():
+            raise RecoveryBlocked("全机许可记录缺失")
+    except PriorDeviceWorkPending as exc:
+        return exc.user_message
+    except RecoveryBlocked:
+        return "暂时无法核实本机前一次制作的状态，请先检查设备，再开始制作。"
+    return None
+
+
 class StaleGrantInput(PermissionError):
     """The owner explicitly rejected current inputs; permit fencing is separate."""
 
@@ -793,13 +864,7 @@ class DeviceScheduler(DeviceRequestReadAccess):
             initial = {"state": "free", "generation": 0, "database_path": None}
             self._write_ledger(initial)
             return initial
-        try:
-            data = json.loads(self.ledger_path.read_text())
-            if data["state"] not in {"free", "held", "reconciling"} or not isinstance(data["generation"], int):
-                raise ValueError("invalid ledger")
-            return data
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise RecoveryBlocked("全机许可记录不可核查") from exc
+        return _load_device_ledger(self.ledger_path)
 
     def _write_ledger(self, data: dict[str, object]) -> None:
         temporary = self.ledger_path.with_name(f"{self.ledger_path.name}.{uuid.uuid4().hex}.tmp")
@@ -832,47 +897,6 @@ class DeviceScheduler(DeviceRequestReadAccess):
         self._write_ledger(data)
         return data
 
-    def _check_database_switch(self, data: dict[str, object]) -> None:
-        old = data.get("database_path")
-        if not old or Path(str(old)) == self.database_path:
-            return
-        old_path = Path(str(old))
-        if not old_path.is_file():
-            raise RecoveryBlocked("前一业务库不可用，不能确认其待办已处理")
-        try:
-            with sqlite3.connect(f"file:{quote(str(old_path))}?mode=ro", uri=True) as old_conn:
-                old_conn.execute("BEGIN")  # All prior-dataset facts share one read snapshot.
-                pending = old_conn.execute(
-                    """SELECT 1 FROM device_work_requests
-                    WHERE state IN ('waiting', 'blocked', 'granted', 'yield_requested') LIMIT 1"""
-                ).fetchone()
-                old_permit = old_conn.execute("SELECT state FROM device_permit WHERE id=1").fetchone()
-                if pending and old_conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_runs'"
-                ).fetchone():
-                    pending = old_conn.execute(
-                        """SELECT 1 FROM device_work_requests AS request
-                        WHERE request.state IN ('waiting', 'blocked', 'granted', 'yield_requested')
-                        AND NOT (
-                            request.state IS 'blocked'
-                            AND request.wait_reason IS 'input_stale'
-                            AND request.last_grant_generation IS NULL
-                            AND request.owner_type IS 'creation_job'
-                            AND EXISTS (
-                                SELECT 1 FROM job_runs AS job
-                                WHERE job.id = request.owner_id
-                                  AND job.workspace_id = request.workspace_id
-                                  AND job.kind = 'creation_task_execution'
-                                  AND job.status = 'succeeded'
-                            )
-                        ) LIMIT 1"""
-                    ).fetchone()
-        except sqlite3.Error as exc:
-            raise RecoveryBlocked("前一业务库的待办无法核查") from exc
-        if pending:
-            raise PriorDeviceWorkPending()
-        if old_permit is None or old_permit[0] != "free":
-            raise RecoveryBlocked("前一业务库仍有未处理设备请求，不能切换协调者")
 
     def _reconcile_local(self, conn: sqlite3.Connection, data: dict[str, object], now: str) -> sqlite3.Row:
         permit = conn.execute("SELECT * FROM device_permit WHERE id=1").fetchone()
@@ -997,7 +1021,7 @@ class DeviceScheduler(DeviceRequestReadAccess):
             raise RecoveryBlocked("设备锁仍被占用，旧执行单元尚不能恢复")
         try:
             data = self._recover_ledger(self._read_ledger(existed))
-            self._check_database_switch(data)
+            _check_database_switch(self.database_path, data)
             now = self._now()
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -1076,7 +1100,7 @@ class DeviceScheduler(DeviceRequestReadAccess):
         prepared_token_hash: str | None = None
         try:
             data = self._recover_ledger(self._read_ledger(existed))
-            self._check_database_switch(data)
+            _check_database_switch(self.database_path, data)
             now = self._now()
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -1610,7 +1634,7 @@ class DeviceScheduler(DeviceRequestReadAccess):
             raise RecoveryBlocked("设备仍被占用或释放状态未知")
         try:
             data = self._recover_ledger(self._read_ledger(existed))
-            self._check_database_switch(data)
+            _check_database_switch(self.database_path, data)
             now = _stamp(self._now())
             new_id = uuid.uuid4().hex
             with self._connect() as conn:

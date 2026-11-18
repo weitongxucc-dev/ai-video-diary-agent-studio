@@ -384,11 +384,14 @@ export function MaterialLibraryWorkspace({
 
   function markSegmentDraftChanged() {
     if (!selected || !selectedSegment) return;
-    const anchor = {
+    const previous = editAnchorRef.current;
+    const anchor = previous?.assetId === selected.id && previous.segmentId === selectedSegment.id ? previous : {
       assetId: selected.id,
       segmentId: selectedSegment.id,
       startSeconds: selectedSegment.start_seconds,
       endSeconds: selectedSegment.end_seconds,
+      assetRevision: selected.updated_at,
+      segmentRevision: selectedSegment.updated_at,
     };
     editAnchorRef.current = anchor;
     setEditAnchor(anchor);
@@ -673,6 +676,8 @@ export function MaterialLibraryWorkspace({
     const revision = selectionRevision.current;
     const draftRevision = editDraftRevision.current;
     const target = { assetId: selected.id, segmentId: selectedSegment.id };
+    const anchor = editAnchorRef.current;
+    const captured = anchor?.assetId === target.assetId && anchor.segmentId === target.segmentId ? anchor : null;
     setBusy("segment");
     setDetailError("");
     try {
@@ -680,6 +685,8 @@ export function MaterialLibraryWorkspace({
         selected.id,
         selectedSegment.id,
         {
+          expected_asset_updated_at: captured?.assetRevision ?? selected.updated_at,
+          expected_segment_updated_at: captured?.segmentRevision ?? selectedSegment.updated_at,
           description: descriptionDraft,
           transcript: transcriptDraft,
           review_status: selectedSegment.review_status,
@@ -712,6 +719,8 @@ export function MaterialLibraryWorkspace({
     setTagErrors((current) => ({ ...current, [scope]: "" }));
     try {
       const updated = await updateProductionMaterialSegment(selected.id, selectedSegment.id, {
+        expected_asset_updated_at: selected.updated_at,
+        expected_segment_updated_at: selectedSegment.updated_at,
         description: selectedSegment.description,
         transcript: selectedSegment.transcript,
         review_status: selectedSegment.review_status,
@@ -722,6 +731,13 @@ export function MaterialLibraryWorkspace({
       const saved = updated.segments.find(segment => segment.id === selectedSegment.id);
       if (updated.id !== selected.id || !saved || JSON.stringify(saved.user_tags) !== JSON.stringify(nextTags)) {
         throw new Error("标签请求已提交，但保存结果与当前片段不一致，请重新查看素材。");
+      }
+      const anchor = editAnchorRef.current;
+      if (anchor?.assetId === selected.id && anchor.segmentId === selectedSegment.id &&
+          anchor.assetRevision === selected.updated_at && anchor.segmentRevision === selectedSegment.updated_at) {
+        const nextAnchor = { ...anchor, assetRevision: updated.updated_at, segmentRevision: saved.updated_at };
+        editAnchorRef.current = nextAnchor;
+        setEditAnchor(nextAnchor);
       }
       replaceAsset(updated);
       if (clearInput) setTagDrafts((current) => ({ ...current, [scope]: "" }));

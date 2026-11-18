@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from app.avatar_lipsync import select_lipsync_provider
+from app.lipsync_models import planned_lipsync_model_id
 from app.creation.contracts import CreationTask, CoverAsset, SubtitleTrack
 from app.creation.plan_contracts import CreationPlan, CreationPlanPronunciationReference
 from app.materials.contracts import MediaAuthorityError
@@ -102,6 +104,8 @@ class TaskWorkspaceReadUseCase:
         task_read = self.read_summary(task)
         current_version = task_read.current_version
         person_provider = self.person_provider(plan.lipsync_quality) if plan.presenter_share_target > 0 else None
+        if person_provider is not None:
+            person_provider = select_lipsync_provider(person_provider, planned_lipsync_model_id(plan, person_provider.model_id))
         person_render_available = bool(person_provider and person_provider.ready)
         try:
             subtitle_tracks = self.read_subtitles(

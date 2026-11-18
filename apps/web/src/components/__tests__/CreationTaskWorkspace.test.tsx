@@ -4147,6 +4147,8 @@ describe("CreationTaskWorkspace", () => {
     const diagnostic = within(blocker).getByText(/provider_output_invalid/);
     expect(diagnostic.closest("details")).not.toHaveAttribute("open");
     expect(diagnostic).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "重试生成选题" }));
+    await waitFor(() => expect(generateCreationTaskTopics).toHaveBeenCalledWith(task.id));
   });
 
   it("keeps narration failure codes and repair teaching folded while preserving a real next action", async () => {
@@ -5857,6 +5859,50 @@ it('opens manual first-window writing from the existing script workspace and con
   await screen.findByRole('region',{name:'分窗编辑文案'});
   expect(await screen.findByLabelText('第 1 段正文')).toHaveValue('手动首段正文');
   expect(screen.queryByRole('button',{name:'确认文案'})).not.toBeInTheDocument();
+  expect(mocks.confirmScript).not.toHaveBeenCalled();
+});
+
+it("restores the original first-window input after a rejected receipt and remount without reposting", async () => {
+  const task = { ...baseTask, stage: "script" as const, stage_status: "not_started" as const, confirmed_script_id: null };
+  const initial = workspace(task);
+  mocks.getWorkspace.mockResolvedValue(initial);
+  const requests: { request_id: string; title: string; sections: { content: string }[] }[] = [];
+  const network = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST" && url.endsWith("/scripts/windows")) {
+      requests.push(JSON.parse(init.body as string));
+      return new Response(JSON.stringify({ detail: { error: "script_review_invalid", reason: "核查报告无效" } }), { status: 502 });
+    }
+    if (url.includes(`/script-window-requests/${requests[0]?.request_id}?`)) {
+      return new Response(JSON.stringify({
+        task_id: task.id, request_id: requests[0].request_id, operation: "start", status: "failed",
+        submission_effect: "rejected", message: "本次没有保存草稿。", submitted_input_available: true,
+        ...(url.includes("include_input=true") ? { submitted_input: requests[0] } : {}),
+      }));
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+  vi.stubGlobal("fetch", network);
+  const work = <CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>;
+  const oldView = renderTaskSubject(work);
+  fireEvent.click(await screen.findByRole("button", { name: "手动编写文案" }));
+  const title = await screen.findByLabelText("新文案标题");
+  await waitFor(() => expect(title).toBeEnabled());
+  fireEvent.change(title, { target: { value: "原始标题" } });
+  fireEvent.change(screen.getByLabelText("第 1 段标题"), { target: { value: "原始段落" } });
+  fireEvent.change(screen.getByLabelText("第 1 段正文"), { target: { value: "原始正文" } });
+  fireEvent.change(screen.getByLabelText("第 1 段画面建议"), { target: { value: "原始画面建议" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存首窗" }));
+  await screen.findByText("核查报告无效");
+  oldView.unmount();
+
+  renderTaskSubject(work);
+  fireEvent.click(await screen.findByRole("button", { name: "手动编写文案" }));
+  fireEvent.click(await screen.findByRole("button", { name: "查询原请求结果" }));
+  fireEvent.click(await screen.findByRole("button", { name: "返回原稿继续编辑" }));
+  await waitFor(() => expect(screen.getByLabelText("第 1 段正文")).toHaveValue("原始正文"));
+  expect(screen.getByLabelText("第 1 段画面建议")).toHaveValue("原始画面建议");
+  expect(screen.getByRole("button", { name: "保存首窗" })).toBeEnabled();
+  expect(requests).toHaveLength(1);
   expect(mocks.confirmScript).not.toHaveBeenCalled();
 });
 

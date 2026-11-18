@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.lipsync_models import planned_lipsync_model_id
 from app.creation.task_input_reads import creation_task_from_payload
 import hashlib
 import json
@@ -281,7 +282,7 @@ def _presenter_inputs_in_snapshot(repository, task, script, plan, models, *, con
             voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version,
             audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
             motion="natural", expression="neutral", authorization_id=person.authorization.id if person.authorization else "",
-            authorization_version=person.authorization.version if person.authorization else "", model_id=models[plan.lipsync_quality], viewer_user_id=task.owner_user_id)
+            authorization_version=person.authorization.version if person.authorization else "", model_id=planned_lipsync_model_id(plan, models[plan.lipsync_quality]), viewer_user_id=task.owner_user_id)
         if _authorization_failure(request) is not None:
             raise PermissionError("人物或声音授权已失效，不能生成或复用")
         yield segment, request
@@ -539,7 +540,7 @@ def person_edit_stage_facts(repository, task, proposal, plan, budget, models):
         audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
         motion=payload["motion"], expression=payload["expression"],
         authorization_id=person.authorization.id if person.authorization else "", authorization_version=person.authorization.version if person.authorization else "",
-        model_id=models[plan.lipsync_quality], viewer_user_id=task.owner_user_id)
+        model_id=planned_lipsync_model_id(plan, models[plan.lipsync_quality]), viewer_user_id=task.owner_user_id)
     if _authorization_failure(request) is not None:
         raise PermissionError("人物或声音授权已失效，不能生成或复用")
     files = presenter_input_facts(request)

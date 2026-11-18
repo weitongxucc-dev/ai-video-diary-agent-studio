@@ -291,10 +291,14 @@ it("bounded execution preview reads 45 sections by version and refreshes the par
   const version = "2026-10-26T00:00:00Z", nextVersion = "2026-10-26T00:00:01Z";
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     const request = new URL(url, "http://local");
+    if (request.pathname === "/api/device/resource-preparations") {
+      return new Response(JSON.stringify({ platform: "darwin", actor_scope: "a".repeat(64), revision: 1,
+        cpu_preparation_supported: true, preparation_configured: true, profile_status: "available",
+        available_operations: ["cpu_render"] }));
+    }
     requests.push(request);
     expect(request.pathname).toBe("/api/creation-tasks/task-1/scripts/script-1/sections");
     const expected = request.searchParams.get("expected_updated_at");
-    expect(expected).toBe(changed ? (requests.length === 4 ? version : nextVersion) : version);
     if (changed && expected === version) return new Response(JSON.stringify({ detail: "文案版本冲突" }), { status: 409 });
     const after = Number(request.searchParams.get("after_ordinal"));
     const end = Math.min(after + 20, 45);
@@ -343,4 +347,5 @@ it("bounded execution preview reads 45 sections by version and refreshes the par
   await screen.findByText("第 1 段 · 标题1：正式正文1");
   await waitFor(() => expect(screen.getByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeEnabled());
   expect(requests.map(request => request.searchParams.get("after_ordinal"))).toEqual(["0", "20", "40", "20", "0"]);
+  expect(requests.map(request => request.searchParams.get("expected_updated_at"))).toEqual([version, version, version, version, nextVersion]);
 });

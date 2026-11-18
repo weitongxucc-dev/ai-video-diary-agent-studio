@@ -2553,21 +2553,21 @@ def test_window_first_draft_45_target_is_reachable_without_seeding_a_script(api_
                  'evidence_reference_ids':[state.refs[0]['reference_id']]} for index in range(start,end)]
     initial = CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='45段稿',sections=parts(0,20))
     first = case.start_window('local','task',initial,member_id=state.owner.member_id)
-    assert first['total_count'] == 20 and len(calls) == 1
+    assert first['total_count'] == 20 and calls == []
     assert case.start_window('local','task',initial,member_id=state.owner.member_id) == first
-    assert len(calls) == 1
+    assert calls == []
     current = state.repository.script_records.get_creation_task_script('local',first['script_id'])
     assert current.draft_complete is False and len(current.sections) == 20
     from app.schemas import CreationTaskScriptConfirmRequest
     with pytest.raises(ScriptDraftRejected) as failure:
         case.confirm('local','task',current.id,CreationTaskScriptConfirmRequest(title=current.title,
             sections=[vars(part) for part in current.sections],expected_updated_at=current.updated_at),member_id=state.owner.member_id)
-    assert failure.value.status_code == 409 and len(calls) == 1
+    assert failure.value.status_code == 409 and calls == []
     last = first
     for start,end in [(20,40),(40,45)]:
         payload = CreationTaskScriptSectionsPatchRequest(request_id=uuid4(),expected_updated_at=last['updated_at'],sections=parts(start,end))
         last = case.patch('local','task',first['script_id'],payload,member_id=state.owner.member_id)
-    assert last['total_count'] == 45 and len(calls) == 3
+    assert last['total_count'] == 45 and calls == []
     assert state.repository.task_records.get_creation_task('local','task').confirmed_script_id is None
     all_parts, cursor = [], 0
     while cursor is not None:
@@ -2579,7 +2579,7 @@ def test_window_first_draft_45_target_is_reachable_without_seeding_a_script(api_
     with state.repository._connect() as conn:
         assert conn.execute('SELECT COUNT(*) FROM creation_task_scripts').fetchone()[0] == 1
         assert conn.execute('SELECT COUNT(*) FROM script_generation_runs').fetchone()[0] == 1
-        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='script_sections_reviewed'").fetchone()[0] == 3
+        assert conn.execute("SELECT COUNT(*) FROM task_events WHERE event_type='script_sections_reviewed'").fetchone()[0] == 0
 
     from app.schemas import CreationTaskScriptConfirmSavedRequest
     confirmation=CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=last['updated_at'])
@@ -2590,7 +2590,7 @@ def test_window_first_draft_45_target_is_reachable_without_seeding_a_script(api_
         result=case.confirm_saved('local','task',first['script_id'],confirmation,member_id=state.owner.member_id)
         assert result['status']=='confirmed' and result['total_count']==45
         assert case.confirm_saved('local','task',first['script_id'],confirmation,member_id=state.owner.member_id)==result
-    assert len(calls)==6
+    assert len(calls)==3
     assert state.repository.task_records.get_creation_task('local','task').confirmed_script_id==first['script_id']
     stored=state.repository.script_records.get_creation_task_script('local',first['script_id'])
     assert stored.draft_complete is True and stored.selection_status=='confirmed' and len(stored.sections)==45
@@ -2598,7 +2598,7 @@ def test_window_first_draft_45_target_is_reachable_without_seeding_a_script(api_
                                      operation='confirm',script_id=stored.id)==result
 
 
-def test_same_window_request_in_flight_is_query_only_not_a_second_model_call(api_state, monkeypatch):
+def test_same_window_request_in_flight_is_query_only_not_a_second_save(api_state, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
     from uuid import uuid4
@@ -2606,14 +2606,13 @@ def test_same_window_request_in_flight_is_query_only_not_a_second_model_call(api
     state=api_state
     entered,release=Event(),Event()
     calls=[]
-    def review(request):
-        data=json.loads(json.loads(request.content)['messages'][1]['content'])
-        calls.append(data)
+    save = state.repository.script_records.save_script_candidate
+    def delayed_save(run, candidate, **kwargs):
+        calls.append(candidate.id)
         entered.set()
         assert release.wait(5)
-        return _review_tool_response(bound_review(reviewed(draft()),data))
-    checker=OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(review))
-    monkeypatch.setattr(main,'_creation_task_script_generator_for',lambda settings:checker)
+        return save(run, candidate, **kwargs)
+    monkeypatch.setattr(state.repository.script_records, 'save_script_candidate', delayed_save)
     case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
     request=CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='首窗',sections=[{
         'id':'first','title':'素材用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}])
@@ -2705,7 +2704,7 @@ def test_incomplete_review_never_adopts_and_later_confirmation_reuses_completed_
     request=CreationTaskScriptConfirmSavedRequest(request_id=uuid4(),expected_updated_at=last['updated_at'])
     with pytest.raises(ScriptDraftRejected) as failure:
         case.confirm_saved('local','task',first['script_id'],request,member_id=state.owner.member_id)
-    assert failure.value.status_code==502 and len(calls)==4
+    assert failure.value.status_code==502 and len(calls)==2
     assert state.repository.task_records.get_creation_task('local','task').confirmed_script_id is None
     assert state.repository.script_records.get_creation_task_script('local',first['script_id']).draft_complete is False
     original=case.window_request_result('local','task',request.request_id,member_id=state.owner.member_id,operation='confirm',script_id=first['script_id'])
@@ -2713,10 +2712,10 @@ def test_incomplete_review_never_adopts_and_later_confirmation_reuses_completed_
     mode['truncate']=False
     retry=request.model_copy(update={'request_id':uuid4()})
     result=case.confirm_saved('local','task',first['script_id'],retry,member_id=state.owner.member_id)
-    assert result['status']=='confirmed' and len(calls)==5
+    assert result['status']=='confirmed' and len(calls)==3
     assert calls[-1]['review_window']['section_ids']==[f'part-{i}' for i in range(20,25)]
     assert case.confirm_saved('local','task',first['script_id'],retry,member_id=state.owner.member_id)==result
-    assert len(calls)==5
+    assert len(calls)==3
 
 
 def test_delegated_saved_adoption_records_real_goal_journal_without_full_script(api_state, monkeypatch):
@@ -2766,7 +2765,7 @@ def test_delegated_saved_adoption_records_real_goal_journal_without_full_script(
         proofs=json.loads(row['result_json'])['goal_business_actions']
         assert len(proofs)==1 and proofs[0]['id']==saved['script_id'] and proofs[0]['version']==result['updated_at']
         assert len([event for event in json.loads(row['events_json']) if event.get('phase')=='script_adoption'])==1
-    assert len(calls)==2
+    assert len(calls)==1
 
 
 
@@ -2798,7 +2797,7 @@ def test_patch_rechecks_revoked_source_after_preflight_inside_writer_transaction
     with pytest.raises((ScriptDraftRejected,HTTPException)) as error:
         case.patch('local','task',saved['script_id'],CreationTaskScriptSectionsPatchRequest(request_id=uuid4(),expected_updated_at=saved['updated_at'],sections=[{
             'id':'first','title':'用途','content':FACT,'visual_prompt':'另一种计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}]),member_id=state.owner.member_id)
-    assert error.value.status_code==409 and len(calls)==2
+    assert error.value.status_code==409 and calls==[]
     assert state.repository.script_records.get_creation_task_script('local',saved['script_id'])==before
 
 
@@ -2816,7 +2815,7 @@ def test_first_window_receipt_failure_rolls_back_original_task_run_and_body_toge
         'id':'first','title':'用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}])
     with pytest.raises(RuntimeError,match='synthetic receipt failure'):
         case.start_window('local','task',request,member_id=state.owner.member_id)
-    assert len(calls)==1 and state.repository.task_records.get_creation_task('local','task')==before
+    assert calls==[] and state.repository.task_records.get_creation_task('local','task')==before
     with state.repository._connect() as conn:
         for table in ('creation_task_scripts','script_generation_runs','creation_task_script_sections'):
             assert conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]==0
@@ -2867,7 +2866,7 @@ def test_script_owner_task_port_failure_rolls_back_same_transaction(api_state, m
         'id':'first','title':'用途','content':FACT,'visual_prompt':'计划画面','evidence_reference_ids':[state.refs[0]['reference_id']]}])
     with pytest.raises(RuntimeError,match='synthetic task-owner failure'):
         case.start_window('local','task',request,member_id=state.owner.member_id)
-    assert len(calls)==1 and state.repository.task_records.get_creation_task('local','task')==before
+    assert calls==[] and state.repository.task_records.get_creation_task('local','task')==before
     with state.repository._connect() as conn:
         for table in ('creation_task_scripts','script_generation_runs','creation_task_script_sections'):
             assert conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0]==0

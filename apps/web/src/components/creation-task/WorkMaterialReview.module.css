@@ -1,0 +1,42 @@
+.review { display: grid; gap: 12px; min-width: 0; }
+.review p { margin: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.heading, .results strong { overflow-wrap: anywhere; }
+.search, .pages { display: flex; align-items: end; gap: 8px; }
+.search .field { flex: 1; min-width: 0; }
+.field { display: grid; gap: 4px; color: var(--text-2); }
+.field input, .field select {
+  min-height: 34px;
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  color: var(--text-1);
+  background: var(--surface-1);
+  font: inherit;
+}
+.field :focus-visible, .back:focus-visible, .results button:focus-visible, .roles input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.results { padding: 0; margin: 0; list-style: none; display: grid; gap: 6px; }
+.results button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  text-align: start;
+  color: var(--text-1);
+}
+.results button:hover, .back:hover { background: var(--surface-2); }
+.results button span, .review .note { color: var(--text-2); }
+.back { justify-self: start; }
+.preview { width: 100%; max-height: min(36vh, 320px); background: var(--surface-2); border-radius: 8px; }
+.roles { display: flex; flex-wrap: wrap; gap: 8px 14px; min-width: 0; padding: 0; border: 0; }
+.roles legend { margin-bottom: 8px; font-weight: 600; }
+.roles label { display: inline-flex; align-items: center; gap: 4px; }
+.roles input { accent-color: var(--accent); }
+.review form:not(.search) { display: grid; justify-items: start; gap: 8px; }
+.review .error { color: var(--danger); }

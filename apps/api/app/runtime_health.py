@@ -7,6 +7,7 @@ from app.assistant_pi import pi_runtime_checks
 from app.config import Settings
 from app.local_runtime_status import ffmpeg_available as probe_ffmpeg_available
 from app.local_runtime_status import whisper_file_present
+from app.lipsync_models import LatentSync16Runtime
 from app.model_runtime import (
     CHINESE_CLIP_VIT_B16,
     QWEN3_VL_4B_4BIT,
@@ -31,6 +32,7 @@ def model_catalog_from_settings(settings: Settings) -> ModelCatalog:
         settings.voice_model_worker_path,
         understanding_runtime_python_path=settings.understanding_runtime_python_path,
         understanding_worker_path=settings.understanding_worker_path,
+        latentsync_runtime=LatentSync16Runtime.from_settings(settings),
     )
 
 

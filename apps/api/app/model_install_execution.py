@@ -13,6 +13,7 @@ from urllib.parse import quote
 from app.model_runtime import (CHINESE_CLIP_VIT_B16, QWEN3_TTS_06B_BASE_8BIT, QWEN3_VL_4B_4BIT,
     MODEL_FILES, DownloadFile, ModelCatalog, ModelSpec)
 from app.model_install_jobs import ModelInstallError, _atomic_json
+from app.lipsync_models import LATENTSYNC_16_MODEL_ID
 
 _CHUNK_BYTES = 4 * 1024**2
 
@@ -28,6 +29,13 @@ MODEL_RUNTIME_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 
 
 def ensure_runtime(catalog: ModelCatalog, spec: ModelSpec) -> None:
+    if spec.id == LATENTSYNC_16_MODEL_ID:
+        if catalog.latentsync_runtime is None:
+            raise ModelInstallError("请先配置独立的 LatentSync 1.6 CUDA 环境和离线 VAE、人脸检测权重。")
+        issue = catalog.latentsync_runtime.issue()
+        if issue:
+            raise ModelInstallError(issue)
+        return
     runtime_python = catalog.runtime_path(spec)
     if runtime_python is None:
         raise ModelInstallError("未配置模型运行环境路径。")
@@ -100,11 +108,15 @@ def download_model(staging_path: Path, job_id: str, spec: ModelSpec, download_fi
                 raise ModelInstallError(f"下载文件大小不匹配：{item.path}")
             os.replace(part_path, destination)
             completed_bytes += item.size
+        digest = _sha256(destination)
+        if item.sha256 is not None and digest != item.sha256:
+            destination.unlink()
+            raise ModelInstallError(f"下载文件与官方校验值不一致：{item.path}，可重试下载。")
         manifest_files.append(
             {
                 "path": item.path,
                 "size": item.size,
-                "sha256": _sha256(destination),
+                "sha256": digest,
             }
         )
         update_job(

@@ -97,17 +97,20 @@ def test_start_http_creates_partial_draft_without_an_existing_script(api_state, 
     assert result['total_count'] == 1
     saved = state.repository.script_records.get_creation_task_script('local', result['script_id'])
     assert saved.draft_complete is False
+    run = state.repository.script_records.get_script_generation_run('local', saved.run_id)
+    assert run.run_kind == 'manual_draft'
+    assert run.route_snapshot['availability'] != 'succeeded'
     assert state.repository.task_records.get_creation_task('local', 'task').confirmed_script_id is None
     replay = state.client.post(url, json=body)
     assert replay.status_code == 200 and replay.json() == result
-    assert len(calls) == 1
+    assert calls == []
     assert state.client.post(url, json={**body, 'title': '换输入'}).status_code == 409
     assert state.client.post(url, json={**body, 'draft_complete': True}).status_code == 422
     context = state.client.get('/api/creation-tasks/task/assistant/script-context')
     assert context.status_code == 200, context.text
     assert context.json()['draft']['sections'] is None
     assert context.json()['draft']['draft_complete'] is False
-    assert len(calls) == 1
+    assert calls == []
     lookup = f"/api/creation-tasks/task/script-window-requests/{body['request_id']}?operation=start"
     assert state.client.get(lookup).json() == result
     confirmation = {'request_id': str(uuid4()), 'expected_updated_at': result['updated_at']}
@@ -115,13 +118,57 @@ def test_start_http_creates_partial_draft_without_an_existing_script(api_state, 
                                   json=confirmation)
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()['status'] == 'confirmed'
-    assert len(calls) == 2
+    assert len(calls) == 1
     saved = state.repository.script_records.get_creation_task_script('local', result['script_id'])
     assert saved.draft_complete is True and saved.selection_status == 'confirmed'
     lookup = (f"/api/creation-tasks/task/script-window-requests/{confirmation['request_id']}"
               f"?operation=confirm&script_id={result['script_id']}")
     assert state.client.get(lookup).json() == confirmed.json()
-    assert len(calls) == 2
+    assert len(calls) == 1
+
+
+def test_manual_draft_survives_malformed_review_and_can_be_edited(api_state, monkeypatch):
+    state = api_state
+    state.client.app.include_router(build_script_sections_router(
+        readable_task=main._readable_creation_task,
+        read_sections=state.repository.script_records.read_creation_task_script_sections,
+        patch_sections=main._script_window_http_adapter().patch_creation_script_sections,
+        start_window=main._script_window_http_adapter().start_creation_script_window,
+        confirm_saved=main._script_window_http_adapter().confirm_saved_creation_script,
+        read_request=main._script_window_http_adapter().read_creation_script_window_request,
+    ))
+    calls = []
+
+    def malformed_review(request):
+        calls.append(request)
+        return _review_tool_response({'sections': 'malformed'})
+
+    checker = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        transport=httpx.MockTransport(malformed_review))
+    monkeypatch.setattr(main, '_creation_task_script_generator_for', lambda settings: checker)
+    prefix = '/api/creation-tasks/task'
+    body = {**agent_payload(state), 'request_id': str(uuid4())}
+    response = state.client.post(f'{prefix}/scripts/windows', json=body)
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    script_url = f"{prefix}/scripts/{saved['script_id']}"
+    confirmation = {'request_id': str(uuid4()), 'expected_updated_at': saved['updated_at']}
+    assert calls == []
+    failed = state.client.post(f'{script_url}/confirm-saved', json=confirmation)
+    assert failed.status_code == 502 and failed.json()['detail']['error'] == 'script_review_invalid'
+    assert len(calls) == 1
+    lookup = f"{prefix}/script-window-requests/{confirmation['request_id']}"
+    rejected = state.client.get(lookup, params={'operation':'confirm', 'script_id':saved['script_id']})
+    assert rejected.status_code == 200 and rejected.json()['submission_effect'] == 'rejected'
+    assert state.client.post(f'{script_url}/confirm-saved', json=confirmation).json() == rejected.json()
+    assert state.repository.task_records.get_creation_task('local', 'task').confirmed_script_id is None
+    assert state.client.get(f'{script_url}/sections').json()['items'][0]['section'] == body['sections'][0]
+    changed = {**body['sections'][0], 'visual_prompt': '修改后的画面建议'}
+    edit = state.client.patch(f'{script_url}/sections', json={
+        'request_id': str(uuid4()), 'expected_updated_at': saved['updated_at'], 'sections': [changed]})
+    assert edit.status_code == 200, edit.text
+    assert state.client.get(f'{script_url}/sections').json()['items'][0]['section'] == changed
+    assert len(calls) == 1
 
 
 def test_45_section_target_through_http_windows_and_complete_adoption(api_state, monkeypatch):
@@ -165,7 +212,7 @@ def test_45_section_target_through_http_windows_and_complete_adoption(api_state,
             'request_id': str(uuid4()), 'expected_updated_at': last['updated_at'], 'sections': sections(start, end)})
         assert response.status_code == 200, response.text
         last = response.json()
-    assert last['total_count'] == 45 and len(calls) == 3
+    assert last['total_count'] == 45 and calls == []
     confirmation = {'request_id': str(uuid4()), 'expected_updated_at': last['updated_at']}
     with monkeypatch.context() as bounded:
         bounded.setattr(state.repository.script_records, 'get_creation_task_script', lambda *args, **kwargs:
@@ -173,12 +220,12 @@ def test_45_section_target_through_http_windows_and_complete_adoption(api_state,
         response = state.client.post(f'/api/creation-tasks/task/scripts/{script_id}/confirm-saved', json=confirmation)
     assert response.status_code == 200, response.text
     assert response.json()['status'] == 'confirmed' and response.json()['total_count'] == 45
-    assert len(calls) == 6
+    assert len(calls) == 3
     assert state.repository.task_records.get_creation_task('local', 'task').confirmed_script_id == script_id
     receipt = state.client.get(f"/api/creation-tasks/task/script-window-requests/{confirmation['request_id']}",
                                params={'operation': 'confirm', 'script_id': script_id})
     assert receipt.status_code == 200 and receipt.json() == response.json()
-    assert len(calls) == 6
+    assert len(calls) == 3
 
 
 def test_oversized_generation_window_does_not_mark_model_connection_failed(api_state, monkeypatch):

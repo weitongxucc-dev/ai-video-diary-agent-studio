@@ -7,6 +7,8 @@ export type SegmentEditAnchor = {
     segmentId: string;
     startSeconds: number;
     endSeconds: number;
+    assetRevision: string;
+    segmentRevision: string;
 };
 export type IntakeStatus = Awaited<ReturnType<typeof getMaterialIntakeStatus>>;
 export type Busy = "scan" | "search" | "load" | "analyze" | "review" | "segment" | "collection" | "retry" | "notes" | null;

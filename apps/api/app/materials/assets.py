@@ -27,6 +27,7 @@ from app.materials.contracts import (
     MaterialVisualFeature,
     effective_segment_usage_role,
     material_media_type_for,
+    material_usage_eligibility,
 )
 from app.media_observations import (
     MaterialSpeechAnalysis,
@@ -36,11 +37,23 @@ from app.media_observations import (
 )
 from app.models import utc_now
 from app.persistence_json import _json_payload, _with_datetime
+from app.source_policy import knowledge_item_readable as content_readable
 from app.source_types import ContentUseState
 
 
 class MaterialVersionConflict(ValueError):
     """A frozen material revision changed before the atomic mutation."""
+
+
+def _require_material_editor(asset: MaterialAsset, identity: tuple[str | None, bool] | None) -> None:
+    if identity is None:
+        return
+    actor, local_diagnostic = identity
+    if not content_readable(user_id=actor, local_diagnostic=local_diagnostic,
+                            visibility=asset.visibility, owner_user_id=asset.owner_user_id):
+        raise KeyError(asset.id)
+    if not local_diagnostic and (not actor or actor != asset.owner_user_id):
+        raise PermissionError("请由素材上传者修改。")
 
 
 class MaterialAssetStore:
@@ -788,22 +801,36 @@ class MaterialAssetStore:
             self._write_asset(conn, asset)
         return asset
 
-    def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str], *, expected_asset_updated_at: datetime | None = None) -> MaterialAsset:
+    @staticmethod
+    def _write_asset_tags(conn: sqlite3.Connection, asset: MaterialAsset) -> None:
+        updated_at = asset.updated_at.isoformat()
+        conn.execute(
+            """UPDATE material_assets
+            SET payload=json_set(payload, '$.user_tags', json(?), '$.updated_at', ?), updated_at=?
+            WHERE workspace_id=? AND id=?""",
+            (json.dumps(asset.user_tags, ensure_ascii=False), updated_at, updated_at, asset.workspace_id, asset.id),
+        )
+
+    def update_asset_tags(self, workspace_id: str, asset_id: str, user_tags: list[str], *,
+                          expected_asset_updated_at: datetime | None = None,
+                          editor_identity: tuple[str | None, bool] | None = None) -> MaterialAsset:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
+            row = self._asset_row_by_id(conn, workspace_id, asset_id)
             if row is None:
                 raise KeyError(asset_id)
-            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            asset = self._asset_from_row(row)
+            _require_material_editor(asset, editor_identity)
             if expected_asset_updated_at is not None and asset.updated_at != expected_asset_updated_at:
                 raise MaterialVersionConflict("素材版本已变化，未提交标签修改；请重新查看后发送。")
             asset.user_tags = _normalized_labels(user_tags)
             asset.updated_at = utc_now()
-            conn.execute("UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset_id))
+            self._write_asset_tags(conn, asset)
         return asset
 
     def update_assets_tags_batch(
-        self, workspace_id: str, asset_ids: list[str], *, add: list[str], remove: list[str]
+        self, workspace_id: str, asset_ids: list[str], *, add: list[str], remove: list[str],
+        editor_identity: tuple[str | None, bool] | None = None,
     ) -> list[MaterialAsset]:
         if not asset_ids:
             raise ValueError("请选择至少一条素材")
@@ -813,16 +840,17 @@ class MaterialAssetStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             for asset_id in dict.fromkeys(asset_ids):
-                row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
+                row = self._asset_row_by_id(conn, workspace_id, asset_id)
                 if row is None:
                     raise KeyError(asset_id)
-                asset = self._asset_from_payload(json.loads(str(row["payload"])))
+                asset = self._asset_from_row(row)
+                _require_material_editor(asset, editor_identity)
                 kept = [tag for tag in asset.user_tags if tag.casefold() not in normalized_remove]
                 asset.user_tags = _normalized_labels([*kept, *normalized_add])
                 asset.updated_at = utc_now()
                 updated.append(asset)
             for asset in updated:
-                conn.execute("UPDATE material_assets SET payload=?, updated_at=? WHERE workspace_id=? AND id=?", (_json_payload(asset), asset.updated_at.isoformat(), workspace_id, asset.id))
+                self._write_asset_tags(conn, asset)
         return updated
 
     def update_asset_notes(
@@ -867,21 +895,24 @@ class MaterialAssetStore:
         asset_id: str,
         segment_id: str,
         *,
-        description: str,
-        transcript: str,
-        review_status: AssetReviewStatus,
+        description: str | None = None,
+        transcript: str | None = None,
+        review_status: AssetReviewStatus | None = None,
         usage_role: AssetUsageRole | None = None,
         user_tags: list[str] | None = None,
         collection_ids: list[str] | None = None,
         expected_asset_updated_at: datetime | None = None,
         expected_segment_updated_at: datetime | None = None,
+        editor_identity: tuple[str | None, bool] | None = None,
+        confirm_automatic_usage: bool = False,
     ) -> MaterialAsset:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT payload FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
+            row = conn.execute("SELECT payload, visibility FROM material_assets WHERE workspace_id=? AND id=?", (workspace_id, asset_id)).fetchone()
             if row is None:
                 raise KeyError(asset_id)
-            asset = self._asset_from_payload(json.loads(str(row["payload"])))
+            asset = self._asset_from_row(row)
+            _require_material_editor(asset, editor_identity)
             if expected_asset_updated_at is not None and asset.updated_at != expected_asset_updated_at:
                 raise MaterialVersionConflict("素材版本已变化，未提交片段修改；请重新查看后发送。")
             segment = next((item for item in asset.segments if item.id == segment_id), None)
@@ -889,10 +920,20 @@ class MaterialAssetStore:
                 raise KeyError(segment_id)
             if expected_segment_updated_at is not None and segment.updated_at != expected_segment_updated_at:
                 raise MaterialVersionConflict("片段版本已变化，未提交修改；请重新查看后发送。")
+            if confirm_automatic_usage:
+                if asset.media_type != "video":
+                    raise ValueError("作品内只确认视频片段的用途。")
+                eligibility = material_usage_eligibility(asset, segment, purpose="automatic")
+                if not eligibility.eligible:
+                    raise ValueError(eligibility.reason)
+                if usage_role == segment.usage_role:
+                    return asset
             if review_status == "approved" and asset.review_status != "approved":
                 raise ValueError("素材文件尚未进入可用库")
-            segment.description = description.strip()
-            segment.transcript = transcript.strip()
+            if description is not None:
+                segment.description = description.strip()
+            if transcript is not None:
+                segment.transcript = transcript.strip()
             if usage_role is not None:
                 previous_usage_role = segment.usage_role
                 segment.usage_role = usage_role
@@ -911,7 +952,8 @@ class MaterialAssetStore:
                 if not set(collection_ids) <= known_collections:
                     raise ValueError("标签夹不存在或不属于当前工作区")
                 segment.collection_ids = list(dict.fromkeys(collection_ids))
-            segment.review_status = review_status
+            if review_status is not None:
+                segment.review_status = review_status
             # Editing member text does not replace recognition facts. Analysis owns
             # system_tags and still refreshes them through its existing save path.
             segment.updated_at = utc_now()

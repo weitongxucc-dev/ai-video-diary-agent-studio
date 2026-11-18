@@ -111,8 +111,8 @@ def prepare_runtime_dependencies(
     models = ModelProviders(
         catalog, visual_semantic_provider_from_catalog(catalog),
         voice_clone_provider_from_catalog(catalog, temporary_root=settings.effective_temporary_root_path),
-        avatar_lipsync_provider_from_settings(settings),
-        avatar_lipsync_provider_from_settings(settings, quality="high"),
+        avatar_lipsync_provider_from_settings(settings, quality="fast"),
+        avatar_lipsync_provider_from_settings(settings, quality="high", catalog=catalog),
     )
     production = ProductionRepository(
         database_path=settings.database_path, video_library_path=settings.video_inbox_path,
@@ -159,7 +159,7 @@ def prepare_runtime_dependencies(
         MontageRenderer(settings.video_output_path), ArtifactStore(settings.video_output_path),
         NarrationGenerator(settings.video_output_path, models.voice),
         VoicePreviewService(settings.video_output_path, models.voice),
-        AvatarPreviewService(settings.video_output_path, models.avatar),
+        AvatarPreviewService(settings.video_output_path, models.latentsync, alternatives=(models.avatar,)),
         inbox, processor, video_processing_pipeline_from_settings(settings, processor=processor),
         DraftWorkspace(settings), SourceTracker(inbox),
     )

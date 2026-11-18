@@ -184,7 +184,7 @@ it("keeps browsing separate from explicit asset and segment references", async (
   await waitFor(()=>expect(JSON.parse(screen.getByLabelText("草稿引用").textContent!)).toEqual([{kind:"material",label:"local.mp4 · 片段 0:01–0:03",selection:{scope:"segment",asset_id:"asset",segment_id:"segment",expected_updated_at:asset.updated_at,expected_segment_updated_at:segment.updated_at}}]));
 });
 
-it("shows asset labels and applies assistant readback only to the exact selected segment", async () => {
+it("applies deferred assistant readback only to the originating material segment", async () => {
   vi.mocked(getProductionMaterials).mockResolvedValue(twoAssetLibrary);
   let resolveTurn!: (value: Awaited<ReturnType<typeof sendMaterialAssistantTurn>>) => void;
   vi.mocked(sendMaterialAssistantTurn).mockImplementationOnce((message, conversationId, _selection, _requestId, expectedVersion, onEvent) => {
@@ -219,15 +219,7 @@ it("shows asset labels and applies assistant readback only to the exact selected
       };
     });
   });
-  vi.mocked(updateMaterialAssetTags).mockResolvedValue({ ...taggedAsset, user_tags: ["整条标签"] });
   render(<AssistantConversationProvider><MaterialLibraryWorkspace initialLibrary={twoAssetLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} /></AssistantConversationProvider>);
-  fireEvent.click(screen.getByRole("button", { name: /^0:04\.0\s*local\.mp4/ }));
-  expect(screen.getByText("整条素材还没有我的标签。")).toBeInTheDocument();
-  fireEvent.change(screen.getByLabelText("添加到整条素材"), { target: { value: "整条标签" } });
-  fireEvent.keyDown(screen.getByLabelText("添加到整条素材"), { key: "Enter" });
-  await waitFor(() => expect(updateMaterialAssetTags).toHaveBeenCalledWith("asset", ["整条标签"]));
-  await waitFor(() => expect(screen.getByLabelText("移除整条素材标签 整条标签")).toBeInTheDocument());
-
   fireEvent.click(screen.getByRole("button", { name: /^0:01.*0:03/ }));
   fireEvent.click(await screen.findByRole("button",{name:"引用到对话：local.mp4 · 片段 0:01–0:03"}));
   fireEvent.change(screen.getByRole("textbox", { name: "素材对话" }), { target: { value: "给片段加上产品演示" } });
@@ -238,20 +230,23 @@ it("shows asset labels and applies assistant readback only to the exact selected
     expect.any(String), expect.any(Number), expect.any(Function), expect.any(Number),
   ));
   fireEvent.click(screen.getByRole("button", { name: /^0:04\.0\s*自造素材B\.mp4/ }));
-  resolveTurn({
+  await act(async () => resolveTurn({
     reply: "已按你的要求更新这个片段。", provider: "test", model: "test",
     material_result: {
       scope: "segment", asset_ref: "asset:asset", segment_ref: "segment:segment",
       user_tags: ["旧标签", "产品演示"], system_tags: [], action: "add", changed: true,
     },
-  });
-  await waitFor(() => expect(screen.getByRole("button", { name: /^0:04\.0\s*自造素材B\.mp4/ })).toBeInTheDocument());
+  }));
   expect(screen.queryByLabelText("移除标签 产品演示")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /^0:04\.0\s*local\.mp4/ }));
   fireEvent.click(screen.getByRole("button", { name: /^0:01.*0:03/ }));
-  await waitFor(() => expect(screen.getByLabelText("移除标签 产品演示")).toBeInTheDocument());
-  expect(screen.getByLabelText("移除整条素材标签 整条标签")).toBeInTheDocument();
+  expect(await screen.findByLabelText("移除标签 产品演示")).toBeInTheDocument();
+  expect(screen.getByText("整条素材还没有我的标签。")).toBeInTheDocument();
+});
 
+it("shows manual and assistant labels on the whole asset", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue(taggedLibrary);
+  vi.mocked(updateMaterialAssetTags).mockResolvedValue({ ...taggedAsset, user_tags: ["整条标签"] });
   vi.mocked(sendMaterialAssistantTurn).mockResolvedValueOnce({
     reply: "整条素材标签已更新。", provider: "test", model: "test",
     material_result: {
@@ -259,9 +254,15 @@ it("shows asset labels and applies assistant readback only to the exact selected
       user_tags: ["整条标签", "整条AI标签"], action: "add", changed: true,
     },
   });
-  fireEvent.click(screen.getByRole("button", { name: /^0:04\.0\s*local\.mp4/ }));
-  fireEvent.click(screen.getByRole("button", { name: /移除引用.*片段/ }));
-  fireEvent.click(screen.getByRole("button", { name: "引用到对话：local.mp4" }));
+  render(<AssistantConversationProvider><MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} /></AssistantConversationProvider>);
+  expect(screen.getByText("整条素材还没有我的标签。")).toBeInTheDocument();
+  const assetTags = screen.getByLabelText("添加到整条素材");
+  fireEvent.change(assetTags, { target: { value: "整条标签" } });
+  fireEvent.keyDown(assetTags, { key: "Enter" });
+  expect(await screen.findByLabelText("移除整条素材标签 整条标签")).toBeInTheDocument();
+  expect(updateMaterialAssetTags).toHaveBeenCalledWith("asset", ["整条标签"]);
+
+  fireEvent.click(await screen.findByRole("button", { name: "引用到对话：local.mp4" }));
   fireEvent.change(screen.getByRole("textbox", { name: "素材对话" }), { target: { value: "给整条素材添加整条AI标签" } });
   await waitFor(()=>expect(screen.getByRole("button",{name:"发送"})).toBeEnabled());
   fireEvent.click(screen.getByRole("button",{name:"发送"}));
@@ -269,7 +270,9 @@ it("shows asset labels and applies assistant readback only to the exact selected
     "给整条素材添加整条AI标签", expect.any(String), expect.objectContaining({ scope: "asset", asset_id: "asset" }),
     expect.any(String), expect.any(Number), expect.any(Function), expect.any(Number),
   ));
-  await waitFor(() => expect(screen.getByLabelText("移除整条素材标签 整条AI标签")).toBeInTheDocument());
+  expect(await screen.findByLabelText("移除整条素材标签 整条AI标签")).toBeInTheDocument();
+  expect(screen.getByLabelText("移除整条素材标签 整条标签")).toBeInTheDocument();
+  expect(screen.queryByLabelText("移除标签 整条AI标签")).not.toBeInTheDocument();
 });
 
 it("persists the selected restriction and removes obsolete proof displays", async () => {
@@ -411,6 +414,8 @@ it.each([
   expect(within(screen.getByLabelText("系统标签")).getByText(`用途:${oldLabel}`)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "保存片段修改" }));
   await waitFor(() => expect(updateProductionMaterialSegment).toHaveBeenCalledWith("asset", "segment", {
+    expected_asset_updated_at: initial.assets[0].updated_at,
+    expected_segment_updated_at: segment.updated_at,
     description: segment.description, transcript: segment.transcript, review_status: segment.review_status,
     usage_role: chosen, user_tags: segment.user_tags, collection_ids: [],
   }));
