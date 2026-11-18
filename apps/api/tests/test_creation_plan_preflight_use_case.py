@@ -181,6 +181,12 @@ def test_metadata_preflight_template_pins_scope_and_lazy_provider(tmp_path, monk
     assert all(not x.blocks_confirmation for x in positive.blockers)
     invocations.append({"kind": "confirm_explicit_positive", "trace": list(trace),
         "fingerprint": positive.preflight_fingerprint, "provided_fields": sorted(inputs[1].provided_fields)})
+    monkeypatch.setattr(ProviderFacts, "ready", True)
+    monkeypatch.setattr(ProviderFacts, "supported_languages", ("zh",), raising=False)
+    english = explicit.model_copy(update={"language": "en-US"})
+    preview = main._creation_plan_preflight_http_adapter().preflight(request, workspace, english, automation_scope=scope)
+    language_blocker = next(item for item in preview.blockers if item.reason == "language_unavailable")
+    assert language_blocker.stage == "avatar_lipsync" and not language_blocker.blocks_confirmation
     import sqlite3
     with sqlite3.connect(database) as conn:
         counts = {table: conn.execute("SELECT count(*) FROM " + table).fetchone()[0]
