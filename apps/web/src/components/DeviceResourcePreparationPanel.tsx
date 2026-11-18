@@ -241,6 +241,7 @@ export function DeviceResourcePreparationPanel() {
   return <section className={styles.panel} aria-label="基础媒体准备">
     <header className={styles.header}><div><h3>基础媒体准备</h3><span className={recorded ? styles.ready : styles.secondary}>{profileLabel}</span></div><IconButton label="重新读取状态" disabled={busy} onClick={() => void refresh()}><RefreshCw/></IconButton></header>
     <p className={styles.secondary}>按你使用的视频规格检查本机画面与音频处理条件，不会制作已有作品。配音模型等能力另行检查。</p>
+    {status?.production_blocker && <p role="status">{status.production_blocker}</p>}
     {status && !status.preparation_configured ? <p>请从桌面应用打开设置，绑定本机设备配置后再准备。</p>
       : status && !status.cpu_preparation_supported ? <p>当前系统尚不支持基础媒体准备；请使用已适配的 macOS 桌面版本。</p> : null}
     <fieldset className={styles.fields} disabled={locked}>

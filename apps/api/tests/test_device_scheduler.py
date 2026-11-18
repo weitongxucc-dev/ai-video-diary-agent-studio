@@ -20,6 +20,8 @@ from app.device_scheduler import (
     DeviceScheduler,
     ProcessIdentity,
     RecoveryBlocked,
+    PriorDeviceWorkPending,
+    production_device_blocker,
     SchedulePolicy,
     SessionHeartbeat,
     SourceRef,
@@ -684,6 +686,19 @@ def _snapshot_old_rows(scheduler):
         return (conn.execute("SELECT * FROM device_work_requests ORDER BY id").fetchall(),
                 conn.execute("SELECT * FROM device_permit ORDER BY id").fetchall(),
                 conn.execute("SELECT * FROM job_runs ORDER BY id").fetchall())
+
+
+def test_production_preflight_reports_prior_work_without_claiming_the_device(tmp_path):
+    first = _scheduler(tmp_path)
+    current_database = tmp_path / "new.sqlite"
+    assert production_device_blocker(current_database, first.lock_path, None) is None
+    assert not first.lock_path.exists() and not current_database.exists()
+    _completed_stale_history(first, owner="device_preparation", reason="owner_unknown")
+    before = _snapshot_old_rows(first)
+    ledger = first.ledger_path.read_bytes()
+    assert production_device_blocker(current_database, first.lock_path, None) == PriorDeviceWorkPending.user_message
+    assert first.ledger_path.read_bytes() == ledger and _snapshot_old_rows(first) == before
+    assert not current_database.exists()
 
 
 def test_completed_never_granted_stale_history_allows_handoff_without_old_row_changes(tmp_path):

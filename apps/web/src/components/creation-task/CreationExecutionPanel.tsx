@@ -1,4 +1,5 @@
 "use client";
+import { DeviceProductionStatus } from "../DeviceProductionStatus";
 import { PreviewVideo } from "./EditPreviewCard";
 import { ExecutionQueueStatus } from "../ExecutionQueueStatus";
 import { creationTaskFailureReason } from "@/lib/creation-task-status";
@@ -162,6 +163,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
         {sourceMedia ? needsOutput ? "重新输出当前剪辑" : "继续原片制作" : needsOutput ? "确认以上文案和要求，仅重新输出当前剪辑" : "确认以上文案和要求，继续制作"}
     </Button> : null;
     const content = <section aria-label="连续制作" className={styles.workSection}>
+    {(!job || needsOutput) && <DeviceProductionStatus />}
     <div className={styles.operationHeading}><h2>{job ? "连续制作" : "制作要求"}</h2><span className={styles.stateBadge}>{statusText}</span></div>
     {needsOutput ? <p>{sourceMedia ? "沿用当前原片与剪辑，重新输出当前时间线。" : "沿用有效配音和故事板，重新输出当前时间线。"}</p> : null}
     {(!job || resumable || waitingForUser) && preview ? <>
