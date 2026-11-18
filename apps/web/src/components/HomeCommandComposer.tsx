@@ -3,7 +3,7 @@
 import { AlertCircle, LoaderCircle, RotateCcw, Undo2 } from "lucide-react";
 import { Button } from "./ui/button";
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
 import { readCreationTaskTimelineRestore } from '@/lib/api';
@@ -26,6 +26,7 @@ export type HomeCommandComposerProps = {
   autoFocus?: boolean;
   task?: CreationTask | null;
   onTaskUpdated?: () => void;
+  legacyHistory?: ReactNode;
   pageContext?: { pathname: string };
   taskContext?: {
     stage: string;
@@ -96,7 +97,7 @@ function appliedTaskReceiptKeys(conversation: AssistantConversation, taskId: str
   });
 }
 
-export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext, pageContext, taskContext }: HomeCommandComposerProps) {
+export function HomeCommandComposer({ assignLocation = assignDocumentLocation, autoFocus = false, task = null, onTaskUpdated, materialContext, pageContext, taskContext, legacyHistory }: HomeCommandComposerProps) {
   const selectionState = useAssistantSelection();
   const selectionSnapshot = JSON.stringify([selectionState?.version, selectionState?.items]);
   const latestSelectionSnapshot = useRef(selectionSnapshot);
@@ -490,6 +491,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
 
       <AssistantConversationPanel
         autoFocus={autoFocus}
+        legacyHistory={legacyHistory}
         materialUsage={taskContext?.materialUsage}
         busy={pending !== null || awaitingVersionRead}
         configured={modelConfigured}

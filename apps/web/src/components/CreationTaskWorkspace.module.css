@@ -628,14 +628,14 @@
 .editingAuxiliary :global([data-production-summary]) { display:contents; }
 .editingAuxiliary :global([data-production-summary] > div:empty) { display:none; }
 
-.statusTray { position:relative; flex:0 0 auto; min-width:0; border-top:1px solid var(--border-1); background:var(--surface-1); }
-.statusSummary { display:flex; width:100%; min-height:34px; padding:4px 16px; gap:8px; border-radius:0; font-weight:400; color:var(--text-2); }
+.statusTray { display:flex; flex:0 0 auto; flex-direction:column; min-width:0; max-block-size:36%; border-top:1px solid var(--border-1); background:var(--surface-1); }
+.statusSummary { display:flex; flex:none; width:100%; min-height:34px; padding:4px 16px; gap:8px; border-radius:0; font-weight:400; color:var(--text-2); }
 .statusSummary > span:nth-child(2) { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .statusDot { flex:0 0 6px; width:6px; height:6px; border-radius:50%; background:var(--text-3); }
 .statusDot[data-attention] { background:var(--warning); }
 .statusAction { display:flex; align-items:center; flex-shrink:0; gap:6px; margin-left:auto; }
 .statusSummary[aria-expanded="true"] .statusAction svg { transform:rotate(180deg); }
-.statusContents { position:absolute; bottom:100%; inset-inline:0; z-index:40; max-height:min(480px,70vh); overflow:auto; border-block:1px solid var(--border-1); background:var(--surface-1); box-shadow:0 -8px 24px #0000000a; }
+.statusContents { min-block-size:0; overflow:auto; overscroll-behavior:contain; border-top:1px solid var(--border-1); }
 .statusContents > header { position:sticky; top:0; display:flex; align-items:center; justify-content:space-between; padding:4px 12px 4px 16px; background:var(--surface-1); z-index:1; border-bottom:1px solid var(--border-1); }
 .statusContents .auxiliaryBody { display:grid; max-height:none; padding:12px 16px; border:0; gap:12px; }
 

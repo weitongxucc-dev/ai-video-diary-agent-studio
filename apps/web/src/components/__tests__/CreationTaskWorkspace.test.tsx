@@ -1205,6 +1205,30 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.getAssistantHistory).toHaveBeenCalledWith("task-1");
   });
 
+  it("keeps a failed legacy conversation read and its retry in the history dialog", async () => {
+    const initial = subtitleCoverWorkspace();
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.getAssistantHistory.mockRejectedValueOnce(new Error("旧对话存储暂不可读")).mockResolvedValueOnce({ items: [
+      { role: "assistant", message: "重新读回的历史回复", stage: "script", script_id: null, at: baseTask.updated_at },
+    ] });
+    render(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    await readyInput("局部修改要求");
+    const tray = screen.getByRole("region", { name: "制作与检查" });
+    const trayTrigger = within(tray).getByRole("button", { expanded: false });
+    expect(mocks.getAssistantHistory).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "历史对话" }));
+    const dialog = await screen.findByRole("dialog", { name: "历史对话" });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("旧对话存储暂不可读");
+    expect(trayTrigger).toHaveAttribute("aria-expanded", "false");
+    expect(within(tray).queryByText("旧对话存储暂不可读", { exact: false })).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "重试读取旧版对话" }));
+    fireEvent.click(await within(dialog).findByText("旧版只读历史"));
+    expect(within(dialog).getByText("重新读回的历史回复")).toBeVisible();
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("shows a saved question whose model reply was interrupted", async () => {
     const initial = workspace({ ...baseTask, stage: "script", confirmed_script_id: null });
     mocks.getAssistantHistory.mockResolvedValue({ items: [
@@ -1389,7 +1413,12 @@ describe("CreationTaskWorkspace", () => {
     expect(failure).toHaveFocus();
     expect(await screen.findByRole("region", { name: "制作状态" })).toHaveTextContent("输出磁盘写入失败");
     expect(screen.getByRole("region", { name: "制作状态" })).toHaveTextContent("人物口型");
-    openEditingStatusTray();
+    const close = screen.getByRole("button", { name: "收起制作与检查" });
+    close.focus();
+    await userEvent.keyboard("{Escape}");
+    expect(within(screen.getByRole("region", { name: "制作与检查" })).getByRole("button", { expanded: false })).toHaveFocus();
+    expect(screen.queryByRole("region", { name: "制作状态" })).not.toBeInTheDocument();
+    fireEvent.click(failure);
     fireEvent.click(screen.getByRole("button", { name: /查看制作详情|核对制作要求/ }));
     const panel = await productionPanel();
     await openProductionScript(panel);
@@ -1400,7 +1429,8 @@ describe("CreationTaskWorkspace", () => {
     expect(panel).toHaveTextContent("人物口型：已完成");
     expect(panel).not.toHaveTextContent("person_render");
     expect(mocks.resumeExecution).not.toHaveBeenCalled();
-    fireEvent.click(within(panel).getByRole("button", { name: "确认以上文案和要求，继续制作" }));
+    const details = screen.getByRole("dialog", { name: "制作文案与要求" });
+    fireEvent.click(within(details).getByRole("button", { name: "确认以上文案和要求，继续制作" }));
     await waitFor(() => expect(mocks.resumeExecution).toHaveBeenCalledWith("task-1"));
     expect(mocks.startExecution).not.toHaveBeenCalled();
     expect(mocks.generateNarration).not.toHaveBeenCalled();
@@ -4424,7 +4454,8 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByRole("region", { name: "连续制作" })).toHaveTextContent("成片产物需要检查");
     expect(screen.queryByRole("button", { name: "生成成片" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "确认以上文案和要求，开始制作" })).not.toBeInTheDocument();
-    fireEvent.click(within(panel).getByRole("button", { name: "确认以上文案和要求，仅重新输出当前剪辑" }));
+    const details = screen.getByRole("dialog", { name: "制作文案与要求" });
+    fireEvent.click(within(details).getByRole("button", { name: "确认以上文案和要求，仅重新输出当前剪辑" }));
     await waitFor(() => expect(mocks.resumeExecution).toHaveBeenCalledExactlyOnceWith("task-1"));
     if (outcome === "queued") {
       expect(await within(panel).findByText("已排队")).toBeInTheDocument();
