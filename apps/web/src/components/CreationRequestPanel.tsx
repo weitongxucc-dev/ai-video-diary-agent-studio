@@ -6,6 +6,7 @@ import { confirmCreationRequestWindow, getCreationRequest, getCreationRequestIte
 import { listVoiceProfiles, mediaProfilesErrorMessage, type VoiceProfile } from "@/lib/media-profiles-api";
 import { AppSelect, AppSelectOption } from "./AppSelect";
 import { creationTaskShortStatus } from "@/lib/creation-task-status";
+import { WorkSourceImport } from "./creation-task/WorkSourceImport";
 import { WorkMaterialImport } from "./creation-task/WorkMaterialImport";
 import { PreflightFacts } from "./CreateProductionTaskForm";
 import { AssistantFailureMessage } from "./AssistantConversationPanel";
@@ -170,7 +171,7 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
   return <section className={ui.panel} aria-label="创作目标">
     {!value ? <p role="status">{pending ? "正在读取创作目标…" : "尚未读取当前创作目标。"}</p> : <>
       <div className={ui.heading}><strong>{value.goal}</strong><p className={ui.summary}>目标 {value.target_count.toLocaleString()} 条视频 · 已建 {value.confirmed_count.toLocaleString()} 条任务</p><p className={ui.note}>{requestStates[value.status]}</p><p className={ui.note}>每条 {value.requirements.duration_target_seconds} 秒 · {value.requirements.aspect_ratio}</p>{value.confirmed_count > 0 ? <p className={ui.note}>{Object.entries(taskStates).filter(([status]) => value.task_status_counts[status] > 0).map(([status, label]) => `${label} ${value.task_status_counts[status]} 条`).join(" · ")}</p> : null}</div>
-      {value.confirmed_count < value.target_count && <div className={ui.actions}><WorkMaterialImport /></div>}
+      {value.confirmed_count < value.target_count && <div className={ui.actions}><WorkMaterialImport /><WorkSourceImport key={identity} /></div>}
       {value.clarification_questions.length ? <section className={ui.section}><h3>需要补充</h3><ul className={ui.questions}>{value.clarification_questions.map((question, index) => <li key={index}>{question}</li>)}</ul>{value.material_scope.kind === "today_received" ? <><p className={ui.note}>来源范围需要核实；也可以明确选择当前素材库中的可用素材。</p><button className={ui.button} type="button" disabled={pending || value.output_relation === null} onClick={() => void mutate(() => updateCreationRequest(requestId, { expected_revision: value.revision, output_relation: value.output_relation, material_scope: "workspace_library" }))}>使用当前素材库</button></> : null}</section> : null}
       {value.target_count > 1 ? <section className={ui.section}><h3>这些视频的关系</h3>{value.confirmed_count > 0 ? <p>{relations.find(relation => relation.value === value.output_relation)?.label}</p> : <div className={ui.choices}>{relations.map(relation => <button className={ui.button} key={relation.value} type="button" aria-pressed={value.output_relation === relation.value} disabled={pending || value.output_relation === relation.value} onClick={() => void mutate(() => updateCreationRequest(requestId, { expected_revision: value.revision, output_relation: relation.value }))}>{relation.label}</button>)}</div>}</section> : null}
       {canChooseVoice ? <section className={ui.section} aria-label="本请求声音"><h3>本请求的声音</h3>

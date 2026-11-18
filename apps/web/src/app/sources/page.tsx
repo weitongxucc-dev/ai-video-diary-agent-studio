@@ -4,16 +4,16 @@ import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AlertCircle, CheckCircle2, ExternalLink, FileText, Link2, LoaderCircle, Plus, RefreshCw, Save, Upload } from "lucide-react";
 import Link from "next/link";
 import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { ManualSourceForm, UseStateField } from "@/components/sources/ManualSourceForm";
+import { saveVerifiedSourceToKnowledge } from "@/lib/source-knowledge";
 import { AppShell } from "@/components/AppShell";
 import styles from "./SourcesPage.module.css";
 import {
-  createManualSourceItem,
   createSourceConnector,
   captureWebSnapshot,
   importKnowledgeFile,
   listSourceConnectors,
   listSourceItems,
-  saveSourceItemToKnowledge,
   sourceErrorMessage,
   SourceApiError,
   type ContentUseState,
@@ -79,7 +79,6 @@ function formatFetchTime(value: string | null) {
 
 export default function SourcesPage() {
   const [entryMode, setEntryMode] = useState<"text" | "file" | "web">("text");
-  const [manualType, setManualType] = useState("text");
   const [subscriptionOpen, setSubscriptionOpen] = useState(false);
   const [subscriptionPlatform, setSubscriptionPlatform] = useState("external_urls");
   const [fileName, setFileName] = useState<string | null>(null);
@@ -128,19 +127,6 @@ export default function SourcesPage() {
       setConnectors((current) => [connector, ...current.filter((item) => item.id !== connector.id)]);
       setSelectedConnectorId(connector.id); setNotice("信息源已保存，可执行同步。");
       formElement.reset();
-    } catch (cause) { setError(sourceErrorMessage(cause)); }
-    finally { setBusy(null); }
-  }
-
-  async function addManualItem(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    setBusy("manual-item"); setError(null); setNotice(null); setSavedReceipt(null);
-    try {
-      const license = String(form.get("license") ?? "").trim();
-      const item = await createManualSourceItem({ title: String(form.get("title") ?? ""), content_type: String(form.get("content_type") ?? "text"), source_url: String(form.get("source_url") ?? "") || null, body: String(form.get("body") ?? "") || null, subtitles: null, media_references: [], file_reference: String(form.get("file_reference") ?? "") || null, author: null, ...(license ? { license } : {}), use_state: String(form.get("use_state") ?? "available") as ContentUseState });
-      setSelectedConnectorId(item.connector_id); setItems((current) => [item, ...current]); setSelectedItemId(item.id); setNotice("信息条目已添加，可查看正文并保存到知识库。"); formElement.reset(); setManualType("text");
     } catch (cause) { setError(sourceErrorMessage(cause)); }
     finally { setBusy(null); }
   }
@@ -209,11 +195,7 @@ export default function SourcesPage() {
     const source = selectedItem;
     setBusy(`save-${source.id}`); setError(null); setNotice(null); setSavedReceipt(null);
     try {
-      const saved = await saveSourceItemToKnowledge(source.id, {});
-      if (!saved.id || !saved.version || saved.saved_source_item_id !== source.id ||
-          !["available", "reference_only", "excluded", "not_for_automation", "not_for_publish"].includes(saved.use_state)) {
-        throw new Error("保存回执与当前来源不一致；原信息条目仍保留，可重试。");
-      }
+      const saved = await saveVerifiedSourceToKnowledge(source.id);
       setSavedReceipt({ sourceItemId: source.id, knowledgeItemId: saved.id, useState: saved.use_state });
       setNotice(saved.use_state === "excluded"
         ? `已登记“${source.title}”并回读确认；当前标记为不使用，因此不会进入知识检索。`
@@ -235,18 +217,9 @@ export default function SourcesPage() {
           </nav>
           <section hidden={entryMode !== "text"} className="source-manual-entry">
             <header><div><h2>粘贴文字</h2><p>保存已有笔记或产品资料，核对后加入知识库。</p></div></header>
-            <form className={styles.entryForm} onSubmit={addManualItem}>
-              <label><span>标题</span><input name="title" placeholder="给这条内容一个名称" required /></label>
-              <label><span>正文</span><textarea name="body" placeholder="粘贴已有资料正文" required={manualType === "text"} rows={5} /></label>
-              <details className={styles.more}><summary>出处与使用范围</summary>
-                <label><span>类型</span><AppSelect name="content_type" value={manualType} onValueChange={newValue => setManualType(newValue)}><AppSelectOption value="text">文字</AppSelectOption><AppSelectOption value="link">链接</AppSelectOption><AppSelectOption value="video">视频</AppSelectOption><AppSelectOption value="file">文件引用</AppSelectOption></AppSelect></label>
-                <label><span>原文链接（可选）</span><input name="source_url" placeholder="https://" type="url" /></label>
-                <label><span>文件引用（可选）</span><input name="file_reference" placeholder="已有文件的路径" /></label>
-                <label><span>来源许可记录（可选）</span><input name="license" placeholder="记录来源中已有的许可说明" /></label>
-                <UseStateField />
-              </details>
-              <button disabled={busy === "manual-item"} type="submit"><FileText size={15} />添加信息条目</button>
-            </form>
+            <ManualSourceForm busy={busy !== null} onStart={() => { setBusy("manual-item"); setError(null); setNotice(null); setSavedReceipt(null); }}
+              onCreated={item => { setSelectedConnectorId(item.connector_id); setItems(current => [item, ...current]); setSelectedItemId(item.id); setNotice("信息条目已添加，可查看正文并保存到知识库。"); }}
+              onError={cause => setError(sourceErrorMessage(cause))} onEnd={() => setBusy(null)} />
           </section>
           <section hidden={entryMode !== "file"} className="source-manual-entry">
             <header><div><h2>上传知识文件</h2><p>支持 Markdown、纯文本和带文本层的 PDF。</p></div></header>
@@ -293,10 +266,6 @@ function validateKnowledgeFile(file: File | undefined): string | null {
 }
 
 function Empty({ icon, title, text }: { icon: ReactNode; title: string; text: string }) { return <div className="source-panel__empty">{icon}<strong>{title}</strong><p>{text}</p></div>; }
-
-function UseStateField() {
-  return <label><span>保存后的使用范围</span><AppSelect defaultValue="available" name="use_state"><AppSelectOption value="available">可正常使用</AppSelectOption><AppSelectOption value="reference_only">仅作参考，不直接进入成片</AppSelectOption><AppSelectOption value="excluded">排除，不用于检索、生成或成片</AppSelectOption><AppSelectOption value="not_for_automation">不进入自动选片，可由我手动选择</AppSelectOption><AppSelectOption value="not_for_publish">可制作预览，不进入发布产物</AppSelectOption></AppSelect></label>;
-}
 
 function SourceInspector({ connector, lastRun }: { connector: SourceConnector | null; lastRun: SourceRun | null }) {
   if (!connector) return <p className="source-inspector-empty">选择一个信息源或信息条目，查看来源、授权与可执行操作。</p>;
