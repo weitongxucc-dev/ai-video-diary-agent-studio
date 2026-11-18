@@ -5,6 +5,7 @@ from dataclasses import replace
 from app import model_runtime
 from app.model_runtime import (
     CHINESE_CLIP_VIT_B16,
+    LATENTSYNC_16_512,
     QWEN3_TTS_06B_BASE_8BIT,
     QWEN3_VL_4B_4BIT,
     DownloadFile,
@@ -342,3 +343,17 @@ def test_readiness_names_the_files_that_are_actually_missing(tmp_path):
     assert any("pytorch_model.bin" in problem for problem in readiness.problems)
     assert "已有 2/4 个上游文件" in readiness.message
     assert "重新下载" in readiness.repair_action
+
+
+def test_latentsync_16_rejects_a_legacy_checkpoint_even_without_cuda(tmp_path):
+    catalog = ModelCatalog(tmp_path, None, None)
+    folder = catalog.model_path(LATENTSYNC_16_512)
+    folder.mkdir()
+    # The leading size check rejects 1.5 before importing any inference library.
+    older = folder / "latentsync_unet.pt"
+    older.touch()
+    with older.open("r+b") as handle:
+        handle.truncate(5072348184)
+    status = catalog.status(LATENTSYNC_16_512)
+    assert status.state == "invalid"
+    assert "官方权重大小不符" in status.message

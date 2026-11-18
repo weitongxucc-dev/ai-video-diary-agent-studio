@@ -65,10 +65,14 @@ def test_media_capability_unavailable_metadata_and_quality_refusal(tmp_path, mon
         'repair_action': '安装并配置本地声音复制运行环境后重新查询。', 'retryable': False}
     avatar_response = client.get('/api/media/capabilities/avatar-lipsync')
     assert avatar_response.status_code == 501, avatar_response.text
-    assert avatar_response.json()['detail'] == {
-        'error': 'capability_unavailable', 'capability_id': 'avatar_lipsync', 'detail': avatar.message,
+    high_detail = {
+        'error': 'capability_unavailable', 'capability_id': 'avatar_lipsync', 'detail': high_quality.message,
         'impact': '人物与口型步骤未完成，不能生成或返回人物视频。',
         'repair_action': '配置明确的本地人物口型运行环境后重新查询。', 'retryable': False}
+    assert avatar_response.json()['detail'] == high_detail
+    fast_response = client.get('/api/media/capabilities/avatar-lipsync?quality=fast')
+    assert fast_response.status_code == 501, fast_response.text
+    assert fast_response.json()['detail'] == {**high_detail, 'detail': avatar.message}
     assert 'media_url' not in voice_response.json()['detail']
     assert 'media_url' not in avatar_response.json()['detail']
     invalid = client.get('/api/media/capabilities/avatar-lipsync?quality=invalid')

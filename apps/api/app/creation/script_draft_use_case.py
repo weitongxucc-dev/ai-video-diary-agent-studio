@@ -278,6 +278,7 @@ class ScriptDraftUseCase:
                     repair_action="" if reachable else exc.repair_action, workspace_id=workspace_id)
             raise script_failure(status_code=422 if content_failure or prevalidation else 502,
                 error=exc.code, reason=exc.reason, impact="本轮修订未保存，原有草稿和任务保持原样。",
+                submission_effect="rejected",
                 repair_action=("请核对文案段落、资料引用和方案时长，修改后再提交。"
                     if prevalidation and exc.code != "route_configuration_invalid" else exc.repair_action),
                 retryable=exc.retryable, reason_code=exc.reason_code, section_index=exc.section_index,
@@ -425,10 +426,12 @@ class ScriptDraftUseCase:
         task,plan,topic,sources,refs,entry=self._window_inputs(workspace_id,task_id,metadata)
         reader=self.validate_inputs(workspace_id,plan,refs)
         binding=self._window_binding(plan,topic,sources,refs,reader,entry)
-        window = CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in sections),context['total_count'])
-        review_binding = self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],sections,instruction_origin,
-            library_entry=entry,review_window=window, reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,sections,
-                binding_digest=key,layout_digest=context['layout_digest']))
+        review_binding = None
+        if instruction_origin is not None or generation_run_id is not None or metadata.get('draft_complete', True):
+            window = CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in sections),context['total_count'])
+            review_binding = self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],sections,instruction_origin,
+                library_entry=entry,review_window=window, reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,sections,
+                    binding_digest=key,layout_digest=context['layout_digest']))
         _,np,nt,ns,nr,ne=self._window_inputs(workspace_id,task_id,metadata)
         new_reader=self.validate_inputs(workspace_id,np,nr)
         if binding!=self._window_binding(np,nt,ns,nr,new_reader,ne):
@@ -601,8 +604,11 @@ class ScriptDraftUseCase:
         elif getattr(payload, "expected_updated_at", None) is not None:
             raise ScriptDraftRejected(status_code=409, detail="草稿版本已变化，请重新读取后再保存")
         binding = (creation_plan_payload(plan), asdict(topic), tuple(sources), input_references)
-        review_binding = self._review_candidate(workspace_id, task, plan, topic, sources, reader, payload.title, sections, instruction_origin,
-            review_window=window_start['review_window'] if window_start else None)
+        manual_draft = window_start is not None and instruction_origin is None
+        review_binding = None
+        if not manual_draft:
+            review_binding = self._review_candidate(workspace_id, task, plan, topic, sources, reader, payload.title, sections, instruction_origin,
+                review_window=window_start['review_window'] if window_start else None)
         if window_start:
             def result_write(conn,script):
                 return self.scripts.record_script_window_start(script,window_start['request_id'],
@@ -646,6 +652,7 @@ class ScriptDraftUseCase:
                 route_snapshot=_topic_route_snapshot(workspace_id),
                 prompt_schema_version="assistant-script-window/v1" if window_start else "assistant-script-draft/v2",
                 input_references=input_references,
+                run_kind="manual_draft" if manual_draft else "generation",
             )
             draft = CreationTaskScript(
                 id=window_start['script_id'] if window_start else f"script_{uuid4().hex[:12]}", workspace_id=workspace_id,
@@ -653,7 +660,7 @@ class ScriptDraftUseCase:
                 title=payload.title, language=plan.language, sections=sections, draft_complete=window_start is None,
             )
             try:
-                _, _, draft = self.scripts.save_reviewed_script_generation(run,draft,write_guard=commit_guard,result_write=result_write)
+                _, _, draft = self.scripts.save_script_candidate(run,draft,write_guard=commit_guard,result_write=result_write)
             except (KeyError,ValueError) as exc:
                 raise ScriptDraftRejected(status_code=409,detail=str(exc)) from exc
         return draft

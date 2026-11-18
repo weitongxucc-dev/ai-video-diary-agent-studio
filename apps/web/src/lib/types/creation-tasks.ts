@@ -198,7 +198,7 @@ export type CreationTaskScriptWindowUnsettled = {
     request_id: string;
     operation: "start" | "patch" | "confirm";
     status: "unknown" | "failed";
-    submission_effect: "unknown";
+    submission_effect: "unknown" | "rejected";
     message: string;
     submitted_input_available: boolean;
     submitted_input?: CreationTaskScriptWindowStartInput | CreationTaskScriptSectionsPatchInput | CreationTaskScriptConfirmSavedInput;

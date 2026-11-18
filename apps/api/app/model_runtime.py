@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
+from app.lipsync_models import LATENTSYNC_16_DOWNLOADS, LATENTSYNC_16_MODEL_ID, LATENTSYNC_16_WEIGHTS_REVISION, LatentSync16Runtime
+
 ModelRuntimeState = Literal[
     "missing_runtime",
     "missing_worker",
@@ -120,13 +122,28 @@ QWEN3_VL_4B_4BIT = ModelSpec(
 )
 
 
-MODEL_SPECS = (CHINESE_CLIP_VIT_B16, QWEN3_TTS_06B_BASE_8BIT, QWEN3_VL_4B_4BIT)
+LATENTSYNC_16_512 = ModelSpec(
+    id=LATENTSYNC_16_MODEL_ID,
+    capability="avatar_lipsync_16",
+    display_name="LatentSync 1.6 · 512",
+    repository="ByteDance/LatentSync-1.6",
+    revision=LATENTSYNC_16_WEIGHTS_REVISION,
+    license_name="OpenRAIL++",
+    license_url="https://huggingface.co/ByteDance/LatentSync-1.6",
+    approximate_download_bytes=sum(size for _, size, _ in LATENTSYNC_16_DOWNLOADS),
+    parameter_scale="官方 512×512 口型模型",
+    quantization="官方权重",
+)
+
+
+MODEL_SPECS = (CHINESE_CLIP_VIT_B16, QWEN3_TTS_06B_BASE_8BIT, QWEN3_VL_4B_4BIT, LATENTSYNC_16_512)
 
 
 @dataclass(frozen=True)
 class DownloadFile:
     path: str
     size: int
+    sha256: str | None = None
 
 
 # The upstream file each model is expected to contain. This lives beside the
@@ -135,6 +152,7 @@ class DownloadFile:
 # write an install record, so making inspection depend on it would mean a
 # half-installed model can only be diagnosed by the thing meant to fix it.
 MODEL_FILES: dict[str, tuple[DownloadFile, ...]] = {
+    LATENTSYNC_16_MODEL_ID: tuple(DownloadFile(*item) for item in LATENTSYNC_16_DOWNLOADS),
     QWEN3_VL_4B_4BIT.id: (
         DownloadFile("added_tokens.json", 707),
         DownloadFile("chat_template.jinja", 5292),
@@ -298,8 +316,10 @@ class ModelCatalog:
         *,
         understanding_runtime_python_path: str | Path | None = None,
         understanding_worker_path: str | Path | None = None,
+        latentsync_runtime: LatentSync16Runtime | None = None,
     ) -> None:
         self.model_root_path = Path(model_root_path).expanduser()
+        self.latentsync_runtime = latentsync_runtime
         self.understanding_runtime_python_path = Path(understanding_runtime_python_path).expanduser() if understanding_runtime_python_path else None
         self.understanding_worker_path = Path(understanding_worker_path).expanduser() if understanding_worker_path else None
         self.runtime_python_path = (
@@ -327,6 +347,15 @@ class ModelCatalog:
             ),
             "worker_path": str(worker_path) if worker_path else None,
         }
+        if spec.id == LATENTSYNC_16_MODEL_ID:
+            for asset in MODEL_FILES[spec.id]:
+                weight = model_path / asset.path
+                if weight.is_file() and weight.stat().st_size != asset.size:
+                    return ModelRuntimeStatus(state="invalid",
+                        message=f"LatentSync 1.6 官方权重大小不符（可能为旧版本）：{asset.path}", **common)
+            issue = self.latentsync_runtime.issue() if self.latentsync_runtime else "LatentSync 1.6 运行环境未配置。"
+            if issue:
+                return ModelRuntimeStatus(state="missing_runtime", message=issue, **common)
         if runtime_python_path is None or not runtime_python_path.is_file():
             return ModelRuntimeStatus(
                 state="missing_runtime",
@@ -383,6 +412,11 @@ class ModelCatalog:
         worker_path = self._worker_path(spec)
         problems: list[str] = []
         actions: list[str] = []
+        if spec.id == LATENTSYNC_16_MODEL_ID and self.latentsync_runtime:
+            issue = self.latentsync_runtime.issue()
+            if issue and self.latentsync_runtime.python.is_file():
+                problems.append(issue)
+                actions.append("配置本机 LatentSync 1.6 CUDA 环境")
         if runtime_python_path is None or not runtime_python_path.is_file():
             problems.append(f"运行环境缺失：{runtime_python_path or '未配置模型运行环境路径'}")
             actions.append("准备该模型的独立运行环境")
@@ -473,9 +507,13 @@ class ModelCatalog:
         return self.model_root_path / spec.id
 
     def runtime_path(self, spec: ModelSpec) -> Path | None:
+        if spec.id == LATENTSYNC_16_MODEL_ID:
+            return self.latentsync_runtime.python if self.latentsync_runtime else None
         return self.understanding_runtime_python_path if spec.capability == "visual_understanding" else self.runtime_python_path
 
     def _worker_path(self, spec: ModelSpec) -> Path | None:
+        if spec.id == LATENTSYNC_16_MODEL_ID:
+            return self.latentsync_runtime.worker if self.latentsync_runtime else None
         if spec.capability == "visual_understanding":
             return self.understanding_worker_path
         if spec.capability == "voice_clone_zh":
@@ -528,6 +566,14 @@ def _validate_manifest(
     files = manifest.get("files")
     if not isinstance(files, list) or not files:
         raise ValueError("manifest 未声明模型文件")
+    if spec.id == LATENTSYNC_16_MODEL_ID:
+        expected = {(item.path, item.size, item.sha256) for item in MODEL_FILES[spec.id]}
+        actual = {(item.get("path"), item.get("size"), item.get("sha256"))
+                  for item in files if isinstance(item, dict)
+                  and isinstance(item.get("path"), str) and isinstance(item.get("size"), int)
+                  and isinstance(item.get("sha256"), str)}
+        if actual != expected or len(files) != len(expected):
+            raise ValueError("LatentSync 1.6 安装记录与官方权重清单不匹配")
     resolved_root = model_path.resolve()
     for item in files:
         if not isinstance(item, dict):

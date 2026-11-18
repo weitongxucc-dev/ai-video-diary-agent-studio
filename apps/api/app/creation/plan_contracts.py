@@ -92,6 +92,7 @@ class CreationPlan:
     duration_mode: str = "exact"
     duration_range_seconds: tuple[float, float] | None = None
     source_media: dict[str, object] | None = None
+    lipsync_model_id: str | None = None
 
 
 def creation_plan_payload(plan: CreationPlan) -> dict[str, object]:
@@ -99,6 +100,8 @@ def creation_plan_payload(plan: CreationPlan) -> dict[str, object]:
     payload = asdict(plan)
     if plan.source_media is None:
         del payload['source_media']
+    if plan.lipsync_model_id is None:
+        del payload['lipsync_model_id']
     return payload
 
 

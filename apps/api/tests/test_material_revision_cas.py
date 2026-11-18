@@ -10,9 +10,10 @@ from test_material_tag_navigation import make_repo, register, WORKSPACE
 from test_content_visibility_routes import material_library_no_execution
 
 
-def prepared(tmp_path):
+def prepared(tmp_path, *, uploader_user_id=None):
     repo, library = make_repo(tmp_path)
-    asset_id = register(repo, library, "cas.mp4", user_tags=["原标签"], segments=[{"user_tags":["原片段"]}])
+    asset_id = register(repo, library, "cas.mp4", user_tags=["原标签"],
+                        segments=[{"user_tags": ["原片段"]}], uploader_user_id=uploader_user_id)
     return repo, repo.get_asset(WORKSPACE,asset_id)
 
 
@@ -47,22 +48,54 @@ def test_same_frozen_revision_only_one_atomic_material_writer_wins(tmp_path, sco
 
 def test_segment_revision_conflict_rolls_back_all_fields_and_api_is_409(tmp_path, monkeypatch):
     material_library_no_execution(monkeypatch)
-    repo, original=prepared(tmp_path)
-    segment=original.segments[0]
-    current=repo.update_segment(WORKSPACE,original.id,segment.id,description="并发修订",transcript="新记录",review_status="raw",user_tags=["其他人的新标签"])
-    monkeypatch.setattr(main,"production_repo",repo)
-    monkeypatch.setattr(main,"current_workspace_id",lambda _:WORKSPACE)
-    members=LocalMemberService(tmp_path / "members.sqlite3")
-    _owner,token=members.whoami(None)
-    monkeypatch.setattr(main,"local_members_service",members)
-    repo.set_asset_visibility(WORKSPACE,original.id,"shared")
-    current=repo.get_asset(WORKSPACE,original.id)
-    client=TestClient(main.app,headers={"X-Local-Member-Token":token})
-    rejected=client.put(f"/api/production/materials/{original.id}/segments/{segment.id}",json={
-        "description":"过期不能写","transcript":"过期不能写","review_status":"rejected","user_tags":["过期"],
-        "expected_asset_updated_at":current.updated_at.isoformat(),"expected_segment_updated_at":segment.updated_at.isoformat(),
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    uploader, uploader_token = members.join(members.create_invite_code(), "上传者")
+    reader, reader_token = members.join(members.create_invite_code(), "共享读者")
+    repo, original = prepared(tmp_path, uploader_user_id=uploader.member_id)
+    segment = original.segments[0]
+    repo.update_segment(WORKSPACE, original.id, segment.id, description="并发修订",
+                        transcript="新记录", review_status="raw", user_tags=["其他人的新标签"])
+    current = repo.set_asset_visibility(WORKSPACE, original.id, "shared")
+    # Migrated rows may only carry visibility in the dedicated column.
+    with repo._connect() as conn:
+        conn.execute(
+            "UPDATE material_assets SET payload=json_remove(payload, '$.visibility') WHERE workspace_id=? AND id=?",
+            (WORKSPACE, original.id),
+        )
+    reader_asset_id = register(repo, repo.video_library_path, "reader.mp4", uploader_user_id=reader.member_id)
+    reader_asset = repo.get_asset(WORKSPACE, reader_asset_id)
+    monkeypatch.setattr(main, "production_repo", repo)
+    monkeypatch.setattr(main, "current_workspace_id", lambda _: WORKSPACE)
+    monkeypatch.setattr(main, "local_members_service", members)
+    client = TestClient(main.app, headers={"X-Local-Member-Token": uploader_token})
+    read_only = TestClient(main.app, headers={"X-Local-Member-Token": reader_token})
+    asset_url = f"/api/production/materials/{original.id}"
+    segment_url = f"{asset_url}/segments/{segment.id}"
+
+    assert read_only.get(asset_url).status_code == 200
+    assert read_only.put(segment_url, json={"description": "读者不能改片段"}).status_code == 403
+    assert read_only.put(f"{asset_url}/tags", json={"user_tags": ["读者不能改标签"]}).status_code == 403
+    assert read_only.post("/api/production/materials/tags/batch", json={
+        "asset_ids": [reader_asset_id, original.id], "add": ["读者不能部分写入"], "remove": [],
+    }).status_code == 403
+    assert repo.get_asset(WORKSPACE, reader_asset_id) == reader_asset
+    assert repo.get_asset(WORKSPACE, original.id) == current
+
+    rejected = client.put(segment_url, json={
+        "description": "过期不能写", "transcript": "过期不能写", "review_status": "rejected", "user_tags": ["过期"],
+        "expected_asset_updated_at": current.updated_at.isoformat(),
+        "expected_segment_updated_at": segment.updated_at.isoformat(),
     })
-    assert rejected.status_code==409
-    assert repo.get_asset(WORKSPACE,original.id)==current
-    rejected=client.put(f"/api/production/materials/{original.id}/tags",json={"user_tags":["过期"],"expected_asset_updated_at":original.updated_at.isoformat()})
-    assert rejected.status_code==409 and repo.get_asset(WORKSPACE,original.id)==current
+    assert rejected.status_code == 409, rejected.text
+    assert repo.get_asset(WORKSPACE, original.id) == current
+    rejected = client.put(f"{asset_url}/tags", json={
+        "user_tags": ["过期"], "expected_asset_updated_at": original.updated_at.isoformat(),
+    })
+    assert rejected.status_code == 409, rejected.text
+    assert repo.get_asset(WORKSPACE, original.id) == current
+    saved = client.put(f"{asset_url}/tags", json={
+        "user_tags": ["上传者新标签"], "expected_asset_updated_at": current.updated_at.isoformat(),
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["visibility"] == "shared"
+    assert repo.get_asset(WORKSPACE, original.id).user_tags == ["上传者新标签"]

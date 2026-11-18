@@ -9,6 +9,7 @@ import math
 import stat
 from uuid import UUID
 
+from app.lipsync_models import LATENTSYNC_16_MODEL_ID
 from app.audio_timeline import AudioTimeline, TimelineAudioClip, TimelineAudioTrack, with_resource_audio_tracks
 from app.creation.contracts import CreationTask, TaskEvent, TimelineVersion
 from app.creation.plan_contracts import CreationPlan
@@ -141,7 +142,8 @@ class SourceTaskUseCase:
             "preserve_audio": command.preserve_audio, "file_signature": signature}
         plan = CreationPlan(id=plan_id, workspace_id=actor.workspace_id, goal=command.name.strip(),
             name=command.name.strip(), target_count=1, language="zh-CN", aspect_ratio=command.aspect_ratio,
-            duration_target_seconds=duration, knowledge_references=[], source_references=[], selected_voice=None,
+            duration_target_seconds=duration, lipsync_quality="high", lipsync_model_id=LATENTSYNC_16_MODEL_ID,
+            knowledge_references=[], source_references=[], selected_voice=None,
             pronunciation_references=[], approved_asset_count=1, approved_clip_count=0,
             material_rule_summary="用户明确选择的原视频区间；未进行自动选片或语义分析。",
             model_snapshot=[], confirmation_points=[], blockers=[], preflight_fingerprint=fingerprint,

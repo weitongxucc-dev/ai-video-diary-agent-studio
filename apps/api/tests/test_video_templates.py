@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
+from app.lipsync_models import LATENTSYNC_16_MODEL_ID, MUSETALK_MODEL_ID
 from app.creation.video_template_records import VideoTemplate
 from app.production import ProductionRepository
 from app.source_repository import SourceRepository
@@ -148,17 +149,23 @@ def test_lipsync_quality_defaults_and_stays_in_versioned_plan(state):
     assert any(item["id"] == main._presenter_model_ids()["high"] for item in new_preview["model_snapshot"])
     assert any(item["id"] == main.avatar_lipsync_provider.model_id for item in fast_preview["model_snapshot"])
 
-    # Templates saved before the selector existed keep the former MuseTalk path.
+    # An older template without a selection uses the new-task default.
     payload = {"goal": goal, "template_id": template.id, "template_version": 1}
     legacy = client.post("/api/creation-plans/preview", json=payload).json()
-    assert legacy["lipsync_quality"] == "fast"
+    assert legacy["lipsync_quality"] == "high"
     confirmed = client.post("/api/creation-plans/confirm", json={**payload, "preflight_fingerprint": legacy["preflight_fingerprint"]})
     assert confirmed.status_code == 201, confirmed.text
-    assert production.plan_records.get_creation_plan("workspace_a", confirmed.json()["id"]).lipsync_quality == "fast"
+    stored = production.plan_records.get_creation_plan("workspace_a", confirmed.json()["id"])
+    assert stored.lipsync_quality == "high"
+    assert stored.lipsync_model_id == LATENTSYNC_16_MODEL_ID
 
-    production.video_templates.save_video_template(replace(template, version=2, settings={**template.settings, "lipsync_quality": "high"}))
+    production.video_templates.save_video_template(replace(template, version=2, settings={**template.settings, "lipsync_quality": "fast"}))
     inherited = client.post("/api/creation-plans/preview", json={**payload, "template_version": 2}).json()
-    assert inherited["lipsync_quality"] == "high"
+    assert inherited["lipsync_quality"] == "fast"
+    explicit = client.post("/api/creation-plans/confirm", json={**payload, "template_version": 2,
+        "preflight_fingerprint": inherited["preflight_fingerprint"]})
+    assert explicit.status_code == 201
+    assert production.plan_records.get_creation_plan("workspace_a", explicit.json()["id"]).lipsync_model_id == MUSETALK_MODEL_ID
     assert inherited["preflight_fingerprint"] != legacy["preflight_fingerprint"]
 
 

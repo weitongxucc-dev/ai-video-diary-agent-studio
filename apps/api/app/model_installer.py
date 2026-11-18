@@ -315,4 +315,4 @@ def _human_bytes(value: int) -> str:
 
 def _catalog_paths(catalog: ModelCatalog):
     return (catalog.model_root_path, catalog.runtime_python_path, catalog.visual_worker_path, catalog.voice_worker_path,
-        catalog.understanding_runtime_python_path, catalog.understanding_worker_path)
+        catalog.understanding_runtime_python_path, catalog.understanding_worker_path, catalog.latentsync_runtime)

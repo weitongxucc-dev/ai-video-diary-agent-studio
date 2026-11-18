@@ -1,13 +1,22 @@
 import userEvent from "@testing-library/user-event";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CreationPlanPreview, CreationRequest, CreationTask } from "@/lib/types";
+import { ApiRequestError } from "@/lib/api/transport";
+import type { CreationPlanPreview, CreationRequest, CreationTask, MaterialAsset } from "@/lib/types";
 import { CreationRequestPanel } from "../CreationRequestPanel";
 
 const voiceApi = vi.hoisted(() => ({ list: vi.fn() }));
 vi.mock("@/lib/media-profiles-api", () => ({ listVoiceProfiles: voiceApi.list, mediaProfilesErrorMessage: (cause: unknown) => cause instanceof Error ? cause.message : "声音读取失败" }));
 const api = vi.hoisted(() => ({ get: vi.fn(), items: vi.fn(), update: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), replan: vi.fn() }));
 vi.mock("@/lib/creation-request-api", () => ({ getCreationRequest: api.get, getCreationRequestItems: api.items, updateCreationRequest: api.update, prepareCreationRequestWindow: api.prepare, confirmCreationRequestWindow: api.confirm, replanCreationRequestWindow: api.replan }));
+
+const materialApi = vi.hoisted(() => ({ list: vi.fn(), read: vi.fn(), confirm: vi.fn() }));
+vi.mock("@/lib/api/materials", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/api/materials")>(),
+  getProductionMaterials: materialApi.list, getProductionMaterial: materialApi.read,
+  confirmMaterialSegmentUsage: materialApi.confirm,
+}));
+vi.mock("../DeviceProductionStatus", () => ({ DeviceProductionStatus: () => <p>本机制作条件</p> }));
 
 function header(changes: Partial<CreationRequest> = {}): CreationRequest {
   return { id: "request-a", goal: "制作一万条设备使用短片", target_count: 10000, output_relation: null,
@@ -39,6 +48,66 @@ describe("persistent creation request panel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "重新核对本组方案" }));
     await waitFor(() => expect(api.replan).toHaveBeenCalledWith("request-a", "window-a", 6));
     expect(screen.getByText("目标 10,000 条视频 · 已建 8 条任务")).toBeInTheDocument();
+    expect(api.confirm).not.toHaveBeenCalled();
+  });
+
+  it("checks a clip with zero candidates, rejects stale versions and rechecks the group without leaving the work", async () => {
+    const initial = proposed();
+    const rechecked = structuredClone(initial);
+    rechecked.revision = initial.revision + 1;
+    rechecked.current_window!.id = "window-refreshed";
+    for (const entry of rechecked.current_window!.entries) entry.plan!.approved_clip_count = 1;
+
+    const asset = {
+      id: "video", media_type: "video", file_name: "conveyor.webm", updated_at: "2026-11-18T01:00:00Z",
+      review_status: "raw", usage_role: "unassigned", analysis_status: "ready", use_state: "available",
+      segments: [{ id: "clip-2", start_seconds: 4.25, end_seconds: 7.75, description: "传送带",
+        review_status: "raw", usage_role: "unassigned", updated_at: "2026-11-18T01:00:01Z" }],
+    } as MaterialAsset;
+    const latest = { ...asset, updated_at: "2026-11-18T01:00:15Z",
+      segments: [{ ...asset.segments[0], description: "同事刚保存的说明", updated_at: "2026-11-18T01:00:15Z" }] };
+    const saved: MaterialAsset = { ...latest, segments: [{ ...latest.segments[0], usage_role: "b_roll" }] };
+    api.get.mockResolvedValue(initial);
+    api.replan.mockResolvedValue(rechecked);
+    materialApi.list.mockResolvedValue({ assets: [asset], total_count: 1, limit: 12, offset: 0, has_more: false });
+    materialApi.read.mockResolvedValue(latest);
+    materialApi.confirm.mockRejectedValueOnce(new ApiRequestError(409, "素材版本已变化"))
+      .mockResolvedValueOnce(saved);
+
+    const user = userEvent.setup();
+    render(<CreationRequestPanel requestId="request-a" scopeKey="member-a" isCurrentScope={() => true} />);
+    await user.click(await screen.findByRole("button", { name: "核实镜头与用途" }));
+    expect(screen.getAllByText("本机制作条件")).toHaveLength(1);
+    await user.click(await screen.findByRole("button", { name: /conveyor\.webm/ }));
+    const player = screen.getByLabelText("原片段预览") as HTMLVideoElement;
+    fireEvent.loadedMetadata(player);
+    expect(player.currentTime).toBe(4.25);
+    await user.click(screen.getByRole("radio", { name: "补充画面" }));
+    await user.click(screen.getByRole("button", { name: "保存片段用途" }));
+    await screen.findByText("素材版本已变化");
+    expect(screen.getByRole("button", { name: "保存片段用途" })).toBeDisabled();
+    expect(materialApi.confirm).toHaveBeenCalledWith("video", "clip-2", {
+      usage_role: "b_roll",
+      expected_asset_updated_at: asset.updated_at,
+      expected_segment_updated_at: asset.segments[0].updated_at,
+    });
+    await user.click(screen.getByRole("button", { name: "重新读取片段" }));
+    await screen.findByText(/同事刚保存的说明/);
+    await user.click(screen.getByRole("radio", { name: "补充画面" }));
+    await user.click(screen.getByRole("button", { name: "保存片段用途" }));
+    await screen.findByText(/已保存片段用途：补充画面/);
+    expect(materialApi.confirm).toHaveBeenLastCalledWith("video", "clip-2", {
+      usage_role: "b_roll",
+      expected_asset_updated_at: latest.updated_at,
+      expected_segment_updated_at: latest.segments[0].updated_at,
+    });
+
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "确认创建本组任务" })).toBeDisabled();
+    expect(api.replan).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "重新核对本组方案" }));
+    expect(await screen.findAllByText(/1 个补充镜头/)).toHaveLength(2);
+    expect(api.replan).toHaveBeenCalledWith("request-a", "window-a", 6);
     expect(api.confirm).not.toHaveBeenCalled();
   });
 

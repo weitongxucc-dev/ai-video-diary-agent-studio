@@ -144,7 +144,10 @@ def recording_task(tmp_path, monkeypatch):
     from test_montage_pipeline import _granted_domain_preview_adapter
     client = TestClient(main_module.app, headers={"x-local-member-token": token})
     state = SimpleNamespace(production=repo, member=member, members=members, task=task, workspace_id=workspace_id, client=client)
-    runtime = _granted_domain_preview_adapter(state, monkeypatch, facts_override=main_module._task_media_facts)
+    # Recording tests exercise the audio and task contracts independently of host load.
+    runtime = _granted_domain_preview_adapter(
+        state, monkeypatch, facts_override=main_module._task_media_facts, controlled_ambient=True,
+    )
     client.media_runtime = runtime
     yield repo, task_id, version.id, client
     assert runtime.stop(1)

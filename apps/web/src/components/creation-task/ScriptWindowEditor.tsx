@@ -198,6 +198,11 @@ function WindowEditorBody({ taskId, script, onSaved }: WindowEditorProps) {
             if (result.status !== "confirmed") throw new Error("原请求回执与完整采用操作不符，原请求继续保留。");
             setSaving(true);
             try { await settleConfirmed(result); } finally { if (active.current) setSaving(false); }
+        }} onRejected={async result => {
+            await recovery.clear(result);
+            if (!active.current) return;
+            setError(null);
+            setNotice("核查未通过，已保存的草稿可以继续编辑。");
         }}/></> : null}
         {conflict && recovery.ready && !recovery.pending ? <Button variant="outline" onClick={restart}>放弃本页修改并读取最新版本</Button> : null}
         {!page && !reading && !conflict ? <Button variant="outline" onClick={() => { setError(null); setReadAttempt(value => value + 1); }}>重试读取窗口</Button> : null}
@@ -231,6 +236,7 @@ function WindowStartBody({ taskId, onSaved }: WindowStartProps) {
     const recovery = useScriptWindowRequestRecovery(taskId, null);
     const [receipt, setReceipt] = useState<CreationTaskScriptWindowSaved | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [restored, setRestored] = useState(false);
     const active = useRef(true);
     const { sources, error: sourceError } = useSources(taskId);
     useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
@@ -259,6 +265,7 @@ function WindowStartBody({ taskId, onSaved }: WindowStartProps) {
     const locked = saving || !recovery.ready || recovery.pending !== null || receipt !== null;
     return <section className={styles.workSection} aria-label="手动编写文案">
         <h2>手动编写文案</h2><p>先保存首个窗口，再在同一稿件继续追加；首窗不是完整文案，不会自动确认或启动制作。</p>
+        {restored ? <p role="status">已恢复上次提交的正文和画面建议，请继续编辑或保存草稿。</p> : null}
         {recovery.error ? <p role="alert">{recovery.error}</p> : null}
         <p>刷新仅保留原请求定位；尚未提交的修改不会随刷新恢复。原请求输入需从服务端回执读取。</p>
         {error ? <p role="alert">{error}</p> : null}{sourceError ? <p role="alert">{sourceError}</p> : null}
@@ -270,6 +277,16 @@ function WindowStartBody({ taskId, onSaved }: WindowStartProps) {
             if (result.status !== "saved") throw new Error("原请求回执与首窗保存操作不符，原请求继续保留。");
             setSaving(true);
             try { await settleStart(result); } finally { if (active.current) setSaving(false); }
+        }} onRejected={async result => {
+            const original = result.submitted_input;
+            if (!original || !("title" in original) || original.request_id !== result.request_id) {
+                throw new Error("没有读回原首窗正文，原请求继续保留。");
+            }
+            await recovery.clear(result);
+            if (!active.current) return;
+            setForm({ title: original.title, sections: original.sections });
+            setError(null);
+            setRestored(true);
         }}/> : null}
         {receipt ? <><p role="status">首窗已保存，共 {receipt.total_count} 段；尚未核查并采用为完整文案。</p><Button variant="outline" onClick={() => void onSaved(receipt).catch(cause => setError(cause instanceof Error ? cause.message : "作品状态未能刷新。"))}>读取已保存草稿</Button></> : <Button disabled={locked || !form.title.trim() || !validSections(form.sections)} onClick={() => void save()}>{recovery.pending ? "首窗保存结果待核对" : saving ? "正在保存首窗…" : "保存首窗"}</Button>}
     </section>;

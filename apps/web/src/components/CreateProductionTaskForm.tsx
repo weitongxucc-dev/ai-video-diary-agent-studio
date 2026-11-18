@@ -189,7 +189,7 @@ export function CreateProductionTaskForm({
   const [aspectRatio, setAspectRatio] = useState<CreationPlanInput["aspect_ratio"]>(template?.settings.aspect_ratio ?? "9:16");
   const [duration, setDuration] = useState(String(Math.ceil(template?.settings.duration_target_seconds ?? 60)));
   const [presenterShare, setPresenterShare] = useState<PresenterShare>(template?.settings.presenter_share_target ?? 20);
-  const [lipsyncQuality, setLipsyncQuality] = useState<LipSyncQuality>(template?.settings.lipsync_quality ?? (template ? "fast" : "high"));
+  const [lipsyncQuality, setLipsyncQuality] = useState<LipSyncQuality>(template?.settings.lipsync_quality ?? "high");
   const [preview, setPreview] = useState<CreationPlanPreview | null>(null);
   const [creationRequestId, setCreationRequestId] = useState<string | null>(null);
   const creationRequestKey = useRef<string | null>(null);
@@ -225,7 +225,7 @@ export function CreateProductionTaskForm({
       setGoal(draftId ? "" : initialGoal); setName(""); setTargetCount("1");
       setDuration(String(Math.ceil(template?.settings.duration_target_seconds ?? 60)));
       setLanguage(template?.settings.language ?? "zh-CN"); setAspectRatio(template?.settings.aspect_ratio ?? "9:16");
-      setPresenterShare(template?.settings.presenter_share_target ?? 20); setLipsyncQuality(template?.settings.lipsync_quality ?? (template ? "fast" : "high"));
+      setPresenterShare(template?.settings.presenter_share_target ?? 20); setLipsyncQuality(template?.settings.lipsync_quality ?? "high");
       voiceSelectionEdited.current = false; setVoicePin(undefined); setPersonPin(undefined); setKnowledgePin(initialKnowledgePin);
     }
     previousDraftId.current = draftId;

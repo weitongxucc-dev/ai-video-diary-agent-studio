@@ -6,10 +6,12 @@ from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 from typing import Literal
+from types import SimpleNamespace
 
-from app.avatar_lipsync import AvatarAndLipSyncProvider
+from app.avatar_lipsync import AvatarAndLipSyncProvider, select_lipsync_provider
 from app.materials.contracts import MaterialSegmentMatch, effective_segment_usage_role
 from app.model_runtime import ModelCatalog
+from app.lipsync_models import LATENTSYNC_16_MODEL_ID, MUSETALK_MODEL_ID, planned_lipsync_model_id
 from app.creation.video_template_records import VideoTemplate
 from app.production import ProductionRepository
 from app.creation.plan_contracts import CreationPlan, CreationPlanBlocker, CreationPlanKnowledgeReference, CreationPlanPronunciationReference, CreationPlanSourceReference
@@ -73,8 +75,6 @@ class CreationPlanPreflightUseCase:
                 inherited["presenter_share_target"] = template.settings["presenter_share_target"]
             if "lipsync_quality" not in payload.provided_fields and "lipsync_quality" in template.settings:
                 inherited["lipsync_quality"] = template.settings["lipsync_quality"]
-            elif "lipsync_quality" not in payload.provided_fields:
-                inherited["lipsync_quality"] = "fast"
             payload = replace(payload, **inherited, provided_fields=payload.provided_fields | frozenset(inherited))
         return payload
 
@@ -253,9 +253,21 @@ class CreationPlanPreflightUseCase:
             }
             for status in self.catalog.list_statuses()
         ]
+        model_pin = (frozen_plan.get("lipsync_model_id") if frozen_plan is not None else
+                     LATENTSYNC_16_MODEL_ID if payload.lipsync_quality == "high" else MUSETALK_MODEL_ID)
         selected_lipsync_provider = None
         if payload.presenter_share_target > 0:
             selected_lipsync_provider = self.lipsync_provider_for(payload.lipsync_quality)
+            if frozen_plan is None:
+                if selected_lipsync_provider.model_id != "avatar-lipsync-unconfigured":
+                    model_pin = selected_lipsync_provider.model_id
+                selected_lipsync_provider = select_lipsync_provider(selected_lipsync_provider, model_pin)
+            else:
+                prior_plan = SimpleNamespace(lipsync_model_id=model_pin, lipsync_quality=payload.lipsync_quality,
+                                             model_snapshot=frozen_plan.get("model_snapshot", ()))
+                selected_lipsync_provider = select_lipsync_provider(selected_lipsync_provider,
+                    planned_lipsync_model_id(prior_plan, selected_lipsync_provider.model_id))
+            model_snapshot = [model for model in model_snapshot if model["id"] != selected_lipsync_provider.model_id]
             model_snapshot.append({
                 "id": selected_lipsync_provider.model_id,
                 "capability": "avatar_lipsync",
@@ -400,6 +412,8 @@ class CreationPlanPreflightUseCase:
                 for model in model_snapshot if model["id"] in required_model_ids],
             "confirmation_points": ["确认资料与来源事实", "确认选题", "审核成片与发布"],
         }
+        if model_pin is not None:
+            fingerprint_payload["lipsync_model_id"] = model_pin
         if payload.duration_mode != "exact":
             fingerprint_payload.update(duration_mode=payload.duration_mode,
                 duration_range_seconds=payload.duration_range_seconds)
@@ -423,7 +437,7 @@ class CreationPlanPreflightUseCase:
             duration_mode=payload.duration_mode,
             duration_range_seconds=payload.duration_range_seconds,
             presenter_share_target=payload.presenter_share_target,
-            lipsync_quality=payload.lipsync_quality,
+            lipsync_quality=payload.lipsync_quality, lipsync_model_id=model_pin,
             knowledge_references=knowledge_references,
             source_references=source_references,
             selected_voice=selected_voice,

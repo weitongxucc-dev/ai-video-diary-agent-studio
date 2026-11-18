@@ -8,6 +8,7 @@ export type DeviceResourceStatus = {
   profile_status: 'unprepared' | 'available' | 'invalid';
   revision: number | null;
   available_operations: string[];
+  production_blocker?: string | null;
 };
 
 export type CpuPreparationShape = {
@@ -53,6 +54,7 @@ export async function getDeviceResourceStatus(): Promise<DeviceResourceStatus> {
   if (!/^[0-9a-f]{64}$/.test(value.actor_scope)
       || typeof value.cpu_preparation_supported !== 'boolean' || typeof value.preparation_configured !== 'boolean'
       || !['unprepared', 'available', 'invalid'].includes(value.profile_status)
+      || (value.production_blocker != null && typeof value.production_blocker !== "string")
       || !Array.isArray(value.available_operations)) {
     throw new Error('设备状态回执不完整，尚不能确认当前身份或准备条件。');
   }
