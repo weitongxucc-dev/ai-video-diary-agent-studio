@@ -217,7 +217,7 @@ def test_replanned_english_caption_clock_keeps_real_segment_boundaries(task_inpu
                     timeline_start_seconds=clip.timeline_start_seconds-window.start_seconds,
                     timeline_end_seconds=clip.timeline_end_seconds-window.start_seconds)
                     for clip in plan.clips if clip.cue_id in ids])
-            states[window.section_id] = {'narration_reference': segment.audio_reference,
+            states[window.section_id] = {'current_validity': 'current', 'narration_reference': segment.audio_reference,
                 'montage': montage.creation_task_montage_plan_to_payload(local)}
         from contextlib import nullcontext
         task = SimpleNamespace(workspace_id='workspace', id='task', plan_id='plan')

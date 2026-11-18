@@ -39,6 +39,10 @@ class ConversationTurnRequestConflict(RuntimeError):
     pass
 
 
+class ConversationTurnObjectRefsUnverifiable(ConversationTurnRequestConflict):
+    """The receipt cannot establish the submitted object list."""
+
+
 class ConversationRepository:
     """Persist app conversations and turns in the existing application SQLite DB."""
 
@@ -768,7 +772,7 @@ class ConversationRepository:
                 (client_request_id,),
             ).fetchone()
             if existing is not None:
-                same_request = (
+                same_envelope = (
                     existing["workspace_id"] == workspace_id
                     and existing["member_id"] == member_id
                     and existing["conversation_id"] == conversation_id
@@ -776,10 +780,20 @@ class ConversationRepository:
                     and existing["scope_id"] == conversation["scope_id"]
                     and existing["user_message"] == user_message
                     and existing["expected_draft_version"] == expected_draft_version
-                    and {key: value for key, value in json.loads(existing["request_context_json"]).items() if key != "target_snapshot"}
-                        == {key: value for key, value in (request_context or {}).items() if key != "target_snapshot"}
                 )
-                if not same_request:
+                recorded_context = json.loads(existing["request_context_json"])
+                submitted_context = dict(request_context or {})
+                recorded_context.pop("target_snapshot", None)
+                submitted_context.pop("target_snapshot", None)
+                if not same_envelope or recorded_context != submitted_context:
+                    if (same_envelope and existing["outcome"] == "consumed"
+                            and recorded_context.get("kind") == "task"
+                            and "submitted_object_refs" not in recorded_context
+                            and submitted_context.get("submitted_object_refs")
+                            and recorded_context == {key: value for key, value in submitted_context.items()
+                                                     if key != "submitted_object_refs"}):
+                        # The effective selection does not identify the raw list.
+                        raise ConversationTurnObjectRefsUnverifiable("原回执未保存所提交的对象列表，无法确认重试内容。")
                     raise ConversationTurnRequestConflict("此请求身份已用于其他内容或对话范围。")
                 if existing["outcome"] == "recovered":
                     raise ConversationTurnRequestConflict("此请求已恢复为草稿；如需重新发送，请创建新的请求身份。")

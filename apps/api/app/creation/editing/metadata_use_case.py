@@ -57,7 +57,6 @@ if TYPE_CHECKING:
     from app.creation.narration_artifacts import NarrationArtifactRecord
     from app.creation.contracts import TimelineVersion
     from app.montage import CreationTaskMontagePlan
-    from app.audio_timeline import AudioTimeline
 
 
 
@@ -1067,31 +1066,67 @@ class MetadataEditUseCase:
             raise EditPreviewRejected(status_code=409, detail='请先解锁镜头，再替换素材。')
         invalidated_refs = logical_montage_output_refs(plan)
         viewer_user_id, local_diagnostic = (identity['member_id'], identity['local_diagnostic'])
-        candidates = [candidate for candidate in self.montage_candidates(workspace_id, plan, clip, automation_only=True, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic) if (candidate.asset_id, candidate.segment_id) != (clip.asset_id, clip.segment_id) and candidate.end_seconds - candidate.start_seconds + 1e-06 >= (clip.timeline_end_seconds - clip.timeline_start_seconds) * clip_playback_rate(clip)]
+        # The candidate panel has a display limit. Resolve a replacement across
+        # the whole eligible set before applying the requested footage ranking.
+        candidates = self.montage_candidates(workspace_id, plan, clip, automation_only=True,
+            viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic, limit=None)
         if payload.replacement_asset_id is not None:
             candidates = [item for item in candidates if (item.asset_id, item.segment_id) == (payload.replacement_asset_id, payload.replacement_segment_id)]
         material_constraint = '' if payload.replacement_asset_id is not None else edit_material_constraint(command)
-        if material_constraint:
-            slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
-            matched_refs = self.repository.material_search.search_material_segments(workspace_id, query=material_constraint, usage_roles=['a_roll', 'b_roll'], min_duration_seconds=slot_duration, limit=24, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
-            candidate_by_ref = {(f'asset:{candidate.asset_id}', f'segment:{candidate.segment_id}'): candidate for candidate in candidates}
-            candidates = [candidate_by_ref[match.asset_ref, match.segment_ref] for match in matched_refs if (match.asset_ref, match.segment_ref) in candidate_by_ref]
+        if material_constraint and candidates:
+            source_need = (clip.timeline_end_seconds - clip.timeline_start_seconds) * clip_playback_rate(clip)
+            candidate_by_ref = {(item.asset_id, item.segment_id): item for item in candidates}
+            matches = self.repository.material_search.search_material_segments(
+                workspace_id, query=material_constraint, usage_roles=['a_roll', 'b_roll'],
+                min_duration_seconds=max(0, source_need - 1e-06), eligible_segment_refs=set(candidate_by_ref),
+                limit=24, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic, purpose='automatic',
+            )
+            candidates = []
+            for match in matches:
+                if match.match_tier == 'structural':
+                    continue
+                ref = (match.asset_ref.removeprefix('asset:'), match.segment_ref.removeprefix('segment:'))
+                candidate = candidate_by_ref[ref]
+                if (candidate.start_seconds, candidate.end_seconds) == (match.start_seconds, match.end_seconds):
+                    candidates.append(candidate)
+                    break
         if not candidates:
             raise edit_preview_failure(status_code=409, error='replacement_clip_unavailable', reason=f'当前工作区没有符合“{material_constraint}”且满足时间槽的其他镜头。' if material_constraint else '当前工作区没有满足这个时间槽的其他可用镜头。', impact='原镜头和当前成片保持不变。', repair_action='导入或审核更多素材后重新提出替换要求。', retryable=True)
         base_version = self.ensure_montage_base(workspace_id, task, plan, source=request_source)
         replacement = candidates[0]
         now = utc_now()
-        source_command = metadata_edit_command(task, identity, 'ReplaceClip', {'base_version_id': base_version.id, 'clip_id': clip.id, 'asset_id': replacement.asset_id, 'segment_id': replacement.segment_id, 'source_start_seconds': replacement.start_seconds}, source=request_source)
+        operation_values = {
+            'base_version_id': base_version.id, 'clip_id': clip.id, 'asset_id': replacement.asset_id,
+            'segment_id': replacement.segment_id, 'source_start_seconds': replacement.start_seconds,
+            'automation_only': True,
+        }
+        source_command = metadata_edit_command(task, identity, 'ReplaceClip', operation_values, source=request_source)
         changed, _tracks, _linkage = apply_clip_patch(plan, clip.id, source_command.values, resolve_source=lambda target, values: self.resolve_edit_clip_source(task, identity, target, values), link_reordered=lambda target: self.link_reordered_edit(task, target))
+        after_clip = next(item for item in changed.clips if item.id == clip.id)
         verifier = EditSourceVerifier(self.repository, identity=source_command.actor_identity)
         source_command = self.bind_affected_source_command(verifier, source_command, plan, changed)
         source_scope = verifier.scope_payload(source_command)
         intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=command, context_stage=payload.context_stage, selected_object_refs=payload.selected_object_refs, playhead_ms=payload.playhead_ms, intent_type='replace_visual', scope={'kind': 'clip', 'clip_id': clip.id}, constraints={**{'preserve_narration': True, 'preserve_timing': True, 'material_query': material_constraint or None}, 'affected_source_scope': source_scope}, confidence=0.95, status='interpreted', created_at=now), source=request_source)
-        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=f'把选中的镜头替换为 {replacement.file_name}，保留当前配音和时间位置。', target_refs=[f'clip:{clip.id}'], operation={'operation_type': 'ReplaceClip', 'payload': {'clip_id': clip.id, 'asset_id': replacement.asset_id, 'segment_id': replacement.segment_id, 'source_start_seconds': replacement.start_seconds, 'expected_asset_id': clip.asset_id, 'expected_segment_id': clip.segment_id, 'base_version_id': base_version.id, 'automation_only': True}}, invalidated_refs=invalidated_refs, preview={'before': {'ref': f'clip:{clip.id}', 'label': current_asset.file_name if current_asset else '人物口播', 'detail': f'{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒'}, 'after': {'ref': f'segment:{replacement.segment_id}', 'label': replacement.file_name, 'detail': f'{replacement.start_seconds:.1f}–{replacement.start_seconds + clip.timeline_end_seconds - clip.timeline_start_seconds:.1f} 秒 · {replacement.description}'}}, external_effects=['确认后只更新任务版本，不会立即调用模型或渲染。'], created_at=now, updated_at=now))
+        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(
+            id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id,
+            summary=f'把选中的镜头替换为 {replacement.file_name}，保留当前配音和时间位置。',
+            target_refs=[f'clip:{clip.id}'], invalidated_refs=invalidated_refs,
+            operation={'operation_type': 'ReplaceClip', 'payload': {
+                **operation_values, 'expected_asset_id': clip.asset_id, 'expected_segment_id': clip.segment_id,
+            }},
+            preview={
+                'before': {'ref': f'clip:{clip.id}', 'label': current_asset.file_name if current_asset else '人物口播',
+                           'detail': f'{clip.source_start_seconds:.1f}–{clip.source_end_seconds:.1f} 秒'},
+                'after': {'ref': f'segment:{replacement.segment_id}', 'label': replacement.file_name,
+                          'detail': f'{after_clip.source_start_seconds:.1f}–{after_clip.source_end_seconds:.1f} 秒 · {replacement.description}'},
+            },
+            external_effects=['确认后只更新任务版本，不会立即调用模型或渲染。'], created_at=now, updated_at=now,
+        ))
         return (intent, proposal)
 
 
-    def montage_candidates(self, workspace_id, plan, clip, *, automation_only=False, viewer_user_id=None, local_diagnostic=False, assets=None):
+    def montage_candidates(self, workspace_id, plan, clip, *, automation_only=False,
+                           viewer_user_id=None, local_diagnostic=False, assets=None, limit: int | None = 24):
         cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
         cue_tokens = set((cue.text if cue else '').lower())
         slot_duration = clip.timeline_end_seconds - clip.timeline_start_seconds
@@ -1102,6 +1137,8 @@ class MetadataEditUseCase:
             assets = self.repository.list_assets(workspace_id, include_private=viewer_user_id is not None or local_diagnostic, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
         for asset in assets:
             for segment in asset.segments:
+                if automation_only and (asset.id, segment.id) == (clip.asset_id, clip.segment_id):
+                    continue
                 if not material_segment_eligible(asset, segment, workspace_id, automation_only=automation_only):
                     continue
                 if abs(rate - 1) > 0.001 and (clip.person_render_id or effective_segment_usage_role(asset, segment) == 'a_roll'):
@@ -1114,7 +1151,7 @@ class MetadataEditUseCase:
                 score = max(0.0, min(1.0, overlap * 0.7 + min(1.0, available / max(slot_duration, 0.1)) * 0.3))
                 candidates.append(MontageClipCandidateResponse(asset_id=asset.id, segment_id=segment.id, file_name=asset.file_name, start_seconds=segment.start_seconds, end_seconds=segment.end_seconds, description=description, score=round(score, 3), reasons=['当前工作区可用素材', '时长满足当前旁白时间槽']))
         candidates.sort(key=lambda item: (item.asset_id == clip.asset_id and item.segment_id == clip.segment_id, item.score), reverse=True)
-        return candidates[:24]
+        return candidates[:limit]
 
 
     def preview_reorder(self, task, payload, change, *, identity, request_source, draft_only, execution, actor):

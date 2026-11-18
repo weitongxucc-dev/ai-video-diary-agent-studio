@@ -1,7 +1,16 @@
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from app.materials.candidate_bundle import build_candidate_bundle
-from app.materials.library_routes import MaterialLibraryHTTPAdapter
+from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_material_library_router
+from app.materials.profile_candidates import ProfileCandidateReader
+from app.profiles.contracts import Authorization, PersonProfile, ProfileReference, VoiceProfile
+from app.source_policy import knowledge_item_readable
 
 
 def test_candidate_bundle_projects_material_and_knowledge_without_promoting_unknowns():
@@ -167,16 +176,6 @@ def test_material_candidate_bundle_reads_visible_knowledge_claims_when_requested
     assert result["summary"]["knowledge_candidates"] == 1
     assert result["candidates"][0]["source_revision"] == {"knowledge_version": "v2"}
     assert result["missing_domains"] == ["person", "voice"]
-
-import pytest
-from dataclasses import replace
-from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from app.materials.library_routes import build_material_library_router
-from app.materials.profile_candidates import ProfileCandidateReader
-from app.profiles.contracts import Authorization, PersonProfile, VoiceProfile, ProfileReference
-from app.source_policy import knowledge_item_readable
 
 
 def profile_api():

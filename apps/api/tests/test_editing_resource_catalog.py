@@ -93,6 +93,9 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
     assert transition["runtime_requirements"]["template_id"] == "builtin_visual_openfilm-transition-glitch"
     assert transition["runtime_requirements"]["operation_type"] == "EditGraphicOverlay"
     assert "read_visual_template" in transition["entrypoints"]
+    preflight = client.get("/api/editing-resources/openfilm:transition-glitch/preflight", params={"version": 2}).json()
+    assert preflight["ready"] and preflight["runnable"]
+    assert "EditProposal/TimelineVersion" in preflight["write_boundary"]
     transition_poster = client.get("/api/editing-resources/openfilm:transition-glitch/preview", params={"representation": "poster", "version": 2})
     assert transition_poster.status_code == 200
     assert transition_poster.headers["content-type"].startswith("image/jpeg")
@@ -104,7 +107,7 @@ def test_resource_detail_returns_404_for_unknown_version():
 
 
 def test_failed_is_a_supported_import_outcome_without_promoting_the_resource():
-    catalog = editing_resource_catalog()
+    editing_resource_catalog()
     assert "failed" in ("connected", "catalog_only", "planned", "failed")
     response = client.get("/api/editing-resource-catalog", params={"status": "failed"})
     assert response.status_code == 200

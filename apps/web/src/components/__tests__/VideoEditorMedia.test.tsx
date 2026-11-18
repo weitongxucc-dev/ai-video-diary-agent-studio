@@ -278,6 +278,12 @@ describe("complete source in clip details and replacement", () => {
     Object.defineProperty(video, "videoHeight", { configurable: true, value: height });
     fireEvent.loadedMetadata(video);
   }
+  function openSource() {
+    const source = screen.getByRole("button", { name: "来源" });
+    fireEvent.click(source);
+    expect(source).toHaveAttribute("aria-pressed", "true");
+    return screen.getByLabelText<HTMLVideoElement>("镜头源素材预览");
+  }
 
   it("isolates same-source clip positions and resumes each preview role on its decoded seek target", () => {
     const play = vi.spyOn(HTMLMediaElement.prototype,"play").mockResolvedValue();
@@ -301,11 +307,12 @@ describe("complete source in clip details and replacement", () => {
       mediaState(video,2,false); fireEvent.seeked(video);
     };
     const view = render(content(first));
-    const firstMain = preview("源素材预览"), firstDetails = preview("镜头源素材预览");
+    const firstMain = preview("源素材预览"), firstDetails = openSource();
     for (const video of [firstMain,firstDetails]) { dimensions(video,1920,1080); decodedSeek(video); }
     firstMain.currentTime=23.422; fireEvent.timeUpdate(firstMain);
     firstDetails.currentTime=24.422; fireEvent.timeUpdate(firstDetails);
     const src = firstMain.getAttribute("src");
+    expect(src).toBe("/api/production/materials/asset-1/media");
 
     view.rerender(content(second));
     const secondMain = preview("源素材预览"), secondDetails = preview("镜头源素材预览");
@@ -356,7 +363,11 @@ describe("complete source in clip details and replacement", () => {
     const onPreview = vi.fn();
     const selected = { ...clip, fit_mode: "fill" as const, crop_x: .1, crop_y: .9 };
     render(inspector(selected, onPreview));
-    const video = screen.getByLabelText("镜头源素材预览") as HTMLVideoElement;
+    expect(screen.getByRole("button", { name: "换素材" })).toBeEnabled();
+    expect(screen.getByText("没有满足时长的其他可用镜头，请补充素材。")).toBeInTheDocument();
+    expect(screen.queryByLabelText("镜头源素材预览")).not.toBeInTheDocument();
+    const video = openSource();
+    expect(video).toHaveAttribute("src", "/api/production/materials/asset-1/media");
     expect(video.style.aspectRatio).toBe("");
     dimensions(video, width, height);
     expect(video.style.aspectRatio).toBe(`${width} / ${height}`);
@@ -366,14 +377,14 @@ describe("complete source in clip details and replacement", () => {
     fireEvent.seeked(video);
     expect(screen.queryByText("正在读取原片…")).not.toBeInTheDocument();
     expect(screen.getByText("源素材 · 原始画面，非成片")).toBeInTheDocument();
-    expect(screen.getByText("没有满足时长的其他可用镜头，请补充素材。")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看素材" })).toBeInTheDocument();
     expect(onPreview).not.toHaveBeenCalled();
     expect(selected).toMatchObject({ fit_mode: "fill", crop_x: .1, crop_y: .9 });
   });
 
   it("resets dimensions on failed retry and changed source, ignoring metadata from the previous video", () => {
     const view = render(inspector());
-    const oldVideo = screen.getByLabelText("镜头源素材预览") as HTMLVideoElement;
+    const oldVideo = openSource();
     dimensions(oldVideo, 1080, 1920);
     fireEvent.error(oldVideo);
     expect(screen.getByRole("alert")).toHaveTextContent("原片暂时无法读取");
@@ -386,6 +397,7 @@ describe("complete source in clip details and replacement", () => {
     expect(retried.style.aspectRatio).toBe("1920 / 1080");
     view.rerender(inspector({ ...clip, asset_id: "asset-2" }));
     const changed = screen.getByLabelText("镜头源素材预览") as HTMLVideoElement;
+    expect(changed).toHaveAttribute("src", "/api/production/materials/asset-2/media");
     expect(changed.style.aspectRatio).toBe("");
     dimensions(retried, 1080, 1920);
     expect(changed.style.aspectRatio).toBe("");

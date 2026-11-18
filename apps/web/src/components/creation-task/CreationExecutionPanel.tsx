@@ -158,6 +158,9 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
     const statusText = locators?.items.some(item => !item.adopted) ? "等待画面确认" : locators?.items.some(item => item.adopted) ? "采用已保存，待继续原作业" : job?.status === "queued" ? "已排队" : job?.status === "running" ? "后台制作中"
         : job?.status === "failed" ? "制作停在失败步骤" : job?.status === "cancelled" ? "已在安全边界停止"
             : job?.status === "interrupted" ? "应用中断，等待继续" : job?.status === "succeeded" ? execution?.video_ready ? "成片已生成，等待检查" : "成片产物需要检查" : "等待开始";
+    const resumeAction = resumable ? <Button className="modern-primary-button" disabled={busy || previewStale || !preview?.requirements.can_continue} onClick={onResume} type="button">
+        {sourceMedia ? needsOutput ? "重新输出当前剪辑" : "继续原片制作" : needsOutput ? "确认以上文案和要求，仅重新输出当前剪辑" : "确认以上文案和要求，继续制作"}
+    </Button> : null;
     const content = <section aria-label="连续制作" className={styles.workSection}>
     <div className={styles.operationHeading}><h2>{job ? "连续制作" : "制作要求"}</h2><span className={styles.stateBadge}>{statusText}</span></div>
     {needsOutput ? <p>{sourceMedia ? "沿用当前原片与剪辑，重新输出当前时间线。" : "沿用有效配音和故事板，重新输出当前时间线。"}</p> : null}
@@ -189,7 +192,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
       {needsOutput ? <><p>原成片不再对应当前时间线，请先核对以上文案和制作要求，再确认重新输出。</p><div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || visualBusy} onClick={onOpenMontage} type="button">查看剪辑与已有产物</button></div></> : null}
       {hasInitialExecutionControls && active && job.status !== "interrupted" ? <button className={styles.secondaryButton} disabled={busy || visualBusy} onClick={onCancel} type="button">停止制作</button> : null}
       {awaitingMontageConfirmation ? <Button variant="outline" disabled={busy || visualBusy} onClick={onOpenMontage} type="button">审核镜头</Button> : null}
-      {resumable ? <Button className="modern-primary-button" disabled={busy || previewStale || !preview?.requirements.can_continue} onClick={onResume} type="button">{sourceMedia ? needsOutput ? "重新输出当前剪辑" : "继续原片制作" : needsOutput ? "确认以上文案和要求，仅重新输出当前剪辑" : "确认以上文案和要求，继续制作"}</Button> : null}
+      {compact ? null : resumeAction}
     </div> : null}
   </section>;
     if (!compact)
@@ -209,7 +212,10 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
     {storyboard?.requestId && !storyboard.receipt ? <span role="status">原画面安排结果待核对</span> : null}
     {storyboard?.error ? <p role="alert">{storyboard.error}</p> : null}
     {visualControls}
-    <HomeCardDialog kind="detail" title={sourceMedia ? "原片制作要求" : "制作文案与要求"} open={detailsOpen} onClose={() => setDetailsOpen(false)} footer={<button type="button" onClick={() => setDetailsOpen(false)}>收起制作详情</button>}>
+    <HomeCardDialog kind="detail" title={sourceMedia ? "原片制作要求" : "制作文案与要求"} open={detailsOpen} onClose={() => setDetailsOpen(false)} footer={<>
+      <button type="button" onClick={() => setDetailsOpen(false)}>收起制作详情</button>
+      {resumeAction}
+    </>}>
       <div className={styles.productionDetails}>{content}{storyboardControls}</div>
     </HomeCardDialog>
   </>;

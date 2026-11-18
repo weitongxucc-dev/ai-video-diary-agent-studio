@@ -1729,8 +1729,8 @@ def _audio_ingress_use_case(repository=None):
 
 def _resource_audio_use_case():
     from app.creation.resource_audio_use_case import ResourceAudioUseCase
-    # Reading receipts and assembling Agent tools must work before the device
-    # is calibrated. Execution obtains its runtime at the submission boundary.
+    # Receipt reads resolve the current media owner without starting the device.
+    # Submission obtains its runtime separately.
     media, _ = _media_result_read_components()
     return ResourceAudioUseCase(
         production_repo, _audio_ingress_use_case(), media,
@@ -6168,7 +6168,7 @@ def _task_business(*, generation_case=None):
         native_case=None if generation_case is not None else _native_task_operations_case(),
         timeline_restores=None if generation_case is not None else _timeline_restore_use_case(),exact_case_for=_exact_preview_use_case,
         edit_controls=None if generation_case is not None else _edit_control_use_case(),
-        resource_audio=None if generation_case is not None else _resource_audio_use_case(),
+        resource_audio_for=None if generation_case is not None else _resource_audio_use_case,
         candidate_query=_candidate_query(),
         media_jobs_list=_list_goal_media_jobs,execution_capabilities=_task_execution_capability_facts,
         device_preparation=_dispatch_device_preparation, quality=_quality_application(),

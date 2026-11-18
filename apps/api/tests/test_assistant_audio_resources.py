@@ -16,13 +16,35 @@ from app.conversation_repository import ConversationRepository
 from test_audio_ingress_application import audio_state, pcm_bytes
 
 
-def test_agent_tools_can_be_constructed_without_starting_audio_runtime(tmp_path, monkeypatch):
-    audio_state(tmp_path, monkeypatch)
-    monkeypatch.setattr(main, 'device_runtime', None)
+@pytest.mark.parametrize('stopped', [False, True], ids=['no-runtime', 'stopped-runtime'])
+def test_agent_tools_defer_audio_runtime_checks_until_audio_operation(tmp_path, monkeypatch, stopped):
+    read_components = main._media_result_read_components
+    repo, actor, _, runtime, *_ = audio_state(tmp_path, monkeypatch)
+    monkeypatch.setattr(main, '_media_result_read_components', read_components)
+    monkeypatch.setattr(main, 'device_runtime', runtime if stopped else None)
+    if stopped:
+        monkeypatch.setattr(runtime, '_last_error', RuntimeError('fixture creation owner stopped'))
+
     def forbidden():
-        pytest.fail('Constructing Agent tools must not start a device runtime')
+        pytest.fail('Agent assembly and audio receipt reads must not start a device runtime')
+
     monkeypatch.setattr(main, '_creation_runtime', forbidden)
-    assert main._task_business().resource_audio is not None
+    business = main._task_business()
+    task = repo.task_records.get_creation_task(actor.workspace_id, 'task')
+    business.check = lambda *args, **kwargs: (actor, task, {}, {}, None)
+    host = TaskBusinessAdapter(business)
+    options = dict(call_id='audio', tool_call_id='resource', source_binding={'turn_id':'turn'},
+        cancel_event=Event(), deadline_monotonic=float('inf'))
+    request_id = str(uuid4())
+    read = host('read_audio_resource_request', {'request_id':request_id}, **options)
+    assert not read['ok'] and read['failure']['status_code'] == (503 if stopped else 404)
+    if stopped:
+        before = repo.execution_records.list_task_events(actor.workspace_id, task.id)
+        imported = host('import_audio_resource', {'payload':{'resource_id':'music', 'version':1,
+            'request_id':request_id, 'assistant_turn_id':'turn'}}, **options)
+        assert imported == read
+        assert '整机制作许可已停止' in read['failure']['reason']
+        assert repo.execution_records.list_task_events(actor.workspace_id, task.id) == before
 
 
 def setup_case(tmp_path, monkeypatch):
@@ -98,7 +120,7 @@ def test_task_business_import_persists_verified_conversation_for_strict_media_bi
     resource=factory()
     resource.conversations=conversations
     business=object.__new__(TaskBusiness)
-    business.resource_audio=resource
+    business.resource_audio_for=lambda:resource
     business.runtime=lambda:runtime
     # The admission seam uses an actual consumed turn; submission, host
     # dispatch, original request journal and Job transaction are real.

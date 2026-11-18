@@ -111,7 +111,9 @@ def test_original_job_seals_sample_clock_in_manifest_units_and_real_grant_facts(
     assert event.job_id == job.id and event.payload['manifest']['output_sample_count'] == 440000
     unit, facts = service.assembly_unit_facts('local', job.task_id, manifest, manifest.units[0].id,
         actor=case.actor, budget=budget(), job_id=job.id)
-    assert unit.graph.model_dump() == montage.audio_timeline.model_dump()
+    original, = [track for track in montage.audio_timeline.tracks if track.clips]
+    assert original.role == 'original'
+    assert unit.graph.tracks == [original]
     assert facts['resources']['output_sample_count'] == 440000
     assert facts['resources']['mix_output_bytes'] == 440000 * 8 + 65536
     assert facts['resources']['assembly_manifest_digest'] == manifest.digest
