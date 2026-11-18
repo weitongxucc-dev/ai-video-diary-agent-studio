@@ -153,7 +153,7 @@ from app.profiles.authorization_routes import build_authorization_router
 from app.profiles.pronunciation_routes import build_pronunciation_router
 from app.profiles.profile_routes import build_profile_router
 from app.profiles.preview_routes import build_preview_router
-from app.device_scheduler import SessionHeartbeat, RecoveryBlocked
+from app.device_scheduler import SessionHeartbeat, RecoveryBlocked, PriorDeviceWorkPending
 from app.member_permits import (
     HostBudgetUncalibrated,
     creation_job_registration, find_member, permit_actor, resolve_member_token,
@@ -1891,6 +1891,11 @@ def _media_result_receipt(media, job, actor, runtime):
         raise HTTPException(exc.status_code, exc.detail) from exc
 
 
+def _device_runtime_unavailable(error):
+    detail = str(error) if isinstance(error, PriorDeviceWorkPending) else "整机制作许可已停止，须核查许可后才能继续"
+    return HTTPException(status_code=503, detail=detail)
+
+
 def _media_result_read_components():
     from app.creation_execution import CreationJobOwnerVerifier
     from app.device_runtime import OwnerReadRouter
@@ -1902,7 +1907,7 @@ def _media_result_read_components():
         if runtime is not None:
             registration = runtime.registrations.get('creation_job')
             if runtime.last_error is not None or registration is None:
-                raise HTTPException(status_code=503, detail="整机制作许可已停止，须核查许可后才能继续")
+                raise _device_runtime_unavailable(runtime.last_error)
             return registration.owner.task_media, runtime.scheduler
         repository = production_repo
         authorizations = _task_authorizations_for_goal(repository)
@@ -5586,7 +5591,7 @@ def _creation_runtime_locked():
             raise HTTPException(status_code=503, detail=f"整机制作许可尚未就绪：{exc}") from exc
         device_runtime = runtime
     if runtime.last_error is not None or "creation_job" not in runtime.registrations:
-        raise HTTPException(status_code=503, detail="整机制作许可已停止，须核查许可后才能继续")
+        raise _device_runtime_unavailable(runtime.last_error)
     if not runtime.running:
         try:
             recover_interrupted_quality_checks(runtime)
