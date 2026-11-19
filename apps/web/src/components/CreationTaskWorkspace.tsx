@@ -14,7 +14,7 @@ import { useScriptGenerationRequest } from "./creation-task/useScriptGenerationR
 import { TopicSelection } from "./creation-task/TopicSelection";
 import { useCreationExecution } from "./creation-task/useCreationExecution";
 import type { TaskMediaJob, TaskMediaResultMap, CreationTaskNarrationVoiceSelectionRequest } from "@/lib/types";
-import { getAssistantScriptContext, getCreationTaskNarrationVoiceSelection, saveCreationTaskPresenterSelection } from "@/lib/api/creation-tasks";
+import { confirmProvidedCreationTaskTopic, getAssistantScriptContext, getCreationTaskNarrationVoiceSelection, saveCreationTaskPresenterSelection } from "@/lib/api/creation-tasks";
 import { readCreationTaskTimelineRestore } from '@/lib/api';
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
 import { isLocalAuthMode } from "@/lib/auth/routing";
@@ -1881,6 +1881,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "topic" && task.stage === "topic" ? <TopicSelection topics={topics} selectedTopicId={selectedTopicId} topicTitleDraft={topicTitleDraft} knowledgeCount={workspace.plan.knowledge_references.length} sourceCount={workspace.plan.source_references.length} busy={busy} stageStatus={task.stage_status}
           onSelect={(id, title) => { setSelectedTopicId(id); setTopicTitleDraft(title); }} onTitleChange={setTopicTitleDraft}
           onGenerate={() => void run("topics", () => generateCreationTaskTopics(task.id), "选题已生成，等待选择。")}
+          onUseProvided={title => void run("topic-confirm", () => confirmProvidedCreationTaskTopic(task.id, {
+            title, expected_task_updated_at: task.updated_at,
+          }), "已有选题已确认，可以编写文案。")}
           onRefresh={() => void refresh(true).catch(cause => setError(errorDetails(cause)))}
           onConfirm={() => { if (selectedTopicId) void run("topic-confirm", async () => {
             const saved = await confirmCreationTaskTopic(task.id, selectedTopicId, { title: topicTitleDraft.trim() });
