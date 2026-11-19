@@ -742,12 +742,13 @@ def test_script_consumers_preserve_safe_category_section_and_retryability(
     assert api_state.repository.script_records.list_creation_task_scripts('local', 'task') == []
 
 
-def test_provided_topic_without_generated_metadata_reaches_real_script_provider(api_state, monkeypatch):
+@pytest.mark.parametrize("provided_at_creation", [True, False])
+def test_provided_topic_without_generated_metadata_reaches_real_script_provider(api_state, monkeypatch, provided_at_creation):
     state = api_state
     with state.repository._connect() as conn:
         plan = json.loads(conn.execute("SELECT payload FROM creation_plans WHERE id='plan'").fetchone()[0])
         plan['creation_intent'] = {'kind': 'goal_delegation', 'topic_title': '本机工作区导览',
-            'source': {'kind': 'user_action', 'member_id': state.owner.member_id, 'request_id': 'provided-topic-fixture'}}
+            'source': {'kind': 'user_action', 'member_id': state.owner.member_id, 'request_id': 'provided-topic-fixture'}} if provided_at_creation else None
         topic = json.loads(conn.execute("SELECT payload FROM topic_candidates WHERE id='topic'").fetchone()[0])
         topic.update(angle='', audience='', outline=[])
         run = json.loads(conn.execute("SELECT payload FROM topic_generation_runs WHERE id='topic-run'").fetchone()[0])

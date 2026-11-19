@@ -154,5 +154,7 @@ def test_provided_topic_after_failed_generation_preserves_both_original_records(
     assert provided.title == kwargs["title"] and provided.selection_status == "confirmed"
     assert topics.get_topic_generation_run("local", provided.run_id).route_snapshot == {
         "operation": "provided_topic", "provider": "none"}
+    assert topics.confirmed_topic_origin("local", plan.id, provided) == "provided"
+    assert topics.confirmed_topic_origin("local", "other-plan", provided) == "generated"
     assert topics.get_topic_generation_run("local", failure.id) == failure
     assert repo.job_records.list_job_runs("local", task.id) == []
