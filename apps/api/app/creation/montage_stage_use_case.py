@@ -6,7 +6,8 @@ import json
 from dataclasses import replace
 
 from app.creation_execution import CreationStageGrantContext, current_presenter_render, iter_presenter_inputs
-from app.montage import CreationTaskMontagePlan, MontagePlanner, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
+from app.montage import CreationTaskMontagePlan, MontagePlanner, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
+from app.creation.presenter_selection import planned_presenter_sections
 from app.materials.contracts import MediaAuthorityError
 from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
@@ -272,8 +273,8 @@ class MontageStageUseCase:
             for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, header, connection=conn):
                 audio[section.id] = {'id': segment.id, 'reference': segment.audio_reference,
                     'duration': float(segment.duration_seconds or 0)}
-            selected_sections = select_presenter_sections([(key, row['duration']) for key, row in audio.items()],
-                creation_plan.presenter_share_target)
+            selected_sections = planned_presenter_sections(
+                creation_plan, header, [(key, row['duration']) for key, row in audio.items()])
             if selected_sections and creation_plan.selected_voice is None:
                 raise ValueError('露脸段落缺少当前任务已授权的人物和声音')
             requirement, windows = delivery_windows_from_section_inputs(creation_plan,
@@ -315,13 +316,18 @@ class MontageStageUseCase:
                 if cue.source_section_id == section_id:
                     if clip.source_end_seconds > (render.duration_seconds or 0) + 1 / 30:
                         raise ValueError('人物口型输出短于露脸段落，请重试或降低比例')
+                    if creation_plan.presenter_selection is not None:
+                        clip.match_reasons = ["按指定段落及当前配音生成口型"]
                     clip.person_render_id = render.id
                     clip.asset_id = f'person:{render.id}'
                     clip.source_path = f'person-render://{render.id}'
                     clip.source_end_seconds = min(clip.source_end_seconds, render.duration_seconds or 0)
         actual = round(100 * sum(clip.timeline_end_seconds - clip.timeline_start_seconds
                                  for clip in montage.clips if clip.person_render_id) / montage.duration_seconds, 1)
-        montage.message += f" 露脸目标 {montage.presenter_share_target}%，实际 {actual}%；仅为露脸段落制作口型。"
+        if creation_plan.presenter_selection is not None:
+            montage.message += f" 按已指定的单段露脸，实际 {actual}%；仅为该段制作口型。"
+        else:
+            montage.message += f" 露脸目标 {montage.presenter_share_target}%，实际 {actual}%；仅为露脸段落制作口型。"
         if grant_context is not None:
             montage.message += " 本次受许可编排仅使用已授权素材元数据，未运行视觉语义模型。"
         montage.aspect_ratio = creation_plan.aspect_ratio

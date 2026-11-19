@@ -25,7 +25,8 @@ from app.canvas import canvas_size
 from app.graphic_overlays import validate_overlays
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedRetry, VerifiedWork, WorkRequest
 from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity, audio_resource_refusal
-from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
+from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
+from app.creation.presenter_selection import planned_presenter_sections
 from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
 from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
@@ -267,7 +268,7 @@ def _presenter_inputs_in_snapshot(repository, task, script, plan, models, *, con
         if segment is None or segment.status != 'ready' or not segment.duration_seconds:
             raise ValueError("人物制作缺少当前文案的可用配音分段")
         timings.append((section.id, segment.duration_seconds))
-    selected = select_presenter_sections(timings, plan.presenter_share_target)
+    selected = planned_presenter_sections(plan, script, timings)
     if plan.selected_person is None:
         raise ValueError("请单独选择人物档案与固定版本后再制作人物段")
     person = repository.profile_records.get_person_profile(task.workspace_id, plan.selected_person.profile_id,

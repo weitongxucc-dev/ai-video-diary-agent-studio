@@ -73,8 +73,16 @@ export type CreationPlanBlocker = {
     stage: string;
     blocks_confirmation: boolean;
 };
+export type CreationPlanPresenterSelection = {
+    script_id: string;
+    script_updated_at: string;
+    section_id: string;
+    voice_profile_id: string;
+    voice_version: string;
+};
 export type CreationPlanPreview = Omit<CreationPlanInput, "selected_voice"> & {
     source_media?: SourceMediaSelection | null;
+    presenter_selection?: CreationPlanPresenterSelection | null;
     updated_at?: string | null;
     template_settings?: VideoTemplateSettings;
     name: string;

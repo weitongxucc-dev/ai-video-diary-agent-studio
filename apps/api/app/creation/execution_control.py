@@ -182,6 +182,8 @@ class CreationExecutionControl:
                 "aspect_ratio": plan.aspect_ratio,
                 "duration_target_seconds": plan.duration_target_seconds,
                 "presenter_share_target": plan.presenter_share_target,
+                **({"presenter_selection": {"section_id": plan.presenter_selection.section_id}}
+                   if plan.presenter_selection is not None else {}),
                 "lipsync_quality": plan.lipsync_quality,
                 "selected_voice": plan.selected_voice.profile_id if plan.selected_voice else None,
                 "can_continue": can_continue,

@@ -1,5 +1,5 @@
 import type { CreationTaskEditOperation } from "@/lib/types";
-export type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "reply-transfer" | "execution" | "voice-select" | "recording-adopt" | "person-render" | "clip" | "save" | "assistant" | "edit-preview" | "edit-confirm" | "undo";
+export type BusyAction = "topics" | "topic-confirm" | "script" | "script-confirm" | "reply-transfer" | "execution" | "voice-select" | "recording-adopt" | "person-render" | "presenter-selection" | "clip" | "save" | "assistant" | "edit-preview" | "edit-confirm" | "undo";
 export type PendingLocalEdit = {
     taskId: string;
     jobId: string;

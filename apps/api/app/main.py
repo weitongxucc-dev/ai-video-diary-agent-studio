@@ -3662,6 +3662,8 @@ def _person_render_media_path(render: PersonRender) -> Path | None:
 
 def _task_person_render_http_router(route_names):
     return build_task_person_render_router(
+        access_for=lambda: _exact_edit_access,
+        require_task_open=lambda: _require_automation_task_open,
         workspace_for=lambda: current_workspace_id,
         task_for=lambda: _creation_task_or_404,
         production_for=lambda: production_repo,
@@ -3676,7 +3678,7 @@ def _task_person_render_http_router(route_names):
     )
 
 
-app.include_router(_task_person_render_http_router(('list_creation_task_person_renders',)))
+app.include_router(_task_person_render_http_router(('list_creation_task_person_renders', 'save_creation_task_presenter_selection')))
 
 
 def _generate_creation_task_person_render_record(workspace_id,task_id,payload,*,regeneration_token=None,grant_context=None):
