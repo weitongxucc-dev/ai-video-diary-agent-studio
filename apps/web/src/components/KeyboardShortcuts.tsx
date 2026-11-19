@@ -1,5 +1,6 @@
 "use client";
 
+import { NEW_VIDEO_HREF } from "@/lib/preflight-draft-url";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { useToast } from "@/components/PixelToast";
@@ -77,7 +78,7 @@ export function KeyboardShortcuts({ onOpenSearch }: { onOpenSearch: (target: Eve
 
       if (event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        router.push("/?new=1");
+        router.push(NEW_VIDEO_HREF);
         return;
       }
 
