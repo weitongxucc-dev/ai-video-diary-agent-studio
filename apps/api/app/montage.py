@@ -21,6 +21,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.creation.duration_requirement import DurationRequirement, DurationConflict, SectionWindow, stream_duration_seconds
 from app.creation.execution_input import ExecutionScriptHeader
+from app.creation.reference_picture_order import (
+    FRAME_RATE as REFERENCE_FRAME_RATE, reference_picture_ranges, require_reference_picture_frames, take_reference_picture,
+)
 from app.creation.script_contracts import CreationTaskScriptSection
 from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
 from app.device_scheduler import DeviceScheduler, Grant
@@ -467,7 +470,8 @@ class MontagePlanner:
 
     def build_for_creation_inputs(self, *, workspace_id, task_id, script_header, prepared,
                                   assets, media_reference_for_asset, narration_audio_path,
-                                  person_render_by_section=None, presenter_share_target=0, delivery_windows=None):
+                                  person_render_by_section=None, presenter_share_target=0, delivery_windows=None,
+                                  reference_order=None, reference_offset_frames=0):
         self._validate_creation_planning_source(workspace_id, task_id, script_header, narration_audio_path)
         cues, visual_cues, visual_requirements = prepared
         return self._build_creation_plan(
@@ -475,14 +479,14 @@ class MontagePlanner:
             cues=cues, visual_cues=visual_cues, visual_requirements=visual_requirements, assets=assets,
             media_reference_for_asset=media_reference_for_asset, narration_audio_path=narration_audio_path,
             person_render_by_section=person_render_by_section, presenter_share_target=presenter_share_target,
-            delivery_windows=delivery_windows)
+            delivery_windows=delivery_windows, reference_order=reference_order, reference_offset_frames=reference_offset_frames)
 
     def build_for_creation_section(
         self, *, workspace_id: str, task_id: str, script_header: ExecutionScriptHeader,
         section: CreationTaskScriptSection, profile: ProductionProfile, duration_target_seconds: int,
         assets: list[MaterialAsset], media_reference_for_asset: Callable[[str], str],
         narration_audio_path: str, narration_duration_seconds: float,
-        narration_segment_id: str, delivery_window: SectionWindow,
+        narration_segment_id: str, delivery_window: SectionWindow, reference_order=None, reference_offset_frames=0,
     ) -> CreationTaskMontagePlan:
         """Plan one selected section; the header still describes the real script."""
         prepared = self.prepare_creation_inputs(lambda: iter((section,)), profile=profile,
@@ -492,7 +496,7 @@ class MontagePlanner:
         return self.build_for_creation_inputs(workspace_id=workspace_id, task_id=task_id,
             script_header=script_header, prepared=prepared, assets=assets,
             media_reference_for_asset=media_reference_for_asset, narration_audio_path=narration_audio_path,
-            delivery_windows=(delivery_window,))
+            delivery_windows=(delivery_window,), reference_order=reference_order, reference_offset_frames=reference_offset_frames)
 
     @staticmethod
     def _validate_creation_planning_source(workspace_id, task_id, script, narration_audio_path):
@@ -506,12 +510,12 @@ class MontagePlanner:
     def _build_creation_plan(
         self, *, workspace_id, task_id, script_id, script_title, cues, visual_cues, visual_requirements, assets,
         media_reference_for_asset, narration_audio_path, person_render_by_section,
-        presenter_share_target, delivery_windows,
+        presenter_share_target, delivery_windows, reference_order=None, reference_offset_frames=0,
     ) -> CreationTaskMontagePlan:
         b_roll_candidates = [
             (asset, segment)
             for asset in assets
-            if asset.workspace_id == workspace_id
+            if reference_order is None and asset.workspace_id == workspace_id
             for segment in asset.segments
             if automatic_segment_eligible(asset, segment, workspace_id)
             and effective_segment_usage_role(asset, segment) == "b_roll"
@@ -538,7 +542,9 @@ class MontagePlanner:
             visual_cues = [replace(cue, duration_seconds=windows[cue.source_section_id].duration_seconds)
                            for cue in visual_cues]
         person_render_by_section = person_render_by_section or {}
-        if not b_roll_candidates and any(cue.source_section_id not in person_render_by_section for cue in visual_cues):
+        if reference_order is not None and delivery_windows is None:
+            raise DurationConflict("按参考片顺序需要已核实的各段交付时长。")
+        if reference_order is None and not b_roll_candidates and any(cue.source_section_id not in person_render_by_section for cue in visual_cues):
             error = DurationConflict if delivery_windows is not None else ValueError
             raise error("可用素材库中没有可自动选用的补充画面，无法覆盖未露脸的配音段落")
         # Use the confirmed visual requirement for retrieval; narration remains
@@ -547,9 +553,16 @@ class MontagePlanner:
             cue.id: replace(cue, text=visual_requirements.get(cue.source_section_id) or cue.text)
             for cue in visual_cues
         }
-        cue_vectors, segment_vectors, semantic_note = self._semantic_vectors(
-            workspace_id, list(retrieval_cues.values()), b_roll_candidates
-        )
+        if reference_order is None:
+            cue_vectors, segment_vectors, semantic_note = self._semantic_vectors(
+                workspace_id, list(retrieval_cues.values()), b_roll_candidates)
+        else:
+            ordered_ranges = reference_picture_ranges(workspace_id, assets,
+                reference_order.asset_ids, reference_order.source_start_seconds)
+            needed_frames = sum(round(window.end_seconds * REFERENCE_FRAME_RATE)
+                - round(window.start_seconds * REFERENCE_FRAME_RATE)
+                for window in windows.values() if window.section_id not in person_render_by_section)
+            require_reference_picture_frames(ordered_ranges, reference_offset_frames, needed_frames)
         clips: list[MontageClip] = []
         segment_usage: dict[str, int] = {}
         asset_usage: dict[str, int] = {}
@@ -557,7 +570,7 @@ class MontagePlanner:
         person_source_cursor: dict[str, float] = {}
         source_ranges = []
         covered = {}
-        if delivery_windows is not None:
+        if delivery_windows is not None and reference_order is None:
             for asset, segment in sorted(b_roll_candidates, key=lambda item: (item[0].id, item[1].start_seconds, item[1].end_seconds)):
                 begin = max(segment.start_seconds, covered.get(asset.id, segment.start_seconds))
                 if begin < segment.end_seconds:
@@ -606,6 +619,26 @@ class MontagePlanner:
                 ))
                 person_source_cursor[cue.source_section_id] = source_end
                 timeline_cursor += clip_duration
+                continue
+            if reference_order is not None:
+                start_frame = round(timeline_cursor * REFERENCE_FRAME_RATE)
+                end_frame = round(windows[cue.source_section_id].end_seconds * REFERENCE_FRAME_RATE)
+                spans = take_reference_picture(ordered_ranges, reference_offset_frames, end_frame - start_frame)
+                for span in spans:
+                    frames = span.end_frame - span.start_frame
+                    clips.append(MontageClip(
+                        id=f"clip_{uuid4().hex[:10]}", cue_id=cue.id,
+                        asset_id=span.asset.id, segment_id=span.segment.id,
+                        source_path=media_reference_for_asset(span.asset.id),
+                        source_start_seconds=span.start_frame / REFERENCE_FRAME_RATE,
+                        source_end_seconds=span.end_frame / REFERENCE_FRAME_RATE,
+                        timeline_start_seconds=start_frame / REFERENCE_FRAME_RATE,
+                        timeline_end_seconds=(start_frame + frames) / REFERENCE_FRAME_RATE,
+                        match_score=1.0, match_reasons=["按本作品确认的参考片顺序"], needs_confirmation=False, role="b_roll",
+                    ))
+                    start_frame += frames
+                    reference_offset_frames += frames
+                timeline_cursor = windows[cue.source_section_id].end_seconds
                 continue
             if delivery_windows is not None:
                 end = windows[cue.source_section_id].end_seconds
@@ -725,7 +758,8 @@ class MontagePlanner:
             presenter_share_target=presenter_share_target,
             narration_audio_path=narration_audio_path,
             message=(
-                "镜头均有文案或画面语义依据，可以进入渲染。"
+                "已按本作品确认的参考片顺序安排画面。" if reference_order is not None
+                else "镜头均有文案或画面语义依据，可以进入渲染。"
                 if status == "ready"
                 else f"有 {low_confidence_count} 个低置信镜头需要确认或替换。"
             ),

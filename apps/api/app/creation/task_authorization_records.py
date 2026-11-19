@@ -107,8 +107,8 @@ class TaskAuthorizationRecordStore:
             if row is None:
                 raise KeyError(task_id)
             keys = ("id","goal","target_count","language","aspect_ratio","duration_target_seconds")
-            plan_row = conn.execute("SELECT "+",".join("json_extract(payload,'$."+key+"')" for key in keys)+
-                ",json_extract(payload,'$.source_media'),json_extract(payload,'$.selected_material_asset_ids')"
+            extra = ("source_media", "selected_material_asset_ids", "material_selection_mode", "material_source_start_seconds")
+            plan_row = conn.execute("SELECT "+",".join("json_extract(payload,'$."+key+"')" for key in (*keys, *extra))+
                 " FROM creation_plans WHERE workspace_id=? AND id=?", (workspace_id,row[0])).fetchone()
             # Window creation/confirmation also advances the request's optimistic
             # revision. Bind goal contents so another bounded window cannot revoke
@@ -116,9 +116,9 @@ class TaskAuthorizationRecordStore:
             origin = conn.execute("SELECT r.id,r.goal,r.target_count,r.output_relation,r.requirements_json,r.material_scope_json FROM creation_request_items i "
                 "JOIN creation_request_windows w ON w.id=i.window_id JOIN creation_requests r ON r.id=w.request_id "
                 "WHERE r.workspace_id=? AND i.task_id=?", (workspace_id,task_id)).fetchone()
-        identity = dict(zip(keys, plan_row[:-2], strict=True))
-        for key, value in zip(('source_media', 'selected_material_asset_ids'), plan_row[-2:], strict=True):
+        identity = dict(zip(keys, plan_row[:len(keys)], strict=True))
+        for key, value in zip(extra, plan_row[len(keys):], strict=True):
             if value is not None:
-                identity[key] = json.loads(value)
+                identity[key] = value if key == "material_selection_mode" else json.loads(value)
         identity["request"] = list(origin) if origin is not None else None
         return hashlib.sha256(json.dumps(identity,ensure_ascii=False,sort_keys=True).encode()).hexdigest()

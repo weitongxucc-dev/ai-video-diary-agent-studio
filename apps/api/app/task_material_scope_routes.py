@@ -1,5 +1,6 @@
 """Task-only material scope HTTP requests and receipt access."""
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
@@ -12,6 +13,7 @@ class MaterialScopeAsset(BaseModel):
     model_config = ConfigDict(extra="forbid")
     asset_id: str = Field(min_length=1, max_length=120)
     expected_asset_updated_at: datetime
+    source_start_seconds: float = Field(default=0, ge=0, allow_inf_nan=False)
 
 
 class MaterialScopeRequest(BaseModel):
@@ -19,6 +21,7 @@ class MaterialScopeRequest(BaseModel):
     request_id: UUID
     expected_plan_updated_at: datetime
     assets: list[MaterialScopeAsset] = Field(max_length=64)
+    selection_mode: Literal["automatic", "source_order"] = "automatic"
 
 
 def build_task_material_scope_router(*, access, case_for):
@@ -28,7 +31,8 @@ def build_task_material_scope_router(*, access, case_for):
     def save_material_scope(task_id: str, payload: MaterialScopeRequest, request: Request):
         task, member_id = access(task_id, request, write=True)
         command = MaterialScopeCommand(str(payload.request_id), payload.expected_plan_updated_at,
-            tuple((asset.asset_id, asset.expected_asset_updated_at) for asset in payload.assets))
+            tuple((asset.asset_id, asset.expected_asset_updated_at, asset.source_start_seconds) for asset in payload.assets),
+            payload.selection_mode)
         try:
             return case_for().save(task.workspace_id, task_id, member_id, command)
         except KeyError as exc:

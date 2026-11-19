@@ -1,10 +1,12 @@
 """Set one work's source scope before production and retain the adoption receipt."""
 from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import Literal
 import hashlib
 import json
 
 from app.creation.contracts import TaskEvent
+from app.creation.reference_picture_order import FRAME_RATE, reference_picture_ranges
 from app.materials.contracts import MediaAuthorityError, material_usage_eligibility
 from app.materials.source_files import automatic_segment_eligible
 from app.models import utc_now
@@ -15,7 +17,8 @@ from app.source_policy import knowledge_item_readable
 class MaterialScopeCommand:
     request_id: str
     expected_plan_updated_at: datetime
-    assets: tuple[tuple[str, datetime], ...]
+    assets: tuple[tuple[str, datetime, float], ...]
+    selection_mode: Literal["automatic", "source_order"] = "automatic"
 
 
 class MaterialScopeUseCase:
@@ -47,13 +50,21 @@ class MaterialScopeUseCase:
             return event.payload["receipt"]
 
     def save(self, workspace_id, task_id, member_id, command):
-        assets = sorted(command.assets)
-        selected_ids = [asset_id for asset_id, _ in assets]
+        ordered = command.selection_mode == "source_order"
+        if ordered and not command.assets:
+            raise ValueError("请至少选择一个要按原顺序使用的参考视频。")
+        if not ordered and any(start for _, _, start in command.assets):
+            raise ValueError("指定源入点需要选择按参考片顺序。")
+        assets = command.assets if ordered else sorted(command.assets)
+        selected_ids = [asset_id for asset_id, _, _ in assets]
+        requested_starts = {key: start for key, _, start in assets if start}
         if len(selected_ids) != len(set(selected_ids)):
             raise ValueError("同一素材只能选择一次。")
         event_id = self._event_id(workspace_id, member_id, command.request_id)
         inputs = {"plan_updated_at": command.expected_plan_updated_at.isoformat(),
-                  "assets": [[key, version.isoformat()] for key, version in assets]}
+                  "assets": [[key, version.isoformat()] for key, version, _ in assets]}
+        if ordered:
+            inputs.update(selection_mode=command.selection_mode, source_start_seconds_by_asset=requested_starts)
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             task = self._owned_task(connection, workspace_id, task_id, member_id)
@@ -74,7 +85,8 @@ class MaterialScopeUseCase:
             if (task.stage_status == "running" or task.montage_plan_id or task.current_timeline_version_id
                     or self.repository.job_records.has_open_task_job(connection, workspace_id, task_id)):
                 raise ValueError("此作品已有正在进行的制作或已采用镜头，请从当前剪辑中调整。")
-            for asset_id, version in assets:
+            in_points = {}
+            for asset_id, version, start in assets:
                 asset = self.repository.get_asset(workspace_id, asset_id, connection=connection)
                 if not knowledge_item_readable(user_id=member_id, local_diagnostic=False,
                         visibility=asset.visibility, owner_user_id=asset.owner_user_id):
@@ -82,7 +94,13 @@ class MaterialScopeUseCase:
                 eligibility = material_usage_eligibility(asset, purpose="automatic", expected_asset_version=version)
                 if not eligibility.eligible:
                     raise ValueError(eligibility.repair_action)
-                if not any(automatic_segment_eligible(asset, segment, workspace_id) for segment in asset.segments):
+                if ordered:
+                    if start:
+                        if asset.duration_seconds is None or start >= asset.duration_seconds:
+                            raise ValueError("参考片的源入点必须早于该视频结束。")
+                        in_points[asset_id] = round(start * FRAME_RATE) / FRAME_RATE
+                    reference_picture_ranges(workspace_id, [asset], [asset_id], in_points)
+                elif not any(automatic_segment_eligible(asset, segment, workspace_id) for segment in asset.segments):
                     raise ValueError("所选素材当前版本缺少可用于本作品的已就绪视频片段。")
                 try:
                     reference = self.repository.workspace_media_reference_for_asset(workspace_id, asset_id, connection=connection)
@@ -90,14 +108,17 @@ class MaterialScopeUseCase:
                 except (KeyError, MediaAuthorityError, OSError) as exc:
                     raise ValueError("所选视频的原文件已不可用，请核对素材库。") from exc
             before = plan.selected_material_asset_ids
-            changed = before != selected_ids
+            changed = (before != selected_ids or plan.material_selection_mode != command.selection_mode
+                or plan.material_source_start_seconds != in_points)
             now = utc_now()
             if changed:
-                plan = replace(plan, selected_material_asset_ids=selected_ids, updated_at=now)
+                plan = replace(plan, selected_material_asset_ids=selected_ids, material_selection_mode=command.selection_mode,
+                    material_source_start_seconds=in_points, updated_at=now)
                 self.repository.plan_records.write_plan_payload(connection, workspace_id, plan)
             receipt = {"request_id": command.request_id, "task_id": task.id, "plan_id": plan.id,
                        "plan_updated_at": plan.updated_at.isoformat(), "status": "saved" if changed else "unchanged",
-                       "selected_material_asset_ids": selected_ids}
+                       "selected_material_asset_ids": selected_ids, "selection_mode": command.selection_mode,
+                       "source_start_seconds_by_asset": in_points}
             self.repository.execution_records.append_task_event(TaskEvent(
                 event_id, workspace_id, task.id, None, "task_material_scope_saved",
                 {"inputs": inputs, "previous_asset_ids": before, "receipt": receipt}, now), connection=connection)

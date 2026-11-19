@@ -40,3 +40,10 @@
 .roles input { accent-color: var(--accent); }
 .review form:not(.search) { display: grid; justify-items: start; gap: 8px; }
 .review .error { color: var(--danger); }
+.selectedAssets { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.assetRow { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.assetRow > span { min-width: 0; overflow-wrap: anywhere; }
+.assetActions, .sourceIn { display: flex; align-items: center; gap: 4px; }
+.assetActions { flex-shrink: 0; }
+.sourceIn { color: var(--text-2); }
+.sourceIn input { width: 9ch; padding: 4px; font: inherit; color: var(--text-1); background: var(--surface-1); border: 1px solid var(--border-2); border-radius: 4px; }

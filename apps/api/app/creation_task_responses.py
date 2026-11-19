@@ -57,6 +57,8 @@ class CreationTaskResponseAdapter:
                 ],
                 "approved_asset_count": plan.approved_asset_count,
                 "selected_material_asset_ids": plan.selected_material_asset_ids,
+                "material_selection_mode": plan.material_selection_mode,
+                "material_source_start_seconds": plan.material_source_start_seconds,
                 "approved_clip_count": plan.approved_clip_count,
                 "material_rule_summary": plan.material_rule_summary,
                 "material_matches": [asdict(item) for item in plan.material_matches],

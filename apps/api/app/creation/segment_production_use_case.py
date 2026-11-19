@@ -8,7 +8,9 @@ import json
 import math
 from pathlib import Path
 
+from app.creation.duration_requirement import DurationConflict, SectionWindow
 from app.creation.editing.narration_preview_use_case import inspect_narration_revision
+from app.creation.reference_picture_order import FRAME_RATE, ReferencePictureOrder
 from app.device_scheduler import SchedulePolicy, SubmissionIntent, VerifiedWork, RecoveryBlocked
 from app.models import utc_now
 
@@ -272,6 +274,8 @@ class SegmentProductionUseCase:
 
     def planning_inputs(self, snapshot, section_id, *, connection, checksum, reserved_ranges=None):
         checksum.update(snapshot.input_digest.encode())
+        if snapshot.plan.material_selection_mode == "source_order":
+            checksum.update(str(snapshot.task.current_timeline_version_id).encode())
         for section, measured, window in self.repository.section_inputs.iter_creation_section_planning_inputs(
                 snapshot.task, snapshot.script_header, connection=connection):
             # The target uses a possibly not-yet-persisted audio/text override.
@@ -313,9 +317,24 @@ class SegmentProductionUseCase:
             available.append(replace(asset, segments=segments))
         return available
 
+    def reference_section_window(self, task, section_id, audio, *, connection):
+        montage = self.repository.get_creation_task_montage_plan(task.workspace_id, task.id, connection=connection)
+        cue_sections = {cue["id"]: cue["source_section_id"] for cue in montage["cues"]}
+        clips = [clip for clip in montage["clips"] if cue_sections.get(clip["cue_id"]) == section_id]
+        if not clips or any(clip.get("person_render_id") for clip in clips):
+            raise DurationConflict("当前段落没有可单独重做的参考画面；请通过原人物或整片故事板入口处理。")
+        start = min(clip["timeline_start_seconds"] for clip in clips)
+        end = max(clip["timeline_end_seconds"] for clip in clips)
+        if audio.duration_seconds > end - start + .001:
+            raise DurationConflict("新配音超过原参考画面窗口，请重新确认整片时长与故事板。")
+        offset = sum(round(clip["timeline_end_seconds"] * FRAME_RATE) - round(clip["timeline_start_seconds"] * FRAME_RATE)
+            for clip in montage["clips"] if not clip.get("person_render_id") and clip["timeline_end_seconds"] <= start)
+        expected = [(clip["asset_id"], round(clip["source_start_seconds"] * FRAME_RATE),
+            round(clip["source_end_seconds"] * FRAME_RATE)) for clip in clips]
+        return SectionWindow(section_id, start, end), offset, expected
+
     def section_plan(self, task, section_id, audio, owner, *, connection=None, text=None):
         from app.montage import MontagePlanner, creation_task_montage_plan_to_payload
-        from app.creation.duration_requirement import SectionWindow
         from app.creation.montage_stage_use_case import delivery_windows_from_section_inputs
         allowed = (owner.task_authorizations.material_asset_ids(task.workspace_id, task.id)
             if owner.task_authorizations is not None else None)
@@ -338,8 +357,19 @@ class SegmentProductionUseCase:
                 text_override=(section_id, section.content))
             assets = list({asset.id:asset for asset,_ in self.repository.automatic_material_segments(task.workspace_id,
                 viewer_user_id=task.owner_user_id,asset_ids=allowed,connection=conn)}.values())
-        window = next(item for item in windows if item.section_id == section_id)
-        assets = self.unconsumed_material_segments(assets, reserved_ranges)
+            window = next(item for item in windows if item.section_id == section_id)
+            reference_order = ReferencePictureOrder.from_plan(creation_plan)
+            reference_offset = 0
+            expected = None
+            if reference_order is not None:
+                if task.montage_plan_id:
+                    window, reference_offset, expected = self.reference_section_window(task, section_id, audio, connection=conn)
+                elif snapshot.plan.presenter_share_target:
+                    raise DurationConflict("请先按完整配音生成并确认含人物的参考故事板。")
+                else:
+                    reference_offset = round(window.start_seconds * FRAME_RATE)
+            else:
+                assets = self.unconsumed_material_segments(assets, reserved_ranges)
         plan = MontagePlanner().build_for_creation_section(workspace_id=task.workspace_id, task_id=task.id,
             delivery_window=SectionWindow(section_id, 0, window.duration_seconds),
             script_header=script, section=section, profile=self.repository.get_profile(task.workspace_id),
@@ -347,7 +377,11 @@ class SegmentProductionUseCase:
             media_reference_for_asset=lambda asset_id: self.repository.workspace_media_reference_for_asset(task.workspace_id, asset_id),
             narration_audio_path=self.repository.narration_artifacts.narration_artifact_reference(audio.cache_key),
             narration_duration_seconds=audio.duration_seconds,
-            narration_segment_id=self.narration_stage.segment_id(task.id, script.id, section_id))
+            narration_segment_id=self.narration_stage.segment_id(task.id, script.id, section_id),
+            reference_order=reference_order, reference_offset_frames=reference_offset)
+        if expected is not None and expected != [(clip.asset_id, round(clip.source_start_seconds * FRAME_RATE),
+                round(clip.source_end_seconds * FRAME_RATE)) for clip in plan.clips]:
+            raise DurationConflict("当前镜头顺序或区间已有手动调整，请核对整片故事板后重做，已采用画面保留。")
         from app.audio_timeline import narration_audio_timeline
         plan.audio_timeline = narration_audio_timeline(plan.narration_audio_path, audio.duration_seconds)
         plan.delivery_window = asdict(window)
