@@ -10,12 +10,15 @@ from uuid import uuid4
 import psutil
 import pytest
 
+from app.audio_timeline import audio_mix_output_bounds
 from app.config import Settings
+from app.cpu_preparation_video import PRESENTER_DELIVERY_CONTRACT, LEGACY_PRESENTER_DELIVERY_CONTRACT
+from app.montage import y4m_picture_bytes
 from app.creation_execution import CreationExecutionActor
 from app.device_resource_preparation import DeviceResourcePreparation, CpuPreparationShape, FILE_AUDIO_MIX_PROBE
 from app.device_resource_profile import DeviceProfileIdentity, DeviceProfileUnavailable
 from app.device_runtime import build_device_runtime
-from app.host_resource_probes import HostResourceProbe, HostProcessProbe
+from app.host_resource_probes import HostResourceProbe, HostProcessProbe, Y4M_SERIAL_PICTURE_FORMAT
 from app.local_members import LocalMemberService
 from app.member_permits import MemberDeviceAccess
 from app.production import ProductionRepository
@@ -110,14 +113,21 @@ def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_w
         delivery = receipt['delivery_probe']
         assert delivery['bytes'] > 0 and len(delivery['sha256']) == 64
         if presenter_clip_count:
-            assert delivery['contract'] == 'presenter-h264-serial-ffv1-delivery/v1'
-            assert [delivery['codec'], delivery['serial_codec'], delivery['audio_codec']] == ['h264', 'ffv1', 'aac']
+            assert delivery['contract'] == PRESENTER_DELIVERY_CONTRACT
+            assert delivery['serial_picture_format'] == render.serial_picture_format == Y4M_SERIAL_PICTURE_FORMAT
+            assert [delivery['codec'], delivery['serial_codec'], delivery['audio_codec']] == ['h264', 'rawvideo', 'aac']
             assert delivery['frames'] == 30 and delivery['presenter_clip_count'] == presenter_clip_count
             assert delivery['inputs']['presenter']['width_px'] == 64
             assert delivery['inputs']['material']['width_px'] == 128
             assert delivery['inputs']['presenter']['frame_rate'] == 25
             assert delivery['inputs']['material']['frame_rate'] == 30
-            assert delivery['temporary_bytes'] > delivery['bytes']
+            assert delivery['picture_bytes'] + delivery['auxiliary_bytes'] == delivery['temporary_bytes']
+            assert delivery['picture_bytes'] <= y4m_picture_bytes(64, 64, 30, clip_count)
+            picture_limit = y4m_picture_bytes(64, 64, 30, clip_count)
+            mix_limit = audio_mix_output_bounds(None, (), shape.duration_seconds,
+                normalize_voice_sources=False)['mix_output_bytes']
+            assert render.additional_disk_bytes >= picture_limit + mix_limit + clip_count * 64 * 64 * 4
+            assert render.max_output_bytes == delivery['bytes'] * service.policy.measured_margin
         else:
             assert delivery['contract'] == 'montage-picture-audio-caption/v1'
             assert delivery['observed_resources']['threads_sample_complete']
@@ -240,7 +250,8 @@ def test_new_audio_profile_requires_a_complete_multi_file_probe(tmp_path, monkey
     assert not service.profile_path.exists()
 
 
-def test_presenter_preparation_requires_its_own_full_shape_receipt_and_keeps_normal_budgets(tmp_path, monkeypatch):
+@pytest.mark.parametrize('legacy', [False, True])
+def test_presenter_preparation_requires_its_own_full_shape_receipt_and_keeps_normal_budgets(tmp_path, monkeypatch, legacy):
     _, actor, _, service, _ = metadata_preparation(tmp_path, monkeypatch)
     shape = CpuPreparationShape(64, 64, 30, 151, 8, 2, 8000, 1, source_bytes=1234567)
     normal_plan_id, _ = service.prepare(shape, actor, request_id='normal')
@@ -256,14 +267,30 @@ def test_presenter_preparation_requires_its_own_full_shape_receipt_and_keeps_nor
     with pytest.raises(DeviceProfileUnavailable, match='样片缺少'):
         service._publish(plan, receipt, plan['backends'])
     assert json.loads(service.profile_path.read_bytes()) == original
-    receipt['delivery_probe'] = {'contract': 'presenter-h264-serial-ffv1-delivery/v1',
+    # A v1 receipt cannot publish a v2 plan. A persisted v1 plan can still
+    # publish its own receipt using the original format and capacity rule.
+    receipt['delivery_probe'] = {'contract': LEGACY_PRESENTER_DELIVERY_CONTRACT,
         'inputs': {'presenter': {'codec': 'h264', 'frame_rate': 25},
                    'material': {'codec': 'h264', 'frame_rate': 30}},
         'codec': 'h264', 'serial_codec': 'ffv1', 'audio_codec': 'aac', 'frames': 4530,
         'clip_count': 8, 'presenter_clip_count': 2, 'temporary_bytes': 100000, 'bytes': 50000}
+    with pytest.raises(DeviceProfileUnavailable, match='样片缺少'):
+        service._publish(plan, receipt, plan['backends'])
+    if legacy:
+        from app.device_resource_preparation import _atomic_json, _digest
+        plan.pop('presenter_delivery_probe')
+        plan['bootstrap_budget']['presenter_cpu_render'].pop('serial_picture_format')
+        plan['input_digest'] = _digest({key: value for key, value in plan.items() if key != 'input_digest'})
+        _atomic_json(service.root / 'plans' / f'{plan_id}.json', plan)
+    else:
+        picture_bytes = y4m_picture_bytes(64, 64, 4530, 8)
+        receipt['delivery_probe'].update(contract=PRESENTER_DELIVERY_CONTRACT, serial_codec='rawvideo',
+            serial_picture_format=Y4M_SERIAL_PICTURE_FORMAT, picture_bytes=picture_bytes,
+            auxiliary_bytes=1000, temporary_bytes=picture_bytes + 1000)
     result = service._publish(plan, receipt, plan['backends'])
     updated = json.loads(service.profile_path.read_bytes())
     assert result.revision == normal.revision + 1 and result.budget.presenter_cpu_render.max_duration_seconds == 151
+    assert result.budget.presenter_cpu_render.serial_picture_format == (None if legacy else Y4M_SERIAL_PICTURE_FORMAT)
     for key in ('cpu_render', 'cpu_audio', 'clip_preview'):
         for section in ('budget', 'backends', 'evidence'):
             assert updated[section][key] == original[section][key]

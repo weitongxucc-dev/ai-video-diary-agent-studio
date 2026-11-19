@@ -1132,6 +1132,9 @@ class CreationJobOwnerVerifier:
             prepared_assets = self.task_authorizations.material_asset_ids(task.workspace_id, task.id, connection=connection)
         key, resources = creation_stage_facts(self.repository, task, script, plan, stage,
             self.narration_budget, self.montage_budget, connection=connection, montage_authorized_asset_ids=prepared_assets)
+        if (prepared_assets is not None
+                and resources['preparation_basis_digest'] != self.montage_budget.preparation_basis_digest):
+            raise CreationStagePreparationRequired(stage, "请先完成当前作品的故事板资源准备，再继续原作业。")
         if stage == "montage_plan" and plan.presenter_share_target:
             manifest = []
             for segment, request in iter_presenter_inputs(self.repository, task, script, plan,
