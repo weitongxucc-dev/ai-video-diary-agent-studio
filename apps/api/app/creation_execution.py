@@ -25,7 +25,8 @@ from app.canvas import canvas_size
 from app.graphic_overlays import validate_overlays
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedRetry, VerifiedWork, WorkRequest
 from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity, audio_resource_refusal
-from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload, select_presenter_sections
+from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
+from app.creation.presenter_selection import planned_presenter_sections
 from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
 from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import CreationTask
@@ -267,7 +268,7 @@ def _presenter_inputs_in_snapshot(repository, task, script, plan, models, *, con
         if segment is None or segment.status != 'ready' or not segment.duration_seconds:
             raise ValueError("人物制作缺少当前文案的可用配音分段")
         timings.append((section.id, segment.duration_seconds))
-    selected = select_presenter_sections(timings, plan.presenter_share_target)
+    selected = planned_presenter_sections(plan, script, timings)
     if plan.selected_person is None:
         raise ValueError("请单独选择人物档案与固定版本后再制作人物段")
     person = repository.profile_records.get_person_profile(task.workspace_id, plan.selected_person.profile_id,
@@ -351,6 +352,9 @@ def presenter_stage_facts(repository, task, script, plan, budget, models, *, con
                  "duration_seconds": duration,
                  "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
                  "timeout_seconds": budget.max_timeout_seconds}
+    from app.host_resource_probes import presenter_scope_fields
+    resources.update(presenter_scope_fields(budget, inputs[0][1].model_id))
+
     def encode(value):
         return json.dumps(value, sort_keys=True, default=str).encode()
     checksum = hashlib.sha256(b'{"files": ' + encode(facts) + b', "inputs": [')
@@ -373,15 +377,34 @@ def narration_edit_digest(operation):
 
 def narration_scope_fields(budget, *, task, inputs, reference, language, max_output_bytes,
                            runtime_facts=None, source_binding=None):
+    if budget.input_scope == 'single_call_prepared_v1':
+        if (not isinstance(source_binding, dict)
+                or (source_binding.get('workspace_id'), source_binding.get('task_id'),
+                    source_binding.get('voice_id'), source_binding.get('voice_version')) !=
+                   (task.workspace_id, task.id, inputs.voice.id, inputs.voice.version)
+                or source_binding.get('narration_reference', {}).get('reference') != asdict(reference)):
+            raise ValueError('正常配音形状缺少同一授权来源的完整字节封存')
+        runtime = runtime_facts(task.workspace_id, task.id) if runtime_facts is not None else None
+        reference_sha256 = source_binding['sha256']
+    else:
+        runtime = reference_sha256 = None
+    return single_call_narration_scope_fields(budget, inputs=inputs, reference=reference,
+        workspace_id=task.workspace_id, pronunciation_scope_id=task.id, language=language,
+        max_output_bytes=max_output_bytes, runtime=runtime, reference_sha256=reference_sha256)
+
+
+def single_call_narration_scope_fields(budget, *, workspace_id, pronunciation_scope_id, inputs,
+                                      reference, language, max_output_bytes, runtime=None,
+                                      reference_sha256=None):
+    """Check declared single-call resources against their observed invocation."""
     from app.host_resource_probes import narration_scope_basis
     scope = budget.input_scope
     if scope == 'single_call_experiment_v1':
         return {'input_scope': scope, 'budget_basis': narration_scope_basis(scope)}
     if scope != 'single_call_prepared_v1':
         raise ValueError('普通配音需要已准备的单次资源档；准备许可不能充当作品执行许可')
-    if runtime_facts is None:
+    if runtime is None:
         raise ValueError('正常配音尚未接入实际执行器身份与写入目录')
-    runtime = runtime_facts(task.workspace_id, task.id)
     if (not isinstance(runtime, dict)
             or runtime.get('backend_identity') != budget.preparation_backend_identity):
         raise ValueError('实际配音后端与模型准备回执不一致，请重新准备')
@@ -389,19 +412,14 @@ def narration_scope_fields(budget, *, task, inputs, reference, language, max_out
     if (not isinstance(paths, dict) or set(paths) != {'database', 'temporary', 'model_cache', 'output'}
             or any(not isinstance(value, str) or not Path(value).is_absolute() for value in paths.values())):
         raise ValueError('正常配音缺少数据库、临时文件、模型缓存或实际成品目录')
-    if (not isinstance(source_binding, dict)
-            or (source_binding.get('workspace_id'), source_binding.get('task_id'),
-                source_binding.get('voice_id'), source_binding.get('voice_version')) !=
-               (task.workspace_id, task.id, inputs.voice.id, inputs.voice.version)
-            or source_binding.get('narration_reference', {}).get('reference') != asdict(reference)):
-        raise ValueError('正常配音形状缺少同一授权来源的完整字节封存')
     from app.narration_resource_preparation import narration_preparation_shape_digest
     from app.profiles.contracts import profile_cache_identity
     from app.narration import _pronunciation_dictionary
     dictionary = _pronunciation_dictionary(entries=inputs.pronunciation_entries,
-        workspace_id=task.workspace_id, person_profile_id=inputs.voice.person_profile_id, task_id=task.id)
+        workspace_id=workspace_id, person_profile_id=inputs.voice.person_profile_id,
+        task_id=pronunciation_scope_id)
     actual_shape = narration_preparation_shape_digest(voice_identity=profile_cache_identity(inputs.voice),
-        reference=asdict(reference), reference_sha256=source_binding['sha256'],
+        reference=asdict(reference), reference_sha256=reference_sha256,
         reference_text=inputs.voice.reference_text, language=language,
         pronunciation_dictionary=dictionary)
     if actual_shape != budget.preparation_shape_digest:
@@ -549,6 +567,8 @@ def person_edit_stage_facts(repository, task, proposal, plan, budget, models):
                  "duration_seconds": segment.duration_seconds,
                  "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
                  "timeout_seconds": budget.max_timeout_seconds}
+    from app.host_resource_probes import presenter_scope_fields
+    resources.update(presenter_scope_fields(budget, request.model_id))
     manifest = [operation, asdict(segment), asdict(request), files, resources]
     digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
     return f"person_edit:{digest}", resources

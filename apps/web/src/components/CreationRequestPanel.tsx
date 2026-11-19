@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { CreationPlanPreview, CreationRequest } from "@/lib/types";
 import { confirmCreationRequestWindow, getCreationRequest, getCreationRequestItems, prepareCreationRequestWindow, replanCreationRequestWindow, updateCreationRequest, type CreationRequestItems, type DeliveryGoal } from "@/lib/creation-request-api";
-import { listVoiceProfiles, mediaProfilesErrorMessage, type VoiceProfile } from "@/lib/media-profiles-api";
+import { listPersonProfiles, listVoiceProfiles, mediaProfilesErrorMessage, type PersonProfile, type VoiceProfile } from "@/lib/media-profiles-api";
 import { AppSelect, AppSelectOption } from "./AppSelect";
 import { creationTaskShortStatus } from "@/lib/creation-task-status";
 import { BilingualDeliveryControls, type VoiceChoice } from "./creation-task/BilingualDeliveryControls";
@@ -20,12 +20,14 @@ const relations = [
   { value: "variants", label: "同主题不同版本" },
   { value: "series", label: "系列分集" },
 ] as const;
-const voiceKey = (voice: { id: string; version: string }) => JSON.stringify([voice.id, voice.version]);
+const profileKey = (profile: { id: string; version: string }) => JSON.stringify([profile.id, profile.version]);
+type ProfileField = "selected_voice" | "selected_person";
+const profileLabels = { selected_voice: "声音", selected_person: "人物" };
 const voiceLanguages = { zh: "中文", en: "英文", "zh-en": "中英混合" };
 const requestStates = { awaiting_clarification: "需要补充条件", awaiting_plan: "待规划", awaiting_confirmation: "方案待确认", active: "已建立任务" };
 const taskStates = { created: "待开始", running: "处理中", waiting_for_user: "等待确认", completed: "已完成", failed: "需要处理" };
 
-function goalForVoiceChange(plan: CreationPlanPreview, defaults: CreationRequest["requirements"]): DeliveryGoal {
+function goalForProfileChange(plan: CreationPlanPreview, defaults: CreationRequest["requirements"], field: ProfileField): DeliveryGoal {
   const requirements: DeliveryGoal["requirements"] = {};
   if (plan.language !== defaults.language) requirements.language = plan.language;
   if (plan.aspect_ratio !== defaults.aspect_ratio) requirements.aspect_ratio = plan.aspect_ratio;
@@ -34,8 +36,12 @@ function goalForVoiceChange(plan: CreationPlanPreview, defaults: CreationRequest
     requirements.presenter_share_target = plan.presenter_share_target;
   }
   if (plan.lipsync_quality !== undefined && plan.lipsync_quality !== defaults.lipsync_quality) requirements.lipsync_quality = plan.lipsync_quality;
-  if (plan.selected_person !== undefined && (plan.selected_person?.profile_id !== defaults.selected_person?.profile_id ||
-      plan.selected_person?.version !== defaults.selected_person?.version)) requirements.selected_person = plan.selected_person;
+  const preservedField = field === "selected_voice" ? "selected_person" : "selected_voice";
+  const profile = plan[preservedField];
+  const defaultProfile = defaults[preservedField];
+  if (profile !== undefined && (profile?.profile_id !== defaultProfile?.profile_id || profile?.version !== defaultProfile?.version)) {
+    requirements[preservedField] = profile ? { profile_id: profile.profile_id, version: profile.version } : null;
+  }
   return { goal: plan.goal, name: plan.name, ...(Object.keys(requirements).length ? { requirements } : {}) };
 }
 
@@ -57,8 +63,11 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
   const [voices, setVoices] = useState<{ identity: string; items: VoiceProfile[]; loading: boolean; error: string | null } | null>(null);
   const [voiceSelection, setVoiceSelection] = useState("");
   const [voiceRead, setVoiceRead] = useState(0);
+  const [people, setPeople] = useState<{ identity: string; items: PersonProfile[]; loading: boolean; error: string | null } | null>(null);
+  const [personSelection, setPersonSelection] = useState("");
+  const [personRead, setPersonRead] = useState(0);
   const [changedMaterialPlan, setChangedMaterialPlan] = useState<string | null>(null);
-  const [recheckGoals, setRecheckGoals] = useState<{ identity: string; revision: number; goals: DeliveryGoal[] } | null>(null);
+  const [recheckGoals, setRecheckGoals] = useState<{ identity: string; revision: number; goals: DeliveryGoal[]; field: ProfileField } | null>(null);
   function changeGoals(text: string) { setGoalsText(text); onGoalsDraftChange?.(text); }
 
   async function load() {
@@ -77,7 +86,7 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
     } finally { if (current()) setPending(false); }
   }
   useEffect(() => {
-    setLoaded(null); setItems(null); setGoalsText(goalsDraft); setVoices(null); setVoiceSelection(""); setRecheckGoals(null); setChangedMaterialPlan(null);
+    setLoaded(null); setItems(null); setGoalsText(goalsDraft); setVoices(null); setVoiceSelection(""); setPeople(null); setPersonSelection(""); setRecheckGoals(null); setChangedMaterialPlan(null);
     void load();
     return () => { sequence.current += 1; };
   }, [identity]);
@@ -112,8 +121,12 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
   const materialPlanKey = `${identity}:${value?.revision}:${window?.id}`;
   const needsMaterialRecheck = changedMaterialPlan === materialPlanKey;
   const canChooseVoice = window?.status === "proposed" && value?.confirmed_count === 0;
+  const canChoosePerson = canChooseVoice && ((value?.requirements.presenter_share_target ?? 0) > 0 ||
+    window?.entries.some(entry => (entry.plan?.presenter_share_target ?? 0) > 0));
   const boundVoice = value?.requirements.selected_voice;
-  const boundVoiceKey = boundVoice ? voiceKey({ id: boundVoice.profile_id, version: boundVoice.version }) : "";
+  const boundPerson = value?.requirements.selected_person;
+  const boundVoiceKey = boundVoice ? profileKey({ id: boundVoice.profile_id, version: boundVoice.version }) : "";
+  const boundPersonKey = boundPerson ? profileKey({ id: boundPerson.profile_id, version: boundPerson.version }) : "";
   useEffect(() => {
     if (!canChooseVoice || !scopeCheck.current()) return;
     let active = true;
@@ -123,19 +136,37 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
       if (!current()) return;
       const items = result.items.filter(voice => voice.runnable);
       setVoices({ identity, items, loading: false, error: null });
-      setVoiceSelection(items.some(voice => voiceKey(voice) === boundVoiceKey) ? boundVoiceKey : "");
+      setVoiceSelection(items.some(voice => profileKey(voice) === boundVoiceKey) ? boundVoiceKey : "");
     }).catch(cause => {
       if (current()) setVoices({ identity, items: [], loading: false, error: mediaProfilesErrorMessage(cause) });
     });
     return () => { active = false; };
   }, [identity, canChooseVoice, boundVoiceKey, voiceRead]);
+  useEffect(() => {
+    if (!canChoosePerson || !scopeCheck.current()) return;
+    let active = true;
+    const current = () => active && identity === currentIdentity.current && scopeCheck.current();
+    setPeople({ identity, items: [], loading: true, error: null });
+    setPersonSelection("");
+    void listPersonProfiles().then(result => {
+      if (!current()) return;
+      const items = result.items.filter(person => person.runnable && person.body_reference_available);
+      setPeople({ identity, items, loading: false, error: null });
+      setPersonSelection(items.some(person => profileKey(person) === boundPersonKey) ? boundPersonKey : "");
+    }).catch(cause => {
+      if (current()) setPeople({ identity, items: [], loading: false, error: mediaProfilesErrorMessage(cause) });
+    });
+    return () => { active = false; };
+  }, [identity, canChoosePerson, boundPersonKey, personRead]);
   const voiceChoices = voices?.identity === identity ? voices : null;
-  const chosenVoice = voiceChoices?.items.find(voice => voiceKey(voice) === voiceSelection);
-  const retryGoals = recheckGoals?.identity === identity && recheckGoals.revision === value?.revision ? recheckGoals.goals : null;
+  const personChoices = people?.identity === identity ? people : null;
+  const chosenVoice = voiceChoices?.items.find(voice => profileKey(voice) === voiceSelection);
+  const chosenPerson = personChoices?.items.find(person => profileKey(person) === personSelection);
+  const retry = recheckGoals?.identity === identity && recheckGoals.revision === value?.revision ? recheckGoals : null;
 
-  async function saveVoiceAndRecheck() {
-    if (pending || !value || !window || !canChooseVoice || !chosenVoice || !scopeCheck.current()) return;
-    const goals = window.entries.map(entry => goalForVoiceChange(entry.plan!, value.requirements));
+  async function saveProfileAndRecheck(field: ProfileField, profile: VoiceProfile | PersonProfile | undefined) {
+    if (pending || !value || !window || !canChooseVoice || !profile || !scopeCheck.current() || window.entries.some(entry => !entry.plan)) return;
+    const goals = window.entries.map(entry => goalForProfileChange(entry.plan!, value.requirements, field));
     const operation = ++sequence.current;
     const current = () => operation === sequence.current && identity === currentIdentity.current && scopeCheck.current();
     setPending(true); setError(null);
@@ -143,19 +174,19 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
     try {
       const updated = await updateCreationRequest(requestId, {
         expected_revision: value.revision, output_relation: value.output_relation,
-        requirements: { ...value.requirements, selected_voice: { profile_id: chosenVoice.id, version: chosenVoice.version } },
+        requirements: { ...value.requirements, [field]: { profile_id: profile.id, version: profile.version } },
       });
       if (!current()) return;
       saved = true;
       setLoaded({ identity, value: updated }); setItems(null);
-      setRecheckGoals({ identity, revision: updated.revision, goals });
+      setRecheckGoals({ identity, revision: updated.revision, goals, field });
       const next = await prepareCreationRequestWindow(requestId, { expected_revision: updated.revision, goals });
       if (!current()) return;
       prepared = true; setLoaded({ identity, value: next }); setRecheckGoals(null);
       const page = await getCreationRequestItems(requestId);
       if (current()) setItems(page);
     } catch (cause) {
-      if (current()) setError((saved && !prepared ? "声音已保存，本组方案尚未重新核对。" : "") + (cause instanceof Error ? cause.message : "请重新读取当前状态后再试。"));
+      if (current()) setError((saved && !prepared ? `${profileLabels[field]}已保存，本组方案尚未重新核对。` : "") + (cause instanceof Error ? cause.message : "请重新读取当前状态后再试。"));
     } finally { if (current()) setPending(false); }
   }
   const remaining = value ? value.target_count - value.expanded_count : 0;
@@ -186,16 +217,26 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
         {voiceChoices?.loading ? <p role="status">正在读取可用声音…</p> : voiceChoices?.error ? <p role="alert">{voiceChoices.error}</p> : voiceChoices?.items.length ? <>
           <label><span>声音版本</span><AppSelect aria-label="声音版本" value={voiceSelection} disabled={pending} onValueChange={setVoiceSelection}>
             <AppSelectOption value="">选择可用声音</AppSelectOption>
-            {voiceChoices.items.map(voice => <AppSelectOption key={voiceKey(voice)} value={voiceKey(voice)}>{voice.display_name || "已保存声音"} · {voice.version} · {voiceLanguages[voice.language]}</AppSelectOption>)}
+            {voiceChoices.items.map(voice => <AppSelectOption key={profileKey(voice)} value={profileKey(voice)}>{voice.display_name || "已保存声音"} · {voice.version} · {voiceLanguages[voice.language]}</AppSelectOption>)}
           </AppSelect></label>
-          <button className={ui.button} type="button" disabled={pending || !chosenVoice || voiceSelection === boundVoiceKey || window?.entries.some(entry => !entry.plan)} onClick={() => void saveVoiceAndRecheck()}>保存声音并重新核对</button>
+          <button className={ui.button} type="button" disabled={pending || !chosenVoice || voiceSelection === boundVoiceKey || window?.entries.some(entry => !entry.plan)} onClick={() => void saveProfileAndRecheck("selected_voice", chosenVoice)}>保存声音并重新核对</button>
         </> : <p>当前没有可用声音版本。<a href="/profiles">前往人物与声音</a></p>}
       </section> : null}
-      {retryGoals ? <section className={ui.section}><p>声音已保存，请重新核对本组方案后再确认任务。</p>
+      {canChoosePerson ? <section className={ui.section} aria-label="本请求人物"><h3>本请求的人物</h3>
+        <button className={ui.button} type="button" disabled={pending || personChoices?.loading} onClick={() => setPersonRead(value => value + 1)}>重新读取人物</button>
+        {personChoices?.loading ? <p role="status">正在读取可用人物…</p> : personChoices?.error ? <p role="alert">{personChoices.error}</p> : personChoices?.items.length ? <>
+          <label><span>人物版本</span><AppSelect aria-label="人物版本" value={personSelection} disabled={pending} onValueChange={setPersonSelection}>
+            <AppSelectOption value="">选择可用人物</AppSelectOption>
+            {personChoices.items.map(person => <AppSelectOption key={profileKey(person)} value={profileKey(person)}>{person.display_name} · {person.version}</AppSelectOption>)}
+          </AppSelect></label>
+          <button className={ui.button} type="button" disabled={pending || !chosenPerson || personSelection === boundPersonKey || window?.entries.some(entry => !entry.plan)} onClick={() => void saveProfileAndRecheck("selected_person", chosenPerson)}>保存人物并重新核对</button>
+        </> : <p>当前没有可用人物版本。<a href="/profiles">前往人物与声音</a></p>}
+      </section> : null}
+      {retry ? <section className={ui.section}><p>{profileLabels[retry.field]}已保存，请重新核对本组方案后再确认任务。</p>
         <button className={ui.button} type="button" disabled={pending} onClick={() => void mutate(async () => {
-          const next = await prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: retryGoals });
+          const next = await prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: retry.goals });
           setRecheckGoals(previous => previous?.identity === identity ? null : previous); return next;
-        })}>重新核对已保存声音的方案</button></section> : null}
+        })}>重新核对已保存{profileLabels[retry.field]}的方案</button></section> : null}
       {window?.status === "proposed" ? <section className={ui.section} aria-label="本组制作方案">
         <h3>本组 {window.entries.length} 条方案</h3>
         <DeviceProductionStatus />
@@ -221,7 +262,7 @@ export function CreationRequestPanel({ requestId, scopeKey, isCurrentScope, goal
         </div>
       </section> : remaining > 0 && value.status !== "awaiting_clarification" && value.output_relation !== null ? <section className={ui.section}><h3>{value.confirmed_count ? "准备下一组方案" : "准备方案"}</h3>
         {value.output_relation === "variants" && remaining >= 2 && !goalsText.trim() ?
-          <BilingualDeliveryControls key={identity} pending={pending} onPrepare={prepareLanguageVersions} /> : null}
+          <BilingualDeliveryControls key={identity} pending={pending} requestVoice={value.requirements.selected_voice ?? undefined} onPrepare={prepareLanguageVersions} /> : null}
         {!single ? <><label htmlFor={`request-goals-${requestId}`}>每行写一条视频的具体目标</label><textarea className={ui.goals} id={`request-goals-${requestId}`} value={goalsText} onChange={event => changeGoals(event.target.value)} disabled={pending} /><p className={ui.note}>本次可准备 1–{limit} 条；分别写清主题、版本差异或分集内容。</p>{goals.length > limit ? <p role="alert">本次最多准备 {limit} 条，请减少本组目标。</p> : new Set(goals).size !== goals.length ? <p role="alert">请分别写出每条视频的具体目标。</p> : null}</> : null}<button className={ui.primary} type="button" disabled={pending || !validGoals} onClick={() => void mutate(() => prepareCreationRequestWindow(requestId, { expected_revision: value.revision, goals: goals.map(goal => ({ goal })) }), true)}>准备本组方案</button></section> : null}
       {tasks.length || items?.has_more ? <section className={ui.section} aria-label="已创建的任务"><h3>已创建的任务</h3><div className={ui.entries}>{tasks.map(entry => <article className={ui.entry} key={entry.ordinal}><a href={`/tasks/${encodeURIComponent(entry.task!.id)}`}>第 {entry.ordinal} 条 · {entry.task!.name}</a><p className={ui.note}>{creationTaskShortStatus(entry.task!.stage_status, entry.task!.stage)}</p></article>)}</div><div className={ui.actions}><button className={ui.button} disabled={pending} type="button" onClick={() => void readPage(0)}>返回首组任务</button>{items?.has_more && items.next_after_ordinal !== null ? <button className={ui.button} disabled={pending} type="button" onClick={() => void readPage(items.next_after_ordinal!)}>查看下一组任务</button> : null}</div></section> : null}
     </>}

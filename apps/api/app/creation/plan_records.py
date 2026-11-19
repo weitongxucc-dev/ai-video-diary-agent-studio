@@ -11,7 +11,7 @@ from app.creation.contracts import (
 )
 from app.creation.plan_contracts import (
     CreationPlan, CreationPlanKnowledgeReference, CreationPlanSourceReference,
-    CreationPlanPronunciationReference, CreationPlanBlocker,
+    CreationPlanPronunciationReference, CreationPlanBlocker, CreationPlanPresenterSelection,
     creation_plan_payload,
 )
 from app.materials.contracts import MaterialSegmentMatch, material_usage_eligibility
@@ -84,6 +84,7 @@ class CreationPlanRecordStore:
             if isinstance(voice_payload, dict) and voice_payload.get("person_profile_id")
             and voice_payload.get("person_version") else None)
         pronunciation_payloads = data.pop("pronunciation_references", [])
+        presenter_payload = data.pop("presenter_selection", None)
         blocker_payloads = data.pop("blockers", [])
         material_match_payloads = data.pop("material_matches", [])
         data = _with_datetime(data, "created_at", "confirmed_at", "updated_at")
@@ -106,6 +107,10 @@ class CreationPlanRecordStore:
             ),
             selected_person=(_CreationPlanPersonReference(**person_payload)
                              if isinstance(person_payload, dict) else None),
+            presenter_selection=(
+                CreationPlanPresenterSelection(**_with_datetime(presenter_payload, "script_updated_at"))
+                if presenter_payload is not None else None
+            ),
             pronunciation_references=[
                 CreationPlanPronunciationReference(**item)
                 for item in pronunciation_payloads
@@ -134,6 +139,9 @@ class CreationPlanRecordStore:
         return self.creation_plan_from_payload(json.loads(row["payload"]))
 
     def write_knowledge_adopted_plan(self, connection, workspace_id, plan):
+        self.write_plan_payload(connection, workspace_id, plan)
+
+    def write_plan_payload(self, connection, workspace_id, plan):
         connection.execute(
             "UPDATE creation_plans SET payload=?,updated_at=? WHERE workspace_id=? AND id=?",
             (_json_object(creation_plan_payload(plan)), plan.updated_at.isoformat(), workspace_id, plan.id),

@@ -542,6 +542,7 @@ export type CreationExecutionPreview = {
         aspect_ratio: string;
         duration_target_seconds: number;
         presenter_share_target: number;
+        presenter_selection?: { section_id: string };
         lipsync_quality: "high" | "fast";
         selected_voice: string | null;
         can_continue: boolean;

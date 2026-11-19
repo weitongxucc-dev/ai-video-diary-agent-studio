@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import os
 import json
-from dataclasses import fields
+from dataclasses import MISSING, fields
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -219,7 +219,14 @@ def presenter_budgets_from_env(env: Mapping[str, str] | None = None):
     budgets = []
     for kind, prefix in ((PresenterBudget, "DEVICE_PRESENTER_"),
                          (CpuRenderBudget, "DEVICE_PRESENTER_CPU_RENDER_")):
-        names = {item.name: prefix + item.name.upper() for item in fields(kind) if item.name != "running_cpu_policy"
+        budget_fields = fields(kind)
+        if kind is PresenterBudget:
+            # Window measurements and their model identity come only from the device profile.
+            measured = [item for item in budget_fields if item.default is not MISSING]
+            if any(environment.get(prefix + item.name.upper(), "").strip() for item in measured):
+                raise HostBudgetUncalibrated("人物模型和标定范围必须来自实测设备档案")
+            budget_fields = tuple(item for item in budget_fields if item.default is MISSING)
+        names = {item.name: prefix + item.name.upper() for item in budget_fields if item.name != "running_cpu_policy"
             and (item.name != "max_template_count" or environment.get(prefix + "MAX_TEMPLATE_COUNT", "").strip())}
         if not any(environment.get(name, "").strip() for name in names.values()):
             budgets.append(None)

@@ -44,6 +44,16 @@ export function confirmCreationTaskTopic(taskId: string, topicId: string, input:
 } = {}): Promise<CreationTaskTopicsResponse> {
     return creationPlanRequest<CreationTaskTopicsResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/topics/${encodeURIComponent(topicId)}/confirm`, { method: "POST", body: JSON.stringify(input) });
 }
+export function saveCreationTaskPresenterSelection(taskId: string, input: {
+    script_id: string;
+    expected_script_updated_at: string;
+    expected_plan_updated_at: string;
+    section_id: string | null;
+}): Promise<null> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/presenter-selection`, {
+        method: "PUT", body: JSON.stringify(input),
+    });
+}
 export function getCreationTaskWorkspace(taskId: string): Promise<CreationTaskWorkspace> {
     return creationPlanRequest<CreationTaskWorkspace>(`/api/creation-tasks/${encodeURIComponent(taskId)}`);
 }

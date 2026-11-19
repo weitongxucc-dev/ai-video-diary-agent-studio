@@ -13,7 +13,7 @@ import { useScriptGenerationRequest } from "./creation-task/useScriptGenerationR
 import { TopicSelection } from "./creation-task/TopicSelection";
 import { useCreationExecution } from "./creation-task/useCreationExecution";
 import type { TaskMediaJob, TaskMediaResultMap, CreationTaskNarrationVoiceSelectionRequest } from "@/lib/types";
-import { getCreationTaskNarrationVoiceSelection } from "@/lib/api/creation-tasks";
+import { getCreationTaskNarrationVoiceSelection, saveCreationTaskPresenterSelection } from "@/lib/api/creation-tasks";
 import { readCreationTaskTimelineRestore } from '@/lib/api';
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
 import { isLocalAuthMode } from "@/lib/auth/routing";
@@ -329,12 +329,22 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     return () => { active = false; };
   }, [workspace.task.id, workspace.task.confirmed_script_id, workspace.task.stage]);
   const task = workspace.task;
+  const confirmedScript = workspace.scripts.find(script => script.id === task.confirmed_script_id);
+  const presenterSelection = workspace.plan.presenter_selection;
+  const presenterSelectionCurrent = Boolean(presenterSelection && confirmedScript &&
+    presenterSelection.script_id === confirmedScript.id &&
+    presenterSelection.script_updated_at === confirmedScript.updated_at &&
+    presenterSelection.voice_profile_id === workspace.plan.selected_voice?.profile_id &&
+    presenterSelection.voice_version === workspace.plan.selected_voice?.version);
   const executionController = useCreationExecution({
     taskId: task.id, confirmedScriptId: task.confirmed_script_id,
     sourceMedia: Boolean(workspace.plan.source_media),
     timelineVersionId: task.current_timeline_version_id,
     voiceId: workspace.plan.selected_voice?.profile_id,
     voiceVersion: workspace.plan.selected_voice?.version,
+    presenterSelectionKey: presenterSelection
+      ? `${presenterSelection.script_id}:${presenterSelection.script_updated_at}:${presenterSelection.section_id}:${presenterSelection.voice_profile_id}:${presenterSelection.voice_version}`
+      : undefined,
     workspaceReadRevision: workspaceReceiptRevision.current,
     onWorkspaceRead: acceptWorkspace,
   });
@@ -908,6 +918,16 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setSavingTemplate(false);
     setActiveView(view);
     invalidateEditPreview();
+  }
+
+  function savePresenterSelection(sectionId: string | null, scriptUpdatedAt: string) {
+    if (!confirmedScript || !workspace.plan.updated_at || busy !== null) return;
+    void run("presenter-selection", () => saveCreationTaskPresenterSelection(task.id, {
+      section_id: sectionId,
+      script_id: confirmedScript.id,
+      expected_script_updated_at: scriptUpdatedAt,
+      expected_plan_updated_at: workspace.plan.updated_at!,
+    }), sectionId === null ? "已恢复按露脸比例选段。" : "已保存出镜段落。");
   }
 
   function generatePersonRender(segmentId: string) {
@@ -1793,6 +1813,23 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={!editRequestRecoveryReady || busy !== null || pendingMetadataSave !== null || pendingTimelineRestore !== null} onClick={() => { if (!editRequestRecoveryReady || editRequestOperation.current || pendingMetadataSaveRef.current || pendingTimelineRestoreRef.current) return; void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。"); } } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
         {executionError ? <TaskIssue stage={task.stage} reason={executionError.code === "device_budget_unavailable" ? "这台设备还没有完成制作资源标定，暂时不能开始制作。" : executionError.message} impact={executionError.impact} repair={executionError.repairAction} code={executionError.code}>{executionError.code === "device_budget_unavailable" ? <><Link href="/health">检查运行情况</Link><details className={styles.traceDetails}><summary>制作资源诊断</summary><p>{executionError.message}</p></details></> : null}{task.confirmed_script_id || workspace.plan.source_media ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(executionController.recheckRequirements)} type="button">{workspace.plan.source_media ? "重新核对原片制作要求" : "重新核对文案和制作要求"}</button> : null}</TaskIssue> : null}
         {!error && !executionError && task.stage_status === "failed" && activeView === task.stage && (task.stage_reason || task.stage_impact) ? <TaskIssue stage={task.stage} reason={task.stage_reason} impact={task.stage_impact} repair={task.stage_repair_action} label={`${stageLabels[activeView]}失败`} /> : null}
+        {activeView === "narration" && confirmedScript && workspace.plan.updated_at &&
+          workspace.plan.selected_person && (workspace.plan.selected_voice || presenterSelection) &&
+          (workspace.plan.presenter_share_target ?? 0) > 0 &&
+          !workspace.montage && !task.current_timeline_version_id ? (
+          <details className={styles.requirementDetails}>
+            <summary>出镜段落 · {presenterSelectionCurrent ? "已指定单段" : presenterSelection ? "需重新选择" : "按露脸比例选段"}</summary>
+            {presenterSelection && !presenterSelectionCurrent ? <p role="status">确认文案或声音版本已更新，请重新指定出镜段落。</p> : null}
+            <ConfirmedScriptView script={confirmedScript} presenterSelection={{
+              currentSectionId: presenterSelectionCurrent ? presenterSelection!.section_id : null,
+              busy: busy !== null || ["queued", "running", "interrupted"].includes(execution?.job?.status ?? ""),
+              onSelect: savePresenterSelection,
+            }} />
+            {presenterSelection ? <Button variant="outline" type="button"
+              disabled={busy !== null || ["queued", "running", "interrupted"].includes(execution?.job?.status ?? "")}
+              onClick={() => savePresenterSelection(null, confirmedScript.updated_at)}>恢复按露脸比例选段</Button> : null}
+          </details>
+        ) : null}
         {(task.confirmed_script_id || workspace.plan.source_media) && (executionPreview || execution?.job) && ["script", "narration", "montage"].includes(activeView) ? <CreationExecutionPanel storyboard={{ ...executionController.storyboard,
           canSubmit: executionController.storyboard.canSubmit && storyboardInput !== null }}
           onRegenerateStoryboard={() => void changeStoryboard()} onReadStoryboard={() => void changeStoryboard(true)} visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}

@@ -4,12 +4,14 @@ from __future__ import annotations
 from dataclasses import asdict, replace
 from functools import lru_cache
 import hashlib
+from importlib.util import source_from_cache
 import json
 import os
 import csv
 from pathlib import Path
 import platform
 import shutil
+import stat
 import sys
 from types import SimpleNamespace
 
@@ -23,7 +25,10 @@ from app.device_resource_profile import (
 
 def _file_key(path):
     path = Path(path).resolve(strict=True)
-    info = path.stat()
+    return _stat_key(path, path.stat())
+
+
+def _stat_key(path, info):
     return str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
@@ -52,6 +57,7 @@ def narration_runtime_identity_files(runtime_python):
     native libraries or importing a model on a capability read.
     """
     root = Path(runtime_python).absolute().parent.parent
+    resolved_root = root.resolve()
     config = root / 'pyvenv.cfg'
     lines = {key.strip().lower(): value.strip().lower()
              for line in config.read_text().splitlines() if '=' in line for key, value in [line.split('=', 1)]}
@@ -67,13 +73,32 @@ def narration_runtime_identity_files(runtime_python):
     if not required <= packages:
         raise ValueError('Narration runtime dependencies are not installed')
     identities = [_file_key(config)]
+    resolved_directories = {}
+
+    def installed_file(path):
+        # Resolve shared path components once per observation. Every recorded
+        # file still contributes a fresh filesystem identity to each check.
+        parent = path.parent
+        if parent not in resolved_directories:
+            resolved_directories[parent] = parent.resolve()
+        resolved = resolved_directories[parent] / path.name
+        if not resolved.is_relative_to(resolved_root):
+            raise ValueError('Runtime package inventory leaves its installation')
+        info = resolved.lstat()
+        if stat.S_ISLNK(info.st_mode) or path.name in {'.', '..'}:
+            resolved = resolved.resolve()
+            if not resolved.is_relative_to(resolved_root):
+                raise ValueError('Runtime package inventory leaves its installation')
+            info = resolved.stat()
+        return _stat_key(resolved, info)
+
     # Bind installed import hooks too. External path roots are not in this
     # installation inventory and need their own runtime adapter.
     for path in site.glob('*.pth'):
         identities.append((_file_key(path), _hash_file(path)))
         for line in path.read_text().splitlines():
             if line.strip() and not line.startswith(('#', 'import ', 'import\t')):
-                if not (site / line.strip()).resolve().is_relative_to(root.resolve()):
+                if not (site / line.strip()).resolve().is_relative_to(resolved_root):
                     raise ValueError('Narration runtime has an external import path')
     for record in records:
         identities.append((_file_key(record), _hash_file(record)))
@@ -81,10 +106,20 @@ def narration_runtime_identity_files(runtime_python):
             for item in csv.reader(stream):
                 if not item or not item[0]:
                     raise ValueError('Invalid runtime package inventory')
-                path = (site / item[0]).resolve(strict=True)
-                if not path.is_relative_to(root.resolve()):
-                    raise ValueError('Runtime package inventory leaves its installation')
-                identities.append(_file_key(path))
+                path = site / item[0]
+                try:
+                    identity = installed_file(path)
+                except FileNotFoundError:
+                    # Pip records generated, unhashed bytecode even when it has
+                    # since been cleared. The granted worker disables writes.
+                    if (len(item) != 3 or item[1] or item[2] or path.suffix != '.pyc'
+                            or path.parent.name != '__pycache__'):
+                        raise
+                    source = Path(source_from_cache(str(path)))
+                    if not source.is_file():
+                        raise ValueError('Runtime bytecode source is missing')
+                    identity = installed_file(source)
+                identities.append(identity)
     return identities
 
 
@@ -145,6 +180,15 @@ def backend_identity(name, budget, *, settings, model_catalog=None):
             if actual_worker != budget.worker_sha256:
                 return None
             facts["worker"] = actual_worker
+        elif name == "presenter":
+            from app.lipsync_models import LATENTSYNC_16_MODEL_ID
+            from app.model_runtime import LATENTSYNC_16_512
+            if model_catalog is None or (budget is not None and budget.bound_model_id not in (None, LATENTSYNC_16_MODEL_ID)):
+                return None
+            status = model_catalog.status(LATENTSYNC_16_512)
+            if not status.ready or model_catalog.latentsync_runtime is None:
+                return None
+            facts["runtime"] = model_catalog.latentsync_runtime.backend_identity(Path(status.model_path))
         elif name in {"narration", "material_visual_query"}:
             if model_catalog is None:
                 return None
@@ -221,14 +265,19 @@ def narration_provider_binding(*, provider, status):
 
 
 def narration_execution_facts(*, settings, model_catalog, generator, database_path, workspace_id, task_id):
-    """Read the actual bound provider and its real write locations, without work.
+    """Use the generator's task-owned output layout and installed provider."""
+    output_directory = getattr(generator, 'task_output_directory', None)
+    if not callable(output_directory):
+        raise DeviceProfileUnavailable('配音生成器尚未提供实际任务输出目录')
+    return narration_invocation_facts(settings=settings, model_catalog=model_catalog,
+        provider=getattr(generator, 'provider', None), database_path=database_path,
+        output_directory=output_directory(workspace_id=workspace_id, task_id=task_id))
 
-    The generator owns task output layout. The model catalog owns installation
-    identity. No budget value or provider class name proves either fact.
-    """
+
+def narration_invocation_facts(*, settings, model_catalog, provider, database_path, output_directory):
+    """Read actual provider identity and invocation write locations, without work."""
     from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT
     status = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
-    provider = getattr(generator, 'provider', None)
     paths = narration_provider_binding(provider=provider, status=status)
     # Bind identity to this exact catalog observation, not a second potentially
     # changed status lookup while constructing the same execution declaration.
@@ -236,17 +285,26 @@ def narration_execution_facts(*, settings, model_catalog, generator, database_pa
         model_catalog=SimpleNamespace(status=lambda _spec: status))
     if identity is None:
         raise DeviceProfileUnavailable('配音模型、worker或隔离运行依赖身份无法核实，请重新准备对应能力')
-    output_directory = getattr(generator, 'task_output_directory', None)
-    if not callable(output_directory):
-        raise DeviceProfileUnavailable('配音生成器尚未提供实际任务输出目录')
     write_paths = {'database': _actual_narration_path(database_path).parent,
         'temporary': _actual_narration_path(getattr(provider, 'temporary_root', None)),
         'model_cache': _actual_narration_path(getattr(provider, 'cache_root', None)),
-        'output': _actual_narration_path(output_directory(workspace_id=workspace_id, task_id=task_id))}
+        'output': _actual_narration_path(output_directory)}
     if paths != narration_provider_binding(provider=provider, status=status):
         raise DeviceProfileUnavailable('配音执行器在事实读取期间已更换，请重新读取')
     return {'backend_identity': identity,
             'write_paths': {name: str(path) for name, path in write_paths.items()}}
+
+
+def narration_reference_sha256(reference):
+    """Read bytes from the same qualified file revision used for preparation."""
+    expected = (reference.source_path, reference.device, reference.inode,
+                reference.size_bytes, reference.mtime_ns, reference.ctime_ns)
+    if _file_key(reference.source_path) != expected:
+        raise ValueError('声音参考文件修订已变化，请重新准备')
+    digest = _file_digest(expected)
+    if _file_key(reference.source_path) != expected:
+        raise ValueError('声音参考文件在核验期间变化，请重新准备')
+    return digest
 
 
 @lru_cache()

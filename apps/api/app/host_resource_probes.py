@@ -292,9 +292,24 @@ class PresenterBudget:
     runtime_sample_seconds: float
     additional_memory_bytes: int
     additional_disk_bytes: int
+    bound_model_id: str | None = None
+    max_source_width_px: int | None = None
+    max_source_height_px: int | None = None
+    preparation_scope: str | None = None
 
     def __post_init__(self) -> None:
+        shape_fields = ("bound_model_id", "max_source_width_px", "max_source_height_px", "preparation_scope")
+        shape = tuple(getattr(self, name) for name in shape_fields)
+        if any(value is not None for value in shape):
+            if (not isinstance(self.bound_model_id, str) or not self.bound_model_id
+                    or type(self.max_source_width_px) is not int or self.max_source_width_px <= 0
+                    or type(self.max_source_height_px) is not int or self.max_source_height_px <= 0
+                    or self.preparation_scope not in {"windowed_probe_v1", "windowed_measured_v1"}
+                    or self.max_section_count != 1):
+                raise ValueError("Presenter preparation requires an explicit model and source shape")
         for name, value in vars(self).items():
+            if name in shape_fields:
+                continue
             if name in {"max_duration_seconds", "max_timeout_seconds", "runtime_sample_seconds"}:
                 if type(value) not in {int, float} or not math.isfinite(value) or value <= 0:
                     raise ValueError("Presenter timing limits must be explicitly positive")
@@ -302,6 +317,25 @@ class PresenterBudget:
                 raise ValueError("Presenter limits must be explicit positive integers")
         if self.additional_memory_bytes < self.max_process_rss_bytes or self.runtime_sample_seconds > 0.25:
             raise ValueError("Presenter monitor needs reserved process memory and bounded sampling")
+
+
+def presenter_scope_fields(budget: PresenterBudget, model_id: str) -> dict[str, object]:
+    if budget.preparation_scope is None:
+        return {}
+    if model_id != budget.bound_model_id:
+        raise ValueError("人物请求的模型与设备实测模型不一致。")
+    return {
+        "presenter_preparation_scope": budget.preparation_scope,
+        "presenter_model_id": model_id,
+        "presenter_shape_digest": budget_identity(budget),
+        "presenter_source_width_px": budget.max_source_width_px,
+        "presenter_source_height_px": budget.max_source_height_px,
+    }
+
+
+def presenter_scope_matches(resources, budget: PresenterBudget) -> bool:
+    return all(resources.get(name) == value for name, value in
+               presenter_scope_fields(budget, budget.bound_model_id).items())
 
 
 @dataclass(frozen=True)
@@ -1548,6 +1582,8 @@ class HostResourceProbe:
                      self.budget.narration if kind == "creation_narration" else self.budget.montage)
             if stage is None:
                 return decision(None, "stage_budget_unavailable")
+            if kind == "creation_person_render" and not presenter_scope_matches(resources, stage):
+                return decision(False, "presenter_preparation_binding_changed")
             if (kind == 'creation_montage_plan' and stage.preparation_basis_digest is not None
                     and resources.get('preparation_basis_digest') != stage.preparation_basis_digest):
                 return decision(False, 'montage_preparation_binding_changed')
@@ -2002,6 +2038,12 @@ class HostResourceProbe:
                          else self.budget.narration)
             if narration is None:
                 raise RecoveryBlocked("配音进程预算尚未标定")
+            if resources["kind"] == "creation_person_render":
+                if not presenter_scope_matches(resources, narration):
+                    raise RecoveryBlocked("人物口型许可的模型、画幅或实测预算已变化")
+                if narration.preparation_scope == "windowed_probe_v1" and (
+                        grant.owner_type != "device_preparation" or grant.unit_key != "presenter-prepare:v1"):
+                    raise RecoveryBlocked("候选人物口型标定预算只能执行本次正式设备准备")
             return SceneRuntimeLimits(
                 narration.max_process_rss_bytes, narration.max_process_threads,
                 self.budget.min_available_memory_bytes, self.budget.max_swap_used_bytes,

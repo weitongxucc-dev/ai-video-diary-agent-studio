@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Iterable
 
 from app.creation.contracts import CreationTask
 from app.creation.plan_contracts import creation_plan_payload
+from app.creation.presenter_selection import validate_presenter_selection_version
 from app.creation.script_contracts import CreationTaskScript, CreationTaskScriptSection
 
 if TYPE_CHECKING:
@@ -96,3 +97,5 @@ def validate_execution_relationships(task: CreationTask,
         raise ValueError("当前文案不是已确认的任务文案")
     if plan.creation_task_id != task.id or plan.status != "confirmed":
         raise ValueError("当前制作要求尚未确认")
+    if task.montage_plan_id is None:
+        validate_presenter_selection_version(plan, script)

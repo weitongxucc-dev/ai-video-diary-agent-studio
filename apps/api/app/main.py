@@ -3662,6 +3662,8 @@ def _person_render_media_path(render: PersonRender) -> Path | None:
 
 def _task_person_render_http_router(route_names):
     return build_task_person_render_router(
+        access_for=lambda: _exact_edit_access,
+        require_task_open=lambda: _require_automation_task_open,
         workspace_for=lambda: current_workspace_id,
         task_for=lambda: _creation_task_or_404,
         production_for=lambda: production_repo,
@@ -3676,7 +3678,7 @@ def _task_person_render_http_router(route_names):
     )
 
 
-app.include_router(_task_person_render_http_router(('list_creation_task_person_renders',)))
+app.include_router(_task_person_render_http_router(('list_creation_task_person_renders', 'save_creation_task_presenter_selection')))
 
 
 def _generate_creation_task_person_render_record(workspace_id,task_id,payload,*,regeneration_token=None,grant_context=None):
@@ -5788,6 +5790,10 @@ def _device_preparation_service(kind="cpu"):
         from app.narration_resource_preparation import NarrationResourcePreparation
         return NarrationResourcePreparation(repository=production_repo, model_catalog=model_catalog,
                                              provider=voice_clone_provider, **arguments)
+    if kind == "presenter":
+        from app.presenter_resource_preparation import PresenterResourcePreparation
+        return PresenterResourcePreparation(model_catalog=model_catalog, provider=latentsync_provider,
+                                            **arguments)
     if kind == "montage":
         from app.montage_resource_preparation import MontageResourcePreparation
         return MontageResourcePreparation(repository=production_repo,
@@ -5807,6 +5813,12 @@ def _device_preparation_application(*, kind="cpu", request_id=None, actor=None):
     from app.montage_resource_preparation import MontagePreparationShape
     if request_id is not None:
         kind = request_kind(database_path=production_repo.database_path, request_id=request_id, actor=actor)
+    shape_factories = {'cpu': CpuPreparationShape, 'narration': NarrationPreparationShape,
+                       'montage': MontagePreparationShape}
+    if kind == "presenter":
+        from app.presenter_resource_preparation import PresenterPreparationShape
+        shape_factories[kind] = PresenterPreparationShape
+
     def bind(service, budget, scope):
         runtime, _ = bind_device_runtime(
             repository=production_repo, settings=settings, members=local_members_service,
@@ -5818,8 +5830,7 @@ def _device_preparation_application(*, kind="cpu", request_id=None, actor=None):
         service=_device_preparation_service(kind), database_path=production_repo.database_path,
         lifecycle_lock=_runtime_reload_lock, current_runtime=lambda: device_runtime,
         replace_runtime=_publish_device_runtime, stop_runtime=_stop_device_runtime, bind_runtime=bind,
-        shape_factory={'cpu': CpuPreparationShape, 'narration': NarrationPreparationShape,
-                       'montage': MontagePreparationShape}[kind])
+        shape_factory=shape_factories[kind])
 
 
 def _dispatch_device_preparation(action, *, actor, request_id, shape=None, kind="cpu"):
@@ -5936,11 +5947,15 @@ def _build_device_components(*, repository: ProductionRepository):
     creation_registration = registrations["creation_job"]
     registrations["creation_job"] = replace(creation_registration,
         on_stopped=creation_registration.executor.record_stopped)
+    from app.device_resource_configuration import narration_invocation_facts
     from app.profile_preview_execution import profile_preview_registration
     registrations["media_preview"] = profile_preview_registration(repository,
         voice_service=voice_preview_service, avatar_service=avatar_preview_service,
         narration_budget=narration_budget, presenter_budget=presenter_budget,
-        verify_identity=_verify_creation_identity)
+        verify_identity=_verify_creation_identity,
+        voice_runtime_facts=lambda provider, output: narration_invocation_facts(
+            settings=settings, model_catalog=model_catalog, provider=provider,
+            database_path=repository.database_path, output_directory=output))
     registrations["platform_publish"] = platform_publish_registration(
         repository, platform_auth_service,
         publishable_output_for=_platform_publish_output_for,

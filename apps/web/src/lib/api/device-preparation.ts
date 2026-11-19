@@ -31,6 +31,19 @@ export type CpuPreparationRequest = {
   shape: CpuPreparationShape;
 };
 
+export type NarrationPreparationRequest = {
+  request_id: string;
+  kind: 'narration';
+  shape: {
+    voice_profile_id: string;
+    voice_version: string;
+    language: 'zh' | 'en';
+    text: string;
+    output_duration_seconds: number;
+    pronunciation_references: { id: string; version: string }[];
+  };
+};
+
 export type DevicePreparationReceipt = {
   id: string;
   plan_id: string;
@@ -49,8 +62,8 @@ export type DevicePreparationFinalization = DevicePreparationReceipt & {
 const root = '/api/device/resource-preparations';
 const scopeHeaders = (scope: string) => ({ 'X-Device-Preparation-Scope': scope });
 
-export async function getDeviceResourceStatus(): Promise<DeviceResourceStatus> {
-  const value = await request<DeviceResourceStatus>(root);
+export async function getDeviceResourceStatus(signal?: AbortSignal): Promise<DeviceResourceStatus> {
+  const value = await request<DeviceResourceStatus>(root, signal && { signal });
   if (!/^[0-9a-f]{64}$/.test(value.actor_scope)
       || typeof value.cpu_preparation_supported !== 'boolean' || typeof value.preparation_configured !== 'boolean'
       || !['unprepared', 'available', 'invalid'].includes(value.profile_status)
@@ -73,13 +86,19 @@ export async function prepareCpuResources(payload: CpuPreparationRequest, scope:
   return receipt(await request(root, { method: 'POST', headers: scopeHeaders(scope), body: JSON.stringify(payload) }));
 }
 
-export async function getDevicePreparation(id: string, scope: string): Promise<DevicePreparationReceipt> {
-  return receipt(await request(`${root}/${encodeURIComponent(id)}`, { headers: scopeHeaders(scope) }), id);
+export async function prepareNarrationResources(payload: NarrationPreparationRequest, scope: string, signal?: AbortSignal): Promise<DevicePreparationReceipt> {
+  return receipt(await request(root, { method: 'POST', headers: scopeHeaders(scope), body: JSON.stringify(payload), signal }));
 }
 
-export async function finalizeDevicePreparation(id: string, scope: string): Promise<DevicePreparationFinalization> {
+export async function getDevicePreparation(id: string, scope: string, signal?: AbortSignal): Promise<DevicePreparationReceipt> {
+  return receipt(await request(`${root}/${encodeURIComponent(id)}`, {
+    headers: scopeHeaders(scope), ...(signal && { signal }),
+  }), id);
+}
+
+export async function finalizeDevicePreparation(id: string, scope: string, signal?: AbortSignal): Promise<DevicePreparationFinalization> {
   const value = await request<DevicePreparationFinalization>(`${root}/${encodeURIComponent(id)}/finalize`, {
-    method: 'POST', headers: scopeHeaders(scope), body: '{}',
+    method: 'POST', headers: scopeHeaders(scope), body: '{}', ...(signal && { signal }),
   });
   receipt(value, id);
   return value;

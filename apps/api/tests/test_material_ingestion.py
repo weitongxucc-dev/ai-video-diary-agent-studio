@@ -65,6 +65,40 @@ class HashResources:
         return True
 
 
+def test_desktop_image_receipt_registers_only_the_verified_members_selected_file(tmp_path):
+    from PIL import Image
+
+    repo, library = make_repo(tmp_path)
+    repo.material_source_files.bind_material_ingestion("one", expected_directory=str(library), verified_owner_user_id="owner")
+    selected = library / "cover.JPEG"
+    unselected = library / "another.png"
+    Image.new("RGB", (12, 18)).save(selected)
+    Image.new("RGB", (12, 18)).save(unselected)
+    service = MaterialIngestionService(repo)
+    revision = repo.material_source_files.material_copy_revision(selected.stat())
+
+    def receive(owner):
+        service.confirm_copy_complete("one", relative_path=selected.name, expected_revision=revision,
+                                      confirmation_source="app_import", verified_owner_user_id=owner)
+
+    receive("owner")
+    receive("owner")
+    with pytest.raises(ValueError):
+        receive("other")
+    assets = repo.list_assets("one")
+    assert [(a.file_name, a.media_type, a.visibility, a.owner_user_id) for a in assets] == [
+        (selected.name, "image", "private", "owner")]
+    ref = repo.workspace_media_reference_for_asset("one", assets[0].id)
+    assert repo.resolve_workspace_media_reference("one", ref, require_registered=True) == selected
+    bad = library / "fake.jpg"
+    bad.write_bytes(b"invalid image")
+    with pytest.raises(ValueError):
+        service.confirm_copy_complete("one", relative_path=bad.name,
+            expected_revision=repo.material_source_files.material_copy_revision(bad.stat()),
+            confirmation_source="app_import", verified_owner_user_id="owner")
+    assert len(repo.list_assets("one")) == 1
+
+
 def test_copy_confirmation_persists_revision_before_waking() -> None:
     repository = Mock()
     service = MaterialIngestionService(repository)

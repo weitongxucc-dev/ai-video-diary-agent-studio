@@ -226,6 +226,14 @@ async function main() {
       assert.equal(fs.statSync(existing).mtimeMs, beforeStat.mtimeMs, 'existing mtime untouched');
     });
 
+    await check('copies a selected JPEG from the same native picker', async () => {
+      const source = makeSource('portrait.JPEG');
+      const result = await importMaterials({ port, pickSources: async () => [source] });
+      assert.deepEqual(plain(result.skipped), []);
+      assert.equal(result.copied[0].fileName, 'portrait.JPEG');
+      assert.equal(sha256(path.join(boundDir, 'portrait.JPEG')), sha256(source));
+    });
+
     // ── Unsupported extension ─────────────────────────
     await check('skips unsupported extensions and still imports the rest', async () => {
       const source = makeSource('clip-b.webm');

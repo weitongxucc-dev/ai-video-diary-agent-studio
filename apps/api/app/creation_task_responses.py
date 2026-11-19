@@ -44,6 +44,7 @@ class CreationTaskResponseAdapter:
                 "duration_mode": plan.duration_mode,
                 "duration_range_seconds": plan.duration_range_seconds,
                 "presenter_share_target": plan.presenter_share_target,
+                "presenter_selection": asdict(plan.presenter_selection) if plan.presenter_selection else None,
                 "lipsync_quality": plan.lipsync_quality,
                 "knowledge_references": [item.__dict__ for item in plan.knowledge_references],
                 "source_references": [item.__dict__ for item in plan.source_references],

@@ -1,0 +1,39 @@
+diff --git a/latentsync_mlx/attention.py b/latentsync_mlx/attention.py
+index b950c6a..722f223 100644
+--- a/latentsync_mlx/attention.py
++++ b/latentsync_mlx/attention.py
+@@ -44,3 +44,2 @@ class Attention(nn.Module):
+-        scores = (q * self.scale) @ k.transpose(0, 1, 3, 2)
+-        attn = mx.softmax(scores, axis=-1)
+-        out = (attn @ v).transpose(0, 2, 1, 3).reshape(B, S, -1)
++        out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale)
++        out = out.transpose(0, 2, 1, 3).reshape(B, S, -1)
+diff --git a/latentsync_mlx/pipeline.py b/latentsync_mlx/pipeline.py
+index ff0d7ec..981c959 100644
+--- a/latentsync_mlx/pipeline.py
++++ b/latentsync_mlx/pipeline.py
+@@ -116,0 +117,6 @@ class LipsyncPipelineMLX:
++        # Upstream feature2chunks includes two extra padded windows. The
++        # candidate must preserve the actual audio clock, not loop video tails.
++        actual_frames = math.floor(len(audio_samples) * video_fps / audio_sample_rate)
++        if actual_frames < 1 or len(whisper_chunks) < actual_frames:
++            raise ValueError("Insufficient audio conditioning for actual duration")
++        whisper_chunks = whisper_chunks[:actual_frames]
+@@ -208 +214 @@ class LipsyncPipelineMLX:
+-            for t in self.sampler.timesteps:
++            for step_index, t in enumerate(self.sampler.timesteps):
+@@ -227,0 +234,4 @@ class LipsyncPipelineMLX:
++                if step_index % 5 == 0:
++                    print(f"chunk={chunk_idx} step={step_index} peak_MLX_GiB={mx.get_peak_memory()/2**30:.2f}", flush=True)
++                if mx.get_peak_memory() > 8 * 1024**3:
++                    raise RuntimeError("Candidate exceeded 8 GiB MLX allocation during actual generation")
+@@ -276,6 +286,3 @@ class LipsyncPipelineMLX:
+-        cmd = (
+-            f"ffmpeg -y -loglevel error -nostdin "
+-            f"-i {video_temp} -i {audio_temp} "
+-            f"-c:v libx264 -crf 18 -c:a aac -q:v 0 -q:a 0 {video_out_path}"
+-        )
+-        subprocess.run(cmd, shell=True)
++        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-nostdin", "-i", video_temp,
++                        "-i", audio_temp, "-c:v", "libx264", "-crf", "18", "-c:a", "aac",
++                        "-q:v", "0", "-q:a", "0", str(video_out_path)], check=True)

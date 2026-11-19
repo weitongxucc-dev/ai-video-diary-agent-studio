@@ -381,7 +381,7 @@ def presenter_key_stream_case(tmp_path, monkeypatch):
     yield from _presenter_permit_case(tmp_path, monkeypatch, metadata_only=True, section_count=2)
 
 
-def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_count=1):
+def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_count=1, start_job=True):
     """Persistent lawful inputs; resource availability and media bytes are fixtures."""
     import json
     from dataclasses import asdict
@@ -477,7 +477,8 @@ def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_coun
         run_render=forbidden, render_is_valid=forbidden)
     script = repo.script_records.get_creation_task_script(WORKSPACE, "script")
     persisted = repo.plan_records.get_creation_plan(WORKSPACE, plan.id)
-    job = execution.start(WORKSPACE, task.id, script.id, revision_digest(script, persisted), actor=actor)
+    job = (execution.start(WORKSPACE, task.id, script.id, revision_digest(script, persisted), actor=actor)
+           if start_job else None)
     registration = creation_job_registration(repo, render_action=forbidden, render_is_valid=forbidden,
         cpu_render_budget=cpu, presenter_cpu_render_budget=cpu, presenter_budget=budget,
         montage_budget=MontageBudget(1, 4, 100000, 100000, 5, 1),
@@ -513,6 +514,44 @@ def _presenter_permit_case(tmp_path, monkeypatch, *, metadata_only, section_coun
         "lock": lock_proof, "ledger": ledger, "permit": permit}, indent=2))
 
 
+def test_chosen_presenter_section_survives_reload_and_controls_admission(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from app.creation.execution_input import validate_execution_relationships
+    from app.creation.presenter_selection import planned_presenter_sections
+    from app.creation_execution import presenter_inputs, presenter_stage_facts
+
+    for case in _presenter_permit_case(tmp_path, monkeypatch, metadata_only=True, section_count=2, start_job=False):
+        repo, task = case.repo, case.task
+        script = repo.script_records.get_creation_task_script(WORKSPACE, "script")
+        plan = repo.plan_records.get_creation_plan(WORKSPACE, task.plan_id)
+        choices = dict(member_id=case.member.member_id, script_id=script.id,
+            expected_script_updated_at=script.updated_at, expected_plan_updated_at=plan.updated_at)
+        models = {"fast": "fixture-avatar"}
+        assert [segment.source_section_id for segment, _ in presenter_inputs(repo, task, script, plan, models)] == ["section"]
+        with pytest.raises(PermissionError):
+            repo.presenter_selection.save(WORKSPACE, task.id, section_id="tail", **(choices | {"member_id": "other"}))
+        saved = repo.presenter_selection.save(WORKSPACE, task.id, section_id="tail", **choices)
+        assert repo.presenter_selection.save(WORKSPACE, task.id, section_id="tail", **choices).updated_at == saved.updated_at
+        with pytest.raises(ValueError, match="制作方案已变化"):
+            repo.presenter_selection.save(WORKSPACE, task.id, section_id="section", **choices)
+        snapshot = repo.execution_inputs.read_creation_execution_snapshot(WORKSPACE, task.id)
+        assert snapshot.plan.presenter_selection == saved.presenter_selection
+        assert planned_presenter_sections(snapshot.plan, snapshot.script_header, [("section", 1), ("tail", 1)]) == ["tail"]
+        assert [segment.source_section_id for segment, _ in presenter_inputs(repo, task, script, snapshot.plan, models)] == ["tail"]
+        _, facts = presenter_stage_facts(repo, task, script, snapshot.plan, case.budget, models)
+        assert facts["section_count"] == 1
+        assert facts["duration_seconds"] == 1
+        with pytest.raises(ValueError, match="确认文案版本已变化"):
+            validate_execution_relationships(task, replace(snapshot.script_header, updated_at=saved.updated_at), snapshot.plan)
+        with pytest.raises(ValueError, match="声音版本已变化"):
+            validate_execution_relationships(task, snapshot.script_header, replace(snapshot.plan,
+                selected_voice=replace(snapshot.plan.selected_voice, version="v2")))
+        case.execution.start(WORKSPACE, task.id, script.id, snapshot.input_digest, actor=case.actor)
+        choices["expected_plan_updated_at"] = saved.updated_at
+        with pytest.raises(ValueError, match="当前仍有制作作业"):
+            repo.presenter_selection.save(WORKSPACE, task.id, section_id=None, **choices)
+
+
 def test_presenter_budget_absence_and_partial_configuration_do_not_borrow_cpu():
     from dataclasses import asdict
     from app.host_resource_probes import PresenterBudget
@@ -521,11 +560,13 @@ def test_presenter_budget_absence_and_partial_configuration_do_not_borrow_cpu():
     with pytest.raises(HostBudgetUncalibrated, match="人物专属预算"):
         presenter_budgets_from_env({"DEVICE_PRESENTER_MAX_THREADS": "1"})
     budget = PresenterBudget(1, 1024, 10, 1024, 1, 5, 1024, 8, .1, 1024, 1024)
-    env = {"DEVICE_PRESENTER_" + name.upper(): str(value) for name, value in asdict(budget).items()}
+    env = {"DEVICE_PRESENTER_" + name.upper(): str(value) for name, value in asdict(budget).items() if value is not None}
     env.update({name.replace("DEVICE_CPU_RENDER_", "DEVICE_PRESENTER_CPU_RENDER_"): value
                 for name, value in _CPU_RENDER_ENV.items()})
     actual, cpu = presenter_budgets_from_env(env)
     assert actual == budget and cpu == cpu_render_budget_from_env(_CPU_RENDER_ENV)
+    with pytest.raises(HostBudgetUncalibrated, match="实测设备档案"):
+        presenter_budgets_from_env({**env, "DEVICE_PRESENTER_PREPARATION_SCOPE": "windowed_measured_v1"})
 
 
 def _presenter_scheduler(case):

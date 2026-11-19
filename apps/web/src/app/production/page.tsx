@@ -79,10 +79,10 @@ function CreationTaskRow({ task }: { task: CreationTask }) {
 export default async function ProductionPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string; draft_id?: string; draft_start?: string; knowledge_item_id?: string; knowledge_version?: string; reply_conversation_id?: string; reply_turn_id?: string; reply_request_id?: string }>;
+  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string; draft_id?: string; draft_start?: string; request_id?: string; knowledge_item_id?: string; knowledge_version?: string; reply_conversation_id?: string; reply_turn_id?: string; reply_request_id?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
-  if (params.new === "1" && params.view !== "automations" && !params.draft_id) {
+  if (params.new === "1" && params.view !== "automations" && !params.draft_id && params.request_id === undefined) {
     const draftParams = new URLSearchParams();
     for (const key of ["goal", "template_id", "template_version", "knowledge_item_id", "knowledge_version", "reply_conversation_id", "reply_turn_id", "reply_request_id"] as const) {
       const value = params[key];
@@ -107,6 +107,16 @@ export default async function ProductionPage({
   }
 
   if (params.new === "1") {
+    if (params.request_id !== undefined) {
+      return <WorkspaceRoute label="创作目标"><AppShell creationTasks={creationTasks}>
+        <div className="modern-queue"><section>
+          <header className={draftStyles.draftHeader}><h1>创作目标</h1><Link href="/production">返回任务列表</Link></header>
+          {typeof params.request_id === "string" && /^request_[0-9a-f]{32}$/.test(params.request_id)
+            ? <WorkbenchCreationDraftForm key={params.request_id} draftId={params.draft_id} savedRequestId={params.request_id} />
+            : <p role="alert">创作目标地址无效。</p>}
+        </section></div>
+      </AppShell></WorkspaceRoute>;
+    }
     const initialGoal = params.goal ?? "";
     const replyValues = [params.reply_conversation_id, params.reply_turn_id, params.reply_request_id];
     const hasReplyOrigin = replyValues.some(Boolean);
