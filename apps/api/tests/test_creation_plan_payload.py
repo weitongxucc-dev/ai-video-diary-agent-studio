@@ -124,3 +124,35 @@ def test_persisted_script_generation_input_omits_null_and_binds_real_source(tmp_
         selected = case._capture_input(connection, task, 'member', {'execution_location': 'cloud'})
     assert selected['requirements']['source_media'] == SOURCE
     assert selected['goal_revision'] != before['goal_revision']
+
+
+def test_provided_topic_after_failed_generation_preserves_both_original_records(tmp_path):
+    repo = ProductionRepository(tmp_path / "topics.sqlite3", tmp_path / "library")
+    plan = CreationPlan(**LEGACY_PLAN)
+    task = CreationTask("task", "local", plan.id, "Existing work", "knowledge_explanation", owner_user_id="member")
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id="member")
+    topics = repo.topic_records
+    running, _ = topics.start_topic_generation(
+        TopicGenerationRun("failed-topic-run", "local", task.id, plan.id, "running", {}, "fixture", []))
+    with pytest.raises(ValueError, match="正在生成"):
+        topics.confirm_provided_topic("local", task.id, title="原片已有主题",
+            expected_task_updated_at=running.updated_at, verified_owner_user_id="member")
+
+    failed_task, failure = topics.fail_topic_generation("failed-topic-run", reason="本机文字模型不可用",
+        impact="未生成选题", repair_action="修复连接或填写已有主题", retryable=True)
+    kwargs = {"title": "原片已有主题", "expected_task_updated_at": failed_task.updated_at}
+    with pytest.raises(PermissionError):
+        topics.confirm_provided_topic("local", task.id, **kwargs, verified_owner_user_id="other-member")
+    with pytest.raises(ValueError, match="状态已变化"):
+        topics.confirm_provided_topic("local", task.id, title=kwargs["title"],
+            expected_task_updated_at=running.updated_at, verified_owner_user_id="member")
+    adopted = topics.confirm_provided_topic("local", task.id, **kwargs, verified_owner_user_id="member")
+    assert (adopted.id, adopted.stage, adopted.stage_status) == (task.id, "script", "not_started")
+    assert adopted.stage_reason is None and adopted.confirmed_script_id is None
+    assert topics.confirm_provided_topic("local", task.id, **kwargs, verified_owner_user_id="member") == adopted
+    provided = topics.get_topic_candidate("local", task.id, adopted.selected_topic_id)
+    assert provided.title == kwargs["title"] and provided.selection_status == "confirmed"
+    assert topics.get_topic_generation_run("local", provided.run_id).route_snapshot == {
+        "operation": "provided_topic", "provider": "none"}
+    assert topics.get_topic_generation_run("local", failure.id) == failure
+    assert repo.job_records.list_job_runs("local", task.id) == []

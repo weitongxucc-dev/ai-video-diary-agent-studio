@@ -103,6 +103,7 @@ class CreationPlan:
     source_media: dict[str, object] | None = None
     lipsync_model_id: str | None = None
     presenter_selection: CreationPlanPresenterSelection | None = None
+    selected_material_asset_ids: list[str] = field(default_factory=list)
 
 
 def creation_plan_payload(plan: CreationPlan) -> dict[str, object]:
@@ -114,6 +115,8 @@ def creation_plan_payload(plan: CreationPlan) -> dict[str, object]:
         del payload['lipsync_model_id']
     if plan.presenter_selection is None:
         del payload['presenter_selection']
+    if not plan.selected_material_asset_ids:
+        del payload['selected_material_asset_ids']
     return payload
 
 

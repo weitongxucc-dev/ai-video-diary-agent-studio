@@ -7,8 +7,81 @@ import styles from "../CreationTaskWorkspace.module.css";
 import { narrationSegmentStatus, segmentRevisionStatus, segmentAdoptionReason } from './stage-labels';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/button';
+import { ApiRequestError } from "@/lib/api/transport";
+import { adoptNarrationDuration, readNarrationDuration, type NarrationDurationStatus, type NarrationDurationRequest } from "@/lib/api/narration-duration";
+import { visibleError } from "../material-library/material-errors";
 import { readCreationTaskSegments, readCreationTaskBudget, readCreationTaskSegmentRevision, resumeCreationTaskSegmentRevision } from '@/lib/api/task-media';
 import type { CreationTaskSegments, CreationTaskSegment, CreationTaskBudget, CreationTaskSegmentRevision } from '@/lib/types/creation-tasks';
+
+export function NarrationDurationReviewPanel({ taskId, onSaved }: { taskId: string; onSaved?: () => void }) {
+  const [status, setStatus] = useState<NarrationDurationStatus>();
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
+  const pending = useRef<NarrationDurationRequest | null>(null);
+  const saving = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    let reading = false;
+    async function refresh() {
+      if (reading || saving.current) return;
+      reading = true;
+      try {
+        const result = await readNarrationDuration(taskId);
+        if (active && result.task_id === taskId) setStatus(result);
+      } catch (cause) {
+        if (active && !pending.current) setError(visibleError(cause, "无法读取配音进度。"));
+      } finally {
+        reading = false;
+      }
+    }
+    void refresh();
+    const timer = setInterval(() => void refresh(), 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [taskId]);
+
+  async function adopt() {
+    if (saving.current || (!status?.review_id && !pending.current)) return;
+    if (!pending.current && status?.review_id) {
+      pending.current = { request_id: crypto.randomUUID(), review_id: status.review_id };
+    }
+    const input = pending.current;
+    if (!input) return;
+    saving.current = true;
+    setSubmitting(true);
+    setError("");
+    try {
+      const receipt = await adoptNarrationDuration(taskId, input);
+      pending.current = null;
+      setUncertain(false);
+      setSaved(receipt.duration_target_seconds);
+      setStatus(current => current && { ...current, target_seconds: receipt.duration_target_seconds, review_id: null });
+      onSaved?.();
+    } catch (cause) {
+      const rejected = cause instanceof ApiRequestError && cause.status < 500;
+      if (rejected) pending.current = null;
+      setUncertain(!rejected);
+      setError(visibleError(cause, rejected ? "无法采用此时长，请刷新后核对。" : "保存结果待确认，请查询原请求。"));
+    } finally {
+      saving.current = false;
+      setSubmitting(false);
+    }
+  }
+
+  if (!status?.review_id && !error && !uncertain && saved === null) return null;
+  return <section className={styles.workSection} aria-label="配音进度与交付时长">
+    {status && <p>正式配音已完成 {status.completed_sections} / {status.total_sections} 段 ·
+      实测 {status.measured_seconds.toFixed(2)} 秒 · 目标 {status.target_seconds.toFixed(2)} 秒</p>}
+    {status?.review_id && !uncertain && <p>完整配音已保存。将交付时长调整为 {status.minimum_delivery_seconds.toFixed(2)} 秒后，可以继续使用这些配音。</p>}
+    {error && <p role="alert">{error}</p>}
+    {saved !== null && <p role="status">已保存 {saved.toFixed(2)} 秒的交付时长。点击继续制作即可合并已有配音。</p>}
+    {(status?.review_id || uncertain) && <Button type="button" onClick={() => void adopt()} disabled={submitting}>
+      {submitting ? "正在保存" : uncertain ? "查询原保存结果" : "采用完整配音时长"}
+    </Button>}
+  </section>;
+}
 
 export function SegmentProductionPanel({ taskId }: { taskId: string }) {
     const [segments,setSegments]=useState<CreationTaskSegments|null>(null);

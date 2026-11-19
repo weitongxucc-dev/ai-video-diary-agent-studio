@@ -324,6 +324,9 @@ class SegmentProductionUseCase:
             if snapshot.task.confirmed_script_id != task.confirmed_script_id:
                 raise ValueError('当前确认文案在规划前变化')
             task, script, creation_plan = snapshot.task, snapshot.script_header, snapshot.plan
+            if creation_plan.selected_material_asset_ids:
+                selected = set(creation_plan.selected_material_asset_ids)
+                allowed = selected if allowed is None else selected.intersection(allowed)
             current = self.repository.section_inputs.read_creation_section_input(task, script, section_id, connection=conn)
             section = current['section']
             section = replace(section, content=text) if text is not None else section

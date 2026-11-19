@@ -8,12 +8,13 @@ import { editExecutionReadinessMessage } from './creation-task/stage-labels';
 import { saveTaskVideo, saveTaskCover, saveTaskSubtitles, type SaveFeedback } from "./creation-task/output-saving";
 import { ReviewOutputView } from "./creation-task/ReviewOutputView";
 import { NarrationPreparation } from "./creation-task/NarrationPreparation";
+import type { AuditionVoice } from "./creation-task/DeliveryVoiceSample";
 import { ScriptWindowStart } from "./creation-task/ScriptWindowEditor";
 import { useScriptGenerationRequest } from "./creation-task/useScriptGenerationRequest";
 import { TopicSelection } from "./creation-task/TopicSelection";
 import { useCreationExecution } from "./creation-task/useCreationExecution";
 import type { TaskMediaJob, TaskMediaResultMap, CreationTaskNarrationVoiceSelectionRequest } from "@/lib/types";
-import { getAssistantScriptContext, getCreationTaskNarrationVoiceSelection, saveCreationTaskPresenterSelection } from "@/lib/api/creation-tasks";
+import { confirmProvidedCreationTaskTopic, getAssistantScriptContext, getCreationTaskNarrationVoiceSelection, saveCreationTaskPresenterSelection } from "@/lib/api/creation-tasks";
 import { readCreationTaskTimelineRestore } from '@/lib/api';
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
 import { isLocalAuthMode } from "@/lib/auth/routing";
@@ -61,11 +62,12 @@ import { TaskIssue } from './creation-task/TaskIssue';
 import { Inspector, SubtitleCoverInspector } from './creation-task/TaskInspector';
 import { ConfirmedTopicView } from './creation-task/TopicStage';
 import { ReadonlyScriptsView, ConfirmedScriptView, ScriptGenerationStatus, ScriptLibrarySave, PlanReplyDraftAction, ScriptEditor } from './creation-task/ScriptStage';
-import { NarrationResultView, SegmentProductionPanel } from './creation-task/NarrationStage';
+import { NarrationDurationReviewPanel, NarrationResultView, SegmentProductionPanel } from './creation-task/NarrationStage';
 import { PersonStageView } from './creation-task/PersonStage';
 import { CreationExecutionPanel } from './creation-task/CreationExecutionPanel';
 import { EditPreviewCard } from './creation-task/EditPreviewCard';
 import { ContextCommandBar, TaskConversationHistory } from './creation-task/TaskConversation';
+import { MaterialScopePicker } from './creation-task/MaterialScopePicker';
 import { PrepareMaterialsView } from './creation-task/PrepareMaterialsView';
 import { PublishStageView } from './creation-task/PublishStageView';
 import { FinalVideoQualityCheck } from './creation-task/FinalVideoQualityCheck';
@@ -446,6 +448,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   });
   const windowScript = latestScript?.selection_status === "draft" && (!latestScript.draft_complete || latestScript.sections_total_count > 20);
   const runnableVoices = workspace.available_voices.filter((voice) => voice.runnable);
+  const scriptAuditionLanguage = workspace.plan.language === "zh-CN" ? "zh"
+    : workspace.plan.language === "en-US" ? "en" : null;
+  const scriptAuditionVoice = workspace.plan.selected_voice;
+  const scriptAudition: AuditionVoice | undefined = scriptAuditionVoice && scriptAuditionLanguage &&
+    (scriptAuditionVoice.language === scriptAuditionLanguage || scriptAuditionVoice.language === "zh-en")
+    ? { language: scriptAuditionLanguage, profileId: scriptAuditionVoice.profile_id, version: scriptAuditionVoice.version }
+    : undefined;
   const zhSubtitleValid = workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid");
   const enSubtitleValid = workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid");
   const coverValid = workspace.cover_asset?.status === "valid";
@@ -1873,6 +1882,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "topic" && task.stage === "topic" ? <TopicSelection topics={topics} selectedTopicId={selectedTopicId} topicTitleDraft={topicTitleDraft} knowledgeCount={workspace.plan.knowledge_references.length} sourceCount={workspace.plan.source_references.length} busy={busy} stageStatus={task.stage_status}
           onSelect={(id, title) => { setSelectedTopicId(id); setTopicTitleDraft(title); }} onTitleChange={setTopicTitleDraft}
           onGenerate={() => void run("topics", () => generateCreationTaskTopics(task.id), "选题已生成，等待选择。")}
+          onUseProvided={title => void run("topic-confirm", () => confirmProvidedCreationTaskTopic(task.id, {
+            title, expected_task_updated_at: task.updated_at,
+          }), "已有选题已确认，可以编写文案。")}
           onRefresh={() => void refresh(true).catch(cause => setError(errorDetails(cause)))}
           onConfirm={() => { if (selectedTopicId) void run("topic-confirm", async () => {
             const saved = await confirmCreationTaskTopic(task.id, selectedTopicId, { title: topicTitleDraft.trim() });
@@ -1905,7 +1917,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
               </details>
             </section> : null}
         {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript &&
-          !retainedScript && (!retainedCheckKey || retainedCheck?.key === retainedCheckKey && !retainedCheck.error) ? <ScriptEditor taskId={task.id} busy={busy !== null} key={windowScript ? `${task.id}:${latestScript.id}` : `${task.id}:${latestScript.id}:${latestScript.updated_at}`} onWindowSaved={async () => { await refresh(true); }} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
+          !retainedScript && (!retainedCheckKey || retainedCheck?.key === retainedCheckKey && !retainedCheck.error) ? <ScriptEditor taskId={task.id} auditionVoice={scriptAudition} busy={busy !== null} key={windowScript ? `${task.id}:${latestScript.id}` : `${task.id}:${latestScript.id}:${latestScript.updated_at}`} onWindowSaved={async () => { await refresh(true); }} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
         {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ReadonlyScriptsView scripts={workspace.scripts} confirmedScriptId={task.confirmed_script_id} /> : null}
 
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <details className={styles.runDetails}><summary>保存到文案库</summary><ScriptLibrarySave key={latestScript.id} script={latestScript} onReloadSource={async () => { await refresh(true); }} /></details> : null}
@@ -1916,6 +1928,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
             onRecord={() => setRecordingOpen(true)} onReviseScript={() => openView("script")} onAdoptRecording={recording => void adoptRecordedVoice(recording)} onVoiceChange={setSelectedVoiceId}
             onUseVoice={() => void handleNarrationVoice()} />
         ) : null}
+        {activeView === "narration" && task.stage === "narration" && task.stage_status === "not_started"
+          && task.stage_reason && task.confirmed_script_id && !workspace.narration ?
+          <NarrationDurationReviewPanel key={task.id} taskId={task.id} onSaved={() => {
+            void refresh(true).catch(cause => {
+              if (currentTaskId.current === task.id) setError(errorDetails(cause));
+            });
+          }} /> : null}
         {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={generatePersonRender} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} narration={workspace.narration} personRenders={workspace.person_renders} hasPerson={Boolean(workspace.plan.selected_person)} taskId={task.id} /> : null}
 
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>准备视频剪辑</h2><p>在上方核对文案与要求后继续制作。</p></div></section> : null}
@@ -1927,7 +1946,25 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {(activeView === "review" || activeView === "montage") && workspace.montage ? <FinalVideoQualityCheck compact={isEditor} taskId={task.id} versionId={task.current_timeline_version_id} outputUrl={workspace.montage.output_url} onLocate={locateQualityFinding} /> : null}
         {(activeView === "review" || activeView === "montage") && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}
         </div>
-        {activeView === "prepare" ? <PrepareMaterialsView matches={workspace.plan.material_matches} approvedAssetCount={workspace.plan.approved_asset_count} approvedClipCount={workspace.plan.approved_clip_count} /> : null}
+        {activeView === "prepare" ? <PrepareMaterialsView matches={workspace.plan.material_matches}
+          approvedAssetCount={workspace.plan.approved_asset_count} approvedClipCount={workspace.plan.approved_clip_count}
+          selectedAssetIds={workspace.plan.selected_material_asset_ids}>
+          {!workspace.plan.source_media && workspace.plan.updated_at && workspace.plan.selected_material_asset_ids &&
+            <MaterialScopePicker key={task.id} taskId={task.id} planUpdatedAt={workspace.plan.updated_at}
+              selectedAssetIds={workspace.plan.selected_material_asset_ids}
+              disabled={busy !== null || task.stage_status === "running" || Boolean(task.montage_plan_id || task.current_timeline_version_id)}
+              onSaved={receipt => {
+                const current = currentWorkspace.current;
+                if (receipt.task_id !== current.task.id) return;
+                if (current.plan.updated_at === workspace.plan.updated_at) {
+                  acceptWorkspace({ ...current, plan: { ...current.plan, updated_at: receipt.plan_updated_at,
+                    selected_material_asset_ids: receipt.selected_material_asset_ids } }, workspaceReceiptRevision.current);
+                }
+                void refresh(true).catch(cause => {
+                  if (currentTaskId.current === receipt.task_id) setError(errorDetails(cause));
+                });
+              }} />}
+        </PrepareMaterialsView> : null}
         {activeView === "person" ? <PersonStageView busy={busy !== null} onGenerate={generatePersonRender} onOpenNarration={() => openView("narration")} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} narration={workspace.narration} renders={workspace.person_renders} selectedPerson={workspace.plan.selected_person} lipsyncQuality={workspace.plan.lipsync_quality} presenterShareTarget={workspace.plan.presenter_share_target ?? workspace.montage?.presenter_share_target ?? null} presenterShareActual={workspace.montage?.presenter_share_actual} capability={workspace.person_render_capability} portraitAvailable={workspace.portrait_available} /> : null}
         {activeView === "publish" ? <PublishStageView ready={Boolean(workspace.montage?.output_url)} onOpenReview={() => openView("review")} /> : null}
         {recordingOpen ? <HomeCardDialog title="电脑录音" onClose={() => setRecordingOpen(false)}>{workspace.scripts.filter(script => script.id === task.confirmed_script_id).map(script => <div key={script.id}><p>录音提词：以下按页显示已确认文案，不是全文载入。</p><ConfirmedScriptView script={script}/></div>)}<DesktopVoiceRecorder onRecorded={submitRecordedVoice} onCancel={() => setRecordingOpen(false)} /></HomeCardDialog> : null}

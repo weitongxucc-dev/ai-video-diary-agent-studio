@@ -127,6 +127,9 @@ def test_task_topic_preflight_and_missing_commands_do_not_write(tmp_path, monkey
     # Never generate on the seeded task: even a preflight failure persists a run.
     generation = client.post('/api/creation-tasks/missing/topics/generate', json={}, headers=headers)
     assert generation.status_code == 404 and generation.json()['detail'] == 'creation task not found'
+    provided = {"title": "原片已有主题", "expected_task_updated_at": body["task"]["updated_at"]}
+    assert client.post(base + "/provided", json=provided, headers={"X-Local-Member-Token": reader_token}).status_code == 403
+    assert client.post("/api/creation-tasks/missing/topics/provided", json=provided, headers=headers).status_code == 404
     assert repository.topic_records.latest_topic_generation_run('local', task.id) is None
     assert repository.job_records.list_job_runs('local', task.id) == []
     assert facts() == before_facts

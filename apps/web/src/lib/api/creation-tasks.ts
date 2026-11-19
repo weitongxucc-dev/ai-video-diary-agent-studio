@@ -39,6 +39,14 @@ export function getCreationTaskTopics(taskId: string): Promise<CreationTaskTopic
 export function generateCreationTaskTopics(taskId: string): Promise<CreationTaskTopicsResponse> {
     return creationPlanRequest<CreationTaskTopicsResponse>(`/api/creation-tasks/${encodeURIComponent(taskId)}/topics/generate`, { method: "POST", body: JSON.stringify({}) });
 }
+export function confirmProvidedCreationTaskTopic(taskId: string, input: {
+    title: string;
+    expected_task_updated_at: string;
+}): Promise<CreationTaskTopicsResponse> {
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/topics/provided`, {
+        method: "POST", body: JSON.stringify(input),
+    });
+}
 export function confirmCreationTaskTopic(taskId: string, topicId: string, input: {
     title?: string;
 } = {}): Promise<CreationTaskTopicsResponse> {

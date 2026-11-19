@@ -8,10 +8,14 @@ import { WorkspaceAudio } from "../workbench/WorkspaceMedia";
 import { useVoiceSamplePreparation } from "./useVoiceSamplePreparation";
 import ui from "../CreationRequestPanel.module.css";
 
-type Props = {
+export type AuditionVoice = {
   language: "zh" | "en";
   profileId: string;
   version: string;
+};
+
+type Props = AuditionVoice & {
+  savedSection?: { sourceKey: string; text: string };
 };
 
 const statusLabels = {
@@ -35,12 +39,12 @@ function isPreparationRejection(run: MediaPreview, sentence: string) {
 }
 
 export function DeliveryVoiceSample(props: Props) {
-  return <VoiceSample key={JSON.stringify([props.profileId, props.version, props.language])} {...props} />;
+  return <VoiceSample key={JSON.stringify([props.profileId, props.version, props.language, props.savedSection?.sourceKey])} {...props} />;
 }
 
-function VoiceSample({ language, profileId, version }: Props) {
+function VoiceSample({ language, profileId, version, savedSection }: Props) {
   const name = language === "zh" ? "中文" : "英文";
-  const initialText = language === "zh" ? "欢迎来到包装车间。" : "Welcome to the packaging floor.";
+  const initialText = savedSection?.text ?? (language === "zh" ? "欢迎来到包装车间。" : "Welcome to the packaging floor.");
   const [text, setText] = useState(initialText);
   const [run, setRun] = useState<MediaPreview | null>(null);
   const [sending, setSending] = useState(false);
@@ -53,7 +57,7 @@ function VoiceSample({ language, profileId, version }: Props) {
   const scopeBefore = useRef<string | undefined>(undefined);
   const previewToken = useRef<string | null>(null);
   const hint = useId();
-  const preparation = useVoiceSamplePreparation({ language, profileId, version });
+  const preparation = useVoiceSamplePreparation({ language, profileId, version, sourceKey: savedSection?.sourceKey });
   const { status, attempt, receipt } = preparation;
   const scope = status?.actor_scope;
   const visibleRun = previewToken.current === readLocalMemberToken() ? run : null;
@@ -88,8 +92,8 @@ function VoiceSample({ language, profileId, version }: Props) {
   const savedText = attempt?.payload.shape.text;
   // Restore the original text when returning to a submitted or settled preparation.
   useEffect(() => {
-    if (savedText !== undefined) setText(savedText);
-  }, [attempt?.payload.request_id, savedText]);
+    if (!savedSection && savedText !== undefined) setText(savedText);
+  }, [attempt?.payload.request_id, savedSection, savedText]);
 
   useEffect(() => {
     if (attempt?.settlement === "ready") setRecoveryText(null);
@@ -174,7 +178,7 @@ function VoiceSample({ language, profileId, version }: Props) {
 
   return <div className={ui.section} role="group" aria-label={name + "样句试听"}>
     <label>{name}试听文字
-      <input lang={language} value={text} maxLength={4000}
+      <input lang={language} value={text} maxLength={4000} readOnly={Boolean(savedSection)}
         disabled={sending || inProgress || pendingPreparation}
         onChange={event => { setText(event.target.value); setError(""); }} />
     </label>

@@ -1189,18 +1189,17 @@ class CreationJobOwnerVerifier:
         else:
             # Whole-source metadata is the original request's recovery proof.
             # Segment bodies are encoded one row at a time in this snapshot.
+            from app.creation.narration_duration import narration_file_facts
             audio = self.narration_audio_budget
             ready_inputs, source_files, ordered_ids = [], [], []
             for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, script, connection=conn):
                 record = self.repository.narration_artifacts.get_narration_artifact(task.workspace_id,
                     segment.audio_reference.removeprefix('narration://artifact/'), connection=conn)
-                path = Path(record.audio_path)
-                source_stat = path.stat()
+                facts = narration_file_facts(record)
                 ordered_ids.append(section.id)
-                ready_inputs.append({'reference': segment.audio_reference, 'size_bytes': source_stat.st_size,
+                ready_inputs.append({'reference': segment.audio_reference, 'size_bytes': facts[2],
                     'duration_seconds': record.duration_seconds, 'sample_rate': record.sample_rate, 'channels': 1, 'uses': 1})
-                source_files.append([record.cache_key, str(path.resolve()), source_stat.st_size,
-                    source_stat.st_mtime_ns, source_stat.st_ctime_ns])
+                source_files.append(facts)
             if audio is None or not ready_inputs:
                 raise ValueError('配音合并缺少全部ready片段或独立CPU音频预算')
             manifest['source_files'] = source_files
@@ -1210,12 +1209,14 @@ class CreationJobOwnerVerifier:
                     task, script, connection=conn))
             source_digest = pcm_manifest_digest(manifest, segments())
             resources = self.pcm_resources(conn, job, common, ready_inputs, source_files,
-                source_digest, ordered_ids, limits, plan, pcm_preparation=pcm_preparation, request=request)
+                source_digest, ordered_ids, limits, plan, pcm_preparation=pcm_preparation, request=request,
+                review_duration=plan.presenter_selection is not None or self.segments is None)
             return 'narration:merge:v1:' + pcm_manifest_digest(manifest, segments(), resources=resources), resources
         digest = hashlib.sha256(json.dumps([manifest, resources], sort_keys=True, default=str).encode()).hexdigest()
         return prefix + digest, resources
 
-    def pcm_resources(self, conn, job, common, ready_inputs, source_files, source_digest, ordered_ids, limits, plan, *, pcm_preparation=None, request=None):
+    def pcm_resources(self, conn, job, common, ready_inputs, source_files, source_digest, ordered_ids, limits, plan, *,
+                      pcm_preparation=None, request=None, review_duration=False):
         from app.creation.narration_pcm import prepare_sources, prepared_source_facts, work_baseline
         audio = self.narration_audio_budget
         checkpoint = self.repository.narration_checkpoints.creation_narration_merge_checkpoint(job.workspace_id, job.id, connection=conn)
@@ -1241,6 +1242,15 @@ class CreationJobOwnerVerifier:
                 raise RecoveryBlocked('PCM格式准备必须在原动作的写事务外完成')
             pcm_preparation=prepare_sources(item[1] for item in source_files)
         original_sources=[prepared_source_facts(item[1],pcm_preparation) for item in source_files]
+        if review_duration:
+            from app.creation.narration_duration import narration_files_digest, timing_summary
+            measured = [item["pcm_frames"] / 24000 for item in original_sources]
+            timeline_durations = [max(seconds, item["duration_seconds"])
+                for seconds, item in zip(measured, ready_inputs, strict=True)]
+            timing = timing_summary(measured, len(ordered_ids), plan.duration_target_seconds,
+                timeline_durations=timeline_durations)
+            if timing["exceeds_target"]:
+                raise NarrationDurationReviewRequired(timing, narration_files_digest(source_files))
         sources=original_sources[covered:covered+count]
         if not sources:
             raise RecoveryBlocked('原PCM检查点没有可追加的片段')
@@ -2030,18 +2040,30 @@ class CreationStagePreparationRequired(ValueError):
         self.stage = stage
 
 
+class NarrationDurationReviewRequired(CreationStagePreparationRequired):
+    def __init__(self, timing, files_digest):
+        super().__init__("narration", "完整配音已保存，按帧排入时间线需要更长的交付时长。请确认新的目标。")
+        self.timing = timing
+        self.files_digest = files_digest
+
+
 def _wait_for_creation_preparation(repository, job, pending, *, connection):
     current = repository.job_records.get_job_run(job.workspace_id, job.id, connection=connection)
     if current.status == 'interrupted' and current.failure_reason == str(pending):
         return
+    from app.creation.narration_duration import duration_wait_event_id
+    reviewing_duration = isinstance(pending, NarrationDurationReviewRequired)
+    event_id = duration_wait_event_id(job) if reviewing_duration else f"event_{job.id}_prepare_{pending.stage}_{uuid4().hex}"
+    payload = {"stage": pending.stage, "status": "pending", "reason": str(pending)}
+    if reviewing_duration:
+        payload.update(timing=pending.timing, files_digest=pending.files_digest)
+    repair = ("在配音页确认新的交付时长，然后继续原作业。" if reviewing_duration
+        else "完成这一阶段的设备准备后，继续制作以恢复原作业。")
     repository.creation_execution_jobs.interrupt_creation_execution(TaskEvent(
-        id=f"event_{job.id}_prepare_{pending.stage}_{uuid4().hex}", workspace_id=job.workspace_id,
-        task_id=job.task_id, job_id=job.id, event_type="creation_execution_stage",
-        payload={"stage": pending.stage, "status": "pending", "reason": str(pending)},
-        created_at=datetime.now(timezone.utc)),
+        id=event_id, workspace_id=job.workspace_id, task_id=job.task_id, job_id=job.id,
+        event_type="creation_execution_stage", payload=payload, created_at=datetime.now(timezone.utc)),
         impact="当前阶段未领取许可，上游已完成结果和累计消耗已保存。",
-        repair_action="完成这一阶段的设备准备后，继续制作以恢复原作业。",
-        task_is_current=lambda _: False, connection=connection)
+        repair_action=repair, task_is_current=lambda _: reviewing_duration, connection=connection)
 
 
 def submit_creation_stage(execution: "CreationExecution", scheduler: DeviceScheduler,

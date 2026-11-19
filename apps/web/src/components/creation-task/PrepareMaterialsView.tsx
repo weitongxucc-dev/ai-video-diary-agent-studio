@@ -3,7 +3,7 @@ import { WorkspaceVideo, WorkspaceAudio } from "../workbench/WorkspaceMedia";
 import Link from "next/link";
 import NextImage from "next/image";
 import { AlertCircle, CheckCircle2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { WorkMaterialImport } from "./WorkMaterialImport";
 import { WorkMaterialReview } from "./WorkMaterialReview";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
@@ -24,7 +24,9 @@ export function materialUseLabel(status: MaterialAsset["use_state"]) {
         not_for_automation: "不用于自动任务", not_for_publish: "不用于发布" }[status];
 }
 export const PREPARE_MATERIALS_PAGE_SIZE = 100;
-export function PrepareMaterialsView({ matches, approvedAssetCount, approvedClipCount }: {
+export function PrepareMaterialsView({ matches, approvedAssetCount, approvedClipCount, selectedAssetIds, children }: {
+    children?: ReactNode;
+    selectedAssetIds?: string[];
     matches: MaterialSegmentMatch[];
     approvedAssetCount: number;
     approvedClipCount: number;
@@ -83,7 +85,9 @@ export function PrepareMaterialsView({ matches, approvedAssetCount, approvedClip
         }
         return map;
     }, [matches]);
-    const matchedAssets = useMemo(() => (materials ?? []).filter((asset) => matchesByAsset.has(asset.id)), [materials, matchesByAsset]);
+    const scoped = Boolean(selectedAssetIds?.length);
+    const matchedAssets = useMemo(() => (materials ?? []).filter(asset => selectedAssetIds?.length
+        ? selectedAssetIds.includes(asset.id) : matchesByAsset.has(asset.id)), [materials, matchesByAsset, selectedAssetIds]);
     return (<section className={styles.workSection}>
       <div className={styles.sectionHeading}>
         <div>
@@ -96,16 +100,17 @@ export function PrepareMaterialsView({ matches, approvedAssetCount, approvedClip
         } />
         <span className={styles.artifactStatus}><CheckCircle2 size={15}/>{matches.length ? `方案已记录 ${matches.length} 个检索候选` : "方案尚无匹配片段"}</span>
       </div>
+      {children}
       <div className={styles.artifactGrid}>
         <section><strong>检索候选</strong><p>{matches.length} 个片段，需核对画面内容及本次用途。</p></section>
         <section><strong>方案可用内容</strong><p>{approvedAssetCount} 个素材 · {approvedClipCount} 个补充镜头</p><small>这是创建方案时的可用数量；当前限制见下方素材状态。</small></section>
       </div>
       {loadError ? <div className={styles.blocker} role="alert"><AlertCircle size={17}/><span>素材列表读取失败：{loadError}；这不改变方案匹配或资料就绪状态。</span></div> : null}
       <div className={styles.evidenceList}>
-        <strong>本次素材列表</strong>
+        <strong>{scoped ? "本片指定素材" : "本次素材列表"}</strong>
         {loading && materials === null ? <p>正在读取素材…</p> : null}
-        {materials !== null && matchedAssets.length === 0 && hasMore ? <p>当前已读 {materials.length} 条，尚未找到本方案匹配素材；可继续读取下一页。</p> : null}
-        {materials !== null && matchedAssets.length === 0 && !hasMore ? <p>已读完素材列表；本方案暂无匹配素材，或素材解析状态缺失。</p> : null}
+        {materials !== null && matchedAssets.length === 0 && hasMore ? <p>当前已读 {materials.length} 条，尚未找到{scoped ? "本片指定素材" : "本方案匹配素材"}；可继续读取下一页。</p> : null}
+        {materials !== null && matchedAssets.length === 0 && !hasMore ? <p>{scoped ? "当前可见素材中未找到本片指定素材。" : "已读完素材列表；本方案暂无匹配素材，或素材解析状态缺失。"}</p> : null}
         {matchedAssets.map((asset) => {
             const matches = matchesByAsset.get(asset.id) ?? [];
             const tags = asset.user_tags ?? [];

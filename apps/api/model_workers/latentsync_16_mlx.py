@@ -22,7 +22,7 @@ WEIGHTS_REVISION = "c42c7e6c8e9c213626389fa7d9a3c444b8536353"
 MLX_REVISION = "8370f1ff2b7c240c9ea78cbeb134c254336f6806"
 # Apache-2.0 upstream port and official utility snapshot with verified local
 # timing, memory and inference corrections, including the pose adapter.
-SOURCE_SHA256 = "6876911ac5d97b72d02f13e1a4d908071d9c76341193b27a522ceedc23dbf7bb"
+SOURCE_SHA256 = "0486e1768ac1a461ba7a4d28bfd9d8a4e8aa4f3010d364ab99ce099d096a419c"
 UNET_FILE = ("unet/latentsync_unet_mlx.safetensors", 2536073912,
              "dac23792c44475e48f8a3fa40f8db53c56b9d5ab97f41044297f12040bf3972b")
 RUNTIME_WEIGHTS = (
@@ -167,12 +167,12 @@ def render(root: Path, whisper: Path, video: Path, audio: Path, output: Path, sc
             return mx.concatenate(predictions, axis=0)
 
     class PosteriorPipeline(LipsyncPipelineMLX):
-        def _loop_video(self, whisper_chunks, video_frames):
-            aligned = super()._loop_video(whisper_chunks, video_frames)
+        def _stage_face_windows(self, video_path, frame_count, frames_per_window, temp_dir):
+            windows = super()._stage_face_windows(video_path, frame_count, frames_per_window, temp_dir)
             # BrowImageProcessor keeps the real ONNX detector in `pose`.
             # Restoring the output frames only needs its affine restorer.
             self.image_processor.pose = None
-            return aligned
+            return windows
 
         def _vae_encode(self, images, batch_size=1):
             staged.load("vae")

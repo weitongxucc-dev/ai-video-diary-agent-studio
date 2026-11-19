@@ -171,7 +171,7 @@ class CreationExecutionJobTransactions:
                     "ORDER BY rowid DESC LIMIT 1", (workspace_id, job.task_id, job.id, job.input_digest)).fetchone()
                 if row is None or json.loads(row['payload_json'])['start_event_id'] != start.id:
                     from app.device_scheduler import RecoveryBlocked
-                    raise RecoveryBlocked('原作业有效输入缺少声音改选回执，不能继续')
+                    raise RecoveryBlocked('原作业有效输入缺少声音改选回执或时长采用回执，不能继续')
                 rebound = json.loads(row['payload_json'])
                 payload = {**payload, 'input_digest': job.input_digest,
                     'source_binding_event_id': rebound.get('source_binding_event_id')}
@@ -199,6 +199,40 @@ class CreationExecutionJobTransactions:
             if generation is not None:
                 payload = {**payload, 'operation': 'render_current', **render_generation_fields(generation)}
             return payload
+
+    def rebind_narration_duration(self, job, input_digest, adoption_event_id, *, connection):
+        """Move the effective delivery input after all original audio units settled."""
+        if not connection.in_transaction:
+            raise ValueError("配音时长须在原作品的采用事务中提交")
+        if connection.execute(
+            "SELECT 1 FROM device_work_requests WHERE workspace_id=? AND owner_type='creation_job' "
+            "AND owner_id=? AND state IN ('waiting','blocked','granted','yield_requested')",
+            (job.workspace_id, job.id),
+        ).fetchone() is not None:
+            raise ValueError("原配音仍有待结算的设备请求，请稍后刷新")
+        inputs = self.creation_execution_input(job.workspace_id, job.id, connection=connection)
+        rebound_id = f"{adoption_event_id}_execution"
+        source_id = None
+        if inputs.get("source_binding_event_id"):
+            source = self.creation_narration_source_binding(job.workspace_id, job.id, connection=connection)
+            reference = self.creation_narration_reference(job.workspace_id, job.id, connection=connection)
+            source_id = f"{rebound_id}_source"
+            self.execution_records.append_task_event(_TaskEvent(source_id, job.workspace_id, job.task_id, job.id,
+                "creation_narration_source_bound", {**source.payload,
+                    "business_input_digest": input_digest, "adoption_revision_digest": input_digest,
+                    "origin_event_id": rebound_id, "previous_source_binding_event_id": source.id,
+                    "narration_reference": reference}), connection=connection)
+        changed = connection.execute(
+            "UPDATE job_runs SET input_digest=?,failure_reason=NULL,impact=NULL,repair_action=NULL,"
+            "finished_at=NULL,updated_at=? WHERE workspace_id=? AND id=? AND input_digest=? AND status='interrupted'",
+            (input_digest, utc_now().isoformat(), job.workspace_id, job.id, job.input_digest),
+        ).rowcount
+        if changed != 1:
+            raise ValueError("原配音作业版本已变化，时长未采用")
+        self.execution_records.append_task_event(_TaskEvent(rebound_id, job.workspace_id, job.task_id, job.id,
+            "creation_execution_input_rebound", {"start_event_id": f"event_{job.id}_start",
+                "duration_adoption_event_id": adoption_event_id, "previous_input_digest": job.input_digest,
+                "input_digest": input_digest, "source_binding_event_id": source_id}), connection=connection)
 
     def creation_narration_source_binding(self, workspace_id, job_id, *, connection=None):
         from app.device_scheduler import RecoveryBlocked

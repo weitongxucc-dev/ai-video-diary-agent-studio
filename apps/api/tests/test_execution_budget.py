@@ -1,14 +1,17 @@
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import threading
+from uuid import uuid4
 
 import pytest
 
 from app.creation.contracts import JobRun
 from app.creation.execution_budget_scope import BudgetScopeConflict, BudgetScopeExhausted, ExecutionBudgetScopes
-from app.creation_execution import CreationExecutionActor
-from test_creation_execution import _seed
+from app.creation.task_authorization import TaskAuthorizationUseCase
+from app.creation.task_budget_use_case import TaskBudgetUseCase
+from app.creation_execution import CreationExecutionActor, revision_digest, submit_creation_stage
+from test_creation_execution import _narration_units_case, _seed
 
 
 @pytest.fixture
@@ -59,6 +62,162 @@ def settle(repo, job, request, seconds, size):
         scopes._append(conn, receipt_id, 'local', job.task_id, job.id, 'creation_narration_unit_settled',
             {'usage_id': f'{request}:1', 'elapsed_seconds': seconds, 'output_bytes': size})
         return scopes.settle(conn, 'local', job.id, request_id=request, permit_generation=1, receipt_id=receipt_id)
+
+
+@pytest.fixture
+def production_scope_start(tmp_path, request):
+    import app.main as main
+
+    case = _narration_units_case(tmp_path, start_job=False, **getattr(request, 'param', {}))
+    repo = case.repo
+    task = repo.task_records.get_creation_task('local', case.task_id)
+    authority = TaskAuthorizationUseCase(repo, verify_identity=lambda _: 'ready')
+    grant = authority.ensure(task, case.actor, interactive=True)
+    assert authority.verdict(case.actor, task.id, 'narration') == 'ready'
+    case.execution = main._new_creation_execution(repo)
+    case.grant = grant
+    try:
+        yield case
+    finally:
+        case.scheduler.close()
+
+
+def start(case, *, execution=None, revised=False):
+    repo = case.repo
+    task = repo.task_records.get_creation_task('local', case.task_id)
+    plan = repo.plan_records.get_creation_plan('local', task.plan_id)
+    if revised:
+        plan = replace(plan, name='Same authorized work, revised title')
+        with repo._connect() as conn:
+            repo.plan_records.write_plan_payload(conn, 'local', plan)
+    script = repo.script_records.get_creation_task_script('local', case.script_id)
+    return (execution or case.execution).start('local', task.id, script.id, revision_digest(script, plan), actor=case.actor)
+
+
+def test_new_production_jobs_share_a_task_scope_and_record_actual_usage(production_scope_start):
+    case = production_scope_start
+    first = start(case)
+    assert start(case).id == first.id
+    reserve(case.repo, case.actor, first, 'first-production-leaf')
+    settle(case.repo, first, 'first-production-leaf', 3, 25)
+    next_job = start(case, revised=True)
+    assert next_job.id != first.id
+    with case.repo._connect() as conn:
+        scopes = ExecutionBudgetScopes(case.repo)
+        first_binding = scopes.binding(conn, 'local', first.id)
+        next_binding = scopes.binding(conn, 'local', next_job.id)
+    assert first_binding.payload['scope_id'] == next_binding.payload['scope_id']
+    assert first_binding.payload['input_digest'] != next_binding.payload['input_digest']
+    scope, = case.repo.execution_budget_scopes_for_task('local', case.task_id, case.actor)
+    assert scope['authorization']['source_ref'] == f'event_{case.grant.id}_{case.grant.revision}'
+    assert scope['usage']['execution_seconds'] == 3 and scope['usage']['generated_bytes'] == 25
+
+
+def test_existing_explicit_cap_and_revocation_take_precedence_over_local_default(production_scope_start):
+    case = production_scope_start
+    repo = case.repo
+    command = dict(scope_id='approved-total', source_ref='isolated-user-authorization',
+        target_task_ids=[case.task_id], limits={'execution_seconds': 5, 'generated_bytes': 80},
+        policy_kind='explicit_total', authorization_guard=lambda conn: None)
+    repo.authorize_execution_budget_scope('local', case.task_id, case.actor, **command,
+        expected_revision=-1, request_id='explicit-original')
+    job = start(case)
+    scoped, = repo.execution_budget_scopes_for_task('local', case.task_id, case.actor)
+    assert scoped['authorization']['scope_id'] == 'approved-total'
+    with pytest.raises(BudgetScopeExhausted):
+        reserve(repo, case.actor, job, 'over-explicit-limit')
+    repo.authorize_execution_budget_scope('local', case.task_id, case.actor, **command,
+        expected_revision=0, request_id='explicit-revoked', revoked=True)
+    assert start(case).id == job.id
+    with pytest.raises(PermissionError, match='累计授权已撤销'):
+        start(case, revised=True)
+    assert [item.id for item in case.execution.jobs('local', case.task_id)] == [job.id]
+
+
+def test_legacy_job_and_account_identity_do_not_get_local_default(production_scope_start):
+    import app.main as main
+
+    case = production_scope_start
+    old_execution = main._new_creation_execution(case.repo)
+    old_execution.budget_policy_for = None
+    original = start(case, execution=old_execution)
+    record = case.repo.execution_records.get_task_event('local', f'event_{original.id}_start')
+    assert start(case).id == original.id
+    assert case.repo.execution_records.get_task_event('local', record.id) == record
+    new_input = start(case, revised=True)
+    assert 'execution_budget_policy' not in case.repo.execution_records.get_task_event(
+        'local', f'event_{new_input.id}_start').payload
+    assert case.repo.execution_budget_scopes_for_task('local', case.task_id, case.actor) == []
+    remote = CreationExecutionActor.account(*(str(uuid4()) for _ in range(3)))
+    assert TaskBudgetUseCase(case.repo).local_start_policy(
+        remote.workspace_id, case.task_id, remote, original.input_digest, operation='creation') is None
+
+
+def test_scope_authorization_start_and_binding_roll_back_together(production_scope_start, monkeypatch):
+    case = production_scope_start
+    original = case.repo.execution_records.append_task_event
+
+    def interrupted(event, *, connection=None):
+        result = original(event, connection=connection)
+        if event.event_type == 'execution_budget_scope_bound':
+            raise RuntimeError('isolated transaction interruption')
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(case.repo.execution_records, 'append_task_event', interrupted)
+        with pytest.raises(RuntimeError, match='isolated transaction interruption'):
+            start(case)
+    assert case.execution.jobs('local', case.task_id) == []
+    assert not any(event.event_type.startswith('execution_budget_scope_') or event.event_type == 'creation_execution_started'
+                   for event in case.repo.execution_records.list_task_events('local', case.task_id))
+    assert start(case).id
+
+
+def test_task_authorization_is_rechecked_after_policy_read_before_binding(production_scope_start, monkeypatch):
+    from datetime import datetime, timezone
+
+    case = production_scope_start
+    original = case.execution.budget_policy_for
+
+    def revoke_after_selection(*args, **kwargs):
+        policy = original(*args, **kwargs)
+        assert policy['policy_kind'] == 'scope'
+        case.repo.task_authorization_records.save_task_authorization(
+            replace(case.grant, revision=case.grant.revision + 1, revoked_at=datetime.now(timezone.utc)),
+            expected_revision=case.grant.revision)
+        return policy
+
+    monkeypatch.setattr(case.execution, 'budget_policy_for', revoke_after_selection)
+    with pytest.raises(PermissionError, match='需要当前有效的原任务授权'):
+        start(case)
+    assert not case.execution.jobs('local', case.task_id)
+    assert not case.repo.execution_budget_scopes_for_task('local', case.task_id, case.actor)
+
+
+@pytest.mark.parametrize('production_scope_start', [
+    {'section_count': 20, 'audio_input_count': 5, 'seconds': 2, 'duration_seconds': 40},
+], indirect=True)
+def test_production_scope_crosses_old_byte_cap_with_real_pcm_and_finite_units(production_scope_start):
+    case = production_scope_start
+    case.owner.narration_audio_budget = replace(case.owner.narration_audio_budget,
+        max_source_duration_seconds=60, max_output_duration_seconds=60)
+    job = start(case)
+    submit_creation_stage(case.execution, case.scheduler, job, case.actor)
+    for _ in range(40):
+        if case.repo.task_records.get_creation_task('local', case.task_id).narration_cache_key:
+            break
+        grant = case.scheduler.pick_and_grant()
+        assert grant is not None and grant.unit_key.startswith('narration:')
+        unit = case.scheduler._get(grant.request_id).resources
+        assert 0 < unit['timeout_seconds'] <= 300 and 0 < unit['max_output_bytes'] <= 3 * 1024**2
+        assert unit['parent_timeout_seconds'] is None and unit['parent_max_output_bytes'] is None
+        case.executor.execute(grant, case.scheduler)
+    task = case.repo.task_records.get_creation_task('local', case.task_id)
+    assert case.repo.narration_artifacts.get_narration_artifact('local', task.narration_cache_key).duration_seconds == 40
+    scope, = case.repo.execution_budget_scopes_for_task('local', case.task_id, case.actor)
+    assert scope['usage']['generated_bytes'] > 3 * 1024**2
+    assert scope['usage']['reserved_bytes'] == 0 and scope['usage']['unknown_unit_count'] == 0
+    assert len(case.generated) == 20
 
 
 def test_two_jobs_atomically_reserve_one_shared_remainder(scope_case):

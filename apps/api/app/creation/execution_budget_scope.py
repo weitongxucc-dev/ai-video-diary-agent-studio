@@ -7,6 +7,10 @@ import json
 import math
 
 from app.creation.contracts import TaskEvent
+from app.creation.task_authorization import TaskAuthorizationUseCase
+
+
+_LOCAL_START_ORIGIN = 'confirmed_local_task'
 
 
 class BudgetScopeConflict(ValueError):
@@ -63,6 +67,114 @@ class ExecutionBudgetScopes:
         if row is None:
             raise KeyError(scope_id)
         return self.repository.execution_records.task_event_from_row(row)
+
+    def local_start_reference(self, workspace_id, task_id, actor):
+        if actor is None or actor.workspace_id != workspace_id or workspace_id != 'local' or actor.device_id is not None:
+            return None
+        with self.repository._connect() as conn:
+            conn.execute('BEGIN')
+            reference, _ = self._local_start_reference(conn, workspace_id, task_id, actor)
+            return reference
+
+    def _require_local_grant(self, connection, workspace_id, task_id, actor, *, operation='narration'):
+        # Read the durable task grant and live local roster on this transaction.
+        # No identity refresh or network authority can be issued by budget binding.
+        authorization = TaskAuthorizationUseCase(self.repository, verify_identity=None)
+        if authorization.status(workspace_id, task_id, identity=authorization.identity(actor),
+                operation=operation, connection=connection) != 'valid':
+            raise PermissionError('本机累计资源范围需要当前有效的原任务授权')
+        return self.repository.task_authorization_records.get_task_authorization(
+            workspace_id, task_id, connection=connection, metadata_only=True)
+
+    def _current_target_policy(self, connection, workspace_id, task_id, actor):
+        policies = []
+        rows = connection.execute(
+            "SELECT DISTINCT json_extract(e.payload_json,'$.scope_id') AS scope_id FROM task_events e "
+            "JOIN json_each(e.payload_json,'$.target_task_ids') AS target "
+            "WHERE e.workspace_id=? AND e.event_type='execution_budget_scope_authorized' AND target.value=?",
+            (workspace_id, task_id))
+        for row in rows:
+            policy = self.current(connection, workspace_id, row['scope_id']).payload
+            if policy['actor'] != actor.identity_payload():
+                continue
+            if policy['revoked'] or task_id not in policy['target_task_ids']:
+                raise PermissionError('本作品累计授权已撤销或移出范围')
+            policies.append(policy)
+        explicit = [policy for policy in policies if policy['policy_kind'] == 'explicit_total']
+        active = explicit or policies
+        if len(active) > 1:
+            raise BudgetScopeConflict('本作品存在多个有效累计授权范围，需明确采用的原范围')
+        return active[0] if active else None
+
+    def _local_start_reference(self, connection, workspace_id, task_id, actor, *, new_job_id=None):
+        if actor.workspace_id != workspace_id or workspace_id != 'local' or actor.device_id is not None:
+            raise PermissionError('当前身份不能沿用本地作品累计资源策略')
+        task = require_creation_task(connection, workspace_id, task_id)
+        if task.owner_user_id is None:
+            return None, None
+        if task.owner_user_id != actor.member_id:
+            raise PermissionError('累计授权范围不属于当前成员')
+        plan = self.repository.plan_records.read_creation_plan(connection, workspace_id, task.plan_id)
+        applicable = plan.source_media is None and plan.selected_voice is not None
+        active = self._current_target_policy(connection, workspace_id, task_id, actor)
+        if active is None and (not applicable or self.repository.task_authorization_records.get_task_authorization(
+                workspace_id, task_id, connection=connection, metadata_only=True) is None):
+            # Historical and member-only callers without a production grant
+            # or existing budget scope keep their existing limits.
+            return None, None
+        grant = self._require_local_grant(connection, workspace_id, task_id, actor,
+            operation='narration' if applicable else 'render')
+        if active is not None:
+            scope_id, revision = active['scope_id'], active['revision']
+        else:
+            old = connection.execute(
+                "SELECT 1 FROM job_runs j WHERE j.workspace_id=? AND j.task_id=? "
+                "AND j.kind='creation_task_execution' AND j.id<>? LIMIT 1",
+                (workspace_id, task_id, new_job_id or '')).fetchone()
+            if old is not None:
+                return None, None
+            # The confirmed task is the sole target when no shared goal scope
+            # has been granted. A job/version/retry never supplies this ID.
+            scope_id = self._id('local_task', workspace_id, task_id)
+            revision = 0
+        return {'scope_id': scope_id, 'revision': revision, 'origin': _LOCAL_START_ORIGIN}, grant
+
+    def _bind_start_authority(self, connection, job, actor, *, scope_id, expected_revision):
+        try:
+            start = self.repository.execution_records.get_task_event(
+                job.workspace_id, f'event_{job.id}_start', connection=connection)
+        except KeyError:
+            return
+        policy = start.payload.get('execution_budget_policy')
+        if policy is None or policy.get('origin') != _LOCAL_START_ORIGIN:
+            return
+        reference = {'scope_id': scope_id, 'revision': expected_revision, 'origin': _LOCAL_START_ORIGIN}
+        if (job.kind != 'creation_task_execution'
+                or start.event_type not in {'creation_execution_started', 'creation_execution_resumed'}
+                or start.job_id != job.id or start.task_id != job.task_id
+                or start.payload['input_digest'] != job.input_digest
+                or any(start.payload.get(key) != value for key, value in actor.identity_payload().items())
+                or policy != {'policy_kind': 'scope', **reference}):
+            raise PermissionError('累计资源策略仅可绑定原本机制作开始请求')
+        expected, grant = self._local_start_reference(connection, job.workspace_id, job.task_id, actor, new_job_id=job.id)
+        if expected != reference:
+            raise BudgetScopeConflict('制作开始前累计授权已变化，请重新读取原范围')
+        try:
+            self.current(connection, job.workspace_id, scope_id)
+        except KeyError:
+            if start.event_type != 'creation_execution_started':
+                raise BudgetScopeConflict('原制作累计授权不存在，恢复不能新建范围')
+            source_ref = f'event_{grant.id}_{grant.revision}'
+            source = self.repository.execution_records.get_task_event(job.workspace_id, source_ref, connection=connection)
+            if (source.task_id != job.task_id or source.event_type != 'task_authorization'
+                    or (source.payload['authorization_id'], source.payload['revision'], source.payload['goal_revision'])
+                    != (grant.id, grant.revision, grant.goal_revision)):
+                raise PermissionError('本机累计策略缺少原任务授权回执')
+            self.install_indexes(connection)
+            self.authorize(connection, job.workspace_id, job.task_id, actor, scope_id=scope_id, expected_revision=-1,
+                request_id=scope_id, source_ref=source_ref, target_task_ids=[job.task_id],
+                limits={'execution_seconds': None, 'generated_bytes': None}, policy_kind='local_goal',
+                authorization_guard=lambda conn: self._require_local_grant(conn, job.workspace_id, job.task_id, actor))
 
     def authorize(self, connection, workspace_id, origin_task_id, actor, *, scope_id, expected_revision,
                   request_id, source_ref, target_task_ids, limits, policy_kind, authorization_guard, revoked=False):
@@ -136,6 +248,7 @@ class ExecutionBudgetScopes:
                 "'task_execution_unit_started','task_execution_unit_settled') LIMIT 1",
                 (workspace_id, job_id)).fetchone():
             raise PermissionError('已有历史用量不能静默迁入新授权范围，须保留原封存归属')
+        self._bind_start_authority(connection, job, actor, scope_id=scope_id, expected_revision=expected_revision)
         current = self.current(connection, workspace_id, scope_id)
         policy = current.payload
         if (policy['revoked'] or policy['revision'] != expected_revision

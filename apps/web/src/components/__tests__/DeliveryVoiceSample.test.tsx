@@ -3,6 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { DeliveryVoiceSample } from "../creation-task/DeliveryVoiceSample";
 import { BilingualDeliveryControls } from "../creation-task/BilingualDeliveryControls";
+import { ScriptEditor } from "../creation-task/ScriptStage";
+import type { CreationTaskScript } from "@/lib/types";
+import { getCreationTaskScriptEditSources, getCreationTaskScriptSections } from "@/lib/api/creation-tasks";
 
 const api = vi.hoisted(() => ({
   create: vi.fn(), attempts: vi.fn(), profiles: vi.fn(), voice: vi.fn(), dictionary: vi.fn(),
@@ -14,6 +17,12 @@ vi.mock("@/lib/media-profiles-api", () => ({ createVoicePreview: api.create, lis
 vi.mock("@/lib/api/device-preparation", () => ({
   getDeviceResourceStatus: api.resources, prepareNarrationResources: api.prepare,
   getDevicePreparation: api.read, finalizeDevicePreparation: api.finalize,
+}));
+
+vi.mock("@/lib/api/creation-tasks", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/api/creation-tasks")>(),
+  getCreationTaskScriptEditSources: vi.fn(),
+  getCreationTaskScriptSections: vi.fn(),
 }));
 
 const configured = {
@@ -31,6 +40,7 @@ beforeEach(() => {
   api.resources.mockResolvedValue(configured);
   api.voice.mockResolvedValue({ id: "studio", version: "v3", person_profile_id: "host", workspace_id: "local" });
   api.dictionary.mockResolvedValue({ items: [] });
+  vi.mocked(getCreationTaskScriptEditSources).mockResolvedValue({task_id:"task",script_id:"script",sources:[]});
 });
 
 it("plays the chosen voice, language and submitted sentence from the exact completed attempt", async () => {
@@ -49,6 +59,34 @@ it("plays the chosen voice, language and submitted sentence from the exact compl
   expect(api.create).toHaveBeenCalledWith({voice_profile_id:"studio",voice_version:"v3",language:"en",preview_text:"Line seven.",retry:false});
   await waitFor(() => expect(screen.getByLabelText("英文样句录音")).toHaveAttribute("src","/current.wav"), {timeout:4000});
   expect(api.create).toHaveBeenCalledTimes(1);
+});
+
+it.each([true, false])("auditions the saved text after editing the manuscript locally (complete: %s)", async (complete) => {
+  const section = {id:"opening",title:"Opening",content:"Saved opening.",visual_prompt:"Original footage",evidence_reference_ids:[]};
+  const revision = "2026-10-24T00:00:00Z";
+  const common = {id:"script",task_id:"task",run_id:"run",topic_id:"topic",title:"Talk",
+    language:"en-US",selection_status:"draft",created_at:revision,updated_at:revision,confirmed_at:null} as const;
+  const script: CreationTaskScript = complete
+    ? {...common,draft_complete:true,sections_loaded:true,sections:[section],sections_total_count:1}
+    : {...common,draft_complete:false,sections_loaded:false,sections:null,sections_total_count:36};
+  vi.mocked(getCreationTaskScriptSections).mockResolvedValue({
+    script_id:"script",task_id:"task",updated_at:revision,title:"Talk",language:"en-US",
+    selection_status:"draft",total_count:36,items:[{ordinal:1,section,digest:"test"}],
+    next_after_ordinal:1,truncated:true,
+  });
+  api.create.mockResolvedValue({id:"saved-audition", preview_text:section.content, status:"succeeded", output_url:"/saved.wav"});
+  render(<ScriptEditor taskId="task" script={script} busy={false} repairing={false} onConfirm={vi.fn()}
+    auditionVoice={{language:"en",profileId:"studio",version:"v3"}}/>);
+  fireEvent.change(await screen.findByLabelText("第 1 段正文"),{target:{value:"Unsaved local edit."}});
+  fireEvent.click(screen.getByText("试听已保存段落"));
+  fireEvent.change(screen.getByLabelText("选择试听段落"),{target:{value:section.id}});
+  expect(screen.getByLabelText("英文试听文字")).toHaveValue(section.content);
+  expect(screen.getByLabelText("英文试听文字")).toHaveAttribute("readonly");
+  await click("生成英文试听");
+  await screen.findByLabelText("英文样句录音");
+  expect(api.create).toHaveBeenCalledExactlyOnceWith({
+    voice_profile_id:"studio",voice_version:"v3",language:"en",preview_text:section.content,retry:false,
+  });
 });
 
 it("asks for a new selection when the chosen version becomes unavailable", async () => {

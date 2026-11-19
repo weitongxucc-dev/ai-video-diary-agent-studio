@@ -6,6 +6,8 @@ import type { CreationTaskScript, CreationTaskScriptSection, CreationTaskScriptS
 import { useWorkspaceViewState } from "../workbench/context";
 import { Button } from "../ui/button";
 import { ScriptRequestLookup } from "./ScriptRequestLookup";
+import type { AuditionVoice } from "./DeliveryVoiceSample";
+import { SavedScriptAudition } from "./SavedScriptAudition";
 import { useScriptWindowRequestRecovery } from "./script-window-request-recovery";
 import styles from "../CreationTaskWorkspace.module.css";
 
@@ -202,12 +204,15 @@ function ScriptSubtitleImport({ disabled, sources, sections, continuation, onApp
 }
 
 type WindowEditorProps = {
-    taskId: string; script: CreationTaskScript; onSaved: (receipt: CreationTaskScriptWindowSaved | CreationTaskScriptConfirmed) => Promise<void>;
+    taskId: string;
+    script: CreationTaskScript;
+    auditionVoice?: AuditionVoice;
+    onSaved: (receipt: CreationTaskScriptWindowSaved | CreationTaskScriptConfirmed) => Promise<void>;
 };
 export function ScriptWindowEditor(props: WindowEditorProps) {
     return <WindowEditorBody key={`${props.taskId}:${props.script.id}`} {...props}/>;
 }
-function WindowEditorBody({ taskId, script, onSaved }: WindowEditorProps) {
+function WindowEditorBody({ taskId, script, auditionVoice, onSaved }: WindowEditorProps) {
     const [form, setForm] = useWorkspaceViewState<Form>(`script-window-inputs:${taskId}:${script.id}`, { edit: null, append: null });
     const recovery = useScriptWindowRequestRecovery(taskId, script.id);
     const [page, setPage] = useState<CreationTaskScriptSectionWindow | null>(null);
@@ -335,6 +340,8 @@ function WindowEditorBody({ taskId, script, onSaved }: WindowEditorProps) {
         <div className={styles.sectionHeading}><h2>{page?.title ?? script.title}</h2><span>共 {page?.total_count ?? script.sections_total_count} 段</span></div>
         {!script.draft_complete && !confirmed ? <p>当前为部分稿，已存 {page?.total_count ?? script.sections_total_count} 段不代表目标已完整；可分窗修改或追加，尚未核查并采用为完整文案。</p> : null}
         <p>每次只保存当前修改的段落，其他已存段保留。窗口保存不等于整稿核查或采用。</p>
+        {auditionVoice && page?.items.length ? <SavedScriptAudition voice={auditionVoice} items={page.items}
+            sourceVersion={JSON.stringify([taskId, script.id, page.updated_at])} /> : null}
         {reading ? <p role="status">正在读取文案窗口…</p> : null}
         {notice ? <p role="status">{notice}</p> : null}
         {recovery.error ? <p role="alert">{recovery.error}</p> : null}
