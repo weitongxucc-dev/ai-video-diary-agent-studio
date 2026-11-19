@@ -34,6 +34,11 @@ _BUDGET_TYPES = {
     "material_visual_query": MaterialVisualQueryBudget, "clip_preview": CpuRenderBudget,
     "packet_copy": PacketCopyBudget, "audio_encode": AudioEncodeBudget, "final_mux": FinalMuxBudget,
 }
+# The installed desktop can already have a measured subtitle budget. This
+# runtime cannot execute that operation, but must keep its bound receipt when
+# reading the host policy and when preparing other supported operations.
+_PRESERVED_OPERATIONS = {'subtitle_recognition'}
+PROFILE_OPERATION_NAMES = frozenset(_BUDGET_TYPES) | _PRESERVED_OPERATIONS
 
 
 class DeviceProfileUnavailable(RuntimeError):
@@ -191,20 +196,20 @@ def load_device_resource_profile(path: str | Path, *, device: DeviceProfileIdent
             (field.name for field in fields(DeviceProfileIdentity))))
         if identity != device:
             raise ValueError("Resource profile belongs to a different device configuration")
-        payload = dict(_object(document["budget"], (field.name for field in fields(HostBudget))))
-        backends = _object(document["backends"], _BUDGET_TYPES)
-        evidence_refs = _object(document.get("evidence", {}), {"host", *_BUDGET_TYPES})
+        payload = _object(document["budget"], {field.name for field in fields(HostBudget)} | PROFILE_OPERATION_NAMES)
+        backends = _object(document["backends"], PROFILE_OPERATION_NAMES)
+        evidence_refs = _object(document.get("evidence", {}), {"host", *PROFILE_OPERATION_NAMES})
         evidence, unavailable = {}, {}
-        values = {key: value for key, value in payload.items() if key not in _BUDGET_TYPES}
+        host_payload = {key: value for key, value in payload.items() if key not in PROFILE_OPERATION_NAMES}
+        values = dict(host_payload)
         if values.get("memory_policy") is not None:
             values["memory_policy"] = _budget(MemoryPolicy, values["memory_policy"])
         # A retired swap ceiling remains optional diagnostic data, not a gate.
         values.setdefault("max_swap_used_bytes", None)
-        host_payload = {key: value for key, value in payload.items() if key not in _BUDGET_TYPES}
         evidence["host"] = (_measurement(path, evidence_refs["host"], device=device,
             backend_identity=None, budget_payload=host_payload) if "host" in evidence_refs else
             {"status": "declared", "verification_status": "unknown"})
-        for name, kind in _BUDGET_TYPES.items():
+        for name in sorted(PROFILE_OPERATION_NAMES):
             if payload.get(name) is None:
                 if name in backends or name in evidence_refs:
                     raise ValueError("Resource profile has metadata without its operation budget")
@@ -212,7 +217,15 @@ def load_device_resource_profile(path: str | Path, *, device: DeviceProfileIdent
             configured_identity = backends.get(name)
             if not isinstance(configured_identity, str) or not configured_identity.strip():
                 raise ValueError("Operation budget needs its actual backend identity")
-            operation_budget = _budget(kind, payload[name])
+            if name in _PRESERVED_OPERATIONS:
+                if not isinstance(payload[name], dict) or not payload[name]:
+                    raise ValueError("Preserved operation needs its original budget")
+                if name in evidence_refs:
+                    _measurement(path, evidence_refs[name], device=device,
+                                 backend_identity=configured_identity, budget_payload=payload[name])
+                unavailable[name] = 'operation_not_supported_by_runtime'
+                continue
+            operation_budget = _budget(_BUDGET_TYPES[name], payload[name])
             if name == "packet_copy" and operation_budget.backend_identity != configured_identity:
                 raise ValueError("Packet-copy policy and configured backend identity disagree")
             if name == 'narration' and operation_budget.input_scope == 'single_call_preparation_v1':

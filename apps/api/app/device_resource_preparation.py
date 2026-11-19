@@ -26,7 +26,9 @@ from app.cpu_preparation_video import preparation_video_command, preparation_del
 from app.artwork_resource_preparation import (extend_render_budget, measure_template_inputs,
     measure_native_inputs, extend_native_budget)
 from app.device_resource_configuration import backend_identity
-from app.device_resource_profile import DeviceProfileIdentity, DeviceProfileUnavailable, _BUDGET_TYPES, _digest, load_device_resource_profile
+from app.device_resource_profile import (
+    PROFILE_OPERATION_NAMES, DeviceProfileIdentity, DeviceProfileUnavailable, _digest, load_device_resource_profile,
+)
 from app.device_resource_volumes import sample_write_volumes
 from app.device_scheduler import SubmissionIntent, SchedulePolicy, VerifiedWork
 from app.device_runtime import OwnerRegistration
@@ -250,7 +252,7 @@ class DeviceResourcePreparation:
         # Missing fields receive the versioned baseline; declared values retain
         # their original meaning, including an explicit observation-only IO None.
         inherited = ({name: getattr(resolved.budget, name) for name, value in previous['budget'].items()
-            if name not in _BUDGET_TYPES and (name != 'memory_policy' or value is not None)}
+            if name not in PROFILE_OPERATION_NAMES and (name != 'memory_policy' or value is not None)}
             if previous else {})
         ffmpeg, ffprobe = shutil.which('ffmpeg'), shutil.which('ffprobe')
         if not ffmpeg or not ffprobe:
@@ -595,7 +597,7 @@ class DeviceResourcePreparation:
             document['backends'] = {**document.get('backends', {}), **identities}
             document['evidence'] = dict(document.get('evidence', {}))
             for name in ('host', *sorted(owned)):
-                payload = ({key: value for key, value in document['budget'].items() if key not in _BUDGET_TYPES}
+                payload = ({key: value for key, value in document['budget'].items() if key not in PROFILE_OPERATION_NAMES}
                            if name == 'host' else document['budget'][name])
                 evidence = {'format_version': 1, 'device': asdict(self.device),
                     'backend_identity': None if name == 'host' else identities[name], 'budget_digest': _digest(payload),
