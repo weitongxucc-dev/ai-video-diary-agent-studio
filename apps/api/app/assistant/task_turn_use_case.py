@@ -10,6 +10,8 @@ from functools import partial
 from uuid import UUID
 from pydantic import ValidationError
 from app.assistant.failures import AssistantUnavailable
+from app.assistant.inputs import latest_consumed_input
+from app.creation.editing.edit_scope import clip_tail_blocker
 from app.assistant.turn_control import AssistantStopped
 from app.assistant.task_turn_scope_use_case import TaskTurnSelection
 from app.assistant.projection import _safe_business_failure, _safe_compaction_event
@@ -347,6 +349,9 @@ class TaskAssistantTurnUseCase:
                 or stage == 'review' and task.stage == 'montage'):
             stage = task.stage
         message = claim['event']['message'] if claim['event'].get('phase') == 'input' else goal['original_instruction']
+        if blocker := clip_tail_blocker(message):
+            yield from self.finish_goal(business, claim, blocker, None)
+            return
         selection = TaskTurnSelection(stage, [ref for ref in context.get('selected_object_refs', [])
             if ref not in fresh['task_version'].get('removed_selected_refs', [])], context.get('playhead_ms'))
         stage, refs = (yield ResolveTurnScope(workspace_id, task, selection))
@@ -473,6 +478,8 @@ class TaskAssistantTurnUseCase:
         frozen_context = self._conversations_for().consumed_turn_request_context(turn_id, str(payload.conversation_id), workspace_id, member_id)
         trusted_refs = frozen_context.get('selected_object_refs', trusted_refs)
         material_selection = (frozen_context.get('target_snapshot') or {}).get('material_selection')
+        if blocker := clip_tail_blocker(message):
+            return (yield from self.finish(task_id, payload, turn_id, blocker, None, trusted_stage))
         try:
             reply, preview = (yield RunTask(workspace_id, member_id, task_id, str(payload.conversation_id), turn_id, message, trusted_stage, trusted_refs, payload.playhead_ms, caller_user_id, local_diagnostic, profile_reference, knowledge_reference, task_version, material_selection))
         except AssistantStopped:
@@ -528,6 +535,13 @@ class TaskAssistantTurnUseCase:
         # fails the final ownership check. Mixed business/runtime receipts carry
         # the same evidence as runtime-only replies.
         runtime = {**runtime_receipt_fields(preview), **runtime_receipt_fields(runtime_receipt)}
+        if preview is None and runtime:
+            # A steering input can become active after the model was started.
+            # A reply without a business receipt cannot report an unsupported save.
+            turn = self._conversations_for().get_turn(turn_id)
+            current = latest_consumed_input((turn or {}).get('events', []))
+            if current and (blocker := clip_tail_blocker(current['message'])):
+                reply = blocker
         try:
             return (yield from self._finish(task_id, payload, turn_id, reply, preview,
                                            trusted_stage, runtime_receipt=runtime))

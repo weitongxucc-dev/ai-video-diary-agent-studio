@@ -241,7 +241,7 @@ export function createNativeTaskTools({sdk,callNative,turnId,inputId=turnId,user
         const failure=call.executionFailure ?? error.failure ?? {reason:error.message,submission_effect:call.command || call.fileReceipt?'unknown':'not_submitted'};
         const details={failure:error.operation==='read_task_command' && (call.command || call.fileReceipt)
           ?{...failure,submission_effect:'unknown'}:failure,
-          native_execution:call.command ?? call.fileReceipt};
+          invocation_input_id:call.input,native_execution:call.command ?? call.fileReceipt};
         return {isError:true,content:[{type:'text',text:JSON.stringify(details)}],details};
       }
     }),

@@ -506,3 +506,19 @@ def test_pi_launch_check_failure_is_not_a_provider_key_rejection(monkeypatch, tm
     assert not caught.value.service_contacted
     assert KEY not in str(caught.value)
     assert settings.llm_service_status("w")["state"] == LLM_SERVICE_UNVERIFIED
+
+
+def test_edit_scope_refusal_never_projects_a_fabricated_save():
+    from app.assistant.result_projection import project_business_result
+    from app.creation.editing.edit_scope import CLIP_TAIL_UNAVAILABLE
+
+    result = {
+        'status': 'settled',
+        'answer': '已经裁短并保存。',
+        'tool_results': [{
+            'type': 'tool_execution_end', 'toolName': 'apply_typed_edit', 'isError': True,
+            'result': {'details': {'failure': {'error': 'edit_scope_conflict',
+                'reason': CLIP_TAIL_UNAVAILABLE, 'submission_effect': 'not_submitted'}}},
+        }],
+    }
+    assert project_business_result(result) == (CLIP_TAIL_UNAVAILABLE, None)

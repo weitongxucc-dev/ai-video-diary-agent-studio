@@ -94,6 +94,10 @@ class TaskBusiness:
         native_origin={**origin,'task_id':task.id,'assistant_turn_id':source_binding['turn_id'],
             'input_id':origin.get('input_id') or source_binding['turn_id'],
             'session_id':source_binding['session_id'],'sdk_round':source_binding.get('sdk_round',0)}
+        from app.creation.editing.edit_scope import native_edit_blocker
+        if blocker := native_edit_blocker(native_origin, operation, arguments):
+            raise TaskOperationRejected({'error': 'edit_scope_conflict', 'reason': blocker,
+                'submission_effect': 'not_submitted'}, kind='conflict')
         def guard(conn):
             return self.check(source_binding,cancel_event,deadline_monotonic,connection=conn,check_version=False)
         invocation.owner_entered=True

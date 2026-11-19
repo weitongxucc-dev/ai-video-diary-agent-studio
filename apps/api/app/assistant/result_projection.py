@@ -195,6 +195,7 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
     unresolved_syntax_error = False
     quality_continuation = None
     edit_request_status = None
+    scope_blocker = None
     edit_applied = None
     script_tool_result = None
     script_tool_status = None
@@ -214,6 +215,10 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         if (latest_input is not None and event.get("type") == "tool_execution_end"
                 and ("invocation_input_id" not in details or details["invocation_input_id"] != latest_input["invocation_input_id"])):
             continue  # History remains in the SDK log; only this input owns the reply.
+        if event.get("type") == "tool_execution_end" and event.get("isError"):
+            failure = _safe_business_failure(details.get("failure"))
+            if failure.get("error") == "edit_scope_conflict" and failure.get("submission_effect") == "not_submitted":
+                scope_blocker = failure.get("reason")
         if event.get('type') == 'tool_execution_end' and event.get('toolName') == 'read_task_observations':
             page = {} if event.get('isError') else (event.get('result') or {}).get('details') or {}
             observation_readbacks = {}  # A newer stale/currentness read supersedes older evidence.
@@ -413,6 +418,8 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
         failure_message = f" 原因：{action_failure['reason']}" if action_failure.get('reason') else ''
         return ("修改已保存，可撤销；后续制作没有取得成功提交回执。" + failure_message if action_failed else
                 "修改已保存到可撤销的时间线版本；本次尚未重新生成视频。") + readiness_message, edit_applied
+    if scope_blocker and not any((preview, media_job, action_result, segment_result, edit_control_result)):
+        return scope_blocker, None
     if (action_failed and action_result is None) or topic_failed:
         if render_configuration_failed:
             raise _fail(FAILURE_TOOL_FAILED, explanation="本机渲染尚未完成配置，本轮未生成新成片；当前修改已保留。",
