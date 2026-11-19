@@ -479,6 +479,7 @@ class ScriptDraftUseCase:
                              verified_body_digest=facts.body_digest)
 
     def _review_saved_ranges(self, workspace_id, task_id, script_id, expected_updated_at, instruction_origin, reread_origin, write_guard, *, draft_only):
+        from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT
         from app.topics import CreationTaskScriptReviewWindow
         context=self.scripts.saved_script_review_context(workspace_id,task_id,script_id,expected_updated_at)
         metadata=context['metadata']
@@ -489,10 +490,13 @@ class ScriptDraftUseCase:
             raise ScriptDraftRejected(status_code=409,detail="真实全稿段数尚未满足采用要求，请补齐草稿后继续。")
         binding=self._window_binding(plan,topic,sources,refs,reader,entry)
         current_guard=self._source_commit_guard(workspace_id,task_id,binding,write_guard,instruction_origin,reread_origin,draft_only=draft_only,source_metadata=metadata)
+        route = self.route_snapshot(workspace_id)
+        # Keep the report schema and context bounded on the same device as the editor.
+        review_limit = 1 if route["execution_location"] == "local" else SCRIPT_SECTION_WINDOW_LIMIT
         cursor,review_binding=0,None
         while cursor is not None:
             page=self.scripts.read_creation_task_script_sections(workspace_id,task_id,script_id,
-                expected_updated_at=expected_updated_at,after_ordinal=cursor)
+                expected_updated_at=expected_updated_at,after_ordinal=cursor,limit=review_limit)
             parts=[CreationTaskScriptSection(**item['section']) for item in page['items']]
             window=CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in parts),context['total_count'],finalizing=True)
             review_binding=self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],parts,instruction_origin,

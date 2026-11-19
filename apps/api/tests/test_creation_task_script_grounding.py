@@ -2675,7 +2675,8 @@ def test_partial_review_coverage_cannot_be_adopted_as_a_complete_script(api_stat
 
 
 
-def test_incomplete_review_never_adopts_and_later_confirmation_reuses_completed_ranges(api_state, monkeypatch):
+@pytest.mark.parametrize(('location', 'window_size'), [('cloud', 20), ('local', 1)])
+def test_incomplete_review_never_adopts_and_later_confirmation_reuses_completed_ranges(api_state, monkeypatch, location, window_size):
     from uuid import uuid4
     from app.schemas import CreationTaskScriptWindowStartRequest,CreationTaskScriptSectionsPatchRequest,CreationTaskScriptConfirmSavedRequest
     from app.creation.script_draft_use_case import ScriptDraftRejected
@@ -2687,16 +2688,20 @@ def test_incomplete_review_never_adopts_and_later_confirmation_reuses_completed_
     calls=[]
     mode={'truncate':True}
     def review(request):
-        data=json.loads(json.loads(request.content)['messages'][1]['content'])
+        transport_payload = json.loads(request.content)
+        data = json.loads(transport_payload['messages'][1]['content'])
+        assert transport_payload['max_tokens'] == (512 if location == 'local' else 8192)
         calls.append(data)
-        if data['review_window']['finalizing'] and data['review_window']['section_ids'][0]=='part-20' and mode['truncate']:
+        if data['review_window']['finalizing'] and data['review_window']['section_ids'][0]==f'part-{window_size}' and mode['truncate']:
             return httpx.Response(200,json={'choices':[{'finish_reason':'length','message':{'content':''}}]})
         return _review_tool_response({'sections':[{'index':part['index'],'supports':[{
             'candidate_quote_id':part['content'][0]['quote_id'],'source_quote_id':part['allowed_source_quote_ids']['evidence_1'][0]}]}
             for part in data['script']['sections']]})
-    checker=OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1','same-model',transport=httpx.MockTransport(review))
+    base_url = 'http://127.0.0.1:8033/v1' if location == 'local' else 'https://models.invalid/v1'
+    checker=OpenAICompatibleCreationTaskScriptGenerator(base_url,'same-model',transport=httpx.MockTransport(review))
     monkeypatch.setattr(main,'_creation_task_script_generator_for',lambda settings:checker)
     case=main._script_draft_use_case('local',validate_inputs=lambda ws,plan,refs:main._validate_script_input_sources(ws,plan,refs,state.owner.member_id))
+    case.route_snapshot = lambda _workspace: {'execution_location': location}
     def parts(start,end): return [{'id':f'part-{i}','title':f'段落{i}','content':FACT,'visual_prompt':'计划画面',
         'evidence_reference_ids':[state.refs[0]['reference_id']]} for i in range(start,end)]
     first=case.start_window('local','task',CreationTaskScriptWindowStartRequest(request_id=uuid4(),title='完整稿',sections=parts(0,20)),member_id=state.owner.member_id)
@@ -2712,10 +2717,14 @@ def test_incomplete_review_never_adopts_and_later_confirmation_reuses_completed_
     mode['truncate']=False
     retry=request.model_copy(update={'request_id':uuid4()})
     result=case.confirm_saved('local','task',first['script_id'],retry,member_id=state.owner.member_id)
-    assert result['status']=='confirmed' and len(calls)==3
-    assert calls[-1]['review_window']['section_ids']==[f'part-{i}' for i in range(20,25)]
+    assert result['status']=='confirmed'
+    assert [call['review_window']['section_ids'] for call in calls[2:]] == [
+        [f'part-{i}' for i in range(start, min(start + window_size, 25))]
+        for start in range(window_size, 25, window_size)
+    ]
+    completed_calls = len(calls)
     assert case.confirm_saved('local','task',first['script_id'],retry,member_id=state.owner.member_id)==result
-    assert len(calls)==3
+    assert len(calls)==completed_calls
 
 
 def test_delegated_saved_adoption_records_real_goal_journal_without_full_script(api_state, monkeypatch):
