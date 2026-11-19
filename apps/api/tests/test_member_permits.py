@@ -608,6 +608,30 @@ def test_default_presenter_budget_required_before_queueing(presenter_permit_case
         scheduler.close()
 
 
+def test_presenter_owner_reads_original_sources_under_exclusive_transaction(presenter_permit_case):
+    import sqlite3
+    from app.creation_execution import submit_creation_stage
+
+    case = presenter_permit_case
+    owner = case.registration.owner
+    owner.verify_identity = lambda actor: "ready" if actor == case.actor else "unauthorized"
+    scheduler = _presenter_scheduler(case)
+    try:
+        request = scheduler._get(submit_creation_stage(case.execution, scheduler, case.job, case.actor))
+        assert request.unit_key.startswith("person_render:")
+        with case.repo._connect() as conn:
+            conn.execute("BEGIN EXCLUSIVE")
+            with sqlite3.connect(case.repo.database_path, timeout=0) as competing:
+                with pytest.raises(sqlite3.OperationalError, match="locked"):
+                    competing.execute("SELECT id FROM material_assets").fetchall()
+            assert owner.check_current(request, conn) == "ready"
+            assert conn.in_transaction
+            conn.rollback()
+        assert scheduler._get(request.id) == request
+    finally:
+        scheduler.close()
+
+
 @pytest.mark.parametrize("change", ["member", "person_authorization", "audio", "cross_workspace"])
 def test_presenter_grant_continuously_rechecks_original_facts_and_releases(presenter_permit_case, change):
     from dataclasses import replace

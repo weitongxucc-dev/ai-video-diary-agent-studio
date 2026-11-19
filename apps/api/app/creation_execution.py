@@ -272,18 +272,21 @@ def _presenter_inputs_in_snapshot(repository, task, script, plan, models, *, con
     if plan.selected_person is None:
         raise ValueError("请单独选择人物档案与固定版本后再制作人物段")
     person = repository.profile_records.get_person_profile(task.workspace_id, plan.selected_person.profile_id,
-                                           plan.selected_person.version)
+                                           plan.selected_person.version, connection=connection)
     for section_id in selected:
         segment = repository.section_inputs.read_creation_section_input(task, script, section_id, connection=connection)['audio']
         if (segment.voice_profile_id, segment.voice_version) != (plan.selected_voice.profile_id, plan.selected_voice.version):
             raise ValueError("人物配音版本与当前方案不一致")
-        audio = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
+        audio = repository.narration_artifacts.resolve_authorized_narration_audio_reference(
+            task.workspace_id, segment.audio_reference, connection=connection)
         request = repository.profile_inputs.resolve_avatar_lipsync_request(
             workspace_id=task.workspace_id, person_id=person.id, person_version=person.version,
             voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version,
             audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
             motion="natural", expression="neutral", authorization_id=person.authorization.id if person.authorization else "",
-            authorization_version=person.authorization.version if person.authorization else "", model_id=planned_lipsync_model_id(plan, models[plan.lipsync_quality]), viewer_user_id=task.owner_user_id)
+            authorization_version=person.authorization.version if person.authorization else "",
+            model_id=planned_lipsync_model_id(plan, models[plan.lipsync_quality]),
+            viewer_user_id=task.owner_user_id, connection=connection)
         if _authorization_failure(request) is not None:
             raise PermissionError("人物或声音授权已失效，不能生成或复用")
         yield segment, request
