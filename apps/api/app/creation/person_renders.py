@@ -1,6 +1,7 @@
 """Task-bound person-render records, cache identity and original status transitions."""
 from __future__ import annotations
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 import math
@@ -272,9 +273,9 @@ class PersonRenderStore:
         return self._person_render_from_row(row)
 
     def list_person_renders(
-        self, workspace_id: str, task_id: str
+        self, workspace_id: str, task_id: str, *, connection: sqlite3.Connection | None = None,
     ) -> list[PersonRender]:
-        with self._connect() as conn:
+        with self._connect() if connection is None else nullcontext(connection) as conn:
             require_creation_task(conn, workspace_id, task_id)
             rows = conn.execute(
                 """

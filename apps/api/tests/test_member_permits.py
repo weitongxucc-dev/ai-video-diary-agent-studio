@@ -608,17 +608,28 @@ def test_default_presenter_budget_required_before_queueing(presenter_permit_case
         scheduler.close()
 
 
-def test_presenter_owner_reads_original_sources_under_exclusive_transaction(presenter_permit_case):
+@pytest.mark.parametrize("stage", ["person_render", "montage_plan", "render"])
+def test_presenter_owner_reads_original_sources_under_exclusive_transaction(presenter_permit_case, stage):
+    from dataclasses import replace
     import sqlite3
+    from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.creation_execution import submit_creation_stage
 
     case = presenter_permit_case
     owner = case.registration.owner
     owner.verify_identity = lambda actor: "ready" if actor == case.actor else "unauthorized"
+    if stage != "person_render":
+        render = _complete_presenter_fixture(case)
+        if stage == "render":
+            _presenter_montage_fixture(case, render)
+        else:
+            owner.task_authorizations = TaskAuthorizationUseCase(case.repo, lambda _identity: "ready")
+            owner.task_authorizations.ensure(case.task, case.actor)
+            owner.montage_budget = replace(owner.montage_budget, preparation_basis_digest="a" * 64)
     scheduler = _presenter_scheduler(case)
     try:
         request = scheduler._get(submit_creation_stage(case.execution, scheduler, case.job, case.actor))
-        assert request.unit_key.startswith("person_render:")
+        assert request.unit_key.startswith(f"{stage}:")
         with case.repo._connect() as conn:
             conn.execute("BEGIN EXCLUSIVE")
             with sqlite3.connect(case.repo.database_path, timeout=0) as competing:

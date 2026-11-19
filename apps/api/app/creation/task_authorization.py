@@ -387,8 +387,8 @@ class TaskAuthorizationUseCase:
                 return "outside_scope"
         return "valid"
 
-    def material_asset_ids(self, workspace_id, task_id):
-        with self.repository.execution_inputs.creation_execution_read() as conn:
+    def material_asset_ids(self, workspace_id, task_id, *, connection=None):
+        with self.repository.execution_inputs.creation_execution_read(connection) as conn:
             if self.status(workspace_id, task_id, operation="montage_plan", connection=conn) != "valid":
                 raise PermissionError("原任务的选材授权未就绪")
             authorization = self.repository.task_authorization_records.get_task_authorization(workspace_id, task_id, connection=conn)

@@ -4354,7 +4354,7 @@ def test_explicit_presenter_waits_after_full_narration_and_resumes_original_job(
     case.owner.presenter_budget = object()
     case.owner.presenter_models[plan.lipsync_quality] = 'test'
     rendered = []
-    monkeypatch.setattr(case.owner, 'person_valid', lambda _task: bool(rendered))
+    monkeypatch.setattr(case.owner, 'person_valid', lambda _task, **_kwargs: bool(rendered))
     case.executor.person_stage = SimpleNamespace(generate_stage=lambda *_args: rendered.append('section_1'))
     monkeypatch.setattr(execution_module, 'presenter_stage_facts',
         lambda *_args, **_kwargs: ('person_render:prepared', {'kind': 'creation_person_render',

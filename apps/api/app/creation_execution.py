@@ -308,10 +308,11 @@ def presenter_input_facts(request):
     return facts
 
 
-def current_presenter_render(repository, task, segment, request, resolve_output):
+def current_presenter_render(repository, task, segment, request, resolve_output, *, connection=None):
     input_facts = presenter_input_facts(request)
     key = avatar_lipsync_cache_key(request, input_facts=input_facts)
-    render = next((item for item in repository.person_renders.list_person_renders(task.workspace_id, task.id)
+    render = next((item for item in repository.person_renders.list_person_renders(
+                       task.workspace_id, task.id, connection=connection)
                    if item.cache_key == key and item.narration_segment_id == segment.id
                    and item.person_profile_id == request.person.id and item.person_version == request.person.version
                    and item.voice_profile_id == segment.voice_profile_id and item.voice_version == segment.voice_version
@@ -320,7 +321,7 @@ def current_presenter_render(repository, task, segment, request, resolve_output)
         return None
     if render.duration_seconds + .001 < segment.duration_seconds:
         return None
-    transforms = repository.lineage_records.list_transform_runs(task.workspace_id, task.id)
+    transforms = repository.lineage_records.list_transform_runs(task.workspace_id, task.id, connection=connection)
     if not any(item.transform_type == "person_render" and item.status == "succeeded"
                and item.input_digest == key and render.artifact_ref in item.output_refs
                and segment.audio_reference in item.input_refs
@@ -536,7 +537,7 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
     return f"narration_edit:{digest}", resources
 
 
-def person_edit_stage_facts(repository, task, proposal, plan, budget, models):
+def person_edit_stage_facts(repository, task, proposal, plan, budget, models, *, connection=None):
     """Seal one selected person segment, never the whole presenter stage."""
     if budget is None:
         raise ValueError("人物制作预算尚未标定，请配置 DEVICE_PRESENTER_* 标定值")
@@ -546,25 +547,30 @@ def person_edit_stage_facts(repository, task, proposal, plan, budget, models):
             or operation["operation_type"] not in {"ChangePersonSegment", "RegeneratePersonRender"}
             or task.current_timeline_version_id != payload["base_version_id"]):
         raise ValueError("人物编辑提案或时间线已变化，请重新预览")
-    montage = creation_task_montage_plan_from_payload(repository.get_creation_task_montage_plan(task.workspace_id, task.id))
+    montage = creation_task_montage_plan_from_payload(
+        repository.get_creation_task_montage_plan(task.workspace_id, task.id, connection=connection))
     clip = next(item for item in montage.clips if item.id == payload["clip_id"])
     cue = next(item for item in montage.cues if item.id == payload["cue_id"])
-    segment = repository.narration_records.get_narration_segment(task.workspace_id, task.id, payload["narration_segment_id"])
+    segment = repository.narration_records.get_narration_segment(
+        task.workspace_id, task.id, payload["narration_segment_id"], connection=connection)
     if (clip.asset_id != payload["expected_asset_id"] or clip.segment_id != payload["expected_segment_id"]
             or clip.person_render_id != payload["expected_person_render_id"]
             or cue.narration_segment_id != segment.id or segment.script_id != task.confirmed_script_id
             or segment.status != "ready" or segment.audio_reference != payload["expected_audio_reference"]
             or payload.get("lipsync_quality", plan.lipsync_quality) != plan.lipsync_quality):
         raise ValueError("人物编辑对象或配音已变化，请重新预览")
-    person = repository.profile_records.get_person_profile(task.workspace_id, payload["person_profile_id"], payload["person_version"])
-    audio = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
+    person = repository.profile_records.get_person_profile(
+        task.workspace_id, payload["person_profile_id"], payload["person_version"], connection=connection)
+    audio = repository.narration_artifacts.resolve_authorized_narration_audio_reference(
+        task.workspace_id, segment.audio_reference, connection=connection)
     request = repository.profile_inputs.resolve_avatar_lipsync_request(
         workspace_id=task.workspace_id, person_id=person.id, person_version=person.version,
         voice_profile_id=segment.voice_profile_id, voice_version=segment.voice_version,
         audio_path=str(audio), audio_cache_key=segment.audio_reference, language=segment.language,
         motion=payload["motion"], expression=payload["expression"],
         authorization_id=person.authorization.id if person.authorization else "", authorization_version=person.authorization.version if person.authorization else "",
-        model_id=planned_lipsync_model_id(plan, models[plan.lipsync_quality]), viewer_user_id=task.owner_user_id)
+        model_id=planned_lipsync_model_id(plan, models[plan.lipsync_quality]), viewer_user_id=task.owner_user_id,
+        connection=connection)
     if _authorization_failure(request) is not None:
         raise PermissionError("人物或声音授权已失效，不能生成或复用")
     files = presenter_input_facts(request)
@@ -724,7 +730,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                 raise ValueError("人物镜头不属于当前配音与露脸选择")
             item = person_inputs[cue.narration_segment_id]
             segment = repository.narration_records.get_narration_segment(task.workspace_id, task.id, cue.narration_segment_id, connection=conn)
-            render = current_presenter_render(repository, task, segment, item, resolve_presenter_output)
+            render = current_presenter_render(repository, task, segment, item, resolve_presenter_output, connection=conn)
             if (render is None or render.id != clip.person_render_id
                     or clip.asset_id != f"person:{render.id}" or clip.source_path != f"person-render://{render.id}"
                     or clip.source_end_seconds > render.duration_seconds + .001):
@@ -1090,14 +1096,15 @@ class CreationJobOwnerVerifier:
         if stage == 'montage_plan' and self.montage_budget is not None and self.montage_budget.preparation_basis_digest is not None:
             if self.task_authorizations is None:
                 raise ValueError('当前任务没有可核验的故事板授权素材范围')
-            prepared_assets = self.task_authorizations.material_asset_ids(task.workspace_id, task.id)
+            prepared_assets = self.task_authorizations.material_asset_ids(task.workspace_id, task.id, connection=connection)
         key, resources = creation_stage_facts(self.repository, task, script, plan, stage,
             self.narration_budget, self.montage_budget, connection=connection, montage_authorized_asset_ids=prepared_assets)
         if stage == "montage_plan" and plan.presenter_share_target:
             manifest = []
             for segment, request in iter_presenter_inputs(self.repository, task, script, plan,
                     self.presenter_models, connection=connection):
-                item = current_presenter_render(self.repository, task, segment, request, self.resolve_presenter_output)
+                item = current_presenter_render(self.repository, task, segment, request,
+                    self.resolve_presenter_output, connection=connection)
                 if item is None:
                     raise ValueError("人物段落尚未在专属许可下完成")
                 stat = self.resolve_presenter_output(item).stat()
@@ -1448,10 +1455,10 @@ class CreationJobOwnerVerifier:
         preparation=self.persisted_pcm_sources(request,conn) if request.resources.get('execution_mode')=='cpu_pcm_wav_assembly' else None
         return self.verify_submission(intent, actor, connection=conn,pcm_preparation=preparation,request=request)
 
-    def edit_facts(self, job, task, event, plan):
-        proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
+    def edit_facts(self, job, task, event, plan, *, connection=None):
+        proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id, event["edit_proposal_id"], connection=connection)
         return person_edit_stage_facts(self.repository, task, proposal, plan,
-                                      self.presenter_budget, self.presenter_models)
+                                      self.presenter_budget, self.presenter_models, connection=connection)
 
     def narration_edit_facts(self, job, task, event, plan, *, connection=None, request=None, original_recovery=False, pcm_preparation=None, comparison_reference=None):
         with self.repository.execution_inputs.creation_execution_read(connection) as conn:
@@ -1515,14 +1522,14 @@ class CreationJobOwnerVerifier:
             digest=hashlib.sha256(json.dumps(resources,sort_keys=True).encode()).hexdigest()
             return 'narration_edit:pcm:'+digest,resources
 
-    def person_valid(self, task):
-        with self.repository.execution_inputs.creation_execution_read() as conn:
+    def person_valid(self, task, *, connection=None):
+        with self.repository.execution_inputs.creation_execution_read(connection) as conn:
             snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(task.workspace_id, task.id, connection=conn)
             valid = True
             for segment, request in iter_presenter_inputs(self.repository, snapshot.task,
                     snapshot.script_header, snapshot.plan, self.presenter_models, connection=conn):
                 if current_presenter_render(self.repository, snapshot.task, segment, request,
-                        self.resolve_presenter_output) is None:
+                        self.resolve_presenter_output, connection=conn) is None:
                     valid = False
             return valid
 
@@ -1629,7 +1636,7 @@ class CreationJobOwnerVerifier:
             task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
             if (verdict == "ready" and self.task_authorizations is not None
                     and connection is None and stage == "person_edit"):
-                proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
+                proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id, event["edit_proposal_id"], connection=conn)
                 target = proposal.operation["payload"]
                 authorization = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id, connection=conn)
                 if f"{target['person_profile_id']}:{target['person_version']}" not in authorization.resource_scope.get("persons", []):
@@ -1641,7 +1648,7 @@ class CreationJobOwnerVerifier:
                 if intent.unit_key != key:
                     raise PermissionError("配音编辑输入已变化，请重新安排")
             elif verdict == "ready" and job.kind == PERSON_EDIT_KIND:
-                key, resources = self.edit_facts(job, task, event, plan)
+                key, resources = self.edit_facts(job, task, event, plan, connection=conn)
                 if intent.unit_key != key:
                     raise PermissionError("人物编辑输入已变化，请重新安排")
             elif verdict == "ready" and stage == "render":
@@ -1710,7 +1717,7 @@ class CreationJobOwnerVerifier:
                     or plan.creation_task_id != task.id or plan.status != "confirmed"
                     or event.get("revision_digest") != (revision if revision is not None else revision_digest(script, plan))):
                 return "stale"
-            proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id, event["edit_proposal_id"])
+            proposal = self.repository.edit_records.get_edit_proposal(job.workspace_id, event["edit_proposal_id"], connection=connection)
             if job.kind == NARRATION_EDIT_KIND:
                 actor = CreationExecutionActor.from_event(job.workspace_id, event)
                 if task.owner_user_id != (actor.user_id or actor.member_id):
@@ -1726,7 +1733,7 @@ class CreationJobOwnerVerifier:
                     plan.presenter_share_target != 0
                     or task.narration_cache_key is None
                     or (recording := self.repository.narration_artifacts.get_narration_artifact(
-                        task.workspace_id, task.narration_cache_key
+                        task.workspace_id, task.narration_cache_key, connection=connection
                     )) is None or recording.source_kind != "recorded"
                 ))
                 or (revision if revision is not None else revision_digest(script, plan)) != job.input_digest):
@@ -1824,7 +1831,7 @@ class CreationJobOwnerVerifier:
             if job.kind == NARRATION_EDIT_KIND:
                 key, resources = self.narration_edit_facts(job, task, event, plan, connection=conn, request=request)
             elif job.kind == PERSON_EDIT_KIND:
-                key, resources = self.edit_facts(job, task, event, plan)
+                key, resources = self.edit_facts(job, task, event, plan, connection=conn)
             elif stage == "render":
                 key, resources = self.render_facts(conn, task, plan, request=request, actor=original)
             elif stage == 'narration' and request.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:')):
@@ -2134,7 +2141,7 @@ def upstream_stage_valid(repository, task, stage, *, connection=None):
     if not task.montage_plan_id:
         return False
     try:
-        plan = repository.get_creation_task_montage_plan(task.workspace_id, task.id)
+        plan = repository.get_creation_task_montage_plan(task.workspace_id, task.id, connection=connection)
     except KeyError:
         return False
     return (plan.get("script_id") == task.confirmed_script_id
@@ -2142,11 +2149,11 @@ def upstream_stage_valid(repository, task, stage, *, connection=None):
         and not repository.section_inputs.has_uncomposed_sections(task, connection=connection))
 
 
-def montage_waiting_for_confirmation(repository, task):
+def montage_waiting_for_confirmation(repository, task, *, connection=None):
     if not task.montage_plan_id:
         return False
     try:
-        plan = repository.get_creation_task_montage_plan(task.workspace_id, task.id)
+        plan = repository.get_creation_task_montage_plan(task.workspace_id, task.id, connection=connection)
     except KeyError:
         return False
     return (plan.get("script_id") == task.confirmed_script_id
@@ -2304,11 +2311,12 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
     elif not upstream_stage_valid(repository, task, "narration", connection=connection):
         stage = "narration"
     elif plan.presenter_share_target and (
-            (explicit_presenter and plan.lipsync_quality not in owner.presenter_models) or not owner.person_valid(task)):
+            (explicit_presenter and plan.lipsync_quality not in owner.presenter_models)
+            or not owner.person_valid(task, connection=connection)):
         stage = "person_render"
-    elif montage_waiting_for_confirmation(repository, task):
+    elif montage_waiting_for_confirmation(repository, task, connection=connection):
         return None  # User confirmation is a business gate, not another work unit.
-    elif not upstream_stage_valid(repository, task, "montage_plan"):
+    elif not upstream_stage_valid(repository, task, "montage_plan", connection=connection):
         stage = "montage_plan"
     else:
         stage = "render"
@@ -2320,7 +2328,7 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         if stage == 'render' and plan.presenter_share_target and owner.presenter_cpu_render_limits is None:
             raise CreationStagePreparationRequired(stage, "请先完成人物组合 CPU 成片准备，再继续原作业。")
     if stage == "render":
-        event = repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start")
+        event = repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start", connection=connection)
         actor = CreationExecutionActor.from_event(job.workspace_id, event.payload) if event.payload.get("member_id") else None
         with nullcontext(connection) if connection is not None else repository._connect() as conn:
             stage, _resources = owner.render_facts(conn, task, plan, actor=actor, job=job, prepare_assembly=True)
