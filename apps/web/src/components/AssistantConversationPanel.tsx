@@ -21,8 +21,9 @@ import remarkGfm from "remark-gfm";
 import Link from "next/link";
 import { getAssistantCapabilities, taskMediaJobLabel, taskMediaResourceCheckLabel } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantScriptToolReceipt, ResourceAdmissionReceipt } from "@/lib/types";
-import type { AssistantInputReceipt, AssistantStoryboardRegeneration, AssistantScriptWindowRequest, AssistantResultStage } from "@/lib/types/assistant";
+import type { AssistantInputReceipt, AssistantStoryboardRegeneration, AssistantScriptWindowRequest, AssistantResultStage, OpenAssistantResult } from "@/lib/types/assistant";
 import type { CreationTaskEditConfirmResponse } from "@/lib/types/task-edits";
+import { completedAudioReplyMatchesReceipt } from "./creation-task/assistant-result-audio";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
 import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal, assistantTurnScriptWindowRequest, assistantScriptWindowReadKey, assistantTurnGoalRefreshState } from "./useAssistantConversation";
 
@@ -382,12 +383,13 @@ function InputReceipt({ item, reading, onWithdraw }: { item: AssistantInputRecei
   </div>;
 }
 
-function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, onOpenResultStage, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, windowReadError, taskScopeId, outputRecovered = false, productionRecovered = false, inputReceipts = [] }: { inputReceipts?: AssistantInputReceipt[]; turn: AssistantConversationTurn; latest?: boolean; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; onOpenResultStage?: (stage: AssistantResultStage) => void; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; windowReadError?: string; taskScopeId?: string; outputRecovered?: boolean; productionRecovered?: boolean }) {
+function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlanFromReply, onOpenEditProposal, onOpenCreationRequest, onOpenResultStage, transferDraftState, onContinue, continueReason, onReadResult, readingResult, refreshPaused, windowReadError, taskScopeId, outputRecovered = false, productionRecovered = false, inputReceipts = [] }: { inputReceipts?: AssistantInputReceipt[]; turn: AssistantConversationTurn; latest?: boolean; reading?: ReadingState; onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void; onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void; onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void; onOpenResultStage?: OpenAssistantResult; transferDraftState: "none" | "draft" | "confirmed"; onContinue: (message: string) => void; continueReason: string | null; onReadResult: (turn: AssistantConversationTurn, openProposal?: boolean) => void; readingResult: boolean; refreshPaused: boolean; windowReadError?: string; taskScopeId?: string; outputRecovered?: boolean; productionRecovered?: boolean }) {
   const businessContinuation = turn.events.some((event: unknown) => typeof event === "object" && event !== null
     && "type" in event && event.type === "goal_continuation_started"
     && "source_kind" in event && event.source_kind === "business_event");
   const result = turn.result;
   const taskResult = assistantTaskTurnResult(turn);
+  const [locationNotice, setLocationNotice] = useState<string | null>(null);
   const continuation = taskResult?.continuation;
   const job = taskResult?.response?.media_job;
   const request = taskResult?.response?.edit_request;
@@ -471,6 +473,7 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
     || scriptWindow?.failure || job?.failure_reason && job.status !== "cancelled" || job?.repair_action
     || job?.resource_wait?.context === "pending_request")
     || ["failed", "interrupted", "rejected"].includes(outcomeStatus ?? "");
+  const completedAudioReply = !resultNeedsAttention && !businessSummary && completedAudioReplyMatchesReceipt(turn);
   const summaryInHeading = Boolean(taskResult && resultSummary);
   const savedStage = taskScopeId && !windowInputMismatch ? savedResultStage(turn, taskScopeId) : null;
   const resultStage = onOpenResultStage ? savedStage : null;
@@ -497,7 +500,7 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
       {repairAction && repairAction !== visibleFailure && repairAction !== failureImpact ? <p>{repairAction}</p> : null}
     </div> : null}
     {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
-    {resultSummary ? <TurnResult summary={resultSummary} summaryInHeading={summaryInHeading} reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult) && (resultNeedsAttention || !turn.assistant_text.trim())}>
+    {resultSummary && !completedAudioReply ? <TurnResult summary={resultSummary} summaryInHeading={summaryInHeading} reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult) && (resultNeedsAttention || !turn.assistant_text.trim())}>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
       {storyboardSummary && storyboardSummary !== resultSummary ? <p>{storyboardSummary}</p> : null}
       {segment?.failure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:segment:diagnostic`} message={segment.failure.reason}/>{segment.failure.repair_action ? <p>{segment.failure.repair_action}</p> : null}</div> : null}
@@ -517,11 +520,15 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
       {job?.resource_wait ? <ResourceWaitReceipt receipt={job.resource_wait} reading={reading} readingKey={`${turn.id}:resource:${job.resource_wait.observation_id}:${job.resource_wait.context}`}/> : null}
       {refreshPaused && pendingResult ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
     </TurnResult> : null}
+    {completedAudioReply && readinessMessage ? <ReadingDetails reading={reading} readingKey={`${turn.id}:readiness`} className="assistant-turn-result">
+      <summary>制作条件</summary><div className="assistant-result-details"><p>{readinessMessage}</p></div>
+    </ReadingDetails> : null}
     <div className="assistant-result-actions">
-      {resultStage ? <Button variant="ghost" className="assistant-text-action" type="button" onClick={() => onOpenResultStage?.(resultStage)}>{resultStageLabels[resultStage]}</Button> : null}
+      {resultStage ? <Button variant="ghost" className="assistant-text-action" type="button" onClick={() => setLocationNotice(onOpenResultStage?.(resultStage, turn) ?? null)}>{resultStageLabels[resultStage]}</Button> : null}
       {onOpenEditProposal && canOpenTurnProposal(turn) ? <Button variant="ghost" type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</Button> : null}
       {unknownRequest || waitingForOriginal && (turn.status !== "running" || refreshPaused) ? <Button variant="ghost" type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</Button> : null}
     </div>
+    {locationNotice && resultStage ? <p className="assistant-stream-status" role="status">{locationNotice}</p> : null}
     {onOpenCreationRequest && turn.status !== "running" && result?.kind === "creation_request" && typeof result.creation_request_id === "string" ? <Button variant="ghost" className="assistant-text-action" type="button" disabled={Boolean(continueReason)} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</Button> : null}
     {turn.status === "failed" ? <p role="status">{outputRecovered ? "本轮回复曾中断；制作与技术检查已恢复完成，历史失败保留。"
       : productionRecovered ? "本轮回复曾中断；成片已生成，输出尚未检查，历史记录保留。"
@@ -551,7 +558,7 @@ export function AssistantConversationPanel({
   onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void;
   onCreatePlanFromReply?: (turn: AssistantConversationTurn) => void;
   onOpenEditProposal?: (turn: AssistantConversationTurn) => void; onOpenCreationRequest?: (turn: AssistantConversationTurn) => void;
-  onOpenResultStage?: (stage: AssistantResultStage) => void;
+  onOpenResultStage?: OpenAssistantResult;
   transferDraftState?: "none" | "draft" | "confirmed";
   busy: boolean;
   configured: boolean;

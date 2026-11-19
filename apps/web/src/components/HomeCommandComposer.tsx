@@ -1,5 +1,5 @@
 "use client";
-import type { AssistantResultStage } from "@/lib/types/assistant";
+import type { OpenAssistantResult } from "@/lib/types/assistant";
 
 import { AlertCircle, LoaderCircle, RotateCcw, Undo2 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -38,7 +38,7 @@ export type HomeCommandComposerProps = {
     getPlayheadMs: () => number | null;
     onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void;
     transferDraftState?: "none" | "draft" | "confirmed";
-    onOpenResultStage?: (stage: AssistantResultStage) => void;
+    onOpenResultStage?: OpenAssistantResult;
     onOpenEditProposal?: (turn: AssistantConversationTurn) => void;
   };
   materialContext?: {

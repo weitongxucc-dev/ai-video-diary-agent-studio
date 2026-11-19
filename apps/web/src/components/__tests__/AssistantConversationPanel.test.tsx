@@ -277,7 +277,7 @@ it.each([
   render(<AssistantConversationPanel state={state({conversation:saved, refresh})} input="正在编辑的下一条要求"
     onInput={vi.fn()} onSend={send} onOpenEditProposal={proposal} onOpenResultStage={open} busy={false} configured scopeLabel="当前任务"/>);
   fireEvent.click(screen.getByRole("button", {name:label}));
-  expect(open).toHaveBeenCalledExactlyOnceWith(stage);
+  expect(open).toHaveBeenCalledExactlyOnceWith(stage, turn);
   expect(screen.getByRole("textbox")).toHaveValue("正在编辑的下一条要求");
   expect(send).not.toHaveBeenCalled();
   expect(proposal).not.toHaveBeenCalled();
@@ -294,7 +294,7 @@ it("locates a saved result after the reply failed without offering to replay the
     onOpenResultStage={open} busy={false} configured scopeLabel="当前作品"/>);
   expect(screen.queryByRole("button", {name:"继续编辑本条要求"})).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", {name:"查看当前文案"}));
-  expect(open).toHaveBeenCalledExactlyOnceWith("script");
+  expect(open).toHaveBeenCalledExactlyOnceWith("script", saved.turns[0]);
   expect(send).not.toHaveBeenCalled();
 });
 
@@ -2609,4 +2609,35 @@ describe("conversation panel width changes", () => {
       expect(screen.queryByRole("button", {name: "展开全文"})).not.toBeInTheDocument();
     } finally { cleanup(); sizes.restore(); }
   });
+});
+
+it("keeps the concrete saved gain reply and folds supplementary admission facts", () => {
+  const saved = conversation("task");
+  const turn = saved.turns[0];
+  const summary = "这段配音已从 0 dB 调整为 -3 dB。已保存，可撤销。";
+  turn.assistant_text = summary;
+  turn.status = "completed";
+  const operation = { id: "edit-1", task_id: "task-one", workspace_id: saved.workspace_id, status: "applied",
+    operation_type: "EditAudioTimeline", base_version_id: "before", result_version_id: "after",
+    payload: { edit: { action: "update", target_id: "voice-clip" } } };
+  const applied = { operation, execution_readiness: { status: "authorization_ready" } };
+  turn.result = { kind: "task_turn", timeline_action: "apply",
+    completed_local_edit: { scope: "single_narration_gain_edit", task_id: "task-one", request_id: "request-1",
+      operation_id: operation.id, base_version_id: "before", result_version_id: "after", target_id: "voice-clip",
+      gain_before_db: 0, gain_after_db: -3, summary },
+    response: { timeline_action: "apply", edit_request: { task_id: "task-one", request_id: "request-1",
+      phase: "apply", status: "recorded", result: applied } } };
+  const open = vi.fn();
+  const panel = () => <AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()}
+    onSend={vi.fn()} onOpenResultStage={open} busy={false} configured scopeLabel="当前作品"/>;
+  const view = render(panel());
+  expect(screen.getAllByText(summary)).toHaveLength(1);
+  expect(screen.queryByText("修改已保存，可撤销；成片尚未重新生成")).not.toBeInTheDocument();
+  expect(screen.getByText("制作条件").closest("details")).not.toHaveAttribute("open");
+  fireEvent.click(screen.getByRole("button", { name: "查看当前剪辑" }));
+  expect(open).toHaveBeenCalledExactlyOnceWith("montage", turn);
+
+  applied.execution_readiness = { status: "not_ready" };
+  view.rerender(panel());
+  expect(screen.getByText(/本次保存时后台执行授权未就绪/)).toBeVisible();
 });
