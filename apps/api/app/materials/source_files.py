@@ -4,13 +4,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import nullcontext
 import json
+import math
 import os
 from pathlib import Path
 import sqlite3
 from typing import Literal
 from uuid import uuid4
 
-from app.materials.contracts import MaterialAsset, MATERIAL_MEDIA_BY_SUFFIX
+from app.materials.contracts import (
+    MATERIAL_MEDIA_BY_SUFFIX,
+    MaterialAsset,
+    MaterialSegment,
+    material_usage_eligibility,
+)
 from app.media_link_import import _probe_file_media_type
 
 from app.models import utc_now
@@ -33,6 +39,31 @@ def directory_accepts_writes(root: Path) -> bool:
     except OSError:
         return False
     return True
+
+
+def material_segment_eligible(
+    asset: MaterialAsset, segment: MaterialSegment, workspace_id: str, *, automation_only: bool = False,
+) -> bool:
+    """Check metadata and source identity before decoding under a device grant."""
+    purpose = "automatic" if automation_only else "manual"
+    if (asset.workspace_id != workspace_id
+            or not material_usage_eligibility(asset, segment, purpose=purpose).eligible
+            or asset.media_type != "video"
+            or asset.duration_seconds is None or not math.isfinite(asset.duration_seconds)
+            or not (math.isfinite(segment.start_seconds) and math.isfinite(segment.end_seconds)
+                    and 0 <= segment.start_seconds < segment.end_seconds <= asset.duration_seconds)):
+        return False
+    path = Path(asset.path)
+    try:
+        stat = path.stat()
+        return (path.is_file() and stat.st_size > 0 and stat.st_size == asset.size_bytes
+                and abs(stat.st_mtime - asset.modified_at.timestamp()) < 0.001)
+    except OSError:
+        return False
+
+
+def automatic_segment_eligible(asset: MaterialAsset, segment: MaterialSegment, workspace_id: str) -> bool:
+    return material_segment_eligible(asset, segment, workspace_id, automation_only=True)
 
 
 class MaterialSourceFileAccess:

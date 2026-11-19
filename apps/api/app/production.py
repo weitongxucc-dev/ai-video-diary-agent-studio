@@ -45,7 +45,6 @@ import io
 import hashlib
 import json
 import logging
-import math
 import sqlite3
 import wave
 from contextlib import nullcontext
@@ -104,7 +103,12 @@ from app.materials.usage_records import MaterialUsageRecordReader
 from app.materials.reference_video import (
     ReferenceVideoStudyStore, build_reference_video_study, compare_study_to_timeline,
 )
-from app.materials.source_files import MaterialSourceFileAccess, directory_accepts_writes as directory_accepts_writes
+from app.materials.source_files import (
+    MaterialSourceFileAccess,
+    automatic_segment_eligible,
+    directory_accepts_writes as directory_accepts_writes,
+    material_segment_eligible,
+)
 from app.materials.intake import MaterialIntakeUseCase
 from app.materials.link_intake import LinkMaterialIntakeUseCase
 from app.materials.workspace_references import WorkspaceMediaReferenceAccess
@@ -223,27 +227,6 @@ BatchItemStatus = Literal[
 
 
 
-
-def material_segment_eligible(asset, segment, workspace_id, *, automation_only=False):
-    """Metadata/file qualification; deep decoding remains under the executing Grant."""
-    if (asset.workspace_id != workspace_id
-            or not material_usage_eligibility(asset,segment,purpose='automatic' if automation_only else 'manual').eligible
-            or asset.media_type != "video"
-            or asset.duration_seconds is None or not math.isfinite(asset.duration_seconds)
-            or not (math.isfinite(segment.start_seconds) and math.isfinite(segment.end_seconds)
-                    and 0 <= segment.start_seconds < segment.end_seconds <= asset.duration_seconds)):
-        return False
-    path = Path(asset.path)
-    try:
-        stat = path.stat()
-        return (path.is_file() and stat.st_size > 0 and stat.st_size == asset.size_bytes
-                and abs(stat.st_mtime - asset.modified_at.timestamp()) < 0.001)
-    except OSError:
-        return False
-
-
-def automatic_segment_eligible(asset, segment, workspace_id):
-    return material_segment_eligible(asset, segment, workspace_id, automation_only=True)
 
 
 

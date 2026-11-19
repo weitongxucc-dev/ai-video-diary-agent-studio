@@ -6,7 +6,7 @@ import json
 
 from app.creation.contracts import TaskEvent
 from app.materials.contracts import MediaAuthorityError, material_usage_eligibility
-from app.production import automatic_segment_eligible
+from app.materials.source_files import automatic_segment_eligible
 from app.models import utc_now
 from app.source_policy import knowledge_item_readable
 
