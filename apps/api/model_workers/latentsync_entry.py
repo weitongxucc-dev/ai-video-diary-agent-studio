@@ -11,18 +11,26 @@ import numpy as np
 import torch
 from einops import rearrange
 
-import local_face
 import official_onnx as pose
 from latentsync.utils.affine_transform import AlignRestore
 from latentsync.utils.image_processor import ImageProcessor
 
 
 class BrowImageProcessor(ImageProcessor):
-    def __init__(self, resolution=256, device="mps", mask_image=None):
+    def __init__(self, resolution=256, device="mps", mask_image=None, *, threads=None):
         super().__init__(resolution=resolution, device="cpu", mask_image=mask_image)
         self.restorer = AlignRestore(resolution=resolution, device=device)
         pose_root = Path(os.environ["LATENTSYNC_POSE_ROOT_PATH"])
-        self.pose = pose.build_session(str(pose_root / "dw-ll_ucoco_384.onnx"))
+        weights = str(pose_root / "dw-ll_ucoco_384.onnx")
+        if threads is None:
+            self.pose = pose.build_session(weights)
+        else:
+            import onnxruntime as ort
+
+            options = ort.SessionOptions()
+            options.intra_op_num_threads = threads
+            options.inter_op_num_threads = 1
+            self.pose = ort.InferenceSession(weights, sess_options=options, providers=["CPUExecutionProvider"])
 
     def affine_transform(self, image):
         data, center, scale = pose.preprocess(image, (288, 384))
@@ -43,5 +51,8 @@ class BrowImageProcessor(ImageProcessor):
         return rearrange(torch.from_numpy(face), "h w c -> c h w"), box, matrix
 
 
-local_face.LocalImageProcessor = BrowImageProcessor
-runpy.run_path(str(Path.cwd() / "inference_fidelity.py"), run_name="__main__")
+if __name__ == "__main__":
+    import local_face
+
+    local_face.LocalImageProcessor = BrowImageProcessor
+    runpy.run_path(str(Path.cwd() / "inference_fidelity.py"), run_name="__main__")

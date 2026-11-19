@@ -384,11 +384,10 @@ class ModelCatalog:
                 message=f"模型安装不完整：{exc}",
                 **common,
             )
-        return ModelRuntimeStatus(
-            state="ready",
-            message=_ready_message(spec),
-            **common,
-        )
+        message = _ready_message(spec)
+        if spec.id == LATENTSYNC_16_MODEL_ID and self.latentsync_runtime.backend == "mlx":
+            message = "LatentSync 1.6 · 512 的 Apple MLX 运行环境已就绪，生成需通过本机人物口型资源准入。"
+        return ModelRuntimeStatus(state="ready", message=message, **common)
 
     def inspect_weights(self, spec: ModelSpec) -> WeightsInspection:
         """Read this spec's directory, whether or not an install record exists."""
@@ -416,7 +415,7 @@ class ModelCatalog:
             issue = self.latentsync_runtime.issue()
             if issue and self.latentsync_runtime.python.is_file():
                 problems.append(issue)
-                actions.append("配置本机 LatentSync 1.6 CUDA 环境")
+                actions.append(f"配置本机 LatentSync 1.6 {self.latentsync_runtime.backend.upper()} 环境")
         if runtime_python_path is None or not runtime_python_path.is_file():
             problems.append(f"运行环境缺失：{runtime_python_path or '未配置模型运行环境路径'}")
             actions.append("准备该模型的独立运行环境")

@@ -168,6 +168,22 @@ def _measurement(profile_path, reference, *, device, backend_identity, budget_pa
                 or not observation.get('request_id') or type(observation.get('generation')) is not int
                 or not observation.get('model_observed_resources')):
             raise ValueError('Prepared narration does not bind its original model measurement')
+    if budget_payload.get('preparation_scope') == 'windowed_measured_v1':
+        observation = receipt['observations']
+        shape = receipt['input_range'].get('shape', {})
+        media = observation.get('media', {})
+        if (receipt['input_range'].get('scope') != 'one_measured_invocation'
+                or observation.get('shape') != shape
+                or observation.get('backends', {}).get('presenter') != backend_identity
+                or not observation.get('request_id') or type(observation.get('generation')) is not int
+                or not observation.get('model_observation')
+                or (shape.get('model_id'), shape.get('width_px'), shape.get('height_px'), shape.get('duration_seconds'))
+                   != (budget_payload['bound_model_id'], budget_payload['max_source_width_px'],
+                       budget_payload['max_source_height_px'], budget_payload['max_duration_seconds'])
+                or (media.get('engine'), media.get('width'), media.get('height'))
+                   != (budget_payload['bound_model_id'], budget_payload['max_source_width_px'],
+                       budget_payload['max_source_height_px'])):
+            raise ValueError('Prepared presenter does not bind its measured model, source dimensions and duration')
     return {"status": "recorded", "reference": record_id, "sha256": expected,
             "verification_status": "unknown"}
 
@@ -235,6 +251,13 @@ def load_device_resource_profile(path: str | Path, *, device: DeviceProfileIdent
                     and name not in evidence_refs):
                 unavailable[name] = 'model_preparation_receipt_missing'
                 continue
+            if name == 'presenter' and operation_budget.preparation_scope is not None:
+                if operation_budget.preparation_scope != 'windowed_measured_v1':
+                    unavailable[name] = 'model_preparation_not_completed'
+                    continue
+                if name not in evidence_refs:
+                    unavailable[name] = 'model_preparation_receipt_missing'
+                    continue
             current_identity = (backend_identities(name, operation_budget) if callable(backend_identities)
                                 else backend_identities.get(name))
             if (configured_identity != current_identity

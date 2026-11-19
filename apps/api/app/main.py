@@ -5788,6 +5788,10 @@ def _device_preparation_service(kind="cpu"):
         from app.narration_resource_preparation import NarrationResourcePreparation
         return NarrationResourcePreparation(repository=production_repo, model_catalog=model_catalog,
                                              provider=voice_clone_provider, **arguments)
+    if kind == "presenter":
+        from app.presenter_resource_preparation import PresenterResourcePreparation
+        return PresenterResourcePreparation(model_catalog=model_catalog, provider=latentsync_provider,
+                                            **arguments)
     if kind == "montage":
         from app.montage_resource_preparation import MontageResourcePreparation
         return MontageResourcePreparation(repository=production_repo,
@@ -5807,6 +5811,12 @@ def _device_preparation_application(*, kind="cpu", request_id=None, actor=None):
     from app.montage_resource_preparation import MontagePreparationShape
     if request_id is not None:
         kind = request_kind(database_path=production_repo.database_path, request_id=request_id, actor=actor)
+    shape_factories = {'cpu': CpuPreparationShape, 'narration': NarrationPreparationShape,
+                       'montage': MontagePreparationShape}
+    if kind == "presenter":
+        from app.presenter_resource_preparation import PresenterPreparationShape
+        shape_factories[kind] = PresenterPreparationShape
+
     def bind(service, budget, scope):
         runtime, _ = bind_device_runtime(
             repository=production_repo, settings=settings, members=local_members_service,
@@ -5818,8 +5828,7 @@ def _device_preparation_application(*, kind="cpu", request_id=None, actor=None):
         service=_device_preparation_service(kind), database_path=production_repo.database_path,
         lifecycle_lock=_runtime_reload_lock, current_runtime=lambda: device_runtime,
         replace_runtime=_publish_device_runtime, stop_runtime=_stop_device_runtime, bind_runtime=bind,
-        shape_factory={'cpu': CpuPreparationShape, 'narration': NarrationPreparationShape,
-                       'montage': MontagePreparationShape}[kind])
+        shape_factory=shape_factories[kind])
 
 
 def _dispatch_device_preparation(action, *, actor, request_id, shape=None, kind="cpu"):

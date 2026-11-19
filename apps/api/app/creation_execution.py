@@ -351,6 +351,9 @@ def presenter_stage_facts(repository, task, script, plan, budget, models, *, con
                  "duration_seconds": duration,
                  "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
                  "timeout_seconds": budget.max_timeout_seconds}
+    from app.host_resource_probes import presenter_scope_fields
+    resources.update(presenter_scope_fields(budget, inputs[0][1].model_id))
+
     def encode(value):
         return json.dumps(value, sort_keys=True, default=str).encode()
     checksum = hashlib.sha256(b'{"files": ' + encode(facts) + b', "inputs": [')
@@ -563,6 +566,8 @@ def person_edit_stage_facts(repository, task, proposal, plan, budget, models):
                  "duration_seconds": segment.duration_seconds,
                  "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
                  "timeout_seconds": budget.max_timeout_seconds}
+    from app.host_resource_probes import presenter_scope_fields
+    resources.update(presenter_scope_fields(budget, request.model_id))
     manifest = [operation, asdict(segment), asdict(request), files, resources]
     digest = hashlib.sha256(json.dumps(manifest, sort_keys=True, default=str).encode()).hexdigest()
     return f"person_edit:{digest}", resources

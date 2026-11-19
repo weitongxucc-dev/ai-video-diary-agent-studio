@@ -1,0 +1,32 @@
+diff --git a/latentsync/utils/image_processor.py b/latentsync/utils/image_processor.py
+index 5ac9f4e..8c1b45a 100644
+--- a/latentsync/utils/image_processor.py
++++ b/latentsync/utils/image_processor.py
+@@ -23 +22,0 @@ from .affine_transform import AlignRestore
+-from .face_detector import FaceDetector
+@@ -51,0 +51 @@ class ImageProcessor:
++            from .face_detector import FaceDetector
+diff --git a/latentsync/utils/util.py b/latentsync/utils/util.py
+index 6aa9ab3..4451a15 100644
+--- a/latentsync/utils/util.py
++++ b/latentsync/utils/util.py
+@@ -31 +30,0 @@ import cv2
+-from decord import AudioReader, VideoReader
+@@ -52,4 +51,2 @@ def read_video(video_path: str, change_fps=True, use_decord=True):
+-        command = (
+-            f"ffmpeg -loglevel error -y -nostdin -i {video_path} -r 25 -crf 18 {os.path.join(temp_dir, 'video.mp4')}"
+-        )
+-        subprocess.run(command, shell=True)
++        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-nostdin", "-i", str(video_path),
++                        "-r", "25", "-crf", "18", os.path.join(temp_dir, "video.mp4")], check=True)
+@@ -66,0 +64 @@ def read_video_decord(video_path: str):
++    from decord import VideoReader
+@@ -106,5 +104,3 @@ def read_audio(audio_path: str, audio_sample_rate: int = 16000):
+-    ar = AudioReader(audio_path, sample_rate=audio_sample_rate, mono=True)
+-
+-    # To access the audio samples
+-    audio_samples = torch.from_numpy(ar[:].asnumpy())
+-    audio_samples = audio_samples.squeeze(0)
++    import librosa
++    data, _ = librosa.load(audio_path, sr=audio_sample_rate, mono=True)
++    audio_samples = torch.from_numpy(data)

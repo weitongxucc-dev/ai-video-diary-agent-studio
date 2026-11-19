@@ -121,6 +121,11 @@ class ProfilePreviewOwner:
                 "section_count": 1, "input_bytes": source.size_bytes + visual.size_bytes + stat.st_size,
                 "duration_seconds": duration, "max_output_bytes": budget.max_output_bytes,
                 "threads": budget.max_threads, "timeout_seconds": budget.max_timeout_seconds}
+            from app.host_resource_probes import presenter_scope_fields
+            scope = presenter_scope_fields(budget, run.model_id)
+            if scope:
+                resources.update(scope)
+                facts.append(scope)
         digest = _digest([run.workspace_id, run.member_identity, run.model_id, facts])
         return digest, f"{run.preview_type}:{digest}", resources
 

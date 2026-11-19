@@ -178,7 +178,8 @@ def request_kind(*, database_path, request_id, actor):
         raise KeyError(request_id)
     if row[:3] != (OWNER_TYPE, actor.workspace_id, actor.member_id):
         raise PermissionError('Preparation request belongs to another owner, workspace or member')
-    kinds = {'cpu-prepare:v1': 'cpu', 'narration-prepare:v1': 'narration', 'montage-prepare:v1': 'montage'}
+    kinds = {'cpu-prepare:v1': 'cpu', 'narration-prepare:v1': 'narration', 'montage-prepare:v1': 'montage',
+             'presenter-prepare:v1': 'presenter'}
     if row[3] not in kinds:
         raise ValueError('Unknown device preparation execution unit')
     return kinds[row[3]]

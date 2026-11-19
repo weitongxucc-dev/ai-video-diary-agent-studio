@@ -180,6 +180,15 @@ def backend_identity(name, budget, *, settings, model_catalog=None):
         elif name in {"native_command", "montage"}:
             source = ("creation/native_task_operations.py" if name == "native_command" else "montage.py")
             executable = Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__).parent / source
+        elif name == "presenter":
+            from app.lipsync_models import LATENTSYNC_16_MODEL_ID
+            from app.model_runtime import LATENTSYNC_16_512
+            if model_catalog is None or (budget is not None and budget.bound_model_id not in (None, LATENTSYNC_16_MODEL_ID)):
+                return None
+            status = model_catalog.status(LATENTSYNC_16_512)
+            if not status.ready or model_catalog.latentsync_runtime is None:
+                return None
+            facts["runtime"] = model_catalog.latentsync_runtime.backend_identity(Path(status.model_path))
             facts["implementation"] = _hash_file(executable)
             if name == 'montage' and not getattr(sys, 'frozen', False):
                 for source in ('creation/montage_stage_use_case.py', 'montage_resource_preparation.py'):
