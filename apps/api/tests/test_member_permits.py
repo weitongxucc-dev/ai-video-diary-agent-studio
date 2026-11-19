@@ -521,11 +521,13 @@ def test_presenter_budget_absence_and_partial_configuration_do_not_borrow_cpu():
     with pytest.raises(HostBudgetUncalibrated, match="人物专属预算"):
         presenter_budgets_from_env({"DEVICE_PRESENTER_MAX_THREADS": "1"})
     budget = PresenterBudget(1, 1024, 10, 1024, 1, 5, 1024, 8, .1, 1024, 1024)
-    env = {"DEVICE_PRESENTER_" + name.upper(): str(value) for name, value in asdict(budget).items()}
+    env = {"DEVICE_PRESENTER_" + name.upper(): str(value) for name, value in asdict(budget).items() if value is not None}
     env.update({name.replace("DEVICE_CPU_RENDER_", "DEVICE_PRESENTER_CPU_RENDER_"): value
                 for name, value in _CPU_RENDER_ENV.items()})
     actual, cpu = presenter_budgets_from_env(env)
     assert actual == budget and cpu == cpu_render_budget_from_env(_CPU_RENDER_ENV)
+    with pytest.raises(HostBudgetUncalibrated, match="实测设备档案"):
+        presenter_budgets_from_env({**env, "DEVICE_PRESENTER_PREPARATION_SCOPE": "windowed_measured_v1"})
 
 
 def _presenter_scheduler(case):
