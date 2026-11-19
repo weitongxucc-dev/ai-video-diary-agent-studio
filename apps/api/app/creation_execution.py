@@ -590,14 +590,15 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
                      creation_plan: CreationPlan, limits: CpuRenderLimits,
                      *, request: WorkRequest | None = None, presenter_limits=None,
                      presenter_models=None, resolve_presenter_output=None,
-                     actor=None, graphic_source_facts=None, audio_mix_facts=None) -> tuple[str, dict[str, object]]:
+                     actor=None, graphic_source_facts=None, audio_mix_facts=None,
+                     retry_from: WorkRequest | None = None) -> tuple[str, dict[str, object]]:
     """Derive a bounded pure-material render from current confirmed inputs."""
     if not conn.in_transaction:
         with repository.execution_inputs.creation_execution_read() as reader:
             return cpu_render_facts(repository, reader, task, creation_plan, limits, request=request,
                 presenter_limits=presenter_limits, presenter_models=presenter_models,
                 resolve_presenter_output=resolve_presenter_output, actor=actor,
-                graphic_source_facts=graphic_source_facts, audio_mix_facts=audio_mix_facts)
+                graphic_source_facts=graphic_source_facts, audio_mix_facts=audio_mix_facts, retry_from=retry_from)
     source_mode = creation_plan.source_media is not None
     if not task.montage_plan_id or (not source_mode and (not task.narration_cache_key or not task.confirmed_script_id)):
         raise ValueError("当前任务缺少已确认故事板或配音")
@@ -769,8 +770,29 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         manifest["graphic_sources"] = graphics
     if audio_mix is not None:
         manifest["audio_mix"] = audio_mix
-    digest = hashlib.sha256(json.dumps(manifest, ensure_ascii=False, sort_keys=True,
-                                       default=str).encode("utf-8")).hexdigest()
+    def unit_key(value):
+        digest = hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                           default=str).encode("utf-8")).hexdigest()
+        return f"render:{digest}"
+
+    key = unit_key(manifest)
+    if retry_from is not None:
+        original_audio = retry_from.resources.get("audio_mix")
+        if not presenter or (audio_mix is None) != (original_audio is None):
+            raise RecoveryBlocked("原人物成片输入已变化，请核对当前版本")
+        previous_manifest = manifest
+        if audio_mix is not None:
+            # Rebuild the failed key with its original admission policy. The
+            # current media identities, graph and exact output bounds still
+            # have to match the original request.
+            policy_fields = ("threads", "timeout_seconds", "source_duration_limit_seconds",
+                             "source_sample_rate_limit", "source_channels_limit")
+            previous_audio = {**audio_mix["resources"],
+                              **{field: original_audio[field] for field in policy_fields}}
+            previous_manifest = {**manifest, "audio_mix": {**audio_mix, "resources": previous_audio}}
+        previous_key = retry_from.unit_key.partition(":retry:")[0]
+        if unit_key(previous_manifest) != previous_key:
+            raise RecoveryBlocked("原人物成片时间线、画面或音轨来源已变化")
     # These are the exact fields HostResourceProbe reads back to budget the unit.
     # A set that is not decidable there blocks the render, so the canvas comes
     # from the shared aspect-ratio authority the renderer itself uses, not from
@@ -789,7 +811,7 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
     }
     if audio_mix is not None:
         resources["audio_mix"] = audio_mix["resources"]
-    return f"render:{digest}", resources
+    return key, resources
 
 
 def montage_manifest_chunks(assets, narration, script_fields, sections):
@@ -1011,18 +1033,28 @@ class CreationJobOwnerVerifier:
             changed=changed or actual!=failed['actual'] or limit!=failed['maximum']
         return changed
 
-    def render_facts(self, conn, task, plan, *, request=None, actor=None, job=None, prepare_assembly=False):
+    def render_facts(self, conn, task, plan, *, request=None, actor=None, job=None, prepare_assembly=False,
+                     retry_from=None):
         job = job or (self.repository.job_records.get_job_run(task.workspace_id, request.owner_id, connection=conn)
             if request is not None else None)
         key, resources = self._render_facts(conn, task, plan, request=request, actor=actor, job=job,
-            prepare_assembly=prepare_assembly)
+            prepare_assembly=prepare_assembly, retry_from=retry_from)
+        if retry_from is not None:
+            key = f"{key}:retry:{retry_from.id}"
         if job is not None:
+            if retry_from is None and plan.presenter_share_target:
+                inputs = self.repository.creation_execution_jobs.creation_execution_input(
+                    job.workspace_id, job.id, connection=conn)
+                predecessor = inputs.get("render_unit_key", "").partition(":retry:")[2]
+                if predecessor:
+                    key = f"{key}:retry:{predecessor}"
             from app.creation.render_generation import current_render_generation, render_generation_fields
             generation = current_render_generation(self.repository, job, connection=conn)
             resources = {**resources, **render_generation_fields(generation)}
         return key, resources
 
-    def _render_facts(self, conn, task, plan, *, request=None, actor=None, job=None, prepare_assembly=False):
+    def _render_facts(self, conn, task, plan, *, request=None, actor=None, job=None, prepare_assembly=False,
+                      retry_from=None):
         if self.packet_copy_assembly is not None and job is None and request is not None:
             job = self.repository.job_records.get_job_run(task.workspace_id, request.owner_id, connection=conn)
         if self.audio_delivery is not None and job is not None:
@@ -1084,7 +1116,8 @@ class CreationJobOwnerVerifier:
         return cpu_render_facts(self.repository, conn, task, plan, limits, request=request,
             presenter_limits=self.presenter_cpu_render_limits, presenter_models=self.presenter_models,
             resolve_presenter_output=self.resolve_presenter_output,
-            actor=actor, graphic_source_facts=self.graphic_source_facts, audio_mix_facts=mix_facts)
+            actor=actor, graphic_source_facts=self.graphic_source_facts, audio_mix_facts=mix_facts,
+            retry_from=retry_from)
 
     def stage_facts(self, task, script, plan, stage, *, connection=None):
         if stage in {'montage_plan', 'person_render'} and connection is None:

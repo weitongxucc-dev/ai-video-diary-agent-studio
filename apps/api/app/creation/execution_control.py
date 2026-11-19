@@ -16,6 +16,7 @@ from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecu
     CreationInputRejected, creation_input_rejection, revision_digest, submit_creation_stage, montage_waiting_for_confirmation,
     migrate_creation_narration_request, resume_original_narration)
 from app.creation.render_stage_use_case import RenderRejected
+from app.creation.render_reopen import continue_failed_presenter_render
 from app.creation.contracts import TaskEvent, JobRun
 from app.creation.task_authorization import TaskAuthorizationDenied
 from app.device_scheduler import SubmissionIntent, SchedulePolicy, RecoveryBlocked
@@ -346,6 +347,14 @@ class CreationExecutionControl:
                         self.repository.creation_execution_jobs.bind_creation_execution_source(
                             current, execution_source, connection=conn)
                 return self.read_bound(workspace_id, task_id, latest.id, actor, verify_media=verify_media)
+            retried = continue_failed_presenter_render(self.execution, self.render_stage, latest, actor,
+                runtime.scheduler, write_guard=write_guard)
+            if retried is not None:
+                if execution_source is not None:
+                    self.repository.creation_execution_jobs.bind_creation_execution_source(
+                        self.repository.job_records.get_job_run(workspace_id, latest.id), execution_source, write_guard=write_guard)
+                runtime.wake()
+                return self.status(workspace_id, task_id, verify_media=verify_media)
             if latest is not None and self.execution.rerender_current(latest,actor,runtime.scheduler,write_guard=write_guard):
                 job = self.repository.job_records.get_job_run(workspace_id,latest.id)
                 if execution_source is not None:
