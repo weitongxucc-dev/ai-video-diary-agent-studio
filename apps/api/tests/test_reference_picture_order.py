@@ -1,7 +1,6 @@
 """Ordered task input is replayable and consumes only the adopted visual ranges."""
 from dataclasses import replace
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 
