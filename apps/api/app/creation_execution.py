@@ -2251,6 +2251,9 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         if owner.segments.waiting_for_visual_decision(job,connection=connection):
             return None
     regenerate = event.get("operation") == "regenerate_storyboard"
+    if (plan.presenter_share_target and not explicit_presenter
+            and (owner.presenter_budget is None or owner.presenter_cpu_render_limits is None)):
+        raise ValueError("人物制作及人物组合 CPU 成片专属预算尚未标定")
     if source_mode:
         if event.get('operation') not in {None, 'render_current'}:
             raise ValueError('原声来源任务只能执行当前已采用时间线的输出')
