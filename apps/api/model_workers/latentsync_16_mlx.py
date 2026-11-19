@@ -103,6 +103,39 @@ def check_runtime(root: Path, revision: str) -> None:
         raise ValueError("LatentSync 1.6 MLX 需要可用的 Metal 和 PyTorch MPS。")
 
 
+
+class _StagedWeights:
+    """Retain the lazy model structures while materializing one checkpoint at a time."""
+
+    def __init__(self, mx, *, unet, vae, root: Path):
+        self.mx = mx
+        self.models = {"vae": (vae, root / RUNTIME_WEIGHTS[0][0]),
+                       "unet": (unet, root / UNET_FILE[0])}
+        # Capture the unevaluated initialization trees before the pipeline
+        # seeds its noise. Reusing them avoids advancing its seeded PRNG when
+        # the checkpoint changes, and preserves the strict load shape checks.
+        self.placeholders = {name: model.parameters() for name, (model, _) in self.models.items()}
+        self.active = None
+
+    def load(self, name):
+        model, path = self.models[name]
+        if self.active != name:
+            self.release()
+            self.active = name
+            model.load_weights([(key, value.astype(self.mx.float16))
+                                for key, value in self.mx.load(str(path)).items()])
+            self.mx.eval(model.parameters())
+            print(f"LatentSync MLX weights={name} active_bytes={self.mx.get_active_memory()} "
+                  f"peak_bytes={self.mx.get_peak_memory()}", flush=True)
+        return model
+
+    def release(self):
+        if self.active is not None:
+            self.mx.synchronize()
+            self.models[self.active][0].update(self.placeholders[self.active])
+            self.active = None
+            self.mx.clear_cache()
+
 def render(root: Path, whisper: Path, video: Path, audio: Path, output: Path, scratch: Path,
            *, memory_limit: int = 8 * 1024**3) -> int:
     import cv2
@@ -134,7 +167,28 @@ def render(root: Path, whisper: Path, video: Path, audio: Path, output: Path, sc
             return mx.concatenate(predictions, axis=0)
 
     class PosteriorPipeline(LipsyncPipelineMLX):
-        _vae_encode = encode_with_posterior
+        def _loop_video(self, whisper_chunks, video_frames):
+            aligned = super()._loop_video(whisper_chunks, video_frames)
+            # BrowImageProcessor keeps the real ONNX detector in `pose`.
+            # Restoring the output frames only needs its affine restorer.
+            self.image_processor.pose = None
+            return aligned
+
+        def _vae_encode(self, images, batch_size=1):
+            staged.load("vae")
+            latents = encode_with_posterior(self, images, batch_size)
+            mx.eval(latents)
+            return latents
+
+        def _vae_decode(self, latents, batch_size=1):
+            staged.load("vae")
+            frames = super()._vae_decode(latents, batch_size)
+            mx.eval(frames)
+            return frames
+
+        def _restore_video(self, *args):
+            staged.release()
+            return super()._restore_video(*args)
 
     threads = int(os.environ.get("OMP_NUM_THREADS", "1"))
     torch.set_num_threads(threads)
@@ -144,19 +198,27 @@ def render(root: Path, whisper: Path, video: Path, audio: Path, output: Path, sc
     mx.set_cache_limit(256 * 1024**2)
     mx.set_memory_limit(memory_limit)
     unet, vae = SerialGuidanceUNet(), Autoencoder()
-    for model, path in ((unet, root / UNET_FILE[0]), (vae, root / RUNTIME_WEIGHTS[0][0])):
-        model.load_weights([(name, tensor.astype(mx.float16)) for name, tensor in mx.load(str(path)).items()])
-        mx.eval(model.parameters())
+    staged = _StagedWeights(mx, unet=unet, vae=vae, root=root)
+
+    def run_unet(sample, timestep, *, encoder_hidden_states):
+        return staged.load("unet")(sample, timestep, encoder_hidden_states=encoder_hidden_states)
+
     encoder = Audio2Feature(model_path=str(whisper), device=torch.device("mps"),
                             num_frames=WINDOW_FRAMES, audio_feat_length=[2, 2])
     mask = load_fixed_mask(RESOLUTION, mask_image_path=str(root / "upstream/latentsync/utils/mask.png"))
     processor = BrowImageProcessor(resolution=RESOLUTION, device="mps", mask_image=mask, threads=threads)
-    pipeline = PosteriorPipeline(unet=unet, vae=vae, sampler=CorrectedDDIMSampler(),
+    pipeline = PosteriorPipeline(unet=run_unet, vae=vae, sampler=CorrectedDDIMSampler(),
                                 audio_encoder=encoder, image_processor=processor,
                                 resolution=RESOLUTION, dtype=mx.float16)
-    # Drop external owners so the pipeline can release each stage as it ends.
-    del encoder, processor, unet, vae, model
-    pipeline(video_path=str(video), audio_path=str(audio), video_out_path=str(output),
-             num_frames=WINDOW_FRAMES, num_inference_steps=STEPS, guidance_scale=GUIDANCE,
-             video_fps=FRAME_RATE, audio_sample_rate=SAMPLE_RATE, seed=SEED, temp_dir=str(scratch))
-    return mx.get_peak_memory()
+    # Let the pipeline release Whisper before any MLX checkpoint is loaded.
+    del encoder, processor, unet, vae
+    try:
+        pipeline(video_path=str(video), audio_path=str(audio), video_out_path=str(output),
+                 num_frames=WINDOW_FRAMES, num_inference_steps=STEPS, guidance_scale=GUIDANCE,
+                 video_fps=FRAME_RATE, audio_sample_rate=SAMPLE_RATE, seed=SEED, temp_dir=str(scratch))
+        peak = mx.get_peak_memory()
+        if peak > memory_limit:
+            raise RuntimeError(f"LatentSync 1.6 MLX 峰值超过本机许可的 {memory_limit / 1024**3:.2f} GiB")
+        return peak
+    finally:
+        staged.release()
