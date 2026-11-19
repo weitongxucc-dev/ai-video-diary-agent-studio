@@ -655,6 +655,26 @@ describe("HomeCommandComposer", () => {
     expect(mocks.ask).toHaveBeenCalledOnce();
   });
 
+  it("does not offer an earlier conversation's unconfirmed edit in a new chat on the same task", async () => {
+    configuredModel();
+    const task = { id: "task-1", stage: "montage", name: "产品介绍", current_timeline_version_id: "v1", timeline_sequence: 1 } as CreationTask;
+    mocks.editAsk.mockResolvedValue({ reply: "已准备修改", edit_preview: { proposal: {
+      id: "proposal-from-original-chat", summary: "调亮画面", invalidated_refs: [], external_effects: [],
+      preview: { before: {label:"原画面",detail:"偏暗"}, after: {label:"新画面",detail:"更亮"} },
+    } } });
+    render(<HomeCommandComposer task={task} />);
+    fireEvent.change(await readyInput("任务对话要求"), { target: { value: "先预览提亮效果" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByRole("dialog", { name: "修改预览" });
+    fireEvent.click(screen.getByRole("button", {name:"先不改"}));
+    expect(screen.getByRole("button", {name:"查看修改"})).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", {name:"新对话"}));
+    await waitFor(() => expect(screen.queryByRole("button", {name:"查看修改"})).toBeNull());
+    await readyInput("任务对话要求");
+    expect(screen.queryByRole("button", {name:"查看修改"})).toBeNull();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+  });
+
   it("keeps an existing task in the chat, previews a change, confirms and undoes it", async () => {
     configuredModel();
     const task = { id: "task-1", stage: "montage", name: "产品介绍", can_undo: false, current_timeline_version_id: "v1", timeline_sequence: 1 } as CreationTask;

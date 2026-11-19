@@ -141,7 +141,9 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const [activePlanTurnId, setActivePlanTurnId] = useState<string | null>(null);
   const [shareUpdating, setShareUpdating] = useState(false);
   const shareRevision = useRef(0);
-  const [taskPreview, setTaskPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
+  const [proposalForConversation, setTaskPreview] = useState<{conversationId: string; preview: CreationTaskEditPreviewResponse} | null>(null);
+  const taskPreview = !assistant.loading && proposalForConversation?.conversationId === assistant.conversation?.id
+    ? proposalForConversation?.preview : null;
   const [taskPreviewOpen, setTaskPreviewOpen] = useState(false);
   const latestTaskFacts = useRef(task);
   latestTaskFacts.current = task;
@@ -161,7 +163,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const restoredPlanKey = useRef<string | null>(null);
   const replyPlanRequests = useRef(new Map<string, string>());
   const appliedTaskReads = useRef(new Set<string>());
-  useEffect(() => { setPending(null); }, [scopeKind, scopeId, assistant.conversation?.id]);
+  useEffect(() => { setPending(null); setTaskActionStatus(null); }, [scopeKind, scopeId, assistant.conversation?.id]);
   useEffect(() => {
     scopeRevision.current += 1;
     setPreview(null); setPreviewOpen(false);
@@ -261,7 +263,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         }, onStreamEvent);
         const fresh = assistant.isCurrentConversation(turn.conversationId) ? await assistant.refresh() : null;
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
-        setTaskPreview(result.edit_preview);
+        setTaskPreview(result.edit_preview ? { conversationId: turn.conversationId, preview: result.edit_preview } : null);
         setTaskPreviewOpen(Boolean(result.edit_preview));
         const receiptKeys = fresh ? appliedTaskReceiptKeys(fresh, task.id) : [];
         if (onTaskUpdated && (result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration || result.segment_revision || result.timeline_restore

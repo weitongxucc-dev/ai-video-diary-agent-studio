@@ -16,36 +16,43 @@ export type TurnTool = {
 };
 
 export function turnTools(turn: AssistantConversationTurn): TurnTool[] {
-  const tools: TurnTool[] = [];
-  const positions = new Map<number, number>();
+  const tools = new Map<number, TurnTool>();
   for (const event of turn.events) {
-    if (event.type === "tool_start") {
-      positions.set(event.tool_id, tools.length);
-      tools.push({ id: event.tool_id, label: event.label, state: turn.status === "running" ? "running" : "unreturned" });
+    if (event.type === "tool_start" && !tools.has(event.tool_id)) {
+      tools.set(event.tool_id, { id: event.tool_id, label: event.label, state: turn.status === "running" ? "running" : "unreturned" });
     } else if (event.type === "tool_end") {
-      const position = positions.get(event.tool_id) ?? tools.length;
-      positions.set(event.tool_id, position);
-      tools[position] = { id: event.tool_id, label: event.label, state: event.ok ? "succeeded" : "failed",
-        summary: event.summary, failure: event.failure };
+      tools.set(event.tool_id, { id: event.tool_id, label: event.label || tools.get(event.tool_id)?.label || "",
+        state: event.ok ? "succeeded" : "failed", summary: event.summary, failure: event.failure });
     }
   }
-  return tools;
+  return [...tools.values()];
 }
 
-// Only user-facing tool receipts reach this surface. Keep diagnostic blobs and
-// paths out of the DOM even when an older tool returned them as a summary.
+export type TurnReadingState = {
+  get: (key: string, fallback: boolean) => boolean;
+  save: (key: string, open: boolean) => void;
+};
+
+export function hasPrivateExecutionText(text: string) {
+  return /\b(?:authorization|api[_ -]?key|(?:access|refresh)[_ -]?token|password|(?:private[_ -]?)?reasoning(?:[_ -]?(?:content|text))?|thinking)\b["']?\s*[:=]|\bbearer\s+[a-z0-9._~-]{8,}|\bsk-(?:proj-)?[a-z0-9_-]{12,}|-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/i.test(text);
+}
+
+// Only user-facing tool receipts reach this surface. Older events can still
+// carry transport errors or raw tool responses in a summary.
 export function publicExecutionText(value?: string | null) {
   const text = value?.trim();
-  return text && !/(?:https?:\/\/|file:\/\/|Traceback|ECONNREFUSED|ENOTFOUND|\/(?:Users|Volumes|private|tmp|home|var)\/|[a-z]:\\|(?:api[_ -]?key|authorization)\s*[:=]|\bsk-(?:proj-)?[a-z0-9_-]{12,}|^\s*[{[])/i.test(text) ? text : null;
+  return text && !hasPrivateExecutionText(text)
+    && !/(?:https?:\/\/|file:\/\/|Traceback|ECONNREFUSED|ENOTFOUND|\/(?:Users|Volumes|private|tmp|home|var)\/|[a-z]:\\|^[{[])/i.test(text) ? text : null;
 }
 
 export function TurnActivity({ turn, tools, continuation = false }: {
   turn: AssistantConversationTurn; tools: TurnTool[]; continuation?: boolean;
 }) {
   if (turn.status !== "running") return null;
-  const active = [...tools].reverse().find(tool => tool.state === "running");
+  const active = tools.filter(tool => tool.state === "running").at(-1);
   const label = publicExecutionText(active?.label);
-  const activity = label ? `正在${label}` : turn.assistant_text.trim() ? "正在回复"
+  const activity = active ? label ? label.startsWith("正在") ? label : `正在${label}` : "正在执行"
+    : turn.assistant_text.trim() ? "正在回复"
     : continuation ? "继续完成原要求" : turn.sequence === 0 ? "正在发送要求" : "正在等待回复";
   return <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={14} className="is-spinning"/>{activity}</p>;
 }
@@ -72,7 +79,7 @@ const elapsed = (ms?: number | null) => ms == null ? null : ms < 1000 ? `${forma
 
 function TraceEvent({ event }: { event: AssistantTraceEvent }) {
   const time = event.at ? Date.parse(event.at) : NaN;
-  const label = publicExecutionText(event.label ?? event.tool_name);
+  const label = publicExecutionText(event.label);
   const failure = event.failure_class ? failureLabels[event.failure_class] ?? "有失败记录" : null;
   return <li>
     <span>{eventLabels[event.type] ?? "记录事件"}{label ? `：${label}` : ""}</span>
@@ -82,7 +89,7 @@ function TraceEvent({ event }: { event: AssistantTraceEvent }) {
 }
 
 function TurnUsage({ trace, model }: { trace: AssistantTurnTrace; model: string | null }) {
-  const usage = trace.provider_usage;
+  const usage = trace.usage_status === "unknown" ? null : trace.provider_usage;
   const source = trace.usage_source ? usageSources[trace.usage_source] : null;
   const counts = usage ? ([
     ["总计", usage.totalTokens], ["输入", usage.input], ["输出", usage.output],
@@ -90,26 +97,32 @@ function TurnUsage({ trace, model }: { trace: AssistantTurnTrace; model: string 
   ] as const).filter((entry): entry is readonly [typeof entry[0], number] => entry[1] != null) : [];
   return <dl className="assistant-trace-usage" aria-label="本轮用量">
     {model ? <div><dt>模型</dt><dd>{model}</dd></div> : null}
-    <div><dt>用量来源</dt><dd>{trace.usage_status === "unknown" ? "未提供" : source ?? "来源未注明"}</dd></div>
+    <div><dt>用量来源</dt><dd>{trace.usage_status === "unknown" ? "未提供" : source ?? (trace.usage_status === "estimated" ? "估算，来源未注明" : "来源未注明")}</dd></div>
     {counts.length ? <div><dt>Token</dt><dd>{counts.map(([label, value]) => <span key={label}>{label} {formatNumber.format(value)}</span>)}</dd></div> : null}
     <div><dt>耗时</dt><dd>{elapsed(trace.duration_ms) ?? "未提供"}</dd></div>
     <div><dt>费用</dt><dd>未提供</dd></div>
   </dl>;
 }
 
-export function AssistantTurnExecutionRecord({ turn, tools, model, surfacedFailure, savedOpen = false, onOpenChange }: {
-  turn: AssistantConversationTurn; tools: TurnTool[]; model: string | null; surfacedFailure?: AssistantToolFailure; savedOpen?: boolean; onOpenChange?: (open: boolean) => void;
+export function AssistantTurnExecutionRecord({ turn, tools, model, surfacedFailure, reading }: {
+  turn: AssistantConversationTurn;
+  tools: TurnTool[];
+  model: string | null;
+  surfacedFailure?: AssistantToolFailure;
+  reading?: TurnReadingState;
 }) {
-  const [open, setOpen] = useState(savedOpen);
+  const readingKey = `${turn.id}:trace`;
+  const diagnosticsKey = `${turn.id}:technical`;
+  const [open, setOpen] = useState(() => reading?.get(readingKey, false) ?? false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(() => reading?.get(diagnosticsKey, false) ?? false);
   const [trace, setTrace] = useState<AssistantTurnTrace | null>(null);
   const [error, setError] = useState(false);
   const [retry, setRetry] = useState(0);
   const [earlier, setEarlier] = useState<"idle" | "loading" | "error">("idle");
   const loaded = useRef(false);
   const running = turn.status === "running";
-  const readingKey = `${turn.id}:trace`;
   useEffect(() => {
-    if (!open || running || loaded.current) return;
+    if (!open || !diagnosticsOpen || running || loaded.current) return;
     let active = true;
     setError(false);
     void getAssistantTurnTrace(turn.id).then(value => {
@@ -117,7 +130,7 @@ export function AssistantTurnExecutionRecord({ turn, tools, model, surfacedFailu
       if (active) { loaded.current = true; setTrace(value); }
     }).catch(() => { if (active) setError(true); });
     return () => { active = false; };
-  }, [open, retry, running, turn.id]);
+  }, [open, diagnosticsOpen, retry, running, turn.id]);
 
   async function loadEarlier(before: number) {
     if (earlier === "loading") return;
@@ -133,30 +146,35 @@ export function AssistantTurnExecutionRecord({ turn, tools, model, surfacedFailu
   const events = trace?.events.filter(event => Object.hasOwn(eventLabels, event.type)
     && (!tools.length || !["tool_start", "tool_end"].includes(event.type))) ?? [];
   return <details className="assistant-trace" data-reading-key={readingKey} open={open}
-    onToggle={event => { const next = event.currentTarget.open; setOpen(next); onOpenChange?.(next); }}>
-    <summary><ChevronRight aria-hidden size={14}/><span>执行记录</span></summary>
+    onToggle={event => { const next = event.currentTarget.open; setOpen(next); reading?.save(readingKey, next); }}>
+    <summary><ChevronRight aria-hidden size={14}/><span>执行记录</span>{tools.length ? <span className="assistant-trace-step-count">{tools.length} 步</span> : null}</summary>
     {open ? <div className="assistant-trace-body">
       {tools.length ? <ol className="assistant-trace-tools" aria-label="操作">
-        {tools.map((tool, index) => {
+        {tools.map(tool => {
           const label = publicExecutionText(tool.label) ?? "工具调用";
           const inReply = tool.failure && tool.failure === surfacedFailure;
           const detail = inReply ? null : publicExecutionText(tool.failure?.reason ?? tool.summary);
-          const impact = publicExecutionText(tool.failure?.impact);
+          const impact = inReply ? null : publicExecutionText(tool.failure?.impact);
           const repair = inReply ? null : publicExecutionText(tool.failure?.repair_action);
-          return <li key={`${tool.id}:${index}`}>
+          return <li key={tool.id}>
             <div className="assistant-trace-tool-heading"><span>{label}</span><span>{toolStateLabels[tool.state]}</span></div>
             {detail ? <p>{detail}</p> : tool.state === "unreturned" ? <p>此调用没有返回，后台作业是否完成仍待核对。</p> : null}
             {impact && impact !== detail ? <p>{impact}</p> : null}
             {repair && repair !== detail && repair !== impact ? <p>{repair}</p> : null}
           </li>;
         })}
-      </ol> : null}
-      {running ? (!tools.length ? <p>暂无已返回的操作记录。</p> : null)
-        : error ? <div role="alert"><p>执行记录暂时无法读取。</p><Button variant="ghost" type="button" onClick={() => setRetry(value => value + 1)}>重试读取记录</Button></div>
-          : trace ? <>
-            <TurnUsage trace={trace} model={model}/>
-            {events.length || trace.next_before != null || trace.failure_class || trace.retry_count ? <details className="assistant-trace-technical">
-              <summary>技术详情</summary>
+      </ol> : <p>本轮暂无公开操作记录。</p>}
+      <details className="assistant-trace-technical" data-reading-key={diagnosticsKey} open={diagnosticsOpen}
+        onToggle={event => {
+          const next = event.currentTarget.open;
+          setDiagnosticsOpen(next);
+          reading?.save(diagnosticsKey, next);
+        }}>
+        <summary><ChevronRight aria-hidden size={14}/>用量与技术详情</summary>
+        {diagnosticsOpen ? running ? <p>本轮结束后可查看用量和技术详情。</p>
+          : error ? <div role="alert"><p>执行记录暂时无法读取。</p><Button variant="ghost" type="button" onClick={() => setRetry(value => value + 1)}>重试读取记录</Button></div>
+            : trace ? <>
+              <TurnUsage trace={trace} model={model}/>
               {trace.failure_class ? <p>运行记录包含{failureLabels[trace.failure_class] ?? "一次失败"}。</p> : null}
               {trace.retry_count ? <p>内部重试 {trace.retry_count} 次</p> : null}
               {events.length ? <ol className="assistant-trace-events" aria-label="技术事件">
@@ -164,8 +182,8 @@ export function AssistantTurnExecutionRecord({ turn, tools, model, surfacedFailu
               </ol> : null}
               {earlier === "error" ? <p role="alert">较早的记录暂时无法读取。</p> : null}
               {trace.next_before != null ? <Button variant="ghost" type="button" disabled={earlier === "loading"} onClick={() => void loadEarlier(trace.next_before!)}>{earlier === "loading" ? "正在读取…" : "加载更早记录"}</Button> : null}
-            </details> : null}
-          </> : <p role="status">正在读取执行记录…</p>}
+            </> : <p role="status">正在读取执行记录…</p> : null}
+      </details>
     </div> : null}
   </details>;
 }
