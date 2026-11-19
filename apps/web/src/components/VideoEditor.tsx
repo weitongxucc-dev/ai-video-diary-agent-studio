@@ -15,7 +15,7 @@ import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
 import { VisualEffectsInspector } from "./VisualEffectsInspector";
 
-import { useContext, useEffect, useId, useRef, useState, type RefObject, type ReactNode } from "react";
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Check, Clapperboard, Lock, Unlock, Maximize, Pause, Play, Plus, Replace, Volume2, VolumeX, ListVideo, SlidersHorizontal, ChevronDown, SkipBack, SkipForward } from "lucide-react";
 import { apiUrl, listenCreationTaskAudio, resolveCreationTaskMediaResponse, cancelCreationTaskMediaJob, taskMediaJobLabel, TaskMediaJobError } from "@/lib/api";
 import type { CreationTaskMontageClip, CreationTaskExactEditInput, CreationTaskMontage, CreationTaskSubtitleTrack, CreationTaskPersonRender, CreationTaskPersonRenderCapability, GraphicOverlay, MontageClipCandidate, TaskMediaJob } from "@/lib/types";
@@ -183,8 +183,10 @@ function CanvasControls({ ratio, fitMode, versionId, editError, busy, onPreview,
 }
 
 type VideoStageMontage = Pick<CreationTaskMontage, "clips" | "cues" | "duration_seconds" | "output_url" | "low_confidence_clip_count" | "aspect_ratio" | "graphic_overlays">;
-export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montage, planAspectRatio, subtitleTracks, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, timelineActions, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay, editError, onEditSubtitle }:  {
+export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montage, planAspectRatio, subtitleTracks, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, timelineActions, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay, editError, onEditSubtitle, seekRequest, audioSelection }:  {
   editError?: string; onEditSubtitle?: (cueId: string) => void;
+  seekRequest?: { seconds: number };
+  audioSelection?: { id: string; seconds?: number };
   selectedOverlayId?: string|null; onSelectOverlay?: (id:string)=>void;
   taskId: string; versionId: string | null; narrationCacheKey: string | null; montage: VideoStageMontage;
   planAspectRatio: NonNullable<CreationTaskMontage["aspect_ratio"]>; subtitleTracks: CreationTaskSubtitleTrack[];
@@ -197,6 +199,9 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
   const auxiliaryRef = useEditorDockHost("auxiliary");
   const panel = useContext(WorkspacePanelContext);
   const [time, setTime] = useWorkspaceViewState("video.time", initialTime);
+  useLayoutEffect(() => {
+    if (seekRequest) setTime(seekRequest.seconds);
+  }, [seekRequest, setTime]);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useWorkspaceViewState("video.muted", false);
   const outputIdentity = JSON.stringify([taskId, versionId, montage.output_url]);
@@ -292,7 +297,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
       <span className={ui.shotImage}><ClipThumbnail clip={clip} taskId={taskId} statusId={`${storyboardId}-thumbnail-${index}`} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
       <span className={ui.shotLabel}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><small>{editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</small></span>
     </button>)}</div> : null}
-    <TimelineViewport actions={timelineActions} duration={montage.duration_seconds} time={time} playing={playing} selectedTime={selected?.timeline_start_seconds} selectionKey={selectedId} formatTime={editorTime} onSeek={value => { const clip = montage.clips.find(item => value >= item.timeline_start_seconds && value < item.timeline_end_seconds); if (clip && clip.id !== selectedId) onSelect(clip.id); seek(value); }}>
+    <TimelineViewport actions={timelineActions} duration={montage.duration_seconds} time={time} playing={playing} selectedTime={audioSelection?.seconds ?? selected?.timeline_start_seconds} selectionKey={audioSelection?.id ?? selectedId} formatTime={editorTime} onSeek={value => { const clip = montage.clips.find(item => value >= item.timeline_start_seconds && value < item.timeline_end_seconds); if (clip && clip.id !== selectedId) onSelect(clip.id); seek(value); }}>
       {onSelectOverlay && montage.graphic_overlays?.length ? <OverlayTimeline formatTime={editorTime} items={montage.graphic_overlays} duration={montage.duration_seconds} selectedId={selectedOverlayId} disabled={busy} onSelect={onSelectOverlay}/> : null}
       <div className={ui.track}>
         <span><Clapperboard aria-hidden />画面</span>
@@ -302,7 +307,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
           const label = `${shot}：${range}${clip.locked ? "，已锁定" : clip.needs_confirmation ? "，待查看" : ""}`;
           return <button key={clip.id} type="button" className={ui.videoTimelineClip}
             style={{ left: `${clip.timeline_start_seconds / montage.duration_seconds * 100}%`, width: `${(clip.timeline_end_seconds - clip.timeline_start_seconds) / montage.duration_seconds * 100}%` }}
-            title={label} aria-label={`定位${label}`} aria-pressed={clip.id === selectedId}
+            title={label} aria-label={`定位${label}`} aria-pressed={!audioSelection && clip.id === selectedId}
             onClick={() => { onSelect(clip.id); seek(clip.timeline_start_seconds); }}>
             <span className={ui.timelineThumbnail}><ClipThumbnail clip={clip} taskId={taskId} /></span>
             <span className={ui.timelineClipLabel}>{shot}{clip.locked ? <Lock aria-hidden /> : clip.needs_confirmation ? <span className={ui.clipReviewMark} aria-hidden /> : null}</span>

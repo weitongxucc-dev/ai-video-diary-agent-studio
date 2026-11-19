@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from datetime import datetime, timezone
 
 
 REVIEWER_KINDS = ('evidence_scout', 'script_reviewer', 'visual_reviewer', 'audio_reviewer')
+RUNTIME_RECEIPT_FIELDS = ('session_id', 'provider_usage', 'usage_status', 'trace_events')
+_RUNTIME_EVENT_TYPES = {
+    'agent_start', 'agent_end', 'agent_settled', 'turn_start', 'turn_end',
+    'tool_start', 'tool_end', 'nested_tool', 'compaction_start', 'compaction_end', 'retry',
+    'model_start', 'model_end',
+}
+_RUNTIME_EVENT_IDENTIFIERS = ('event_id', 'parent_event_id', 'tool_call_id', 'tool_name', 'status', 'failure_class')
 _REFERENCE_KINDS = {
     'conversation_id': 'conversation', 'turn_id': 'turn', 'tool_call_id': 'tool_call',
     'request_id': 'business_request', 'failed_request_id': 'business_request',
@@ -16,6 +24,65 @@ _REFERENCE_KINDS = {
     'result_version_id': 'timeline', 'artifact_ref': 'output',
     'output_ref': 'output', 'observation_id': 'output',
 }
+
+
+def _is_logical_reference(key: str, value: object) -> bool:
+    if not isinstance(value, str) or not 1 <= len(value) <= 256:
+        return False
+    if re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_.:-]*', value):
+        return True
+    if _REFERENCE_KINDS[key] != 'output':
+        return False
+    # Registered artifact records use relative artifacts/ names; the
+    # narration repository publishes its own logical scheme.
+    if re.fullmatch(r'narration://artifact/[A-Za-z0-9_-]{1,128}', value):
+        return True
+    return re.fullmatch(r'artifacts/(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.-]*', value) is not None
+
+
+def safe_runtime_trace_events(events: object) -> list[dict]:
+    if not isinstance(events, list):
+        return []
+    safe = []
+    for event in events[:1000]:
+        if (not isinstance(event, dict) or not isinstance(event.get('type'), str)
+                or event['type'] not in _RUNTIME_EVENT_TYPES):
+            continue
+        item = {'type': event['type']}
+        for key in ('step', 'at_ms'):
+            if type(value := event.get(key)) is int and 0 <= value <= 253402300799999:
+                item[key] = value
+        for key in _RUNTIME_EVENT_IDENTIFIERS:
+            if isinstance(value := event.get(key), str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,256}', value):
+                item[key] = value
+        refs = event.get('references')
+        if isinstance(refs, dict):
+            item['references'] = {key: value for key, value in refs.items()
+                if key in _REFERENCE_KINDS and _is_logical_reference(key, value)}
+        safe.append(item)
+    return safe
+
+
+def runtime_receipt_fields(value: object) -> dict:
+    return {key: value[key] for key in RUNTIME_RECEIPT_FIELDS if key in value} if isinstance(value, dict) else {}
+
+
+def append_runtime_receipt(first: dict, following: dict) -> dict:
+    if first.get('session_id') and following.get('session_id') and first['session_id'] != following['session_id']:
+        return {**first, 'provider_usage': None, 'usage_status': 'unknown'}
+    merged = {**first, **following}
+    left, right = first.get('provider_usage'), following.get('provider_usage')
+    status = first.get('usage_status')
+    if status in {'known', 'estimated'} and status == following.get('usage_status') and left and right:
+        merged['provider_usage'] = {key: left[key] + right[key] for key in left.keys() & right.keys()}
+        if not merged['provider_usage']:
+            merged['usage_status'] = 'unknown'
+    else:
+        merged.update(provider_usage=None, usage_status='unknown')
+    events = [*first.get('trace_events', []), *following.get('trace_events', [])]
+    if events:
+        merged['trace_events'] = [{**event, 'step': index} for index, event in enumerate(events, 1)]
+    return merged
 
 
 def project_usage_ledger(turns: list[dict]) -> dict:
@@ -56,7 +123,7 @@ def _references(event: dict) -> list[dict]:
         raw = event.get(key)
         if raw is None and isinstance(event.get('trace_references'), dict):
             raw = event['trace_references'].get(key)
-        ref = _opaque(raw)
+        ref = _opaque(raw) if _is_logical_reference(key, raw) else None
         if ref:
             values[(kind, ref)] = {'kind': kind, 'ref': ref}
     return list(values.values())
@@ -68,7 +135,7 @@ def _nested_references(value: object, *, depth: int = 0) -> list[dict]:
     refs = []
     for key, item in value.items():
         kind = _REFERENCE_KINDS.get(key)
-        ref = _opaque(item) if kind else None
+        ref = _opaque(item) if kind and _is_logical_reference(key, item) else None
         if ref:
             refs.append({'kind': kind, 'ref': ref})
         elif isinstance(item, dict):
@@ -228,7 +295,7 @@ def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 20
             tool_counts[label] = tool_counts.get(label, 0) + 1
         projected.append(item)
     result = turn.get('result') if isinstance(turn.get('result'), dict) else {}
-    runtime_events = result.get('trace_events') if isinstance(result.get('trace_events'), list) else []
+    runtime_events = safe_runtime_trace_events(result.get('trace_events'))
     runtime_projected, started_at, ended_at, runtime_duration, runtime_failure, retries, runtime_associations = _project_runtime_events(runtime_events, turn.get('id'))
     if runtime_projected:
         projected = runtime_projected

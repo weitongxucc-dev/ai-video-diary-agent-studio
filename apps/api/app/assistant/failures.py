@@ -96,6 +96,7 @@ class AssistantUnavailable(RuntimeError):
         super().__init__(message)
         self.cause = cause
         self.service_contacted = service_contacted
+        self.runtime_receipt: dict = {}
 
 
 def _fail(

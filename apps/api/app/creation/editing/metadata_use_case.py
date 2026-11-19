@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.creation.editing.clips import ClipPreviewCommand
+from app.creation.editing.edit_scope import edit_scope_blocker
 from app.schemas import CreationTaskExactEditRequest
 from app.schemas import MontageClipCandidateResponse
 from app.visual_effects import compile_crop_command
@@ -681,6 +682,26 @@ class MetadataEditUseCase:
         source_command = direct_command or proposal_source_command
         identity = actor_identity or (source_command.actor_identity if source_command is not None else None)
         material_before = creation_task_montage_plan_from_payload(base_version.snapshot['montage'])
+        source_intent = direct_intent or self.repository.edit_records.get_edit_intent(
+            workspace_id, proposal.intent_id, connection=connection)
+        edit_source = source_intent.constraints.get('request_source')
+        if edit_source and edit_source.get('assistant_turn_id'):
+            linked = operation_type == 'RemoveSilence' or material_before.duration_seconds != updated_plan.duration_seconds
+            if operation_type == 'EditCompoundTimeline' and not linked:
+                # Compare candidate effects instead of trusting the proposal label.
+                before_tracks = self.current_subtitle_tracks(workspace_id, task,
+                    current_version=base_version, montage=material_before)
+                changed_tracks = (
+                    material_before.clips != updated_plan.clips
+                    or material_before.graphic_overlays != updated_plan.graphic_overlays,
+                    effective_audio_timeline(material_before) != effective_audio_timeline(updated_plan),
+                    edited_subtitle_tracks is not None and
+                        [(track.style, track.cues) for track in before_tracks] !=
+                        [(track.style, track.cues) for track in edited_subtitle_tracks],
+                )
+                linked = sum(changed_tracks) > 1
+            if blocker := edit_scope_blocker(edit_source, linked=linked):
+                raise EditConflict(blocker)
         authorization_write = self.prepare_material_scope(task, material_before, updated_plan, identity, connection=connection)
         carried_tracks = [clone_subtitle_track(track, timeline_version_id=result_version_id) for track in (edited_subtitle_tracks if edited_subtitle_tracks is not None else self.current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))]
         audio_edit = operation_payload.get('edit') if operation_type == 'EditAudioTimeline' else None

@@ -1,13 +1,15 @@
 "use client";
 import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleMinus, Film, MessageSquarePlus, Volume2 } from "lucide-react";
 import type { MaterialAsset } from "@/lib/types";
 import { assetDuration, fileLabel, mediaLabel, roleLabel, reviewLabel } from './material-labels';
 import { useStateOptions } from './material-state';
 import styles from "./MaterialResults.module.css";
 import { IconButton } from "../ui/icon-button";
-type Props = {
+import { MaterialSearchMatches, materialHitKey, type MaterialResultActions } from "./MaterialSearchMatches";
+type Props = MaterialResultActions & {
     assets: MaterialAsset[];
     selectedId: string | null;
     selectionDisabled: boolean;
@@ -17,15 +19,42 @@ type Props = {
     intakeBound: boolean;
     failedThumbnails: Readonly<Record<string, boolean>>;
     onThumbnailFailure: (assetId: string) => void;
-    onSelect: (asset: MaterialAsset) => void;
-    onReference?: (asset: MaterialAsset) => void;
     onResetFilters: () => void;
     onImport: () => void;
 };
-export function MaterialResults({ assets, selectedId, selectionDisabled, viewMode, hasFilters, hasTagFilter, intakeBound, failedThumbnails, onThumbnailFailure, onSelect, onReference, onResetFilters, onImport }: Props) {
+export function MaterialResults({ assets, selectedId, selectionDisabled, viewMode, hasFilters, hasTagFilter, intakeBound, failedThumbnails, onThumbnailFailure, onSelect, onReference, onReplace, onResetFilters, onImport }: Props) {
+    const [previewKey, setPreviewKey] = useState<string | null>(null);
+    const [replacing, setReplacing] = useState<string | null>(null);
+    const [replaceNotice, setReplaceNotice] = useState<{ key: string; message: string } | null>(null);
+    const replaceInFlight = useRef(false);
+    useEffect(() => {
+        if (selectionDisabled) setPreviewKey(null);
+    }, [selectionDisabled]);
+    const replace: MaterialResultActions["onReplace"] = onReplace && (async (asset, segment) => {
+        if (selectionDisabled || replaceInFlight.current) return false;
+        replaceInFlight.current = true;
+        const key = materialHitKey(asset, segment);
+        setReplacing(key);
+        setReplaceNotice(null);
+        let saved = false;
+        try {
+            saved = await onReplace(asset, segment);
+        } catch {
+            saved = false;
+        } finally {
+            replaceInFlight.current = false;
+            setReplacing(null);
+            setReplaceNotice({ key, message: saved ? "已替换当前镜头，可在作品时间线撤销。"
+                : "替换结果尚未确认，请回到当前作品核对。" });
+        }
+        return saved;
+    });
     return <>
         {assets.length ? (<div className={`library-grid ${styles.results}${viewMode === "list" ? ` is-list ${styles.objectList}` : ""}`}>
           {assets.map((asset) => {
+                if (asset.search_hits?.length) return <MaterialSearchMatches key={asset.id} asset={asset}
+                  disabled={selectionDisabled} previewKey={previewKey} onPreviewChange={setPreviewKey} replacing={replacing}
+                  replaceNotice={replaceNotice} onSelect={onSelect} onReference={onReference} onReplace={replace} />;
                 const AssetStateIcon = asset.analysis_status === "failed" ? CircleAlert
                     : asset.analysis_status === "blocked" ? CircleMinus : asset.use_state === "excluded" ? CircleDot
                         : asset.analysis_status === "ready" ? CircleCheck : CircleDashed;

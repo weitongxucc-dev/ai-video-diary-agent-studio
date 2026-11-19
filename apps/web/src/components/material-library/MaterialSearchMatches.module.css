@@ -1,0 +1,48 @@
+.file {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-2);
+  align-content: start;
+  padding: var(--space-3);
+  background: var(--surface-1);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  font: 400 var(--font-size-body)/var(--line-body) var(--font-ui);
+}
+
+.fileHeading, .matchFacts, .actions {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+
+.fileHeading strong { min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+.fileHeading span, .matchFacts span { color: var(--text-2); font-size: var(--font-size-meta); }
+.list { display: grid; gap: var(--space-2); padding: 0; margin: 0; list-style: none; }
+.match { min-width: 0; padding-block: var(--space-2); border-block-start: 1px solid var(--border-1); }
+.matchBody { display: flex; gap: var(--space-2); }
+.matchCopy { min-width: 0; flex: 1; }
+.matchFacts strong { font-variant-numeric: tabular-nums; font-weight: 500; }
+.matchFacts .restriction { color: var(--warning); }
+.matchCopy p, .notice, .player p { margin: 0; overflow-wrap: anywhere; }
+.notice { color: var(--text-2); }
+.poster {
+  display: grid;
+  place-items: center;
+  align-self: flex-start;
+  flex: 0 0 calc(var(--space-6) * 2);
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--space-1);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.poster video { display: block; width: 100%; aspect-ratio: inherit; object-fit: cover; }
+.poster svg { width: var(--space-4); height: var(--space-4); }
+.actions { align-items: center; margin-block-start: var(--space-1); }
+.player:not([hidden]) { padding-block-start: var(--space-2); }
+.player video { width: 100%; max-height: min(36vh, 20rem); object-fit: contain; background: var(--surface-2); }
+.player audio { width: 100%; }

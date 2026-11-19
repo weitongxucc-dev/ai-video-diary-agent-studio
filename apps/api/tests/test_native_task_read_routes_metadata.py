@@ -119,3 +119,35 @@ def test_native_task_reads_metadata_and_rejects_unregistered_artifact_without_wr
     assert not (tmp_path / 'native-task-workspaces').exists()
     assert calls == []
     client.close()
+
+
+def test_native_turn_scope_refuses_writes_but_allows_original_reads():
+    from threading import Event
+    from types import SimpleNamespace
+    from app.creation.native_task_operations import NativeOperationHandler
+
+    origin = {'assistant_turn_id': 'turn', 'raw_command': '只把当前镜头末尾裁短半秒，不要全轨删除。'}
+    calls = []
+
+    def dispatch(operation, arguments, **_context):
+        calls.append((operation, arguments))
+        return {'status': 'succeeded'}
+
+    handler = NativeOperationHandler(SimpleNamespace(dispatch=dispatch), object(),
+        lambda _source, _connection: origin, lambda: None)
+    context = {'call_id': 'call', 'tool_call_id': 'tool', 'source_binding': {},
+               'cancel_event': Event(), 'deadline_monotonic': float('inf')}
+    for operation, arguments in [
+        ('submit_task_command', {}),
+        ('register_task_artifacts', {}),
+        ('native_task_file', {'action': 'write'}),
+        ('open_task_working_context', {'input_refs': [{'name': 'candidate.mp4'}]}),
+    ]:
+        reply = handler(operation, arguments, **context)
+        assert not reply['ok']
+        assert reply['failure']['error'] == 'edit_scope_conflict'
+        assert reply['failure']['submission_effect'] == 'not_submitted'
+    assert calls == []
+    assert handler('read_task_command', {'request_id': 'old-request'}, **context)['ok']
+    origin['raw_command'] = '删除 3.5 到 4 秒，所有轨道同步删除。'
+    assert handler('submit_task_command', {}, **context)['ok']

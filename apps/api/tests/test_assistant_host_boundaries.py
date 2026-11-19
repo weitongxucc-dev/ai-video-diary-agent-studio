@@ -225,7 +225,7 @@ def test_public_turn_binds_real_preflight_before_process_and_preserves_selected_
         assert "synthetic-private-key" not in " ".join(command)
         assert "synthetic-profile" not in kwargs["message"]
         assert "creator_preferences" in kwargs["message"] and "plain" in kwargs["message"]
-        launches.append(command)
+        launches.append(json.loads(kwargs["message"])["sessionId"])
         return sdk_completed(command, 0, json.dumps({"type": "message_end", "message": {
             "role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "synthetic answer"}]}})
             + "\n" + json.dumps({"type": "agent_settled"}), "")
@@ -236,8 +236,9 @@ def test_public_turn_binds_real_preflight_before_process_and_preserves_selected_
         conversation_id="conversation", message="original instruction", stage="montage", selected_refs=[], playhead_ms=None,
         local_member_token="synthetic-member", caller_user_id="member", on_event=events.append,
         task_version={"timeline_version_id": None, "timeline_sequence": 0})
-    assert answer == "synthetic answer" and preview is None
     assert len(launches) == 1
+    assert answer == "synthetic answer"
+    assert preview == {"kind": "runtime_receipt", "session_id": launches[0]}
     assert observations == [{"ok": True, "cause": "verified", "workspace_id": "workspace"}]
     assert events[0]["type"] == "tool_start" and events[-1]["ok"] is True
 

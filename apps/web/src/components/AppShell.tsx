@@ -1,4 +1,5 @@
 "use client";
+import { NEW_VIDEO_HREF } from "@/lib/preflight-draft-url";
 import Link from "next/link";
 import Image from "next/image";
 import { createPortal } from "react-dom";
@@ -45,7 +46,7 @@ import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components
 import { Button } from "./ui/button";
 import { IconButton } from "./ui/icon-button";
 import { Tooltip } from "./ui/tooltip";
-import { WorkbenchAssistantTargetContext, WorkspacePanelContext, useWorkspacePage } from "./workbench/context";
+import { WorkbenchAssistantTargetContext, WorkspacePanelContext, isCreationDraftRoute, useWorkspacePage } from "./workbench/context";
 import { useConversationVisibility } from "./workbench/useConversationVisibility";
 import { useWorkbenchTarget } from "./workbench/WorkbenchTarget";
 import { ConversationTarget } from "./workbench/ConversationTarget";
@@ -146,6 +147,7 @@ function isActive(pathname: string, href: string, activePath?: string, search?: 
 }
 
 function currentRouteFor(pathname: string, searchParams?: Pick<URLSearchParams, "get">) {
+  if (isCreationDraftRoute(pathname, searchParams)) return { label: "新视频草稿" };
   return routeLabels
     .filter((item) => isActive(pathname, item.href, item.activePath, searchParams))
     .sort((a, b) => b.href.length - a.href.length)[0] ?? routeLabels[0];
@@ -439,7 +441,7 @@ export function AppShellFrame({
   }
 
   const commandItems = useMemo<CommandPaletteItem[]>(() => [
-    { id: "new-production", label: "新建视频", description: "说说想法", href: "/?new=1", icon: Plus },
+    { id: "new-production", label: "新建视频", description: "说说想法", href: NEW_VIDEO_HREF, icon: Plus },
     ...primaryNav.filter((item) => showMembersNav || item.href !== "/members").map((item) => ({
       id: `nav-${item.href}`,
       label: item.label,
@@ -505,9 +507,9 @@ export function AppShellFrame({
               <NavigationRows pathname={pathname} showMembers={showMembersNav} />
             </Suspense>
           </div>
-          {navigationCollapsed ? <Link href="/?new=1" className="desktop-nav-row" aria-label="新建视频" title="新建视频"><Plus size={16}/></Link> : null}
+          {navigationCollapsed ? <Link href={NEW_VIDEO_HREF} className="desktop-nav-row" aria-label="新建视频" title="新建视频"><Plus size={16}/></Link> : null}
           <div className="desktop-nav-section desktop-nav-section--creation-tasks">
-            <div className="desktop-nav-heading"><Link href="/" title="查看全部创作任务">创作任务</Link><Link href="/?new=1" aria-label="新建视频" title="新建视频" className="shell-icon-button"><Plus size={16}/></Link></div>
+            <div className="desktop-nav-heading"><Link href="/" title="查看全部创作任务">创作任务</Link><Link href={NEW_VIDEO_HREF} aria-label="新建视频" title="新建视频" className="shell-icon-button"><Plus size={16}/></Link></div>
             {!workspaceReady ? <p className="desktop-creation-tasks-empty" role="status">登录并完成首次设置后读取创作任务。</p> : null}
             {workspaceReady && taskReadState === "loading" ? <p className="desktop-creation-tasks-empty" role="status">{recentTasks.length ? "正在更新创作任务…" : "正在读取创作任务…"}</p> : null}
             {workspaceReady && taskReadState === "error" ? <div className="desktop-creation-tasks-empty" role="alert">

@@ -1,5 +1,5 @@
 "use client";
-import type { AssistantResultStage } from "@/lib/types/assistant";
+import type { OpenAssistantResult } from "@/lib/types/assistant";
 
 import { AlertCircle, LoaderCircle, RotateCcw, Undo2 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -32,12 +32,13 @@ export type HomeCommandComposerProps = {
   taskContext?: {
     stage: string;
     materialUsage?: MaterialUsageContext;
+    onReplaceClipFromMaterial?: (source: { assetId: string; segmentId: string; startSeconds: number; clipId: string; versionId: string }) => Promise<boolean>;
     timelinePresent?: boolean;
     selectedObjectRefs: string[];
     getPlayheadMs: () => number | null;
     onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void;
     transferDraftState?: "none" | "draft" | "confirmed";
-    onOpenResultStage?: (stage: AssistantResultStage) => void;
+    onOpenResultStage?: OpenAssistantResult;
     onOpenEditProposal?: (turn: AssistantConversationTurn) => void;
   };
   materialContext?: {
@@ -140,7 +141,9 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const [activePlanTurnId, setActivePlanTurnId] = useState<string | null>(null);
   const [shareUpdating, setShareUpdating] = useState(false);
   const shareRevision = useRef(0);
-  const [taskPreview, setTaskPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
+  const [proposalForConversation, setTaskPreview] = useState<{conversationId: string; preview: CreationTaskEditPreviewResponse} | null>(null);
+  const taskPreview = !assistant.loading && proposalForConversation?.conversationId === assistant.conversation?.id
+    ? proposalForConversation?.preview : null;
   const [taskPreviewOpen, setTaskPreviewOpen] = useState(false);
   const latestTaskFacts = useRef(task);
   latestTaskFacts.current = task;
@@ -160,7 +163,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const restoredPlanKey = useRef<string | null>(null);
   const replyPlanRequests = useRef(new Map<string, string>());
   const appliedTaskReads = useRef(new Set<string>());
-  useEffect(() => { setPending(null); }, [scopeKind, scopeId, assistant.conversation?.id]);
+  useEffect(() => { setPending(null); setTaskActionStatus(null); }, [scopeKind, scopeId, assistant.conversation?.id]);
   useEffect(() => {
     scopeRevision.current += 1;
     setPreview(null); setPreviewOpen(false);
@@ -260,7 +263,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         }, onStreamEvent);
         const fresh = assistant.isCurrentConversation(turn.conversationId) ? await assistant.refresh() : null;
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
-        setTaskPreview(result.edit_preview);
+        setTaskPreview(result.edit_preview ? { conversationId: turn.conversationId, preview: result.edit_preview } : null);
         setTaskPreviewOpen(Boolean(result.edit_preview));
         const receiptKeys = fresh ? appliedTaskReceiptKeys(fresh, task.id) : [];
         if (onTaskUpdated && (result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration || result.segment_revision || result.timeline_restore

@@ -77,7 +77,7 @@ import { getProductionMaterials, getMaterialLibraryInsights, getMaterialIntakeSt
 import { importLocalMaterials } from "@/lib/directoryPicker";
 import { checkMediaLink, importMediaLink } from "@/lib/media-link-api";
 import { MaterialLibraryWorkspace } from "@/components/MaterialLibraryWorkspace";
-import { WorkspacePageContext } from "@/components/workbench/context";
+import { WorkbenchAssistantTargetContext, WorkspacePageContext } from "@/components/workbench/context";
 import { AssistantConversationProvider, useAssistantMaterialReference, useAssistantSelection } from "@/components/AssistantConversationProvider";
 const asset: MaterialAsset & { user_tags: string[] } = { id:"asset", workspace_id:"workspace", visibility:"private", file_name:"local.mp4", path:"/local.mp4", size_bytes:100, user_tags:[], user_description:"", upload_context:"",
   modified_at:"2026-09-20", media_type:"video", source_url:null, duration_seconds:4, usage_role:"b_roll", suggested_usage_role:"b_roll", usage_role_confidence:0,
@@ -115,6 +115,70 @@ beforeEach(() => {
   vi.mocked(getMaterialBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
   vi.mocked(getAssetBusinessObjects).mockResolvedValue({ items: [], total_count: 0 });
   vi.mocked(getAssetSegmentUsageRecords).mockResolvedValue({ items: [], total_count: 0 });
+});
+
+const packagingSegment = { ...segment, id: "packaging", start_seconds: 103.59, end_seconds: 112.79,
+  description: "包装区摆放着待用纸箱" };
+const packaging = { ...asset, file_name: "工序实拍.mp4", duration_seconds: 145.767, source_available: true,
+  segments: [segment, packagingSegment], search_hits: [{ segment_id: packagingSegment.id, basis: "片段描述",
+    excerpt: packagingSegment.description, reference_allowed: true, manual_use_allowed: true, restriction: null }] };
+
+it("shows only the matching range and can preview or explicitly reference that same segment", async () => {
+  vi.mocked(getProductionMaterials).mockResolvedValue({ ...library, assets: [packaging] });
+  function Probe() {
+    const selection = useAssistantSelection();
+    return <output aria-label="草稿引用">{JSON.stringify(selection?.items ?? [])}</output>;
+  }
+  render(<AssistantConversationProvider>
+    <MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />
+    <Probe />
+  </AssistantConversationProvider>);
+  fireEvent.change(screen.getByRole("textbox", {name: "搜索素材"}), { target: { value: "包装区" } });
+  const hit = await screen.findByRole("region", { name: "工序实拍.mp4" });
+  expect(within(hit).getByText("1:43.59–1:52.79")).toBeVisible();
+  expect(within(hit).getByText("片段描述")).toBeVisible();
+  fireEvent.click(within(hit).getByRole("button", {name: "试看片段"}));
+  const player = within(hit).getByLabelText("命中区间试看") as HTMLVideoElement;
+  expect(player.getAttribute("src")).toContain("/media#t=103.59,112.79");
+  fireEvent.loadedMetadata(player);
+  expect(player.currentTime).toBe(103.59);
+  expect(screen.getByLabelText("草稿引用")).toHaveTextContent("[]");
+  fireEvent.click(within(hit).getByRole("button", {name: "引用此片段"}));
+  await waitFor(() => expect(JSON.parse(screen.getByLabelText("草稿引用").textContent!)).toEqual([
+    expect.objectContaining({ selection: { scope: "segment", asset_id: packaging.id, segment_id: packagingSegment.id,
+      expected_updated_at: packaging.updated_at, expected_segment_updated_at: packagingSegment.updated_at } }),
+  ]));
+});
+
+it("binds a manual replacement to the selected workbench clip and waits for its saved receipt", async () => {
+  navigation.query = "mode=panel";
+  vi.mocked(getProductionMaterials).mockResolvedValue({ ...library, assets: [packaging] });
+  vi.mocked(getProductionMaterial).mockResolvedValue(packaging);
+  let finish!: (saved: boolean) => void;
+  const replaceClip = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve; }));
+  const target: React.ContextType<typeof WorkbenchAssistantTargetContext> = { taskContext: {
+    stage: "montage", selectedObjectRefs: [], getPlayheadMs: () => 0,
+    materialUsage: { taskId: "task", taskName: "工序片", versionId: "timeline-4",
+      selectedClipId: "target", clips: [{
+        id: "target", locked: false, role: "b_roll", asset_id: asset.id, segment_id: segment.id, cue_id: null,
+        source_reference: "workspace://test/source", source_start_seconds: 0, source_end_seconds: 3,
+        timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: 1,
+        needs_confirmation: false, manually_selected: true,
+      }] },
+    onReplaceClipFromMaterial: replaceClip,
+  } };
+  render(<WorkbenchAssistantTargetContext.Provider value={target}>
+    <MaterialLibraryWorkspace initialLibrary={taggedLibrary} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />
+  </WorkbenchAssistantTargetContext.Provider>);
+  const panel = screen.getByRole("region", { name: "编辑器资源面板" });
+  fireEvent.change(within(panel).getByRole("textbox", {name: "搜索素材"}), { target: { value: "包装区" } });
+  fireEvent.click(await within(panel).findByRole("button", { name: "替换当前镜头" }));
+  await waitFor(() => expect(replaceClip).toHaveBeenCalledWith({
+    assetId: packaging.id, segmentId: packagingSegment.id, startSeconds: 103.59, clipId: "target", versionId: "timeline-4",
+  }));
+  expect(screen.queryByText("已替换当前镜头，可在作品时间线撤销。")).not.toBeInTheDocument();
+  await act(async () => finish(true));
+  expect(await screen.findByText("已替换当前镜头，可在作品时间线撤销。")).toBeVisible();
 });
 it("switches the material collection between cover grid and object rows", async () => {
   render(<MaterialLibraryWorkspace initialLibrary={library} initialInsights={insights} initialCollections={{collections:[],total_count:0}} />);

@@ -9,7 +9,7 @@ import {once} from "node:events";
 import {pathToFileURL, fileURLToPath} from "node:url";
 import {openCreationSession} from "../session.mjs";
 import {createToolCallScope} from "../../agent_tools/diary/registration.ts";
-import {createBusinessRequest, BusinessResultUnknown} from "../../agent_tools/diary/transport.ts";
+import {createBusinessRequest, BusinessResultUnknown, needsEditDirection} from "../../agent_tools/diary/transport.ts";
 import {registerPreviewJobReader} from "../../agent_tools/diary/preview-job-reader.ts";
 import {registerExecutionTools} from "../../agent_tools/diary/execution-tools.ts";
 
@@ -386,8 +386,16 @@ test('native SDK file operations use host windows and CAS without local-file or 
       actual_line_offset:args.line_offset,next_line_offset:args.line_offset===undefined?null:args.line_offset+args.line_limit,
       truncated:content!==text,file_revision:{version:sha}}};
   };
-  const native=createNativeTaskTools({sdk,turnId:'turn',inputId:'input',callNative});
+  const native=createNativeTaskTools({sdk,turnId:'turn',inputId:'input',callNative,needsEditDirection,
+    userInstruction:'这个镜头有点怪。'});
   const tools=Object.fromEntries(native.tools.map(tool=>[tool.name,tool]));
+  const before = calls.length;
+  const blocked = await tools.write.execute('vague-write',{path:'program.py',content:'unapproved'});
+  assert.equal(blocked.details.failure.error,'edit_direction_missing');
+  assert.equal(blocked.details.failure.submission_effect,'not_submitted');
+  assert.equal(calls.length,before);
+  native.rebind({AI_VIDEO_DIARY_AGENT_INPUT_ID:'next-input',
+    AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION:'把当前镜头末尾裁短半秒。'});
   assert.equal((await tools.write.execute('write',{path:'program.py',content:"print('one')"})).isError,undefined);
   assert.equal((await tools.edit.execute('edit',{path:'program.py',edits:[{oldText:"print('one')",newText:"print('two')"}]})).isError,undefined);
   assert.equal(files.get('/task/work/program.py'),"print('two')");

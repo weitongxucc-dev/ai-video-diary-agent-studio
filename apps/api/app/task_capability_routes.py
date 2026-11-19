@@ -46,7 +46,8 @@ class TaskEditCapabilityResponseAdapter:
                     for item in operations if item["operation_type"] != "GenerateCoverFromFrame"
                 ],
             },
-            "units": {"source_start_seconds": "源片段起点，秒；TrimClip 保留镜头时长与旁白",
+            "units": {"source_start_seconds": "源片段起点，秒；TrimClip 只调整起点，保留镜头时间槽、旁白与字幕，不支持单独裁短镜头末尾。",
+                      "range_edit": "RemoveTimelineRanges 删除整条时间线区间，画面、声音、字幕与图层同步变化。",
                       "start_seconds": "时间轴秒", "end_seconds": "时间轴秒", "split_time_seconds": "时间轴秒",
                       "playback_rate": "0.25–4，语义按operation区分。ChangeClipSpeed：绝对画面速度，每1秒timeline消耗rate秒source；source_span=timeline_span*rate。0.7减速、2加速；2.5秒槽@0.7消耗2.5*0.7=1.75秒源片段，保留时间槽、旁白和字幕。ChangeLinkedSpeed：相对当前速度倍率，联动改变时轴，不是绝对速度。",
                       "crop_x": "0–1，裁剪窗口水平位置", "crop_y": "0–1，裁剪窗口垂直位置",

@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { AudioLines, Check, Film, Grid2X2, Image as ImageIcon, List, Music2, SlidersHorizontal, Sparkles, Sticker, Subtitles, Wand2 } from "lucide-react";
-import type { MaterialAsset } from "@/lib/types";
-import { fileLabel, mediaLabel, roleLabel, reviewLabel } from "./material-library/material-labels";
+import { useEffect, useState, type ReactNode } from "react";
+import { AudioLines, Film, Grid2X2, Music2, SlidersHorizontal, Sparkles, Sticker, Subtitles, Wand2 } from "lucide-react";
 import styles from "./EditorResourceLibraryPanel.module.css";
 import { ResourceVisualPreview } from "./resource-library/ResourceVisualAdoption";
 
@@ -39,32 +37,18 @@ function resourceStateLabel(status: RemoteStatus) {
   return status === "connected" ? "可用" : status === "catalog_only" ? "目录中" : "计划中";
 }
 
-function assetMatches(asset: MaterialAsset, query: string, filter: string) {
-  if (filter !== "all" && asset.media_type !== filter) return false;
-  const needle = query.trim().toLocaleLowerCase();
-  if (!needle) return true;
-  return [asset.file_name, asset.user_description, asset.upload_context, ...asset.user_tags].join(" ").toLocaleLowerCase().includes(needle);
-}
-
 export function EditorResourceLibraryPanel({
-  assets,
-  selectedId,
+  materials,
   initialCategory = "materials",
-  onSelect,
-  onReferenceMaterial,
   renderResourceAction,
 }: {
-  assets: MaterialAsset[];
-  selectedId: string | null;
+  materials: ReactNode;
   initialCategory?: EditorResourceCategory;
-  onSelect: (asset: MaterialAsset) => void;
-  onReferenceMaterial: (asset: MaterialAsset) => void;
   renderResourceAction?: (resource: CatalogResource) => ReactNode;
 }) {
   const [categoryId, setCategoryId] = useState<EditorResourceCategory>(initialCategory);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
-  const [view, setView] = useState<"grid" | "list">("grid");
   const [categories, setCategories] = useState(editorResourceCategories);
   const [catalogResources, setCatalogResources] = useState<CatalogResource[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -72,6 +56,7 @@ export function EditorResourceLibraryPanel({
   const [catalogLoading, setCatalogLoading] = useState(true);
   useEffect(() => { setCategoryId(initialCategory); }, [initialCategory]);
   useEffect(() => {
+    if (categoryId === "materials") return;
     let active = true;
     setCatalogError(null);
     setCatalogLoading(true);
@@ -91,8 +76,6 @@ export function EditorResourceLibraryPanel({
     return () => { active = false; };
   }, [categoryId, catalogRetry]);
   const category = categories.find(item => item.id === categoryId) ?? categories[0];
-  const visibleAssets = useMemo(() => assets.filter(asset => assetMatches(asset, query, filter)), [assets, filter, query]);
-  const selected = assets.find(asset => asset.id === selectedId) ?? visibleAssets[0] ?? null;
 
   return <section className={styles.panel} aria-label="编辑器资源面板">
     <header className={styles.header}>
@@ -105,15 +88,13 @@ export function EditorResourceLibraryPanel({
         {categories.map(item => { const Icon = item.icon; return <button key={item.id} type="button" className={item.id === categoryId ? styles.activeCategory : ""} aria-pressed={item.id === categoryId} onClick={() => { setCategoryId(item.id); setQuery(""); setFilter("all"); }}><Icon size={15} /><span>{item.label}</span><small>{stateLabel(item.state)}</small></button>; })}
       </nav>
       <div className={styles.content}>
+        {categoryId === "materials" ? materials : <>
         <div className={styles.toolbar}>
           <label className={styles.search}><span>搜索{category.label}</span><input aria-label={`搜索${category.label}`} type="search" placeholder={`搜索${category.label}`} value={query} onChange={event => setQuery(event.target.value)} /></label>
           <select aria-label="资源类型筛选" value={filter} onChange={event => setFilter(event.target.value)}><option value="all">全部类型</option><option value="video">视频</option><option value="image">图片</option><option value="audio">音频</option></select>
-          <div className={styles.viewToggle} role="group" aria-label="资源显示方式"><button type="button" aria-label="网格视图" aria-pressed={view === "grid"} onClick={() => setView("grid")}><Grid2X2 size={15} /></button><button type="button" aria-label="列表视图" aria-pressed={view === "list"} onClick={() => setView("list")}><List size={15} /></button></div>
         </div>
-        {catalogError ? <div className={styles.catalogError} role="alert"><p>{catalogError}</p><button type="button" onClick={() => setCatalogRetry(value => value + 1)}>重新读取资源目录</button></div> : categoryId === "materials" ? <div className={`${styles.materialArea} ${view === "list" ? styles.list : ""}`}>
-          <div className={styles.results} aria-label="素材结果">{visibleAssets.length ? visibleAssets.map(asset => <button key={asset.id} type="button" className={`${styles.card} ${selected?.id === asset.id ? styles.selected : ""}`} aria-pressed={selected?.id === asset.id} onClick={() => onSelect(asset)}><span className={styles.thumb}>{asset.media_type === "image" ? <img src={`/api/production/materials/${encodeURIComponent(asset.id)}/media`} alt="" /> : asset.media_type === "video" ? <Film size={22} /> : <AudioLines size={22} />}</span><span className={styles.cardCopy}><strong>{fileLabel(asset.file_name)}</strong><small>{mediaLabel(asset.media_type)} · {reviewLabel(asset)}</small><small>{asset.user_tags.slice(0, 2).join(" · ") || roleLabel(asset)}</small></span></button>) : <p className={styles.empty}>没有匹配的已接入素材。请调整搜索或先导入素材。</p>}</div>
-          {selected ? <aside className={styles.detail} aria-label="资源详情"><div className={styles.detailPreview}>{selected.media_type === "image" ? <img src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`} alt={`预览：${fileLabel(selected.file_name)}`} /> : selected.media_type === "video" ? <video controls width={640} height={360} preload="metadata" src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`} aria-label={`预览：${fileLabel(selected.file_name)}`} /> : <audio controls preload="metadata" src={`/api/production/materials/${encodeURIComponent(selected.id)}/media`} aria-label={`预览：${fileLabel(selected.file_name)}`} />}</div><h3>{fileLabel(selected.file_name)}</h3><p>{selected.user_description || "暂无用户说明"}</p><dl><div><dt>状态</dt><dd>{selected.analysis_status === "ready" ? "已分析" : selected.analysis_status === "pending" ? "等待分析" : "暂不可用"}</dd></div><div><dt>来源</dt><dd>{selected.source_url || selected.path || "本地素材"}</dd></div><div><dt>版本</dt><dd>{selected.updated_at}</dd></div></dl>{selected.analysis_status === "ready" && selected.use_state === "available" ? <button type="button" className={styles.adopt} onClick={() => onReferenceMaterial(selected)}><Check size={15} />引用到对话</button> : <p className={styles.unavailable}>当前资源不能直接采用；请先完成分析或调整使用状态。</p>}</aside> : <div className={styles.detail}><ImageIcon size={28} /><p>选择一个素材查看预览、来源和采用状态。</p></div>}
-        </div> : catalogLoading ? <p>正在读取资源目录…</p> : catalogResources.length ? <CatalogResourceResults key={categoryId} resources={catalogResources.filter(resource => (!query.trim() || resource.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && (filter === "all" || resource.preview.kind === filter))} renderResourceAction={renderResourceAction} /> : <UnavailableCategory category={category} />}
+        {catalogError ? <div className={styles.catalogError} role="alert"><p>{catalogError}</p><button type="button" onClick={() => setCatalogRetry(value => value + 1)}>重新读取资源目录</button></div> : catalogLoading ? <p>正在读取资源目录…</p> : catalogResources.length ? <CatalogResourceResults key={categoryId} resources={catalogResources.filter(resource => (!query.trim() || resource.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && (filter === "all" || resource.preview.kind === filter))} renderResourceAction={renderResourceAction} /> : <UnavailableCategory category={category} />}
+        </>}
       </div>
     </div>
   </section>;

@@ -648,11 +648,33 @@ describe("HomeCommandComposer", () => {
     const tools = await within(record).findByRole("list", { name: "操作" });
     expect(within(tools).getByText("读取当前工作区").parentElement).toHaveTextContent("已返回");
     expect(within(tools).getByText("已读取 1 项任务摘要。")).toBeVisible();
+    expect(mocks.readTrace).not.toHaveBeenCalled();
+    fireEvent.click(within(record).getByText("用量与技术详情"));
     expect(await within(record).findByLabelText("本轮用量")).toBeVisible();
     const conversationId = mocks.ask.mock.calls[0][1];
     const turnId = mocks.saved.get(conversationId)!.turns[0].id;
     expect(mocks.readTrace).toHaveBeenCalledExactlyOnceWith(turnId);
     expect(mocks.ask).toHaveBeenCalledOnce();
+  });
+
+  it("does not offer an earlier conversation's unconfirmed edit in a new chat on the same task", async () => {
+    configuredModel();
+    const task = { id: "task-1", stage: "montage", name: "产品介绍", current_timeline_version_id: "v1", timeline_sequence: 1 } as CreationTask;
+    mocks.editAsk.mockResolvedValue({ reply: "已准备修改", edit_preview: { proposal: {
+      id: "proposal-from-original-chat", summary: "调亮画面", invalidated_refs: [], external_effects: [],
+      preview: { before: {label:"原画面",detail:"偏暗"}, after: {label:"新画面",detail:"更亮"} },
+    } } });
+    render(<HomeCommandComposer task={task} />);
+    fireEvent.change(await readyInput("任务对话要求"), { target: { value: "先预览提亮效果" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await screen.findByRole("dialog", { name: "修改预览" });
+    fireEvent.click(screen.getByRole("button", {name:"先不改"}));
+    expect(screen.getByRole("button", {name:"查看修改"})).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", {name:"新对话"}));
+    await waitFor(() => expect(screen.queryByRole("button", {name:"查看修改"})).toBeNull());
+    await readyInput("任务对话要求");
+    expect(screen.queryByRole("button", {name:"查看修改"})).toBeNull();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 
   it("keeps an existing task in the chat, previews a change, confirms and undoes it", async () => {

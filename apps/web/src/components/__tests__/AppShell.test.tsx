@@ -369,7 +369,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "设备设置" })).toHaveAttribute("href", "/settings");
     expect(screen.queryByRole("button", { name: "创作者与空间菜单" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles?mode=manage");
-    expect(screen.getByRole("link", { name: "新建视频" })).toHaveAttribute("href", "/?new=1");
+    expect(screen.getByRole("link", { name: "新建视频" })).toHaveAttribute("href", "/production?new=1");
     expect(screen.getByText("创作任务")).toBeInTheDocument();
     expect(screen.getByText("产品演示视频")).toBeInTheDocument();
     expect(screen.queryByText("等待开始")).not.toBeInTheDocument();

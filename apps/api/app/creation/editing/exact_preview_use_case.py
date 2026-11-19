@@ -14,6 +14,7 @@ from app.creation.editing.audio_edit_use_case import AudioEditRejected
 from app.creation.execution_control import ExecutionControlRejected
 from app.media.picture_preview import PicturePreviewRejected
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS
+from app.creation.editing.edit_scope import edit_scope_blocker
 from app.creation.editing.metadata_use_case import (EditPreviewRejected, metadata_edit_command, effective_audio_timeline, logical_montage_output_refs)
 from app.creation.editing.subtitle_use_case import subtitle_values
 from app.creation.editing.picture import EditConflict
@@ -291,6 +292,8 @@ class ExactPreviewUseCase:
 
     def preview(self, workspace_id, task_id, payload, *, identity, actor, source, draft_only, execution, reader_identity):
         operation = payload.operation_type
+        if blocker := edit_scope_blocker(source, linked=operation in LINKED_EDIT_OPERATIONS):
+            raise EditPreviewRejected(409, blocker)
         if operation in {'ChangePersonSegment','RegeneratePersonRender','RegenerateNarrationSegment'}:
             from app.schemas import CreationTaskEditPreviewRequest
             task=self.metadata.task_or_missing(workspace_id,task_id)
@@ -573,6 +576,8 @@ class ExactPreviewUseCase:
         clean, source = self.complete_typed(task, payload, identity['member_id'], actor, source, version, origin=origin)
         if origin is None and source.get('assistant_turn_id') and expected_input_id != source.get('input_id'):
             raise EditPreviewRejected(409, '助手输入已变化，旧请求不能归入新要求；请查询原请求回执')
+        if blocker := edit_scope_blocker(source, linked=clean.operation_type in LINKED_EDIT_OPERATIONS):
+            raise EditPreviewRejected(409, {'error': 'edit_scope_conflict', 'reason': blocker, 'submission_effect': 'not_submitted'})
         return clean, source
 
     def _record(self, task, event_id, result):

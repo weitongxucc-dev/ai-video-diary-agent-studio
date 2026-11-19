@@ -98,3 +98,11 @@ it('discards an old account conversation response that arrives after the new acc
   expect(screen.getByLabelText('会话草稿')).toHaveValue('server-draft-b'); expect(screen.getByLabelText('当前引用')).toBeEmptyDOMElement();
   expect(mocks.current).toHaveBeenCalledTimes(2);
 });
+
+it('leaves public authentication routes outside the local workbench', () => {
+  mocks.local = true;
+  mocks.path = '/auth/update-password';
+  render(content());
+  expect(screen.getByText('业务会话未初始化')).toBeVisible();
+  expect(mocks.current).not.toHaveBeenCalled();
+});

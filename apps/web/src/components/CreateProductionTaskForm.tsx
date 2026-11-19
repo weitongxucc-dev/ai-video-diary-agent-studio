@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AlertCircle, CheckCircle2, ChevronRight, LoaderCircle, SearchCheck, ShieldCheck } from "lucide-react";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
@@ -16,7 +17,7 @@ import { getKnowledgeItem } from "@/lib/source-api";
 import { createCreationRequest } from "@/lib/creation-request-api";
 import { CreationRequestPanel } from "./CreationRequestPanel";
 import ui from "./CreateProductionTaskForm.module.css";
-import { clearPreflightDraft, loadPreflightDraft, PREFLIGHT_RESOURCE_PATHS, preflightReturnUrl, readPreflightDraftScope, sameDraftScope, savePreflightDraft, savePreflightRepairContext, validDraftId, type DraftScope, type PreflightDraftFields, type PreflightReplyOrigin, type PreflightKnowledgePin } from "@/lib/preflight-draft";
+import { clearPreflightDraft, clearPreflightRepairTarget, loadPreflightDraft, matchesPreflightRepairTarget, PREFLIGHT_RESOURCE_PATHS, preflightReturnUrl, readPreflightDraftScope, sameDraftScope, sameDraftTemplate, savePreflightDraft, savePreflightRepairContext, type DraftScope, type PreflightDraftFields, type PreflightReplyOrigin, type PreflightKnowledgePin } from "@/lib/preflight-draft";
 
 // These fields are returned by MaterialSegmentMatchResponse; the shared Web type omits them.
 type PreflightMatch = CreationPlanPreview["material_matches"][number] & { match_tier?: string; asset_file_name?: string };
@@ -30,12 +31,14 @@ function stageLabel(stage: string) {
   return ({ preparation: "资料准备", topic: "选题", script: "文案", narration: "配音", person_lipsync: "人物与口型", avatar_lipsync: "人物与口型", montage: "视频剪辑", video_editing: "视频剪辑", subtitle_cover: "字幕与封面", review_output: "检查与输出", publish_analytics: "发布与数据" } as Record<string, string>)[stage] ?? "后续阶段（未提供名称）";
 }
 
-type CreateProductionTaskFormProps = {
+export type CreateProductionTaskFormProps = {
   template?: VideoTemplate | null;
   autoFocus?: boolean;
   initialGoal?: string;
   assignLocation?: (url: string) => void;
   draftId?: string;
+  draftStart?: boolean;
+  onDraftSaved?: (href: string) => void;
   replyOrigin?: PreflightReplyOrigin | null;
   initialKnowledgePin?: PreflightKnowledgePin | null;
 };
@@ -137,9 +140,13 @@ export function CreateProductionTaskForm({
   initialGoal = "",
   assignLocation = assignDocumentLocation,
   draftId,
+  draftStart = false,
+  onDraftSaved,
   replyOrigin: initialReplyOrigin = null,
   initialKnowledgePin = null,
 }: CreateProductionTaskFormProps) {
+  const entry = useRef({ draftStart, initialGoal, initialReplyOrigin, initialKnowledgePin });
+  entry.current = { draftStart, initialGoal, initialReplyOrigin, initialKnowledgePin };
   const [voices, setVoices] = useState<VoiceProfile[]>([]);
   const [people, setPeople] = useState<PersonProfile[]>([]);
   const [knowledgePin, setKnowledgePin] = useState<PreflightKnowledgePin | null>(initialKnowledgePin);
@@ -165,6 +172,7 @@ export function CreateProductionTaskForm({
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftReady, setDraftReady] = useState(false);
   const [restored, setRestored] = useState(false);
+  const [draftSaved, setDraftSaved] = useState(false);
   const [replyOrigin, setReplyOrigin] = useState<PreflightReplyOrigin | null>(initialReplyOrigin);
   const replyOriginRef = useRef<PreflightReplyOrigin | null>(initialReplyOrigin);
   const alive = useRef(true);
@@ -194,7 +202,7 @@ export function CreateProductionTaskForm({
   const [creationRequestId, setCreationRequestId] = useState<string | null>(null);
   const creationRequestKey = useRef<string | null>(null);
   const [created, setCreated] = useState(false);
-  const [pending, setPending] = useState<"preview" | "confirm" | null>(null);
+  const [pending, setPending] = useState<"preview" | "confirm" | "save" | null>(null);
   const [error, setError] = useState<FormError | null>(null);
   const submittingRef = useRef(false);
   const inputRevision = useRef(0);
@@ -211,10 +219,11 @@ export function CreateProductionTaskForm({
   }, [template?.id, template?.version]);
 
   useEffect(() => {
+    const { draftStart, initialGoal, initialReplyOrigin, initialKnowledgePin } = entry.current;
     let active = true; alive.current = true;
     ++inputRevision.current; ++operation.current; submittingRef.current = false; setPending(null); setCreated(false); setPreview(null);
     setCreationRequestId(null); creationRequestKey.current = null;
-    userEdited.current = false; setDraftReady(false); setRestored(false); setDraftError(null); draftScope.current = null;
+    userEdited.current = false; setDraftReady(false); setRestored(false); setDraftSaved(false); setDraftError(null); draftScope.current = null;
     draftUuid.current = draftId ?? crypto.randomUUID();
     const hasInitialOrigin = initialReplyOrigin !== null;
     if (!draftId || previousDraftId.current !== draftId) {
@@ -222,7 +231,7 @@ export function CreateProductionTaskForm({
       setReplyOrigin(replyOriginRef.current);
     }
     if (draftId || previousDraftId.current !== draftId) {
-      setGoal(draftId ? "" : initialGoal); setName(""); setTargetCount("1");
+      setGoal(draftId && !draftStart ? "" : initialGoal); setName(""); setTargetCount("1");
       setDuration(String(Math.ceil(template?.settings.duration_target_seconds ?? 60)));
       setLanguage(template?.settings.language ?? "zh-CN"); setAspectRatio(template?.settings.aspect_ratio ?? "9:16");
       setPresenterShare(template?.settings.presenter_share_target ?? 20); setLipsyncQuality(template?.settings.lipsync_quality ?? "high");
@@ -232,10 +241,10 @@ export function CreateProductionTaskForm({
     void readPreflightDraftScope().then(scope => {
       if (!active) return;
       draftScope.current = scope;
-      if (draftId) {
-        const saved = loadPreflightDraft(window.sessionStorage, scope, draftId);
-        if (!saved) throw new Error("当前成员与工作区没有这份临时草稿。");
-        if (JSON.stringify(saved.template) !== JSON.stringify(template ? { id: template.id, version: template.version } : null)) throw new Error("草稿模板固定版本与入口不符，没有恢复旧输入。");
+      const saved = draftId ? loadPreflightDraft(window.sessionStorage, scope, draftId) : null;
+      if (draftId && !saved && !draftStart) throw new Error("当前成员与工作区没有这份临时草稿。");
+      if (saved) {
+        if (!sameDraftTemplate(saved.template, template)) throw new Error("草稿模板固定版本与入口不符，没有恢复旧输入。");
         if (userEdited.current) throw new Error("你已更改输入，晚到的草稿没有覆盖当前内容。");
         setGoal(saved.goal); setName(saved.name); setTargetCount(saved.targetCount); setDuration(saved.duration);
         setLanguage(saved.language); setAspectRatio(saved.aspectRatio); setPresenterShare(saved.presenterShare); setLipsyncQuality(saved.lipsyncQuality);
@@ -244,12 +253,14 @@ export function CreateProductionTaskForm({
         replyOriginRef.current = saved.replyOrigin ?? null;
         setReplyOrigin(replyOriginRef.current);
         ++inputRevision.current;
-        void runPreview(saved);
       }
       setDraftReady(true);
+      if (draftId && saved?.goal.trim() && Number(saved.targetCount) === 1 && matchesPreflightRepairTarget(window.sessionStorage, scope, draftId)) {
+        void runPreview(saved);
+      }
     }).catch(cause => { if (active) setDraftError(`临时草稿未恢复：${cause instanceof Error ? cause.message : "身份或存储读取失败"}`); });
     return () => { active = false; alive.current = false; ++inputRevision.current; ++operation.current; };
-  }, [draftId, template?.id, template?.version, initialReplyOrigin?.conversation_id, initialReplyOrigin?.turn_id, initialReplyOrigin?.request_id, initialKnowledgePin?.knowledge_item_id, initialKnowledgePin?.version]);
+  }, [draftId, template?.id, template?.version]);
 
   function draftFields(): PreflightDraftFields {
     return { goal, name, targetCount, duration, language, aspectRatio, presenterShare, lipsyncQuality,
@@ -262,29 +273,57 @@ export function CreateProductionTaskForm({
     if (draftScope.current && !sameDraftScope(scope, draftScope.current)) throw new Error("成员或工作区已切换，请重新打开新建表单；没有发送原草稿。");
     return scope;
   }
-  async function repair(href: string) {
-    if (!PREFLIGHT_RESOURCE_PATHS.has(href) || !draftReady || pending) return;
+  async function saveDraft(repairHref?: string) {
+    if (!draftReady || submittingRef.current || created || (repairHref && !PREFLIGHT_RESOURCE_PATHS.has(repairHref))) return;
+    const saved = draftFields();
     const revision = inputRevision.current;
+    const request = ++operation.current;
+    submittingRef.current = true;
+    setPending("save");
+    setDraftError(null);
     try {
       const scope = await verifiedScope();
       if (!alive.current || revision !== inputRevision.current) return;
       const id = draftUuid.current!;
-      if (!validDraftId(id)) throw new Error("草稿编号无效，没有离开表单。");
-      const saved = draftFields();
+      const returnTo = preflightReturnUrl(id, saved.template);
+      if (!repairHref) clearPreflightRepairTarget(window.sessionStorage, scope, id);
       savePreflightDraft(window.sessionStorage, scope, id, saved);
-      savePreflightRepairContext(window.sessionStorage, scope, id, saved.template);
-      assignLocation(`${href}?${new URLSearchParams({ return_to: preflightReturnUrl(id, saved.template) })}`);
-    } catch (cause) { if (alive.current && revision === inputRevision.current) setDraftError(`临时草稿保存失败，当前输入仍保留：${cause instanceof Error ? cause.message : "存储不可用"}`); }
+      if (repairHref) {
+        savePreflightRepairContext(window.sessionStorage, scope, id, saved.template);
+        setPreview(null);
+        assignLocation(`${repairHref}?${new URLSearchParams({ return_to: returnTo })}`);
+      } else {
+        onDraftSaved?.(returnTo);
+        setDraftSaved(true);
+      }
+    } catch (cause) {
+      if (alive.current && revision === inputRevision.current) setDraftError(`临时草稿保存失败，当前输入仍保留：${cause instanceof Error ? cause.message : "存储不可用"}`);
+    } finally {
+      if (alive.current && request === operation.current) {
+        submittingRef.current = false;
+        setPending(null);
+      }
+    }
   }
 
   async function abandonDraft() {
+    if (!draftReady || submittingRef.current || created) return;
     const revision = inputRevision.current;
+    const request = ++operation.current;
+    submittingRef.current = true;
+    setPending("save");
     try {
       const scope = await verifiedScope();
       if (!alive.current || revision !== inputRevision.current) return;
       clearPreflightDraft(window.sessionStorage, scope, draftUuid.current!);
       assignLocation("/production");
     } catch (cause) { if (alive.current && revision === inputRevision.current) setDraftError(`没有放弃草稿，当前输入仍保留：${cause instanceof Error ? cause.message : "存储不可用"}`); }
+    finally {
+      if (alive.current && request === operation.current) {
+        submittingRef.current = false;
+        setPending(null);
+      }
+    }
   }
 
   function input(value = draftFields()): CreationPlanInput {
@@ -304,6 +343,8 @@ export function CreateProductionTaskForm({
 
   function invalidatePreview() {
     userEdited.current = true;
+    setDraftSaved(false);
+    setRestored(false);
     ++inputRevision.current;
     if (replyOriginRef.current) {
       replyOriginRef.current = { ...replyOriginRef.current, request_id: crypto.randomUUID() };
@@ -387,16 +428,23 @@ export function CreateProductionTaskForm({
   const isPending = pending !== null || created;
   return (
     <div className={`creation-plan-form ${ui.form}`}>
-      {template ? <section aria-label="所选模板"><strong>{template.name} · v{template.version}</strong><p>{template.settings.script_section_count ? `${template.settings.script_section_count} 段文案 · ` : ""}{template.settings.fit_mode === "fit" ? "完整显示画面" : "填满画面"} · 复用字幕样式</p><p>{template.settings.style_instruction || "未指定额外文案风格"}</p><button type="button" disabled={!draftReady || isPending} onClick={() => void repair("/templates")}>重新选择模板</button></section> : null}
-      {knowledgePin ? <section aria-label="所选知识资料"><strong>{knowledgeName ?? "所选知识资料"} · 固定版本 {knowledgePin.version}</strong><p>本次制作方案将核验并引用这个固定版本；修改制作目标不会更换资料版本。</p>{knowledgeError ? <p role="alert">{knowledgeError}</p> : null}<button type="button" disabled={isPending} onClick={() => { setKnowledgePin(null); invalidatePreview(); }}>取消本次资料引用</button><button type="button" disabled={!draftReady || isPending} onClick={() => void repair("/knowledge")}>查看资料或重新选择</button></section> : null}
+      {template ? <section aria-label="所选模板"><strong>{template.name} · v{template.version}</strong><p>{template.settings.script_section_count ? `${template.settings.script_section_count} 段文案 · ` : ""}{template.settings.fit_mode === "fit" ? "完整显示画面" : "填满画面"} · 复用字幕样式</p><p>{template.settings.style_instruction || "未指定额外文案风格"}</p><button type="button" disabled={!draftReady || isPending} onClick={() => void saveDraft("/templates")}>重新选择模板</button></section> : null}
+      {knowledgePin ? <section aria-label="所选知识资料"><strong>{knowledgeName ?? "所选知识资料"} · 固定版本 {knowledgePin.version}</strong><p>本次制作方案将核验并引用这个固定版本；修改制作目标不会更换资料版本。</p>{knowledgeError ? <p role="alert">{knowledgeError}</p> : null}<button type="button" disabled={isPending} onClick={() => { setKnowledgePin(null); invalidatePreview(); }}>取消本次资料引用</button><button type="button" disabled={!draftReady || isPending} onClick={() => void saveDraft("/knowledge")}>查看资料或重新选择</button></section> : null}
       {replyOrigin ? <p role="status">已选择一条首页完成回复作为文案来源。这里仍需确认制作方案和选题；页面只保存会话与轮次定位，服务端会重新读取回复正文。</p> : null}
-      <p className={ui.draftNotice}>{restored ? (pending === "preview" ? "已恢复本次输入，正在重新检查当前资格。" : preview ? "已恢复本次输入并取得新预检结果。" : "已恢复本次输入，请重新检查当前资格。") : "前往补充资源前会保存当前输入为本成员、本工作区的临时草稿。"}关闭或返回列表不会创建任务；已保存的临时草稿仅保留在本次浏览会话，创建成功后清理。</p>
-      <button type="button" disabled={!draftReady || isPending} onClick={() => void abandonDraft()}>放弃本次草稿并返回列表</button>
+      <p className={ui.draftNotice} role="status">{draftSaved ? "草稿已保存，可在当前浏览会话刷新或重新打开。" : restored ? (pending === "preview" ? "已恢复本次输入，正在重新检查当前资格。" : preview ? "已恢复本次输入并取得新预检结果。" : "已恢复本次输入，请重新检查当前资格。") : "已保存的草稿仅保留在本次浏览会话。"}</p>
       {draftError ? <p className={ui.draftNotice} role="alert">{draftError}</p> : null}
       <form onSubmit={handlePreview} aria-busy={pending !== null}>
-        <label><span>制作目标</span><textarea autoFocus={autoFocus} disabled={isPending} name="goal" onChange={(event) => { setGoal(event.target.value); invalidatePreview(); }} placeholder="例如：用本周可用素材制作一条介绍 AI 工具观察的竖版视频" required rows={4} value={goal} /></label>
+        <label><span>制作目标</span><textarea autoFocus={autoFocus} disabled={isPending} name="goal" maxLength={1000} onChange={(event) => { setGoal(event.target.value); invalidatePreview(); }} placeholder="例如：用本周可用素材制作一条介绍 AI 工具观察的竖版视频" required rows={4} value={goal} /></label>
+        <div className={ui.draftActions}>
+          {onDraftSaved ? <>
+            <Button variant="outline" type="button" disabled={isPending || !draftReady || !goal.trim()} onClick={() => void saveDraft()}>保存草稿</Button>
+            <Button variant="outline" type="button" disabled={isPending || !draftReady} onClick={() => void saveDraft("/library")}>打开素材库</Button>
+          </> : null}
+          <button className="modern-primary-button" aria-describedby={`${formId}-preview-scope`} disabled={isPending || !draftReady || !goal.trim()} type="submit">{pending === "preview" ? <LoaderCircle className="is-spinning" size={16} /> : <SearchCheck size={16} />}{pending === "preview" ? "正在检查…" : "检查可用内容"}</button>
+        </div>
+        <div className="creation-plan-form__actions"><span id={`${formId}-preview-scope`}>{!goal.trim() ? "先填写制作目标，再检查。" : !draftReady ? "当前成员与工作区尚未确认，暂不能检查。" : preview ? (preview.confirmable ? "预检完成，可以确认创建。" : "预检完成，但仍有创建阻断需要处理。") : "检查不会创建任务，也不会生成选题、文案或成片。"}</span></div>
         <div className="creation-plan-form__settings">
-          <label><span>任务名称（可选）</span><input disabled={isPending} name="name" onChange={(event) => { setName(event.target.value); invalidatePreview(); }} placeholder="例如：本周 AI 工具观察" value={name} /></label>
+          <label><span>任务名称（可选）</span><input disabled={isPending} name="name" maxLength={200} onChange={(event) => { setName(event.target.value); invalidatePreview(); }} placeholder="例如：本周 AI 工具观察" value={name} /></label>
           <label><span>成片数量</span><input disabled={isPending} max={Number.MAX_SAFE_INTEGER} min="1" name="target_count" onChange={(event) => { setTargetCount(event.target.value); invalidatePreview(); }} required type="number" value={targetCount} /></label>
           <label><span>语言</span><AppSelect disabled name="language" value={language}><AppSelectOption value="zh-CN">中文（当前版本）</AppSelectOption></AppSelect></label>
           <label><span>目标时长（秒）</span><input aria-label="目标时长（秒）" aria-describedby={template ? `${formId}-duration-default` : undefined} disabled={isPending} min="1" step="1" name="duration_target_seconds" onChange={(event) => { setDuration(event.target.value); invalidatePreview(); }} required type="number" value={duration} />{template ? <small id={`${formId}-duration-default`}>模板原时长 {template.settings.duration_target_seconds ?? 60} 秒，新方案按整数秒设置，可调整本次时长。</small> : null}</label>
@@ -408,14 +456,16 @@ export function CreateProductionTaskForm({
         <PresenterShareSlider disabled={isPending} onChange={(value) => { setPresenterShare(value); invalidatePreview(); }} value={presenterShare} />
         <LipSyncQualitySelect disabled={isPending || presenterShare === 0} onChange={(value) => { setLipsyncQuality(value); invalidatePreview(); }} value={lipsyncQuality} />
         {presenterShare === 0 ? <p>露脸占比为 0%，本次无需人物口型，口型档位暂不可调整。</p> : null}
-        <div className="creation-plan-form__actions"><button className="modern-primary-button" aria-describedby={`${formId}-preview-scope`} disabled={isPending || !draftReady || !goal.trim()} type="submit">{pending === "preview" ? <LoaderCircle className="is-spinning" size={16} /> : <SearchCheck size={16} />}{pending === "preview" ? "正在检查…" : "检查可用内容"}</button><span id={`${formId}-preview-scope`}>{!goal.trim() ? "先填写制作目标，再检查。" : !draftReady ? "当前成员与工作区尚未确认，暂不能检查。" : preview ? (preview.confirmable ? "预检完成，可以确认创建。" : "预检完成，但仍有创建阻断需要处理。") : "检查不会创建任务，也不会生成选题、文案或成片。"}</span></div>
       </form>
+      <div>
+        <Button variant="ghost" type="button" disabled={!draftReady || isPending} onClick={() => void abandonDraft()}>放弃本次草稿并返回列表</Button>
+      </div>
 
       {creationRequestId ? <CreationRequestPanel key={creationRequestId} requestId={creationRequestId} scopeKey={draftScope.current ? `${draftScope.current.memberId}:${draftScope.current.workspaceId}` : ""} isCurrentScope={() => alive.current && creationRequestKey.current !== null} /> : null}
 
       {error ? <section className="creation-plan-error" role="alert"><AlertCircle size={17} /><div><strong>操作未完成：{error.message}</strong>{error.impact ? <p>{error.impact}</p> : null}{error.repairAction ? <p>处理方式：{error.repairAction}</p> : null}</div>{error.repairAction ? <button disabled={isPending || !goal.trim()} onClick={() => void runPreview()} type="button">重新检查可用内容</button> : null}</section> : null}
 
-      {preview ? <div className="creation-plan-preview"><header><div><span>预检结果</span><h3>{preview.confirmable ? "本次检查允许创建创作任务" : "先处理创建阻断"}</h3><p>预检画幅：{preview.aspect_ratio}</p><p>预检目标时长：{preview.duration_target_seconds} 秒</p><p>以下事实来自本次只读检查；创建许可不代表全部制作阶段已就绪。</p></div><span className={preview.confirmable ? "creation-plan-preview__state is-ready" : "creation-plan-preview__state is-blocking"}>{preview.confirmable ? "可创建任务" : "创建受阻"}</span></header><PreflightFacts preview={preview} voices={voices} people={people} onRepair={href => void repair(href)} disabled={!draftReady || isPending} /><Blockers preview={preview} onRepair={href => void repair(href)} disabled={!draftReady || isPending} /><div className="creation-plan-confirm"><div><strong>确认后将创建创作任务</strong><p>创建后从“选题：未开始”进入后续流程，不会自动生成选题、文案或成片。</p><p id={`${formId}-confirm-scope`}>{preview.confirmable ? "当前允许创建任务；后续阶段的限制见待处理事项。" : "当前不能创建任务，请先处理标记为阻止创建的事项并重新检查。"}</p></div><button className="modern-primary-button" aria-describedby={`${formId}-confirm-scope`} disabled={!preview.confirmable || !draftReady || isPending} onClick={() => void handleConfirm()} type="button">{pending === "confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <ChevronRight size={16} />}{created ? "任务已创建" : pending === "confirm" ? "正在创建…" : "确认并创建任务"}</button></div></div> : null}
+      {preview ? <div className="creation-plan-preview"><header><div><span>预检结果</span><h3>{preview.confirmable ? "本次检查允许创建创作任务" : "先处理创建阻断"}</h3><p>预检画幅：{preview.aspect_ratio}</p><p>预检目标时长：{preview.duration_target_seconds} 秒</p><p>以下事实来自本次只读检查；创建许可不代表全部制作阶段已就绪。</p></div><span className={preview.confirmable ? "creation-plan-preview__state is-ready" : "creation-plan-preview__state is-blocking"}>{preview.confirmable ? "可创建任务" : "创建受阻"}</span></header><PreflightFacts preview={preview} voices={voices} people={people} onRepair={href => void saveDraft(href)} disabled={!draftReady || isPending} /><Blockers preview={preview} onRepair={href => void saveDraft(href)} disabled={!draftReady || isPending} /><div className="creation-plan-confirm"><div><strong>确认后将创建创作任务</strong><p>创建后从“选题：未开始”进入后续流程，不会自动生成选题、文案或成片。</p><p id={`${formId}-confirm-scope`}>{preview.confirmable ? "当前允许创建任务；后续阶段的限制见待处理事项。" : "当前不能创建任务，请先处理标记为阻止创建的事项并重新检查。"}</p></div><button className="modern-primary-button" aria-describedby={`${formId}-confirm-scope`} disabled={!preview.confirmable || !draftReady || isPending} onClick={() => void handleConfirm()} type="button">{pending === "confirm" ? <LoaderCircle className="is-spinning" size={16} /> : <ChevronRight size={16} />}{created ? "任务已创建" : pending === "confirm" ? "正在创建…" : "确认并创建任务"}</button></div></div> : null}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 "use client";
+import { NEW_VIDEO_HREF } from "@/lib/preflight-draft-url";
 import { WorkspaceVideo, WorkspaceAudio } from "./workbench/WorkspaceMedia";
 
 import Link from "next/link";
@@ -194,12 +195,12 @@ export function HomeWorkspace({ tasks, foundation, insights, live, recentAssets 
       <label className={styles.search} data-input-group><Search aria-hidden size={16} /><input aria-label="搜索任务" ref={searchRef} value={query} placeholder="搜索任务" onChange={event => { setQuery(event.target.value); setTaskPage(0); }} />{query ? <button aria-label="清空任务搜索" title="清空搜索" onClick={() => { setQuery(""); setTaskPage(0); searchRef.current?.focus(); }} type="button"><X aria-hidden size={14} /></button> : null}</label>
       <AppSelect aria-label="任务状态" value={filter} onValueChange={value => { setFilter(value as TaskFilter); setTaskPage(0); }}><AppSelectOption value="all">全部状态</AppSelectOption><AppSelectOption value="not_started">等待开始</AppSelectOption><AppSelectOption value="waiting_for_user">等你确认</AppSelectOption><AppSelectOption value="running">正在制作</AppSelectOption><AppSelectOption value="completed">已完成步骤</AppSelectOption><AppSelectOption value="failed">需要处理</AppSelectOption></AppSelect>
       <button aria-label={view === "board" ? "切换为列表" : "切换为看板"} title={view === "board" ? "切换为列表" : "切换为看板"} className={styles.viewButton} onClick={() => setView(view === "board" ? "list" : "board")} type="button">{view === "board" ? <List aria-hidden size={16} /> : <Columns3 aria-hidden size={16} />}</button>
-      <Link className={styles.newTask} href="/?new=1"><Plus aria-hidden size={16} />新建视频</Link>
+      <Link className={styles.newTask} href={NEW_VIDEO_HREF}><Plus aria-hidden size={16} />新建视频</Link>
     </div>
     <div className={styles.content}>
       <section aria-label="创作任务看板"><div className={styles.sectionHeading}><h2>创作任务</h2><small>{items.length} 个视频任务</small></div>
         <div id="home-task-body">
-          {emptyWorkspace ? <section aria-label="开始创作" className={styles.startHere}><h3>从一个视频目标开始</h3><p>当前可见范围还没有素材、资料、声音或创作任务。说说你想做的视频，也可以先导入画面。</p><div><Link href="/?new=1">说说视频目标 <ArrowRight aria-hidden size={14} /></Link><Link href="/library?mode=manage">去素材库导入</Link></div></section>
+          {emptyWorkspace ? <section aria-label="开始创作" className={styles.startHere}><h3>从一个视频目标开始</h3><p>当前可见范围还没有素材、资料、声音或创作任务。说说你想做的视频，也可以先导入画面。</p><div><Link href={NEW_VIDEO_HREF}>说说视频目标 <ArrowRight aria-hidden size={14} /></Link><Link href="/library?mode=manage">去素材库导入</Link></div></section>
             : !filteredTasks.length ? <div className={styles.empty}><p>{query || filter !== "all" ? "没有匹配的任务" : "还没有创作任务"}</p>{query || filter !== "all" ? <button onClick={() => { setQuery(""); setFilter("all"); searchRef.current?.focus(); }} type="button">清除筛选</button> : <Link href="/production">新建视频</Link>}</div>
               : view === "board" ? <div className={styles.taskGroups}>{groups.map(group => <section className={styles.taskGroup} aria-label={group.title} key={group.title}><h3>{group.title}<span>{group.items.length}</span></h3><div className={styles.taskColumn} tabIndex={group.items.length ? 0 : undefined} aria-label={`${group.title}任务滚动列表`}>{group.items.length ? group.items.map(taskRow) : <p className={styles.taskGroupEmpty}>{group.empty}</p>}</div></section>)}</div>
                 : <><div className={styles.taskList} aria-label="创作任务列表">{pageTasks.map(taskRow)}</div>{pageCount > 1 ? <nav className={styles.pagination} aria-label="已读取任务分页"><button disabled={currentPage === 0} onClick={() => setTaskPage(currentPage - 1)} type="button">上一页</button><span>{currentPage + 1} / {pageCount} · 已读 {filteredTasks.length} 项</span><button disabled={currentPage === pageCount - 1} onClick={() => setTaskPage(currentPage + 1)} type="button">下一页</button></nav> : null}</>}

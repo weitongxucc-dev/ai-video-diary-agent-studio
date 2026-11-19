@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from app.materials.library_routes import MaterialLibraryHTTPAdapter
 from fastapi.testclient import TestClient
@@ -175,7 +177,10 @@ def test_unavailable_assistant_turn_retains_partial_reply_and_persisted_failure(
     def unavailable(_settings, *, turn_id, **_kwargs):
         calls.append(turn_id)
         repo.append_event(turn_id, {"type": "text_delta", "delta": "已读到部分上下文。"})
-        raise AssistantUnavailable("文字模型当前不可用；请检查设置。", cause="runtime_missing")
+        failure = AssistantUnavailable("文字模型当前不可用；请检查设置。")
+        failure.runtime_receipt = {"session_id": "scoped-session", "usage_status": "known",
+                                   "provider_usage": {"input": 3, "output": 1, "totalTokens": 4}}
+        raise failure
 
     monkeypatch.setattr(main_module, "run_plan_turn", unavailable)
     client = TestClient(main_module.app)
@@ -194,7 +199,36 @@ def test_unavailable_assistant_turn_retains_partial_reply_and_persisted_failure(
     saved = ConversationRepository(tmp_path / "failed-assistant.sqlite3").list_turns(conversation["id"])[0]
     assert saved["status"] == "failed"
     assert saved["assistant_text"] == "已读到部分上下文。"
-    assert saved["result"] == {"kind": "failure", "message": "文字模型当前不可用；请检查设置。"}
+    assert saved["result"]["kind"] == "failure"
+    # Old rows can already contain unsafe trace fragments. Both history routes
+    # must redact them on read, without rewriting the persisted receipt.
+    legacy_events = [
+        {"type": "tool_end", "step": 1, "references": {"output_reference": "/Users/example/private.mp4",
+            "request_id": "request-1", "output_ref": "C:/Users/example/private.mp4"}, "thinking": "private reasoning"},
+        {"type": "nested_tool", "step": 2, "references": {"output_reference": "https://host/private",
+            "artifact_ref": "artifacts/../private.mp4"}},
+        {"type": "nested_tool", "step": 3, "references": {"output_reference": "artifacts/task/job/preview.mp4",
+            "artifact_ref": "narration://artifact/audio-key"}},
+    ]
+    with repo._connect() as connection:
+        connection.execute("UPDATE assistant_conversation_turns SET result_json=? WHERE id=?",
+                           (json.dumps({**saved["result"], "trace_events": legacy_events}), saved["id"]))
+    history = client.get(f"/api/assistant/conversations/{conversation['id']}", headers=headers)
+    assert history.status_code == 200
+    stored = history.json()["turns"][0]["result"]["trace_events"]
+    assert stored[0]["references"] == {"request_id": "request-1"}
+    assert "thinking" not in stored[0] and not stored[1]["references"]
+    assert stored[2]["references"] == legacy_events[2]["references"]
+    trace_url = f"/api/assistant/turns/{saved['id']}/trace"
+    projected = client.get(trace_url, headers=headers)
+    assert projected.status_code == 200
+    trace = projected.json()
+    assert trace["session_id"] == "scoped-session" and trace["provider_usage"]["totalTokens"] == 4
+    assert sum(ref["kind"] == "output" for ref in trace["associations"]) == 2
+    assert "private" not in projected.text
+    assert repo.get_turn(saved["id"])["result"]["trace_events"] == legacy_events
+    _, other_token = members.join(members.create_invite_code(), "成员乙")
+    assert client.get(trace_url, headers={"X-Local-Member-Token": other_token}).status_code == 404
     replay = client.post("/api/assistant/plan/turn", headers=headers, json=request)
     assert replay.status_code == 503
     assert len(calls) == 1  # A failed durable turn is not automatically re-run on HTTP retry.

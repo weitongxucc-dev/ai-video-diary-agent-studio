@@ -118,6 +118,10 @@ class CommandPreviewUseCase:
         workspace_id, task_id = (task.workspace_id, task.id)
         short_preview_base_version = base_version_id
         command = payload.raw_command.strip()
+        if payload.assistant_turn_id:
+            from app.creation.editing.edit_scope import clip_tail_blocker
+            if blocker := clip_tail_blocker(command):
+                raise EditPreviewRejected(409, blocker)
         parsed_overlay = None
         if '/' in command or '\\' in command:
             try:
@@ -209,6 +213,13 @@ class CommandPreviewUseCase:
         if selected_ref.startswith('clip:') and payload.context_stage in {'montage', 'review', 'subtitle_cover'}:
             action = clip_request(task_id, payload, selected_ref, command, base_version_id, request_source)
             if action is not None:
+                if payload.assistant_turn_id and isinstance(action, CreationTaskExactEditRequest):
+                    from app.creation.editing.edit_scope import edit_scope_blocker
+                    from app.creation.editing.linked_timeline_use_case import LINKED_EDIT_OPERATIONS
+                    if blocker := edit_scope_blocker(
+                            {'assistant_turn_id': str(payload.assistant_turn_id), 'raw_command': command},
+                            linked=action.operation_type in LINKED_EDIT_OPERATIONS):
+                        raise EditPreviewRejected(409, blocker)
                 return self.resolve_action(task, action, identity=identity, reader_identity=reader_identity, request_source=request_source, draft_only=draft_only, execution=execution, actor=actor)
         action = self.subtitles.command_batch_or_structure(task, payload, selected_ref, command, identity=identity, request_source=request_source, draft_only=draft_only, execution=execution, actor=actor)
         if action is not None:

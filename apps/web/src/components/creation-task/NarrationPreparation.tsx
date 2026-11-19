@@ -5,7 +5,8 @@ import { AppSelect, AppSelectOption } from "../AppSelect";
 import { Button } from "../ui/button";
 import { AlertCircle, Check, LoaderCircle, Mic, Volume2 } from "lucide-react";
 import { apiUrl } from "@/lib/api";
-import type { CreationTaskRecording, CreationTaskVoiceOption } from "@/lib/types";
+import type { CreationPlanVoiceReference, CreationTaskRecording, CreationTaskVoiceOption } from "@/lib/types";
+import { DeliveryVoiceSample } from "./DeliveryVoiceSample";
 import type { BusyAction } from './edit-context';
 import styles from "../CreationTaskWorkspace.module.css";
 
@@ -20,7 +21,8 @@ type Props = {
     canReviseScript: boolean;
     scriptConfirmed: boolean;
     scriptSectionCount: number;
-    hasSelectedVoice: boolean;
+    boundVoice: CreationPlanVoiceReference | null;
+    deliveryLanguage: string;
     voices: CreationTaskVoiceOption[];
     selectedVoiceId: string | null;
     recordings: CreationTaskRecording[];
@@ -32,9 +34,14 @@ type Props = {
     onVoiceChange: (id: string) => void;
     onUseVoice: () => void;
 };
-export function NarrationPreparation({ taskId, canReviseScript, scriptConfirmed, scriptSectionCount, hasSelectedVoice, voices, selectedVoiceId, recordings, recordingsError, busy, onRecord, onReviseScript, onAdoptRecording, onVoiceChange, onUseVoice }: Props) {
+export function NarrationPreparation({ taskId, canReviseScript, scriptConfirmed, scriptSectionCount, boundVoice, deliveryLanguage, voices, selectedVoiceId, recordings, recordingsError, busy, onRecord, onReviseScript, onAdoptRecording, onVoiceChange, onUseVoice }: Props) {
     const unavailable = voices.filter(voice => !voice.runnable);
     const selectedRunnable = voices.some(voice => voice.profile_id === selectedVoiceId && voice.runnable);
+    const choice = boundVoice ?? voices.find(voice => voice.profile_id === selectedVoiceId);
+    const option = voices.find(voice => voice.profile_id === choice?.profile_id && voice.version === choice.version);
+    const sampleLanguages = (["zh", "en"] as const).filter(language =>
+        deliveryLanguage.includes(language === "zh" ? "zh-CN" : "en-US") &&
+        (choice?.language === language || choice?.language === "zh-en"));
     return (<section className={styles.workSection}>
             <div className={styles.emptyAction}>
               <Volume2 size={30}/>
@@ -51,9 +58,14 @@ export function NarrationPreparation({ taskId, canReviseScript, scriptConfirmed,
                 <Button className="modern-primary-button" disabled={busy !== null} onClick={() => onAdoptRecording(recording)} type="button">{busy === "recording-adopt" ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}采用这段录音</Button>
                 : <p>当前文案不是单段确认稿，无法确定录音对应关系；请先整理为一个明确段落。</p>) : null}
                 </article>))}
-              {hasSelectedVoice ? <p>已选择授权声音。如需生成配音，可在连续制作中确认要求后继续；本机录音也可独立采用。</p>
+              {boundVoice ? <p>作品声音 · {option?.person_display_name ?? "已选声音"} · {boundVoice.version}</p>
             : voices.length ? <div className={styles.voiceSelection}><label className={styles.field}><span>用于生成配音的声音</span><AppSelect aria-label="用于生成配音的声音" disabled={busy !== null} onValueChange={onVoiceChange} value={selectedVoiceId ?? ""}>{voices.map((voice) => <AppSelectOption key={`${voice.profile_id}:${voice.version}`} value={voice.profile_id} disabled={!voice.runnable}>{voice.person_display_name} · {voice.version}</AppSelectOption>)}</AppSelect></label><Button className="modern-primary-button" disabled={busy !== null || !selectedRunnable} onClick={onUseVoice} type="button">{busy === "voice-select" ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}采用此声音</Button></div>
                 : <div className={styles.voiceMissing}><AlertCircle size={18}/><div><strong>还没有可用于生成配音的授权声音</strong><p>你仍可采用这次本人录音；使用声音模型时再登记获得授权的声音。</p></div><Link className="modern-primary-button" href={`/profiles?view=voices&task=${encodeURIComponent(taskId)}`}>添加声音</Link></div>}
+              {choice && option?.runnable !== false && sampleLanguages.length ? <details>
+                <summary>试听样句</summary>
+                {sampleLanguages.map(language => <DeliveryVoiceSample key={JSON.stringify([taskId, choice.profile_id, choice.version, language])}
+                  language={language} profileId={choice.profile_id} version={choice.version} />)}
+              </details> : null}
               {unavailable.length ? <div role="status"><ul aria-label="暂不可用的声音">{unavailable.map(voice => <li key={`${voice.profile_id}:${voice.version}`}>{voice.person_display_name} · {voice.version}：{voiceUnavailableReason(voice.runnable_reason)}</li>)}</ul><Link href={`/profiles?view=voices&task=${encodeURIComponent(taskId)}`}>检查声音参考</Link></div> : null}
             </div>
           </section>);

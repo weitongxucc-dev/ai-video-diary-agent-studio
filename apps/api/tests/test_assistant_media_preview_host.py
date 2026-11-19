@@ -91,9 +91,9 @@ def test_run_task_turn_returns_media_job_without_restarting_model(monkeypatch, t
         message="把选中镜头速度改为0.7倍，保留时间槽和旁白", stage="montage", selected_refs=[], playhead_ms=None,
         caller_user_id="member-current", turn_id="trusted-turn",
     )
-    assert result == {"kind":"media_job","media_job":job}
-    assert "已安排，预览尚未完成" in reply
     assert len(calls) == 1
+    assert result == {"kind":"media_job","media_job":job,"session_id":calls[0]["sessionId"]}
+    assert "已安排，预览尚未完成" in reply
     prompt = calls[0]["systemPrompt"]
     assert "未知结果先查原请求" in prompt
     assert "相同失败不重放" in prompt and "无进展不盲循环" in prompt

@@ -4,6 +4,7 @@ import type { CreationTaskTopicsResponse, CreationTaskScript, CreationExecutionS
 import type { CreationTaskEditPreviewResponse, TaskMediaJob } from './task-edits';
 import type { CreationRequest } from './creation-requests';
 export type AssistantResultStage = "script" | "narration" | "montage";
+export type OpenAssistantResult = (stage: AssistantResultStage, turn: AssistantConversationTurn) => string | void;
 
 export type AssistantEditRequest = {
     task_id: string;

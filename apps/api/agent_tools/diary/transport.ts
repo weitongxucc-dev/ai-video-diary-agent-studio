@@ -333,6 +333,22 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   return topic ? result('confirm_creation_task_topic', {...args, candidate_id: decodeURIComponent(topic[1]), payload}) : null;
 }
 
+// Object selection does not supply a missing action. Match complete generic
+// feedback, so an instruction with a concrete edit in another clause can pass.
+export function needsEditDirection(instruction?: string): boolean {
+  const text = instruction?.trim();
+  if (!text) return false;
+  const [feedback, followUp, ...remaining] = text.split(/[，。,.、！？!?]+/)
+    .map(part => part.trim()).filter(Boolean);
+  if (!feedback || remaining.length) return false;
+  const genericRequest = /^(?:请\s*)?(?:帮我)?(?:改好|优化|调整|改|弄好)(?:一?点|一下)?$/u;
+  const shotFeedback = /^(?:当前(?:选中)?(?:这(?:一)?个)?|这(?:一)?个|这个选中的)?镜头(?:总)?(?:感觉|觉得|看着)?(?:有点|有些)?(?:不太对劲|不太对|不对劲|不自然|怪怪的|怪|别扭)$/u;
+  if (shotFeedback.test(feedback)) return !followUp || genericRequest.test(followUp);
+  if (!followUp && genericRequest.test(feedback)) return true;
+  const englishFeedback = /^(?:this|the selected|the current) (?:shot|clip) (?:feels|looks) (?:a (?:bit|little) )?(?:off|odd|weird)$/i;
+  return englishFeedback.test(feedback) && (!followUp || /^(?:please )?(?:make it better|fix it up)$/i.test(followUp));
+}
+
 export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, verifyTaskVersion, readCredentials, readActionSource, getSignal, getToolCallId, fetchRequest, businessCall, onFailure}: {
   apiBase?: string; taskId?: string; selectedTaskVersion: TaskVersion | null;
   verifyTaskVersion: (workspace: any) => void;
@@ -371,12 +387,22 @@ export function createBusinessRequest({apiBase, taskId, selectedTaskVersion, ver
     };
     const notSubmitted = (error: string, reason: string, stage: string) => reject(new RequestNotSubmitted(reason,
       {...locators, error, reason, repair_action: "重新读取当前对象和原请求，处理阻断后再提交。", stage, submission_effect: "not_submitted"}));
+    const taskRoot = `/api/creation-tasks/${encodeURIComponent(taskId || '')}`;
+    if (taskId && write && needsEditDirection(readActionSource?.().userInstruction)) {
+      const recordsFeedback = path === `${taskRoot}/assistant/input-understanding`
+        && ['clarification', 'candidate'].includes(requestBody?.kind);
+      if (!recordsFeedback) return reject(new RequestNotSubmitted(
+        '当前反馈没有指定修改方向，请先澄清具体想改什么。', {
+          ...locators, error: 'edit_direction_missing', reason: '当前反馈没有指定修改方向，业务请求未提交。',
+          repair_action: '读取已有信息，记录澄清或未采用的候选，请用户指出想改的地方。',
+          stage: 'input_understanding', submission_effect: 'not_submitted',
+        }));
+    }
     const operation = businessCall ? hostOperation(path, (init?.method || 'GET').toUpperCase(), requestBody) : null;
     if (operation?.operation === 'read_task_workspace' && selectedTaskVersion)
       operation.arguments.expected_task_version = {...selectedTaskVersion};
     if (businessCall && !operation) return notSubmitted('business_operation_not_supported', '该操作未接入原目标后台执行，请求未提交。', 'capability');
     if (!businessCall && !apiBase) return notSubmitted("business_service_unavailable", "本地业务服务不可用，请求未提交。", "connection");
-    const taskRoot = `/api/creation-tasks/${encodeURIComponent(taskId || '')}`;
     const sectionWrite = path === `${taskRoot}/assistant/narration-semantic-review`
       || (path.startsWith(`${taskRoot}/segments/`) && /^\/segments\/[^/]+\/revision$/.test(path.slice(taskRoot.length)))
       || (path.startsWith(`${taskRoot}/segment-requests/`) && /^\/segment-requests\/[^/]+\/resume$/.test(path.slice(taskRoot.length)));

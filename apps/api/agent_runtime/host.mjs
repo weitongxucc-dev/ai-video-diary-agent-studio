@@ -123,9 +123,14 @@ const result = createSessionResult(input.sessionId);
 session.subscribe(event => { result.observe(event); emit(event.type === 'compaction_start'
   ? {...event,contextUsage:session.getContextUsage()} : event); });
 try {
-  if (abortRequested) await abortSession();
-  else await session.prompt(input.message, { source: "rpc" });
-  if (inputExtension.getFailure()) throw inputExtension.getFailure();
+  try {
+    if (abortRequested) await abortSession();
+    else await session.prompt(input.message, { source: "rpc" });
+    if (inputExtension.getFailure()) throw inputExtension.getFailure();
+  } catch (error) {
+    emit({...result.value(), status: "failed", input_id: inputExtension.getLastConsumedInputId() ?? originalInputId});
+    throw error;
+  }
   emit({...result.value(),input_id:inputExtension.getLastConsumedInputId() ?? originalInputId});
 } finally {
   if (abortRun) await abortRun;

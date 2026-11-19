@@ -134,6 +134,42 @@ function openExecutionRecord(summary = screen.getByText("执行记录")) {
   return details;
 }
 
+function openDiagnostics(record: HTMLElement) {
+  return openExecutionRecord(within(record).getByText("用量与技术详情"));
+}
+
+it("keeps public operations available while streaming and reads diagnostics only on request after settlement", async () => {
+  const saved = conversation();
+  saved.turns[0] = {...saved.turns[0], status: "running", assistant_text: "已读到部分资料", result: null,
+    events: [{type: "tool_start", tool_id: 7, label: "读取原作品"},
+      {type: "tool_start", tool_id: 7, label: "读取原作品"}]};
+  api.getAssistantTurnTrace.mockResolvedValueOnce({
+    turn_id: "turn-one", events: [], next_before: null, provider_usage: null,
+    usage_status: "unknown", duration_ms: null,
+  });
+  const panel = () => <AssistantConversationPanel state={state({conversation:saved})} input=""
+    onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前作品"/>;
+  const view = render(panel());
+  expect(screen.getByRole("status")).toHaveTextContent("正在读取原作品");
+  expect(screen.getByText("已读到部分资料")).toBeVisible();
+  const record = openExecutionRecord();
+  expect(within(record).getAllByRole("listitem")).toHaveLength(1);
+  expect(within(record).getByText("进行中")).toBeVisible();
+  openDiagnostics(record);
+  expect(within(record).getByText("本轮结束后可查看用量和技术详情。")).toBeVisible();
+  expect(api.getAssistantTurnTrace).not.toHaveBeenCalled();
+
+  saved.turns[0] = {...saved.turns[0], status: "completed", assistant_text:"已读到部分资料。核对完毕。",
+    events: [...saved.turns[0].events, {type:"tool_end", tool_id:7, label:"读取原作品", ok:true, summary:"已核对原作品。"},
+      {type:"tool_start", tool_id:7, label:"读取原作品"}]};
+  view.rerender(panel());
+  expect(screen.getByText("已读到部分资料。核对完毕。")).toBeVisible();
+  expect(within(record).queryByText("进行中")).not.toBeInTheDocument();
+  expect(within(record).getByText("已返回")).toBeVisible();
+  expect(await within(record).findByLabelText("本轮用量")).toHaveTextContent("未提供");
+  expect(api.getAssistantTurnTrace).toHaveBeenCalledExactlyOnceWith("turn-one");
+});
+
 it("loads earlier persisted trace events and keeps the newest page visible", async () => {
   api.getAssistantTurnTrace.mockImplementation(async (_turnId: string, before?: number | null) => ({
     turn_id: "turn-one", conversation_id: "conversation-one", session_id: null, status: "completed",
@@ -150,9 +186,11 @@ it("loads earlier persisted trace events and keeps the newest page visible", asy
     busy={false} configured scopeLabel="当前任务"/>);
   expect(api.getAssistantTurnTrace).not.toHaveBeenCalled();
   const record = openExecutionRecord();
+  expect(api.getAssistantTurnTrace).not.toHaveBeenCalled();
+  expect(within(record).queryByLabelText("本轮用量")).not.toBeInTheDocument();
+  openDiagnostics(record);
   expect(await within(record).findByLabelText("本轮用量")).toBeVisible();
   expect(within(record).getByText("费用").parentElement).toHaveTextContent("未提供");
-  fireEvent.click(within(record).getByText("技术详情"));
   expect(within(record).getByText("开始工具调用：事件4")).toBeVisible();
   fireEvent.click(within(record).getByRole("button", {name: "加载更早记录"}));
   expect(await within(record).findByText("开始工具调用：事件1")).toBeVisible();
@@ -179,6 +217,7 @@ it("retries an unreadable execution record locally and exposes measured usage wi
   render(<AssistantConversationPanel state={state({conversation:saved})} input="待保留的草稿" onInput={vi.fn()} onSend={send}
     busy={false} configured scopeLabel="当前任务"/>);
   const record = openExecutionRecord();
+  openDiagnostics(record);
   fireEvent.click(await within(record).findByRole("button", {name:"重试读取记录"}));
   const usage = await within(record).findByLabelText("本轮用量");
   expect(usage).toHaveTextContent("供应商实测");
@@ -186,7 +225,6 @@ it("retries an unreadable execution record locally and exposes measured usage wi
   expect(usage).toHaveTextContent("缓存读取 0");
   expect(usage).toHaveTextContent("2.35 秒");
   expect(usage).toHaveTextContent("qwen-test");
-  fireEvent.click(within(record).getByText("技术详情"));
   expect(within(record).getByText("内部重试 1 次")).toBeVisible();
   expect(record).not.toHaveTextContent(/private-fixture|private-reasoning-fixture|read_sources|\/Users\//);
   expect(api.getAssistantTurnTrace).toHaveBeenCalledTimes(2);
@@ -239,11 +277,25 @@ it.each([
   render(<AssistantConversationPanel state={state({conversation:saved, refresh})} input="正在编辑的下一条要求"
     onInput={vi.fn()} onSend={send} onOpenEditProposal={proposal} onOpenResultStage={open} busy={false} configured scopeLabel="当前任务"/>);
   fireEvent.click(screen.getByRole("button", {name:label}));
-  expect(open).toHaveBeenCalledExactlyOnceWith(stage);
+  expect(open).toHaveBeenCalledExactlyOnceWith(stage, turn);
   expect(screen.getByRole("textbox")).toHaveValue("正在编辑的下一条要求");
   expect(send).not.toHaveBeenCalled();
   expect(proposal).not.toHaveBeenCalled();
   expect(refresh).not.toHaveBeenCalled();
+});
+
+it("locates a saved result after the reply failed without offering to replay the edit", () => {
+  const saved = conversation("task");
+  saved.turns[0] = {...saved.turns[0], status:"failed", result:{kind:"task_turn", response:{
+    script_draft:{task_id:"task-one", id:"draft-version", updated_at:"2026-11-19T08:00:00Z"},
+  }}};
+  const open = vi.fn(), send = vi.fn();
+  render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()} onSend={send}
+    onOpenResultStage={open} busy={false} configured scopeLabel="当前作品"/>);
+  expect(screen.queryByRole("button", {name:"继续编辑本条要求"})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", {name:"查看当前文案"}));
+  expect(open).toHaveBeenCalledExactlyOnceWith("script", saved.turns[0]);
+  expect(send).not.toHaveBeenCalled();
 });
 
 it("does not navigate from model claims, another task's receipt, or a proposed edit", () => {
@@ -606,6 +658,21 @@ describe("persisted storyboard regeneration receipts", () => {
 });
 
 describe("persisted business result cards", () => {
+  it("reads the original queued job after the reply stops without offering to edit the request again", async () => {
+    const saved = projectedTaskConversation("queued");
+    saved.turns[0].status = "stopped";
+    const refresh = vi.fn().mockResolvedValue(saved);
+    const onSend = vi.fn();
+    render(<AssistantConversationPanel state={state({conversation: saved, refresh})} input="" onInput={vi.fn()}
+      onSend={onSend} busy={false} configured scopeLabel="当前任务"/>);
+    expect(screen.getByText(/本轮已停止/)).toBeVisible();
+    expect(screen.getByText(/预览已安排，正在等待后台处理/)).toBeVisible();
+    expect(screen.queryByRole("button", {name: "继续编辑本条要求"})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name: "查询本轮结果"}));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("shows the first same-request refusal beside the current wait and preserves the next draft", () => {
     const saved = projectedTaskConversation("queued");
     const response = saved.turns[0].result!.response as Record<string, unknown>;
@@ -1042,6 +1109,72 @@ describe("AssistantConversationPanel", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it.each(["created", "failed"] as const)("hides old content during slow creation and restores the right view when creation %s", async outcome => {
+    const original = {...conversation("task"), title: "上一段作品对话"};
+    const next = {...original, id: "new-task-conversation", title: "新对话", turns: [], creation_contexts: [{
+      conversation_id: "creation-origin",
+      turns: [{...original.turns[0], id: "origin-turn", status: "running" as const, user_message: "最初的制作要求"}],
+    }]};
+    api.getCurrentAssistantConversation.mockResolvedValue(original);
+    api.listAssistantConversations.mockResolvedValue({items: [original]});
+    let saveDraft!: (value: AssistantConversation) => void;
+    api.updateAssistantConversation.mockImplementationOnce(() => new Promise<AssistantConversation>(resolve => { saveDraft = resolve; }));
+    let finishCreation!: (value: AssistantConversation) => void;
+    let failCreation!: (error: Error) => void;
+    api.createAssistantConversation.mockImplementationOnce(() => new Promise<AssistantConversation>((resolve, reject) => {
+      finishCreation = resolve;
+      failCreation = reject;
+    }));
+    let controller!: ReturnType<typeof useAssistantConversation>;
+    const changed = vi.fn();
+    function Harness() {
+      controller = useAssistantConversation({scope_kind: "task", scope_id: "task-one"});
+      return <AssistantConversationPanel state={controller} input={controller.draftText} onInput={controller.setDraftText}
+        onSend={vi.fn()} onConversationChange={changed} busy={false} configured scopeLabel="原作品"
+        composerActions={<button type="button">修改目标</button>}/>;
+    }
+    render(<Harness/>);
+    await screen.findByRole("region", {name: "助手对话：上一段作品对话"});
+    const oldDraft = "保留在上一段对话的修改草稿";
+    fireEvent.change(screen.getByRole("textbox"), {target: {value: oldDraft}});
+    const lateStream = controller.bindTurnEvents(original.id, original.turns[0].id);
+    fireEvent.click(screen.getByRole("button", {name: "新对话"}));
+    const assertSwitching = () => {
+      expect(screen.getByRole("status")).toHaveTextContent("正在切换对话…");
+      expect(screen.queryByRole("log")).not.toBeInTheDocument();
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", {name: "修改目标"})).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", {name: "添加素材引用"})).not.toBeInTheDocument();
+    };
+    assertSwitching();
+    await waitFor(() => expect(api.updateAssistantConversation).toHaveBeenCalledWith(original.id,
+      expect.objectContaining({draft_text: oldDraft, expected_draft_version: 0})));
+    expect(api.createAssistantConversation).not.toHaveBeenCalled();
+    await act(async () => saveDraft({...original, draft_text: oldDraft, draft_version: 1}));
+    await waitFor(() => expect(api.createAssistantConversation).toHaveBeenCalledWith({scope_kind: "task", scope_id: "task-one"}));
+    act(() => lateStream({type: "text_delta", delta: "迟到的上一段回复"}));
+    assertSwitching();
+
+    if (outcome === "failed") {
+      await act(async () => failCreation(new Error("暂时无法创建对话")));
+      expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法创建对话");
+      expect(screen.getByRole("region", {name: "助手对话：上一段作品对话"})).toBeVisible();
+      expect(screen.getByText("请先读当前方案")).toBeVisible();
+      expect(screen.getByRole("textbox")).toHaveValue(oldDraft);
+      expect(changed).not.toHaveBeenCalled();
+    } else {
+      await act(async () => finishCreation(next));
+      expect(await screen.findByRole("region", {name: "助手对话：新对话"})).toBeVisible();
+      expect(screen.getByLabelText("空对话")).toBeVisible();
+      expect(screen.getByRole("textbox")).toHaveValue("");
+      expect(screen.queryByText("请先读当前方案")).not.toBeInTheDocument();
+      expect(screen.getByText("创建要求与制作记录").closest("details")).not.toHaveAttribute("open");
+      expect(screen.getByText("最初的制作要求")).not.toBeVisible();
+      expect(changed).toHaveBeenCalledOnce();
+    }
+    expect(screen.queryByText(/迟到的上一段回复/)).not.toBeInTheDocument();
+  });
+
   it("shows a readable failure first and keeps raw JSON and codes in collapsed diagnostics", () => {
     const raw = '{"detail":{"reason":"provider_output_invalid","request_id":"qa-id"}}';
     render(<AssistantConversationPanel state={state({ error: raw })} input="" onInput={vi.fn()} onSend={vi.fn()}
@@ -1052,6 +1185,16 @@ describe("AssistantConversationPanel", () => {
     const diagnostic = within(alert).getByText("诊断详情").closest("details")!;
     expect(diagnostic).not.toHaveAttribute("open");
     expect(diagnostic).toHaveTextContent(raw);
+  });
+
+  it("keeps private diagnostic fields out of the DOM on a failed request", () => {
+    const raw = '{"reasoning_content":"private-test","authorization":"Bearer private-token"}';
+    render(<AssistantConversationPanel state={state({error:raw})} input="" onInput={vi.fn()} onSend={vi.fn()}
+      busy={false} configured scopeLabel="当前作品"/>);
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("请查询原请求的结果");
+    expect(alert).not.toHaveTextContent(/private-test|private-token/);
+    expect(within(alert).queryByText("诊断详情")).not.toBeInTheDocument();
   });
 
   it("folds the actual Chinese invalid-JSON failure and single-underscore code without filtering successful JSON discussion", () => {
@@ -1189,14 +1332,18 @@ describe("AssistantConversationPanel", () => {
       act(paint);
       next.rerender(panel());
       const restoredDetails = next.container.querySelectorAll<HTMLDetailsElement>("details[data-reading-key]");
-      expect(restoredDetails).toHaveLength(6); // Each turn's result, diagnostic, and execution disclosure.
+      const publicDetails = [...restoredDetails].filter(detail => !detail.classList.contains("assistant-trace-technical"));
+      const technicalDetails = [...restoredDetails].filter(detail => detail.classList.contains("assistant-trace-technical"));
+      expect(publicDetails).toHaveLength(6);
+      expect(technicalDetails).toHaveLength(2);
+      expect(technicalDetails.every(detail => !detail.open)).toBe(true);
       expect(screen.getAllByText("执行记录")).toHaveLength(2);
       screen.getAllByText("执行记录").forEach(summary => expect(summary.closest("details")).toHaveAttribute("open"));
-      expect([...restoredDetails].every(detail => detail.open)).toBe(true);
+      expect(publicDetails.every(detail => detail.open)).toBe(true);
       const restoredHistory = screen.getByLabelText("持久对话记录");
       let scroll = 0;
       Object.defineProperty(restoredHistory, "scrollTop", { configurable: true,
-        get: () => scroll, set: value => { scroll = [...restoredDetails].every(detail => detail.open) ? Math.min(value, 500) : 0; },
+        get: () => scroll, set: value => { scroll = publicDetails.every(detail => detail.open) ? Math.min(value, 500) : 0; },
       });
       expect(scroll).toBe(0);
       act(paint);
@@ -1948,7 +2095,20 @@ describe("persistent workbench conversation and command completion", () => {
     const currentConversation=conversation();
     if(condition === "running") currentConversation.turns=[{...currentConversation.turns[0],id:"pending-turn",status:"running"}];
     const createNew=vi.fn(),onInput=vi.fn(),onSend=vi.fn();
-    render(<AssistantConversationPanel state={state({conversation:condition === "missing" ? null : currentConversation,loading:condition === "loading",createNew})} input="/new" onInput={onInput} onSend={onSend} busy={condition === "busy"} configured={false} scopeLabel="工作区"/>);
+    const panel = (loading: boolean) => <AssistantConversationPanel state={state({conversation:condition === "missing" ? null : currentConversation,loading,createNew})} input="/new" onInput={onInput} onSend={onSend} busy={condition === "busy"} configured={false} scopeLabel="工作区"/>;
+    const view = render(panel(condition === "loading"));
+    if (condition === "loading") {
+      expect(screen.getByRole("status")).toHaveTextContent("正在切换对话…");
+      expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+      expect(screen.queryByRole("option")).not.toBeInTheDocument();
+      view.rerender(panel(false));
+      await screen.findByRole("option",{name:/新对话/});
+      expect(screen.getByRole("textbox")).toHaveValue("/new");
+      expect(createNew).not.toHaveBeenCalled();
+      expect(onInput).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+      return;
+    }
     const input=screen.getByRole("textbox");
     await screen.findByRole("option",{name:/新对话/});
     if(condition === "ime") fireEvent.compositionStart(input);
@@ -2449,4 +2609,37 @@ describe("conversation panel width changes", () => {
       expect(screen.queryByRole("button", {name: "展开全文"})).not.toBeInTheDocument();
     } finally { cleanup(); sizes.restore(); }
   });
+});
+
+it("keeps the concrete saved gain reply and folds supplementary admission facts", () => {
+  const saved = conversation("task");
+  const turn = saved.turns[0];
+  const summary = "这段配音已从 0 dB 调整为 -3 dB。已保存，可撤销。";
+  turn.assistant_text = summary;
+  turn.status = "completed";
+  const operation = { id: "edit-1", task_id: "task-one", workspace_id: saved.workspace_id, status: "applied",
+    operation_type: "EditAudioTimeline", base_version_id: "before", result_version_id: "after",
+    payload: { edit: { action: "update", target_id: "voice-clip" } } };
+  const applied = { operation, narration: { task: { id: "task-one" }, audio_reference: "existing-narration" },
+    execution_readiness: { status: "authorization_ready" } };
+  turn.result = { kind: "task_turn", timeline_action: "apply",
+    completed_local_edit: { scope: "single_narration_gain_edit", task_id: "task-one", request_id: "request-1",
+      operation_id: operation.id, base_version_id: "before", result_version_id: "after", target_id: "voice-clip",
+      gain_before_db: 0, gain_after_db: -3, summary },
+    response: { timeline_action: "apply", edit_request: { task_id: "task-one", request_id: "request-1",
+      phase: "apply", status: "recorded", result: applied } } };
+  const open = vi.fn();
+  const panel = () => <AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()}
+    onSend={vi.fn()} onOpenResultStage={open} busy={false} configured scopeLabel="当前作品"/>;
+  const view = render(panel());
+  expect(screen.getAllByText(summary)).toHaveLength(1);
+  expect(screen.queryByText("修改已保存，可撤销；成片尚未重新生成")).not.toBeInTheDocument();
+  expect(screen.getByText("制作条件").closest("details")).not.toHaveAttribute("open");
+  fireEvent.click(screen.getByRole("button", { name: "查看当前剪辑" }));
+  expect(open).toHaveBeenCalledExactlyOnceWith("montage", turn);
+
+  applied.execution_readiness = { status: "not_ready" };
+  view.rerender(panel());
+  expect(screen.getByText(/本次保存时后台执行授权未就绪/)).toBeVisible();
+  expect(screen.queryByText("修改已保存，可撤销；成片尚未重新生成")).not.toBeInTheDocument();
 });
