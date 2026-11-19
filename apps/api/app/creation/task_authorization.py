@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from app.creation.contracts import TaskAuthorization, TaskAuthorizationConflict
 from app.materials.contracts import MediaAuthorityError
+from app.source_policy import knowledge_item_readable
 
 
 logger = logging.getLogger(__name__)
@@ -42,14 +43,28 @@ class TaskAuthorizationUseCase:
             plan = json.loads(row["payload"])
             montage = conn.execute("SELECT payload FROM creation_task_montage_plans WHERE workspace_id=? AND task_id=?", (workspace_id,task_id)).fetchone()
             montage = json.loads(montage["payload"]) if montage is not None else {}
-        result = {"assets": {item["asset_ref"].removeprefix("asset:") for item in plan.get("material_matches", [])},
+            selected_assets = set(plan.get("selected_material_asset_ids", []))
+            if selected_assets:
+                assets = conn.execute(
+                    "SELECT id,visibility,json_extract(payload,'$.owner_user_id') AS owner_user_id "
+                    "FROM material_assets WHERE workspace_id=? AND id IN (SELECT value FROM json_each(?))",
+                    (workspace_id, json.dumps(sorted(selected_assets))),
+                )
+                readable = {row["id"] for row in assets if knowledge_item_readable(user_id=task.owner_user_id,
+                    local_diagnostic=False, visibility=row["visibility"], owner_user_id=row["owner_user_id"])}
+                if readable != selected_assets:
+                    raise TaskAuthorizationDenied("作品选定的素材已不可读取，请核对选材范围")
+        clip_assets = {clip["asset_id"] for clip in montage.get("clips", [])
+                       if clip.get("asset_id") and not clip.get("person_render_id")}
+        if selected_assets and not clip_assets <= selected_assets:
+            raise TaskAuthorizationDenied("当前镜头超出本作品选定的素材范围")
+        matched_assets = {item["asset_ref"].removeprefix("asset:") for item in plan.get("material_matches", [])}
+        result = {"assets": selected_assets or matched_assets | clip_assets,
                   "voices": set(), "persons": set(), "references": set()}
         for key, kind in (("selected_voice", "voices"), ("selected_person", "persons")):
             ref = plan.get(key)
             if ref:
                 result[kind].add(f"{ref['profile_id']}:{ref['version']}")
-        result["assets"].update(clip["asset_id"] for clip in montage.get("clips", [])
-                                if clip.get("asset_id") and not clip.get("person_render_id"))
         def references(value):
             if isinstance(value, dict):
                 for child in value.values():
@@ -275,7 +290,6 @@ class TaskAuthorizationUseCase:
 
     def prepare_material_edit(self, task, editor_identity, asset_ids):
         """Prepare only newly used fixed materials; ordinary editing does not issue a task grant."""
-        from app.source_policy import knowledge_item_readable as content_readable
         current = self.repository.task_authorization_records.get_task_authorization(task.workspace_id, task.id)
         reader = editor_identity.get('user_id') or editor_identity['member_id']
         status = self.status(task.workspace_id, task.id, operation='render')
@@ -300,7 +314,7 @@ class TaskAuthorizationUseCase:
             raise TaskAuthorizationDenied('本次替换素材已不存在')
         for asset_id in sorted(additions):
             asset = self.repository.get_asset(task.workspace_id, asset_id)
-            if not content_readable(user_id=reader, local_diagnostic=editor_identity.get('local_diagnostic', False),
+            if not knowledge_item_readable(user_id=reader, local_diagnostic=editor_identity.get('local_diagnostic', False),
                     visibility=asset.visibility, owner_user_id=asset.owner_user_id):
                 raise TaskAuthorizationDenied('当前编辑成员无权使用替换素材')
             references.append(self.repository.workspace_media_reference_for_asset(task.workspace_id, asset_id))
@@ -361,7 +375,10 @@ class TaskAuthorizationUseCase:
             return "outside_scope"
         if not check_scope:
             return "valid"
-        task, required = self._requirements(workspace_id, task_id, connection=connection)
+        try:
+            task, required = self._requirements(workspace_id, task_id, connection=connection)
+        except TaskAuthorizationDenied:
+            return "outside_scope"
         if any(not set(values) <= set(authorization.resource_scope.get(key, []))
                for key, values in required.items() if key != "references"):
             return "outside_scope"
@@ -371,9 +388,11 @@ class TaskAuthorizationUseCase:
         return "valid"
 
     def material_asset_ids(self, workspace_id, task_id):
-        if self.status(workspace_id, task_id, operation="montage_plan") != "valid":
-            raise PermissionError("原任务的选材授权未就绪")
-        return frozenset(self.repository.task_authorization_records.get_task_authorization(workspace_id, task_id).resource_scope["assets"])
+        with self.repository.execution_inputs.creation_execution_read() as conn:
+            if self.status(workspace_id, task_id, operation="montage_plan", connection=conn) != "valid":
+                raise PermissionError("原任务的选材授权未就绪")
+            authorization = self.repository.task_authorization_records.get_task_authorization(workspace_id, task_id, connection=conn)
+            return frozenset(authorization.resource_scope["assets"])
 
     @staticmethod
     def business_context_id(goal):

@@ -498,7 +498,8 @@ class ScriptDraftUseCase:
             page=self.scripts.read_creation_task_script_sections(workspace_id,task_id,script_id,
                 expected_updated_at=expected_updated_at,after_ordinal=cursor,limit=review_limit)
             parts=[CreationTaskScriptSection(**item['section']) for item in page['items']]
-            window=CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in parts),context['total_count'],finalizing=True)
+            window=CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in parts),
+                context['total_count'],finalizing=True,review_title=cursor == 0)
             review_binding=self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],parts,instruction_origin,
                 library_entry=entry,review_window=window,reuse_review=lambda key:self.scripts.script_sections_have_review(workspace_id,task_id,script_id,parts,
                     binding_digest=key,layout_digest=context['layout_digest']))

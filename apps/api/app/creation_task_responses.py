@@ -56,6 +56,7 @@ class CreationTaskResponseAdapter:
                     item.__dict__ for item in plan.pronunciation_references
                 ],
                 "approved_asset_count": plan.approved_asset_count,
+                "selected_material_asset_ids": plan.selected_material_asset_ids,
                 "approved_clip_count": plan.approved_clip_count,
                 "material_rule_summary": plan.material_rule_summary,
                 "material_matches": [asdict(item) for item in plan.material_matches],

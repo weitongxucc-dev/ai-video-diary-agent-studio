@@ -91,6 +91,7 @@ export type CreationPlanPreview = Omit<CreationPlanInput, "selected_voice"> & {
     selected_voice: CreationPlanVoiceReference | null;
     pronunciation_references: CreationPlanPronunciationReference[];
     approved_asset_count: number;
+    selected_material_asset_ids?: string[];
     approved_clip_count: number;
     material_rule_summary: string;
     material_matches: MaterialSegmentMatch[];

@@ -12,10 +12,6 @@ from app.creation.script_contracts import (
     CreationTaskScriptSection as _CreationTaskScriptSection,
     ScriptGenerationRun as _ScriptGenerationRun,
 )
-from app.creation.topic_contracts import (
-    TopicCandidate as _TopicCandidate,
-    TopicGenerationRun as _TopicGenerationRun,
-)
 from app.models import utc_now
 from app.source_policy import content_owner, knowledge_item_readable as _content_readable
 
@@ -126,11 +122,7 @@ class CreationRequestAdoptionUseCase:
         title = (intent.get("topic_title") or (final["title"] if final else None)) if intent else None
         now = utc_now()
         if title and not task.selected_topic_id:
-            topic_run = _TopicGenerationRun(f"provided_topic_run_{task.id}", task.workspace_id, task.id, plan.id,
-                "succeeded", {"operation": "provided_topic", "provider": "none"}, "provided-topic/v1", [], started_at=now, finished_at=now)
-            topic = _TopicCandidate(f"provided_topic_{task.id}", task.workspace_id, task.id, topic_run.id,
-                title, "", "", [], 0, selection_status="confirmed", created_at=now)
-            self.topic_records.save_provided_topic(conn, topic_run, topic)
+            topic = self.topic_records.record_provided_topic(conn, task, title, now)
             task.selected_topic_id = topic.id
             task.stage, task.stage_status, task.recovery_point = "script", "not_started", "script"
             task.status, task.progress = "running", max(task.progress, 20)

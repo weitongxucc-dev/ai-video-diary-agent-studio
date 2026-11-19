@@ -3168,6 +3168,7 @@ class CreationPlanPreviewResponse(BaseModel):
     selected_voice: CreationPlanVoiceReferenceResponse | None
     pronunciation_references: list[CreationPlanPronunciationReferenceResponse]
     approved_asset_count: int = Field(ge=0)
+    selected_material_asset_ids: list[str] = Field(default_factory=list)
     approved_clip_count: int = Field(ge=0)
     material_rule_summary: str
     material_matches: list[MaterialSegmentMatchResponse]

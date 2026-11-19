@@ -9,6 +9,8 @@ import { transferAssistantReplyToScript, getAssistantScriptContext, getCreationT
 import type { CreationTask, CreationTaskScript, CreationTaskScriptSectionWindow, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 import styles from "../CreationTaskWorkspace.module.css";
 import { ScriptWindowEditor } from "./ScriptWindowEditor";
+import type { AuditionVoice } from "./DeliveryVoiceSample";
+import { SavedScriptAudition } from "./SavedScriptAudition";
 import { getScriptLibraryRequest, isScriptLibraryWriteRejected } from "@/lib/api/script-library";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
 export function ScriptGenerationStatus({ requestId, receipt, working, stopping, error, onRead, onStop }: {
@@ -264,10 +266,12 @@ type ScriptEditorProps = {
     repairing: boolean;
     onConfirm: (script: LoadedScript) => void;
     onWindowSaved?: () => Promise<void>;
+    auditionVoice?: AuditionVoice;
 };
 export function ScriptEditor(props: ScriptEditorProps) {
     if (props.script.selection_status === "draft" && (!props.script.draft_complete || props.script.sections_total_count > 20)) {
-        return <ScriptWindowEditor key={`${props.taskId}:${props.script.id}`} taskId={props.taskId} script={props.script} onSaved={async () => { await props.onWindowSaved?.(); }}/>;
+        return <ScriptWindowEditor key={`${props.taskId}:${props.script.id}`} taskId={props.taskId} script={props.script}
+            auditionVoice={props.auditionVoice} onSaved={async () => { await props.onWindowSaved?.(); }}/>;
     }
     if (props.script.sections_loaded) return <CompleteScriptEditor {...props} script={props.script}/>;
     return <ScriptEditorLoader key={`${props.taskId}:${props.script.id}:${props.script.updated_at}`} {...props}/>;
@@ -304,8 +308,9 @@ function ScriptEditorLoader(props: ScriptEditorProps) {
         {props.script.sections_total_count > 20 ? <><p>当前可逐页查看，分段修改尚未开放。</p><ConfirmedScriptView script={props.script}/></> : null}
     </>;
 }
-function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm }: Omit<ScriptEditorProps, 'script'> & { script: LoadedScript }) {
+function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm, auditionVoice }: Omit<ScriptEditorProps, 'script'> & { script: LoadedScript }) {
     const [draft, setDraft] = useWorkspaceViewState(`script:${script.id}:${script.updated_at}`+".draft", script);
+    const [savedScript, setSavedScript] = useState(script);
     const [sourceRead, setSourceRead] = useState<
         { status: "loading" } | { status: "failed"; message: string }
         | { status: "ready"; sources: { reference_id: string; title: string }[] }
@@ -332,6 +337,7 @@ function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm }: Om
                 expected_updated_at: submittedDraft.updated_at,
                 edit_mode: "replace_all",
             });
+            setSavedScript(saved);
             setDraft((current) => current === submittedDraft
                 ? saved
                 : { ...current, updated_at: saved.updated_at, draft_complete: saved.draft_complete });
@@ -347,6 +353,9 @@ function CompleteScriptEditor({ taskId, script, busy, repairing, onConfirm }: Om
       <div className={styles.sectionHeading}><div><h2>{repairing ? "修订文案" : "检查文案"}</h2><p>确认时会核查正文、画面建议及相关事实依据；通过后使用这份文案制作。</p></div></div>
       {script.reused_from_entry_id ? <p>从文案库复用的新稿，尚未确认；没有调用模型或复制旧成片。<Link href="/knowledge">查看文案来源</Link></p> : null}
       {script.source_reply_reference ? <p>来自已完成对话回复。当前内容是待确认草稿；可继续编辑画面建议和相关资料，确认时会核查完整内容。</p> : null}
+      {auditionVoice && savedScript.sections.length ? <SavedScriptAudition voice={auditionVoice}
+        items={savedScript.sections.map((section, index) => ({ section, ordinal: index + 1 }))}
+        sourceVersion={JSON.stringify([taskId, savedScript.id, savedScript.updated_at])} /> : null}
       <label className={styles.field}><span>标题</span><input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })}/></label>
       <div className={styles.scriptSections}>{draft.sections.map((section, index) => <article key={section.id}><header><span>第 {index + 1} 段</span><strong>{section.title}</strong></header><textarea aria-label={`第 ${index + 1} 段正文`} rows={5} value={section.content} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, content: event.target.value } : item) })}/><label className={styles.field}><span>画面建议</span><textarea aria-label={`第 ${index + 1} 段画面建议`} rows={2} value={section.visual_prompt} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, visual_prompt: event.target.value } : item) })}/></label><fieldset className={styles.scriptSourceChoices}><legend>选择这段使用的当前资料</legend>{sourceRead.status === "loading" ? <p role="status">正在读取当前任务资料…</p> : sourceRead.status === "failed" ? <p>资料尚未读回，请检查读取错误。</p> : sourceRead.sources.length ? sourceRead.sources.map((source) => <label key={source.reference_id}><input type="checkbox" checked={section.evidence_reference_ids.includes(source.reference_id)} onChange={(event) => setDraft({ ...draft, sections: draft.sections.map((item) => item.id === section.id ? { ...item, evidence_reference_ids: event.target.checked ? [...item.evidence_reference_ids, source.reference_id] : item.evidence_reference_ids.filter((id) => id !== source.reference_id) } : item) })}/>{source.title}</label>) : <p>当前任务没有可选资料；涉及事实的内容仍需有效依据，确认时会核查。</p>}</fieldset></article>)}</div>
       {sourceRead.status === "failed" ? <p role="alert">{sourceRead.message}</p> : null}

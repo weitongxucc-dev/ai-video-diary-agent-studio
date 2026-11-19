@@ -397,24 +397,11 @@ class TopicRecordStore:
             candidate.selection_status = "confirmed"
             if title is not None:
                 candidate.title = title
-            task.selected_topic_id = candidate.id
-            task.stage = "script"
-            task.stage_status = "not_started"
-            task.status = "running"
-            task.progress = max(task.progress, 20)
-            task.recovery_point = "script"
-            task.stage_reason = None
-            task.stage_impact = None
-            task.stage_repair_action = None
-            task.stage_retryable = None
-            task.updated_at = now
             conn.execute(
                 "UPDATE topic_candidates SET payload = ? WHERE id = ?",
                 (_json_payload(candidate), candidate.id),
             )
-            self._append_event(TaskEvent(f"topic_adopted_{candidate.id}", workspace_id, task_id, None,
-                "topic_adopted", {"topic_id": candidate.id, "title": candidate.title, "adoption": adoption}), connection=conn)
-            self._write_task(conn, task)
+            self._adopt_topic(conn, task, candidate, adoption, now)
         return (
             self._read_task(workspace_id, task_id),
             next(
@@ -423,6 +410,43 @@ class TopicRecordStore:
                 if candidate.id == candidate_id
             ),
         )
+
+    def confirm_provided_topic(self, workspace_id, task_id, *, title, expected_task_updated_at, verified_owner_user_id):
+        title = title.strip()
+        if not 1 <= len(title) <= 80:
+            raise ValueError("选题标题需要填写 1–80 个字符")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            task = self._require_task(conn, workspace_id, task_id)
+            if task.owner_user_id and task.owner_user_id != content_owner(verified_owner_user_id):
+                raise PermissionError("当前成员不能确认此作品的选题")
+            candidate_id = f"provided_topic_{task.id}"
+            if task.selected_topic_id == candidate_id:
+                candidate = self.get_topic_candidate(workspace_id, task_id, candidate_id, connection=conn)
+                if candidate.title == title:
+                    return task
+                raise ValueError("已有选题已经确认")
+            if task.selected_topic_id or task.stage != "topic" or task.stage_status not in {"not_started", "failed", "waiting_for_user"}:
+                raise ValueError("当前作品的选题正在生成或已经确认")
+            if task.updated_at != expected_task_updated_at:
+                raise ValueError("作品的选题状态已变化，请刷新后重新确认")
+            intent = self._read_plan_intent(conn, workspace_id, task.plan_id)
+            adoption = CreationIntentUseCase.adoption(intent, kind="manual",
+                member_id=content_owner(verified_owner_user_id) or task.owner_user_id, version=candidate_id)
+            now = utc_now()
+            candidate = self.record_provided_topic(conn, task, title, now)
+            self._adopt_topic(conn, task, candidate, adoption, now)
+        return task
+
+    def _adopt_topic(self, conn, task, candidate, adoption, now):
+        task.selected_topic_id = candidate.id
+        task.stage, task.stage_status, task.status = "script", "not_started", "running"
+        task.progress, task.recovery_point = max(task.progress, 20), "script"
+        task.stage_reason = task.stage_impact = task.stage_repair_action = task.stage_retryable = None
+        task.updated_at = now
+        self._append_event(TaskEvent(f"topic_adopted_{candidate.id}", task.workspace_id, task.id, None,
+            "topic_adopted", {"topic_id": candidate.id, "title": candidate.title, "adoption": adoption}), connection=conn)
+        self._write_task(conn, task)
 
     def get_topic_candidate(self, workspace_id, task_id, candidate_id, *, connection=None):
         with nullcontext(connection) if connection is not None else self._connect() as conn:
@@ -434,8 +458,17 @@ class TopicRecordStore:
             raise KeyError(candidate_id)
         return topic_candidate_from_payload(json.loads(str(row["payload"])))
 
+    def record_provided_topic(self, connection, task: CreationTask, title: str, now):
+        """Record the supplied topic within the original adoption transaction."""
+        run = TopicGenerationRun(f"provided_topic_run_{task.id}", task.workspace_id, task.id, task.plan_id,
+            "succeeded", {"operation": "provided_topic", "provider": "none"}, "provided-topic/v1",
+            [], started_at=now, finished_at=now)
+        candidate = TopicCandidate(f"provided_topic_{task.id}", task.workspace_id, task.id, run.id,
+            title, "", "", [], 0, selection_status="confirmed", created_at=now)
+        self.save_provided_topic(connection, run, candidate)
+        return candidate
+
     def save_provided_topic(self, connection, run: TopicGenerationRun, candidate: TopicCandidate):
-        """Record the supplied topic within the existing Plan/Task adoption transaction."""
         if not connection.in_transaction:
             raise ValueError("给定选题存储必须属于方案任务原事务")
         connection.execute(

@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import time
 from types import SimpleNamespace
+from uuid import uuid4
 
 import psutil
 import pytest
@@ -29,7 +30,8 @@ from tests.host_memory_boundary import IsolatedMemoryMonitor
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='synthetic B-roll fixture requires ffmpeg')
-def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(tmp_path, monkeypatch):
+@pytest.mark.parametrize("restricted", [False, True], ids=["workspace", "work-selection"])
+def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(tmp_path, monkeypatch, restricted):
     repo, task_id, script_id, _ = _seed(tmp_path, workspace_id='local', duration_seconds=2)
     members = LocalMemberService(repo.database_path)
     member, token = members.join(members.create_invite_code(), '故事板 normal 合成成员')
@@ -66,6 +68,9 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
     # This actual ffmpeg command creates input data, before the metadata execution window.
     asset, material_ref = register_synthetic_video_asset(repo, workspace_id='local', member_id=member.member_id,
         path=tmp_path / 'library/source.mp4', asset_id='declared-montage-broll', seconds=6)
+    if restricted:
+        register_synthetic_video_asset(repo, workspace_id='local', member_id=member.member_id,
+            path=tmp_path / 'library/other.mp4', asset_id='unselected-broll', seconds=6)
     monkeypatch.setattr(main, 'auth_context', SimpleNamespace(enabled=False))
     monkeypatch.setattr(main, 'local_members_service', members)
     monkeypatch.setattr(main, 'production_repo', repo)
@@ -97,7 +102,8 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
     def observe_build(planner, *args, **kwargs):
         result = original_build(planner, *args, **kwargs)
         calls.append({'port': 'planner', 'configured_global': planner is main.montage_planner,
-            'logical_refs': [clip.source_path for clip in result.clips], 'status': result.status})
+            'logical_refs': [clip.source_path for clip in result.clips], 'status': result.status,
+            'candidate_assets': [asset.id for asset in kwargs['assets']]})
         return result
 
     def observe_save(*args, **kwargs):
@@ -123,6 +129,13 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
     client = TestClient(main.app, headers={'X-Local-Member-Token': token})
     url = '/api/creation-tasks/' + task_id
+    if restricted:
+        saved = client.put(url + '/material-scope', json={
+            'request_id': str(uuid4()), 'expected_plan_updated_at': plan.updated_at.isoformat(),
+            'assets': [{'asset_id': asset.id, 'expected_asset_updated_at': asset.updated_at.isoformat()}],
+        })
+        assert saved.status_code == 200, saved.text
+        plan = repo.plan_records.get_creation_plan('local', plan.id)
     request = {'script_id': script_id, 'input_digest': revision_digest(script, plan), 'requirements_confirmed': True}
     evidence_dir = os.environ.get('MONTAGE_STAGE_EVIDENCE_DIR')
     try:
@@ -163,6 +176,7 @@ def test_public_montage_stage_keeps_low_confidence_wait_and_single_publication(t
         assert repo.job_records.get_job_run('local', job_id).status == 'queued'
         assert [call['port'] for call in calls] == ['planner', 'save_montage', 'save_montage', 'ensure_base']
         assert calls[0]['configured_global'] is False and calls[1]['connection_supplied'] is False and calls[2]['connection_supplied'] is True
+        assert calls[0]['candidate_assets'] == [asset.id]
         before_queries = list(calls)
         public = client.get(url + '/execution', params={'job_id': job_id})
         montage_public = client.get(url)

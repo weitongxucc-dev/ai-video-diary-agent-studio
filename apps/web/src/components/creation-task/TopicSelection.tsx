@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import { Check, LoaderCircle, Sparkles } from "lucide-react";
 import type { CreationTaskTopicsResponse } from "@/lib/types";
 import type { BusyAction } from './edit-context';
@@ -16,12 +17,27 @@ type Props = {
     onGenerate: () => void;
     onRefresh: () => void;
     onConfirm: () => void;
+    onUseProvided: (title: string) => void;
 };
-export function TopicSelection({ topics, selectedTopicId, topicTitleDraft, knowledgeCount, sourceCount, busy, stageStatus, onSelect, onTitleChange, onGenerate, onRefresh, onConfirm }: Props) {
+export function TopicSelection({ topics, selectedTopicId, topicTitleDraft, knowledgeCount, sourceCount, busy, stageStatus, onSelect, onTitleChange, onGenerate, onRefresh, onConfirm, onUseProvided }: Props) {
+    const [providedTitle, setProvidedTitle] = useState("");
     const selectedTopicCandidate = topics?.candidates.find(candidate => candidate.id === selectedTopicId) ?? null;
     const running = stageStatus === "running" || busy === "topics";
     const generateLabel = stageStatus === "failed" ? "重试生成选题" : "生成选题";
     return (<section className={styles.workSection}><div className={styles.sectionHeading}><div><h2>{topics?.candidates.length ? "选择选题" : "生成选题"}</h2><p>{knowledgeCount} 项固定资料 · {sourceCount} 条信息源</p><details className={styles.traceDetails}><summary>本次生成范围</summary><p>使用本任务预检列出的文字摘录；确认选题后不再生成新候选。</p></details></div>{!topics?.candidates.length && (running
         ? <div><p role="status"><LoaderCircle className="is-spinning" size={16}/>正在生成选题</p><button type="button" disabled={busy !== null} onClick={onRefresh}>刷新选题状态</button></div>
-        : <button className="modern-primary-button" disabled={busy !== null} onClick={onGenerate} type="button"><Sparkles size={16}/>{generateLabel}</button>)}</div>{topics?.candidates.length ? <div className={styles.topicList}>{topics.candidates.map((candidate) => <label className={selectedTopicId === candidate.id ? styles.selected : ""} key={candidate.id}><input checked={selectedTopicId === candidate.id} name="topic" onChange={() => onSelect(candidate.id, candidate.title)} type="radio"/><div><header><strong>{candidate.title}</strong><span>{candidate.score} 分</span></header><p>{candidate.angle}</p><small>适合：{candidate.audience}</small><ol>{candidate.outline.map((item) => <li key={item}>{item}</li>)}</ol></div></label>)}</div> : null}{selectedTopicCandidate ? <label className={styles.field}><span>编辑标题</span><input aria-label="编辑标题" disabled={busy !== null} maxLength={80} onChange={(event) => onTitleChange(event.target.value)} placeholder="输入本选题的标题" value={topicTitleDraft}/><small className={styles.eyebrow}>确认时保存这个标题；后续文案将使用已保存的选题。</small></label> : null}{topics?.candidates.length ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy !== null || !selectedTopicId || !topicTitleDraft.trim()} onClick={onConfirm} type="button">{busy === "topic-confirm" ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}确认选题</button></div> : null}</section>);
+        : <button className="modern-primary-button" disabled={busy !== null} onClick={onGenerate} type="button"><Sparkles size={16}/>{generateLabel}</button>)}</div>{topics?.candidates.length ? <div className={styles.topicList}>{topics.candidates.map((candidate) => <label className={selectedTopicId === candidate.id ? styles.selected : ""} key={candidate.id}><input checked={selectedTopicId === candidate.id} name="topic" onChange={() => onSelect(candidate.id, candidate.title)} type="radio"/><div><header><strong>{candidate.title}</strong><span>{candidate.score} 分</span></header><p>{candidate.angle}</p><small>适合：{candidate.audience}</small><ol>{candidate.outline.map((item) => <li key={item}>{item}</li>)}</ol></div></label>)}</div> : null}{selectedTopicCandidate ? <label className={styles.field}><span>编辑标题</span><input aria-label="编辑标题" disabled={busy !== null} maxLength={80} onChange={(event) => onTitleChange(event.target.value)} placeholder="输入本选题的标题" value={topicTitleDraft}/><small className={styles.eyebrow}>确认时保存这个标题；后续文案将使用已保存的选题。</small></label> : null}{topics?.candidates.length ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy !== null || !selectedTopicId || !topicTitleDraft.trim()} onClick={onConfirm} type="button">{busy === "topic-confirm" ? <LoaderCircle className="is-spinning" size={16}/> : <Check size={16}/>}确认选题</button></div> : null}
+    {!running ? <details className={styles.requirementDetails}>
+        <summary>使用已有选题</summary>
+        <form onSubmit={event => {
+            event.preventDefault();
+            if (providedTitle.trim()) onUseProvided(providedTitle.trim());
+        }}>
+            <label className={styles.field}><span>已有选题标题</span>
+                <input name="topic_title" required maxLength={80} disabled={busy !== null}
+                    value={providedTitle} onChange={event => setProvidedTitle(event.target.value)} />
+            </label>
+            <button type="submit" className={styles.secondaryButton} disabled={busy !== null}>确认已有选题</button>
+        </form>
+    </details> : null}</section>);
 }

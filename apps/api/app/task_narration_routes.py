@@ -2,7 +2,15 @@
 from uuid import UUID
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, ConfigDict, Field
+from app.creation.narration_duration import NarrationDurationReview
 from app.schemas import CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskNarrationResponse
+
+class NarrationDurationAdoptionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    request_id: UUID
+    review_id: str = Field(min_length=1, max_length=160)
+
 
 def build_task_narration_router(*, access_for, adoption_for, production_for, execution_for, actor_for, control_for, runtime_for, http_error_for, authority_error_for, failure_for, blocked_for, selection_response_for, workspace_for, readable_for, path_for, file_response_for, ingress_for):
     router = APIRouter()
@@ -41,6 +49,28 @@ def build_task_narration_router(*, access_for, adoption_for, production_for, exe
         except PermissionError as exc:
             raise http_error_for()(status_code=403, detail=str(exc)) from exc
         return selection_response_for().model_validate(receipt)
+
+    @router.get("/api/creation-tasks/{task_id}/narration/duration")
+    def read_narration_duration(task_id: str, request: Request):
+        task, _ = access_for()(task_id, request)
+        actor = actor_for()(request, task.workspace_id)
+        if actor is None:
+            raise http_error_for()(status_code=403, detail="请以当前成员身份读取配音进度。")
+        return NarrationDurationReview(production_for()).read(task.workspace_id, task_id, actor)
+
+    @router.put("/api/creation-tasks/{task_id}/narration/duration")
+    def adopt_narration_duration(task_id: str, payload: NarrationDurationAdoptionRequest, request: Request):
+        task, _ = access_for()(task_id, request, write=True)
+        actor = actor_for()(request, task.workspace_id)
+        if actor is None:
+            raise http_error_for()(status_code=403, detail="请以原制作成员身份采用交付时长。")
+        try:
+            return NarrationDurationReview(production_for()).adopt(task.workspace_id, task_id, actor,
+                request_id=str(payload.request_id), review_id=payload.review_id)
+        except PermissionError as exc:
+            raise http_error_for()(status_code=403, detail=str(exc)) from exc
+        except (ValueError, blocked_for()) as exc:
+            raise http_error_for()(status_code=409, detail=str(exc)) from exc
 
     @router.post('/api/creation-tasks/{task_id}/narration/generate', response_model=CreationTaskNarrationResponse)
     def generate_creation_task_narration(task_id: str, request: Request) -> CreationTaskNarrationResponse:

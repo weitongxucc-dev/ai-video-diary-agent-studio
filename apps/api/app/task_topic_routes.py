@@ -1,6 +1,17 @@
 """Task topic HTTP; source preflight, generation facts and adoption transactions retain original owners."""
+from datetime import datetime
+
 from fastapi import APIRouter, Request
+from pydantic import BaseModel, ConfigDict, Field
 from app.schemas import CreationTaskTopicsResponse, CreationTaskTopicGenerateRequest, CreationTaskTopicConfirmRequest
+
+
+class CreationTaskProvidedTopicRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=80)
+    expected_task_updated_at: datetime
+
 
 def build_task_topic_router(*, workspace_for, task_for, plan_for, route_for, preflight_error_for, source_inputs_for, response_for, automation_guard_for, draft_for, current_inputs_for, draft_error_for, http_error_for, adoption_for, production_for, reader_for, failure_for):
     router = APIRouter()
@@ -31,6 +42,23 @@ def build_task_topic_router(*, workspace_for, task_for, plan_for, route_for, pre
             return draft_for()(workspace_id, validate_inputs=lambda ws, plan, refs: current_inputs_for()(request, ws, plan, refs)).generate_topics(workspace_id, task)
         except draft_error_for() as exc:
             raise http_error_for()(status_code=exc.status_code, detail=exc.detail) from exc
+
+    @router.post('/api/creation-tasks/{task_id}/topics/provided', response_model=CreationTaskTopicsResponse)
+    def confirm_provided_topic(task_id: str, request: Request, payload: CreationTaskProvidedTopicRequest) -> CreationTaskTopicsResponse:
+        workspace_id = workspace_for()(request)
+        automation_guard_for()(request, workspace_id, task_id)
+        try:
+            task = production_for().topic_records.confirm_provided_topic(
+                workspace_id, task_id, title=payload.title, expected_task_updated_at=payload.expected_task_updated_at,
+                verified_owner_user_id=reader_for()(request, workspace_id)[0],
+            )
+        except KeyError as exc:
+            raise http_error_for()(status_code=404, detail="没有找到当前作品") from exc
+        except PermissionError as exc:
+            raise http_error_for()(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise http_error_for()(status_code=409, detail=str(exc)) from exc
+        return response_for()(workspace_id, task)
 
     @router.post('/api/creation-tasks/{task_id}/topics/{topic_id}/confirm', response_model=CreationTaskTopicsResponse)
     def confirm_creation_task_topic(task_id: str, topic_id: str, request: Request, payload: CreationTaskTopicConfirmRequest) -> CreationTaskTopicsResponse:

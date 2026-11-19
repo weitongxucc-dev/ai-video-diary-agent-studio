@@ -207,7 +207,8 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
     resources=HostResourceProbe(repo.database_path,disk_paths=(tmp_path,),budget=host_budget)
     registration=creation_job_registration(repo,render_action=main._render_creation_stage_with_grant,
         render_is_valid=main._creation_stage_valid_with_grant,verify_identity=main._verify_creation_identity,
-        narration_budget=budget,narration_audio_budget=audio_budget,montage_budget=montage_budget)
+        narration_budget=budget,narration_audio_budget=audio_budget,montage_budget=montage_budget,
+        task_authorizations=main._task_authorizations_for_goal(repo))
     runtime=build_device_runtime(database_path=repo.database_path,device_lock_path=tmp_path/'device.lock',
         device_access=MemberDeviceAccess(members,identity_verifier=main._verify_creation_identity),
         registrations={'creation_job':registration},resources=resources,processes=HostProcessProbe())
@@ -232,12 +233,23 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         first=client.post(url+'/execution/start',json=request)
         assert first.status_code==202,first.text
         first_job=first.json()['job']['id']
+        scope = repo.execution_budget_scopes_for_task('local', task_id, actor)
+        assert len(scope) == 1
+        policy = scope[0]['authorization']
+        assert policy['target_task_ids'] == [task_id] and policy['policy_kind'] == 'local_goal'
+        assert policy['limits'] == {'execution_seconds': None, 'generated_bytes': None}
+        source = repo.execution_records.get_task_event('local', policy['source_ref'])
+        assert (source.task_id, source.event_type) == (task_id, 'task_authorization')
         duplicate=client.post(url+'/execution/start',json=request)
         assert duplicate.status_code==202 and duplicate.json()['job']['id']==first_job,duplicate.text
         rows=repo.job_records.list_creation_job_request_states('local',first_job)
         assert len(rows)==1 and isinstance(rows[0],sqlite3.Row) and set(rows[0].keys())=={'id','state','unit_key','wait_reason','last_failure_reason'}
         request_id=rows[0]['id']
         assert rows[0]['state']=='waiting'
+        with repo._connect() as conn:
+            resources = json.loads(conn.execute('SELECT resources_json FROM device_work_requests WHERE id=?', (request_id,)).fetchone()[0])
+        assert resources['parent_max_output_bytes'] is None and resources['parent_timeout_seconds'] is None
+        assert resources['max_output_bytes'] == budget.max_output_bytes and resources['timeout_seconds'] == budget.max_timeout_seconds
         assert repo.job_records.list_creation_job_request_states('other-workspace',first_job)==[]
         wait=repo.job_records.creation_execution_wait_row('local',member.member_id,first_job,request['input_digest'])
         assert isinstance(wait,sqlite3.Row) and set(wait.keys())=={'unit_key','wait_reason','updated_at'}
@@ -298,6 +310,7 @@ def test_public_execution_control_reuses_queue_and_preserves_query_boundaries(tm
         resumed=client.post(url+'/execution/resume')
         assert resumed.status_code==202 and resumed.json()['job']['id']!=first_job,resumed.text
         second_job=resumed.json()['job']['id']
+        assert repo.execution_budget_scopes_for_task('local', task_id, actor) == scope
         assert client.post(url+'/execution/resume').json()['job']['id']==second_job
         assert len(repo.job_records.list_creation_job_request_states('local',second_job))==1
         assert client.get(url+'/execution',params={'job_id':second_job}).status_code==200

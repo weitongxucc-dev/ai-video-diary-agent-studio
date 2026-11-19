@@ -192,7 +192,13 @@ class MetadataEditUseCase:
 
     def prepare_material_scope(self, task, before, after, identity, *, connection):
         previous = {clip.asset_id for clip in before.clips if not clip.person_render_id}
-        introduced = {clip.asset_id for clip in after.clips if not clip.person_render_id} - previous
+        candidate = {clip.asset_id for clip in after.clips if not clip.person_render_id}
+        plans = self.repository.plan_records
+        plan = (plans.get_creation_plan(task.workspace_id, task.plan_id) if connection is None
+            else plans.read_creation_plan(connection, task.workspace_id, task.plan_id))
+        if plan.selected_material_asset_ids and not candidate <= set(plan.selected_material_asset_ids):
+            raise PermissionError('替换后的镜头超出本作品选定的素材范围，未采用')
+        introduced = candidate - previous
         if self.task_authorizations is None:
             return lambda _conn: {'status':'not_ready','reason_code':'task_authorization_unavailable','device_admission':'not_checked'}
         if introduced:
