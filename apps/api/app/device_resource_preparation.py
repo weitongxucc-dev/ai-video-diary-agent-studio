@@ -22,7 +22,7 @@ import time
 import psutil
 
 from app.audio_timeline import PCM_CONTAINER_ALLOWANCE_BYTES
-from app.cpu_preparation_video import (PRESENTER_DELIVERY_CONTRACT, measure_presenter_delivery,
+from app.cpu_preparation_video import (PRESENTER_DELIVERY_CONTRACT, PRESENTER_SOURCE_FRAME_RATE, measure_presenter_delivery,
     preparation_video_command, preparation_delivery_command)
 from app.artwork_resource_preparation import (extend_render_budget, measure_template_inputs,
     measure_native_inputs, extend_native_budget)
@@ -605,7 +605,9 @@ class DeviceResourcePreparation:
                 or delivery.get('codec') != 'h264' or delivery.get('serial_codec') != 'ffv1'
                 or delivery.get('audio_codec') != 'aac'
                 or set(delivery.get('inputs', {})) != {'presenter', 'material'}
-                or any(row['codec'] != 'h264' for row in delivery['inputs'].values())):
+                or any(delivery['inputs'][kind].get('codec') != 'h264'
+                       or delivery['inputs'][kind].get('frame_rate') != rate
+                       for kind, rate in (('presenter', PRESENTER_SOURCE_FRAME_RATE), ('material', 30)))):
             raise DeviceProfileUnavailable('人物组合 CPU 样片缺少完整的解码、镜头或交付记录。')
         duration = max(shape.duration_seconds, frames / 30)
         temporary_bytes = delivery['temporary_bytes'] + receipt['media']['audio']['bytes']

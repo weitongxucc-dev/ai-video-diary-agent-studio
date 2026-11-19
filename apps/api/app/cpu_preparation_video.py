@@ -2,6 +2,7 @@
 import hashlib
 import json
 import math
+from fractions import Fraction
 
 from PIL import Image
 
@@ -9,6 +10,7 @@ from app.visual_effects import color_filters, framing_filter, geometry_filters
 
 
 PRESENTER_DELIVERY_CONTRACT = 'presenter-h264-serial-ffv1-delivery/v1'
+PRESENTER_SOURCE_FRAME_RATE = 25
 
 
 def _media_digest(path):
@@ -16,11 +18,11 @@ def _media_digest(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
-def _probe_video(plan, run, path, *, codec, size, frames, audio_codec=None):
+def _probe_video(plan, run, path, *, codec, size, frames, frame_rate=30, audio_codec=None):
     counter = 'frames' if audio_codec else 'packets'
     count_field = f'nb_read_{counter}'
     result = run([plan['ffprobe'], '-v', 'error', '-threads', '1', f'-count_{counter}',
-        '-show_entries', f'stream=codec_type,codec_name,width,height,{count_field}:format=duration',
+        '-show_entries', f'stream=codec_type,codec_name,width,height,avg_frame_rate,{count_field}:format=duration',
         '-of', 'json', str(path)])
     if result.stderr:
         raise ValueError('人物组合 CPU 样片媒体检查报告了解码错误')
@@ -29,12 +31,13 @@ def _probe_video(plan, run, path, *, codec, size, frames, audio_codec=None):
     duration = float(probe['format']['duration'])
     if (video['codec_name'] != codec or (video['width'], video['height']) != size
             or int(video[count_field]) != frames
-            or not math.isfinite(duration) or abs(duration - frames / 30) > 1 / 30 + 1e-6):
+            or (codec == 'h264' and Fraction(video['avg_frame_rate']) != frame_rate)
+            or not math.isfinite(duration) or abs(duration - frames / frame_rate) > 1 / frame_rate + 1e-6):
         raise ValueError(f'人物组合 CPU 样片未达到 {codec} 尺寸或帧数')
     if audio_codec and not any(item['codec_type'] == 'audio' and item['codec_name'] == audio_codec
                                for item in probe['streams']):
         raise ValueError('人物组合 CPU 样片缺少预期音轨')
-    return {'codec': codec, 'width_px': size[0], 'height_px': size[1], 'frames': frames,
+    return {'codec': codec, 'width_px': size[0], 'height_px': size[1], 'frames': frames, 'frame_rate': frame_rate,
         'duration_seconds': duration, 'bytes': path.stat().st_size, 'sha256': _media_digest(path)}
 
 
@@ -50,8 +53,10 @@ def measure_presenter_delivery(plan, shape, audio, run, *, max_bytes):
     total_frames = round(plan['probe_seconds'] * 30)
     frame_counts = [total_frames // shape.clip_count + (index < total_frames % shape.clip_count)
                     for index in range(shape.clip_count)]
-    groups = (('presenter', size, frame_counts[:shape.presenter_clip_count]),
-              ('material', material_size, frame_counts[shape.presenter_clip_count:]))
+    # LatentSync 1.6 emits 25 fps H.264. Its actual picture job reframes
+    # to the same 30 fps delivery clock as the original material.
+    groups = (('presenter', size, PRESENTER_SOURCE_FRAME_RATE, frame_counts[:shape.presenter_clip_count]),
+              ('material', material_size, 30, frame_counts[shape.presenter_clip_count:]))
     paths = [audio]
     inputs, clips, shot_paths, caption_spans = {}, [], [], []
     picture_lines = ['ffconcat version 1.0']
@@ -60,10 +65,10 @@ def measure_presenter_delivery(plan, shape, audio, run, *, max_bytes):
         bitmap.save(caption)
     paths.append(caption)
     position = 0
-    for kind, source_size, counts in groups:
+    for kind, source_size, source_rate, counts in groups:
         source = root / f'{kind}-h264.mp4'
-        fixture_frames = max(counts) + 1
-        fixture_filter = f'testsrc2=size={source_size[0]}x{source_size[1]}:rate=30'
+        fixture_frames = math.ceil(max(counts) * source_rate / 30) + 1
+        fixture_filter = f'testsrc2=size={source_size[0]}x{source_size[1]}:rate={source_rate}'
         if kind == 'presenter':
             fixture_filter += ',hue=s=0.5'
         paths.append(source)
@@ -71,7 +76,8 @@ def measure_presenter_delivery(plan, shape, audio, run, *, max_bytes):
             '-i', fixture_filter, '-frames:v', str(fixture_frames), '-an', '-c:v', 'libx264',
             '-threads', '1', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
             '-fs', str(max_bytes), str(source)], tuple(paths))
-        inputs[kind] = _probe_video(plan, run, source, codec='h264', size=source_size, frames=fixture_frames)
+        inputs[kind] = _probe_video(plan, run, source, codec='h264', size=source_size,
+            frames=fixture_frames, frame_rate=source_rate)
         for frames in counts:
             index = len(clips)
             target = root / f'presenter-probe-{index:03}.nut'

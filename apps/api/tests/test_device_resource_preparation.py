@@ -114,6 +114,8 @@ def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_w
             assert delivery['frames'] == 30 and delivery['presenter_clip_count'] == presenter_clip_count
             assert delivery['inputs']['presenter']['width_px'] == 64
             assert delivery['inputs']['material']['width_px'] == 128
+            assert delivery['inputs']['presenter']['frame_rate'] == 25
+            assert delivery['inputs']['material']['frame_rate'] == 30
             assert delivery['temporary_bytes'] > delivery['bytes']
         else:
             assert delivery['contract'] == 'montage-picture-audio-caption/v1'
@@ -235,7 +237,8 @@ def test_presenter_preparation_requires_its_own_full_shape_receipt_and_keeps_nor
         service._publish(plan, receipt, plan['backends'])
     assert json.loads(service.profile_path.read_bytes()) == original
     receipt['delivery_probe'] = {'contract': 'presenter-h264-serial-ffv1-delivery/v1',
-        'inputs': {'presenter': {'codec': 'h264'}, 'material': {'codec': 'h264'}},
+        'inputs': {'presenter': {'codec': 'h264', 'frame_rate': 25},
+                   'material': {'codec': 'h264', 'frame_rate': 30}},
         'codec': 'h264', 'serial_codec': 'ffv1', 'audio_codec': 'aac', 'frames': 4530,
         'clip_count': 8, 'presenter_clip_count': 2, 'temporary_bytes': 100000, 'bytes': 50000}
     result = service._publish(plan, receipt, plan['backends'])
