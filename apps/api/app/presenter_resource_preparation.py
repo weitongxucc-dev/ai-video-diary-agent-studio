@@ -138,12 +138,12 @@ class PresenterResourcePreparation(DeviceResourcePreparation):
             raise DeviceProfileUnavailable("当前系统内存压力无法支持人物口型标定。")
         headroom = math.floor((memory.available_bytes - reserve) * self.policy.available_memory_fraction)
         rss = min(8 * 1024**3, headroom)
-        # The worker materializes the converted UNet and VAE before inference.
-        resident_weights = UNET_FILE[1] + RUNTIME_WEIGHTS[0][1]
+        # The worker materializes only one checkpoint at each inference stage.
+        resident_weights = max(UNET_FILE[1], RUNTIME_WEIGHTS[0][1])
         if rss < resident_weights:
             raise DeviceProfileUnavailable(
                 f"按现有设备保留量，本次可用 {max(0, rss) / 1024**3:.2f} GiB，"
-                f"低于 LatentSync 1.6 的 UNet 与 VAE 权重体积 {resident_weights / 1024**3:.2f} GiB。")
+                f"低于 LatentSync 1.6 的最大单阶段权重体积 {resident_weights / 1024**3:.2f} GiB。")
         raw_bytes = shape.width_px * shape.height_px * 4 * shape.frames
         timeout = min(self.policy.max_timeout_seconds, 300 + shape.windows * self.policy.timeout_seconds_per_window)
         limits = PresenterBudget(
