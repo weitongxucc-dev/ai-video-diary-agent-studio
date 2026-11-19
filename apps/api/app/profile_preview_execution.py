@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
 
+def voice_preview_original_digest(run, reference, inputs, scope=None):
+    facts = [asdict(reference), asdict(inputs.voice), run.preview_input,
+             [entry.task_input() for entry in inputs.pronunciation_entries]]
+    if scope is not None:
+        facts.append(scope)
+    return _digest([run.workspace_id, run.member_identity, run.model_id, facts])
+
 
 class ProfilePreviewOwner:
     def __init__(self, repository, *, voice_service, avatar_service, narration_budget,
@@ -61,6 +68,10 @@ class ProfilePreviewOwner:
         if not provider.ready or provider.model_id != run.model_id:
             raise ValueError("预览模型不可用或已变化")
         if run.preview_type == "voice":
+            if run.preview_input.get('saved_section') is not None:
+                from app.creation.saved_section_auditions import SavedSectionAuditions
+                SavedSectionAuditions(self.repository, service.preview_output_path).preview_params(
+                    actor, run.preview_input['saved_section'], run.preview_input)
             if ((run.preview_input.get("voice_profile_id"), run.preview_input.get("voice_version"))
                     != (voice.id, voice.version)
                     or (run.preview_input.get("language") or voice.language) != run.language):
@@ -68,8 +79,7 @@ class ProfilePreviewOwner:
             budget = self.narration_budget
             if budget is None:
                 raise ValueError("独立声音预览同类资源预算尚未标定")
-            facts = [asdict(source), asdict(voice), run.preview_input,
-                     [entry.task_input() for entry in narration_inputs.pronunciation_entries]]
+            scope = None
             resources = {"kind": "creation_narration", "execution_mode": "isolated_qwen3_tts",
                 "text_chars": len(run.preview_input["preview_text"]) + len(voice.reference_text), "section_count": 1,
                 "reference_bytes": source.size_bytes, "duration_seconds": budget.max_duration_seconds,
@@ -92,9 +102,9 @@ class ProfilePreviewOwner:
                     language=run.language, max_output_bytes=resources["max_output_bytes"],
                     runtime=runtime, reference_sha256=narration_reference_sha256(source))
                 resources.update(scope)
-                facts.append(scope)
             elif budget.input_scope == "single_call_preparation_v1":
                 raise ValueError("模型准备许可不能作为独立声音试听的执行档")
+            digest = voice_preview_original_digest(run, source, narration_inputs, scope)
         else:
             budget = self.presenter_budget
             if budget is None:
@@ -114,9 +124,12 @@ class ProfilePreviewOwner:
             with wave.open(str(audio), "rb") as wav:
                 duration = wav.getnframes() / wav.getframerate()
             stat = audio.stat()
+            upstream_facts = asdict(upstream)
+            if upstream_facts['output_sha256'] is None:  # Preserve old sealed avatar inputs.
+                del upstream_facts['output_sha256']
             facts = [asdict(source), asdict(visual), asdict(person), asdict(resolved.voice),
                      asdict(resolved.authorization) if resolved.authorization else None, run.preview_input,
-                     [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns], asdict(upstream)]
+                     [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns], upstream_facts]
             resources = {"kind": "creation_person_render", "execution_mode": "isolated_avatar_lipsync",
                 "section_count": 1, "input_bytes": source.size_bytes + visual.size_bytes + stat.st_size,
                 "duration_seconds": duration, "max_output_bytes": budget.max_output_bytes,
@@ -126,7 +139,7 @@ class ProfilePreviewOwner:
             if scope:
                 resources.update(scope)
                 facts.append(scope)
-        digest = _digest([run.workspace_id, run.member_identity, run.model_id, facts])
+            digest = _digest([run.workspace_id, run.member_identity, run.model_id, facts])
         return digest, f"{run.preview_type}:{digest}", resources
 
     def verify_submission(self, intent, actor):

@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -15,6 +16,18 @@ from urllib.parse import urlsplit
 from app.materials.contracts import MediaAuthorityError as _MediaAuthorityError
 from app.models import utc_now
 from app.persistence_json import _json_payload, _with_datetime
+
+
+AUDITION_REFERENCE = 'voice-preview://attempt/'
+
+
+def audition_pcm_sha256(file):
+    return hashlib.file_digest(file, 'sha256').hexdigest()
+
+def audition_source_digest(voice, reference, pronunciation, language):
+    from app.profiles.contracts import profile_cache_identity
+    return hashlib.sha256(json.dumps([profile_cache_identity(voice), asdict(reference), voice.reference_text,
+        pronunciation, language, voice.model_id], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 @dataclass
@@ -36,6 +49,7 @@ class NarrationArtifactRecord:
     source_artifact_ref: str | None = None
     source_sha256: str | None = None
     source_script_digest: str | None = None
+    audition_input_digest: str | None = None
     created_at: datetime = field(default_factory=utc_now)
 
 
@@ -123,6 +137,16 @@ class NarrationArtifactStore:
             return None
         if record.source_kind == "recorded" and not self.recorded_source_is_current(record, connection=connection):
             return None
+        if (record.source_artifact_ref or '').startswith(AUDITION_REFERENCE):
+            path = Path(record.audio_path)
+            try:
+                if path.resolve() != path:
+                    return None
+                with path.open('rb') as file:
+                    if audition_pcm_sha256(file) != record.source_sha256:
+                        return None
+            except OSError:
+                return None
         return record
 
     def save_narration_artifact(

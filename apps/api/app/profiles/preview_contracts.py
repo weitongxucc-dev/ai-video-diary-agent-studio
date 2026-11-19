@@ -36,3 +36,4 @@ class MediaPreviewRunRecord:
     preview_input: dict = field(default_factory=dict)
     input_digest: str = ""
     device_request_id: str | None = None
+    output_sha256: str | None = None

@@ -210,8 +210,9 @@ class NarrationStageUseCase:
     def segment_id(task_id: str, script_id: str, section_id: str) -> str:
         return f"narration_segment_{hashlib.sha256(f'{task_id}:{script_id}:{section_id}'.encode('utf-8')).hexdigest()[:20]}"
 
-    def pending_segment(self, task, script, section, resources):
-        return NarrationSegment(id=self.segment_id(task.id, script.id, section.id),
+    @classmethod
+    def pending_segment(cls, task, script, section, resources):
+        return NarrationSegment(id=cls.segment_id(task.id, script.id, section.id),
             workspace_id=task.workspace_id, task_id=task.id, script_id=script.id, source_section_id=section.id,
             text=section.content, audio_reference=None, duration_seconds=None, sample_rate=None,
             model_id=resources['model_id'], voice_profile_id=resources['voice_profile_id'], voice_version=resources['voice_version'],

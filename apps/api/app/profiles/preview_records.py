@@ -228,6 +228,17 @@ class PreviewRecordStore:
             raise KeyError(run_id)
         return self._media_preview_run_from_payload(json.loads(row['payload']))
 
+    def private_voice_candidates(self, workspace_id, identity, voice_id, version, language, text, *, connection):
+        rows = connection.execute(
+            "SELECT payload FROM media_preview_attempts WHERE workspace_id=? AND preview_type='voice' "
+            "AND json_extract(payload,'$.status')='succeeded' "
+            "AND json_extract(payload,'$.member_identity.member_id')=? "
+            "AND json_extract(payload,'$.voice_profile_id')=? AND json_extract(payload,'$.voice_version')=? "
+            "AND json_extract(payload,'$.language')=? AND trim(json_extract(payload,'$.preview_input.preview_text'))=? "
+            "ORDER BY updated_at DESC, id LIMIT 12",
+            (workspace_id, identity['member_id'], voice_id, version, language, text))
+        return [run for row in rows if (run := self._media_preview_run_from_payload(json.loads(row['payload']))).member_identity == identity]
+
     def local_revisions(self, workspace_id, run_id, *, upstream_identity, connection):
         own = connection.execute("SELECT updated_at FROM media_preview_attempts WHERE workspace_id=? AND id=?",
             (workspace_id, run_id)).fetchone()
