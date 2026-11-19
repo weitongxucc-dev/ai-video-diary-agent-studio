@@ -69,7 +69,7 @@ class LatentSync16Runtime:
             for path in files:
                 if not path.is_file() or not path.stat().st_size:
                     return f"LatentSync 1.6 MLX 离线运行文件缺失：{path}"
-            return _check_runtime(self, _file_revision(files))
+            return _runtime_issue(self, _file_revision(files))
         upstream = self.root / "upstream"
         required = (
             upstream / "scripts/inference.py", upstream / "configs/unet/stage2_512.yaml",
@@ -92,7 +92,7 @@ class LatentSync16Runtime:
         sources = tuple(path for name in ("scripts", "configs", "latentsync")
                         for path in sorted((upstream / name).rglob("*"))
                         if path.is_file() and "__pycache__" not in path.parts)
-        return _check_runtime(self, _file_revision((*files, *sources)))
+        return _runtime_issue(self, _file_revision((*files, *sources)))
 
 
     def backend_identity(self, weights_root: Path) -> dict[str, object]:
@@ -161,9 +161,23 @@ def _file_revision(files):
                  for path in files for fact in (path.stat(),))
 
 
+class _RuntimeCheckFailed(RuntimeError):
+    pass
+
+
+def _runtime_issue(runtime: LatentSync16Runtime, revision) -> str | None:
+    try:
+        _check_runtime(runtime, revision)
+    except _RuntimeCheckFailed as exc:
+        return str(exc)
+    return None
+
+
 @lru_cache(maxsize=8)
-def _check_runtime(runtime: LatentSync16Runtime, revision) -> str | None:
-    command = [str(runtime.python), str(runtime.worker), "--check-runtime",
+def _check_runtime(runtime: LatentSync16Runtime, revision) -> None:
+    # Cache only successful native imports. A transient native failure must not
+    # keep the current verified installation unavailable until the API restarts.
+    command = [str(runtime.python), "-u", str(runtime.worker), "--check-runtime",
                "--runtime-root", str(runtime.root.resolve()), "--code-revision", LATENTSYNC_16_CODE_REVISION,
                "--backend", runtime.backend]
     env = None
@@ -175,8 +189,8 @@ def _check_runtime(runtime: LatentSync16Runtime, revision) -> str | None:
     try:
         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"LatentSync 1.6 运行环境检查失败：{exc}"
+        raise _RuntimeCheckFailed(f"LatentSync 1.6 运行环境检查失败：{exc}") from exc
     if result.returncode:
         detail = result.stderr.strip() or result.stdout.strip()
-        return detail[-900:] or f"LatentSync 1.6 {runtime.backend.upper()} 环境检查进程退出：{result.returncode}"
-    return None
+        raise _RuntimeCheckFailed(detail[-900:] or
+                                  f"LatentSync 1.6 {runtime.backend.upper()} 环境检查进程退出：{result.returncode}")

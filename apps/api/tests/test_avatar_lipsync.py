@@ -776,3 +776,17 @@ def test_latentsync_16_calibration_identity_rejects_changed_runtime_weights(tmp_
     converted.write_bytes(b"bad file!")
     with pytest.raises(ValueError, match="文件校验失败"):
         runtime.backend_identity(tmp_path)
+
+
+def test_latentsync_16_runtime_retry_recovers_transient_native_probe_failure(tmp_path, monkeypatch):
+    from app import lipsync_models
+
+    runtime = lipsync_models.LatentSync16Runtime(tmp_path, tmp_path / "python", tmp_path / "worker.py", "mlx")
+    replies = iter([
+        SimpleNamespace(returncode=-11, stdout="", stderr=""),
+        SimpleNamespace(returncode=0, stdout="", stderr=""),
+    ])
+    monkeypatch.setattr(lipsync_models.subprocess, "run", lambda *args, **kwargs: next(replies))
+    assert "-11" in lipsync_models._runtime_issue(runtime, ())
+    assert lipsync_models._runtime_issue(runtime, ()) is None
+    assert lipsync_models._runtime_issue(runtime, ()) is None

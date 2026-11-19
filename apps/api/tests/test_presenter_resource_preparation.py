@@ -132,3 +132,14 @@ def test_presenter_fixture_changes_cannot_be_admitted(tmp_path, monkeypatch):
     with pytest.raises(DeviceProfileUnavailable, match="校验"):
         service.prepare(PresenterPreparationShape(), actor, request_id="changed-fixture")
     assert service.profile_path.read_bytes() == original
+
+
+def test_presenter_setup_keeps_profile_when_weight_residency_cannot_fit(tmp_path, monkeypatch):
+    _, actor, _, service, _ = preparation_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr("app.presenter_resource_preparation.sample_host_memory",
+                        lambda: SimpleNamespace(pressure="warning", available_bytes=2 * 1024**3))
+    before = service.profile_path.read_bytes()
+    with pytest.raises(DeviceProfileUnavailable, match="低于 LatentSync 1.6"):
+        service.prepare(PresenterPreparationShape(), actor, request_id="insufficient")
+    assert service.profile_path.read_bytes() == before
+    assert not (service.root / "plans").exists() or not list((service.root / "plans").glob("*.json"))
