@@ -146,7 +146,8 @@ def test_supported_creative_draft_is_reviewed_once_with_same_sources_and_require
     supported, branch = [branch for branch in schema['properties']['sections']['items']['anyOf']
                          if 'no_factual_assertions' not in branch['properties']]
     assert supported['required'] == ['index', 'supports']
-    assert set(supported['properties']) == {'index', 'supports'} and supported['additionalProperties'] is False
+    assert set(supported['properties']) == {'index', 'supports', 'issues'} and supported['additionalProperties'] is False
+    assert supported['properties']['issues']['maxItems'] == 0
     properties = branch['properties']
     assert set(properties) == {'index', 'supports', 'issues'}
     assert branch['required'] == ['index', 'issues'] and branch['additionalProperties'] is False
@@ -230,7 +231,8 @@ def test_each_schema_branch_pairs_only_current_section_candidates_and_declared_e
     assert {branch['properties']['index']['enum'][0] for branch in schema['items']['anyOf']} == {1, 2}
     global_title_ids = [piece['quote_id'] for piece in data['script']['title']]
     for section, branch in zip(data['script']['sections'],
-            [branch for branch in schema['items']['anyOf'] if {'supports', 'issues'} <= set(branch['properties'])]):
+            [branch for branch in schema['items']['anyOf']
+             if 'issues' in branch['required'] and 'supports' in branch['properties']]):
         props = branch['properties']
         assert props['index'] == {'type': 'integer', 'enum': [section['index']]}
         local_ids = (global_title_ids if section['index'] == 1 else []) + [piece['quote_id'] for field in ('title', 'content', 'visual_prompt') for piece in section[field]]
@@ -511,6 +513,27 @@ def test_goal_conflicts_are_separate_from_valid_source_support(quote, field, det
     assert detail in failure.value.repair_action and len(calls) == 2
 
 
+@pytest.mark.parametrize('encoded', [False, True])
+@pytest.mark.parametrize('declared', [False, True])
+def test_empty_issues_requires_valid_positive_support_from_the_current_section(encoded, declared):
+    request_input = replace(inputs(), sources=(*inputs().sources, CreationTaskTopicSource(
+        reference_id='unbound', kind='knowledge', title='另一份资料', text=FACT)))
+    document = draft()
+    report = reviewed(document)
+    section = report['sections'][0]
+    section['issues'] = '[]' if encoded else []
+    section['supports'][0]['source_quote_id'] = '@evidence_1:0' if declared else '@evidence_2:0'
+    calls = []
+    generator = provider(document, report, calls)
+    if declared:
+        assert generator.generate(request_input).sections[0].content == FACT
+    else:
+        with pytest.raises(CreationTaskScriptGenerationError) as failure:
+            generator.generate(request_input)
+        assert failure.value.reason_code == 'support_reference'
+    assert len(calls) == 2
+
+
 @pytest.mark.parametrize('malformed', ['missing-section', 'duplicate-index', 'wrong-alias', 'fake-quote',
                                      'fake-source-quote', 'bare-pass', 'wrong-field-type', 'truncated',
                                      'empty-issues', 'encoded-empty-issues', 'empty-goal-refs', 'goal-without-support'])
@@ -534,6 +557,7 @@ def test_review_must_cover_every_section_with_exact_support(malformed):
         review['sections'][0]['supports'][0]['candidate_quote_id'] = []
     elif malformed in {'empty-issues', 'encoded-empty-issues'}:
         review['sections'][0]['issues'] = [] if malformed == 'empty-issues' else '[]'
+        del review['sections'][0]['supports']
     elif malformed in {'empty-goal-refs', 'goal-without-support'}:
         review = rejected(document, kind='goal_conflict', field='content', quote=FACT, detail='与当前要求冲突。')
         if malformed == 'empty-goal-refs':
@@ -1568,7 +1592,8 @@ def test_legacy_issue_text_protocol_is_rejected_even_when_quote_is_exact():
     ('missing', 'tool_call_count'), ('multiple', 'tool_call_count'),
     ('wrong-type', 'tool_type'), ('wrong-name', 'tool_name'),
     ('bad-args', 'tool_arguments'), ('fenced-args', 'tool_arguments'),
-    ('trailing-args', 'tool_arguments'), ('not-object', 'tool_arguments_shape'),
+    ('trailing-args', 'tool_arguments'), ('duplicate-issues', 'tool_arguments'),
+    ('not-object', 'tool_arguments_shape'), ('extra-report-key', 'tool_arguments_shape'),
     ('length', 'length'), ('old-content', 'tool_finish'),
 ])
 def test_only_one_complete_report_tool_is_accepted_without_execution_or_fallback(caplog, invalid, reason):
@@ -1604,8 +1629,18 @@ def test_only_one_complete_report_tool_is_accepted_without_execution_or_fallback
             tool['function']['arguments'] = '```json\n' + tool['function']['arguments'] + '\n```'
         elif invalid == 'trailing-args':
             tool['function']['arguments'] += ' ' + sentinel
+        elif invalid == 'duplicate-issues':
+            report['sections'][0]['issues'] = [{'kind': 'goal_conflict',
+                'candidate_quote_id': report['sections'][0]['supports'][0]['candidate_quote_id'],
+                'missing_or_conflicting': '没有获得制作许可。'}]
+            raw = json.dumps(report)[:-3] + ', "issues":[] }]}'
+            assert json.loads(raw)['sections'][0]['issues'] == []
+            tool['function']['arguments'] = raw
         elif invalid == 'not-object':
             tool['function']['arguments'] = '[]'
+        elif invalid == 'extra-report-key':
+            report['issues'] = ['报告级格式错误。']
+            tool['function']['arguments'] = json.dumps(report)
         elif invalid == 'length':
             choice['finish_reason'] = 'length'
         else:

@@ -1108,7 +1108,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                                     "enum": source_ids}}}}
             branches = [
                 {"type": "object", "additionalProperties": False, "required": ["index", "supports"],
-                    "properties": {"index": index_schema, "supports": supports_schema}},
+                    "properties": {"index": index_schema, "supports": supports_schema,
+                        "issues": {"type": "array", "items": {"type": "object"}, "maxItems": 0}}},
                 {"type": "object", "additionalProperties": False, "required": ["index", "issues"],
                     "properties": {"index": index_schema, "supports": supports_schema,
                         "issues": {"type": "array", "minItems": 1, "items": {"anyOf": issue_schemas}}},
@@ -1179,14 +1180,14 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "仅调用一次submit_script_review报告工具，在arguments中提交sections数组。"
                     "这是无副作用的检查报告，不执行任何动作，不在content写报告，不额外调用工具。"
                     f"本次送审稿有{review_section_count}段，报告sections必须恰好返回{review_section_count}项，index为1至{review_section_count}且唯一。"
-                    "完整覆盖输入全部段落，index从1开始且唯一。无问题段严格返回{index,supports:非空数组}并省略issues；"
+                    "完整覆盖输入全部段落，index从1开始且唯一。无问题且有事实的段落返回{index,supports:非空数组}，可省略issues或返回issues:[]；"
                     "有事实的段落返回具体事实supports或unsupported_fact，不得借总标题的一条支持替代正文事实核查。"
                     "有问题段返回{index,issues:非空数组}，可补非空supports；只有goal_conflict且含事实时仍必须给supports。"
                     "完整检查本项归属字段后，若没有任何对外事实断言，返回{index,no_factual_assertions:{reason,candidate_quote_ids}}。"
                     "reason简述为何属于纯提问、修辞、转场或未声称已完成的创作计划；candidate_quote_ids必须完整列出该index分支的全部候选片段ID，不得漏片段。"
                     "无事实结论与supports、unsupported_fact互斥，不能将陈述、承诺、暗示性反问或既有事实改称修辞绕过。"
                     "无事实段仍完整核对goal/current_instruction/requirements；违反要求时同时报告goal_conflict，不得用无事实代替符合要求。"
-                    "不适用字段按对应schema分支省略，不填写空数组、空字符串或null，不增加其他字段。"
+                    "其余不适用字段按对应schema分支省略，不填写空数组、空字符串或null，不增加其他字段。"
                     "结论只由具体问题表达，不另返回grounded、constraints_met等重复判断。"
                     "通过的每段supports给1项最有代表性的支持，必要时补第2项，每项严格只有{candidate_quote_id,source_quote_id}。"
                     "candidate_quote_id须来自当前段的title/content/visual_prompt或本项负责的总标题；"
@@ -1315,13 +1316,31 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             raise self._review_failure("tool_name", diagnostics)
         arguments = function.get("arguments")
         diagnostics["tool_arguments_length"] = len(arguments) if isinstance(arguments, str) else None
+
+        class ReviewJsonError(ValueError):
+            pass
+
+        def unique_object(pairs):
+            result = {}
+            for key, item in pairs:
+                if key in result:
+                    raise ReviewJsonError("duplicate_key")
+                result[key] = item
+            return result
+
+        def reject_constant(_value):
+            raise ReviewJsonError("non_standard_number")
+
+        def decode_report_json(value):
+            return json.loads(value, object_pairs_hook=unique_object, parse_constant=reject_constant)
+
         try:
-            document = json.loads(arguments)
-        except (TypeError, ValueError):
+            document = decode_report_json(arguments)
+        except (TypeError, ValueError, RecursionError):
             raise self._review_failure("tool_arguments", diagnostics) from None
-        if not isinstance(document, dict):
+        if not isinstance(document, dict) or document.keys() - {"sections"}:
             raise self._review_failure("tool_arguments_shape", diagnostics)
-        reviews = document.get("sections") if isinstance(document, dict) else None
+        reviews = document.get("sections")
         diagnostics["returned_sections_type"] = ("missing" if "sections" not in document else {
             type(None): "null", list: "array", dict: "object", str: "string",
             bool: "boolean", int: "number", float: "number"}[type(reviews)])
@@ -1359,29 +1378,13 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             # Native values keep their existing strict validation path below.
             if not isinstance(value, str):
                 return value
-            rejection = "invalid_json"
-
-            def unique_object(pairs):
-                nonlocal rejection
-                result = {}
-                for key, item in pairs:
-                    if key in result:
-                        rejection = "duplicate_key"
-                        raise ValueError
-                    result[key] = item
-                return result
-
-            def reject_constant(_value):
-                nonlocal rejection
-                rejection = "non_standard_number"
-                raise ValueError
-
             decoded_type = None
             try:
-                decoded = json.loads(value, strict=True, object_pairs_hook=unique_object,
-                    parse_constant=reject_constant)
+                decoded = decode_report_json(value)
+            except ReviewJsonError as error:
+                rejection = str(error)
             except (ValueError, RecursionError):
-                pass
+                rejection = "invalid_json"
             else:
                 if isinstance(decoded, list):
                     return decoded
@@ -1421,15 +1424,15 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 for item_index, quote_id in enumerate(actual_ids, start=1):
                     if candidate_quote(quote_id, index, item_index) is None:
                         raise self._review_failure("no_facts_coverage", diagnostics)
-            # Omission belongs only to an explicit report branch. Supplied
-            # values, including empty arrays, still have to meet its schema.
+            # A positive report may explicitly return zero issues. All of its
+            # support pairs still go through the same quote and scope checks.
             supports = review["supports"] if "supports" in review else []
             issues = report_array(review["issues"], "issues") if "issues" in review else []
             if "supports" in review and (not isinstance(supports, list) or not supports):
                 raise self._review_failure("support_shape", diagnostics)
-            if "issues" in review and (not isinstance(issues, list) or not issues):
+            if "issues" in review and (not isinstance(issues, list) or (not issues and not supports)):
                 diagnostics["issue_shape_mismatch"] = {
-                    "subtype": ("too_many" if issues else "empty") if isinstance(issues, list) else "not_array",
+                    "subtype": "empty" if isinstance(issues, list) else "not_array",
                     "issues_type": {type(None): "null", list: "array", dict: "object", str: "string",
                         bool: "boolean", int: "number", float: "number"}[type(issues)],
                     "issue_count": len(issues) if isinstance(issues, list) else None}
