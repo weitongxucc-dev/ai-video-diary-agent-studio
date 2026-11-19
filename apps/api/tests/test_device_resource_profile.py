@@ -126,6 +126,40 @@ def test_profile_rejects_undeclared_fields_and_forged_receipt_path(tmp_path):
         load(write_profile(tmp_path, document))
 
 
+def test_existing_subtitle_measurement_does_not_block_supported_device_operations(tmp_path):
+    document = profile_document()
+    document['budget']['subtitle_recognition'] = {'source_digest': 'test-source', 'max_duration_seconds': 30}
+    document['backends']['subtitle_recognition'] = 'whisper-installed-desktop'
+    receipts = tmp_path / 'resource-profile-evidence'
+    receipts.mkdir()
+    document['evidence'] = {}
+    host_budget = {name: value for name, value in document['budget'].items()
+                   if name not in document['backends']}
+    for name, budget, backend in (
+        ('host', host_budget, None),
+        ('subtitle_recognition', document['budget']['subtitle_recognition'], 'whisper-installed-desktop'),
+    ):
+        digest = hashlib.sha256(json.dumps(budget, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        receipt = json.dumps({'format_version': 1, 'device': asdict(DEVICE), 'backend_identity': backend,
+            'budget_digest': digest, 'method': 'fixture', 'input_range': {'duration_seconds': 30},
+            'observations': {'peak_rss_bytes': 100}}).encode()
+        (receipts / f'{name}.json').write_bytes(receipt)
+        document['evidence'][name] = {'record_id': name, 'sha256': hashlib.sha256(receipt).hexdigest()}
+
+    path = write_profile(tmp_path, document)
+    original = path.read_bytes()
+    resolved = load(path)
+    assert resolved.budget.cpu_render is not None
+    assert resolved.evidence['host']['status'] == 'recorded'
+    assert resolved.unavailable['subtitle_recognition'] == 'operation_not_supported_by_runtime'
+    assert 'subtitle_recognition' not in resolved.evidence
+    assert path.read_bytes() == original
+
+    document['budget']['subtitle_recognition']['max_duration_seconds'] = 60
+    with pytest.raises(DeviceProfileUnavailable, match='does not bind'):
+        load(write_profile(tmp_path, document))
+
+
 def test_existing_budget_validation_is_preserved_and_unknown_fields_do_not_disappear(tmp_path):
     document = profile_document()
     document["budget"]["cpu_render"]["max_process_threads"] = 1

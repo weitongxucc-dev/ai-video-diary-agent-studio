@@ -170,7 +170,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
       {sourceMedia ? <p>沿用原片 {sourceMedia.source_start_seconds}–{sourceMedia.source_end_seconds} 秒的当前剪辑。</p> : <ExecutionScriptWindow key={previewKey} preview={preview} onStale={setStalePreview}/>}
       {previewStale ? <p role="status">制作前览已过期，请重新核对文案和制作要求。{onRefreshPreview ? <Button variant="outline" disabled={busy} onClick={onRefreshPreview}>重新核对文案和制作要求</Button> : null}</p> : null}
       <section className={styles.executionRequirements} aria-label="这次制作要求">
-        <p>画幅 {preview.requirements.aspect_ratio} · 目标时长 {preview.requirements.duration_target_seconds} 秒 · 露脸目标 {preview.requirements.presenter_share_target}%</p>
+        <p>画幅 {preview.requirements.aspect_ratio} · 目标时长 {preview.requirements.duration_target_seconds} 秒 · {preview.requirements.presenter_selection ? "指定单段出镜" : `露脸目标 ${preview.requirements.presenter_share_target}%`}</p>
         {sourceMedia ? <p>{sourceMedia.preserve_audio ? "保留原声" : "不使用原声音轨"}</p> : <p>口型：{preview.requirements.lipsync_quality === "high" ? "高精度" : "较快档"} · {preview.narration_source?.source_kind === "recorded"
                 ? `配音来源：本人录音 · 已采用 · ${preview.narration_source.duration_seconds.toFixed(1)} 秒`
                 : preview.narration_source?.source_kind === "generated"

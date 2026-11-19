@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     CreationPlanApiError: MockCreationPlanApiError,
     assignLocation: vi.fn(),
     getKnowledgeItem: vi.fn(),
+    createCreationRequest: vi.fn(),
   };
 });
 
@@ -30,6 +31,11 @@ vi.mock("@/lib/api", () => ({
   CreationPlanApiError: mocks.CreationPlanApiError,
 }));
 vi.mock("@/lib/source-api", () => ({ getKnowledgeItem: mocks.getKnowledgeItem }));
+vi.mock("@/lib/creation-request-api", () => ({ createCreationRequest: mocks.createCreationRequest }));
+vi.mock("../CreationRequestPanel", () => ({
+  CreationRequestPanel: ({ requestId, isCurrentScope }: { requestId: string; isCurrentScope: () => boolean }) =>
+    isCurrentScope() ? <output aria-label="已保存制作目标">{requestId}</output> : null,
+}));
 
 vi.mock("@/lib/preflight-draft", async (importOriginal) => ({ ...await importOriginal<typeof import("@/lib/preflight-draft")>(), readPreflightDraftScope: vi.fn().mockResolvedValue({ memberId: "local:member-a", workspaceId: "workspace-a" }) }));
 
@@ -74,6 +80,28 @@ describe("CreateProductionTaskForm", () => {
     mocks.confirmCreationPlan.mockReset();
     mocks.assignLocation.mockReset();
     mocks.getKnowledgeItem.mockReset();
+    mocks.createCreationRequest.mockReset();
+  });
+
+  it("recovers an existing request without requiring the temporary draft or creating a replacement", async () => {
+    const requestId = "request_00000000000000000000000000000001";
+    render(<CreateProductionTaskForm draftId="c9e3e677-7f10-460e-82ba-9355a2346751" savedRequestId={requestId} />);
+    expect(await screen.findByLabelText("已保存制作目标")).toHaveTextContent(requestId);
+    expect(screen.queryByRole("button", { name: "检查可用内容" })).not.toBeInTheDocument();
+    expect(mocks.createCreationRequest).not.toHaveBeenCalled();
+  });
+
+  it("hands the persisted request locator to the workbench after checking the member", async () => {
+    const onRequestSaved = vi.fn();
+    const requestId = "request_00000000000000000000000000000002";
+    mocks.createCreationRequest.mockResolvedValue({ id: requestId });
+    render(<CreateProductionTaskForm initialGoal="准备中英文两个版本" onRequestSaved={onRequestSaved} />);
+    fireEvent.change(screen.getByRole("spinbutton", { name: "成片数量" }), { target: { value: "2" } });
+    const check = screen.getByRole("button", { name: "检查可用内容" });
+    await waitFor(() => expect(check).toBeEnabled());
+    fireEvent.click(check);
+    await waitFor(() => expect(onRequestSaved).toHaveBeenCalledWith(requestId));
+    expect(await screen.findByLabelText("已保存制作目标")).toHaveTextContent(requestId);
   });
 
   it("pins a selected knowledge version in the pending plan and cancels it explicitly", async () => {

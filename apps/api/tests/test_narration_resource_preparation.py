@@ -1,6 +1,7 @@
 """Isolated owner contracts; fake grant command results are not model measurements."""
 from dataclasses import asdict, replace
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 import wave
@@ -9,7 +10,7 @@ import pytest
 
 from app.device_resource_profile import DeviceProfileUnavailable
 from app.narration_resource_preparation import NarrationResourcePreparation, NarrationPreparationShape
-from app.profiles.contracts import VoiceProfile
+from app.profiles.contracts import Authorization, ProfileReference, VoiceProfile
 from app.profile_reference_media import ProfileReferenceInput
 from app.voice_clone import VoiceCloneResult
 from app.granted_subprocess import GrantedCommandResult, ObservedCommandResources
@@ -21,7 +22,7 @@ from test_device_resource_configuration import isolated_model_runtime
 from test_device_scheduler import Resources, Processes
 
 
-def fixture(tmp_path, monkeypatch, *, metadata=False):
+def fixture(tmp_path, monkeypatch, *, metadata=False, registered=False):
     from test_device_resource_preparation import metadata_preparation
     repository, actor, access, cpu, paths = (metadata_preparation(tmp_path, monkeypatch) if metadata else preparation(tmp_path))
     document = profile_document()
@@ -42,21 +43,32 @@ def fixture(tmp_path, monkeypatch, *, metadata=False):
         stream.setsampwidth(2)
         stream.setframerate(16000)
         stream.writeframes(b'\0\0' * 16000)
-    voice = VoiceProfile('voice', 'local', 'v1', 'zh', str(reference_path), '参考声音')
-    reference = ProfileReferenceInput.from_source(source_path=reference_path, workspace_id='local',
-        profile_id='voice', profile_version='v1', asset_id=None, segment_id=None, source_type='audio',
-        kind='voice_audio', start_seconds=None, end_seconds=None, source_duration_seconds=1)
-    monkeypatch.setattr(repository.profile_records, 'get_versioned_voice_profile', lambda workspace, identity, version: voice)
-    def resolve(selected, **kwargs):
-        assert kwargs['viewer_user_id'] == actor.member_id and kwargs['for_generation'] is True
-        return reference
-    monkeypatch.setattr(repository, 'profile_reference_input', resolve)
-    provider = SimpleNamespace(ready=True, message='ready', supported_languages=('zh', 'en', 'zh-en'),
+    if registered:
+        logical, _, _ = repository.import_voice_reference_wav(actor.workspace_id,
+            reference_path.read_bytes(), verified_owner_user_id=actor.member_id)
+        voice = repository.save_versioned_voice_profile(VoiceProfile(
+            'voice', actor.workspace_id, 'v1', 'zh-en', logical, '参考声音',
+            display_name='已授权测试声音', model_id='fixture-model', reference=ProfileReference(),
+            authorization=Authorization('test-voice-auth', 'v1', 'test', ('voice',), ('narration',),
+                datetime(2025, 1, 1, tzinfo=timezone.utc), None, 'fixture://reference', 'active', actor.workspace_id),
+        ), verified_owner_user_id=actor.member_id)
+    else:
+        voice = VoiceProfile('voice', 'local', 'v1', 'zh', str(reference_path), '参考声音')
+        reference = ProfileReferenceInput.from_source(source_path=reference_path, workspace_id='local',
+            profile_id='voice', profile_version='v1', asset_id=None, segment_id=None, source_type='audio',
+            kind='voice_audio', start_seconds=None, end_seconds=None, source_duration_seconds=1)
+        monkeypatch.setattr(repository.profile_records, 'get_versioned_voice_profile', lambda workspace, identity, version: voice)
+        def resolve(selected, **kwargs):
+            assert kwargs['viewer_user_id'] == actor.member_id and kwargs['for_generation'] is True
+            return reference
+        monkeypatch.setattr(repository, 'profile_reference_input', resolve)
+    provider = SimpleNamespace(ready=True, model_id='fixture-model', message='ready', supported_languages=('zh', 'en', 'zh-en'),
         supports_pronunciation_dictionary=True, runtime_python_path=python, worker_path=worker, model_path=model,
         temporary_root=paths['temporary'], cache_root=model.parent / '.cache')
     def generate(**kwargs):
         kwargs['grant_context'].run([str(python), str(worker)])
         output = Path(kwargs['output_path'])
+        output.parent.mkdir(parents=True, exist_ok=True)
         with wave.open(str(output), 'wb') as stream:
             stream.setnchannels(1)
             stream.setsampwidth(2)
@@ -115,6 +127,80 @@ def test_model_owner_publishes_only_after_original_scheduler_checkpoint_and_inva
         assert service._load().budget.narration is None
         with pytest.raises(ValueError, match='已变化'):
             service.finalize(database_path=repository.database_path, request_id=request.id, actor=actor)
+    finally:
+        assert runtime.stop(2)
+
+
+def test_finalized_narration_preparation_binds_the_original_voice_audition(tmp_path, monkeypatch):
+    from app.device_resource_configuration import narration_invocation_facts
+    from app.host_resource_probes import narration_scope_basis, narration_write_volumes_valid
+    from app.narration import VoicePreviewService
+    from app.profile_preview_execution import profile_preview_registration, submit_profile_preview
+
+    repository, actor, access, service, voice = fixture(tmp_path, monkeypatch, registered=True)
+    plan_id, _ = service.prepare(NarrationPreparationShape(voice.id, voice.version, '准备样本。', 'zh', 2),
+        actor, request_id='profile-preview-preparation')
+    lock_path = tmp_path / 'preview-device.lock'
+    runtime = build_device_runtime(database_path=repository.database_path, device_lock_path=lock_path,
+        device_access=access, registrations={'device_preparation': service.registration()},
+        resources=Resources(), processes=Processes())
+    monkeypatch.setattr('app.granted_subprocess.run_granted_command', lambda *args, **kwargs:
+        GrantedCommandResult(0, b'', b'', ObservedCommandResources(1024**2, 2, True, True)))
+    try:
+        request = runtime.scheduler.submit(service.intent(plan_id, actor), actor)
+        service.execute(runtime.scheduler.pick_and_grant(), runtime.scheduler)
+        profile = service.finalize(database_path=repository.database_path, request_id=request.id, actor=actor)
+    finally:
+        assert runtime.stop(2)
+
+    audition = VoicePreviewService(tmp_path / 'audition-output', service.provider)
+
+    def invocation(provider, output):
+        return narration_invocation_facts(settings=service.settings, model_catalog=service.model_catalog,
+            provider=provider, database_path=repository.database_path, output_directory=output)
+
+    registration = profile_preview_registration(repository, voice_service=audition, avatar_service=None,
+        narration_budget=profile.budget.narration, presenter_budget=None,
+        verify_identity=access.verify_identity, voice_runtime_facts=invocation)
+    runtime = build_device_runtime(database_path=repository.database_path, device_lock_path=lock_path,
+        device_access=access, registrations={'media_preview': registration},
+        resources=Resources(), processes=Processes())
+    try:
+        def submit(text, language='zh', selected=voice):
+            params = {'voice_profile_id': selected.id, 'voice_version': selected.version,
+                'preview_text': text, 'language': language}
+            prepared = audition.request(repository=repository, workspace_id=actor.workspace_id,
+                viewer_user_id=actor.member_id, member_identity=actor.identity_payload(), prepare_only=True, **params)
+            assert prepared.status == 'queued'
+            return submit_profile_preview(runtime, prepared, actor, params)
+
+        with pytest.raises(ValueError, match='声音、来源.*语言'):
+            submit('Preview this line.', 'en')
+        other = repository.save_versioned_voice_profile(replace(voice, id='other-voice'),
+            verified_owner_user_id=actor.member_id)
+        with pytest.raises(ValueError, match='声音、来源.*语言'):
+            submit('同文案，不同声音。', selected=other)
+        registration.owner.voice_runtime_facts = lambda provider, output: invocation(provider, tmp_path / 'other-output')
+        with pytest.raises(ValueError, match='实际成品目录'):
+            submit('实际目录与设备声明错配。')
+        registration.owner.voice_runtime_facts = invocation
+
+        queued = submit('同一已准备声音的试听。')
+        grant = runtime.scheduler.pick_and_grant()
+        assert grant is not None and grant.request_id == queued.device_request_id
+        request = runtime.scheduler._get(grant.request_id)
+        resources = request.resources
+        assert resources['input_scope'] == 'single_call_prepared_v1'
+        assert resources['budget_basis'] == narration_scope_basis(resources['input_scope'])
+        assert resources['preparation_shape_digest'] == service._plan(plan_id)['inputs']['shape_digest']
+        assert resources['write_volumes']['paths']['output'] == str(
+            audition.preview_output_path(actor.workspace_id, queued.identity).parent)
+        assert narration_write_volumes_valid(resources, profile.budget.narration)
+
+        registration.executor.execute(grant, runtime.scheduler)
+        result = repository.preview_records.get_media_preview_run(actor.workspace_id, 'voice', queued.identity)
+        assert result.id == queued.id and result.status == 'succeeded'
+        assert result.device_request_id == grant.request_id and Path(result.output_path).is_file()
     finally:
         assert runtime.stop(2)
 

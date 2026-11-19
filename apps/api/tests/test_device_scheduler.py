@@ -688,6 +688,48 @@ def _snapshot_old_rows(scheduler):
                 conn.execute("SELECT * FROM job_runs ORDER BY id").fetchall())
 
 
+def test_same_database_preview_preserves_unchanged_blocked_request_and_rechecks_dependencies(tmp_path):
+    class OwnersWithPriorPreparation(Owners):
+        prior_verdict = "unknown"
+
+        def check_current(self, request, conn):
+            if request.owner_type == "device_preparation":
+                return self.prior_verdict
+            return super().check_current(request, conn)
+
+    clock = Clock(datetime(2026, 11, 19, 4, tzinfo=timezone.utc))
+    owners = OwnersWithPriorPreparation()
+    scheduler = _scheduler(tmp_path, clock=clock, owners=owners)
+    prior = scheduler.submit(_intent("prior-preparation", owner_type="device_preparation", unit="cpu-prepare:v1"), "member-a")
+    assert scheduler.pick_and_grant() is None
+
+    def prior_row():
+        with sqlite3.connect(scheduler.database_path) as conn:
+            conn.row_factory = sqlite3.Row
+            return dict(conn.execute("SELECT * FROM device_work_requests WHERE id=?", (prior.id,)).fetchone())
+
+    before = prior_row()
+    assert before["state"] == "blocked" and before["wait_reason"] == "owner_unknown"
+    clock.advance(seconds=5)
+    preview = scheduler.submit(_intent("new-voice-preview", owner_type="preview", unit="voice"), "member-a")
+    grant = scheduler.pick_and_grant()
+    assert grant is not None and grant.request_id == preview.id
+    _complete(scheduler, grant)
+    assert prior_row() == before
+
+    clock.advance(seconds=5)
+    owners.prior_verdict = "dependency"
+    assert scheduler.pick_and_grant() is None
+    changed = prior_row()
+    assert changed["wait_reason"] == "dependency" and changed["updated_at"] != before["updated_at"]
+
+    clock.advance(seconds=5)
+    owners.prior_verdict = "ready"
+    grant = scheduler.pick_and_grant()
+    assert grant is not None and grant.request_id == prior.id
+    _complete(scheduler, grant)
+
+
 def test_production_preflight_reports_prior_work_without_claiming_the_device(tmp_path):
     first = _scheduler(tmp_path)
     current_database = tmp_path / "new.sqlite"

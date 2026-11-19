@@ -19,7 +19,7 @@ function header(id = "script", count = 0): CreationTaskScript {
         sections_loaded: false, sections: null, sections_total_count: count, draft_complete: false,
         selection_status: "draft", created_at: "2026-10-24T00:00:00Z", updated_at: "2026-10-24T00:00:00Z", confirmed_at: null };
 }
-function harness(initial: CreationTaskScriptSection[] = []) {
+function harness(initial: CreationTaskScriptSection[] = [], sources: { reference_id: string; title: string }[] = []) {
     let sections = structuredClone(initial);
     let version = header().updated_at;
     let tick = 0;
@@ -61,8 +61,8 @@ function harness(initial: CreationTaskScriptSection[] = []) {
     }
     const fetch = vi.fn(async (url: string, init?: RequestInit) => {
         const request = new URL(url, "http://local");
-        if (request.pathname.endsWith("/sources")) return new Response(JSON.stringify({ task_id: "task", script_id: "script", sources: [] }));
-        if (request.pathname.endsWith("/assistant/script-context")) return new Response(JSON.stringify({ sources: [], draft: null, reply_origin: null }));
+        if (request.pathname.endsWith("/sources")) return new Response(JSON.stringify({ task_id: "task", script_id: "script", sources }));
+        if (request.pathname.endsWith("/assistant/script-context")) return new Response(JSON.stringify({ sources, draft: null, reply_origin: null }));
         if (request.pathname.includes("/script-window-requests/")) {
             queries.push(request);
             expect(init?.method ?? "GET").toBe("GET");
@@ -125,6 +125,44 @@ function fill(count: number, offset = 0, append = false) {
 function section(id = "first"): CreationTaskScriptSection {
     return { id, title: "第一段", content: "原正文", visual_prompt: "原画面", evidence_reference_ids: [] };
 }
+
+it("continues one complete SRT across saves and refuses a changed saved prefix", async () => {
+    const source = { reference_id: "knowledge:source:1", title: "原字幕资料" };
+    const server = harness([], [source]);
+    const contents = Array.from({ length: 36 }, (_, index) => `原话 ${index + 1}\n续行`);
+    const subtitles = contents.map((content, index) =>
+        `${index + 1}\n00:00:00,000 --> 00:00:01,000\n${content}`).join("\n\n");
+    const start = render(<ScriptWindowStart taskId="task" onSaved={async () => undefined}/>);
+    await screen.findByRole("option", {name: source.title});
+    fireEvent.change(screen.getByLabelText("新文案标题"), {target: {value: "原字幕稿"}});
+    function fillImport(text: string) {
+        fireEvent.change(screen.getByLabelText("或粘贴 SRT 正文"), {target: {value: text}});
+        fireEvent.change(screen.getByLabelText("本批段落引用"), {target: {value: source.reference_id}});
+        fireEvent.change(screen.getByLabelText("本批画面建议"), {target: {value: "沿用原片画面"}});
+        fireEvent.click(screen.getByText("填入文案段落"));
+    }
+    fillImport(subtitles);
+    await screen.findByText(/已填入第 1–20 句/);
+    expect(server.writes).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", {name: "保存首窗"}));
+    await waitFor(() => expect(server.sections()).toHaveLength(20));
+    start.unmount();
+
+    const version = server.version();
+    render(<ScriptWindowEditor taskId="task" script={{...header("script", 20), updated_at: version}} onSaved={async () => undefined}/>);
+    await waitFor(() => expect(screen.getByRole("button", {name: "追加文案"})).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", {name: "追加文案"}));
+    fillImport(subtitles.replace("原话 1\n", "被替换的话\n"));
+    await screen.findByText(/与已存文案的前段不一致/);
+    expect(server.sections().map(item => item.content)).toEqual(contents.slice(0, 20));
+
+    fillImport(subtitles);
+    await screen.findByText(/已填入第 21–36 句/);
+    fireEvent.click(screen.getByRole("button", {name: "保存新增段落"}));
+    await waitFor(() => expect(server.sections().map(item => item.content)).toEqual(contents));
+    expect(server.writes.map(write => (write.body.sections as CreationTaskScriptSection[]).length)).toEqual([20, 16]);
+    expect(server.sections().every(item => item.evidence_reference_ids[0] === source.reference_id)).toBe(true);
+});
 
 it("creates 45 sections through three real-client windows, edits section 45 and inserts by stable anchor without replacing the rest", async () => {
     const server = harness();

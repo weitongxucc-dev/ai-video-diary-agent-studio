@@ -919,17 +919,21 @@ class DeviceScheduler(DeviceRequestReadAccess):
         return permit
 
     def _update_wait(self, conn: sqlite3.Connection, row: sqlite3.Row, now: datetime, reason: str | None) -> None:
-        since = _parse(row["eligible_since_utc"])
-        total = float(row["eligible_wait_seconds"])
+        previous_since = _parse(row["eligible_since_utc"])
+        previous_total = float(row["eligible_wait_seconds"])
+        since, total = previous_since, previous_total
         if reason is None:
             since = since or now
         else:
             if since is not None:
                 total += max(0, (now - since).total_seconds())
             since = None
+        state = "waiting" if reason is None else "blocked"
+        if (state, reason, since, total) == (row["state"], row["wait_reason"], previous_since, previous_total):
+            return
         conn.execute(
             "UPDATE device_work_requests SET state=?, wait_reason=?, eligible_since_utc=?, eligible_wait_seconds=?, updated_at=? WHERE id=?",
-            ("waiting" if reason is None else "blocked", reason, _stamp(since) if since else None, total, _stamp(now), row["id"]),
+            (state, reason, _stamp(since) if since else None, total, _stamp(now), row["id"]),
         )
 
     def _schedule_wait(self, conn: sqlite3.Connection, request: WorkRequest, now: datetime) -> str | None:

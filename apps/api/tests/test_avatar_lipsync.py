@@ -664,3 +664,129 @@ def test_latentsync_16_stages_a_dependency_without_symlink_privileges(tmp_path, 
     monkeypatch.setattr(latentsync_16_worker.os, "link", cross_volume)
     latentsync_16_worker._stage_file(source, destination)
     assert destination.read_bytes() == source.read_bytes()
+
+
+def test_latentsync_16_mlx_requires_grant_and_uses_registered_offline_process(tmp_path):
+    from app.lipsync_models import LatentSync16Runtime
+
+    runtime = LatentSync16Runtime(tmp_path, tmp_path / "python", tmp_path / "worker.py", "mlx")
+    catalog = SimpleNamespace(latentsync_runtime=runtime, verify=lambda _spec: SimpleNamespace(
+        ready=True, model_path=str(tmp_path / "weights")))
+    provider = LatentSync16Provider(catalog, None)
+    command = ["python", "worker.py"]
+    with pytest.raises(subprocess.SubprocessError, match="资源许可"):
+        provider._run_command(command)
+
+    calls = []
+    context = SimpleNamespace(check=lambda: None, threads=2,
+                              run=lambda argv, **kwargs: calls.append((argv, kwargs)) or
+                              SimpleNamespace(returncode=0))
+    output = tmp_path / "output.mp4"
+    provider._run_command(command, grant_context=context, output_paths=(output,))
+    argv, kwargs = calls[0]
+    assert argv[:3] == ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default) (deny network*)"]
+    assert argv[-2:] == ["--backend", "mlx"]
+    assert kwargs["output_paths"] == (output,)
+    assert kwargs["env"]["OMP_NUM_THREADS"] == "2"
+
+
+@pytest.mark.parametrize("frames", [16, 32, 33])
+def test_latentsync_16_mlx_mux_keeps_exact_frames_and_fractional_audio_tail(tmp_path, monkeypatch, frames):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "model_workers"))
+    import latentsync_16_worker as worker
+
+    video, audio, output = (tmp_path / name for name in ("source.mp4", "audio.wav", "output.mp4"))
+    samples = frames * 640 + 272
+    with wave.open(str(audio), "wb") as wav:
+        wav.setparams((1, 2, 16000, samples, "NONE", "not compressed"))
+        wav.writeframes(b"\x04\x00" * samples)
+    command = ["ffmpeg", "-v", "error", "-nostdin"]
+    subprocess.run([*command, "-f", "lavfi", "-i", "testsrc2=s=64x64:r=30:d=2", "-c:v", "libx264",
+                    str(video)], check=True)
+    (tmp_path / "whisper").mkdir()
+    (tmp_path / "whisper/tiny.pt").write_bytes(b"fixture")
+    monkeypatch.setattr(worker.mlx, "check_runtime", lambda _runtime, _revision: None)
+    monkeypatch.setattr(worker.mlx, "verify_weights", lambda *_args, **_kwargs: None)
+
+    def emit_video(_runtime, _weights, staged, _speech, synced, _scratch, *, memory_limit):
+        # Substitute only the inference output. Exercise the actual staging,
+        # duration, mux, decode validation and publication around it.
+        subprocess.run([*command, "-i", str(staged), "-map", "0:v:0", "-c", "copy", str(synced)], check=True)
+        return 1234
+
+    monkeypatch.setattr(worker.mlx, "render", emit_video)
+    result = worker._render({
+        "schema_version": 1, "model_id": LATENTSYNC_16_MODEL_ID, "language": "en",
+        "motion": "natural", "expression": "neutral", "visual_path": str(video),
+        "audio_path": str(audio), "output_path": str(output),
+    }, tmp_path, tmp_path, "revision", "mlx")
+    evidence = json.loads(result["alignment_evidence"])
+    assert output.is_file()
+    assert evidence["backend"] == "apple_mlx"
+    assert evidence["rendered_frames"] == frames
+    assert evidence["window_count"] == (frames + 15) // 16
+    assert evidence["audio_conditioning_samples"] == samples
+    assert evidence["peak_mlx_allocation_bytes"] == 1234
+    assert evidence["audio_duration_seconds"] == pytest.approx(samples / 16000, abs=0.001)
+    assert evidence["video_duration_seconds"] == pytest.approx(frames / 25, abs=0.001)
+    with pytest.raises(worker.MediaTimingError):
+        worker._mlx_media_evidence(output, frames - 1, samples / 16000)
+
+
+
+def test_latentsync_16_mlx_rejects_a_same_size_wrong_conversion(tmp_path, monkeypatch):
+    import hashlib
+    from model_workers import latentsync_16_mlx as mlx
+
+    monkeypatch.setattr(mlx, "UNET_FILE", ("unet.safetensors", 4, hashlib.sha256(b"good").hexdigest()))
+    monkeypatch.setattr(mlx, "RUNTIME_WEIGHTS", ())
+    path = tmp_path / "unet.safetensors"
+    path.write_bytes(b"bad!")
+    with pytest.raises(ValueError, match="权重校验失败"):
+        mlx.verify_weights(tmp_path, checksums=True)
+
+
+def test_latentsync_16_calibration_identity_rejects_changed_runtime_weights(tmp_path, monkeypatch):
+    import hashlib
+    from app import lipsync_models
+
+    worker = tmp_path / "latentsync_16_worker.py"
+    python = tmp_path / "python"
+    for path in (worker, python, *(tmp_path / name for name in (
+            "latentsync_16_mlx.py", "latentsync_entry.py", "media_timing.py"))):
+        path.write_bytes(path.name.encode())
+    original = tmp_path / "latentsync_unet.pt"
+    original.write_bytes(b"original")
+    converted = tmp_path / "unet.safetensors"
+    converted.write_bytes(b"converted")
+    runtime = lipsync_models.LatentSync16Runtime(tmp_path, python, worker, "mlx")
+    monkeypatch.setattr(lipsync_models.LatentSync16Runtime, "issue", lambda self: None)
+    monkeypatch.setattr(lipsync_models.shutil, "which", lambda _name: str(python))
+    monkeypatch.setattr(lipsync_models, "LATENTSYNC_16_DOWNLOADS",
+                        ((original.name, 8, hashlib.sha256(b"original").hexdigest()),))
+    monkeypatch.setattr(lipsync_models.mlx, "UNET_FILE",
+                        (converted.name, 9, hashlib.sha256(b"converted").hexdigest()))
+    monkeypatch.setattr(lipsync_models.mlx, "RUNTIME_WEIGHTS", ())
+
+    identity = runtime.backend_identity(tmp_path)
+    assert identity["model_id"] == LATENTSYNC_16_MODEL_ID
+    assert identity["backend"] == "mlx"
+    assert identity["runtime_root"] == str(tmp_path.resolve())
+    assert identity["artifacts"][converted.name]["path"] == str(converted.resolve())
+    converted.write_bytes(b"bad file!")
+    with pytest.raises(ValueError, match="文件校验失败"):
+        runtime.backend_identity(tmp_path)
+
+
+def test_latentsync_16_runtime_retry_recovers_transient_native_probe_failure(tmp_path, monkeypatch):
+    from app import lipsync_models
+
+    runtime = lipsync_models.LatentSync16Runtime(tmp_path, tmp_path / "python", tmp_path / "worker.py", "mlx")
+    replies = iter([
+        SimpleNamespace(returncode=-11, stdout="", stderr=""),
+        SimpleNamespace(returncode=0, stdout="", stderr=""),
+    ])
+    monkeypatch.setattr(lipsync_models.subprocess, "run", lambda *args, **kwargs: next(replies))
+    assert "-11" in lipsync_models._runtime_issue(runtime, ())
+    assert lipsync_models._runtime_issue(runtime, ()) is None
+    assert lipsync_models._runtime_issue(runtime, ()) is None

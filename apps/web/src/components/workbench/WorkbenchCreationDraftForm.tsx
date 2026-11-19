@@ -26,5 +26,13 @@ export function WorkbenchCreationDraftForm(props: CreateProductionTaskFormProps)
     }
   }
 
-  return <CreateProductionTaskForm {...props} assignLocation={navigate} onDraftSaved={updateDraftAddress} />;
+  function updateRequestAddress(requestId: string | null) {
+    if (!isCurrentDraftAddress()) return;
+    const url = new URL(window.location.href);
+    if (requestId) url.searchParams.set("request_id", requestId);
+    else url.searchParams.delete("request_id");
+    window.history.replaceState(null, "", url);
+  }
+
+  return <CreateProductionTaskForm {...props} assignLocation={navigate} onDraftSaved={updateDraftAddress} onRequestSaved={updateRequestAddress} />;
 }

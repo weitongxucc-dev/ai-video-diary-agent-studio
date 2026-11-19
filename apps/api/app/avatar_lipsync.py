@@ -170,6 +170,7 @@ class SubprocessAvatarAndLipSyncProvider:
         model_id: str,
         supported_languages: tuple[str, ...] = (),
         runner: Callable[[list[str]], None] | None = None,
+        temporary_root: str | Path | None = None,
     ) -> None:
         self.runtime_path = Path(runtime_path).expanduser()
         self.worker_path = Path(worker_path).expanduser()
@@ -177,6 +178,7 @@ class SubprocessAvatarAndLipSyncProvider:
         self.model_id = model_id
         self.supported_languages = supported_languages
         self._runner = runner or self._run_command
+        self.temporary_root = Path(temporary_root).expanduser().resolve() if temporary_root else None
 
     @property
     def ready(self) -> bool:
@@ -285,11 +287,16 @@ class SubprocessAvatarAndLipSyncProvider:
         )
 
     def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
+        budget = _admitted_presenter_budget(grant_context)
+        if budget is not None and budget.bound_model_id is not None and budget.bound_model_id != self.model_id:
+            raise subprocess.SubprocessError("设备人物口型标定与当前模型不匹配。")
         if grant_context is None:
             completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30 * 60)
         else:
             grant_context.check()
-            with TemporaryDirectory(prefix="avatar_granted_runtime_") as temporary:
+            if self.temporary_root is not None:
+                self.temporary_root.mkdir(parents=True, exist_ok=True)
+            with TemporaryDirectory(prefix="avatar_granted_runtime_", dir=self.temporary_root) as temporary:
                 root = Path(temporary)
                 for name in ("home", "config", "cache", "tmp"):
                     (root / name).mkdir()
@@ -351,13 +358,19 @@ class LatentSyncAvatarAndLipSyncProvider(SubprocessAvatarAndLipSyncProvider):
             raise subprocess.SubprocessError(detail[-4000:] or f"exit {completed.returncode}")
 
 
+def _admitted_presenter_budget(grant_context):
+    scheduler = getattr(grant_context, "scheduler", None)
+    resources = getattr(scheduler, "resources", None)
+    return getattr(getattr(resources, "budget", None), "presenter", None)
+
+
 class LatentSync16Provider(SubprocessAvatarAndLipSyncProvider):
-    def __init__(self, catalog, legacy):
+    def __init__(self, catalog, legacy, *, temporary_root=None):
         self.catalog, self.legacy = catalog, legacy
-        runtime = catalog.latentsync_runtime
+        self.runtime = runtime = catalog.latentsync_runtime
         super().__init__(runtime_path=runtime.python, worker_path=runtime.worker,
                          runtime_root=runtime.root, model_id=LATENTSYNC_16_MODEL_ID,
-                         supported_languages=("zh", "en"))
+                         supported_languages=("zh", "en"), temporary_root=temporary_root)
 
     @property
     def ready(self) -> bool:
@@ -367,13 +380,31 @@ class LatentSync16Provider(SubprocessAvatarAndLipSyncProvider):
     def message(self) -> str:
         return self.catalog.status(LATENTSYNC_16_512).message
 
+    def backend_identity(self) -> dict[str, object]:
+        state = self.catalog.status(LATENTSYNC_16_512)
+        if not state.ready:
+            raise ValueError(state.message)
+        return self.runtime.backend_identity(Path(state.model_path))
+
     def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
+        if self.runtime.backend == "mlx":
+            if grant_context is None:
+                raise subprocess.SubprocessError("LatentSync 1.6 MLX 需要有效的本机人物口型资源许可。")
+            grant_context.check()
+            command = ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default) (deny network*)", *command]
+            budget = _admitted_presenter_budget(grant_context)
+            if budget is not None and budget.preparation_scope is not None:
+                limits = {"width_px": budget.max_source_width_px, "height_px": budget.max_source_height_px,
+                          "duration_seconds": budget.max_duration_seconds,
+                          "scratch_bytes": budget.additional_disk_bytes,
+                          "memory_bytes": budget.additional_memory_bytes}
+                command = [*command, "--presenter-shape", json.dumps(limits, separators=(",", ":"))]
         # Hash the actual installed checkpoint before sending any media.
         state = self.catalog.verify(LATENTSYNC_16_512)
         if not state.ready:
             raise subprocess.SubprocessError(state.message)
         super()._run_command([*command, "--weights-root", str(Path(state.model_path).resolve()),
-                              "--code-revision", LATENTSYNC_16_CODE_REVISION],
+                              "--code-revision", LATENTSYNC_16_CODE_REVISION, "--backend", self.runtime.backend],
                              grant_context=grant_context, output_paths=output_paths)
 
 
@@ -1018,7 +1049,7 @@ def avatar_lipsync_provider_from_settings(
         else:
             legacy = UnavailableAvatarAndLipSyncProvider("原任务的 LatentSync 1.5 环境尚未配置。",
                                                         model_id=LATENTSYNC_15_MODEL_ID)
-        return LatentSync16Provider(catalog, legacy)
+        return LatentSync16Provider(catalog, legacy, temporary_root=settings.effective_temporary_root_path)
     runtime = settings.avatar_model_runtime_python_path
     runtime_root = settings.avatar_model_root_path
     if not runtime or not runtime_root:

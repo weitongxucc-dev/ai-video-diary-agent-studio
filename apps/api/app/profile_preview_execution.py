@@ -11,7 +11,10 @@ from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.creation_execution import CreationExecutionActor, CreationStageGrantContext
+from app.creation_execution import (CreationExecutionActor, CreationStageGrantContext,
+                                    single_call_narration_scope_fields)
+from app.device_resource_configuration import narration_reference_sha256
+from app.device_resource_profile import DeviceProfileUnavailable
 from app.device_runtime import OwnerRegistration
 from app.device_scheduler import RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedWork
 from app.models import utc_now
@@ -30,12 +33,13 @@ def _digest(value):
 
 class ProfilePreviewOwner:
     def __init__(self, repository, *, voice_service, avatar_service, narration_budget,
-                 presenter_budget, verify_identity):
+                 presenter_budget, verify_identity, voice_runtime_facts=None):
         self.repository = repository
         self.services = {"voice": voice_service, "avatar_lipsync": avatar_service}
         self.narration_budget = narration_budget
         self.presenter_budget = presenter_budget
         self.verify_identity = verify_identity
+        self.voice_runtime_facts = voice_runtime_facts
 
     def read(self, workspace_id, run_id, conn=None):
         if conn is None:
@@ -46,8 +50,9 @@ class ProfilePreviewOwner:
     def facts(self, run):
         actor = CreationExecutionActor.from_event(run.workspace_id, run.member_identity)
         reader = actor.user_id or actor.member_id
+        episode_id = run.preview_input.get("episode_id", "voice_preview")
         narration_inputs = self.repository.profile_inputs.resolve_narration_inputs(workspace_id=run.workspace_id,
-            episode_id=run.preview_input.get("episode_id", "voice_preview"),
+            episode_id=episode_id,
             voice_profile_id=run.voice_profile_id, voice_version=run.voice_version)
         voice = narration_inputs.voice
         source = self.repository.profile_reference_input(voice, viewer_user_id=reader)
@@ -56,6 +61,10 @@ class ProfilePreviewOwner:
         if not provider.ready or provider.model_id != run.model_id:
             raise ValueError("预览模型不可用或已变化")
         if run.preview_type == "voice":
+            if ((run.preview_input.get("voice_profile_id"), run.preview_input.get("voice_version"))
+                    != (voice.id, voice.version)
+                    or (run.preview_input.get("language") or voice.language) != run.language):
+                raise ValueError("试听请求的声音版本或语言与保存的尝试不一致")
             budget = self.narration_budget
             if budget is None:
                 raise ValueError("独立声音预览同类资源预算尚未标定")
@@ -66,6 +75,26 @@ class ProfilePreviewOwner:
                 "reference_bytes": source.size_bytes, "duration_seconds": budget.max_duration_seconds,
                 "max_output_bytes": budget.max_output_bytes, "threads": budget.max_threads,
                 "timeout_seconds": budget.max_timeout_seconds}
+            if budget.input_scope == "single_call_prepared_v1":
+                if source.size_bytes > budget.max_reference_bytes:
+                    raise ValueError("声音参考超过本次已标定的单次输入范围")
+                if self.voice_runtime_facts is None:
+                    raise ValueError("声音试听尚未接入实际执行器身份与写入目录")
+                output = service.preview_output_path(run.workspace_id, run.identity)
+                try:
+                    runtime = self.voice_runtime_facts(service.provider, output.parent)
+                except DeviceProfileUnavailable as exc:
+                    raise ValueError(str(exc)) from exc
+                if runtime.get("write_paths", {}).get("output") != str(output.parent):
+                    raise ValueError("声音试听的实际成品目录与设备写入声明不一致")
+                scope = single_call_narration_scope_fields(budget, workspace_id=run.workspace_id,
+                    pronunciation_scope_id=episode_id, inputs=narration_inputs, reference=source,
+                    language=run.language, max_output_bytes=resources["max_output_bytes"],
+                    runtime=runtime, reference_sha256=narration_reference_sha256(source))
+                resources.update(scope)
+                facts.append(scope)
+            elif budget.input_scope == "single_call_preparation_v1":
+                raise ValueError("模型准备许可不能作为独立声音试听的执行档")
         else:
             budget = self.presenter_budget
             if budget is None:
@@ -92,6 +121,11 @@ class ProfilePreviewOwner:
                 "section_count": 1, "input_bytes": source.size_bytes + visual.size_bytes + stat.st_size,
                 "duration_seconds": duration, "max_output_bytes": budget.max_output_bytes,
                 "threads": budget.max_threads, "timeout_seconds": budget.max_timeout_seconds}
+            from app.host_resource_probes import presenter_scope_fields
+            scope = presenter_scope_fields(budget, run.model_id)
+            if scope:
+                resources.update(scope)
+                facts.append(scope)
         digest = _digest([run.workspace_id, run.member_identity, run.model_id, facts])
         return digest, f"{run.preview_type}:{digest}", resources
 
@@ -209,25 +243,28 @@ class ProfilePreviewExecutor:
     def execute(self, grant, scheduler):
         owner = self.owner
         run = owner.read(grant.workspace_id, grant.owner_id)
-        _, _, resources = owner.facts(run)
         event = threading.Event()
         with self.lock:
             self.cancellations[grant.request_id] = event
-        context = CreationStageGrantContext(scheduler, grant, time.monotonic() + resources["timeout_seconds"],
-                                           resources["max_output_bytes"], resources["threads"], event)
         def write(conn, terminal):
             return owner.repository.preview_records.checkpoint(terminal, grant.request_id, connection=conn)
 
         try:
+            _, _, resources = owner.facts(run)
+            context = CreationStageGrantContext(scheduler, grant, time.monotonic() + resources["timeout_seconds"],
+                                               resources["max_output_bytes"], resources["threads"], event)
             context.check()
             if run.status == "running":
                 # The scheduler re-granted only after the previous registered group released.
                 owner.repository.preview_records.save_media_preview_run(replace(run, status="queued"))
             actor = CreationExecutionActor.from_event(run.workspace_id, run.member_identity)
+            inputs = dict(run.preview_input)
+            if resources.get("input_scope") == "single_call_prepared_v1":
+                inputs["prepared_reference_root"] = Path(resources["write_volumes"]["paths"]["temporary"])
             result = owner.services[run.preview_type].request(repository=owner.repository,
                 preview_records=_PreviewCheckpointRecords(owner.repository.preview_records),
                 workspace_id=run.workspace_id, viewer_user_id=actor.user_id or actor.member_id,
-                grant_context=context, member_identity=run.member_identity, **run.preview_input)
+                grant_context=context, member_identity=run.member_identity, **inputs)
             context.check()
             if result.id != run.id or result.identity != run.identity:
                 raise ValueError("预览输入身份已变化，不能发布到原设备请求")

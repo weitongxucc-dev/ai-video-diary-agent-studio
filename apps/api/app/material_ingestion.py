@@ -285,6 +285,10 @@ class MaterialIngestionService:
         The repository checks the directory binding and current stat revision.
         A manual declaration confirms copy completion, not media validity.
         """
+        if confirmation_source == "app_import" and Path(relative_path).suffix.lower() in {".jpg", ".jpeg", ".png"}:
+            self.repository.material_intake.receive_desktop_image(workspace_id, relative_path=relative_path,
+                expected_revision=expected_revision, owner_user_id=verified_owner_user_id)
+            return
         self.repository.material_source_files.confirm_material_copy_complete(
             workspace_id,
             relative_path=relative_path,

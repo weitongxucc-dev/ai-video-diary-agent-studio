@@ -157,17 +157,24 @@ def test_narration_identity_binds_helper_and_actual_runtime_files(tmp_path):
     (tmp_path / 'manifest.json').write_text(json.dumps({'files': []}))
     status = SimpleNamespace(ready=True, model_path=str(tmp_path), worker_path=str(worker), runtime_python_path=str(python))
     catalog = SimpleNamespace(status=lambda spec: status)
+    site = python.parent.parent / 'lib/python3.12/site-packages'
+    record = site / 'mlx-1.0.dist-info/RECORD'
+    inventory = record.read_text() + 'mlx/__pycache__/__init__.cpython-312.pyc,,\n'
+    record.write_text(inventory)
     def identity():
         return backend_identity('narration', None, settings=Settings(), model_catalog=catalog)
     first = identity()
     helper.write_text('changed-helper')
     second = identity()
     assert first and second and first != second
-    (python.parent.parent / 'lib/python3.12/site-packages/mlx/__init__.py').write_text('changed-installed-code')
+    source = site / 'mlx/__init__.py'
+    source.write_text('changed-installed-code')
     third = identity()
     assert third and third != second
+    record.write_text(inventory + 'mlx/missing-native-extension.so,sha256=missing,1\n')
+    assert identity() is None
     (python.parent.parent / 'installed-requirements.json').write_text('{"requirements":["mlx-audio==0.5.0"]}')
-    (python.parent.parent / 'lib/python3.12/site-packages/mlx-1.0.dist-info/RECORD').unlink()
+    record.unlink()
     assert identity() is None  # Installer declaration cannot replace missing actual dependencies.
 
 

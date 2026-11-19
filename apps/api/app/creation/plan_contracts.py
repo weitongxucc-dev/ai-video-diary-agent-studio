@@ -52,6 +52,15 @@ class CreationPlanBlocker:
     blocks_confirmation: bool
 
 
+@dataclass(frozen=True)
+class CreationPlanPresenterSelection:
+    script_id: str
+    script_updated_at: datetime
+    section_id: str
+    voice_profile_id: str
+    voice_version: str
+
+
 @dataclass
 class CreationPlan:
     id: str
@@ -93,6 +102,7 @@ class CreationPlan:
     duration_range_seconds: tuple[float, float] | None = None
     source_media: dict[str, object] | None = None
     lipsync_model_id: str | None = None
+    presenter_selection: CreationPlanPresenterSelection | None = None
 
 
 def creation_plan_payload(plan: CreationPlan) -> dict[str, object]:
@@ -102,6 +112,8 @@ def creation_plan_payload(plan: CreationPlan) -> dict[str, object]:
         del payload['source_media']
     if plan.lipsync_model_id is None:
         del payload['lipsync_model_id']
+    if plan.presenter_selection is None:
+        del payload['presenter_selection']
     return payload
 
 

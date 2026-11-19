@@ -22,6 +22,7 @@ type ExecutionInput = {
     timelineVersionId: string | null;
     voiceId: string | undefined;
     voiceVersion: string | undefined;
+    presenterSelectionKey?: string;
     workspaceReadRevision: number;
     onWorkspaceRead: (workspace: CreationTaskWorkspace, readRevision: number) => boolean;
 };
@@ -29,7 +30,7 @@ function executionSnapshot(execution: CreationExecutionStatus) {
     return `${execution.job?.id ?? "none"}:${execution.job?.status ?? "none"}:${execution.stages.length}`;
 }
 // Production facts own a separate lifecycle from selection, chat, and unsaved inputs.
-export function useCreationExecution({ taskId, confirmedScriptId, sourceMedia = false, timelineVersionId, voiceId, voiceVersion, workspaceReadRevision, onWorkspaceRead }: ExecutionInput) {
+export function useCreationExecution({ taskId, confirmedScriptId, sourceMedia = false, timelineVersionId, voiceId, voiceVersion, presenterSelectionKey, workspaceReadRevision, onWorkspaceRead }: ExecutionInput) {
     const viewActive = useWorkspacePage()?.active ?? true;
     const [visualDecision, setVisualDecision] = useState<SegmentVisualDecision | null>(null);
     const [visualError, setVisualError] = useState<string | null>(null);
@@ -155,7 +156,7 @@ export function useCreationExecution({ taskId, confirmedScriptId, sourceMedia = 
         pollExecution.current = () => void poll();
         void poll();
         return () => { active = false; pollExecution.current = () => undefined; workspaceRead.current = async () => false; window.clearTimeout(timer); };
-    }, [viewActive, taskId, confirmedScriptId, sourceMedia, timelineVersionId, voiceId, voiceVersion]);
+    }, [viewActive, taskId, confirmedScriptId, sourceMedia, timelineVersionId, voiceId, voiceVersion, presenterSelectionKey]);
     function acceptExecution(next: CreationExecutionStatus) {
         if (next.task_id === currentTask.current)
             setExecution(next);

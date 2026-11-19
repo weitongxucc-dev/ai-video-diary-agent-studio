@@ -8,7 +8,7 @@ const { pipeline } = require('stream/promises');
 // treated as a closed import rather than an open-ended wait.
 const MATERIAL_BINDING_TIMEOUT_MS = 8000;
 // Video entries in apps/api/app/materials/contracts.py MATERIAL_MEDIA_BY_SUFFIX.
-const MATERIAL_IMPORT_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm'];
+const MATERIAL_IMPORT_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm', 'jpg', 'jpeg', 'png'];
 // `_已处理` is the archive segment apps/api/app/production.py already skips in
 // all three scan paths, so staged copies are invisible to intake.
 const MATERIAL_STAGING_SEGMENTS = ['_已处理', '.import-staging'];

@@ -74,6 +74,7 @@ class DevicePreparationShapeRequest(BaseModel):
     source_width_px: int | None = Field(default=None, gt=0, multiple_of=2)
     source_height_px: int | None = Field(default=None, gt=0, multiple_of=2)
     visual_effects: VisualEffects | None = None
+    presenter_clip_count: int = Field(default=0, ge=0)
 
 
 class NarrationPreparationPronunciationReference(BaseModel):
@@ -98,16 +99,25 @@ class MontagePreparationShapeRequest(BaseModel):
     task_id: str = Field(min_length=1)
 
 
+class PresenterPreparationShapeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+    model_id: Literal["latentsync-1.6-512"] = "latentsync-1.6-512"
+    width_px: Literal[1080] = 1080
+    height_px: Literal[1920] = 1920
+    duration_seconds: float = Field(default=0.64, ge=0.04, le=12.8)
+
+
 class DevicePreparationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: UUID
-    kind: Literal["cpu", "narration", "montage"] = "cpu"
-    shape: DevicePreparationShapeRequest | NarrationPreparationShapeRequest | MontagePreparationShapeRequest
+    kind: Literal["cpu", "narration", "montage", "presenter"] = "cpu"
+    shape: (DevicePreparationShapeRequest | NarrationPreparationShapeRequest | MontagePreparationShapeRequest
+            | PresenterPreparationShapeRequest)
 
     @model_validator(mode="after")
     def shape_matches_kind(self):
         expected = {'cpu': DevicePreparationShapeRequest, 'narration': NarrationPreparationShapeRequest,
-                    'montage': MontagePreparationShapeRequest}[self.kind]
+                    'montage': MontagePreparationShapeRequest, 'presenter': PresenterPreparationShapeRequest}[self.kind]
         if not isinstance(self.shape, expected):
             raise ValueError("准备类型与输入形状不一致")
         return self
@@ -3117,6 +3127,14 @@ class CreationTaskEditJobReplayResponse(BaseModel):
     failure_reason: str | None = None
 
 
+class CreationPlanPresenterSelectionResponse(BaseModel):
+    script_id: str
+    script_updated_at: datetime
+    section_id: str
+    voice_profile_id: str
+    voice_version: str
+
+
 class CreationPlanPreviewResponse(BaseModel):
     updated_at: datetime | None = None
     creation_intent: dict[str, object] | None = None
@@ -3134,6 +3152,7 @@ class CreationPlanPreviewResponse(BaseModel):
     duration_mode: Literal["exact", "approximate"] = "exact"
     duration_range_seconds: tuple[float, float] | None = None
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
+    presenter_selection: CreationPlanPresenterSelectionResponse | None = None
     lipsync_quality: Literal["high", "fast"] = "fast"
     knowledge_references: list[CreationPlanKnowledgeReferenceResponse]
     source_references: list[CreationPlanSourceReferenceResponse]

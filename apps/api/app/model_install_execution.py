@@ -31,7 +31,7 @@ MODEL_RUNTIME_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 def ensure_runtime(catalog: ModelCatalog, spec: ModelSpec) -> None:
     if spec.id == LATENTSYNC_16_MODEL_ID:
         if catalog.latentsync_runtime is None:
-            raise ModelInstallError("请先配置独立的 LatentSync 1.6 CUDA 环境和离线 VAE、人脸检测权重。")
+            raise ModelInstallError("请先配置独立的 LatentSync 1.6 运行环境和离线 VAE、人脸检测权重。")
         issue = catalog.latentsync_runtime.issue()
         if issue:
             raise ModelInstallError(issue)

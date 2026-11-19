@@ -5,6 +5,7 @@ from app.creation.plan_contracts import (
     creation_plan_payload,
 )
 from app.creation.plan_records import CreationPlanRecordStore
+from app.creation.presenter_selection import PresenterSelectionUseCase
 from app.creation.plan_confirmation_use_case import CreationPlanConfirmationUseCase
 from app.creation.knowledge_adoption_use_case import TaskKnowledgeAdoptionUseCase
 from app.creation.narration_voice_selection import NarrationVoiceSelectionTransaction
@@ -389,11 +390,6 @@ class ProductionRepository:
             read_asset=lambda workspace_id, asset_id: self._material_assets.get_asset(workspace_id, asset_id),
         )
         self.reference_video_studies = ReferenceVideoStudyStore(self._connect)
-        self.material_intake = MaterialIntakeUseCase(
-            self._material_assets, self._material_source_files,
-            connection_factory=lambda: self._connect(),
-            upsert_discovered_asset=lambda workspace_id, path: self._upsert_discovered_asset(workspace_id, path),
-        )
         self.material_search = MaterialSegmentSearchUseCase(
             list_assets=self._material_assets.list_assets,
             segment_eligible=material_segment_eligible,
@@ -406,6 +402,11 @@ class ProductionRepository:
         )
         self._workspace_media_references = WorkspaceMediaReferenceAccess(
             self._connect, self._material_source_files, self._material_assets)
+        self.material_intake = MaterialIntakeUseCase(
+            self._material_assets, self._material_source_files,
+            connection_factory=lambda: self._connect(), workspace_references=self._workspace_media_references,
+            upsert_discovered_asset=lambda workspace_id, path: self._upsert_discovered_asset(workspace_id, path),
+        )
         self._material_analysis = MaterialAnalysisUseCase(
             self._material_assets, self._material_source_files, connection_factory=self._connect,
             duration_reader=duration_reader or probe_duration,
@@ -555,6 +556,7 @@ class ProductionRepository:
             append_event=self.execution_records.append_task_event)
         self.plan_records = CreationPlanRecordStore(self._connect,
             read_asset=self._material_assets._asset_payload_row_by_id, decode_asset=self._asset_from_payload)
+        self.presenter_selection = PresenterSelectionUseCase(self, connection_factory=self._connect)
         self.plan_confirmation = CreationPlanConfirmationUseCase(self._connect,
             records=self.plan_records, read_task=self.task_records.get_creation_task, execution_records=self.execution_records)
         self.narration_voice_selection = NarrationVoiceSelectionTransaction(self._connect,

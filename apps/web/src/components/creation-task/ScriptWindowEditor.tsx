@@ -48,6 +48,159 @@ function SectionFields({ section, ordinal, disabled, sources, onChange }: {
     </article>;
 }
 
+type SubtitleImportContinuation = {
+    taskId: string;
+    scriptId: string;
+    updatedAt: string;
+    totalCount: number;
+};
+
+function ScriptSubtitleImport({ disabled, sources, sections, continuation, onAppend }: {
+    disabled: boolean;
+    sources: Source[];
+    sections: CreationTaskScriptSection[];
+    continuation?: SubtitleImportContinuation;
+    onAppend: (sections: CreationTaskScriptSection[]) => void;
+}) {
+    const [text, setText] = useState("");
+    const [sourceId, setSourceId] = useState("");
+    const [visualPrompt, setVisualPrompt] = useState("");
+    const [readingFile, setReadingFile] = useState(false);
+    const [checkingPrefix, setCheckingPrefix] = useState(false);
+    const currentSections = useRef(sections);
+    currentSections.current = sections;
+    const [notice, setNotice] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const used = sections.filter(section =>
+        section.title || section.content || section.visual_prompt || section.evidence_reference_ids.length);
+    const available = WINDOW_LIMIT - used.length;
+
+    async function importText() {
+        setNotice(null);
+        setError(null);
+        const blocks = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim().split(/\n[ \t]*\n+/);
+        const cues: { number: number; content: string }[] = [];
+        for (const block of blocks) {
+            const [number, timing, ...lines] = block.split("\n");
+            const content = lines.join("\n").trim();
+            if (!/^\d+$/.test(number?.trim()) ||
+                !/^\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+\d{2}:\d{2}:\d{2},\d{3}$/.test(timing?.trim()) || !content) {
+                setError("请提供带编号、起止时间和正文的 SRT 段落。");
+                return;
+            }
+            const cueNumber = Number(number.trim());
+            if (!Number.isSafeInteger(cueNumber) || cueNumber <= 0 ||
+                (cues.length > 0 && cueNumber !== cues[cues.length - 1].number + 1)) {
+                setError("请使用编号连续的 SRT 字幕。");
+                return;
+            }
+            if (content.length > 4000) {
+                setError(`字幕第 ${cueNumber} 段正文超过 4000 字，请拆分后再导入。`);
+                return;
+            }
+            cues.push({ number: cueNumber, content });
+        }
+
+        const storedCount = continuation?.totalCount ?? 0;
+        const fromBeginning = cues[0].number === 1;
+        if (!fromBeginning && cues[0].number !== storedCount + 1) {
+            setError(`请选择完整 SRT，或选择从第 ${storedCount + 1} 句开始的续传批次。`);
+            return;
+        }
+        const prefixLength = fromBeginning ? storedCount : 0;
+        const offset = prefixLength + used.length;
+        if (offset >= cues.length) {
+            setError("文件没有剩余正文可填入。");
+            return;
+        }
+        setCheckingPrefix(true);
+        try {
+            if (continuation && prefixLength) {
+                let after = 0;
+                while (after < prefixLength) {
+                    const page = await getCreationTaskScriptSections(continuation.taskId, continuation.scriptId, {
+                        after_ordinal: after, expected_updated_at: continuation.updatedAt,
+                    });
+                    if (!page.items.length || page.items.some(item => item.section.content !== cues[item.ordinal - 1]?.content)) {
+                        throw new Error("这个 SRT 与已存文案的前段不一致。请检查所选文件，已存文案保留。");
+                    }
+                    after = page.items[page.items.length - 1].ordinal;
+                }
+            }
+            if (currentSections.current !== sections ||
+                used.some((section, index) => section.content !== cues[prefixLength + index]?.content)) {
+                throw new Error("本窗已填写正文与所选 SRT 不一致，请先保存或撤回本窗修改。");
+            }
+            const batch = cues.slice(offset, offset + available);
+            const additions = batch.map(cue => ({ ...newSection(), title: `第 ${cue.number} 句`,
+                content: cue.content, visual_prompt: visualPrompt.trim(), evidence_reference_ids: [sourceId] }));
+            onAppend([...used, ...additions]);
+            const remaining = cues.length - offset - batch.length;
+            setNotice(`已填入第 ${batch[0].number}–${batch[batch.length - 1].number} 句。${remaining
+                ? `还有 ${remaining} 句，保存后可选择同一文件继续导入。`
+                : "检查后保存当前窗口。"}`);
+        } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "未能核对已保存的文案前段。");
+        } finally {
+            setCheckingPrefix(false);
+        }
+    }
+
+    async function readFile(file: File) {
+        setError(null);
+        setNotice(null);
+        if (!file.name.toLowerCase().endsWith(".srt")) {
+            setError("请选择扩展名为 .srt 的字幕文件。");
+            return;
+        }
+        if (file.size > 400000) {
+            setError("单次请选择不超过 400 KB 的 SRT 文件。");
+            return;
+        }
+        setReadingFile(true);
+        try {
+            setText(await file.text());
+            setNotice(`已读取 ${file.name}。`);
+        } catch {
+            setError("未能读取这个 SRT 文件。");
+        } finally {
+            setReadingFile(false);
+        }
+    }
+
+    return <details className={styles.requirementDetails}>
+        <summary>批量导入 SRT 文案</summary>
+        <p>每句填入一段正文，本窗可填 {available} 段。可选择完整 SRT，保存后从同一文件继续。</p>
+        <label className={styles.field}><span>选择 SRT 文件</span>
+            <input type="file" accept=".srt" disabled={disabled || readingFile || checkingPrefix} onChange={event => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                if (file) void readFile(file);
+            }}/></label>
+        <label className={styles.field}><span>或粘贴 SRT 正文</span>
+            <textarea value={text} disabled={disabled || readingFile || checkingPrefix} onChange={event => setText(event.target.value)}/></label>
+        {sources.length ? <label className={styles.field}><span>本批段落引用</span>
+            <select value={sourceId} disabled={disabled} onChange={event => setSourceId(event.target.value)}>
+                <option value="">选择本批引用的资料</option>
+                {sources.map(source => <option key={source.reference_id} value={source.reference_id}>{source.title}</option>)}
+            </select></label> : null}
+        <label className={styles.field}><span>本批画面建议</span>
+            <textarea value={visualPrompt} maxLength={1000} disabled={disabled}
+                onChange={event => setVisualPrompt(event.target.value)}/></label>
+        <Button variant="outline" type="button"
+            disabled={disabled || readingFile || checkingPrefix || available === 0 || !text.trim() || !sourceId || !visualPrompt.trim()}
+            onClick={() => void importText()}>{checkingPrefix ? "核对已保存的前段…" : "填入文案段落"}</Button>
+        {used.some(section => !section.visual_prompt.trim()) ? <Button variant="outline" type="button"
+            disabled={disabled || !visualPrompt.trim()} onClick={() => {
+                onAppend(sections.map(section => section.content.trim() && !section.visual_prompt.trim()
+                    ? { ...section, visual_prompt: visualPrompt.trim() } : section));
+                setNotice("已补充未填写的画面建议。");
+            }}>补充未填画面建议</Button> : null}
+        {notice ? <p role="status">{notice}</p> : null}
+        {error ? <p role="alert">{error}</p> : null}
+    </details>;
+}
+
 type WindowEditorProps = {
     taskId: string; script: CreationTaskScript; onSaved: (receipt: CreationTaskScriptWindowSaved | CreationTaskScriptConfirmed) => Promise<void>;
 };
@@ -213,6 +366,12 @@ function WindowEditorBody({ taskId, script, onSaved }: WindowEditorProps) {
         {dirty && !recovery.pending ? <><p>本页有未保存修改，保存或撤回后可翻页。</p><Button disabled={reading || locked || !page || conflict || !validSections(sections)} onClick={save}>保存本页修改</Button><Button variant="outline" disabled={locked} onClick={() => setForm(current => ({ ...current, edit: null }))}>撤回本页未保存修改</Button></> : null}
         {form.append ? <section aria-label="新增文案窗口">
             <h3>{form.append.anchor ? "在所选段落后插入" : "追加到文案末尾"}</h3>
+            <ScriptSubtitleImport disabled={locked} sources={sources} sections={form.append.sections}
+                continuation={form.append.anchor === null && page ? {
+                    taskId, scriptId: script.id, updatedAt: form.append.version, totalCount: page.total_count,
+                } : undefined}
+                onAppend={sections => setForm(current => current.append
+                    ? ({ ...current, append: { ...current.append, sections } }) : current)}/>
             {form.append.sections.map((section, index) => <SectionFields key={section.id} section={section} ordinal={`新增 ${index + 1}`} disabled={locked} sources={sources} onChange={updated => setForm(current => ({ ...current, append: { ...current.append!, sections: current.append!.sections.map(item => item.id === updated.id ? updated : item) } }))}/>)}
             <Button variant="outline" disabled={locked || form.append.sections.length >= WINDOW_LIMIT} onClick={() => setForm(current => ({ ...current, append: { ...current.append!, sections: [...current.append!.sections, newSection()] } }))}>再加一段</Button>
             <p>本次最多保存 {WINDOW_LIMIT} 段，保存后可继续追加，不是整稿段数上限。</p>
@@ -270,6 +429,8 @@ function WindowStartBody({ taskId, onSaved }: WindowStartProps) {
         <p>刷新仅保留原请求定位；尚未提交的修改不会随刷新恢复。原请求输入需从服务端回执读取。</p>
         {error ? <p role="alert">{error}</p> : null}{sourceError ? <p role="alert">{sourceError}</p> : null}
         <label className={styles.field}><span>文案标题</span><input aria-label="新文案标题" value={form.title} disabled={locked} onChange={event => setForm(current => ({ ...current, title: event.target.value }))}/></label>
+        <ScriptSubtitleImport disabled={locked} sources={sources} sections={form.sections}
+            onAppend={sections => setForm(current => ({ ...current, sections }))}/>
         {form.sections.map((section, index) => <SectionFields key={section.id} section={section} ordinal={index + 1} disabled={locked} sources={sources} onChange={updated => setForm(current => ({ ...current, sections: current.sections.map(item => item.id === updated.id ? updated : item) }))}/>)}
         <Button variant="outline" disabled={locked || form.sections.length >= WINDOW_LIMIT} onClick={() => setForm(current => ({ ...current, sections: [...current.sections, newSection()] }))}>再加一段</Button>
         <p>本次最多保存 {WINDOW_LIMIT} 段，保存后可继续追加。</p>

@@ -38,12 +38,24 @@ export function ScriptGenerationStatus({ requestId, receipt, working, stopping, 
         </> : null}
     </div>;
 }
-export function ConfirmedScriptView({ script }: {
+type PresenterSelectionActions = {
+    currentSectionId: string | null;
+    busy: boolean;
+    onSelect: (sectionId: string, scriptUpdatedAt: string) => void;
+};
+
+export function ConfirmedScriptView({ script, presenterSelection }: {
     script: CreationTaskScript;
+    presenterSelection?: PresenterSelectionActions;
 }) {
-    return <ScriptSectionReader key={`${script.task_id}:${script.id}:${script.updated_at}`} script={script}/>;
+    return <ScriptSectionReader key={`${script.task_id}:${script.id}:${script.updated_at}`}
+        script={script} presenterSelection={presenterSelection}/>;
 }
-function ScriptSectionReader({ script, expectedVersion }: { script: { task_id: string; id: string; title?: string; selection_status?: CreationTaskScript["selection_status"] }; expectedVersion?: string }) {
+function ScriptSectionReader({ script, expectedVersion, presenterSelection }: {
+    script: { task_id: string; id: string; title?: string; selection_status?: CreationTaskScript["selection_status"] };
+    expectedVersion?: string;
+    presenterSelection?: PresenterSelectionActions;
+}) {
     const [cursors, setCursors] = useState([0]);
     const [reload, setReload] = useState(0);
     const revision = useRef<string | undefined>(expectedVersion);
@@ -79,7 +91,14 @@ function ScriptSectionReader({ script, expectedVersion }: { script: { task_id: s
         {read.status === "failed" ? <><p role="alert">{read.message}</p><Button variant="outline" onClick={restart}>重新读取文案</Button></> : null}
         {page ? <>
             <p>共 {page.total_count} 段{page.items.length ? ` · 第 ${page.items[0].ordinal}–${page.items[page.items.length - 1].ordinal} 段` : ""}</p>
-            <div className={styles.scriptSections}>{page.items.map(({ ordinal, section }) => <article key={section.id}><header><span>第 {ordinal} 段</span><strong>{section.title}</strong></header><p className={styles.scriptCopy}>{section.content}</p><p><strong>画面建议：</strong>{section.visual_prompt}</p><details className={styles.traceDetails}><summary>来源证据</summary><p>{section.evidence_reference_ids.join("、") || "未单独标注"}</p></details></article>)}</div>
+            <div className={styles.scriptSections}>{page.items.map(({ ordinal, section }) => <article key={section.id}><header><span>第 {ordinal} 段</span><strong>{section.title}</strong></header><p className={styles.scriptCopy}>{section.content}</p><p><strong>画面建议：</strong>{section.visual_prompt}</p>
+                {presenterSelection && page.selection_status === "confirmed" ? (
+                    presenterSelection.currentSectionId === section.id
+                        ? <p role="status">已指定第 {ordinal} 段出镜</p>
+                        : <Button variant="outline" type="button" disabled={presenterSelection.busy}
+                            onClick={() => presenterSelection.onSelect(section.id, page.updated_at)}>仅让第 {ordinal} 段出镜</Button>
+                ) : null}
+                <details className={styles.traceDetails}><summary>来源证据</summary><p>{section.evidence_reference_ids.join("、") || "未单独标注"}</p></details></article>)}</div>
             {page.total_count > page.items.length ? <div><Button variant="outline" disabled={cursors.length === 1} onClick={() => setCursors((current) => current.slice(0, -1))}>上一页文案</Button><Button variant="outline" disabled={page.next_after_ordinal === null} onClick={() => setCursors((current) => [...current, page.next_after_ordinal!])}>下一页文案</Button></div> : null}
         </> : null}
     </section>;

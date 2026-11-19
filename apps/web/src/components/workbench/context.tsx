@@ -64,7 +64,9 @@ export function workspacePageId(pathname: string, search: Pick<URLSearchParams, 
   if (pathname.startsWith("/tasks/")) return pathname;
   if (isCreationDraftRoute(pathname, search)) {
     const id = search.get("draft_id");
-    return id ? `${NEW_VIDEO_HREF}&draft_id=${encodeURIComponent(id)}` : NEW_VIDEO_HREF;
+    const requestId = search.get("request_id");
+    if (id) return `${NEW_VIDEO_HREF}&draft_id=${encodeURIComponent(id)}`;
+    return requestId ? `${NEW_VIDEO_HREF}&request_id=${encodeURIComponent(requestId)}` : NEW_VIDEO_HREF;
   }
   if (pathname === "/production" && search.get("view") === "automations") return "/production?view=automations";
   return pathname;

@@ -1025,14 +1025,8 @@ class MontageRenderer:
             remaining_bytes = temporary_disk_bytes - sum(path.stat().st_size for path in paths)
             if remaining_bytes <= 0:
                 raise ValueError("成片中间文件已耗尽同一许可磁盘上限")
-            command = ["ffmpeg", "-v", "error", "-y", "-protocol_whitelist", "file,pipe",
-                "-filter_threads", str(threads), "-filter_complex_threads", str(threads),
-                "-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{clip.source_end_seconds-clip.source_start_seconds:.3f}",
-                "-threads", str(threads), "-i", str(source), "-vf", clip_video_filters(clip, width=width, height=height),
-                "-an", "-c:v", "ffv1", "-level", "3", "-coder", "0", "-context", "0",
-                "-g", "1", "-slices", "4", "-slicecrc", "1", "-pix_fmt", "yuv420p",
-                "-frames:v", str(frames), "-threads:v", str(threads), "-fs", str(remaining_bytes),
-                "-f", "nut", str(target)]
+            command = serial_picture_command(clip, source, target, size=(width, height),
+                frames=frames, threads=threads, max_bytes=remaining_bytes)
             _run_granted_media_command(scheduler, grant, command, timeout_seconds=None, cancel_event=cancel_event,
                 deadline_monotonic=deadline_monotonic, output_paths=(*paths, target), max_output_file_bytes=temporary_disk_bytes)
             self._temporary_render_paths(output_path, temporary_disk_bytes)
@@ -1887,6 +1881,18 @@ def _srt_time(seconds: float) -> str:
     minutes, remainder = divmod(remainder, 60_000)
     secs, millis = divmod(remainder, 1000)
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def serial_picture_command(clip, source: Path, target: Path, *, size, frames, threads, max_bytes):
+    width, height = size
+    return ["ffmpeg", "-v", "error", "-y", "-protocol_whitelist", "file,pipe",
+        "-filter_threads", str(threads), "-filter_complex_threads", str(threads),
+        "-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{clip.source_end_seconds-clip.source_start_seconds:.3f}",
+        "-threads", str(threads), "-i", str(source), "-vf", clip_video_filters(clip, width=width, height=height),
+        "-an", "-c:v", "ffv1", "-level", "3", "-coder", "0", "-context", "0",
+        "-g", "1", "-slices", "4", "-slicecrc", "1", "-pix_fmt", "yuv420p",
+        "-frames:v", str(frames), "-threads:v", str(threads), "-fs", str(max_bytes),
+        "-f", "nut", str(target)]
 
 
 def _run_granted_media_command(scheduler: DeviceScheduler, grant: Grant, command: list[str], *,

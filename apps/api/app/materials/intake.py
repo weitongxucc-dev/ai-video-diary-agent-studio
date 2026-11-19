@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -11,15 +12,18 @@ from app.materials.analysis import _material_analysis_public_error
 from app.materials.assets import MaterialAssetStore
 from app.materials.contracts import MaterialAsset, material_media_type_for
 from app.materials.source_files import MaterialSourceFileAccess
+from app.materials.workspace_references import WorkspaceMediaReferenceAccess
 
 
 class MaterialIntakeUseCase:
     def __init__(
         self, assets: MaterialAssetStore, source_files: MaterialSourceFileAccess, *,
         connection_factory: Callable[[], sqlite3.Connection],
+        workspace_references: WorkspaceMediaReferenceAccess,
         upsert_discovered_asset: Callable[[str, Path], MaterialAsset],
     ) -> None:
         self._connect = connection_factory
+        self.workspace_references = workspace_references
         self.assets = assets
         self.source_files = source_files
         self._upsert_discovered_asset = upsert_discovered_asset
@@ -27,6 +31,41 @@ class MaterialIntakeUseCase:
     @property
     def video_library_path(self) -> Path:
         return self.source_files.video_library_path
+
+    def receive_desktop_image(self, workspace_id, *, relative_path, expected_revision, owner_user_id):
+        from PIL import Image
+
+        if not owner_user_id:
+            raise ValueError("导入图片需要当前工作区成员身份")
+        relative = Path(relative_path)
+        if relative.name != relative_path:
+            raise ValueError("请选择素材目录内刚复制的图片文件")
+        raw = self.video_library_path / relative
+        if raw.is_symlink():
+            raise ValueError("不能确认符号链接素材")
+        path = self.source_files.validated_library_file(str(raw))
+        stat = path.stat()
+        if self.source_files.material_copy_revision(stat) != expected_revision:
+            raise ValueError("图片文件修订已变化，请重新导入")
+        try:
+            with Image.open(path) as image:
+                if image.format != {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG"}.get(path.suffix.lower()):
+                    raise ValueError("图片内容与文件格式不符")
+                image.verify()
+        except (OSError, SyntaxError, Image.DecompressionBombError) as exc:
+            raise ValueError("无法读取所选图片，请重新选择完整的 JPEG 或 PNG 文件") from exc
+        asset_id = "asset_" + hashlib.sha256(f"{workspace_id}\0{path}".encode()).hexdigest()[:16]
+        asset = MaterialAsset(id=asset_id, workspace_id=workspace_id, owner_user_id=owner_user_id,
+            visibility="private", file_name=path.name, path=str(path), size_bytes=stat.st_size,
+            modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc), media_type="image",
+            analysis_status="blocked", analysis_message="图片已入库，可用作人物参考。")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self.source_files.confirm_material_copy_complete(workspace_id, relative_path=relative_path,
+                expected_revision=expected_revision, confirmation_source="app_import",
+                verified_owner_user_id=owner_user_id, connection=conn)
+            saved = self.assets.save_received_asset(conn, asset, workspace_id=workspace_id, owner_user_id=owner_user_id)
+            self.workspace_references.claim_asset_reference(conn, workspace_id, saved.id)
 
     def scan_library(self, workspace_id: str) -> list[MaterialAsset]:
         if (not self.source_files.material_library_available() or self.source_files.get_material_ingestion_binding()
