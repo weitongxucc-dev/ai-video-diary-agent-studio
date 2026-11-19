@@ -110,4 +110,3 @@ def test_overflow_keeps_the_final_wav_and_reuses_the_original_job(tmp_path, monk
     assert [case.scheduler._get(item[0]) for item in case.generated] == original_requests
     assert len(case.execution.jobs("local", case.task_id)) == 1
     assert client.put(path, json=command).json() == saved.json()
-
