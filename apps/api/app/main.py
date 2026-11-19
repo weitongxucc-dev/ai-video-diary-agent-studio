@@ -5559,11 +5559,13 @@ def _creation_execution_control():
 
 
 def _new_creation_execution(repository: ProductionRepository) -> CreationExecution:
+    from app.creation.task_budget_use_case import TaskBudgetUseCase
     return CreationExecution(
         repository,
         run_montage_plan=_create_creation_task_montage_plan_for_workspace,
         run_render=_render_creation_task_montage_for_workspace,
         render_is_valid=_creation_render_is_valid,
+        budget_policy_for=TaskBudgetUseCase(repository).local_start_policy,
     )
 
 

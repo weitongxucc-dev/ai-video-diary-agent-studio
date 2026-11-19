@@ -10,6 +10,10 @@ class TaskBudgetUseCase:
         self.scope_for = scope_for
 
     def local_start_policy(self, workspace_id, task_id, actor, input_digest, *, operation):
+        if operation == 'creation' and self.scope_for is None:
+            from app.creation.execution_budget_scope import ExecutionBudgetScopes
+            reference = ExecutionBudgetScopes(self.repository).local_start_reference(workspace_id, task_id, actor)
+            return {'policy_kind': 'scope', **reference} if reference is not None else None
         if actor is None:
             raise PermissionError('本地目标执行策略需要可信发起成员')
         self.require_actor(workspace_id, task_id, actor)
