@@ -12,8 +12,9 @@ type Language = "zh" | "en";
 type Voices = Partial<Record<Language, VoiceChoice>>;
 const labels = { zh: "中文版声音", en: "英文版声音" };
 
-export function BilingualDeliveryControls({ pending, onPrepare }: {
+export function BilingualDeliveryControls({ pending, requestVoice, onPrepare }: {
   pending: boolean;
+  requestVoice?: VoiceChoice;
   onPrepare: (voices: Voices) => void;
 }) {
   const [profiles, setProfiles] = useState<VoiceProfile[]>([]);
@@ -48,6 +49,8 @@ export function BilingualDeliveryControls({ pending, onPrepare }: {
       {(["zh", "en"] as const).map(language => {
           const options = profiles.filter(voice => voice.language === language || voice.language === "zh-en");
           const selected = selection[language];
+          const effective = selected ?? requestVoice;
+          const auditionVoice = effective && options.find(voice => voice.id === effective.profile_id && voice.version === effective.version);
           const selectedKey = selected ? JSON.stringify([selected.profile_id, selected.version]) : "";
           return <div className={ui.section} key={language}><label>{labels[language]}
             <AppSelect aria-label={labels[language]} value={selectedKey} disabled={pending || loading} onValueChange={key => {
@@ -62,8 +65,8 @@ export function BilingualDeliveryControls({ pending, onPrepare }: {
               })}
             </AppSelect>
           </label>
-            {selected && options.some(voice => voice.id === selected.profile_id && voice.version === selected.version) ?
-              <DeliveryVoiceSample key={selectedKey} language={language} profileId={selected.profile_id} version={selected.version} /> : null}
+            {auditionVoice ?
+              <DeliveryVoiceSample key={JSON.stringify([auditionVoice.id, auditionVoice.version])} language={language} profileId={auditionVoice.id} version={auditionVoice.version} /> : null}
           </div>;
         })}
       <button type="button" className={ui.button} disabled={loading || pending} onClick={() => setRead(value => value + 1)}>刷新声音列表</button>

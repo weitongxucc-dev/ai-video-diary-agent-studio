@@ -368,6 +368,23 @@ it("does not issue a prepare request or apply a late voice PATCH after the membe
   expect(screen.getByText("另一成员的目标")).toBeInTheDocument();
 });
 
+it("offers both auditions for the saved bilingual voice without changing either delivery", async () => {
+  const user = userEvent.setup();
+  const voice = { ...availableVoice, language: "zh-en" };
+  const request = header({
+    target_count: 2, output_relation: "variants", status: "awaiting_plan",
+    requirements: { ...header().requirements, selected_voice: { profile_id: voice.id, version: voice.version } },
+  });
+  api.get.mockResolvedValue(request);
+  voiceApi.list.mockResolvedValue({ items: [voice], total_count: 1 });
+  render(<CreationRequestPanel requestId={request.id} scopeKey="member-a" isCurrentScope={() => true} />);
+  await user.click(await screen.findByText("分别指定中英文声音"));
+  expect(await screen.findByRole("group", { name: "中文样句试听" })).toBeInTheDocument();
+  expect(await screen.findByRole("group", { name: "英文样句试听" })).toBeInTheDocument();
+  expect(api.update).not.toHaveBeenCalled();
+  expect(api.prepare).not.toHaveBeenCalled();
+});
+
 it("does not offer voice requirement mutations after any task was confirmed", async () => {
   api.get.mockResolvedValue({ ...proposed(), confirmed_count: 1 });
   render(<CreationRequestPanel requestId="request-a" scopeKey="member-a" isCurrentScope={() => true} />);
