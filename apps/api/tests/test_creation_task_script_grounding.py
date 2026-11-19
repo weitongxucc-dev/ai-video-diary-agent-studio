@@ -3172,3 +3172,35 @@ def generate_current_http_draft(state, monkeypatch, calls, *, task_id="task"):
     assert replay.status_code == 202 and replay.json() == saved
     assert len(calls) == count
     return state.repository.script_records.get_creation_task_script("local", saved["script_id"])
+
+
+@pytest.mark.parametrize('mode,reason', [('valid', None), ('invented_quote', 'source_quote'), ('truncated', 'length')])
+def test_local_mlx_schema_report_validates_citations_and_finish(mode, reason):
+    from app.topics import CreationTaskGeneratedScript, CreationTaskGeneratedScriptSection, CreationTaskScriptReviewWindow
+    from app.model_runtime import QWEN3_VL_4B_4BIT
+
+    request_input = replace(inputs(), review_window=CreationTaskScriptReviewWindow(
+        'script', 'v1', ('a',), 1, finalizing=True))
+    candidate = CreationTaskGeneratedScript('素材', 'zh-CN', (
+        CreationTaskGeneratedScriptSection('用途', FACT, '计划展示素材。', ('knowledge:fixture:v1',)),))
+
+    def respond(request):
+        payload = json.loads(request.content)
+        assert 'tools' not in payload and 'tool_choice' not in payload
+        assert payload['response_format']['type'] == 'json_schema'
+        assert payload['response_format']['json_schema']['strict'] is True
+        submitted = json.loads(payload['messages'][1]['content'])
+        report = bound_review(reviewed(submitted), submitted)
+        if mode == 'invented_quote':
+            report['sections'][0]['supports'][0]['source_quote_id'] = 'missing'
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'length' if mode == 'truncated' else 'stop',
+            'message': {'content': json.dumps(report)}}]})
+
+    generator = OpenAICompatibleCreationTaskScriptGenerator('http://127.0.0.1/v1',
+        '/models/' + QWEN3_VL_4B_4BIT.id, transport=httpx.MockTransport(respond))
+    if reason is None:
+        generator.check_draft(request_input, candidate)
+    else:
+        with pytest.raises(CreationTaskScriptGenerationError) as rejected_report:
+            generator.check_draft(request_input, candidate)
+        assert rejected_report.value.reason_code == reason

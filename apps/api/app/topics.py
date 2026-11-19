@@ -17,6 +17,7 @@ from app.config import Settings, structured_completion_options
 from app.content_templates import ContentTemplate
 from app.external_sources import ExternalSourceResponseError, HtmlPageSourceClient
 from app.hermes_radar import HermesRadarSourceClient
+from app.model_runtime import QWEN3_VL_4B_4BIT
 from app.models import FeedbackEvent, SourceRef, TopicCandidate
 from app.preference_memory import preference_memory_payload
 from app.product_hunt import (
@@ -615,6 +616,17 @@ def _review_quote_spans(text, anchors=(), *, separate_sentences=False):
         yield start, previous
 
 
+def _mlx_report_schema(value):
+    # The local grammar compiler does not implement contains or uniqueItems.
+    # The shared report validator checks both constraints against the submitted evidence.
+    if isinstance(value, list):
+        return [_mlx_report_schema(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _mlx_report_schema(item) for key, item in value.items()
+                if key not in {"contains", "uniqueItems"}}
+    return value
+
+
 def _unique_verbatim_span(text, quote):
     quote = quote.strip()
     if not quote or not any(char.isalnum() for char in quote):
@@ -1172,13 +1184,19 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                              "不得用当前窗口通过声称未送审正文也通过；上下文不足时不得编造事实支持。")
         local_final_review = (input.review_window is not None and input.review_window.finalizing
             and review_section_count == 1 and urlsplit(self._base_url).hostname in {"localhost", "127.0.0.1", "::1"})
+        local_json_report = local_final_review and self._model.rsplit("/", 1)[-1] == QWEN3_VL_4B_4BIT.id
+        report_instruction = (
+            "只在回复正文中返回一个符合 schema 的 JSON 核查报告，顶层字段为 sections。"
+            "不调用工具，不使用 Markdown。"
+            if local_json_report else
+            "仅调用一次submit_script_review报告工具，在arguments中提交sections数组。"
+            "这是无副作用的检查报告，不执行任何动作，不在content写报告，不额外调用工具。"
+        )
         payload = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": (
-                    review_rules +
-                    "仅调用一次submit_script_review报告工具，在arguments中提交sections数组。"
-                    "这是无副作用的检查报告，不执行任何动作，不在content写报告，不额外调用工具。"
+                    review_rules + report_instruction +
                     f"本次送审稿有{review_section_count}段，报告sections必须恰好返回{review_section_count}项，index为1至{review_section_count}且唯一。"
                     "完整覆盖输入全部段落，index从1开始且唯一。无问题且有事实的段落返回{index,supports:非空数组}，可省略issues或返回issues:[]；"
                     "有事实的段落返回具体事实supports或unsupported_fact，不得借总标题的一条支持替代正文事实核查。"
@@ -1225,14 +1243,18 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                     "sources": source_inputs, "script": {"title": title_pieces, "language": script.language, "sections": sections},
                 }, ensure_ascii=False)},
             ],
-            "tools": [{"type": "function", "function": {"name": "submit_script_review",
-                "description": "提交本次逐段核查报告；不改写、保存、确认文案或执行制作。",
-                "parameters": report_schema}}],
-            "tool_choice": "required", "temperature": 0,
-            "max_tokens": 512 if local_final_review else 8192,
-            **structured_completion_options(self._model, forced_tools=True),
+            "temperature": 0, "max_tokens": 512 if local_final_review else 8192,
+            **structured_completion_options(self._model, forced_tools=not local_json_report),
             **({"thinking": {"type": "disabled"}} if self._model == "MiniMax-M3" else {}),
         }
+        if local_json_report:
+            payload["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "submit_script_review", "strict": True, "schema": _mlx_report_schema(report_schema)}}
+        else:
+            payload["tools"] = [{"type": "function", "function": {"name": "submit_script_review",
+                "description": "提交本次逐段核查报告；不改写、保存、确认文案或执行制作。",
+                "parameters": report_schema}}]
+            payload["tool_choice"] = "required"
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
 
         async def post_review(request_payload):
@@ -1303,19 +1325,24 @@ class OpenAICompatibleCreationTaskScriptGenerator:
             raise self._review_failure("envelope", diagnostics) from None
         if finish == "length":
             raise self._review_failure("length", diagnostics)
-        if finish != "tool_calls":
-            raise self._review_failure("tool_finish", diagnostics)
-        calls = message.get("tool_calls")
-        if not isinstance(calls, list) or len(calls) != 1:
-            raise self._review_failure("tool_call_count", diagnostics)
-        call = calls[0]
-        if not isinstance(call, dict) or call.get("type") != "function" or not isinstance(call.get("function"), dict):
-            raise self._review_failure("tool_type", diagnostics)
-        function = call["function"]
-        if function.get("name") != "submit_script_review":
-            raise self._review_failure("tool_name", diagnostics)
-        arguments = function.get("arguments")
-        diagnostics["tool_arguments_length"] = len(arguments) if isinstance(arguments, str) else None
+        if local_json_report:
+            if finish != "stop" or message.get("tool_calls") or message.get("refusal"):
+                raise self._review_failure("json_finish", diagnostics)
+            arguments = message.get("content")
+        else:
+            if finish != "tool_calls":
+                raise self._review_failure("tool_finish", diagnostics)
+            calls = message.get("tool_calls")
+            if not isinstance(calls, list) or len(calls) != 1:
+                raise self._review_failure("tool_call_count", diagnostics)
+            call = calls[0]
+            if not isinstance(call, dict) or call.get("type") != "function" or not isinstance(call.get("function"), dict):
+                raise self._review_failure("tool_type", diagnostics)
+            function = call["function"]
+            if function.get("name") != "submit_script_review":
+                raise self._review_failure("tool_name", diagnostics)
+            arguments = function.get("arguments")
+            diagnostics["tool_arguments_length"] = len(arguments) if isinstance(arguments, str) else None
 
         class ReviewJsonError(ValueError):
             pass
@@ -1559,6 +1586,7 @@ class OpenAICompatibleCreationTaskScriptGenerator:
         section_index = section_index if section else None
         issue = {
             "envelope": "响应结构无法解析", "length": "响应在完整报告前已截断",
+            "json_finish": "本机文字服务未完成结构化核查报告",
             "tool_finish": "未以核查报告工具完成响应", "tool_call_count": "核查报告工具调用数量不正确",
             "tool_type": "核查报告工具类型不正确", "tool_name": "核查报告工具名称不正确",
             "tool_arguments": "工具参数不是有效JSON", "tool_arguments_shape": "工具参数不是报告对象",
