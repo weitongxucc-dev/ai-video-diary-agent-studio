@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { AnchorHTMLAttributes } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistantConversation, CreationTask } from "@/lib/types";
@@ -35,10 +35,21 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+function emptyConversation() {
+  const history = screen.getByRole("region", { name: "持久对话记录" });
+  const empty = within(history).getByLabelText("空对话");
+  expect(empty).toBeVisible();
+  expect(empty).toHaveTextContent("输入制作目标或编辑要求。");
+  expect(within(history).queryByRole("log")).not.toBeInTheDocument();
+  expect(within(history).queryByText("执行记录")).not.toBeInTheDocument();
+  return empty;
+}
+
 describe("assistant empty conversation entry context", () => {
   it.each(["/", "/settings", "/profiles", "/members", "/knowledge", "/sources", "/library", "/templates", "/history", "/health", "/production", "/unknown"])("keeps a concise empty conversation on %s without navigation or business actions", (pathname) => {
     render(<HomeCommandComposer pageContext={{ pathname }} />);
-    expect(screen.getByRole("heading", { name: "想聊点什么？" })).toBeInTheDocument();
+    emptyConversation();
+    expect(screen.getByRole("textbox", { name: "制作要求" })).toHaveValue("");
     expect(screen.queryByRole("navigation", { name: "当前页面建议入口" })).not.toBeInTheDocument();
     expect(mocks.createNew).not.toHaveBeenCalled(); expect(mocks.beginTurn).not.toHaveBeenCalled();
     expect(mocks.sendWorkspace).not.toHaveBeenCalled(); expect(mocks.setDraftText).not.toHaveBeenCalled();
@@ -46,7 +57,10 @@ describe("assistant empty conversation entry context", () => {
 
   it.each(["topic", "script", "narration", "montage", "review"])("retains the task target at stage %s without inserting an unsolicited draft", (stage) => {
     render(<HomeCommandComposer task={{ id: "task-fixture", stage, name: "fixture" } as CreationTask} />);
-    expect(screen.getByRole("heading", { name: "想聊点什么？" })).toBeInTheDocument();
+    const empty = emptyConversation();
+    expect(within(empty).getByTitle("fixture")).toBeVisible();
+    expect(mocks.useConversation).toHaveBeenLastCalledWith({ scope_kind: "task", scope_id: "task-fixture" });
+    expect(screen.getByRole("textbox", { name: "任务对话要求" })).toHaveValue("");
     expect(mocks.setDraftText).not.toHaveBeenCalled(); expect(mocks.beginTurn).not.toHaveBeenCalled();
     expect(mocks.sendTask).not.toHaveBeenCalled();
   });
@@ -75,6 +89,10 @@ describe("assistant empty conversation entry context", () => {
     const view = render(<HomeCommandComposer pageContext={{ pathname: "/settings" }} />);
     view.rerender(<HomeCommandComposer pageContext={{ pathname: "/members" }} />);
     expect(screen.getByText("答复").tagName).toBe("STRONG");
+    expect(screen.queryByLabelText("空对话")).not.toBeInTheDocument();
+    const history = screen.getByRole("region", { name: "持久对话记录" });
+    const record = within(history).getByText("执行记录").closest("details")!;
+    expect(record).not.toHaveAttribute("open");
     expect(screen.queryByRole("navigation", { name: "当前页面建议入口" })).not.toBeInTheDocument();
     expect(screen.queryByText("点击建议只填入草稿，发送后才处理。")).not.toBeInTheDocument();
     expect(mocks.createNew).not.toHaveBeenCalled(); expect(mocks.setDraftText).not.toHaveBeenCalled();
