@@ -16,14 +16,13 @@ export function BilingualDeliveryControls({ pending, onPrepare }: {
   pending: boolean;
   onPrepare: (voices: Voices) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [profiles, setProfiles] = useState<VoiceProfile[]>([]);
   const [selection, setSelection] = useState<Voices>({});
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [read, setRead] = useState(0);
   useEffect(() => {
-    if (!open) return;
+    if (!read) return;
     let current = true;
     setError("");
     setLoading(true);
@@ -33,7 +32,7 @@ export function BilingualDeliveryControls({ pending, onPrepare }: {
       if (current) setError(mediaProfilesErrorMessage(cause));
     }).finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [open, read]);
+  }, [read]);
 
   const staleSelection = (["zh", "en"] as const).filter(language => {
     const selected = selection[language];
@@ -42,15 +41,16 @@ export function BilingualDeliveryControls({ pending, onPrepare }: {
   });
   const hasSelection = Boolean(selection.zh || selection.en);
   return <>
-    <details open={open} onToggle={event => setOpen(event.currentTarget.open)}>
+    <details onToggle={event => { if (event.currentTarget.open) setRead(current => current || 1); }}>
       <summary>分别指定中英文声音</summary>
-      {loading ? <p role="status">正在读取声音…</p> : error ? <p role="alert">{error}</p> :
-        (["zh", "en"] as const).map(language => {
+      {loading ? <p role="status">正在读取声音…</p> : null}
+      {error ? <p role="alert">{error}</p> : null}
+      {(["zh", "en"] as const).map(language => {
           const options = profiles.filter(voice => voice.language === language || voice.language === "zh-en");
           const selected = selection[language];
           const selectedKey = selected ? JSON.stringify([selected.profile_id, selected.version]) : "";
           return <div className={ui.section} key={language}><label>{labels[language]}
-            <AppSelect aria-label={labels[language]} value={selectedKey} disabled={pending} onValueChange={key => {
+            <AppSelect aria-label={labels[language]} value={selectedKey} disabled={pending || loading} onValueChange={key => {
               const voice = options.find(item => JSON.stringify([item.id, item.version]) === key);
               setSelection(current => ({ ...current, [language]: voice ? { profile_id: voice.id, version: voice.version } : undefined }));
             }}>
