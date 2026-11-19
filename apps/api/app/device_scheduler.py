@@ -1094,6 +1094,20 @@ class DeviceScheduler(DeviceRequestReadAccess):
         connection.execute("UPDATE device_work_requests SET state='done',checkpoint_ref=?,wait_reason=NULL,"
             "retry_not_before_utc=NULL,updated_at=? WHERE id=?",(checkpoint_ref,_stamp(self._now()),request.id))
 
+    def _observe_candidate(self, request: WorkRequest):
+        # These reads happen before preparing a permit. A competing SQLite writer
+        # can delay observation without invalidating the request or its inputs.
+        try:
+            with self._connect() as conn:
+                local_check = self.owners.capture_local(request, conn)
+                return self.owners.check_current(request, conn), local_check
+        except sqlite3.OperationalError as exc:
+            code = getattr(exc, "sqlite_errorcode", 0) & 0xff
+            if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise
+            logger.debug("Device request %s awaits an available SQLite read", request.id)
+            return None
+
     def pick_and_grant(self) -> Grant | None:
         if self._held_fd is not None:
             return None
@@ -1126,11 +1140,14 @@ class DeviceScheduler(DeviceRequestReadAccess):
                 conn.commit()
             observations = []
             for request in candidates:
-                with self._connect() as conn:
-                    local_check = self.owners.capture_local(request, conn)
-                    owner_state = self.owners.check_current(request, conn)
+                observation = self._observe_candidate(request)
+                if observation is None:
+                    continue
+                owner_state, local_check = observation
                 decision = self.resources.admit(request) if owner_state == "ready" else None
                 observations.append((request, owner_state, decision, self._now(), local_check))
+            if not observations:
+                return None
             now = self._now()
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -1163,9 +1180,10 @@ class DeviceScheduler(DeviceRequestReadAccess):
                 conn.commit()
             # Earlier candidates may have waited behind slow owner checks. The
             # selected unit gets its own current decision, outside the write lock.
-            with self._connect() as conn:
-                local_check = self.owners.capture_local(selected, conn)
-                owner_state = self.owners.check_current(selected, conn)
+            observation = self._observe_candidate(selected)
+            if observation is None:
+                return None
+            owner_state, local_check = observation
             decision = self.resources.admit(selected) if owner_state == "ready" else None
             observed_at = self._now()
             now = self._now()

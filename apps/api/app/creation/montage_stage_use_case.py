@@ -297,7 +297,7 @@ class MontageStageUseCase:
                 for segment, request in iter_presenter_inputs(self.repository, task, header, creation_plan,
                         self.person_stage.presenter_model_ids(), connection=conn):
                     render = current_presenter_render(self.repository, task, segment, request,
-                        self.metadata.picture_renderer.person_path)
+                        self.metadata.picture_renderer.person_path, connection=conn)
                     if render is None or self.metadata.picture_renderer.person_path(render) is None:
                         raise ValueError('露脸段落的口型视频没有完成，请重试故事板')
                     renders[segment.source_section_id] = render

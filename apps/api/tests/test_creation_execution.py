@@ -1923,6 +1923,13 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
         registrations={"creation_job": SimpleNamespace(owner=scheduler.owners,
             executor=CreationJobUnitExecutor(repo, render_action=lambda *_: pytest.fail("metadata fixture must not render"),
                 render_is_valid=lambda *_: False))}, wake=lambda: None)
+    if scenario == "single":
+        saved_job = repo.job_records.get_job_run("local", job.id)
+        # A previous startup saw the task stage before the next device unit existed.
+        old_event = TaskEvent(f"event_{job.id}_recovery_{saved_job.attempt}", "local", task_id, job.id,
+            "creation_execution_stage", {"stage": "montage", "status": "interrupted",
+                "reason": "process_interrupted", "permit_retained": False}, created_at=saved_job.updated_at)
+        repo.execution_records.append_task_event(old_event)
     control.recover(runtime)
     recovered = repo.task_records.get_creation_task("local", task_id)
     if scenario == "single":
@@ -1935,6 +1942,10 @@ def test_recovered_interrupted_narration_resets_stage_before_admission(tmp_path,
         assert conn.execute("SELECT count(*) FROM device_work_requests WHERE owner_id=?", (job.id,)).fetchone()[0] == 1
     control.recover(runtime)  # Same receipt and request, no duplicate recovery write.
     if scenario == "single":
+        receipts = [item for item in repo.execution_records.list_task_events("local", task_id)
+                    if item.id.startswith(old_event.id)]
+        assert len(receipts) == 2 and old_event in receipts
+        assert {item.payload["stage"] for item in receipts} == {"montage", "narration"}
         # The real stage gate now permits re-entry; no voice model is called.
         assert repo.start_creation_task_narration("local", task_id).stage_status == "running"
     else:
@@ -4354,7 +4365,7 @@ def test_explicit_presenter_waits_after_full_narration_and_resumes_original_job(
     case.owner.presenter_budget = object()
     case.owner.presenter_models[plan.lipsync_quality] = 'test'
     rendered = []
-    monkeypatch.setattr(case.owner, 'person_valid', lambda _task: bool(rendered))
+    monkeypatch.setattr(case.owner, 'person_valid', lambda _task, **_kwargs: bool(rendered))
     case.executor.person_stage = SimpleNamespace(generate_stage=lambda *_args: rendered.append('section_1'))
     monkeypatch.setattr(execution_module, 'presenter_stage_facts',
         lambda *_args, **_kwargs: ('person_render:prepared', {'kind': 'creation_person_render',
