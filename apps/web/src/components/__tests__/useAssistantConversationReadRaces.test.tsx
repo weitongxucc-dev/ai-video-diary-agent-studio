@@ -510,7 +510,7 @@ describe("useAssistantConversation read races", () => {
     api.createAssistantConversation.mockResolvedValueOnce(created);
     api.getAssistantConversationReference.mockImplementation((id: string) => id === original.id
       ? oldRead.promise : Promise.resolve({selected_reference: null, reference_version: 0, status: "ready", reason: null}));
-    const wrapper = ({children}: {children: ReactNode}) => createElement(AssistantConversationProvider, {children});
+    const wrapper = ({children}: {children: ReactNode}) => createElement(AssistantConversationProvider, null, children);
     const {result} = renderHook(() => ({
       state: useAssistantConversation({scope_kind: "home", scope_id: "home"}),
       references: useAssistantSelection(),
