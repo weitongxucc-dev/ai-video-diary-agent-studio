@@ -13,7 +13,7 @@ import { useScriptGenerationRequest } from "./creation-task/useScriptGenerationR
 import { TopicSelection } from "./creation-task/TopicSelection";
 import { useCreationExecution } from "./creation-task/useCreationExecution";
 import type { TaskMediaJob, TaskMediaResultMap, CreationTaskNarrationVoiceSelectionRequest } from "@/lib/types";
-import { getCreationTaskNarrationVoiceSelection, saveCreationTaskPresenterSelection } from "@/lib/api/creation-tasks";
+import { getAssistantScriptContext, getCreationTaskNarrationVoiceSelection, saveCreationTaskPresenterSelection } from "@/lib/api/creation-tasks";
 import { readCreationTaskTimelineRestore } from '@/lib/api';
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
 import { isLocalAuthMode } from "@/lib/auth/routing";
@@ -406,6 +406,23 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   const latestScript = workspace.scripts[0] ?? null;
+  const retainedCheckKey = activeView === "script" && task.stage === "script" && task.stage_status === "not_started" &&
+    latestScript?.selection_status === "draft"
+    ? `${task.id}:${latestScript.id}:${latestScript.updated_at}:${workspace.plan.updated_at}` : null;
+  const [retainedCheck, setRetainedCheck] = useState<{ key: string; scriptId?: string; error?: string } | null>(null);
+  useEffect(() => {
+    if (!retainedCheckKey) return;
+    let active = true;
+    void getAssistantScriptContext(task.id).then(context => {
+      if (active) setRetainedCheck({ key: retainedCheckKey, scriptId: context.retained_draft?.id });
+    }).catch(cause => {
+      if (active) setRetainedCheck({ key: retainedCheckKey,
+        error: cause instanceof Error ? cause.message : "没有读回已采用的资料。" });
+    });
+    return () => { active = false; };
+  }, [task.id, retainedCheckKey]);
+  const retainedScript = retainedCheckKey && retainedCheck?.key === retainedCheckKey &&
+    retainedCheck.scriptId === latestScript?.id ? latestScript : null;
   const [manualScriptOpen, setManualScriptOpen] = useWorkspaceViewState("manual-script-open", false);
   const manualForGeneration = useRef(manualScriptOpen); manualForGeneration.current = manualScriptOpen;
   const generationReadOwner = useRef<{ workspace: WorkspaceState; navigation: number; revision: number } | null>(null);
@@ -1873,7 +1890,22 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           <section className={styles.workSection}><div className={styles.emptyAction}><FileText size={28} /><h2>生成文案</h2><p>使用已确认选题与固定资料。</p><button className="modern-primary-button" disabled={busy !== null || scriptGeneration.blocked} onClick={() => void scriptGeneration.generate()} type="button">{scriptGeneration.working ? <LoaderCircle className="is-spinning" size={16} /> : <Sparkles size={16} />}生成文案</button></div></section>
           <Button variant="outline" disabled={busy !== null} onClick={() => setManualScriptOpen(true)}>手动编写文案</Button>
         </> : null}
-        {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript ? <ScriptEditor taskId={task.id} busy={busy !== null} key={windowScript ? `${task.id}:${latestScript.id}` : `${task.id}:${latestScript.id}:${latestScript.updated_at}`} onWindowSaved={async () => { await refresh(true); }} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
+        {retainedCheckKey && retainedCheck?.key !== retainedCheckKey ? <p role="status">正在核对原稿与新资料…</p> : null}
+        {retainedCheckKey && retainedCheck?.key === retainedCheckKey && retainedCheck.error ? <p role="alert">{retainedCheck.error}</p> : null}
+        {retainedScript ? manualScriptOpen
+          ? <ScriptWindowStart taskId={task.id} retainedScript={retainedScript}
+              onSaved={async () => { await refresh(true); setManualScriptOpen(false); }} />
+          : <section className={styles.workSection}>
+              <h2>资料已更新</h2>
+              <p>原稿《{retainedScript.title}》及其核查记录已保存。使用本次资料可另存新稿。</p>
+              <Button type="button" variant="outline" disabled={busy !== null}
+                onClick={() => setManualScriptOpen(true)}>基于新资料另存文案</Button>
+              <details className={styles.requirementDetails}><summary>查看原稿</summary>
+                <ConfirmedScriptView script={retainedScript} />
+              </details>
+            </section> : null}
+        {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript &&
+          !retainedScript && (!retainedCheckKey || retainedCheck?.key === retainedCheckKey && !retainedCheck.error) ? <ScriptEditor taskId={task.id} busy={busy !== null} key={windowScript ? `${task.id}:${latestScript.id}` : `${task.id}:${latestScript.id}:${latestScript.updated_at}`} onWindowSaved={async () => { await refresh(true); }} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
         {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ReadonlyScriptsView scripts={workspace.scripts} confirmedScriptId={task.confirmed_script_id} /> : null}
 
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <details className={styles.runDetails}><summary>保存到文案库</summary><ScriptLibrarySave key={latestScript.id} script={latestScript} onReloadSource={async () => { await refresh(true); }} /></details> : null}

@@ -170,6 +170,42 @@ def test_append_is_atomic_replayable_and_preserves_old_script_and_run(state, mon
     assert rows(state) == committed
 
 
+def test_manual_first_window_saves_new_draft_only_from_current_retained_revision(state, monkeypatch):
+    old = saved_agent_draft(state)
+    old_rows = rows(state, ("creation_task_scripts", "script_generation_runs"))
+    item = knowledge(state)
+    assert adopt(state, command(state, item)).status_code == 200
+    route = "/api/creation-tasks/{task_id}/scripts/windows"
+    state.client.app.routes.append(next(route_item for route_item in main.app.routes if getattr(route_item, "path", None) == route))
+    url = "/api/creation-tasks/task/scripts/windows"
+    monkeypatch.setattr(main, "_creation_task_script_generator_for",
+        lambda *_: pytest.fail("saving a manual draft must not run review"))
+    command_body = {"title": old.title, "sections": [{
+        "id": "new-section", "title": "逐字稿", "content": old.sections[0].content,
+        "visual_prompt": "沿用原片画面", "evidence_reference_ids": [f"knowledge:{item.id}:{item.version}"],
+    }]}
+    request = {"request_id": str(uuid4()), **command_body}
+    assert state.client.post(url, json=request).status_code == 409
+    retained = {"script_id": old.id, "expected_updated_at": old.updated_at.isoformat()}
+    wrong = {"request_id": str(uuid4()), **command_body,
+        "retained_script": {**retained, "expected_updated_at": "2020-01-01T00:00:00Z"}}
+    assert state.client.post(url, json=wrong).status_code == 409
+    assert rows(state, old_rows) == old_rows
+
+    current = {"request_id": str(uuid4()), **command_body, "retained_script": retained}
+    response = state.client.post(url, json=current)
+    assert response.status_code == 200, response.text
+    receipt = response.json()
+    assert receipt["status"] == "saved" and receipt["script_id"] != old.id
+    assert state.client.post(url, json=current).json() == receipt
+    assert state.repository.script_records.get_creation_task_script("local", old.id) == old
+    new = state.repository.script_records.get_creation_task_script("local", receipt["script_id"])
+    assert new.sections[0].content == old.sections[0].content
+    run = state.repository.script_records.get_script_generation_run("local", new.run_id)
+    assert any(ref["object_id"] == item.id and ref["version_or_identity"] == item.version for ref in run.input_references)
+    assert state.repository.task_records.get_creation_task("local", "task").confirmed_script_id is None
+
+
 def test_new_script_consumes_new_fixed_inputs_and_old_draft_cannot_be_adopted(state, monkeypatch):
     old = saved_agent_draft(state)
     historical = rows(state, ('creation_task_scripts', 'script_generation_runs'))

@@ -152,6 +152,7 @@ export function getAssistantScriptContext(taskId: string): Promise<{
         sections: null;
         sections_loaded: false;
     }) | null;
+    retained_draft?: Pick<CreationTaskScript, "id" | "title" | "updated_at" | "sections_total_count"> | null;
     reply_origin: {
         conversation_id: string;
         turn_id: string;

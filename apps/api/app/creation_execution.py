@@ -2024,6 +2024,26 @@ class CreationJobOwnerVerifier:
         raise PermissionError("请通过已确认任务的继续制作入口重试")
 
 
+class CreationStagePreparationRequired(ValueError):
+    def __init__(self, stage, message):
+        super().__init__(message)
+        self.stage = stage
+
+
+def _wait_for_creation_preparation(repository, job, pending, *, connection):
+    current = repository.job_records.get_job_run(job.workspace_id, job.id, connection=connection)
+    if current.status == 'interrupted' and current.failure_reason == str(pending):
+        return
+    repository.creation_execution_jobs.interrupt_creation_execution(TaskEvent(
+        id=f"event_{job.id}_prepare_{pending.stage}_{uuid4().hex}", workspace_id=job.workspace_id,
+        task_id=job.task_id, job_id=job.id, event_type="creation_execution_stage",
+        payload={"stage": pending.stage, "status": "pending", "reason": str(pending)},
+        created_at=datetime.now(timezone.utc)),
+        impact="当前阶段未领取许可，上游已完成结果和累计消耗已保存。",
+        repair_action="完成这一阶段的设备准备后，继续制作以恢复原作业。",
+        task_is_current=lambda _: False, connection=connection)
+
+
 def submit_creation_stage(execution: "CreationExecution", scheduler: DeviceScheduler,
                           job: JobRun, actor: CreationExecutionActor) -> str | None:
     """Queue exactly the next persisted stage; repeated submissions reuse one request."""
@@ -2034,6 +2054,15 @@ def submit_creation_stage(execution: "CreationExecution", scheduler: DeviceSched
         return migrated.id
     try:
         intent = next_creation_intent(execution.repository, scheduler, job)
+    except CreationStagePreparationRequired as pending:
+        repository = execution.repository
+        with repository._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            event = repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start", connection=conn)
+            if CreationExecutionActor.from_event(job.workspace_id, event.payload) != actor:
+                raise PermissionError("不能改变其他成员的制作作业") from pending
+            _wait_for_creation_preparation(repository, job, pending, connection=conn)
+        return None
     except (ValueError, PermissionError) as exc:
         # This is before scheduler.submit: the registered job has a known
         # rejection, rather than an unknown submission or a running worker.
@@ -2213,14 +2242,17 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         job, snapshot, event = owner._snapshot_facts(conn, job.workspace_id, job.id)
         task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
     source_mode = plan.source_media is not None
-    if not source_mode and owner.segments is not None and job.kind == KIND and not event.get('operation'):
+    explicit_presenter = plan.presenter_selection is not None
+    if (not source_mode and not explicit_presenter and owner.segments is not None
+            and job.kind == KIND and not event.get('operation')):
         intent = owner.segments.next_initial(job,owner,connection=connection)
         if intent is not None:
             return intent
         if owner.segments.waiting_for_visual_decision(job,connection=connection):
             return None
     regenerate = event.get("operation") == "regenerate_storyboard"
-    if plan.presenter_share_target and (owner.presenter_budget is None or owner.presenter_cpu_render_limits is None):
+    if (plan.presenter_share_target and not explicit_presenter
+            and (owner.presenter_budget is None or owner.presenter_cpu_render_limits is None)):
         raise ValueError("人物制作及人物组合 CPU 成片专属预算尚未标定")
     if source_mode:
         if event.get('operation') not in {None, 'render_current'}:
@@ -2235,7 +2267,8 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         stage = "render"
     elif not upstream_stage_valid(repository, task, "narration", connection=connection):
         stage = "narration"
-    elif plan.presenter_share_target and not owner.person_valid(task):
+    elif plan.presenter_share_target and (
+            (explicit_presenter and plan.lipsync_quality not in owner.presenter_models) or not owner.person_valid(task)):
         stage = "person_render"
     elif montage_waiting_for_confirmation(repository, task):
         return None  # User confirmation is a business gate, not another work unit.
@@ -2243,6 +2276,13 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         stage = "montage_plan"
     else:
         stage = "render"
+    if explicit_presenter:
+        if stage == 'person_render' and (owner.presenter_budget is None or plan.lipsync_quality not in owner.presenter_models):
+            raise CreationStagePreparationRequired(stage, "请先完成人物口型资源准备，再继续原作业。")
+        if stage == 'montage_plan' and owner.montage_budget is None:
+            raise CreationStagePreparationRequired(stage, "请先完成故事板资源准备，再继续原作业。")
+        if stage == 'render' and owner.presenter_cpu_render_limits is None:
+            raise CreationStagePreparationRequired(stage, "请先完成人物组合 CPU 成片准备，再继续原作业。")
     if stage == "render":
         event = repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start")
         actor = CreationExecutionActor.from_event(job.workspace_id, event.payload) if event.payload.get("member_id") else None
@@ -2770,7 +2810,7 @@ class CreationJobUnitExecutor:
             owner = owner.registrations[DEVICE_OWNER_TYPE].owner
         with self.repository.execution_inputs.creation_execution_read() as conn:
             job, snapshot, event = owner._snapshot_facts(conn, grant.workspace_id, grant.owner_id)
-            task, _unused_script, _unused_plan = snapshot.task, snapshot.script_header, snapshot.plan
+            task, plan = snapshot.task, snapshot.plan
         job, remaining_seconds, remaining_bytes = self.repository.narration_units.start_creation_narration_unit(grant, resources, None,
             pending_segment_for=self.narration_stage.pending_segment if resources['narration_phase'] == 'segment' else None)
         already_elapsed = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(permit['granted_at_utc'])).total_seconds())
@@ -2807,7 +2847,11 @@ class CreationJobUnitExecutor:
                     and exhausted(limits, usage['used_seconds'], usage['used_output_bytes'])):
                 self.repository.narration_units.exhaust_creation_narration_budget(current, job.task_id, connection=conn)
                 return None
-            intent = next_creation_intent(self.repository, scheduler, job, connection=conn, pcm_preparation=pcm_preparation)
+            try:
+                intent = next_creation_intent(self.repository, scheduler, job, connection=conn, pcm_preparation=pcm_preparation)
+            except CreationStagePreparationRequired as pending:
+                _wait_for_creation_preparation(self.repository, job, pending, connection=conn)
+                return None
             return (intent, owner.verify_submission(intent, actor, connection=conn, pcm_preparation=pcm_preparation)) if intent is not None else None
 
         try:
@@ -2825,7 +2869,8 @@ class CreationJobUnitExecutor:
             from app.creation.duration_requirement import DurationConflict
             try:
                 video_preparation = (self.segments.prepare_video(job,event.payload,task,segment.source_section_id,
-                    artifact,owner,text=segment.text) if self.segments is not None and segment is not None else None)
+                    artifact,owner,text=segment.text)
+                    if self.segments is not None and segment is not None and plan.presenter_selection is None else None)
             except DurationConflict as conflict:
                 video_preparation = self.segments.planning_conflict_event(job,task,segment.source_section_id,artifact,conflict)
             if artifact is not None:
@@ -2998,13 +3043,21 @@ class CreationJobUnitExecutor:
             if not valid(task):
                 raise ValueError('制作阶段未产生匹配当前文案的可用结果')
             original = CreationExecutionActor.from_event(job.workspace_id, self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start').payload)
-            next_intent = next_creation_intent(self.repository, scheduler, job)
+            preparation_wait = None
+            try:
+                next_intent = next_creation_intent(self.repository, scheduler, job)
+            except CreationStagePreparationRequired as pending:
+                preparation_wait = pending
+                next_intent = None
             output = task.narration_cache_key if stage == 'narration' else ','.join((item.id for item in self.repository.person_renders.list_person_renders(task.workspace_id, task.id) if item.status == 'ready')) if stage == 'person_render' else task.montage_plan_id
             def checkpoint(conn, current):
                 if stage in {'montage_plan', 'person_render'} and owner.check_current(scheduler._get(grant.request_id), conn) != 'ready':
                     raise PermissionError('原制作检查点提交前授权或来源已变化')
-                return self._checkpoint(conn, current, status='queued', output=output, stage=stage,
-                    reason='waiting_for_user' if next_intent is None else None)
+                result = self._checkpoint(conn, current, status='queued', output=output, stage=stage,
+                    reason='waiting_for_user' if next_intent is None and preparation_wait is None else None)
+                if preparation_wait is not None:
+                    _wait_for_creation_preparation(self.repository, job, preparation_wait, connection=conn)
+                return result
             scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                 checkpoint_write=checkpoint, next_intent=next_intent, actor=original)
         except HostResourceRefusal as exc:

@@ -1089,6 +1089,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                              "finalizing=false表示构建中的部分稿，允许尚未达到整体段数；finalizing=true表示完整采用核查，按total_section_count核对原始目标的整体段数与要求。"
                              "不能用本窗口的段数冒充全稿段数，也不能因一个窗口小于全稿要求就判错。"
                              "不得用当前窗口通过声称未送审正文也通过；上下文不足时不得编造事实支持。")
+        local_final_review = (input.review_window is not None and input.review_window.finalizing
+            and review_section_count == 1 and urlsplit(self._base_url).hostname in {"localhost", "127.0.0.1", "::1"})
         payload = {
             "model": self._model,
             "messages": [
@@ -1146,7 +1148,8 @@ class OpenAICompatibleCreationTaskScriptGenerator:
                 "description": "提交本次逐段核查报告；不改写、保存、确认文案或执行制作。",
                 "parameters": report_schema}}],
             "tool_choice": "required", "temperature": 0,
-            "max_tokens": 8192, **structured_completion_options(self._model, forced_tools=True),
+            "max_tokens": 512 if local_final_review else 8192,
+            **structured_completion_options(self._model, forced_tools=True),
             **({"thinking": {"type": "disabled"}} if self._model == "MiniMax-M3" else {}),
         }
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
