@@ -27,6 +27,14 @@ export function useAssistantKnowledgeReference() { return useContext(KnowledgeRe
 const SelectionContext = createContext<{items:SelectedAssistantReference[];version:number|undefined;select:(items:SelectedAssistantReference[],additive?:boolean)=>void;remove:(item:SelectedAssistantReference)=>void}|null>(null);
 export function useAssistantSelection() { return useContext(SelectionContext); }
 
+type ReferenceSelection = {
+  conversationId: string | null;
+  scopeKey: string;
+  value: AssistantSavedReference | null;
+  pending: boolean;
+  reason: string | null;
+};
+
 function MemberConversation({ children }: { children: ReactNode }) {
   const router = useRouter();
   useEffect(() => {
@@ -36,28 +44,44 @@ function MemberConversation({ children }: { children: ReactNode }) {
   }, [router]);
   const { targetId } = useWorkbenchTarget();
   const state = useScopedAssistantConversation(targetId ? { scope_kind: "task", scope_id: targetId.slice("/tasks/".length) } : { scope_kind: "home", scope_id: "home" });
-  const [savedReference, setSavedReference] = useState<AssistantSavedReference | null>(null);
-  const itemsRef = useRef(assistantReferenceItems(savedReference));
-  const [referenceStatus, setReferenceStatus] = useState({pending:true,reason:null as string|null});
+  const scopeKey = targetId ?? "home";
+  const conversationId = state.conversation?.id ?? null;
+  const [selection, setSelection] = useState<ReferenceSelection>({
+    conversationId: null, scopeKey, value: null, pending: true, reason: null,
+  });
+  const reference = selection.conversationId === conversationId && selection.scopeKey === scopeKey
+    ? selection
+    : {value: state.conversation?.selected_reference ?? null, pending: true, reason: null};
+  const items = assistantReferenceItems(reference.value);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const activeId = useRef<string | null>(null);
   const explicitReferenceId = useRef<string|null>(null);
-  if (activeId.current !== (state.conversation?.id ?? null)) explicitReferenceId.current=null;
-  activeId.current = state.conversation?.id ?? null;
+  if (activeId.current !== conversationId) explicitReferenceId.current=null;
+  activeId.current = conversationId;
   const referenceRevision = useRef(0);
   const versions = useRef(new Map<string,number>());
-  const queue = useRef<Promise<unknown>>(Promise.resolve());
-  const pendingBeforeLoad = useRef<{value:AssistantSavedReference|null}|null>(null);
+  const queues = useRef(new Map<string, Promise<unknown>>());
+  const pendingBeforeLoad = useRef<{scopeKey:string;value:AssistantSavedReference|null}|null>(null);
+  const showReference = useCallback((conversationId: string | null, value: AssistantSavedReference | null,
+    pending: boolean, reason: string | null = null) => {
+    setSelection({conversationId, scopeKey, value, pending, reason});
+  }, [scopeKey]);
   const selectReference = useCallback((value:AssistantSavedReference|null) => {
     // Events can arrive in the same React batch (for example cross-page handoff).
     // The next selection must compose with the optimistic selection immediately.
     itemsRef.current=assistantReferenceItems(value);
     const id = activeId.current;
-    if (!id) { pendingBeforeLoad.current={value}; setSavedReference(value); setReferenceStatus({pending:true,reason:null}); return; }
+    if (!id) {
+      pendingBeforeLoad.current={scopeKey,value};
+      showReference(null,value,true);
+      return;
+    }
+    pendingBeforeLoad.current = null;
     explicitReferenceId.current=id;
     const revision = ++referenceRevision.current;
-    setSavedReference(value);
-    setReferenceStatus({pending:true,reason:null});
-    const operation = queue.current.catch(() => undefined).then(async () => {
+    showReference(id,value,true);
+    const operation = (queues.current.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
       let version = versions.current.get(id);
       if (version === undefined) { const current = await getAssistantConversationReference(id); version=current.reference_version; versions.current.set(id,version); }
       const result = await saveAssistantConversationReference(id,value,version);
@@ -66,37 +90,44 @@ function MemberConversation({ children }: { children: ReactNode }) {
     });
     // After a failed CAS the next explicit action must read a fresh version;
     // do not restore the previous selection or retry the rejected write.
-    queue.current=operation.catch(() => { versions.current.delete(id); });
+    queues.current.set(id,operation.catch(() => { versions.current.delete(id); }));
     void operation.then(result => {
       if (activeId.current !== id || referenceRevision.current !== revision) return;
-      setSavedReference(result.selected_reference);
-      setReferenceStatus({pending:false,reason:result.status === "unavailable" ? result.reason : null});
+      showReference(id,result.selected_reference,false,result.status === "unavailable" ? result.reason : null);
     }).catch(cause => {
-      if (activeId.current === id && referenceRevision.current === revision) setReferenceStatus({pending:false,reason:cause instanceof Error ? cause.message : "引用没有保存，请重新查看或取消。"});
+      if (activeId.current === id && referenceRevision.current === revision) {
+        showReference(id,value,false,cause instanceof Error ? cause.message : "引用没有保存，请重新查看或取消。");
+      }
     });
-  }, []);
+  }, [scopeKey, showReference]);
   useEffect(() => {
-    const id = state.conversation?.id;
+    const id = conversationId;
     // An explicit selection in this render epoch owns the state and performs its own authenticated read/save.
     if (id && explicitReferenceId.current === id) return;
     const revision = ++referenceRevision.current;
-    if (!pendingBeforeLoad.current) setSavedReference(state.conversation?.selected_reference ?? null);
-    setReferenceStatus({pending:Boolean(id),reason:null});
+    if (pendingBeforeLoad.current?.scopeKey !== scopeKey) pendingBeforeLoad.current = null;
+    const pending = pendingBeforeLoad.current;
+    const value = pending ? pending.value : state.conversation?.selected_reference ?? null;
+    showReference(id,value,Boolean(id) || Boolean(pending));
     if (!id) return;
-    const operation = queue.current.catch(() => undefined).then(() => getAssistantConversationReference(id));
-    queue.current = operation;
-    void operation.then(value => {
-      versions.current.set(id,value.reference_version);
+    const operation = (queues.current.get(id) ?? Promise.resolve()).catch(() => undefined)
+      .then(() => getAssistantConversationReference(id));
+    queues.current.set(id,operation);
+    void operation.then(result => {
+      versions.current.set(id,result.reference_version);
       if (activeId.current !== id || referenceRevision.current !== revision) return;
-      if (pendingBeforeLoad.current) { const pending=pendingBeforeLoad.current.value; pendingBeforeLoad.current=null; selectReference(pending); return; }
-      setSavedReference(value.selected_reference);
-      setReferenceStatus({pending:false,reason:value.status === "unavailable" ? value.reason ?? "所引用对象当前不可读取，请重新查看或取消引用。" : null});
+      if (pendingBeforeLoad.current === pending && pending) {
+        pendingBeforeLoad.current=null;
+        selectReference(pending.value);
+        return;
+      }
+      showReference(id,result.selected_reference,false,result.status === "unavailable" ? result.reason ?? "所引用对象当前不可读取，请重新查看或取消引用。" : null);
     }).catch(cause => {
-      if (activeId.current === id && referenceRevision.current === revision) setReferenceStatus({pending:false,reason:cause instanceof Error ? cause.message : "引用未能恢复，请重新查看或取消。"});
+      if (activeId.current === id && referenceRevision.current === revision) {
+        showReference(id,value,false,cause instanceof Error ? cause.message : "引用未能恢复，请重新查看或取消。");
+      }
     });
-  }, [state.conversation?.id, selectReference]);
-  const items = assistantReferenceItems(savedReference);
-  itemsRef.current = items;
+  }, [conversationId, scopeKey, selectReference, showReference]);
   const selectItems = useCallback((next:SelectedAssistantReference[], additive = false) => {
     const unique = new Map((additive ? [...itemsRef.current,...next] : next).map(item=>[assistantReferenceKey(item),item]));
     const values = [...unique.values()];
@@ -104,7 +135,7 @@ function MemberConversation({ children }: { children: ReactNode }) {
   },[selectReference]);
   const removeItem = useCallback((item:SelectedAssistantReference) => selectItems(itemsRef.current.filter(value=>assistantReferenceKey(value)!==assistantReferenceKey(item))),[selectItems]);
   const material = items.find(item=>item.kind === "material");
-  const reference = material?.kind === "material" ? {selection:material.selection,label:material.label} : null;
+  const materialReference = material?.kind === "material" ? {selection:material.selection,label:material.label} : null;
   const profile = items.find(item=>item.kind === "person" || item.kind === "voice");
   const profileReference = profile && "profile_id" in profile ? profile : null;
   const knowledge = items.find(item=>item.kind === "knowledge");
@@ -143,8 +174,8 @@ function MemberConversation({ children }: { children: ReactNode }) {
     window.addEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, receive);
     return () => window.removeEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, receive);
   }, [selectMaterial]);
-  return <AssistantConversationContext.Provider value={state}><ReferenceStatusContext.Provider value={{...referenceStatus,cancel:()=>selectReference(null)}}>
-    <SelectionContext.Provider value={{items,version:activeId.current ? versions.current.get(activeId.current) : undefined,select:selectItems,remove:removeItem}}><MaterialReferenceContext.Provider value={{reference,setReference:selectMaterial}}>
+  return <AssistantConversationContext.Provider value={state}><ReferenceStatusContext.Provider value={{pending:reference.pending,reason:reference.reason,cancel:()=>selectReference(null)}}>
+    <SelectionContext.Provider value={{items,version:conversationId ? versions.current.get(conversationId) : undefined,select:selectItems,remove:removeItem}}><MaterialReferenceContext.Provider value={{reference:materialReference,setReference:selectMaterial}}>
       <ProfileReferenceContext.Provider value={{reference:profileReference,setReference:selectProfile}}>
         <KnowledgeReferenceContext.Provider value={{reference:knowledgeReference,setReference:selectKnowledge}}>{children}</KnowledgeReferenceContext.Provider>
       </ProfileReferenceContext.Provider>

@@ -1,7 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AssistantConversationProvider, useAssistantReferenceStatus, useAssistantSelection } from "../AssistantConversationProvider";
 import { useAssistantConversation } from "../useAssistantConversation";
-import type { AssistantConversation, AssistantScriptToolReceipt, CreationTaskAssistantTurnResponse } from "@/lib/types";
+import type { AssistantConversation, AssistantConversationReferenceState, AssistantSavedReference, AssistantScriptToolReceipt, CreationTaskAssistantTurnResponse } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
   getCurrentAssistantConversation: vi.fn(),
@@ -12,9 +14,13 @@ const api = vi.hoisted(() => ({
   createAssistantConversation: vi.fn(),
   resumeAssistantConversation: vi.fn(),
   stopAssistantConversationTurn: vi.fn(),
+  getAssistantConversationReference: vi.fn(),
+  saveAssistantConversationReference: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => api);
+vi.mock("next/navigation", () => ({useRouter: () => ({push: vi.fn()})}));
+vi.mock("@/hooks/useLocalMemberIdentity", () => ({useLocalMemberIdentity: () => ({token: "test-member"})}));
 
 function conversation(overrides: Partial<AssistantConversation> = {}): AssistantConversation {
   return {
@@ -432,6 +438,93 @@ describe("same-turn business result reads", () => {
 });
 
 describe("useAssistantConversation read races", () => {
+  it("keeps a new conversation when the original current read arrives late", async () => {
+    const originalRead = deferred<AssistantConversation>();
+    const old = conversation({ draft_text: "旧草稿", turns: businessConversation().turns });
+    const created = conversation({ id: "new-conversation", draft_version: 0 });
+    api.getCurrentAssistantConversation.mockReturnValueOnce(originalRead.promise);
+    api.createAssistantConversation.mockResolvedValueOnce(created);
+    const {result} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await act(async () => { await result.current.createNew(); });
+    await act(async () => { originalRead.resolve(old); });
+    expect(result.current.conversation).toMatchObject({id: created.id, turns: []});
+    expect(result.current.draftText).toBe("");
+    expect(result.current.loading).toBe(false);
+  });
+
+  it("discards a slow result read from before leaving and resuming the same conversation", async () => {
+    const initial = businessConversation("queued");
+    const restored = businessConversation("confirmed");
+    const delayed = deferred<AssistantConversation>();
+    api.getCurrentAssistantConversation.mockResolvedValueOnce(initial);
+    api.getAssistantConversation.mockReturnValueOnce(delayed.promise);
+    api.createAssistantConversation.mockResolvedValueOnce(conversation({id: "new-conversation"}));
+    api.resumeAssistantConversation.mockResolvedValueOnce(restored);
+    const {result} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let read!: ReturnType<typeof result.current.refresh>;
+    act(() => { read = result.current.refresh(); });
+    await act(async () => { await result.current.createNew(); });
+    await act(async () => { await result.current.resume(initial.id); });
+    await act(async () => { delayed.resolve(initial); await read; });
+    expect(result.current.conversation?.turns).toEqual(restored.turns);
+  });
+
+  it("opens for a first send without waiting for the history index or importing an old SSE turn", async () => {
+    const initial = conversation();
+    const created = conversation({id: "new-conversation", draft_version: 0});
+    const history = deferred<{items: AssistantConversation[]}>();
+    api.createAssistantConversation.mockResolvedValueOnce(created);
+    const {result} = renderHook(() => useAssistantConversation({scope_kind: "home", scope_id: "home"}));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let original!: ReturnType<typeof result.current.beginTurn>;
+    await act(async () => { original = result.current.beginTurn("旧轮次"); await original.draftCheckpoint; });
+    const oldEvent = result.current.bindTurnEvents(original.conversationId, original.localTurnId);
+    api.listAssistantConversations.mockReturnValueOnce(history.promise);
+    let switched = false;
+    let creating!: ReturnType<typeof result.current.createNew>;
+    await act(async () => { creating = result.current.createNew(); void creating.then(() => { switched = true; }); });
+    expect(switched).toBe(true);
+
+    act(() => {
+      oldEvent({type: "turn_started", turn_id: "old-turn", turn_state: "running", draft_version: 2});
+      oldEvent({type: "text_delta", delta: "旧回复"});
+    });
+    expect(result.current.conversation?.turns).toEqual([]);
+    let first!: ReturnType<typeof result.current.beginTurn>;
+    await act(async () => { first = result.current.beginTurn("新的第一条"); await first.draftCheckpoint; });
+    await act(async () => { history.resolve({items: [initial, created]}); await creating; });
+    expect(first.conversationId).toBe(created.id);
+    expect(result.current.conversation?.turns.map(turn => turn.user_message)).toEqual(["新的第一条"]);
+    expect(api.stopAssistantConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("authenticates the new conversation's empty references while the old reference read is still pending", async () => {
+    const oldReference: AssistantSavedReference = {
+      kind: "knowledge", knowledge_item_id: "old-knowledge", version: "1", label: "旧会话资料",
+    };
+    const original = conversation({selected_reference: oldReference});
+    const created = conversation({id: "new-conversation", selected_reference: null, draft_version: 0});
+    const oldRead = deferred<AssistantConversationReferenceState>();
+    api.getCurrentAssistantConversation.mockResolvedValueOnce(original);
+    api.createAssistantConversation.mockResolvedValueOnce(created);
+    api.getAssistantConversationReference.mockImplementation((id: string) => id === original.id
+      ? oldRead.promise : Promise.resolve({selected_reference: null, reference_version: 0, status: "ready", reason: null}));
+    const wrapper = ({children}: {children: ReactNode}) => createElement(AssistantConversationProvider, {children});
+    const {result} = renderHook(() => ({
+      state: useAssistantConversation({scope_kind: "home", scope_id: "home"}),
+      references: useAssistantSelection(),
+      status: useAssistantReferenceStatus(),
+    }), {wrapper});
+    await waitFor(() => expect(api.getAssistantConversationReference).toHaveBeenCalledWith(original.id));
+    await act(async () => { await result.current.state.createNew(); });
+    expect(result.current.references).toMatchObject({items: [], version: 0});
+    expect(result.current.status.pending).toBe(false);
+    await act(async () => { oldRead.resolve({selected_reference: oldReference, reference_version: 2, status: "ready", reason: null}); });
+    expect(result.current.references).toMatchObject({items: [], version: 0});
+    expect(api.saveAssistantConversationReference).not.toHaveBeenCalled();
+  });
+
   it("does not let a refresh GET replace text typed after that read started", async () => {
     const initial = conversation({ draft_text: "旧服务端草稿" });
     api.getCurrentAssistantConversation.mockResolvedValue(initial);

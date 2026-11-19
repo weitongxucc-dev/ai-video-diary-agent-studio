@@ -215,6 +215,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   const loadedScope = useRef<string | null>(null);
   const streamRevision = useRef(0);
   const readRevision = useRef(0);
+  const listRevision = useRef(0);
   const loadEpoch = useRef(0);
   const activeReads = useRef({ epoch: 0, count: 0 });
   const [businessRefreshPaused, setBusinessRefreshPaused] = useState(false);
@@ -337,19 +338,26 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     revision.current += 1;
     const current = conversationRef.current;
     if (!current) return;
+    const text = draftValue.current;
     await draftQueue.current.catch(() => undefined);
-    const recoveryOwnsEmptyDraft = draftValue.current === "" && [...localTurnRecovery.current.values()].some((turn) =>
+    const latest = conversationRef.current;
+    if (latest?.id !== current.id || latest.draft_text === text) return;
+    const recoveryOwnsEmptyDraft = text === "" && [...localTurnRecovery.current.values()].some((turn) =>
       turn.conversationId === current.id
         && turn.persistedTurnId === null
         && draftRevisionFor(draftRevisionByConversation.current, current.id) === turn.draftRevision);
-    if (!recoveryOwnsEmptyDraft) await saveDraftValue(current.id, draftValue.current);
+    if (!recoveryOwnsEmptyDraft) await saveDraftValue(current.id, text);
   }, [saveDraftValue]);
 
   const loadList = useCallback(async (scopeArg?: AssistantConversationScope) => {
     const requestedScope = scopeArg ?? { scope_kind: scopeKind, scope_id: scopeId };
     const requestedKey = `${requestedScope.scope_kind}:${requestedScope.scope_id}`;
+    const epoch = loadEpoch.current;
+    const list = ++listRevision.current;
     const result = await listAssistantConversations(requestedScope);
-    if (activeScopeKey.current === requestedKey) setConversations(result.items);
+    if (activeScopeKey.current === requestedKey && loadEpoch.current === epoch && listRevision.current === list) {
+      setConversations(result.items);
+    }
     return result.items;
   }, [scopeKind, scopeId]);
 
@@ -367,6 +375,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     reads.count += 1;
     try {
       let fresh = await getAssistantConversation(current.id);
+      if (fresh.id !== current.id) return null;
       const windowTurns = (windowTurnId ? fresh.turns.filter(turn => turn.id === windowTurnId) : assistantConversationRefreshTurns(fresh))
         .filter(turn => assistantTurnScriptWindowRequest(turn, fresh.scope_kind === "task" ? fresh.scope_id : undefined) !== null);
       const windowErrors: Record<string, string | null> = {};
@@ -483,9 +492,9 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   }, [refresh, scopeKey]);
 
   useEffect(() => {
-    loadEpoch.current += 1;
+    const epoch = ++loadEpoch.current;
     activeScopeKey.current = scopeKey;
-    let active = true;
+    const ownsView = () => activeScopeKey.current === scopeKey && loadEpoch.current === epoch;
     if (loadedScope.current !== scopeKey) {
       loadedScope.current = scopeKey;
       revision.current += 1;
@@ -498,8 +507,8 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     replace(null);
     setDraftTextState("");
     void getCurrentAssistantConversation({ scope_kind: scopeKind, scope_id: scopeId })
-      .then(async (current) => {
-        if (!active) return;
+      .then((current) => {
+        if (!ownsView()) return;
         // Re-entering a conversation is a new editing epoch. A request left
         // behind by its previous visit must not replace this visit's draft.
         advanceDraftRevision(draftRevisionByConversation.current, current.id);
@@ -515,16 +524,17 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
             void saveDraftValue(current.id, localDraft).catch(() => undefined);
           }
         }
-        const list = await listAssistantConversations({ scope_kind: scopeKind, scope_id: scopeId });
-        if (active) setConversations(list.items);
+        void loadList().catch((cause) => {
+          if (ownsView()) setError(cause instanceof Error ? cause.message : "无法读取对话历史。");
+        });
       })
-      .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "无法恢复此范围的对话。"); })
-      .finally(() => { if (active) setLoading(false); });
+      .catch((cause) => { if (ownsView()) setError(cause instanceof Error ? cause.message : "无法恢复此范围的对话。"); })
+      .finally(() => { if (ownsView()) setLoading(false); });
     const recoveries = localTurnRecovery.current;
     const draftRevisions = draftRevisionByConversation.current;
     return () => {
-      active = false;
       loadEpoch.current += 1;
+      navigationRevision.current += 1;
       if (draftTimer.current) clearTimeout(draftTimer.current);
       const previous = conversationRef.current;
       const recoveryOwnsEmptyDraft = previous && draftValue.current === "" && [...recoveries.values()].some((turn) =>
@@ -536,7 +546,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
       }
       if (activeScopeKey.current === scopeKey) activeScopeKey.current = null;
     };
-  }, [scopeKind, scopeId, replace, saveDraftValue]);
+  }, [scopeKind, scopeId, replace, saveDraftValue, loadList]);
 
   const setDraftText = useCallback((text: string) => {
     draftValue.current = text;
@@ -610,6 +620,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     const observedDraftRevision = draftRevisionFor(draftRevisionByConversation.current, conversationId);
     const observedStreamRevision = streamRevision.current;
     const isActiveHere = () => activeScopeKey.current === scopeKey
+      && navigationRevision.current === recovery.navigationRevision
       && conversationRef.current?.id === conversationId && matchesScope(conversationRef.current);
     const canReplaceDraft = () => isActiveHere()
       && revision.current === observedRevision
@@ -694,6 +705,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
 
   const bindTurnEvents = useCallback((conversationId: string, localTurnId: string) => {
     let persistedTurnId = localTurnId;
+    const navigation = navigationRevision.current;
     return (event: AssistantStreamEvent) => {
       // The stream receipt belongs to the submitted turn even after navigation
       // has moved the visible hook to another scope. Record its durable identity
@@ -707,7 +719,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
         const recovery = localTurnRecovery.current.get(localTurnId);
         if (recovery?.conversationId === conversationId) recovery.persistedTurnId = event.turn_id;
       }
-      if (activeScopeKey.current !== scopeKey) return;
+      if (activeScopeKey.current !== scopeKey || navigationRevision.current !== navigation) return;
       const current = conversationRef.current;
       if (!current || current.id !== conversationId) return;
       const turns = [...current.turns];
@@ -742,52 +754,48 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     };
   }, [replace, restoreSubmittedDraft, scopeKey]);
 
-  const createNew = useCallback(() => {
+  const switchConversation = useCallback((load: () => Promise<AssistantConversation>) => {
+    if (activeScopeKey.current !== scopeKey) return Promise.reject(new Error("对话范围正在切换，请稍后再试。"));
     const navigation = ++navigationRevision.current;
+    const epoch = ++loadEpoch.current;
+    const ownsView = () => activeScopeKey.current === scopeKey && loadEpoch.current === epoch;
+    const requireView = () => {
+      if (!ownsView()) throw new Error("页面或会话已切换；请回到原范围查看。");
+    };
+    setLoading(true);
+    setError(null);
     const operation = navigationQueue.current.catch(() => undefined).then(async () => {
+      requireView();
       await flushDraft();
-      if (navigation !== navigationRevision.current || activeScopeKey.current !== scopeKey) {
-        throw new Error("页面或会话已切换；没有在新范围创建会话。");
-      }
-      const created = await createAssistantConversation({ scope_kind: scopeKind, scope_id: scopeId });
-      if (navigation !== navigationRevision.current || activeScopeKey.current !== scopeKey) {
-        throw new Error("页面或会话已切换；新会话保留在原范围，没有切换当前页面。");
-      }
-      replace(created);
-      draftVersionByConversation.current.set(created.id, created.draft_version);
-      draftValue.current = "";
-      setDraftTextState("");
-      await loadList({ scope_kind: scopeKind, scope_id: scopeId });
-      return created;
-    });
-    navigationQueue.current = operation.then(() => undefined, () => undefined);
-    return operation;
-  }, [scopeKey, scopeKind, scopeId, replace, loadList, flushDraft]);
-
-  const resume = useCallback((id: string) => {
-    const navigation = ++navigationRevision.current;
-    const operation = navigationQueue.current.catch(() => undefined).then(async () => {
-      await flushDraft();
-      if (navigation !== navigationRevision.current || activeScopeKey.current !== scopeKey) {
-        throw new Error("页面或会话已切换；没有恢复其他范围的会话。");
-      }
-      const resumed = await resumeAssistantConversation(id);
-      if (navigation !== navigationRevision.current || activeScopeKey.current !== scopeKey) {
-        throw new Error("页面或会话已切换；恢复结果仍留在原范围。");
-      }
-      if (!matchesScope(resumed)) {
+      requireView();
+      const next = await load();
+      requireView();
+      if (!matchesScope(next)) {
         throw new Error("这段对话属于其他页面或对象，请回到原范围恢复。");
       }
-      advanceDraftRevision(draftRevisionByConversation.current, resumed.id);
-      draftVersionByConversation.current.set(resumed.id, resumed.draft_version);
-      replace(resumed);
-      draftValue.current = resumed.draft_text;
-      setDraftTextState(resumed.draft_text);
-      return resumed;
+      advanceDraftRevision(draftRevisionByConversation.current, next.id);
+      draftVersionByConversation.current.set(next.id, next.draft_version);
+      replace(next);
+      draftValue.current = next.draft_text;
+      setDraftTextState(next.draft_text);
+      setConversations(items => [next, ...items.filter(item => item.id !== next.id)]);
+      void loadList().catch((cause) => {
+        if (ownsView()) setError(cause instanceof Error ? cause.message : "无法读取对话历史。");
+      });
+      return next;
+    }).finally(() => {
+      if (navigation === navigationRevision.current && ownsView()) setLoading(false);
     });
     navigationQueue.current = operation.then(() => undefined, () => undefined);
     return operation;
-  }, [scopeKey, scopeKind, scopeId, replace, flushDraft, matchesScope]);
+  }, [scopeKey, replace, flushDraft, matchesScope, loadList]);
+
+  const createNew = useCallback(() => switchConversation(() => createAssistantConversation({
+    scope_kind: scopeKind, scope_id: scopeId,
+  })), [switchConversation, scopeKind, scopeId]);
+
+  const resume = useCallback((id: string) => switchConversation(() => resumeAssistantConversation(id)),
+    [switchConversation]);
 
   const rename = useCallback(async (title: string) => {
     const current = conversationRef.current;
