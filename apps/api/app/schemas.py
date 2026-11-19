@@ -4241,6 +4241,14 @@ class MediaCapabilityResponse(BaseModel):
     repair_action: str | None
 
 
+class SavedVoicePreviewSection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=160)
+    script_id: str = Field(min_length=1, max_length=160)
+    section_id: str = Field(min_length=1, max_length=160)
+
+
 class VoicePreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -4249,6 +4257,7 @@ class VoicePreviewRequest(BaseModel):
     preview_text: str = Field(min_length=1, max_length=4000)
     language: Literal["zh", "en"] | None = None
     retry: bool = False
+    saved_section: SavedVoicePreviewSection | None = None
 
 
 class AvatarLipSyncPreviewRequest(BaseModel):

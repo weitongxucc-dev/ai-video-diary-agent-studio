@@ -35,6 +35,7 @@ export type NarrationPreparationRequest = {
   request_id: string;
   kind: 'narration';
   shape: {
+    task_id?: string;
     voice_profile_id: string;
     voice_version: string;
     language: 'zh' | 'en';

@@ -1,5 +1,6 @@
 """Task narration HTTP; voice selection, authorized audio and scheduling keep their original owners."""
 from uuid import UUID
+from datetime import datetime
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,8 +12,18 @@ class NarrationDurationAdoptionRequest(BaseModel):
     request_id: UUID
     review_id: str = Field(min_length=1, max_length=160)
 
+class SectionAuditionSelectionRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    request_id: UUID
+    preview_run_id: str | None = Field(max_length=200)
+    expected_script_id: str = Field(min_length=1, max_length=160)
+    expected_script_updated_at: datetime
+    expected_preview_run_id: str | None = Field(max_length=200)
+    expected_output_sha256: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
 
-def build_task_narration_router(*, access_for, adoption_for, production_for, execution_for, actor_for, control_for, runtime_for, http_error_for, authority_error_for, failure_for, blocked_for, selection_response_for, workspace_for, readable_for, path_for, file_response_for, ingress_for):
+
+def build_task_narration_router(*, access_for, adoption_for, production_for, execution_for, actor_for, control_for, runtime_for, http_error_for, authority_error_for, failure_for, blocked_for, selection_response_for, workspace_for, readable_for, path_for, file_response_for, ingress_for,
+                               auditions_for=None, audition_actor_for=None):
     router = APIRouter()
 
     @router.post('/api/creation-tasks/{task_id}/narration/voice', response_model=CreationTaskNarrationVoiceSelectionResponse)
@@ -71,6 +82,33 @@ def build_task_narration_router(*, access_for, adoption_for, production_for, exe
             raise http_error_for()(status_code=403, detail=str(exc)) from exc
         except (ValueError, blocked_for()) as exc:
             raise http_error_for()(status_code=409, detail=str(exc)) from exc
+
+    if auditions_for is not None:
+        audition_url = '/api/creation-tasks/{task_id}/narration/sections/{section_id}/audition'
+
+        @router.get(audition_url)
+        def read_section_audition(task_id: str, section_id: str, request: Request, preview_run_id: str | None = None):
+            task, _ = access_for()(task_id, request)
+            actor = audition_actor_for(request, task.workspace_id)
+            try:
+                return auditions_for().status(task.workspace_id, task_id, section_id, actor, preview_run_id=preview_run_id)
+            except KeyError as exc:
+                raise http_error_for()(status_code=404, detail='当前作品段落不存在。') from exc
+            except ValueError as exc:
+                raise http_error_for()(status_code=409, detail=str(exc)) from exc
+
+        @router.put(audition_url)
+        def select_section_audition(task_id: str, section_id: str, payload: SectionAuditionSelectionRequest, request: Request):
+            task, _ = access_for()(task_id, request, write=True)
+            actor = audition_actor_for(request, task.workspace_id)
+            try:
+                return auditions_for().select(task.workspace_id, task_id, section_id, actor, payload)
+            except KeyError as exc:
+                raise http_error_for()(status_code=404, detail='当前段落或本人的试听不存在。') from exc
+            except PermissionError as exc:
+                raise http_error_for()(status_code=403, detail=str(exc)) from exc
+            except (ValueError, authority_error_for()) as exc:
+                raise http_error_for()(status_code=409, detail=str(exc)) from exc
 
     @router.post('/api/creation-tasks/{task_id}/narration/generate', response_model=CreationTaskNarrationResponse)
     def generate_creation_task_narration(task_id: str, request: Request) -> CreationTaskNarrationResponse:

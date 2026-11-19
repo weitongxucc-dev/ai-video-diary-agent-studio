@@ -86,6 +86,7 @@ it.each([true, false])("auditions the saved text after editing the manuscript lo
   await screen.findByLabelText("英文样句录音");
   expect(api.create).toHaveBeenCalledExactlyOnceWith({
     voice_profile_id:"studio",voice_version:"v3",language:"en",preview_text:section.content,retry:false,
+    saved_section:{task_id:"task",script_id:script.id,section_id:section.id},
   });
 });
 
@@ -289,4 +290,19 @@ it("can prepare the same sentence again when another language replaced its devic
   await click("准备本机试听");
   await waitFor(() => expect(api.prepare).toHaveBeenCalledTimes(2));
   expect(api.prepare.mock.calls[1][0].request_id).not.toBe(api.prepare.mock.calls[0][0].request_id);
+});
+
+it("prepares a saved work section with only that work's pronunciation entries", async () => {
+  api.resources.mockResolvedValue({ ...configured, available_operations: [] });
+  api.prepare.mockResolvedValue(receipt);
+  api.dictionary.mockResolvedValue({ items: ["work", "another"].map(scope_reference => ({
+    id: scope_reference, version: "v1", workspace_id: "local", scope: "task", scope_reference,
+  })) });
+  render(<DeliveryVoiceSample language="en" profileId="studio" version="v3" savedSection={{
+    sourceKey: "work:script:s1", text: "Line seven.", reference: { task_id: "work", script_id: "script", section_id: "s1" },
+  }} />);
+  await click("准备本机试听");
+  await waitFor(() => expect(api.prepare).toHaveBeenCalledWith(expect.objectContaining({
+    shape: expect.objectContaining({ task_id: "work", pronunciation_references: [{ id: "work", version: "v1" }] }),
+  }), configured.actor_scope, expect.any(AbortSignal)));
 });

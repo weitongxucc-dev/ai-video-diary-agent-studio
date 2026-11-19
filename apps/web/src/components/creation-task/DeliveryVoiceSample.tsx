@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { apiUrl } from "@/lib/api";
 import { readLocalMemberToken } from "@/lib/local-member-auth";
-import { createVoicePreview, listMediaPreviewAttempts, mediaProfilesErrorMessage, type MediaPreview } from "@/lib/media-profiles-api";
+import { createVoicePreview, listMediaPreviewAttempts, mediaProfilesErrorMessage, type MediaPreview, type SavedVoiceSection } from "@/lib/media-profiles-api";
 import { WorkspaceAudio } from "../workbench/WorkspaceMedia";
 import { useVoiceSamplePreparation } from "./useVoiceSamplePreparation";
 import ui from "../CreationRequestPanel.module.css";
@@ -15,7 +15,7 @@ export type AuditionVoice = {
 };
 
 type Props = AuditionVoice & {
-  savedSection?: { sourceKey: string; text: string };
+  savedSection?: { sourceKey: string; text: string; reference: SavedVoiceSection };
 };
 
 const statusLabels = {
@@ -57,7 +57,7 @@ function VoiceSample({ language, profileId, version, savedSection }: Props) {
   const scopeBefore = useRef<string | undefined>(undefined);
   const previewToken = useRef<string | null>(null);
   const hint = useId();
-  const preparation = useVoiceSamplePreparation({ language, profileId, version, sourceKey: savedSection?.sourceKey });
+  const preparation = useVoiceSamplePreparation({ language, profileId, version, sourceKey: savedSection?.sourceKey, taskId: savedSection?.reference.task_id });
   const { status, attempt, receipt } = preparation;
   const scope = status?.actor_scope;
   const visibleRun = previewToken.current === readLocalMemberToken() ? run : null;
@@ -134,6 +134,7 @@ function VoiceSample({ language, profileId, version, savedSection }: Props) {
       uncertainPreview.current = true;
       const next = await createVoicePreview({
         voice_profile_id: profileId, voice_version: version, language, preview_text: sentence, retry,
+        ...(savedSection && { saved_section: savedSection.reference }),
       });
       if (!stillCurrent()) return;
       uncertainPreview.current = false;
