@@ -4,14 +4,14 @@
 .tabsList[data-variant="workspace"] { background:transparent; padding:0; }
 .tabsList[data-variant="workspace"] .tabsTrigger[data-active] { background:transparent; border-color:transparent; }
 .tabsList[data-variant="line"] .tabsTrigger[data-active] { border-color:transparent; background:var(--selection-bg); }
-.tabsTrigger { position:relative; display:inline-flex; flex:none; align-items:center; justify-content:center; gap:8px; height:32px; min-width:0; padding:0 12px; border:1px solid transparent; border-radius:8px; color:var(--text-2); background:transparent; font:inherit; font-weight:400; white-space:nowrap; cursor:pointer; transition:background 140ms,color 140ms; }
+.tabsTrigger { position:relative; display:inline-flex; flex:none; align-items:center; justify-content:center; gap:8px; height:32px; min-width:0; padding:0 12px; border:1px solid transparent; border-radius:var(--control-radius); color:var(--text-2); background:transparent; font:inherit; font-weight:400; white-space:nowrap; cursor:pointer; transition:background 140ms,color 140ms; }
 .tabsTrigger:hover { background:var(--surface-3); color:var(--text-1); }
 .tabsTrigger[data-active] { color:var(--text-1); background:var(--selection-bg); border-color:transparent; font-weight:400; }
 .tabsTrigger:disabled { opacity:.5; pointer-events:none; }
 .tabsTrigger:focus-visible,.button:focus-visible,.scrollViewport:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 .tabsContent { min-width:0; min-height:0; outline:none; }
 .tabsContent[hidden] { display:none; }
-.button { --button-bg:var(--accent); --button-fg:var(--accent-contrast); --button-hover-bg:color-mix(in srgb,var(--accent) 85%,var(--surface-1)); --button-pressed-bg:color-mix(in srgb,var(--accent) 75%,var(--surface-1)); display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 10px; border:1px solid transparent; border-radius:8px; background:var(--button-bg); color:var(--button-fg); text-decoration:none; font-family:var(--font-ui); font-size:var(--font-size-body); line-height:var(--line-body); font-weight:400; white-space:nowrap; user-select:none; cursor:pointer; transition:background-color 140ms,color 140ms,border-color 140ms; }
+.button { --button-bg:var(--accent); --button-fg:var(--accent-contrast); --button-hover-bg:color-mix(in srgb,var(--accent) 85%,var(--surface-1)); --button-pressed-bg:color-mix(in srgb,var(--accent) 75%,var(--surface-1)); display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 10px; border:1px solid transparent; border-radius:var(--control-radius); background:var(--button-bg); color:var(--button-fg); text-decoration:none; font-family:var(--font-ui); font-size:var(--font-size-body); line-height:var(--line-body); font-weight:400; white-space:nowrap; user-select:none; cursor:pointer; transition:background-color 140ms,color 140ms,border-color 140ms; }
 .button[data-size="icon"], .icon { width:32px; padding:0; }
 .tooltipPositioner { z-index:150; pointer-events:none; }
 .tooltipAnchor { display:inline-flex; flex-shrink:0; }
@@ -46,7 +46,7 @@
 .menuItem small { color:var(--text-3); font-size:12px; line-height:18px; }
 .menuItem[data-highlighted] { background:var(--surface-3); }
 .menuItem[data-disabled] { opacity:.5; pointer-events:none; }
-.inputGroup { position:relative; display:flex; align-items:center; min-width:0; height:32px; border:1px solid var(--border-2); border-radius:8px; background:var(--surface-1); }
+.inputGroup { position:relative; display:flex; align-items:center; min-width:0; height:32px; border:1px solid var(--border-2); border-radius:var(--control-radius); background:var(--surface-1); }
 .inputGroup:has([data-slot="input-group-control"]:focus-visible) { border-color:var(--focus); outline:2px solid var(--focus); outline-offset:1px; }
 .inputGroup[data-composer] { display:block; height:auto; border:0; border-radius:0; background:transparent; }
 .inputGroup[data-composer]:focus-within { outline:none; }
