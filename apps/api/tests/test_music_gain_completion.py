@@ -112,3 +112,12 @@ def test_narration_gain_requires_one_bound_clip_and_no_pending_work(tmp_path, mo
         'goal_business_actions': [{'kind': 'edit_request', 'id': str(state.payload.request_id)}],
         'completed_local_edit': receipt})
     assert state.conversations.register_task_goal(state.turn['id']) is None
+    # A later projection of this exact commit keeps its audit event, without
+    # appending a second success message or starting a continuation.
+    event = {key: receipt[key] for key in ('task_id', 'operation_id', 'base_version_id', 'result_version_id')}
+    event.update(type='business_result', phase='apply', status='confirmed', event_id='confirmed-same-save')
+    assert state.conversations.project_business_result(state.turn['id'], 'local', state.actor.member_id, event,
+        response_patch={}, message='修改已保存')
+    stored = state.conversations.get_turn(state.turn['id'])
+    assert stored['assistant_text'] == receipt['summary'] and 'continuation' not in stored['result']
+    assert any(item.get('event_id') == event['event_id'] for item in stored['events'])

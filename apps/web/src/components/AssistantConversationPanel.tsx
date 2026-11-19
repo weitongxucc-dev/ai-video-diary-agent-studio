@@ -291,8 +291,10 @@ function savedResultStage(turn: AssistantConversationTurn, taskId: string): Assi
   if (edit?.task_id === taskId && edit.phase === "apply" && edit.status === "recorded") {
     const saved = edit.result as CreationTaskEditConfirmResponse | null | undefined;
     if (saved?.operation?.task_id === taskId && saved.operation.status === "applied" && saved.operation.result_version_id) {
-      if (saved.narration?.task.id === taskId && saved.narration.audio_reference
-        || saved.operation.operation_type === "RegenerateNarrationSegment") return "narration";
+      // Saved timeline snapshots also carry the existing narration. The operation
+      // identifies what this turn changed; older receipts may omit its type.
+      if (saved.operation.operation_type === "RegenerateNarrationSegment"
+        || !saved.operation.operation_type && saved.narration?.task.id === taskId && saved.narration.audio_reference) return "narration";
       return "montage";
     }
   }
@@ -468,12 +470,13 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
         : result?.kind === "failure" && typeof result.message === "string"
           ? result.message
           : null);
-  const resultNeedsAttention = pendingResult || unknownRequest || Boolean(windowReadError || readinessBlocked
+  const otherResultNeedsAttention = pendingResult || unknownRequest || Boolean(windowReadError
     || segment?.failure || segment?.revision?.adoption?.reason || restore?.failure || restore?.receipt?.failure || storyboardFailure
     || scriptWindow?.failure || job?.failure_reason && job.status !== "cancelled" || job?.repair_action
     || job?.resource_wait?.context === "pending_request")
     || ["failed", "interrupted", "rejected"].includes(outcomeStatus ?? "");
-  const completedAudioReply = !resultNeedsAttention && !businessSummary && completedAudioReplyMatchesReceipt(turn);
+  const resultNeedsAttention = otherResultNeedsAttention || readinessBlocked;
+  const completedAudioReply = !otherResultNeedsAttention && !businessSummary && completedAudioReplyMatchesReceipt(turn);
   const summaryInHeading = Boolean(taskResult && resultSummary);
   const savedStage = taskScopeId && !windowInputMismatch ? savedResultStage(turn, taskScopeId) : null;
   const resultStage = onOpenResultStage ? savedStage : null;
@@ -520,7 +523,8 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
       {job?.resource_wait ? <ResourceWaitReceipt receipt={job.resource_wait} reading={reading} readingKey={`${turn.id}:resource:${job.resource_wait.observation_id}:${job.resource_wait.context}`}/> : null}
       {refreshPaused && pendingResult ? <p>自动查询已暂停；后台状态仍以实际结果为准，可以手动查询。</p> : null}
     </TurnResult> : null}
-    {completedAudioReply && readinessMessage ? <ReadingDetails reading={reading} readingKey={`${turn.id}:readiness`} className="assistant-turn-result">
+    {completedAudioReply && readinessMessage && readinessBlocked ? <p role="status">{readinessMessage}</p> : null}
+    {completedAudioReply && readinessMessage && !readinessBlocked ? <ReadingDetails reading={reading} readingKey={`${turn.id}:readiness`} className="assistant-turn-result">
       <summary>制作条件</summary><div className="assistant-result-details"><p>{readinessMessage}</p></div>
     </ReadingDetails> : null}
     <div className="assistant-result-actions">

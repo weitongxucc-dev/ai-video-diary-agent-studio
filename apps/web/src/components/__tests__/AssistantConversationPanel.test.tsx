@@ -2620,7 +2620,8 @@ it("keeps the concrete saved gain reply and folds supplementary admission facts"
   const operation = { id: "edit-1", task_id: "task-one", workspace_id: saved.workspace_id, status: "applied",
     operation_type: "EditAudioTimeline", base_version_id: "before", result_version_id: "after",
     payload: { edit: { action: "update", target_id: "voice-clip" } } };
-  const applied = { operation, execution_readiness: { status: "authorization_ready" } };
+  const applied = { operation, narration: { task: { id: "task-one" }, audio_reference: "existing-narration" },
+    execution_readiness: { status: "authorization_ready" } };
   turn.result = { kind: "task_turn", timeline_action: "apply",
     completed_local_edit: { scope: "single_narration_gain_edit", task_id: "task-one", request_id: "request-1",
       operation_id: operation.id, base_version_id: "before", result_version_id: "after", target_id: "voice-clip",
@@ -2640,4 +2641,5 @@ it("keeps the concrete saved gain reply and folds supplementary admission facts"
   applied.execution_readiness = { status: "not_ready" };
   view.rerender(panel());
   expect(screen.getByText(/本次保存时后台执行授权未就绪/)).toBeVisible();
+  expect(screen.queryByText("修改已保存，可撤销；成片尚未重新生成")).not.toBeInTheDocument();
 });

@@ -2099,7 +2099,13 @@ class ConversationRepository:
             active = latest_consumed_input(events)
             current_input_id = active["input_id"] if active else json.loads(row["request_context_json"]).get("source_input_id")
             current_input = event.get("input_id") == current_input_id
-            if current_input and not duplicate:
+            completed_edit = result.get("completed_local_edit") or {}
+            already_reported = (current_input and row["status"] == "completed"
+                and event.get("phase") == "apply" and event.get("status") == "confirmed"
+                and completed_edit.get("summary") == row["assistant_text"]
+                and all(event.get(key) and event[key] == completed_edit.get(key)
+                        for key in ("task_id", "operation_id", "base_version_id", "result_version_id")))
+            if current_input and not duplicate and not already_reported:
                 result["continuation"] = event
             text = row["assistant_text"]
             shutdown_goal = self._goal_root(conn, turn_id) if row["status"] == "failed" and self.recoverable_business_failure(result) else None
@@ -2112,7 +2118,7 @@ class ConversationRepository:
                 response = {**result.get("response", {}), **response_patch}
                 if event.get("phase") == "execution" and event.get("status") == "succeeded" and event.get("video_ready"):
                     text = "成片已生成，可以查看或保存。"
-                elif not duplicate:
+                elif not duplicate and not already_reported:
                     text = text + ("\n\n" if text else "") + message
                 response["reply"] = text
                 result.update(kind="task_turn", response=response,
