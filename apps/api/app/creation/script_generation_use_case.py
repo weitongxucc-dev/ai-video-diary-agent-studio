@@ -139,7 +139,7 @@ class ScriptGenerationUseCase:
                 presenter_share_target=plan.presenter_share_target,
                 duration_target_seconds=plan.duration_target_seconds,
                 topic_title=selected_topic.title,
-                topic_origin=self._topic_origin(workspace_id, plan, selected_topic),
+                topic_origin=self.repository.topic_records.confirmed_topic_origin(workspace_id, plan.id, selected_topic),
                 topic_angle=selected_topic.angle, topic_audience=selected_topic.audience,
                 topic_outline=tuple(selected_topic.outline), sources=provider_sources,
                 style_instruction=str(plan.template_settings.get("style_instruction", "")),
@@ -206,10 +206,3 @@ class ScriptGenerationUseCase:
                 repair_action="检查模型 JSON 输出与来源引用后重试。", retryable=True,
             ) from exc
         return task
-
-    def _topic_origin(self, workspace_id, plan, topic) -> Literal["generated", "provided"]:
-        intent = plan.creation_intent
-        if not intent or not (intent.get("topic_title") or intent.get("final_script")):
-            return "generated"
-        run = self.repository.topic_records.get_topic_generation_run(workspace_id, topic.run_id)
-        return "provided" if run.task_id == topic.task_id and run.route_snapshot.get("operation") == "provided_topic" else "generated"

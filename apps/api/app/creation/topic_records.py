@@ -280,6 +280,15 @@ class TopicRecordStore:
             self.get_topic_generation_run(run.workspace_id, run.id),
         )
 
+    def confirmed_topic_origin(self, workspace_id, plan_id, topic) -> Literal["generated", "provided"]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT json_extract(payload, '$.route_snapshot.operation') AS operation
+                   FROM topic_generation_runs WHERE workspace_id=? AND id=? AND task_id=? AND plan_id=?""",
+                (workspace_id, topic.run_id, topic.task_id, plan_id),
+            ).fetchone()
+        return "provided" if row and row["operation"] == "provided_topic" else "generated"
+
     def get_topic_generation_run(
         self, workspace_id: str, run_id: str
     ) -> TopicGenerationRun:
