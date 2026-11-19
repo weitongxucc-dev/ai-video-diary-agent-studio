@@ -100,6 +100,71 @@ def test_material_search_filters_members_before_limit_and_keeps_shared_assets(
     assert limited_asset_id in {shared.id, first_private.id}
 
 
+def test_library_search_returns_only_real_segment_matches_and_current_use_permissions(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    material_library_no_execution(monkeypatch)
+    workspace = "material-library-hits"
+    production = _repository(tmp_path)
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    owner, owner_token = members.join(members.create_invite_code(), "素材上传者")
+    other, other_token = members.join(members.create_invite_code(), "其他成员")
+    monkeypatch.setattr(main_module, "production_repo", production)
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _: workspace)
+    monkeypatch.setattr(main_module, "settings", replace(main_module.settings, video_inbox_path=str(production.video_library_path)))
+
+    def asset(id, uploader, visibility, *, asset_name, description):
+        source = production.video_library_path / asset_name
+        source.write_bytes(b"source fixture")
+        return production.material_assets.save_asset(MaterialAsset(
+            id=id, workspace_id=workspace, file_name=asset_name, path=str(source),
+            size_bytes=source.stat().st_size, modified_at=datetime.fromtimestamp(source.stat().st_mtime),
+            owner_user_id=uploader, visibility=visibility, analysis_status="ready",
+            usage_role="b_roll", duration_seconds=145,
+            segments=[
+                MaterialSegment(f"{id}-first", id, 35.0, 40.0, description="传送带"),
+                MaterialSegment(f"{id}-second", id, 103.59, 112.79, description=description),
+            ],
+        ))
+
+    shared = asset("shared-factory", owner.member_id, "shared", asset_name="工序实拍.mp4", description="包装区摆放待用纸箱")
+    asset("name-match", owner.member_id, "private", asset_name="包装区补拍.mp4", description="机器仪表")
+    asset("hidden", other.member_id, "private", asset_name="另个成员.mp4", description="包装区")
+    owner_client = TestClient(main_module.app, headers={"X-Local-Member-Token": owner_token})
+    reader_client = TestClient(main_module.app, headers={"X-Local-Member-Token": other_token})
+    route = "/api/production/materials"
+
+    def search():
+        response = owner_client.get(route, params={"q": "包装区"})
+        assert response.status_code == 200, response.text
+        assert response.json()["total_count"] == 2
+        return {item["id"]: item for item in response.json()["assets"]}
+
+    result = search()
+    assert result["name-match"]["search_hits"] == []
+    visible = result[shared.id]
+    assert visible["source_available"] is True
+    assert [(item["segment_id"], item["basis"], item["excerpt"]) for item in visible["search_hits"]] == [
+        (f"{shared.id}-second", "片段描述", "包装区摆放待用纸箱"),
+    ]
+    assert visible["segments"][1]["start_seconds"] == 103.59
+
+    restriction_url = f"{route}/{shared.id}/use-state"
+    denied = reader_client.put(restriction_url, json={"use_state": "excluded"})
+    assert denied.status_code == 403
+    assert production.get_asset(workspace, shared.id).use_state == "available"
+    for status, reference_allowed in [("reference_only", True), ("excluded", False)]:
+        saved = owner_client.put(restriction_url, json={"use_state": status})
+        assert saved.status_code == 200, saved.text
+        hit, = search()[shared.id]["search_hits"]
+        assert hit["reference_allowed"] is reference_allowed
+        assert hit["manual_use_allowed"] is False and hit["restriction"]
+
+    (production.video_library_path / shared.file_name).unlink()
+    assert search()[shared.id]["source_available"] is False
+
+
 def test_role_confirmation_rechecks_bilingual_plans_without_touching_other_material_edits(tmp_path, monkeypatch):
     """An initially unassigned raw video can be checked from the proposed group."""
     from dataclasses import replace

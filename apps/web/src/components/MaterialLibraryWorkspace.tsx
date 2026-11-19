@@ -337,6 +337,7 @@ export function MaterialLibraryWorkspace({
       current.map((asset) => (asset.id === updated.id ? updated : asset)),
     );
     setLocatedAsset(current => current?.id === updated.id ? updated : current);
+    if (viewActive && (searchScope.query.trim() || searchScope.tag)) void refreshLibrary();
   }
 
   function applyMaterialAssistantResult(selection: MaterialAssistantSelection, result: MaterialAssistantResult) {
@@ -403,12 +404,12 @@ export function MaterialLibraryWorkspace({
     setEditAnchor(null);
   }
 
-  function selectAsset(asset: MaterialAsset, explicit = true) {
+  function selectAsset(asset: MaterialAsset, explicit = true, segment?: MaterialSegment) {
     if (explicit && selectionBlocked) return;
     setLocatedAsset(null);
     resetVoiceNote();
     selectionRevision.current += 1;
-    const first = asset.segments[0];
+    const first = segment ?? asset.segments[0];
     setDescriptionDraft(first?.description ?? "");
     setTranscriptDraft(first?.transcript ?? "");
     setUsageRoleDraft(first?.usage_role ?? "unassigned");
@@ -417,9 +418,11 @@ export function MaterialLibraryWorkspace({
     setPreviewErrorId(null);
     if (selected?.id === asset.id) {
       const media = asset.media_type === "audio" ? sourceAudio.current : sourceVideo.current;
-      if (media && media.readyState >= HTMLMediaElement.HAVE_METADATA) media.currentTime = 0;
+      if (media && media.readyState >= HTMLMediaElement.HAVE_METADATA) media.currentTime = segment?.start_seconds ?? 0;
     }
-    const target = explicit ? { scope: "asset" as const, asset_id: asset.id } : null;
+    const target = !explicit ? null : segment
+      ? { scope: "segment" as const, asset_id: asset.id, segment_id: segment.id }
+      : { scope: "asset" as const, asset_id: asset.id };
     setAssistantSelection(target);
     setSelectedSegmentId(first?.id ?? "");
     setCollectionDraft(first?.collection_ids[0] ?? "");
@@ -441,6 +444,27 @@ export function MaterialLibraryWorkspace({
         ...(segment ? { expected_segment_updated_at: segment.updated_at } : {}),
       },
     }], true);
+  }
+
+  const materialUsage = resourceMode ? resourceTarget?.taskContext?.materialUsage : undefined;
+  const selectedClip = materialUsage?.clips.find(clip => clip.id === materialUsage.selectedClipId);
+  const replaceClipFromMaterial = resourceTarget?.taskContext?.onReplaceClipFromMaterial;
+
+  async function replaceCurrentClip(asset: MaterialAsset, segment: MaterialSegment) {
+    if (!viewActive || selectionBlocked || acceptedSearch !== searchScope || !replaceClipFromMaterial ||
+        !materialUsage?.versionId || !selectedClip || selectedClip.locked) return false;
+    const readAtClick = listReadSequence.current;
+    const current = await getProductionMaterial(asset.id);
+    if (!wasViewActive.current || !ownsListRead(searchScope, readAtClick)) return false;
+    const currentSegment = current.segments.find(item => item.id === segment.id);
+    if (current.updated_at !== asset.updated_at || currentSegment?.updated_at !== segment.updated_at) {
+      void refreshLibrary();
+      return false;
+    }
+    return replaceClipFromMaterial({
+      assetId: asset.id, segmentId: segment.id, startSeconds: segment.start_seconds,
+      clipId: selectedClip.id, versionId: materialUsage.versionId,
+    });
   }
 
   function seekSelectedSegment(media: HTMLMediaElement) {
@@ -879,6 +903,80 @@ export function MaterialLibraryWorkspace({
     </div>
   ) : null;
 
+  const materialBrowser = <>
+      <MaterialLibraryToolbar summary={`已载入 ${assets.length} / ${totalCount} · 最近更新在前`} auxiliary={Boolean(page?.auxiliary)} filtered={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)}
+        search={<InputGroup data-input-group aria-label="素材检索" className="library-search">
+          <InputGroupAddon><Search size={16} /></InputGroupAddon>
+          <InputGroupInput
+            aria-label="搜索素材"
+            ref={searchInput}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索文件、画面、标签或标签夹…"
+            value={query}
+          />
+          {query ? <Button variant="ghost" aria-label="清除搜索" className={styles.searchClear} onClick={() => { setQuery(""); searchInput.current?.focus(); }} type="button"><X size={14} /></Button> : null}
+        </InputGroup>} filters={<><AppSelect className={styles.filterSelect} aria-label="媒体类型筛选" value={mediaType} onValueChange={newValue => selectMediaType(newValue as MediaTypeFilter)}>{mediaTypeOptions.map(value => <AppSelectOption key={value} value={value}>{value === "all" ? "全部类型" : mediaTypeLabels[value]}</AppSelectOption>)}</AppSelect>
+        <AppSelect className={styles.filterSelect} aria-label="审核状态筛选" value={filter} onValueChange={newValue => setFilter(newValue as Filter)}><AppSelectOption value="all">全部确认状态</AppSelectOption><AppSelectOption value="raw">未人工确认</AppSelectOption><AppSelectOption value="approved">已人工确认</AppSelectOption><AppSelectOption value="rejected">已标记排除</AppSelectOption></AppSelect>
+        {initialTag ? (
+          <span className="library-tag">
+            标签：{initialTag}
+            <Link aria-label="清除标签筛选" href="/library">
+              <X size={12} aria-hidden />
+            </Link>
+          </span>
+        ) : null}
+        {query || filter !== "all" || mediaType !== "all" || initialTag ? initialTag ? (
+          <Link className={styles.resetFilters} href="/library" onClick={() => { setQuery(""); setFilter("all"); setMediaType("all"); }}>重置全部</Link>
+        ) : (
+          <Button variant="ghost" className={styles.resetFilters} onClick={resetAllFilters} type="button">重置全部</Button>
+        ) : null}</>} viewActions={<><div className="library-view-toggle" role="group" aria-label="列表显示方式">
+          <Button variant="ghost" aria-label="封面网格" aria-pressed={viewMode === "grid"} title="封面网格" onClick={() => setViewMode("grid")} type="button"><Grid2X2 size={16} /></Button>
+          <Button variant="ghost" aria-label="对象列表" aria-pressed={viewMode === "list"} title="对象列表" onClick={() => setViewMode("list")} type="button"><List size={16} /></Button>
+        </div>
+        <Button variant="ghost" className={styles.iconButton} aria-label="刷新素材列表" title="刷新素材列表" disabled={busy !== null} onClick={() => void refreshLibrary()} type="button"><RefreshCw size={16} /></Button><IconButton label="查看素材统计" onClick={() => setStatisticsOpen(true)}><Info/></IconButton></>}
+        actions={page?.auxiliary ? <IconButton label="导入素材" onClick={() => setImportOpen(true)}><Plus/></IconButton> : <Button variant="outline" className={styles.importButton} onClick={() => setImportOpen(true)} type="button"><Plus size={16}/>导入素材</Button>} />
+      {intakeError || intake?.pending_files.length || (intake && intake.bound_to_current_workspace && intake.directory_state !== "ready") ? <div className={styles.intakeNotice} role={intakeError ? "alert" : "status"}><span>{intakeError ? "素材接入暂不可用" : intake?.pending_files.length ? `${intake.pending_files.length} 个外部文件等待确认复制完成` : "素材目录需要检查"}</span><Button variant="ghost" onClick={() => setImportOpen(true)} type="button">查看接入</Button></div> : null}
+
+      {error ? (
+        <div className="library-error" role="alert">
+          <AlertCircle size={15} />
+          {error}
+        </div>
+      ) : null}
+      {listBusy === "search" ? <p className={styles.searchStatus} role="status">正在更新素材列表…</p> : needsVisibleRead ? <p className={styles.searchStatus} role="status">请刷新素材列表后再选择或引用。</p> : null}
+
+      {selectionLost || segmentLost ? (
+        <div className="library-error" role="alert">
+          <AlertCircle size={15} />
+          {assistantSelectionLost
+            ? "选中的素材已不在当前列表中。已停止编辑，未保存的说明不会写入其他素材；请重新选择一个素材后再保存。"
+            : editAnchorRangeLost
+              ? "正在编辑的片段时间范围已变化。草稿已保留；不会保存到新的时间范围。"
+              : editAnchorLost
+              ? "正在编辑的素材已不在当前结果中。草稿已保留；找回该素材后可继续保存，不会写入其他素材。"
+              : "选中的片段已不在该素材中。已停止编辑，未保存的说明不会写入其他片段；请重新选择一个片段后再保存。"}
+        </div>
+      ) : null}
+
+      <MaterialResults assets={visible} selectedId={selected?.id ?? null} selectionDisabled={selectionBlocked || acceptedSearch !== searchScope} viewMode={viewMode} hasFilters={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)} hasTagFilter={Boolean(initialTag)} intakeBound={Boolean(intake?.bound_to_current_workspace)} failedThumbnails={failedThumbnails} onThumbnailFailure={id => setFailedThumbnails(current => ({ ...current, [id]: true }))} onSelect={(asset, segment) => selectAsset(asset, true, segment)} onReference={referenceSelection ? appendMaterialReference : undefined} onReplace={materialUsage?.versionId && selectedClip && !selectedClip.locked && replaceClipFromMaterial ? replaceCurrentClip : undefined} onResetFilters={resetAllFilters} onImport={() => setImportOpen(true)} />
+      {hasMore ? (
+        <div className="library-load-more">
+          <Button variant="ghost"
+            disabled={busy !== null || acceptedSearch !== searchScope}
+            onClick={() => void loadMore()}
+            type="button"
+          >
+            {busy === "load" ? (
+              <LoaderCircle className="is-spinning" size={15} />
+            ) : null}
+            {busy === "load"
+              ? "正在载入…"
+              : `载入更多（剩余 ${Math.max(0, totalCount - assets.length)}）`}
+          </Button>
+        </div>
+      ) : null}
+  </>;
+
   return (
     <AppShell
       inspector={inspector}
@@ -890,82 +988,12 @@ export function MaterialLibraryWorkspace({
         onResult: applyMaterialAssistantResult,
       }} />}
     >
-      {resourceMode ? <EditorResourceLibraryPanel assets={assets} selectedId={selected?.id ?? null} initialCategory={resourceCategory} onSelect={asset => selectAsset(asset)} onReferenceMaterial={asset => appendMaterialReference(asset)}
+      {resourceMode ? <EditorResourceLibraryPanel initialCategory={resourceCategory} materials={<div className="modern-library">{materialBrowser}</div>}
           renderResourceAction={resourceTarget?.task ? resource => {
             const Adoption = resource.runtime_requirements?.engine === "openfilm-html-v1" ? ResourceVisualAdoption : ResourceAudioAdoption;
             return <Adoption key={`${resourceTarget.task!.id}:${resource.id}:${resource.version}`} taskId={resourceTarget.task!.id} resource={resource} playheadMs={resourceTarget.taskContext?.getPlayheadMs() ?? 0} onTaskUpdated={resourceTarget.onTaskUpdated} />;
           } : undefined} /> : <div className={`modern-library ${styles.workspace}`}>
-        <MaterialLibraryToolbar summary={`已载入 ${assets.length} / ${totalCount} · 最近更新在前`} auxiliary={Boolean(page?.auxiliary)} filtered={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)}
-          search={<InputGroup data-input-group aria-label="素材检索" className="library-search">
-            <InputGroupAddon><Search size={16} /></InputGroupAddon>
-            <InputGroupInput
-              aria-label="搜索素材"
-              ref={searchInput}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索文件、画面、标签或标签夹…"
-              value={query}
-            />
-            {query ? <Button variant="ghost" aria-label="清除搜索" className={styles.searchClear} onClick={() => { setQuery(""); searchInput.current?.focus(); }} type="button"><X size={14} /></Button> : null}
-          </InputGroup>} filters={<><AppSelect className={styles.filterSelect} aria-label="媒体类型筛选" value={mediaType} onValueChange={newValue => selectMediaType(newValue as MediaTypeFilter)}>{mediaTypeOptions.map(value => <AppSelectOption key={value} value={value}>{value === "all" ? "全部类型" : mediaTypeLabels[value]}</AppSelectOption>)}</AppSelect>
-          <AppSelect className={styles.filterSelect} aria-label="审核状态筛选" value={filter} onValueChange={newValue => setFilter(newValue as Filter)}><AppSelectOption value="all">全部确认状态</AppSelectOption><AppSelectOption value="raw">未人工确认</AppSelectOption><AppSelectOption value="approved">已人工确认</AppSelectOption><AppSelectOption value="rejected">已标记排除</AppSelectOption></AppSelect>
-          {initialTag ? (
-            <span className="library-tag">
-              标签：{initialTag}
-              <Link aria-label="清除标签筛选" href="/library">
-                <X size={12} aria-hidden />
-              </Link>
-            </span>
-          ) : null}
-          {query || filter !== "all" || mediaType !== "all" || initialTag ? initialTag ? (
-            <Link className={styles.resetFilters} href="/library" onClick={() => { setQuery(""); setFilter("all"); setMediaType("all"); }}>重置全部</Link>
-          ) : (
-            <Button variant="ghost" className={styles.resetFilters} onClick={resetAllFilters} type="button">重置全部</Button>
-          ) : null}</>} viewActions={<><div className="library-view-toggle" role="group" aria-label="列表显示方式">
-            <Button variant="ghost" aria-label="封面网格" aria-pressed={viewMode === "grid"} title="封面网格" onClick={() => setViewMode("grid")} type="button"><Grid2X2 size={16} /></Button>
-            <Button variant="ghost" aria-label="对象列表" aria-pressed={viewMode === "list"} title="对象列表" onClick={() => setViewMode("list")} type="button"><List size={16} /></Button>
-          </div>
-          <Button variant="ghost" className={styles.iconButton} aria-label="刷新素材列表" title="刷新素材列表" disabled={busy !== null} onClick={() => void refreshLibrary()} type="button"><RefreshCw size={16} /></Button><IconButton label="查看素材统计" onClick={() => setStatisticsOpen(true)}><Info/></IconButton></>}
-          actions={page?.auxiliary ? <IconButton label="导入素材" onClick={() => setImportOpen(true)}><Plus/></IconButton> : <Button variant="outline" className={styles.importButton} onClick={() => setImportOpen(true)} type="button"><Plus size={16}/>导入素材</Button>} />
-        {intakeError || intake?.pending_files.length || (intake && intake.bound_to_current_workspace && intake.directory_state !== "ready") ? <div className={styles.intakeNotice} role={intakeError ? "alert" : "status"}><span>{intakeError ? "素材接入暂不可用" : intake?.pending_files.length ? `${intake.pending_files.length} 个外部文件等待确认复制完成` : "素材目录需要检查"}</span><Button variant="ghost" onClick={() => setImportOpen(true)} type="button">查看接入</Button></div> : null}
-
-        {error ? (
-          <div className="library-error" role="alert">
-            <AlertCircle size={15} />
-            {error}
-          </div>
-        ) : null}
-        {listBusy === "search" ? <p className={styles.searchStatus} role="status">正在更新素材列表…</p> : needsVisibleRead ? <p className={styles.searchStatus} role="status">请刷新素材列表后再选择或引用。</p> : null}
-
-        {selectionLost || segmentLost ? (
-          <div className="library-error" role="alert">
-            <AlertCircle size={15} />
-            {assistantSelectionLost
-              ? "选中的素材已不在当前列表中。已停止编辑，未保存的说明不会写入其他素材；请重新选择一个素材后再保存。"
-              : editAnchorRangeLost
-                ? "正在编辑的片段时间范围已变化。草稿已保留；不会保存到新的时间范围。"
-                : editAnchorLost
-                ? "正在编辑的素材已不在当前结果中。草稿已保留；找回该素材后可继续保存，不会写入其他素材。"
-                : "选中的片段已不在该素材中。已停止编辑，未保存的说明不会写入其他片段；请重新选择一个片段后再保存。"}
-          </div>
-        ) : null}
-
-        <MaterialResults assets={visible} selectedId={selected?.id ?? null} selectionDisabled={selectionBlocked} viewMode={viewMode} hasFilters={Boolean(query || filter !== "all" || mediaType !== "all" || initialTag)} hasTagFilter={Boolean(initialTag)} intakeBound={Boolean(intake?.bound_to_current_workspace)} failedThumbnails={failedThumbnails} onThumbnailFailure={id => setFailedThumbnails(current => ({ ...current, [id]: true }))} onSelect={selectAsset} onReference={referenceSelection ? appendMaterialReference : undefined} onResetFilters={resetAllFilters} onImport={() => setImportOpen(true)} />
-        {hasMore ? (
-          <div className="library-load-more">
-            <Button variant="ghost"
-              disabled={busy !== null || acceptedSearch !== searchScope}
-              onClick={() => void loadMore()}
-              type="button"
-            >
-              {busy === "load" ? (
-                <LoaderCircle className="is-spinning" size={15} />
-              ) : null}
-              {busy === "load"
-                ? "正在载入…"
-                : `载入更多（剩余 ${Math.max(0, totalCount - assets.length)}）`}
-            </Button>
-          </div>
-        ) : null}
+        {materialBrowser}
         <details className={styles.notesEditor}>
           <summary>给选中素材保存公共背景（可选）</summary>
           <p>仅列出当前已加载素材。请明确勾选本批文件，不会默认应用到全库。</p>
@@ -978,8 +1006,8 @@ export function MaterialLibraryWorkspace({
           {batchNoteSaved ? <p role="status">选中素材的公共背景已保存。</p> : null}
           <Button variant="ghost" disabled={busy !== null || !noteBatchAssets.length} onClick={() => void saveNotes(noteBatchAssets, batchContext)} type="button">保存选中素材背景</Button>
         </details>
-
-        {importOpen ? <HomeCardDialog kind="config" title="导入素材" onClose={() => setImportOpen(false)}>
+      </div>}
+      {importOpen ? <HomeCardDialog kind="config" title="导入素材" onClose={() => setImportOpen(false)}>
         <MaterialDiscoveryPanel onReceived={() => { void refreshLibrary(); void refreshInsights(); }} />
         <details><summary>从接收目录或链接导入</summary>
         <MaterialIntakePanel intake={intake} intakeError={intakeError} intakeBusy={intakeBusy} busy={busy} importBusy={importBusy} importResult={importResult} onRefresh={() => void refreshIntakeStatus()} onBind={() => void bindIntake()} onLocalImport={() => void runImport()} onScan={() => void scan()} onConfirmCopy={file => void confirmCopy(file)} mediaLinkImport={<MediaLinkImportPanel linkUrl={linkUrl} linkBusy={linkBusy} linkCheck={linkCheck} linkImport={linkImport} linkError={linkError} disabled={busy !== null} onUrlChange={changeLinkUrl} onCheck={() => void runLinkCheck()} onImport={() => void runLinkImport()} />} />
@@ -987,7 +1015,6 @@ export function MaterialLibraryWorkspace({
         </HomeCardDialog> : null}
         {statisticsOpen ? <HomeCardDialog kind="detail" title="素材统计" onClose={() => setStatisticsOpen(false)}>
         <section className={styles.statistics} aria-label="素材覆盖"><p>{insights.asset_count} 个可见文件 · {insights.segment_count} 个片段</p><div className={styles.statTags}>{insights.tags.filter(entry => entry.asset_count > 0).map(entry => <Link key={entry.tag} href={"/library?tag=" + encodeURIComponent(entry.tag)}>{tagLabel(entry.tag)}<small>{entry.asset_count} 份素材</small></Link>)}</div><p>此处统计已有内容；具体缺口会在制作任务检查素材时显示。</p></section>        </HomeCardDialog> : null}
-      </div>}
     </AppShell>
   );
 }
