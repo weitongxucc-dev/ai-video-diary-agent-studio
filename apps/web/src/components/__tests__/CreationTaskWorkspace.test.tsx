@@ -2738,7 +2738,7 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByLabelText("字幕与封面工作区")).toBeInTheDocument();
     expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
-    expect(screen.getByText("源片预览 · 尚未出片")).toBeInTheDocument();
+    expect(screen.getByText("当前剪辑尚未合成")).toBeInTheDocument();
     expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "撤销" })).toBeEnabled();
   });
