@@ -593,7 +593,7 @@ class VoicePreviewService:
         retry: bool = False,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         grant_context=None, prepare_only: bool = False, member_identity: dict | None = None,
-        preview_records=None, prepared_reference_root: Path | None = None,
+        preview_records=None, prepared_reference_root: Path | None = None, saved_section: dict | None = None,
     ):
         from app.materials.contracts import MediaAuthorityError
         from app.profiles.preview_contracts import MediaPreviewRunRecord
@@ -641,6 +641,8 @@ class VoicePreviewService:
         })
         identity = hashlib.sha256((identity + json.dumps(reference_facts, sort_keys=True)).encode()).hexdigest()
         identity = hashlib.sha256(json.dumps([identity, viewer_user_id, local_diagnostic]).encode()).hexdigest()
+        if saved_section is not None:
+            identity = hashlib.sha256(json.dumps([identity, saved_section], sort_keys=True).encode()).hexdigest()
         existing = records.get_media_preview_run(workspace_id, "voice", identity)
         succeeded_reusable = authorization_failure is None and reference_error is None and not (
             existing is not None
@@ -809,21 +811,25 @@ class VoicePreviewService:
                 impact="声音预览输出缺失、为空或越出允许输出目录。",
                 repair_action="检查声音 provider 输出路径与文件后重试。",
             )
+        with output_path.open('rb') as output:
+            output_sha256 = hashlib.file_digest(output, 'sha256').hexdigest()
         return self._finish(
             records,
             running,
             status="succeeded",
             output_path=str(output_path),
+            output_sha256=output_sha256,
         )
 
     @staticmethod
-    def _finish(records, record, *, status, output_path=None, reason=None, impact=None, repair_action=None):
+    def _finish(records, record, *, status, output_path=None, reason=None, impact=None, repair_action=None, output_sha256=None):
         from dataclasses import replace
 
         completed = replace(
             record,
             status=status,
             output_path=output_path,
+            output_sha256=output_sha256,
             reason=reason,
             impact=impact,
             repair_action=repair_action,

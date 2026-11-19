@@ -3607,6 +3607,11 @@ app.include_router(_task_script_http_router(('confirm_creation_task_script',)))
 
 
 
+def _saved_section_auditions():
+    from app.creation.saved_section_auditions import SavedSectionAuditions
+    return SavedSectionAuditions(production_repo, voice_preview_service.preview_output_path)
+
+
 app.include_router(build_task_narration_router(
     access_for=lambda: _exact_edit_access,
     adoption_for=lambda: _assistant_creation_adoption_scope,
@@ -3625,6 +3630,8 @@ app.include_router(build_task_narration_router(
     path_for=lambda: Path,
     file_response_for=lambda: FileResponse,
     ingress_for=lambda: _submit_audio_ingress,
+    auditions_for=_saved_section_auditions,
+    audition_actor_for=lambda request, ws: _require_permit_actor(request, ws),
 ))
 
 

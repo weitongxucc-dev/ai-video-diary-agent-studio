@@ -1156,6 +1156,10 @@ class CreationJobOwnerVerifier:
                     or record.duration_seconds != segment.duration_seconds or record.sample_rate != segment.sample_rate):
                 raise ValueError('已保存配音片段的文字、声音或发音版本不匹配，须先核对原产物')
             path = Path(record.audio_path)
+            if record.audition_input_digest is not None:
+                from app.creation.narration_artifacts import audition_source_digest
+                if record.audition_input_digest != audition_source_digest(inputs.voice, reference_input, pronunciation, language):
+                    raise PermissionError('已采用试听的原声线、授权或参考已变化，请核对原产物。')
             source_stat = path.stat()
             if source_stat.st_size <= 0:
                 raise ValueError('已保存配音片段为空')

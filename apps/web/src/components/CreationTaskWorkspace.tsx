@@ -7,6 +7,7 @@ import { canOpenStage } from "./creation-task/stage-navigation";
 import { editExecutionReadinessMessage } from './creation-task/stage-labels';
 import { saveTaskVideo, saveTaskCover, saveTaskSubtitles, type SaveFeedback } from "./creation-task/output-saving";
 import { ReviewOutputView } from "./creation-task/ReviewOutputView";
+import { NarrationAuditionPicker } from "./creation-task/NarrationAuditionPicker";
 import { NarrationPreparation } from "./creation-task/NarrationPreparation";
 import type { AuditionVoice } from "./creation-task/DeliveryVoiceSample";
 import { ScriptWindowStart } from "./creation-task/ScriptWindowEditor";
@@ -1923,6 +1924,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <details className={styles.runDetails}><summary>保存到文案库</summary><ScriptLibrarySave key={latestScript.id} script={latestScript} onReloadSource={async () => { await refresh(true); }} /></details> : null}
 
         {pendingVoiceSelection ? <p role="status">声音采用请求等待核对。<Button variant="outline" type="button" disabled={busy !== null} onClick={() => void handleNarrationVoice("query")}>查询声音采用结果</Button>{voiceSelectionNotFound === pendingVoiceSelection.request_id ? <Button variant="outline" type="button" disabled={busy !== null} onClick={() => void handleNarrationVoice("replay")}>继续原声音采用请求</Button> : null}</p> : null}
+        {activeView === "narration" && task.stage === "narration" && !workspace.narration && scriptAudition && latestScript?.id === task.confirmed_script_id && latestScript?.selection_status === "confirmed" ?
+          <NarrationAuditionPicker key={JSON.stringify([task.id, latestScript.id, latestScript.updated_at, scriptAudition])}
+            script={latestScript} disabled={busy !== null || task.stage_status === "running"} /> : null}
         {activeView === "narration" && task.stage === "narration" && !workspace.narration ? (
           <NarrationPreparation taskId={task.id} canReviseScript={Boolean(task.can_revise_script)} scriptConfirmed={latestScript?.selection_status === "confirmed"} scriptSectionCount={workspace.scripts.find(script => script.id === task.confirmed_script_id)?.sections_total_count ?? 0} boundVoice={workspace.plan.selected_voice} deliveryLanguage={workspace.plan.language} voices={workspace.available_voices} selectedVoiceId={selectedVoiceId} recordings={recordings} recordingsError={recordingsError} busy={busy ?? (pendingVoiceSelection ? "voice-select" : null)}
             onRecord={() => setRecordingOpen(true)} onReviseScript={() => openView("script")} onAdoptRecording={recording => void adoptRecordedVoice(recording)} onVoiceChange={setSelectedVoiceId}

@@ -1,8 +1,9 @@
 """Independent voice/avatar preview HTTP; existing services and runtime own execution."""
 from dataclasses import replace
+import hashlib
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from app.creation_execution import CreationExecutionActor
 from app.models import utc_now
@@ -88,7 +89,11 @@ def build_preview_router(*, records_for, workspace_for, reader_for, actor_for,
         actor = actor_for(request, ws)
         runtime = runtime_for()
         try:
-            params = payload.model_dump()
+            params = payload.model_dump(exclude={'saved_section'})
+            if payload.saved_section is not None:
+                from app.creation.saved_section_auditions import SavedSectionAuditions
+                params = SavedSectionAuditions(records_for(), voice_service_for().preview_output_path).preview_params(
+                    actor, payload.saved_section.model_dump(), params)
             run = voice_service_for().request(repository=records_for(), workspace_id=ws,
                 viewer_user_id=user, local_diagnostic=diagnostic, prepare_only=True, member_identity=actor.identity_payload(), **params)
             if run.status == "queued" and not run.device_request_id:
@@ -145,6 +150,38 @@ def build_preview_router(*, records_for, workspace_for, reader_for, actor_for,
             return diagnostic
         original = CreationExecutionActor.from_event(run.workspace_id, run.member_identity)
         return user == (original.user_id or original.member_id)
+
+    def read_exact_voice_preview(identity: str, run_id: str, request: Request, sha256: str):
+        ws = workspace_for(request)
+        actor = actor_for(request, ws)
+        repo = records_for()
+        try:
+            with repo._connect() as conn:
+                run = repo.preview_records.read(ws, run_id, connection=conn)
+        except KeyError as exc:
+            raise HTTPException(404, 'voice preview not found') from exc
+        if run.preview_type != 'voice' or run.identity != identity or run.member_identity != actor.identity_payload():
+            raise HTTPException(404, 'voice preview not found')
+        try:
+            voice = repo.profile_inputs.resolve_narration_inputs(workspace_id=ws, episode_id=run.preview_input.get('episode_id', 'voice_preview'),
+                voice_profile_id=run.voice_profile_id, voice_version=run.voice_version).voice
+            from app.profiles.contracts import profile_use_failure
+            if (profile_use_failure(voice, content_type='voice', usage_scope='narration') or not voice.authorization
+                    or (run.authorization_id, run.authorization_version) != (voice.authorization.id, voice.authorization.version)):
+                raise PermissionError
+            repo.profile_reference_input(voice, viewer_user_id=actor.user_id or actor.member_id)
+            path = voice_service_for().preview_output_path(ws, run.identity)
+            if (run.status != 'succeeded' or run.output_path != str(path) or path.resolve() != path
+                    or run.output_sha256 not in {None, sha256}):
+                raise ValueError
+            audio = path.read_bytes()
+            if hashlib.sha256(audio).hexdigest() != sha256:
+                raise ValueError
+        except PermissionError as exc:
+            raise HTTPException(403, '原试听声音授权已失效。') from exc
+        except (KeyError, ValueError, OSError) as exc:
+            raise HTTPException(409, '原试听 PCM 已变化，请重新读取候选。') from exc
+        return Response(audio, media_type='audio/wav', headers={'Cache-Control': 'private, no-store'})
 
 
     @router.post("/api/media/previews/{preview_type}/{identity}/cancel", response_model=MediaPreviewRunResponse)
@@ -217,7 +254,13 @@ def build_preview_router(*, records_for, workspace_for, reader_for, actor_for,
         preview_type: str,
         identity: str,
         request: Request,
-    ) -> FileResponse:
+        run_id: str | None = None,
+        sha256: str | None = Query(default=None, pattern=r'^[0-9a-f]{64}$'),
+    ) -> Response:
+        if run_id is not None or sha256 is not None:
+            if preview_type != 'voice' or not run_id or not sha256:
+                raise HTTPException(422, '试听播放需要原尝试及 WAV 校验值。')
+            return read_exact_voice_preview(identity, run_id, request, sha256)
         if preview_type not in {"voice", "avatar_lipsync"}:
             raise HTTPException(status_code=422, detail="invalid preview type")
         run = records_for().preview_records.get_media_preview_run(

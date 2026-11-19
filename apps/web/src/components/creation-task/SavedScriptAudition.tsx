@@ -7,8 +7,10 @@ import styles from "../CreationTaskWorkspace.module.css";
 
 type SavedSection = { ordinal: number; section: CreationTaskScriptSection };
 
-export function SavedScriptAudition({ sourceVersion, items, voice }: {
-    sourceVersion: string;
+export function SavedScriptAudition({ taskId, scriptId, updatedAt, items, voice }: {
+    taskId: string;
+    scriptId: string;
+    updatedAt: string;
     items: readonly SavedSection[];
     voice: AuditionVoice;
 }) {
@@ -26,7 +28,8 @@ export function SavedScriptAudition({ sourceVersion, items, voice }: {
             </select>
         </label>
         {section ? <DeliveryVoiceSample {...voice} savedSection={{
-            sourceKey: JSON.stringify([sourceVersion, section.id]),
+            sourceKey: JSON.stringify([JSON.stringify([taskId, scriptId, updatedAt]), section.id]),
+            reference: { task_id: taskId, script_id: scriptId, section_id: section.id },
             text: section.content,
         }}/> : null}
     </details>;
