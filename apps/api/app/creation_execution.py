@@ -1189,7 +1189,7 @@ class CreationJobOwnerVerifier:
         else:
             # Whole-source metadata is the original request's recovery proof.
             # Segment bodies are encoded one row at a time in this snapshot.
-            from app.creation.narration_duration import narration_file_facts, narration_files_digest, timing_summary
+            from app.creation.narration_duration import narration_file_facts
             audio = self.narration_audio_budget
             ready_inputs, source_files, ordered_ids = [], [], []
             for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, script, connection=conn):
@@ -1202,10 +1202,6 @@ class CreationJobOwnerVerifier:
                 source_files.append(facts)
             if audio is None or not ready_inputs:
                 raise ValueError('配音合并缺少全部ready片段或独立CPU音频预算')
-            timing = timing_summary([item['duration_seconds'] for item in ready_inputs],
-                script.sections_total_count, plan.duration_target_seconds)
-            if timing["exceeds_target"] and (plan.presenter_selection is not None or self.segments is None):
-                raise NarrationDurationReviewRequired(timing, narration_files_digest(source_files))
             manifest['source_files'] = source_files
             from app.creation.narration_pcm import pcm_manifest_digest
             def segments():
@@ -1213,12 +1209,14 @@ class CreationJobOwnerVerifier:
                     task, script, connection=conn))
             source_digest = pcm_manifest_digest(manifest, segments())
             resources = self.pcm_resources(conn, job, common, ready_inputs, source_files,
-                source_digest, ordered_ids, limits, plan, pcm_preparation=pcm_preparation, request=request)
+                source_digest, ordered_ids, limits, plan, pcm_preparation=pcm_preparation, request=request,
+                review_duration=plan.presenter_selection is not None or self.segments is None)
             return 'narration:merge:v1:' + pcm_manifest_digest(manifest, segments(), resources=resources), resources
         digest = hashlib.sha256(json.dumps([manifest, resources], sort_keys=True, default=str).encode()).hexdigest()
         return prefix + digest, resources
 
-    def pcm_resources(self, conn, job, common, ready_inputs, source_files, source_digest, ordered_ids, limits, plan, *, pcm_preparation=None, request=None):
+    def pcm_resources(self, conn, job, common, ready_inputs, source_files, source_digest, ordered_ids, limits, plan, *,
+                      pcm_preparation=None, request=None, review_duration=False):
         from app.creation.narration_pcm import prepare_sources, prepared_source_facts, work_baseline
         audio = self.narration_audio_budget
         checkpoint = self.repository.narration_checkpoints.creation_narration_merge_checkpoint(job.workspace_id, job.id, connection=conn)
@@ -1244,6 +1242,15 @@ class CreationJobOwnerVerifier:
                 raise RecoveryBlocked('PCM格式准备必须在原动作的写事务外完成')
             pcm_preparation=prepare_sources(item[1] for item in source_files)
         original_sources=[prepared_source_facts(item[1],pcm_preparation) for item in source_files]
+        if review_duration:
+            from app.creation.narration_duration import narration_files_digest, timing_summary
+            measured = [item["pcm_frames"] / 24000 for item in original_sources]
+            timeline_durations = [max(seconds, item["duration_seconds"])
+                for seconds, item in zip(measured, ready_inputs, strict=True)]
+            timing = timing_summary(measured, len(ordered_ids), plan.duration_target_seconds,
+                timeline_durations=timeline_durations)
+            if timing["exceeds_target"]:
+                raise NarrationDurationReviewRequired(timing, narration_files_digest(source_files))
         sources=original_sources[covered:covered+count]
         if not sources:
             raise RecoveryBlocked('原PCM检查点没有可追加的片段')

@@ -11,9 +11,10 @@ from app.models import utc_now
 DELIVERY_FRAME_RATE = 30
 
 
-def timing_summary(durations, total_count, target_seconds):
+def timing_summary(durations, total_count, target_seconds, *, timeline_durations=None):
     measured = math.fsum(durations)
-    required_frames = sum(max(1, math.ceil(seconds * DELIVERY_FRAME_RATE - 1e-9)) for seconds in durations)
+    required_frames = sum(max(1, math.ceil(seconds * DELIVERY_FRAME_RATE - 1e-9))
+        for seconds in (durations if timeline_durations is None else timeline_durations))
     return {
         "completed_sections": len(durations),
         "total_sections": total_count,
@@ -89,8 +90,15 @@ class NarrationDurationReview:
             plan = self.repository.plan_records.read_creation_plan(conn, workspace_id, task.plan_id)
             summary = self._status(conn, task, plan)
             original = self._original(conn, task, actor)
-            return {"task_id": task.id, **summary,
-                    "review_id": original[1].id if original and summary == original[1].payload["timing"] else None}
+            review_id = None
+            if original and self._same_completed_input(summary, original[1].payload["timing"]):
+                summary = original[1].payload["timing"]
+                review_id = original[1].id
+            return {"task_id": task.id, **summary, "review_id": review_id}
+
+    @staticmethod
+    def _same_completed_input(summary, measured):
+        return all(summary[key] == measured[key] for key in ("completed_sections", "total_sections", "target_seconds"))
 
     def adopt(self, workspace_id, task_id, actor, *, request_id, review_id):
         with self.repository._connect() as conn:
@@ -114,8 +122,9 @@ class NarrationDurationReview:
             snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id, connection=conn)
             plan = snapshot.plan
             files = []
-            timing = self._status(conn, task, plan, files=files)
-            if (snapshot.input_digest != job.input_digest or timing != wait.payload["timing"]
+            summary = self._status(conn, task, plan, files=files)
+            timing = wait.payload["timing"]
+            if (snapshot.input_digest != job.input_digest or not self._same_completed_input(summary, timing)
                     or narration_files_digest(files) != wait.payload["files_digest"]
                     or not timing["exceeds_target"] or timing["completed_sections"] != timing["total_sections"]
                     or task.stage != "narration" or task.narration_cache_key or task.montage_plan_id or task.current_timeline_version_id):

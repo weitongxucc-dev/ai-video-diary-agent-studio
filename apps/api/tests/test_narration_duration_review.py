@@ -2,6 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
+import wave
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,6 +30,21 @@ def test_overflow_keeps_the_final_wav_and_reuses_the_original_job(tmp_path, monk
         case.repo.plan_records.write_plan_payload(conn, "local", plan)
     case.job = case.execution.start("local", task.id, script.id, revision_digest(script, plan), actor=case.actor)
     case.owner.segments = case.executor.segments = SimpleNamespace(waiting_for_visual_decision=lambda _job: False)
+    samples = 23999 if scoped_budget else 24000
+    measured_seconds = 3 * samples / 24000
+    original_generator = case.stage.generator.generate_for_creation_task
+
+    def segment_with_rounded_duration(**kwargs):
+        result = original_generator(**kwargs)
+        if samples != 24000:
+            with wave.open(result.audio_path, "rb") as original:
+                params, data = original.getparams(), original.readframes(samples)
+            with wave.open(result.audio_path, "wb") as shorter:
+                shorter.setparams(params)
+                shorter.writeframes(data)
+        return result
+
+    monkeypatch.setattr(case.stage.generator, "generate_for_creation_task", segment_with_rounded_duration)
     initial_binding = case.repo.creation_execution_jobs.creation_narration_source_binding("local", case.job.id)
     start_event_id = f"event_{case.job.id}_start"
     initial_start = case.repo.execution_records.get_task_event("local", start_event_id)
@@ -49,7 +65,7 @@ def test_overflow_keeps_the_final_wav_and_reuses_the_original_job(tmp_path, monk
         assert case.scheduler._get(grant.request_id).state == "done"
         progress = client.get(path).json()
         assert progress["completed_sections"] == ordinal
-        assert progress["measured_seconds"] == ordinal
+        assert progress["measured_seconds"] == pytest.approx(measured_seconds if ordinal == 3 else ordinal)
         assert progress["target_seconds"] == 2
         assert bool(progress["review_id"]) == (ordinal == 3)
     assert case.scheduler.pick_and_grant() is None
@@ -75,6 +91,7 @@ def test_overflow_keeps_the_final_wav_and_reuses_the_original_job(tmp_path, monk
     assert saved.status_code == 200, saved.text
     assert saved.json()["job_id"] == case.job.id
     assert saved.json()["duration_target_seconds"] == 3
+    assert saved.json()["measured_seconds"] == pytest.approx(measured_seconds)
     assert client.put(path, json=command).json() == saved.json()
     assert client.put(path, json={**wrong, "request_id": command["request_id"]}).status_code == 409
     assert client.get(path).json()["review_id"] is None
@@ -105,7 +122,7 @@ def test_overflow_keeps_the_final_wav_and_reuses_the_original_job(tmp_path, monk
     assert case.scheduler._get(merge.request_id).state == "done"
     adopted = case.repo.task_records.get_creation_task("local", case.task_id)
     full_audio = case.repo.narration_artifacts.get_narration_artifact("local", adopted.narration_cache_key)
-    assert full_audio.duration_seconds == 3
+    assert full_audio.duration_seconds == measured_seconds
     assert len(case.generated) == 3
     assert [case.scheduler._get(item[0]) for item in case.generated] == original_requests
     assert len(case.execution.jobs("local", case.task_id)) == 1
