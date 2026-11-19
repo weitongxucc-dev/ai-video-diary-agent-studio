@@ -5936,11 +5936,15 @@ def _build_device_components(*, repository: ProductionRepository):
     creation_registration = registrations["creation_job"]
     registrations["creation_job"] = replace(creation_registration,
         on_stopped=creation_registration.executor.record_stopped)
+    from app.device_resource_configuration import narration_invocation_facts
     from app.profile_preview_execution import profile_preview_registration
     registrations["media_preview"] = profile_preview_registration(repository,
         voice_service=voice_preview_service, avatar_service=avatar_preview_service,
         narration_budget=narration_budget, presenter_budget=presenter_budget,
-        verify_identity=_verify_creation_identity)
+        verify_identity=_verify_creation_identity,
+        voice_runtime_facts=lambda provider, output: narration_invocation_facts(
+            settings=settings, model_catalog=model_catalog, provider=provider,
+            database_path=repository.database_path, output_directory=output))
     registrations["platform_publish"] = platform_publish_registration(
         repository, platform_auth_service,
         publishable_output_for=_platform_publish_output_for,

@@ -573,6 +573,13 @@ class VoicePreviewService:
         self.output_root = Path(output_root).expanduser().resolve()
         self.provider = provider
 
+    def preview_output_path(self, workspace_id: str, identity: str) -> Path:
+        directory = self.output_root / "previews" / "voice" / _safe_component(workspace_id)
+        path = directory / f"{identity}.wav"
+        if path.resolve() != path:
+            raise ValueError("声音试听成品目录或文件与原路径不一致")
+        return path
+
     def request(
         self,
         *,
@@ -586,7 +593,7 @@ class VoicePreviewService:
         retry: bool = False,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         grant_context=None, prepare_only: bool = False, member_identity: dict | None = None,
-        preview_records=None,
+        preview_records=None, prepared_reference_root: Path | None = None,
     ):
         from app.materials.contracts import MediaAuthorityError
         from app.profiles.preview_contracts import MediaPreviewRunRecord
@@ -737,21 +744,31 @@ class VoicePreviewService:
         if (grant_context.grant.owner_type != "media_preview" or
                 not grant_context.grant.unit_key.startswith("voice:")):
             raise PermissionError("独立预览需要准确的media_preview单位许可")
-        output_path = (
-            self.output_root
-            / "previews"
-            / "voice"
-            / _safe_component(workspace_id)
-            / f"{identity}.wav"
-        )
+        output_path = self.preview_output_path(workspace_id, identity)
         from app.granted_subprocess import GrantedCommandError
         try:
-            if grant_context is not None:
+            if prepared_reference_root is not None:
+                from app.profile_reference_media import materialize_reference
+                scratch = prepared_reference_root / "voice-preview-references"
+                if (prepared_reference_root != Path(self.provider.temporary_root).resolve()
+                        or scratch.resolve() != scratch):
+                    raise ValueError("声音试听派生参考目录与本次标定写入声明不一致")
+
+                def recheck_reference():
+                    grant_context.check()
+                    current = repository.profile_reference_input(voice, viewer_user_id=viewer_user_id,
+                        local_diagnostic=local_diagnostic)
+                    if current != reference_input:
+                        raise ValueError("声音参考修订已变化，请重新排队")
+
+                artifact = materialize_reference(reference_input, output_root=scratch,
+                    grant_context=grant_context, recheck=recheck_reference)
+            else:
                 artifact = repository.materialize_profile_reference(voice, viewer_user_id=viewer_user_id,
                     local_diagnostic=local_diagnostic, grant_context=grant_context)
-                if artifact.source != reference_input:
-                    raise ValueError("声音参考修订已变化，请重新排队")
-                reference = artifact.path
+            if artifact.source != reference_input:
+                raise ValueError("声音参考修订已变化，请重新排队")
+            reference = artifact.path
             result = self.provider.generate_granted(
                 text=preview_text.strip(),
                 reference_audio_path=reference,

@@ -221,14 +221,19 @@ def narration_provider_binding(*, provider, status):
 
 
 def narration_execution_facts(*, settings, model_catalog, generator, database_path, workspace_id, task_id):
-    """Read the actual bound provider and its real write locations, without work.
+    """Use the generator's task-owned output layout and installed provider."""
+    output_directory = getattr(generator, 'task_output_directory', None)
+    if not callable(output_directory):
+        raise DeviceProfileUnavailable('配音生成器尚未提供实际任务输出目录')
+    return narration_invocation_facts(settings=settings, model_catalog=model_catalog,
+        provider=getattr(generator, 'provider', None), database_path=database_path,
+        output_directory=output_directory(workspace_id=workspace_id, task_id=task_id))
 
-    The generator owns task output layout. The model catalog owns installation
-    identity. No budget value or provider class name proves either fact.
-    """
+
+def narration_invocation_facts(*, settings, model_catalog, provider, database_path, output_directory):
+    """Read actual provider identity and invocation write locations, without work."""
     from app.model_runtime import QWEN3_TTS_06B_BASE_8BIT
     status = model_catalog.status(QWEN3_TTS_06B_BASE_8BIT)
-    provider = getattr(generator, 'provider', None)
     paths = narration_provider_binding(provider=provider, status=status)
     # Bind identity to this exact catalog observation, not a second potentially
     # changed status lookup while constructing the same execution declaration.
@@ -236,17 +241,26 @@ def narration_execution_facts(*, settings, model_catalog, generator, database_pa
         model_catalog=SimpleNamespace(status=lambda _spec: status))
     if identity is None:
         raise DeviceProfileUnavailable('配音模型、worker或隔离运行依赖身份无法核实，请重新准备对应能力')
-    output_directory = getattr(generator, 'task_output_directory', None)
-    if not callable(output_directory):
-        raise DeviceProfileUnavailable('配音生成器尚未提供实际任务输出目录')
     write_paths = {'database': _actual_narration_path(database_path).parent,
         'temporary': _actual_narration_path(getattr(provider, 'temporary_root', None)),
         'model_cache': _actual_narration_path(getattr(provider, 'cache_root', None)),
-        'output': _actual_narration_path(output_directory(workspace_id=workspace_id, task_id=task_id))}
+        'output': _actual_narration_path(output_directory)}
     if paths != narration_provider_binding(provider=provider, status=status):
         raise DeviceProfileUnavailable('配音执行器在事实读取期间已更换，请重新读取')
     return {'backend_identity': identity,
             'write_paths': {name: str(path) for name, path in write_paths.items()}}
+
+
+def narration_reference_sha256(reference):
+    """Read bytes from the same qualified file revision used for preparation."""
+    expected = (reference.source_path, reference.device, reference.inode,
+                reference.size_bytes, reference.mtime_ns, reference.ctime_ns)
+    if _file_key(reference.source_path) != expected:
+        raise ValueError('声音参考文件修订已变化，请重新准备')
+    digest = _file_digest(expected)
+    if _file_key(reference.source_path) != expected:
+        raise ValueError('声音参考文件在核验期间变化，请重新准备')
+    return digest
 
 
 @lru_cache()

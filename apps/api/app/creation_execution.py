@@ -373,15 +373,34 @@ def narration_edit_digest(operation):
 
 def narration_scope_fields(budget, *, task, inputs, reference, language, max_output_bytes,
                            runtime_facts=None, source_binding=None):
+    if budget.input_scope == 'single_call_prepared_v1':
+        if (not isinstance(source_binding, dict)
+                or (source_binding.get('workspace_id'), source_binding.get('task_id'),
+                    source_binding.get('voice_id'), source_binding.get('voice_version')) !=
+                   (task.workspace_id, task.id, inputs.voice.id, inputs.voice.version)
+                or source_binding.get('narration_reference', {}).get('reference') != asdict(reference)):
+            raise ValueError('正常配音形状缺少同一授权来源的完整字节封存')
+        runtime = runtime_facts(task.workspace_id, task.id) if runtime_facts is not None else None
+        reference_sha256 = source_binding['sha256']
+    else:
+        runtime = reference_sha256 = None
+    return single_call_narration_scope_fields(budget, inputs=inputs, reference=reference,
+        workspace_id=task.workspace_id, pronunciation_scope_id=task.id, language=language,
+        max_output_bytes=max_output_bytes, runtime=runtime, reference_sha256=reference_sha256)
+
+
+def single_call_narration_scope_fields(budget, *, workspace_id, pronunciation_scope_id, inputs,
+                                      reference, language, max_output_bytes, runtime=None,
+                                      reference_sha256=None):
+    """Check declared single-call resources against their observed invocation."""
     from app.host_resource_probes import narration_scope_basis
     scope = budget.input_scope
     if scope == 'single_call_experiment_v1':
         return {'input_scope': scope, 'budget_basis': narration_scope_basis(scope)}
     if scope != 'single_call_prepared_v1':
         raise ValueError('普通配音需要已准备的单次资源档；准备许可不能充当作品执行许可')
-    if runtime_facts is None:
+    if runtime is None:
         raise ValueError('正常配音尚未接入实际执行器身份与写入目录')
-    runtime = runtime_facts(task.workspace_id, task.id)
     if (not isinstance(runtime, dict)
             or runtime.get('backend_identity') != budget.preparation_backend_identity):
         raise ValueError('实际配音后端与模型准备回执不一致，请重新准备')
@@ -389,19 +408,14 @@ def narration_scope_fields(budget, *, task, inputs, reference, language, max_out
     if (not isinstance(paths, dict) or set(paths) != {'database', 'temporary', 'model_cache', 'output'}
             or any(not isinstance(value, str) or not Path(value).is_absolute() for value in paths.values())):
         raise ValueError('正常配音缺少数据库、临时文件、模型缓存或实际成品目录')
-    if (not isinstance(source_binding, dict)
-            or (source_binding.get('workspace_id'), source_binding.get('task_id'),
-                source_binding.get('voice_id'), source_binding.get('voice_version')) !=
-               (task.workspace_id, task.id, inputs.voice.id, inputs.voice.version)
-            or source_binding.get('narration_reference', {}).get('reference') != asdict(reference)):
-        raise ValueError('正常配音形状缺少同一授权来源的完整字节封存')
     from app.narration_resource_preparation import narration_preparation_shape_digest
     from app.profiles.contracts import profile_cache_identity
     from app.narration import _pronunciation_dictionary
     dictionary = _pronunciation_dictionary(entries=inputs.pronunciation_entries,
-        workspace_id=task.workspace_id, person_profile_id=inputs.voice.person_profile_id, task_id=task.id)
+        workspace_id=workspace_id, person_profile_id=inputs.voice.person_profile_id,
+        task_id=pronunciation_scope_id)
     actual_shape = narration_preparation_shape_digest(voice_identity=profile_cache_identity(inputs.voice),
-        reference=asdict(reference), reference_sha256=source_binding['sha256'],
+        reference=asdict(reference), reference_sha256=reference_sha256,
         reference_text=inputs.voice.reference_text, language=language,
         pronunciation_dictionary=dictionary)
     if actual_shape != budget.preparation_shape_digest:
