@@ -981,9 +981,9 @@ def test_range_presenter_consumes_explicit_person_not_voice_relationship(reposit
     observed = []
     original = repository.profile_records.get_person_profile
 
-    def read_person(ws, person_id, version=None):
+    def read_person(ws, person_id, version=None, *, connection=None):
         observed.append((ws, person_id, version))
-        return original(ws, person_id, version)
+        return original(ws, person_id, version, connection=connection)
 
     monkeypatch.setattr(repository.profile_records, 'get_person_profile', read_person)
     inputs = presenter_inputs(repository, task, script, plan, {'fast': 'test-model'})
