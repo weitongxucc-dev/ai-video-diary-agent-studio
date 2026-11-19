@@ -66,11 +66,7 @@ class ScriptContextUseCase:
         return task, plan, topic, sources, input_references
 
     def topic_origin(self, workspace_id: str, plan: CreationPlan, topic: CreationTaskTopicCandidate) -> Literal["generated", "provided"]:
-        intent = plan.creation_intent
-        if not intent or not (intent.get("topic_title") or intent.get("final_script")):
-            return "generated"
-        run = self.repository.topic_records.get_topic_generation_run(workspace_id, topic.run_id)
-        return "provided" if run.task_id == topic.task_id and run.route_snapshot.get("operation") == "provided_topic" else "generated"
+        return self.repository.topic_records.confirmed_topic_origin(workspace_id, plan.id, topic)
 
     def goal(self, plan: CreationPlan, task: CreationTask, viewer_user_id: str | None) -> str:
         from app.creation.intent_use_case import CreationIntentUseCase
