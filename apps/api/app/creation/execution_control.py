@@ -1,9 +1,11 @@
 """Creation execution control, original queue reconciliation and status projection."""
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from contextlib import ExitStack, nullcontext
 from datetime import datetime
+import hashlib
+import json
 import logging
 import threading
 import time
@@ -540,12 +542,23 @@ class CreationExecutionControl:
                 request = self.repository.job_records.creation_execution_wait_row(
                     job.workspace_id, original.member_id, job.id, job.input_digest)
                 stage = request["unit_key"].split(":", 1)[0] if request is not None else task.stage
-                self.repository.creation_execution_jobs.interrupt_creation_execution(TaskEvent(
+                event = TaskEvent(
                     id=f"event_{job.id}_recovery_{job.attempt}", workspace_id=job.workspace_id,
                     task_id=job.task_id, job_id=job.id, event_type="creation_execution_stage",
                     payload={"stage": stage, "status": "interrupted",
                              "reason": job.failure_reason or "process_interrupted", "permit_retained": False},
-                    created_at=job.updated_at),
+                    created_at=job.updated_at)
+                # Older versions keyed recovery only by attempt. An actual unit can
+                # become visible after that first receipt, before any new grant.
+                try:
+                    previous = self.repository.execution_records.get_task_event(job.workspace_id, event.id)
+                except KeyError:
+                    previous = None
+                if previous != event:
+                    facts = [job.input_digest, event.created_at.isoformat(), event.payload]
+                    suffix = hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
+                    event = replace(event, id=f"{event.id}_{suffix}")
+                self.repository.creation_execution_jobs.interrupt_creation_execution(event,
                     impact=job.impact or "本次执行中断，上游有效产物保留。",
                     repair_action="旧执行者已确认释放；继续前将重新核验身份、输入和资源。",
                     task_is_current=lambda conn: runtime.registrations["creation_job"].owner.owns_task_stage(
