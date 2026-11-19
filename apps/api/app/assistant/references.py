@@ -6,7 +6,10 @@ task, version and subtitle tracks must already be read through trusted access.
 from __future__ import annotations
 
 from collections.abc import Sequence
+
+from app.audio_timeline import effective_audio_timeline
 from app.creation.contracts import CreationTask, SubtitleTrack, TimelineVersion
+from app.montage import creation_task_montage_plan_from_payload
 
 
 class AssistantReferenceConflict(ValueError):
@@ -99,14 +102,18 @@ def validate_timeline_reference(reference: dict, *, task: CreationTask,
             cursor = end
         if found and spans:
             bounds = (spans[0][0], spans[-1][1])
-    elif kind == "audio":
-        tracks = (montage.get("audio_timeline") or {}).get("tracks", [])
-        for track in tracks:
-            clips = track.get("clips", []) if track["id"] == object_id else [item for item in track.get("clips", []) if item["id"] == object_id]
+    elif kind == "audio" and montage:
+        try:
+            plan = creation_task_montage_plan_from_payload(montage)
+            audio = effective_audio_timeline(plan)
+        except (TypeError, ValueError) as exc:
+            raise AssistantReferenceConflict("此版本的音轨引用已不可用，请重新选择。") from exc
+        for track in audio.tracks:
+            clips = track.clips if track.id == object_id else [clip for clip in track.clips if clip.id == object_id]
             if clips:
                 found = True
-                bounds = (min(item["timeline_start_ms"] for item in clips),
-                          max(item["timeline_start_ms"] + round((item["source_end_ms"] - item["source_start_ms"]) / item.get("playback_rate", 1)) for item in clips))
+                bounds = (min(clip.timeline_start_ms for clip in clips),
+                          max(clip.timeline_start_ms + clip.duration_ms for clip in clips))
                 break
     elif kind == "subtitle":
         for track in subtitle_tracks:
