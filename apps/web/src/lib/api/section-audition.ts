@@ -3,6 +3,7 @@ import { request } from "./transport";
 export type SectionAudition = {
   preview_run_id: string;
   output_url: string;
+  output_sha256: string;
   duration_seconds: number;
 };
 
@@ -17,6 +18,7 @@ export type SectionAuditionInput = {
   request_id: string;
   preview_run_id: string | null;
   expected_preview_run_id: string | null;
+  expected_output_sha256: string | null;
   expected_script_id: string;
   expected_script_updated_at: string;
 };

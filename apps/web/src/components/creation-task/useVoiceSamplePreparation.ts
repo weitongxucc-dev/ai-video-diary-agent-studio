@@ -56,7 +56,7 @@ function errorDetail(error: unknown): string {
     ? error.message : "暂时无法确认设备准备状态，请核对原请求。";
 }
 
-async function narrationShape(voice: Voice, text: string): Promise<NarrationPreparationRequest["shape"]> {
+async function narrationShape(voice: Voice, text: string, taskId?: string): Promise<NarrationPreparationRequest["shape"]> {
   const [profile, dictionary] = await Promise.all([
     getVoiceProfile(voice.profileId, voice.version), listPronunciationEntries(),
   ]);
@@ -68,15 +68,16 @@ async function narrationShape(voice: Voice, text: string): Promise<NarrationPrep
   return {
     voice_profile_id: voice.profileId, voice_version: voice.version, language: voice.language,
     text, output_duration_seconds: Math.max(6, Math.ceil(seconds * 1.5 + 2)),
-    // Standalone voice preview uses workspace and selected person's terms.
+    ...(taskId && { task_id: taskId }),
     pronunciation_references: dictionary.items.filter(entry => entry.workspace_id === profile.workspace_id &&
       (entry.scope === "workspace" && entry.scope_reference === null
-        || entry.scope === "person" && entry.scope_reference === profile.person_profile_id))
+        || entry.scope === "person" && entry.scope_reference === profile.person_profile_id
+        || Boolean(taskId) && entry.scope === "task" && entry.scope_reference === taskId))
       .map(({ id, version }) => ({ id, version })),
   };
 }
 
-export function useVoiceSamplePreparation({ profileId, version, language, sourceKey }: Voice & { sourceKey?: string }) {
+export function useVoiceSamplePreparation({ profileId, version, language, sourceKey, taskId }: Voice & { sourceKey?: string; taskId?: string }) {
   const [status, setStatus] = useState<DeviceResourceStatus | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [receipt, setReceipt] = useState<DevicePreparationReceipt | null>(null);
@@ -195,7 +196,7 @@ export function useVoiceSamplePreparation({ profileId, version, language, source
         if (!current.preparation_configured || current.profile_status !== "available") {
           throw new Error("请在桌面设置完成本机资源准备后再试。");
         }
-        const shape = await narrationShape(voice, text);
+        const shape = await narrationShape(voice, text, taskId);
         await refresh(scope);
         saved = { payload: { kind: "narration", request_id: crypto.randomUUID(), shape } };
         storeAttempt(key, saved);

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiUrl } from "@/lib/api";
 import { getCreationTaskScriptSections } from "@/lib/api/creation-tasks";
-import { readSectionAudition, saveSectionAudition, type SectionAuditionStatus } from "@/lib/api/section-audition";
+import { readSectionAudition, saveSectionAudition, type SectionAudition, type SectionAuditionStatus } from "@/lib/api/section-audition";
 import type { CreationTaskScript, CreationTaskScriptSectionWindow } from "@/lib/types";
 import { visibleError } from "../material-library/material-errors";
 import { WorkspaceAudio } from "../workbench/WorkspaceMedia";
@@ -27,12 +27,12 @@ function AuditionChoice({ script, sectionId, disabled }: {
     return () => { active = false; };
   }, [script.task_id, sectionId, revision]);
 
-  async function choose(id: string | null) {
+  async function choose(item: SectionAudition | null) {
     if (!status?.available || busy || disabled) return;
     setBusy(true);
     try {
       await saveSectionAudition(script.task_id, sectionId, {
-        request_id: crypto.randomUUID(), preview_run_id: id,
+        request_id: crypto.randomUUID(), preview_run_id: item?.preview_run_id ?? null, expected_output_sha256: item?.output_sha256 ?? null,
         expected_preview_run_id: status.selection?.preview_run_id ?? null,
         expected_script_id: script.id, expected_script_updated_at: script.updated_at,
       });
@@ -57,7 +57,7 @@ function AuditionChoice({ script, sectionId, disabled }: {
         <WorkspaceAudio controls preload="metadata" aria-label={`试听录音 ${index + 1}`} src={apiUrl(item.output_url)} />
         {selected ? <span role="status">已采用为本段配音</span>
           : <Button variant="outline" disabled={busy || disabled || !status.available}
-              onClick={() => void choose(item.preview_run_id)}>采用这次试听</Button>}
+              onClick={() => void choose(item)}>采用这次试听</Button>}
       </div>;
     })}
     {status.selection && <Button variant="ghost" disabled={busy || disabled || !status.available}

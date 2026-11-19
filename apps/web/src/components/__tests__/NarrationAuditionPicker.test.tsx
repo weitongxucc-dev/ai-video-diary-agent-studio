@@ -6,7 +6,7 @@ import type { CreationTaskScript } from "@/lib/types";
 
 const fixture = vi.hoisted(() => ({
   revision: "2026-11-19T09:10:00Z",
-  candidate: { preview_run_id: "take-2", output_url: "/takes/take-2.wav", duration_seconds: 6.4 },
+  candidate: { preview_run_id: "take-2", output_url: "/takes/take-2.wav", duration_seconds: 6.4, output_sha256: "c".repeat(64) },
   chosen: false,
 }));
 
@@ -46,7 +46,7 @@ it("adopts the played take on a confirmed section and can release the choice aft
   fireEvent.click(screen.getByRole("button", { name: "采用这次试听" }));
   await screen.findByText("已采用为本段配音");
   expect(saveSectionAudition).toHaveBeenCalledWith("work", "opening", {
-    request_id: expect.any(String), preview_run_id: "take-2", expected_preview_run_id: null,
+    request_id: expect.any(String), preview_run_id: "take-2", expected_preview_run_id: null, expected_output_sha256: fixture.candidate.output_sha256,
     expected_script_id: "script", expected_script_updated_at: fixture.revision,
   });
   view.unmount();
