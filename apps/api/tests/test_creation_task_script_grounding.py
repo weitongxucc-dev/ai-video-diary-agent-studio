@@ -1317,8 +1317,9 @@ def test_fragment_payload_losslessly_covers_unicode_fields_and_sources_without_f
     for field, original in fields.items():
         pieces = data['script']['sections'][0][field] if field != 'title' else data['script']['title']
         assert isinstance(pieces, list) and ''.join(item['text'] for item in pieces) == original
-        assert all(0 < len(item['text']) <= 200 for item in pieces)
+        assert all(item['text'] for item in pieces)
         all_ids.extend(item['quote_id'] for item in pieces)
+    assert any('🙂' * 430 in item['text'] for item in data['script']['sections'][0]['visual_prompt'])
     assert ''.join(item['text'] for item in data['script']['sections'][0]['title']) == candidate.sections[0].title
     source_pieces = data['sources'][0]['text']
     # Source preparation retains its existing strip/excerpt rules; chunking
@@ -1331,6 +1332,95 @@ def test_fragment_payload_losslessly_covers_unicode_fields_and_sources_without_f
     # The original fields are arrays of fragments, not an additional fulltext property.
     assert set(data['script']) == {'title', 'language', 'sections'}
     assert set(data['sources'][0]) == {'reference_id', 'kind', 'title', 'text'}
+
+
+@pytest.mark.parametrize('extension', ['', ' and then records the results in the shared production log' * 4])
+def test_one_section_review_keeps_verbatim_source_and_adjacent_context_in_the_same_quote(extension):
+    from app.topics import CreationTaskGeneratedScript, CreationTaskGeneratedScriptSection
+
+    translated = 'The fictional workshop checks every sample before packing it in a marked blue box' + extension + '.'
+    original = '虚构车间将逐件检查过的样品装进标有蓝色标识的盒子。'
+    prefix = '背景资料。' * 30 + original + ' English: '
+    assert len(prefix) < 200 < len(prefix + translated)
+    source_text = prefix + translated + ' Independent notes. ' * 30
+    request_input = replace(inputs(), language='en-US', sources=(
+        CreationTaskTopicSource('paired', 'knowledge', 'Paired captions', source_text),
+        CreationTaskTopicSource('unbound', 'knowledge', 'Unbound caption', source_text),
+    ))
+    candidate = CreationTaskGeneratedScript('Synthetic workshop', 'en-US', (
+        CreationTaskGeneratedScriptSection('Sample check', translated, 'Plan to show the boxes.', ('paired',)),))
+
+    def respond(request):
+        payload = json.loads(request.content)
+        data = json.loads(payload['messages'][1]['content'])
+        declared, unbound = (source['text'] for source in data['sources'])
+        for fragments in (declared, unbound):
+            assert ''.join(item['text'] for item in fragments) == source_text.strip()
+            assert all(item['text'] for item in fragments)
+        source_quote, = [quote for quote in declared if original in quote['text'] and translated in quote['text']]
+        content_quote, = data['script']['sections'][0]['content']
+        match = {
+            'candidate_quote_id': content_quote['quote_id'], 'source_quote_id': source_quote['quote_id'],
+        }
+        assert data['script']['sections'][0]['verbatim_matches'] == [match]
+        return _review_tool_response({'sections': [{'index': 1, 'supports': [match]}]})
+
+    checker = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        transport=httpx.MockTransport(respond))
+    checker.check_draft(request_input, candidate)
+
+
+@pytest.mark.parametrize('extra_claim', ['', 'The workshop has the highest sales in the country.'])
+def test_later_review_window_selects_complete_bilingual_evidence_and_keeps_unmatched_claims_for_review(extra_claim):
+    from app.topics import CreationTaskGeneratedScript, CreationTaskGeneratedScriptSection, CreationTaskScriptReviewWindow
+
+    lines = ('The fictional workshop checks every sample.', 'It uses a marked blue box.')
+    records = ('虚构车间逐件检查样品。 English: ' + lines[0], '车间使用标有蓝色标记的盒子。 English: ' + lines[1])
+    background = ('Unrelated background about the museum schedule.\n' * 16)
+    source_text = background + '\n'.join(records) + '\n' + background
+    request_input = replace(inputs(), language='en-US', sources=(
+        CreationTaskTopicSource('paired', 'knowledge', 'Paired captions', source_text),
+        CreationTaskTopicSource('unbound', 'knowledge', 'Unbound caption', '\n'.join((*records, extra_claim)).strip()),
+    ), review_window=CreationTaskScriptReviewWindow('script', 'saved', ('second',), 2,
+        finalizing=True, review_title=False))
+    content = ' '.join(filter(None, (*lines, extra_claim)))
+    candidate = CreationTaskGeneratedScript('Manuscript title', 'en-US', (
+        CreationTaskGeneratedScriptSection('Sample check', content, 'Plan to show the boxes.', ('paired',)),))
+    calls = []
+
+    def respond(request):
+        data = json.loads(json.loads(request.content)['messages'][1]['content'])
+        calls.append(data)
+        assert data['title_review_section_index'] is None and data['script']['title'] == []
+        source, = data['sources']
+        assert source['reference_id'] == 'evidence_1'
+        section, = data['script']['sections']
+        source_text_by_id = {piece['quote_id']: piece['text'] for piece in source['text']}
+        assert set(section['allowed_source_quote_ids']['evidence_1']) == set(source_text_by_id)
+        assert ''.join(piece['text'] for piece in section['content']) == content
+        matches = section['verbatim_matches']
+        assert len(matches) == len(records)
+        for match, record in zip(matches, records):
+            assert record in source_text_by_id[match['source_quote_id']]
+        if extra_claim:
+            assert not source.get('excerpted')
+            assert ''.join(source_text_by_id.values()) == source_text.strip()
+            return _review_tool_response({'sections': [{'index': 1, 'supports': matches, 'issues': [{
+                'kind': 'unsupported_fact', 'candidate_quote_id': section['content'][-1]['quote_id'],
+                'reference_ids': ['evidence_1'], 'missing_or_conflicting': 'The declared source gives no sales ranking.',
+            }]}]})
+        assert source['excerpted'] and sum(map(len, source_text_by_id.values())) < len(source_text) // 2
+        return _review_tool_response({'sections': [{'index': 1, 'supports': matches}]})
+
+    checker = OpenAICompatibleCreationTaskScriptGenerator('https://models.invalid/v1', 'same-model',
+        transport=httpx.MockTransport(respond))
+    if extra_claim:
+        with pytest.raises(CreationTaskScriptGenerationError) as error:
+            checker.check_draft(request_input, candidate)
+        assert error.value.code == 'script_fact_unsupported'
+    else:
+        checker.check_draft(request_input, candidate)
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize('mismatch', ['cross-section', 'unknown-candidate', 'unknown-source',
@@ -1713,8 +1803,8 @@ def test_valid_issue_references_still_reject_unfounded_content_or_goal_conflict(
 @pytest.mark.parametrize('field,target_section,text,fragment_index', [
     ('title', 0, '  总标题😀  ', 0),
     ('title', 1, '段落标题😀', 0),
-    ('content', 1, '😀' * 200 + FACT, 1),
-    ('visual_prompt', 1, '😀' * 401, 2),
+    ('content', 1, '😀' * 205 + '\n' + FACT, 1),
+    ('visual_prompt', 1, ('😀' * 205 + '\n') * 2 + '计划镜头', 2),
 ])
 def test_content_rejection_locator_is_derived_from_the_verified_candidate_fragment(field, target_section, text, fragment_index):
     import hashlib
@@ -1736,7 +1826,7 @@ def test_content_rejection_locator_is_derived_from_the_verified_candidate_fragme
         data = json.loads(body['messages'][1]['content'])
         fragments = data['script']['title'] if target_section == 0 else data['script']['sections'][0][field]
         assert ''.join(piece['text'] for piece in fragments) == text
-        assert 0 < len(fragments[fragment_index]['text']) <= 200
+        assert fragments[fragment_index]['text'] == text.splitlines(keepends=True)[fragment_index]
         return _review_tool_response({'sections': [{'index': 1, 'issues': [{
             'kind': 'unsupported_fact', 'candidate_quote_id': fragments[fragment_index]['quote_id'],
             'reference_ids': ['evidence_1'], 'missing_or_conflicting': 'private-model-explanation'}]}]})
@@ -2722,6 +2812,8 @@ def test_incomplete_review_never_adopts_and_later_confirmation_reuses_completed_
         [f'part-{i}' for i in range(start, min(start + window_size, 25))]
         for start in range(window_size, 25, window_size)
     ]
+    assert calls[0]['title_review_section_index'] == 1 and calls[0]['script']['title']
+    assert all(call['title_review_section_index'] is None and not call['script']['title'] for call in calls[1:])
     completed_calls = len(calls)
     assert case.confirm_saved('local','task',first['script_id'],retry,member_id=state.owner.member_id)==result
     assert len(calls)==completed_calls
