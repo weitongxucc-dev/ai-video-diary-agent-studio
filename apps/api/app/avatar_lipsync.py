@@ -20,6 +20,7 @@ from app.profiles.contracts import AuthorizationStatus as AuthorizationStatus, A
 from app.voice_clone import MediaRuntimeFailure
 from app.media_timing import MediaTimingError, probe_avatar_media, probe_media_duration
 from app.profile_reference_media import ProfileReferenceInput
+from model_workers.latentsync_16_mlx import FRAME_RATE as LATENTSYNC_FRAME_RATE
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -211,33 +212,38 @@ class SubprocessAvatarAndLipSyncProvider:
                 impact="人物与口型步骤未完成，不能生成或复用人物视频。",
                 action=self.message,
             )
-        with TemporaryDirectory(prefix="ai_video_avatar_") as temporary_dir:
-            request_path = Path(temporary_dir) / "request.json"
-            response_path = Path(temporary_dir) / "response.json"
-            request_path.write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "model_id": self.model_id,
-                        "person_id": request.person.id,
-                        "person_version": request.person.version,
-                        "voice_profile_id": request.voice.id,
-                        "voice_version": request.voice.version,
-                        "audio_path": str(Path(request.audio_path).expanduser().resolve()),
-                        "visual_path": str(Path(request.visual_path).expanduser().resolve()),
-                        "audio_cache_key": request.audio_cache_key,
-                        "language": request.language,
-                        "motion": request.motion,
-                        "expression": request.expression,
-                        "authorization_id": request.authorization.id if request.authorization else "",
-                        "authorization_version": request.authorization.version if request.authorization else "",
-                        "output_path": str(output),
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
+        if self.temporary_root is not None:
+            self.temporary_root.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix="ai_video_avatar_", dir=self.temporary_root) as temporary_dir:
+            work = Path(temporary_dir)
+            request_path = work / "request.json"
+            response_path = work / "response.json"
+            visual = Path(request.visual_path).expanduser().resolve()
             try:
+                worker_visual = self._prepare_worker_visual(request, visual, work, grant_context)
+                request_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "model_id": self.model_id,
+                            "person_id": request.person.id,
+                            "person_version": request.person.version,
+                            "voice_profile_id": request.voice.id,
+                            "voice_version": request.voice.version,
+                            "audio_path": str(Path(request.audio_path).expanduser().resolve()),
+                            "visual_path": str(worker_visual),
+                            "audio_cache_key": request.audio_cache_key,
+                            "language": request.language,
+                            "motion": request.motion,
+                            "expression": request.expression,
+                            "authorization_id": request.authorization.id if request.authorization else "",
+                            "authorization_version": request.authorization.version if request.authorization else "",
+                            "output_path": str(output),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
                 command = (
                     [
                         str(self.runtime_path),
@@ -253,7 +259,8 @@ class SubprocessAvatarAndLipSyncProvider:
                 if grant_context is None:
                     self._runner(command)
                 else:
-                    self._run_command(command, grant_context=grant_context, output_paths=(output,))
+                    outputs = (output,) if worker_visual == visual else (output, worker_visual)
+                    self._run_command(command, grant_context=grant_context, output_paths=outputs)
             except (OSError, subprocess.SubprocessError) as exc:
                 if grant_context is not None and isinstance(exc, PermissionError):
                     raise
@@ -285,6 +292,9 @@ class SubprocessAvatarAndLipSyncProvider:
         return _parse_avatar_result(
             payload, expected_output=output, audio_path=Path(request.audio_path), cache_key=cache_key, grant_context=grant_context
         )
+
+    def _prepare_worker_visual(self, request, visual: Path, work: Path, grant_context) -> Path:
+        return visual
 
     def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
         budget = _admitted_presenter_budget(grant_context)
@@ -385,6 +395,30 @@ class LatentSync16Provider(SubprocessAvatarAndLipSyncProvider):
         if not state.ready:
             raise ValueError(state.message)
         return self.runtime.backend_identity(Path(state.model_path))
+
+    def _prepare_worker_visual(self, request, visual: Path, work: Path, grant_context) -> Path:
+        reference = request.visual_reference_input
+        if reference is None or reference.source_type != "image":
+            return visual
+        if grant_context is None:
+            raise subprocess.SubprocessError("静态人物图转为口型输入需要有效的本机制作许可。")
+        # Convert the registered still to a short, lossless and seekable video.
+        # The calibrated worker loops a video stream; image demuxer loops can
+        # repeat timestamps without producing output at this frame size.
+        target = work / "portrait.mp4"
+        threads = str(grant_context.threads)
+        command = [
+            "ffmpeg", "-v", "error", "-nostdin", "-threads", threads,
+            "-filter_threads", threads, "-protocol_whitelist", "file,pipe",
+            "-loop", "1", "-framerate", str(LATENTSYNC_FRAME_RATE), "-i", str(visual),
+            "-map", "0:v:0", "-an", "-frames:v", "2", "-c:v", "libx264",
+            "-threads", threads, "-preset", "ultrafast", "-qp", "0",
+            "-pix_fmt", "yuv420p", str(target),
+        ]
+        completed = grant_context.run(command, output_paths=(target,))
+        if completed.returncode or not target.is_file() or not target.stat().st_size:
+            raise subprocess.SubprocessError("已授权静态人物图未能生成可循环的视频输入。")
+        return target
 
     def _run_command(self, command: list[str], *, grant_context=None, output_paths=()) -> None:
         if self.runtime.backend == "mlx":
