@@ -1952,13 +1952,17 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           {!workspace.plan.source_media && workspace.plan.updated_at && workspace.plan.selected_material_asset_ids &&
             <MaterialScopePicker key={task.id} taskId={task.id} planUpdatedAt={workspace.plan.updated_at}
               selectedAssetIds={workspace.plan.selected_material_asset_ids}
+              selectionMode={workspace.plan.material_selection_mode}
+              sourceStarts={workspace.plan.material_source_start_seconds}
               disabled={busy !== null || task.stage_status === "running" || Boolean(task.montage_plan_id || task.current_timeline_version_id)}
               onSaved={receipt => {
                 const current = currentWorkspace.current;
                 if (receipt.task_id !== current.task.id) return;
                 if (current.plan.updated_at === workspace.plan.updated_at) {
                   acceptWorkspace({ ...current, plan: { ...current.plan, updated_at: receipt.plan_updated_at,
-                    selected_material_asset_ids: receipt.selected_material_asset_ids } }, workspaceReceiptRevision.current);
+                    selected_material_asset_ids: receipt.selected_material_asset_ids,
+                    material_selection_mode: receipt.selection_mode ?? current.plan.material_selection_mode,
+                    material_source_start_seconds: receipt.source_start_seconds_by_asset ?? current.plan.material_source_start_seconds } }, workspaceReceiptRevision.current);
                 }
                 void refresh(true).catch(cause => {
                   if (currentTaskId.current === receipt.task_id) setError(errorDetails(cause));
