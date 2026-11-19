@@ -1,6 +1,7 @@
 """Read and qualify fixed profile references without deriving media or running models."""
 from __future__ import annotations
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import replace
 import json
 import math
@@ -51,9 +52,10 @@ class ProfileReferenceAccess:
         self, profile: PersonProfile | VersionedVoiceProfile, *,
         viewer_user_id: str | None, local_diagnostic: bool, for_generation: bool,
         probe_media: bool = True,
+        connection: sqlite3.Connection | None = None,
     ) -> tuple[Path, float | None, float | None]:
         """Re-read the source, membership and range; registration never runs a model."""
-        with self._connect() as conn:
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
             row = self._records._latest_profile_payload_row(
                 conn, profile.workspace_id, profile.id, person=isinstance(profile, PersonProfile))
             current = ((self._records._person_profile_from_payload if isinstance(profile, PersonProfile)
@@ -75,14 +77,15 @@ class ProfileReferenceAccess:
         logical = (profile.avatar_reference if isinstance(profile, PersonProfile)
                    else profile.reference_audio_path)
         path = self._workspace_references.resolve_workspace_media_reference(profile.workspace_id, logical,
-                                                       require_registered=reference is None or not reference.asset_id)
+            require_registered=reference is None or not reference.asset_id, connection=connection)
         asset = None
         if reference is not None and reference.asset_id:
-            asset = self._assets.get_asset(profile.workspace_id, reference.asset_id)
-            if self._workspace_references.workspace_media_reference_for_asset(profile.workspace_id, asset.id) != logical:
+            asset = self._assets.get_asset(profile.workspace_id, reference.asset_id, connection=connection)
+            if self._workspace_references.workspace_media_reference_for_asset(
+                    profile.workspace_id, asset.id, connection=connection) != logical:
                 raise ValueError("参考文件与来源素材不一致")
         else:
-            with self._connect() as conn:
+            with nullcontext(connection) if connection is not None else self._connect() as conn:
                 row = self._assets._asset_payload_row_by_path(conn, profile.workspace_id, str(path))
             if row is not None:
                 asset = self._assets._asset_from_row(row)
@@ -145,13 +148,15 @@ class ProfileReferenceAccess:
 
     def profile_reference_input(self, profile: PersonProfile | VersionedVoiceProfile, *,
                                 viewer_user_id: str | None = None, local_diagnostic: bool = False,
-                                for_generation: bool = True) -> ProfileReferenceInput:
+                                for_generation: bool = True,
+                                connection: sqlite3.Connection | None = None) -> ProfileReferenceInput:
         """Qualified source facts only; never decode/derive during device admission."""
         from app.profile_reference_media import ProfileReferenceInput
         path, start, end = self._profile_reference_source(profile, viewer_user_id=viewer_user_id,
-            local_diagnostic=local_diagnostic, for_generation=for_generation, probe_media=False)
+            local_diagnostic=local_diagnostic, for_generation=for_generation, probe_media=False, connection=connection)
         reference = profile.reference
-        asset = self._assets.get_asset(profile.workspace_id, reference.asset_id) if reference and reference.asset_id else None
+        asset = (self._assets.get_asset(profile.workspace_id, reference.asset_id, connection=connection)
+                 if reference and reference.asset_id else None)
         kind = "voice_audio" if isinstance(profile, VersionedVoiceProfile) else "person_visual"
         if kind == "voice_audio" and asset and asset.media_type not in {"audio", "video"}:
             raise ValueError("声音参考需要有效音频或视频的声音范围")

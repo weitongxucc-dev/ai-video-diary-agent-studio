@@ -60,7 +60,7 @@ class SavedSectionAuditions:
             raise ValueError('请为当前稿选择对应语言的固定声线版本。')
         inputs = repo.profile_inputs.resolve_narration_inputs(
             workspace_id=task.workspace_id, episode_id=task.id,
-            voice_profile_id=selection.profile_id, voice_version=selection.version)
+            voice_profile_id=selection.profile_id, voice_version=selection.version, connection=conn)
         voice = inputs.voice
         language = _LANGUAGE[header.language]
         if (profile_use_failure(voice, content_type='voice', usage_scope='narration')
@@ -68,7 +68,7 @@ class SavedSectionAuditions:
                 or (voice.authorization.id, voice.authorization.version, voice.model_id)
                 != (selection.authorization_id, selection.authorization_version, selection.model_id)):
             raise PermissionError('当前声线、授权版本或生成模型已经变化。')
-        repo.profile_reference_input(voice, viewer_user_id=task.owner_user_id)
+        repo.profile_reference_input(voice, viewer_user_id=task.owner_user_id, connection=conn)
         return inputs, language
 
     def preview_params(self, actor, origin, params):
@@ -147,14 +147,14 @@ class SavedSectionAuditions:
         if scope_id != (task.id if params.get('saved_section') else 'voice_preview'):
             raise ValueError('试听的原发音词典范围不能用于该作品。')
         original = repo.profile_inputs.resolve_narration_inputs(workspace_id=ws, episode_id=scope_id,
-            voice_profile_id=voice.id, voice_version=voice.version)
+            voice_profile_id=voice.id, voice_version=voice.version, connection=conn)
         dictionary = _pronunciation_dictionary(entries=inputs.pronunciation_entries,
             workspace_id=ws, person_profile_id=voice.person_profile_id, task_id=task.id)
         preview_dictionary = _pronunciation_dictionary(entries=original.pronunciation_entries,
             workspace_id=ws, person_profile_id=voice.person_profile_id, task_id=scope_id)
         if dictionary != preview_dictionary:
             raise ValueError('试听的发音词典版本与当前段落不一致。')
-        reference = repo.profile_reference_input(original.voice, viewer_user_id=task.owner_user_id)
+        reference = repo.profile_reference_input(original.voice, viewer_user_id=task.owner_user_id, connection=conn)
         resources = json.loads(request['resources_json'])
         scope = None
         if resources.get('input_scope') == 'single_call_prepared_v1':

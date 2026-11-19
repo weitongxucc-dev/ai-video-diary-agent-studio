@@ -3317,6 +3317,61 @@ def _narration_units_case(tmp_path, *, section_count=2, audio_input_count=10, se
         generated=generated, merged=merged, releases=releases)
 
 
+def test_narration_dispatch_uses_owner_snapshot_during_waiting_commit(tmp_path, monkeypatch):
+    from threading import Event
+
+    case = _narration_units_case(tmp_path)
+    database = case.repo.database_path
+    with case.repo._connect() as conn:
+        conn.execute('CREATE TABLE concurrent_activity (id INTEGER)')
+    request_id = submit_creation_stage(case.execution, case.scheduler, case.job, case.actor)
+    original = case.scheduler._get(request_id)
+    assert original.resources['narration_reference']['reference']['asset_id'] is not None
+    writing = Event()
+
+    def commit_activity():
+        with sqlite3.connect(database, timeout=10) as conn:
+            conn.execute('INSERT INTO concurrent_activity VALUES (1)')
+            writing.set()
+            conn.commit()
+
+    check_references = case.owner.narration_unit_facts
+    writer = None
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        def check_during_commit(conn, *args, **kwargs):
+            nonlocal writer
+            if writer is None:
+                assert conn.in_transaction
+                writer = pool.submit(commit_activity)
+                assert writing.wait(3)
+                deadline = time.monotonic() + 3
+                with sqlite3.connect(database, timeout=0) as competitor:
+                    while True:
+                        try:
+                            competitor.execute('SELECT id FROM concurrent_activity').fetchall()
+                        except sqlite3.OperationalError as exc:
+                            assert exc.sqlite_errorcode == sqlite3.SQLITE_BUSY
+                            break
+                        if time.monotonic() >= deadline:
+                            pytest.fail('concurrent commit did not block an independent connection')
+                        time.sleep(.005)
+            return check_references(conn, *args, **kwargs)
+
+        monkeypatch.setattr(case.owner, 'narration_unit_facts', check_during_commit)
+        try:
+            grant = case.scheduler.pick_and_grant()
+            assert grant is not None and grant.request_id == original.id
+            assert grant.input_digest == original.input_digest
+            assert grant.unit_key == original.unit_key
+            assert writer is not None
+            writer.result(timeout=3)
+            case.executor.execute(grant, case.scheduler)
+            assert case.scheduler._get(original.id).state == 'done'
+            assert len(case.generated) == 1
+        finally:
+            case.scheduler.close()
+
+
 def _assert_wav_reads_outside_writer(monkeypatch,case):
     import wave
     connections=[]
