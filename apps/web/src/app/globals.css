@@ -60,9 +60,19 @@
 
 :root {
   color-scheme: light;
+  /* 浅色中性工作面延续现有习惯，不干扰视频颜色判断。 */
   --app-bg: #efeff1;
   --work-bg: #f5f5f7;
-  --font-ui: "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* 中文创作者跨 Mac/Windows 阅读长指令，使用平台中文字体并保留完整回退。 */
+  --font-ui: "PingFang SC", "Microsoft YaHei UI", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* 对话操作共用紧凑节奏，保证预览空间与键盘/鼠标可达。 */
+  --space-xs: var(--space-1);
+  --space-sm: var(--space-2);
+  --space-md: var(--space-3);
+  --space-lg: var(--space-4);
+  --control-height: var(--space-6);
+  /* 过程事件按数字对齐，避免用量更新引起宽度跳动。 */
+  --numeric-variant: tabular-nums;
   --font-size-body: 13px;
   --line-body: 21px;
   --font-size-title: 13px;
@@ -81,29 +91,21 @@
   --border-1: #dddde3;
   --border-2: #dddde3;
   --rule: #ebebef;
-  --accent: #172131;
+  /* 主要提交动作使用墨色实底，把彩色留给媒体和业务状态。 */
+  --accent: #27282a;
   --accent-contrast: #ffffff;
   --success: #246b3e;
   --warning: #815400;
   --danger: #a33a3a;
-  --focus: #6571b5;
-  --focus-text: #4f5ca6;
+  /* 编辑区用单色焦点线定位键盘操作，避免与轨道类别混淆。 */
+  --focus: #535961;
+  --focus-text: #424850;
   --selection-line: #7d8193;
-  --card-edge-start: rgb(185 191 215 / 60%);
-  --card-edge-mid: rgb(212 203 222 / 60%);
-  --card-edge-end: rgb(183 205 210 / 60%);
-  --card-focus-start: #7c85be;
-  --card-focus-mid: #9b88be;
-  --card-focus-end: #6c9da8;
-  --composer-edge-start: #c8ccda;
-  --composer-edge-mid: #dedee7;
-  --composer-edge-end: #c4cbd7;
-  --composer-focus-start: #6571b5;
-  --composer-focus-mid: #8270b5;
-  --composer-focus-end: #3f8292;
-  --composer-tint: #6571b5;
   --running: var(--focus);
-  --shadow-float: 0 2px 5px #1e24450a, 0 14px 42px #171c3016, 0 0 18px #6f77af06;
+  /* 浮层用短阴影与内容分开；常驻分栏使用细分隔线。 */
+  --shadow-float: 0 2px 5px rgb(0 0 0 / 6%), 0 8px 24px rgb(0 0 0 / 9%);
+  /* 高频桌面按钮的边角与较大的面板表面有别。 */
+  --control-radius: 5px;
   --radius-sm: 8px;
   --radius-md: 10px;
   --radius-lg: 12px;
@@ -140,27 +142,14 @@
   --border-1: #45454f;
   --border-2: #45454f;
   --rule: #3a3a43;
-  --accent: #dcdce8;
+  --accent: #e5e5e7;
   --accent-contrast: #202024;
   --success: #77c59b;
   --warning: #dfae62;
   --danger: #ed9898;
-  --focus: #abb5fa;
-  --focus-text: #abb5fa;
+  --focus: #d0d3d7;
+  --focus-text: #d0d3d7;
   --selection-line: #9999aa;
-  --card-edge-start: #6c7196;
-  --card-edge-mid: #7e6c94;
-  --card-edge-end: #5d7f86;
-  --card-focus-start: #abb5fa;
-  --card-focus-mid: #c0a6e6;
-  --card-focus-end: #80bdcc;
-  --composer-edge-start: #45454f;
-  --composer-edge-mid: #565661;
-  --composer-edge-end: #454f55;
-  --composer-focus-start: #abb5fa;
-  --composer-focus-mid: #c0a6e6;
-  --composer-focus-end: #80bdcc;
-  --composer-tint: #abb5fa;
   --running: var(--focus);
   --shadow-float: 0 18px 48px rgb(0 0 0 / 32%), 0 2px 8px rgb(0 0 0 / 24%);
 }

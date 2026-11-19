@@ -26,7 +26,8 @@ export function TimelineViewport({ duration, time, playing, selectedTime, select
   const [scroll, setScroll] = useWorkspaceViewState("timeline.scroll", 0);
   const initialScroll = useRef(scroll);
   const restored = useRef(false);
-  const fit = Math.max(1, size.width - size.label) / duration;
+  const hasTimelineRange = duration > 0;
+  const fit = Math.max(1, size.width - size.label) / (duration || 1);
   const pixelsPerSecond = Math.max(fit, density ?? fit);
   const laneWidth = duration * pixelsPerSecond;
   const interval = tickInterval(pixelsPerSecond);
@@ -72,29 +73,31 @@ export function TimelineViewport({ duration, time, playing, selectedTime, select
     if (node) requestAnimationFrame(() => { node.scrollLeft = next === null ? 0 : Math.max(0, center * Math.max(fit, next) - (node.clientWidth - size.label) / 2); });
   }
   function seekAt(clientX: number) {
-    const rect = ruler.current!.getBoundingClientRect();
+    const rect = ruler.current?.getBoundingClientRect();
+    if (!rect?.width) return;
     onSeek(Math.max(0, Math.min(duration, (clientX - rect.left) / rect.width * duration)));
   }
   return <section style={{ "--timeline-viewport-width": `${size.width}px` } as CSSProperties} className={ui.timelinePanel} aria-label="配音与字幕时间范围">
     <div className={ui.timelineToolbar}>
-      {actions}<span className={ui.timelineName}>时间线</span><div ref={toolsRef} className={ui.timelineToolSlot} />
-      <div className={ui.timelineZoom}>
-        <IconButton className={ui.iconButton} type="button" label="缩小时间线" disabled={pixelsPerSecond <= fit} onClick={() => zoom(Math.max(fit, pixelsPerSecond / 1.5))}><Minus size={15}/></IconButton>
-        <input aria-label="时间线缩放" type="range" min={fit} max={Math.max(160, fit)} step="any" value={pixelsPerSecond} onChange={event => zoom(Number(event.target.value))}/>
-        <IconButton className={ui.iconButton} type="button" label="放大时间线" disabled={pixelsPerSecond >= Math.max(160, fit)} onClick={() => zoom(Math.min(Math.max(160, fit), pixelsPerSecond * 1.5))}><Plus size={15}/></IconButton>
-        <IconButton className={ui.iconButton} type="button" label="时间线适应窗口" onClick={() => zoom(null)}><Maximize2 size={15}/></IconButton>
+      <span className={ui.timelineName}>时间线</span>{actions}<div ref={toolsRef} className={ui.timelineToolSlot} />
+      <div className={ui.timelineZoom} role="group" aria-label="时间线视图">
+        <IconButton className={ui.iconButton} type="button" label="缩小时间线" disabled={!hasTimelineRange || pixelsPerSecond <= fit} onClick={() => zoom(Math.max(fit, pixelsPerSecond / 1.5))}><Minus size={15}/></IconButton>
+        <input aria-label="时间线缩放" aria-valuetext={`${Math.round(pixelsPerSecond / fit * 100)}%`} type="range" disabled={!hasTimelineRange} min={fit} max={Math.max(160, fit)} step="any" value={pixelsPerSecond} onChange={event => zoom(Number(event.target.value))}/>
+        <IconButton className={ui.iconButton} type="button" label="放大时间线" disabled={!hasTimelineRange || pixelsPerSecond >= Math.max(160, fit)} onClick={() => zoom(Math.min(Math.max(160, fit), pixelsPerSecond * 1.5))}><Plus size={15}/></IconButton>
+        <IconButton className={ui.iconButton} type="button" label="时间线适应窗口" disabled={!hasTimelineRange} onClick={() => zoom(null)}><Maximize2 size={15}/></IconButton>
       </div>
     </div>
     <div ref={viewport} className={ui.timelineScroll} data-workspace-scroll="timeline" onScroll={event => setScroll(event.currentTarget.scrollLeft)}>
-      <div className={ui.tracks} style={{ width: size.width ? size.label + laneWidth : "100%" }}>
+      <div className={ui.tracks} style={{ width: size.width && hasTimelineRange ? size.label + laneWidth : "100%" }}>
+        {hasTimelineRange ? <>
         <div className={ui.ruler}><span aria-hidden /><div ref={ruler} className={ui.timeRuler} role="slider" tabIndex={0} aria-label="时间线播放位置" aria-valuemin={0} aria-valuemax={duration} aria-valuenow={Math.min(duration, time)} aria-valuetext={formatTime(time)}
           onPointerDown={event => { drag.current = true; event.currentTarget.setPointerCapture(event.pointerId); seekAt(event.clientX); }}
-          onPointerMove={event => { if (drag.current) seekAt(event.clientX); }} onPointerUp={() => { drag.current = false; }} onPointerCancel={() => { drag.current = false; }}
+          onPointerMove={event => { if (drag.current) seekAt(event.clientX); }} onPointerUp={() => { drag.current = false; }} onLostPointerCapture={() => { drag.current = false; }}
           onKeyDown={event => { const step = event.shiftKey ? 10 : 1; const next = event.key === "Home" ? 0 : event.key === "End" ? duration : event.key === "ArrowRight" ? time + step : event.key === "ArrowLeft" ? time - step : null; if (next !== null) { event.preventDefault(); onSeek(Math.max(0, Math.min(duration, next))); } }}>
           {ticks.filter(tick => tick === 0 || laneWidth - tick * pixelsPerSecond > 55).map(tick => <time key={tick} style={{ left: tick / duration * 100 + "%" }}>{formatTime(tick)}</time>)}
         </div></div>
-        <div className={ui.timelinePlayhead} aria-hidden style={{ left: size.label + Math.min(duration, time) * pixelsPerSecond }}/>
-        {children}
+        <div className={ui.timelinePlayhead} aria-hidden style={{ left: size.label + Math.min(laneWidth - 1, time * pixelsPerSecond) }}/>
+        {children}</> : null}
       </div>
     </div>
   </section>;

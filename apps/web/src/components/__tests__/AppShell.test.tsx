@@ -219,17 +219,41 @@ describe("AppShell", () => {
     fireEvent.click(divider);
     expect(divider).toHaveFocus();
     fireEvent.keyDown(divider, { key: "ArrowRight" });
-    expect(divider).toHaveAttribute("aria-valuenow", "240");
+    expect(divider).toHaveAttribute("aria-valuenow", "192");
     fireEvent.keyDown(divider, { key: "ArrowLeft" });
-    expect(divider).toHaveAttribute("aria-valuenow", "224");
+    expect(divider).toHaveAttribute("aria-valuenow", "176");
     for (let i = 0; i < 10; i++) fireEvent.keyDown(divider, { key: "ArrowLeft" });
-    expect(divider).toHaveAttribute("aria-valuenow", "224");
+    expect(divider).toHaveAttribute("aria-valuenow", "160");
     fireEvent.click(screen.getByRole("button", { name: "收起导航栏" }));
     first.unmount();
     render(<AppShell editorLayout><p>剪辑</p></AppShell>);
     expect(screen.queryByRole("separator", { name: "调整导航栏宽度" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "展开导航栏" }));
-    expect(screen.getByRole("separator", { name: "调整导航栏宽度" })).toHaveAttribute("aria-valuenow", "224");
+    expect(screen.getByRole("separator", { name: "调整导航栏宽度" })).toHaveAttribute("aria-valuenow", "160");
+    localStorage.clear();
+  });
+
+  it("opens narrow navigation without reallocating the editor and returns focus on Escape", () => {
+    localStorage.clear();
+    localStorage.setItem("video-workspace-chat-width", "480");
+    localStorage.setItem("video-editor-left-width", "228");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    const view = render(<AppShell editorLayout conversation={<input aria-label="对话草稿" defaultValue="待发送" />}><p>作品</p></AppShell>);
+    const shell = view.container.firstElementChild;
+    const trigger = screen.getByRole("button", { name: "展开导航栏" });
+    expect(shell).toHaveStyle({ "--editor-left": "48px", "--editor-right": "320px" });
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(within(screen.getByRole("navigation", { name: "主要导航" })).getByRole("link", { name: "首页" })).toHaveFocus();
+    expect(shell).toHaveStyle({ "--editor-left": "48px", "--editor-right": "320px" });
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+    expect(screen.getByLabelText("对话草稿")).toHaveValue("待发送");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
+    fireEvent(window, new Event("resize"));
+    expect(shell).toHaveStyle({ "--editor-left": "228px", "--editor-right": "480px" });
+    view.unmount();
     localStorage.clear();
   });
 
@@ -238,9 +262,9 @@ describe("AppShell", () => {
     const view = render(<AppShell editorLayout conversation={<p>对话</p>}><p>剪辑</p></AppShell>);
     const shell = view.container.firstElementChild as HTMLElement;
     const grid = view.container.querySelector('[class*="contentGrid"]') as HTMLElement;
-    expect(shell).toHaveStyle({ "--editor-left": "224px", "--editor-right": "340px" });
+    expect(shell).toHaveStyle({ "--editor-left": "176px", "--editor-right": "368px" });
     fireEvent.click(screen.getByRole("button", { name: "收起导航栏" }));
-    expect(shell).toHaveStyle({ "--editor-left": "56px" });
+    expect(shell).toHaveStyle({ "--editor-left": "48px" });
     fireEvent.click(screen.getByRole("button", { name: "收起曜核哈力斯" }));
     expect(shell).toHaveStyle({ "--editor-right": "44px" });
     expect(grid.className.split(" ")).toContainEqual(expect.stringContaining("chatCollapsed"));
@@ -255,11 +279,11 @@ describe("AppShell", () => {
     fireEvent.click(screen.getByRole("button", { name: "布局" }));
     fireEvent.click(screen.getByRole("button", { name: "作品区" }));
     fireEvent.click(screen.getByRole("button", { name: "打开曜核哈力斯" }));
-    expect(shell).toHaveStyle({ "--editor-right": "340px" });
+    expect(shell).toHaveStyle({ "--editor-right": "368px" });
     expect(grid.className).not.toContain("chatCollapsed");
     fireEvent.click(screen.getByRole("button", { name: "展开导航栏" }));
-    expect(shell).toHaveStyle({ "--editor-left": "224px" });
-    expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "340");
+    expect(shell).toHaveStyle({ "--editor-left": "176px" });
+    expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "368");
     view.unmount();
     localStorage.clear();
   });
@@ -272,7 +296,7 @@ describe("AppShell", () => {
     fireEvent.click(screen.getByRole("button", { name: "收起曜核哈力斯" }));
     expect(shell).toHaveStyle({ "--editor-right": "44px" });
     fireEvent.click(screen.getByRole("button", { name: "打开曜核哈力斯" }));
-    expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "356");
+    expect(screen.getByRole("separator", { name: "调整对话栏宽度" })).toHaveAttribute("aria-valuenow", "384");
     view.unmount();
     localStorage.clear();
   });
@@ -288,7 +312,7 @@ describe("AppShell", () => {
     expect(screen.getByLabelText("对话草稿")).toHaveValue("待发送");
     view.unmount();
     const restored = render(<AppShell><p>作品</p></AppShell>);
-    expect(restored.container.firstElementChild).toHaveStyle({"--editor-left":"224px", "--editor-right":"340px"});
+    expect(restored.container.firstElementChild).toHaveStyle({"--editor-left":"176px", "--editor-right":"368px"});
     restored.unmount(); localStorage.clear();
   });
 
@@ -312,7 +336,7 @@ describe("AppShell", () => {
   it("uses approved desktop widths for a fresh workspace and keeps a previously saved layout", () => {
     localStorage.clear();
     const first = render(<AppShell autoFocus conversation={<p>对话</p>}><p>首页</p></AppShell>);
-    expect(first.container.firstElementChild).toHaveStyle({ "--editor-left": "224px", "--editor-right": "340px" });
+    expect(first.container.firstElementChild).toHaveStyle({ "--editor-left": "176px", "--editor-right": "368px" });
     first.unmount();
     localStorage.setItem("video-editor-left-width", "224");
     localStorage.setItem("video-workspace-chat-width", "350");
@@ -673,19 +697,19 @@ describe("AppShell", () => {
       expect(screen.getByRole("dialog", { name: "镜头参数" })).toBe(quick);
       expect(screen.getByLabelText("快速草稿")).toHaveValue("保留快速草稿");
     });
-    it("uses the 1200 responsive default without overwriting remembered width", () => {
+    it("uses the 1280 responsive default without overwriting remembered width", () => {
       localStorage.clear();
-      Object.defineProperty(window,"innerWidth",{configurable:true,value:1199});
+      Object.defineProperty(window,"innerWidth",{configurable:true,value:1279});
       const view=render(<AppShell autoFocus conversation={<p>对话</p>}><p>首页</p></AppShell>);
-      expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"300px"});
-      Object.defineProperty(window,"innerWidth",{configurable:true,value:1200});
+      expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"336px"});
+      Object.defineProperty(window,"innerWidth",{configurable:true,value:1280});
       fireEvent(window,new Event("resize"));
-      expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"340px"});
+      expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"344px"});
       expect(localStorage.getItem("video-workspace-chat-width")).toBeNull();
       fireEvent.keyDown(screen.getByRole("separator",{name:"调整对话栏宽度"}),{key:"ArrowRight"});
-      Object.defineProperty(window,"innerWidth",{configurable:true,value:1199});
+      Object.defineProperty(window,"innerWidth",{configurable:true,value:1279});
       fireEvent(window,new Event("resize"));
-      expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"356px"});
+      expect(view.container.firstElementChild).toHaveStyle({"--editor-right":"360px"});
       view.unmount();localStorage.clear();
     });
   });

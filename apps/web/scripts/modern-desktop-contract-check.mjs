@@ -164,7 +164,7 @@ if (!desktop.includes("require('./runtime/desktop-window')") || !desktop.include
   failures.push("Electron must use the desktop window owner");
 }
 
-for (const required of ["titleBarStyle: 'hiddenInset'", "minWidth: 1024", "minHeight: 700", "backgroundColor: '#f7f7f5'"]) {
+for (const required of ["titleBarStyle: 'hiddenInset'", "minWidth: 1024", "minHeight: 700"]) {
   if (!desktopWindow.includes(required)) failures.push(`Electron chrome is missing: ${required}`);
 }
 

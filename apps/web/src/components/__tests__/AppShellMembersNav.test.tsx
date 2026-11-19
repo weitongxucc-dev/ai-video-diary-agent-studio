@@ -51,7 +51,7 @@ describe("member directory entry and existing theme controls", () => {
   beforeEach(() => {
     identity.role = null; identity.ready = true; identity.error = null;
     localStorage.clear();
-    localStorage.setItem("video-editor-left-collapsed", "false");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
     membersApi.mockReset();membersApi.mockResolvedValue({members:[{member_id:"member-a",name:"测试创作者",role:"owner",created_at:"2026-10-10"}]});
     vi.stubEnv("NEXT_PUBLIC_AUTH_MODE", "local");
     Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ addEventListener: vi.fn(), matches: false, removeEventListener: vi.fn() }) });

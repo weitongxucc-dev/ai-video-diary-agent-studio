@@ -12,6 +12,7 @@ import {
   Activity,
   ArrowLeft,
   BookOpen,
+  CalendarClock,
   LoaderCircle,
   Clapperboard,
   FileStack,
@@ -23,7 +24,6 @@ import {
   RefreshCw,
   Search,
   Settings,
-  Sparkles,
   SunMoon,
   UserRound,
   Users,
@@ -32,6 +32,7 @@ import {
   useEffect,
   useCallback, useContext,
   useMemo,
+  useId,
   useRef,
   useState,
   useLayoutEffect,
@@ -43,6 +44,7 @@ import {
 import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components/HomeCommandComposer";
 import { Button } from "./ui/button";
 import { IconButton } from "./ui/icon-button";
+import { Tooltip } from "./ui/tooltip";
 import { WorkbenchAssistantTargetContext, WorkspacePanelContext, useWorkspacePage } from "./workbench/context";
 import { useConversationVisibility } from "./workbench/useConversationVisibility";
 import { useWorkbenchTarget } from "./workbench/WorkbenchTarget";
@@ -79,7 +81,7 @@ const primaryNav: NavItem[] = [
   { href: "/profiles?mode=manage", label: "人物与声音", icon: UserRound },
   { href: "/templates?mode=manage", label: "视频模板", icon: FileStack },
   { href: "/history", label: "发布与数据", icon: Activity },
-  { href: "/production?view=automations", label: "定时任务", icon: Sparkles },
+  { href: "/production?view=automations", label: "定时任务", icon: CalendarClock },
 ];
 
 const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
@@ -275,6 +277,27 @@ export function AppShellFrame({
   const chat = useConversationVisibility({ pathname, creation: editorLayout || pathname.startsWith("/tasks/") || autoFocus, enabled: active && !standalone, collapsed: panels.chatCollapsed, open: panels.openChat, toggle: panels.toggleChat, onReference: closeInspectorForReference });
   const workspaceHidden = editorLayout && panels.workspaceCollapsed && !chat.hidden;
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const navigationId = useId();
+  const navigationNode = useRef<HTMLElement>(null);
+  const navigationTrigger = useRef<HTMLButtonElement>(null);
+  const conversationId = useId();
+  const conversationTrigger = useRef<HTMLButtonElement>(null);
+  const navigationDrawerOpen = active && panels.narrow && sidebarOpen;
+  const navigationCollapsed = panels.collapsed && !navigationDrawerOpen;
+  useEffect(() => { setSidebarOpen(false); }, [active, pathname, panels.narrow]);
+  useEffect(() => {
+    if (navigationDrawerOpen) navigationNode.current?.querySelector("a")?.focus({ preventScroll: true });
+  }, [navigationDrawerOpen]);
+
+  function closeNavigationDrawer(restoreFocus = false) {
+    setSidebarOpen(false);
+    if (restoreFocus) navigationTrigger.current?.focus();
+  }
+  function toggleNavigation() {
+    if (!panels.narrow) panels.toggleLeft();
+    else if (navigationDrawerOpen) closeNavigationDrawer(true);
+    else setSidebarOpen(true);
+  }
   const [searchOpen, setSearchOpen] = useState(false);
   const [members, setMembers] = useState<LocalMember[]>([]);
   const [membersState, setMembersState] = useState<"loading" | "ready" | "error">("loading");
@@ -437,18 +460,15 @@ export function AppShellFrame({
   ], [recentTasks, showMembersNav]);
 
   return (
-    <div className={`desktop-shell ${editorShell.shell}${editorLayout ? " video-editor-shell" : ""}${panels.collapsed ? ` ${editorShell.collapsed}` : ""}`} style={{ "--editor-left": `${panels.leftWidth}px`, "--editor-right": `${panels.rightWidth}px` } as CSSProperties}>
+    <div className={`desktop-shell ${editorShell.shell}${editorLayout ? " video-editor-shell" : ""}${navigationCollapsed ? ` ${editorShell.collapsed}` : ""}`} style={{ "--editor-left": `${panels.leftWidth}px`, "--editor-right": `${panels.rightWidth}px` } as CSSProperties} onKeyDown={event => {
+      if (event.key === "Escape" && navigationDrawerOpen && !event.defaultPrevented) {
+        event.preventDefault();
+        closeNavigationDrawer(true);
+      }
+    }}>
+      {navigationDrawerOpen ? <button type="button" className={editorShell.drawerBackdrop} tabIndex={-1} aria-label="关闭导航栏" onPointerDown={event => event.preventDefault()} onClick={() => closeNavigationDrawer(true)} /> : null}
 
-      {sidebarOpen ? (
-        <Button variant="ghost"
-          aria-label="关闭侧栏"
-          className="sidebar-backdrop"
-          onClick={() => setSidebarOpen(false)}
-          type="button"
-        />
-      ) : null}
-
-      <DesktopHeader nativeMac={nativeMac} collapsed={panels.collapsed} onToggleNavigation={panels.toggleLeft} tabs={workspaceTabs} location={<>
+      <DesktopHeader nativeMac={nativeMac} navigationExpanded={!navigationCollapsed} navigationId={navigationId} navigationTrigger={navigationTrigger} onToggleNavigation={toggleNavigation} tabs={workspaceTabs} location={<>
             {!editorLayout && pathname.split("/").filter(Boolean).length > 1 ? <Button variant="ghost" aria-label="返回" className="shell-icon-button" onClick={() => router.back()} type="button">
               <ArrowLeft size={17} />
             </Button> : null}
@@ -457,27 +477,35 @@ export function AppShellFrame({
             </Suspense>}
       </>} actions={<>
             {workspaceReady ? <Suspense fallback={null}><PreflightDraftReturn /></Suspense> : null}
-            {!standalone ? <IconButton label={chatVisible ? "收起助手" : "打开曜核哈力斯"} aria-pressed={chatVisible} onClick={toggleConversation}><MessageSquare size={16}/></IconButton> : null}
+            {!standalone ? <IconButton label={chatVisible ? "收起助手" : "打开曜核哈力斯"} aria-pressed={chatVisible} aria-controls={conversationId} ref={conversationTrigger} onClick={toggleConversation}><MessageSquare size={16}/></IconButton> : null}
             {editorLayout ? <WorkspaceLayoutMenu conversationHidden={!chatVisible} workspaceHidden={workspaceHidden} onConversation={toggleConversation} onWorkspace={panels.toggleWorkspace}/> : null}
             {toolbarActions}
             <IconButton label="搜索" shortcut="⌘ K" aria-expanded={searchOpen} onClick={() => { setSearchParentId(undefined); setSearchOpen(true); }}><Search size={16} /></IconButton>
             {providedInspector ? <IconButton label="查看详情" description={detailsOpen ? "收起属性面板" : "查看当前对象属性"} aria-pressed={detailsOpen} onClick={() => { setQuickOpen(false); setDetailsOpen(value => !value); }}><PanelRight size={16} /></IconButton> : null}
-            {panels.collapsed ? <><Button variant="ghost" type="button" aria-label="切换明暗主题" title="切换明暗主题" className="shell-icon-button" onClick={toggleTheme}><SunMoon size={16}/></Button><Link aria-label="设备设置" title="设备设置" className="shell-icon-button" href="/settings"><Settings size={16}/></Link></> : null}
+            {navigationCollapsed ? <><Button variant="ghost" type="button" aria-label="切换明暗主题" title="切换明暗主题" className="shell-icon-button" onClick={toggleTheme}><SunMoon size={16}/></Button><Link aria-label="设备设置" title="设备设置" className="shell-icon-button" href="/settings"><Settings size={16}/></Link></> : null}
             {!localAuthMode ? (
               <form action="/auth/signout" method="post">
                 <Button variant="ghost" aria-label="退出登录" className="shell-icon-button" type="submit"><UserRound size={17} /></Button>
               </form>
             ) : null}
       </>} />
-      <aside className={`desktop-sidebar${sidebarOpen ? " is-open" : ""}`}>
+      <aside id={navigationId} ref={navigationNode} className={`desktop-sidebar${navigationDrawerOpen ? ` ${editorShell.navigationDrawer}` : ""}`} onBlur={event => {
+        const next = event.relatedTarget;
+        if (navigationDrawerOpen && next && !event.currentTarget.contains(next) && !navigationTrigger.current?.contains(next)) {
+          closeNavigationDrawer();
+        }
+      }} onClick={event => {
+        if (navigationDrawerOpen && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.target instanceof Element && event.target.closest("a[href]")) {
+          closeNavigationDrawer(true);
+        }
+      }}>
         <nav className="desktop-sidebar__scroll" aria-label="主要导航">
           <div className="desktop-nav-group">
-            {!panels.collapsed ? <span className="desktop-nav-heading desktop-nav-heading--primary">功能导航</span> : null}
             <Suspense fallback={<NavigationRowsContent pathname={pathname} showMembers={showMembersNav} />}>
               <NavigationRows pathname={pathname} showMembers={showMembersNav} />
             </Suspense>
           </div>
-          {panels.collapsed ? <Link href="/?new=1" className="desktop-nav-row" aria-label="新建视频" title="新建视频"><Plus size={16}/></Link> : null}
+          {navigationCollapsed ? <Link href="/?new=1" className="desktop-nav-row" aria-label="新建视频" title="新建视频"><Plus size={16}/></Link> : null}
           <div className="desktop-nav-section desktop-nav-section--creation-tasks">
             <div className="desktop-nav-heading"><Link href="/" title="查看全部创作任务">创作任务</Link><Link href="/?new=1" aria-label="新建视频" title="新建视频" className="shell-icon-button"><Plus size={16}/></Link></div>
             {!workspaceReady ? <p className="desktop-creation-tasks-empty" role="status">登录并完成首次设置后读取创作任务。</p> : null}
@@ -490,13 +518,17 @@ export function AppShellFrame({
             {workspaceReady && recentTasks.length ? recentTasks.map((task) => {
               const statusLabel = creationTaskShortStatus(task.stage_status, task.stage);
               return (
-                <Link data-active-work={task.id === activeCreationTaskId || undefined} aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className={`desktop-creation-task ${shellUi.task}`} aria-label={`${displayTaskName(task.name)} · ${statusLabel}`} title={`${displayTaskName(task.name)} · ${statusLabel}`} href={creationTaskHref(task)} key={task.id}>
-                  <Clapperboard size={16} className={shellUi.stageIcon} />
-                  <span className="desktop-creation-task__copy">
-                    <strong>{displayTaskName(task.name)}</strong>
-                    <small className={shellUi.taskState} data-status={task.stage_status}>{task.stage_status === "running" ? <LoaderCircle aria-hidden="true" className="is-spinning" size={12} strokeWidth={1.7} /> : null}{statusLabel}</small>
-                  </span>
-                </Link>
+                <div key={task.id} className={editorShell.recentTask}>
+                  <Tooltip side="right" label={displayTaskName(task.name)}>
+                    <Link data-active-work={task.id === activeCreationTaskId || undefined} aria-current={pathname === creationTaskHref(task) ? "page" : undefined} className={`desktop-creation-task ${shellUi.task}`} aria-label={`${displayTaskName(task.name)} · ${statusLabel}`} href={creationTaskHref(task)}>
+                      <Clapperboard size={16} className={shellUi.stageIcon} />
+                      <span className="desktop-creation-task__copy">
+                        <strong>{displayTaskName(task.name)}</strong>
+                        <small className={shellUi.taskState} data-status={task.stage_status}>{task.stage_status === "running" ? <LoaderCircle aria-hidden="true" className="is-spinning" size={12} strokeWidth={1.7} /> : null}{statusLabel}</small>
+                      </span>
+                    </Link>
+                  </Tooltip>
+                </div>
               );
             }) : workspaceReady && taskReadState === "ready" ? (
               <p className="desktop-creation-tasks-empty">还没有创作任务</p>
@@ -505,7 +537,7 @@ export function AppShellFrame({
           </div>
         </nav>
 
-        <nav className={shellUi.creatorControls} aria-label="创作者与设备设置" hidden={panels.collapsed}>
+        <nav className={`${shellUi.creatorControls} ${editorShell.creatorControls}`} aria-label="创作者与设备设置" hidden={navigationCollapsed}>
           {members.length ? <Link className={shellUi.avatarGroup} data-avatar-group href="/settings?section=creators" aria-label={`${members.length}位创作者，打开成员设置`} title={`${members.map(member => member.name).join("、")}；不会切换当前身份`}>
             <Users size={16} aria-hidden="true"/><span>成员与空间</span>
           </Link> : <Link className={shellUi.memberStatus} href="/settings?section=creators" title={membersState === "loading" ? "正在读取成员名册" : membersState === "error" ? "成员名册暂不可读，打开设置处理" : localAuthMode ? "尚无成员，打开成员设置" : "打开成员设置"}>{membersState === "loading" ? "读取名册…" : membersState === "error" ? "名册暂不可读" : "成员设置"}</Link>}
@@ -514,19 +546,19 @@ export function AppShellFrame({
             <Link className={shellUi.quickButton} href="/settings" aria-label="设备设置" title={workspaceStatus ? `设备设置 · ${workspaceStatus.label}` : "设备设置"}><Settings size={16} aria-hidden="true"/></Link>
           </div>
         </nav>
-        {!panels.collapsed ? <div className={`${editorShell.separator} ${editorShell.leftSeparator}`} {...panels.separator("left")} /> : null}
+        {panels.canResizeNavigation ? <div className={`${editorShell.separator} ${editorShell.leftSeparator}`} {...panels.separator("left")} /> : null}
       </aside>
 
       <WorkspacePanelContext.Provider value={panelContext}>
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
         <div ref={contentGrid} data-inspector-open={dockInspector && !editorAuxiliaryHost || undefined} className={`${editorShell.contentGrid}${dockInspector && !editorAuxiliaryHost ? ` ${editorShell.withInspector}` : ""}${!chatVisible ? ` ${editorShell.chatCollapsed}` : ""}${workspaceHidden ? ` ${editorShell.workspaceCollapsed}` : ""}${inspectorLayout === "reading" ? ` ${editorShell.readingInspector}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
-          <section ref={conversationNode} data-conversation-pane onPlayCapture={event => { if (!chatVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} aria-label="曜核哈力斯" hidden={!chatVisible} className={editorShell.conversation}>
-            <header className={editorShell.conversationHeader}><span><Image alt="" aria-hidden src="/yaohe-icon.png" width={22} height={22} unoptimized/>曜核哈力斯</span><div className={editorShell.conversationActions}><div data-assistant-header-actions className="assistant-header-actions"/><IconButton label="收起曜核哈力斯" onClick={chat.toggle}><PanelRight size={16}/></IconButton></div></header>
+          <section id={conversationId} ref={conversationNode} data-conversation-pane onPlayCapture={event => { if (!chatVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} aria-label="曜核哈力斯" hidden={!chatVisible} className={editorShell.conversation}>
+            <header className={editorShell.conversationHeader}><span><Image alt="" aria-hidden src="/yaohe-icon.png" width={22} height={22} unoptimized/>曜核哈力斯</span><div className={editorShell.conversationActions}><div data-assistant-header-actions className="assistant-header-actions"/><IconButton label="收起曜核哈力斯" onClick={() => { chat.toggle(); conversationTrigger.current?.focus(); }}><PanelRight size={16}/></IconButton></div></header>
             <div className={editorShell.conversationContext}>{conversationActions ?? (assistantTarget?.task ? <ConversationTarget name={assistantTarget.task.name} onReturn={() => router.push(creationTaskHref(assistantTarget.task!))} onClear={clearTarget} /> : <span>新视频构思</span>)}</div>
             <div className={editorShell.conversationBody}><MediaVisibility visible={chatVisible}>
               {workspaceReady ? conversation || <HomeCommandComposer autoFocus={autoFocus} pageContext={assistantTarget?.task ? undefined : { pathname }} task={recentTasks.find(task => pathname === creationTaskHref(task)) ?? null} onTaskUpdated={() => router.refresh()} {...assistantTarget} /> : null}
             </MediaVisibility></div>
-            <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} />
+            {panels.canResizeConversation ? <div className={`${editorShell.separator} ${editorShell.chatSeparator}`} {...panels.separator("right")} /> : null}
           </section>
           <main ref={mainNode} onPlayCapture={event => { if (!mainVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} className="desktop-main-scroll" data-scroll-region="main-y" onClick={event => { if (event.target instanceof Element && event.target.closest("[data-open-details]")) { setQuickOpen(false); setDetailsOpen(true); } }}>
             {!workspaceReady ? <div className={editorShell.bootNotice}><p role="status">{workspaceBoot.message}</p>{workspaceBoot.href ? <Link href={workspaceBoot.href}>{workspaceBoot.href === '/onboarding' ? '完成首次设置' : '登录账号'}</Link> : null}{workspaceBoot.retry ? <Button variant="outline" onClick={workspaceBoot.retry}>重新核验</Button> : null}</div> : null}

@@ -4,7 +4,7 @@ import { HomeCommandComposer } from "@/components/HomeCommandComposer";
 import { AssistantConversationContext } from "../AssistantConversationContext";
 import { useScopedAssistantConversation } from "../useAssistantConversation";
 import type { AssistantConversation, AssistantConversationTurn, CreationTask } from "@/lib/types";
-import type { AssistantBusinessContinuation, AssistantScriptWindowRequest, AssistantStoryboardRegeneration } from "@/lib/types/assistant";
+import type { AssistantBusinessContinuation, AssistantScriptWindowRequest, AssistantStoryboardRegeneration, AssistantTurnTrace } from "@/lib/types/assistant";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
 const restoreApi=vi.hoisted(()=>({read:vi.fn(async(taskId:string,requestId:string)=>({task_id:taskId,request_id:requestId,
   action:'undo',status:'applied',operation_id:'restored-operation',result_version_id:'restored-version',failure:null}))}));
@@ -18,7 +18,7 @@ const queuedStoryboard: AssistantStoryboardRegeneration = {
     result_url: "/api/creation-tasks/task-1/montage/plan/requests/request-original"},
 };
 
-const mocks = vi.hoisted(() => ({ selection: null as ReturnType<typeof import("../AssistantConversationProvider").useAssistantSelection>, saved: new Map<string, import("@/lib/types").AssistantConversation>(), receipts: new Map<string, unknown>(), sequence: 0, ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn(), updateConversation: vi.fn(), sendTaskTurn: vi.fn(), restoreDraft: vi.fn() }));
+const mocks = vi.hoisted(() => ({ selection: null as ReturnType<typeof import("../AssistantConversationProvider").useAssistantSelection>, saved: new Map<string, import("@/lib/types").AssistantConversation>(), receipts: new Map<string, unknown>(), sequence: 0, ask: vi.fn(), materialAsk: vi.fn(), preflight: vi.fn(), confirm: vi.fn(), settings: vi.fn(), editAsk: vi.fn(), confirmEdit: vi.fn(), undoEdit: vi.fn(), updateConversation: vi.fn(), sendTaskTurn: vi.fn(), restoreDraft: vi.fn(), readTrace: vi.fn() }));
 vi.mock("@/components/AssistantConversationProvider", async importOriginal => ({
   ...(await importOriginal<typeof import("../AssistantConversationProvider")>()),
   useAssistantSelection: () => mocks.selection,
@@ -83,6 +83,14 @@ vi.mock("@/lib/api", () => {
     return response;
   }
   return {
+  getAssistantTurnTrace: mocks.readTrace.mockImplementation(async (turnId: string): Promise<AssistantTurnTrace> => {
+    const conversation = [...saved.values()].find(item => item.turns.some(turn => turn.id === turnId));
+    const turn = conversation?.turns.find(item => item.id === turnId);
+    if (!conversation || !turn) throw new Error("Trace requires a persisted turn");
+    return { turn_id: turn.id, conversation_id: conversation.id, status: turn.status, sequence: turn.sequence,
+      created_at: turn.created_at, updated_at: turn.updated_at, events: [], event_count: 0,
+      tool_counts: {}, compaction_count: 0, provider_usage: null, usage_status: "unknown", associations: [], evidence_candidates: [] };
+  }),
   getCurrentAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => makeConversation(scope, mockUuid())),
   createAssistantConversation: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => makeConversation(scope, mockUuid())),
   listAssistantConversations: vi.fn(async (scope: { scope_kind: "home" | "task" | "material"; scope_id: string }) => ({ items: [...saved.values()].filter((item) => item.scope_kind === scope.scope_kind && item.scope_id === scope.scope_id) })),
@@ -425,7 +433,10 @@ describe("HomeCommandComposer", () => {
     const onResult = vi.fn();
     render(<HomeCommandComposer materialContext={{ selection: null, label: null, onResult }} />);
     const input = await readyInput("素材对话");
-    expect(screen.getByRole("heading", { name: "想聊点什么？" })).toBeInTheDocument();
+    const history = screen.getByRole("region", { name: "持久对话记录" });
+    expect(within(history).getByLabelText("空对话")).toBeVisible();
+    expect(within(history).queryByText("执行记录")).not.toBeInTheDocument();
+    expect(input).toHaveValue("");
     expect(screen.queryByRole("button", { name: "素材库分析情况怎样？" })).not.toBeInTheDocument();
     fireEvent.change(input, { target: { value: "素材库分析情况怎样？" } });
     expect(input).toHaveValue("素材库分析情况怎样？");
@@ -625,11 +636,23 @@ describe("HomeCommandComposer", () => {
       resolveTurn({ reply: "已读到当前制作条件。", provider: "minimax", model: "test", plan_preview: null });
     });
     const finalBody = await screen.findByText("已读到当前制作条件。", { exact: true });
-    const toolSummary = screen.getByLabelText("工具记录 · 1 项 · 调用已结束");
-    expect(toolSummary.compareDocumentPosition(finalBody) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    fireEvent.click(toolSummary);
-    expect(screen.getByText("已读取 1 项任务摘要。")).toBeInTheDocument();
     await waitFor(() => expect(input).toHaveFocus());
+    const article = finalBody.closest("article")!;
+    const record = within(article).getByText("执行记录").closest("details")!;
+    expect(finalBody.compareDocumentPosition(record) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(record).not.toHaveAttribute("open");
+    expect(within(record).queryByText("已读取 1 项任务摘要。")).not.toBeInTheDocument();
+    expect(mocks.readTrace).not.toHaveBeenCalled();
+
+    fireEvent.click(record.querySelector("summary")!);
+    const tools = await within(record).findByRole("list", { name: "操作" });
+    expect(within(tools).getByText("读取当前工作区").parentElement).toHaveTextContent("已返回");
+    expect(within(tools).getByText("已读取 1 项任务摘要。")).toBeVisible();
+    expect(await within(record).findByLabelText("本轮用量")).toBeVisible();
+    const conversationId = mocks.ask.mock.calls[0][1];
+    const turnId = mocks.saved.get(conversationId)!.turns[0].id;
+    expect(mocks.readTrace).toHaveBeenCalledExactlyOnceWith(turnId);
+    expect(mocks.ask).toHaveBeenCalledOnce();
   });
 
   it("keeps an existing task in the chat, previews a change, confirms and undoes it", async () => {
