@@ -39,6 +39,8 @@ export type CreateProductionTaskFormProps = {
   draftId?: string;
   draftStart?: boolean;
   onDraftSaved?: (href: string) => void;
+  onRequestSaved?: (requestId: string | null) => void;
+  savedRequestId?: string;
   replyOrigin?: PreflightReplyOrigin | null;
   initialKnowledgePin?: PreflightKnowledgePin | null;
 };
@@ -142,6 +144,8 @@ export function CreateProductionTaskForm({
   draftId,
   draftStart = false,
   onDraftSaved,
+  onRequestSaved,
+  savedRequestId,
   replyOrigin: initialReplyOrigin = null,
   initialKnowledgePin = null,
 }: CreateProductionTaskFormProps) {
@@ -179,6 +183,7 @@ export function CreateProductionTaskForm({
   const operation = useRef(0);
   const [profilesError, setProfilesError] = useState<string | null>(null);
   useEffect(() => {
+    if (savedRequestId) return;
     let active = true;
     void verifiedScope().then(async scope => {
       const [v, p, d] = await Promise.all([listVoiceProfiles(), listPersonProfiles(), getDefaultVoice()]);
@@ -189,7 +194,7 @@ export function CreateProductionTaskForm({
       if (d && !voiceSelectionEdited.current && !submittingRef.current) { setVoicePin({ profile_id: d.id, version: d.version }); ++inputRevision.current; setPreview(null); }
     }).catch(cause => { if (active) setProfilesError(cause instanceof Error ? cause.message : "档案读取失败"); });
     return () => { active = false; };
-  }, []);
+  }, [savedRequestId]);
   const [goal, setGoal] = useState(initialGoal);
   const [name, setName] = useState("");
   const [targetCount, setTargetCount] = useState("1");
@@ -241,6 +246,7 @@ export function CreateProductionTaskForm({
     void readPreflightDraftScope().then(scope => {
       if (!active) return;
       draftScope.current = scope;
+      if (savedRequestId) { setDraftReady(true); return; }
       const saved = draftId ? loadPreflightDraft(window.sessionStorage, scope, draftId) : null;
       if (draftId && !saved && !draftStart) throw new Error("当前成员与工作区没有这份临时草稿。");
       if (saved) {
@@ -258,9 +264,9 @@ export function CreateProductionTaskForm({
       if (draftId && saved?.goal.trim() && Number(saved.targetCount) === 1 && matchesPreflightRepairTarget(window.sessionStorage, scope, draftId)) {
         void runPreview(saved);
       }
-    }).catch(cause => { if (active) setDraftError(`临时草稿未恢复：${cause instanceof Error ? cause.message : "身份或存储读取失败"}`); });
+    }).catch(cause => { if (active) setDraftError(`${savedRequestId ? "创作目标未恢复" : "临时草稿未恢复"}：${cause instanceof Error ? cause.message : "身份或存储读取失败"}`); });
     return () => { active = false; alive.current = false; ++inputRevision.current; ++operation.current; };
-  }, [draftId, template?.id, template?.version]);
+  }, [draftId, savedRequestId, template?.id, template?.version]);
 
   function draftFields(): PreflightDraftFields {
     return { goal, name, targetCount, duration, language, aspectRatio, presenterShare, lipsyncQuality,
@@ -351,6 +357,7 @@ export function CreateProductionTaskForm({
       setReplyOrigin(replyOriginRef.current);
     }
     setPreview(null);
+    if (creationRequestId) onRequestSaved?.(null);
     setCreationRequestId(null);
     creationRequestKey.current = null;
     setError(null);
@@ -372,7 +379,11 @@ export function CreateProductionTaskForm({
         creationRequestKey.current ??= crypto.randomUUID();
         const result = await createCreationRequest({ ...values, request_key: creationRequestKey.current });
         await verifiedScope();
-        if (alive.current && revision === inputRevision.current) { setCreationRequestId(result.id); setPreview(null); }
+        if (alive.current && revision === inputRevision.current) {
+          setCreationRequestId(result.id);
+          onRequestSaved?.(result.id);
+          setPreview(null);
+        }
         return;
       }
       const result = await previewCreationPlan(values);
@@ -423,6 +434,14 @@ export function CreateProductionTaskForm({
       submittingRef.current = false;
       setPending(null);
     }
+  }
+
+  if (savedRequestId) {
+    if (draftError) return <p role="alert">{draftError}</p>;
+    const scope = draftScope.current;
+    if (!draftReady || !scope) return <p role="status">正在核对当前成员与工作区…</p>;
+    return <CreationRequestPanel key={savedRequestId} requestId={savedRequestId} scopeKey={`${scope.memberId}:${scope.workspaceId}`}
+      isCurrentScope={() => alive.current && draftScope.current !== null && sameDraftScope(scope, draftScope.current)} />;
   }
 
   const isPending = pending !== null || created;
