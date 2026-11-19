@@ -9,31 +9,350 @@ index b950c6a..722f223 100644
 +        out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale)
 +        out = out.transpose(0, 2, 1, 3).reshape(B, S, -1)
 diff --git a/latentsync_mlx/pipeline.py b/latentsync_mlx/pipeline.py
-index ff0d7ec..981c959 100644
 --- a/latentsync_mlx/pipeline.py
 +++ b/latentsync_mlx/pipeline.py
-@@ -116,0 +117,6 @@ class LipsyncPipelineMLX:
+@@ -11,0 +12,2 @@
++from contextlib import closing
++from itertools import chain, islice
+@@ -26,2 +28,24 @@
+-def write_video_frames(path: str, frames: np.ndarray, fps: int = 25):
+-    h, w = frames.shape[1:3]
++def _video_frames(path):
++    capture = cv2.VideoCapture(path)
++    try:
++        if not capture.isOpened():
++            raise ValueError("Could not open the normalized LatentSync video")
++        while True:
++            success, frame = capture.read()
++            if not success:
++                break
++            yield cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
++    finally:
++        capture.release()
++
++
++def _read_window(frames, count):
++    window = list(islice(frames, count))
++    if len(window) != count:
++        raise ValueError("Normalized LatentSync video ended before the narration frames")
++    return window
++
++
++def write_video_frames(path, frames, fps=25):
++    first = next(frames)
++    height, width = first.shape[:2]
+@@ -29,4 +53,8 @@
+-    writer = cv2.VideoWriter(path, fourcc, fps, (w, h))
+-    for frame in frames:
+-        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+-    writer.release()
++    writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
++    try:
++        if not writer.isOpened():
++            raise ValueError("Could not write the LatentSync output video")
++        for frame in chain((first,), frames):
++            writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
++    finally:
++        writer.release()
+@@ -67,24 +95,13 @@
+-    def _loop_video(self, whisper_chunks, video_frames):
+-        if len(whisper_chunks) > len(video_frames):
+-            faces, boxes, affine_matrices = self._affine_transform_video(video_frames)
+-            num_loops = math.ceil(len(whisper_chunks) / len(video_frames))
+-            loop_vf, loop_faces, loop_boxes, loop_aff = [], [], [], []
+-            for i in range(num_loops):
+-                if i % 2 == 0:
+-                    loop_vf.append(video_frames)
+-                    loop_faces.append(faces)
+-                    loop_boxes += boxes
+-                    loop_aff += affine_matrices
+-                else:
+-                    loop_vf.append(video_frames[::-1])
+-                    loop_faces.append(faces.flip(0))
+-                    loop_boxes += boxes[::-1]
+-                    loop_aff += affine_matrices[::-1]
+-            video_frames = np.concatenate(loop_vf)[:len(whisper_chunks)]
+-            faces = torch.cat(loop_faces)[:len(whisper_chunks)]
+-            boxes = loop_boxes[:len(whisper_chunks)]
+-            affine_matrices = loop_aff[:len(whisper_chunks)]
+-        else:
+-            video_frames = video_frames[:len(whisper_chunks)]
+-            faces, boxes, affine_matrices = self._affine_transform_video(video_frames)
+-        return video_frames, faces, boxes, affine_matrices
++    def _stage_face_windows(self, video_path, frame_count, frames_per_window, temp_dir):
++        # Release pose detection before loading MLX weights. Stage only compact
++        # crops and affine geometry, with the full-resolution source on disk.
++        staged = []
++        with closing(_video_frames(video_path)) as source:
++            for start in range(0, frame_count, frames_per_window):
++                count = min(frames_per_window, frame_count - start)
++                faces, boxes, transforms = self._affine_transform_video(_read_window(source, count))
++                path = os.path.join(temp_dir, f"faces-{start}.pt")
++                torch.save((faces, boxes, [matrix.detach().cpu() for matrix in transforms]), path)
++                staged.append(path)
++                del faces, boxes, transforms
++        return staged
+@@ -106 +123 @@
+-        from latentsync.utils.util import read_audio, read_video
++        from latentsync.utils.util import read_audio
+@@ -116,0 +134,6 @@
 +        # Upstream feature2chunks includes two extra padded windows. The
 +        # candidate must preserve the actual audio clock, not loop video tails.
 +        actual_frames = math.floor(len(audio_samples) * video_fps / audio_sample_rate)
 +        if actual_frames < 1 or len(whisper_chunks) < actual_frames:
 +            raise ValueError("Insufficient audio conditioning for actual duration")
 +        whisper_chunks = whisper_chunks[:actual_frames]
-@@ -208 +214 @@ class LipsyncPipelineMLX:
+@@ -125,6 +148,9 @@
+-        # --- Stage 2: Video/face processing (PyTorch/ONNX) ---
+-        print("Processing video frames...")
+-        video_frames = read_video(video_path, use_decord=False)
+-        video_frames, faces, boxes, affine_matrices = self._loop_video(
+-            whisper_chunks, video_frames
+-        )
++        # --- Stage 2: Stage aligned faces without loading the whole video ---
++        print("Processing video frames by window...")
++        if os.path.exists(temp_dir):
++            shutil.rmtree(temp_dir)
++        os.makedirs(temp_dir, exist_ok=True)
++        normalized = os.path.join(temp_dir, "normalized.mp4")
++        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-nostdin", "-i", video_path,
++                        "-r", str(video_fps), "-crf", "18", normalized], check=True)
++        staged = self._stage_face_windows(normalized, actual_frames, num_frames, temp_dir)
+@@ -146,2 +171,0 @@
+-        do_cfg = guidance_scale > 1.0
+-        num_inferences = math.ceil(len(whisper_chunks) / num_frames)
+@@ -156,110 +180,18 @@
+-        synced_frames_list = []
+-
+-        for chunk_idx in tqdm.tqdm(range(num_inferences), desc="MLX inference"):
+-            start = chunk_idx * num_frames
+-            end = min(start + num_frames, len(whisper_chunks))
+-            chunk_faces = faces[start:end]  # (F, C, H, W) torch
+-
+-            # Use PyTorch ImageProcessor for mask/normalize (matches MPS baseline exactly)
+-            ref_pv, masked_pv, masks_pt = self.image_processor.prepare_masks_and_masked_images(
+-                chunk_faces, affine_transform=False
+-            )
+-            # ref_pv: (F, C, H, W) [-1,1], masked_pv: (F, C, H, W) [-1,1], masks_pt: (F, 1, H, W) [0,1]
+-
+-            # Convert to MLX NHWC
+-            ref_pv_mlx = mx.array(ref_pv.numpy().transpose(0, 2, 3, 1)).astype(self.dtype)
+-            masked_pv_mlx = mx.array(masked_pv.numpy().transpose(0, 2, 3, 1)).astype(self.dtype)
+-            masks_mlx = mx.array(masks_pt.numpy().transpose(0, 2, 3, 1)).astype(self.dtype)
+-
+-            # VAE encode
+-            masked_latents = self._vae_encode(masked_pv_mlx)  # (F, h, w, 4)
+-            ref_latents = self._vae_encode(ref_pv_mlx)
+-
+-            # Resize mask to latent space
+-            F_count = masked_latents.shape[0]
+-            masks_np = masks_pt.numpy()  # (F, 1, H, W)
+-            mask_resized = torch.nn.functional.interpolate(
+-                masks_pt, size=(latent_h, latent_w)
+-            ).numpy().transpose(0, 2, 3, 1)  # (F, h, w, 1)
+-            mask_latents = mx.array(mask_resized).astype(self.dtype)
+-
+-            # Add batch dim: (F,...) → (1,F,...)
+-            masked_latents = masked_latents[None]
+-            ref_latents = ref_latents[None]
+-            mask_latents = mask_latents[None]
+-
+-            # CFG doubling
+-            if do_cfg:
+-                masked_latents = mx.concatenate([masked_latents] * 2, axis=0)
+-                ref_latents = mx.concatenate([ref_latents] * 2, axis=0)
+-                mask_latents = mx.concatenate([mask_latents] * 2, axis=0)
+-
+-            # Audio embeddings
+-            audio_embeds = torch.stack(whisper_chunks[start:end])
+-            audio_embeds_mlx = mx.array(audio_embeds.float().numpy()).astype(self.dtype)
+-            audio_embeds_mlx = audio_embeds_mlx[None]  # (1, F, S, 384)
+-            if do_cfg:
+-                null_audio = mx.zeros_like(audio_embeds_mlx)
+-                audio_embeds_mlx = mx.concatenate([null_audio, audio_embeds_mlx], axis=0)
+-
+-            latents = all_latents[:, start:end]
+-
+-            # Denoising loop
 -            for t in self.sampler.timesteps:
-+            for step_index, t in enumerate(self.sampler.timesteps):
-@@ -227,0 +234,4 @@ class LipsyncPipelineMLX:
-+                if step_index % 5 == 0:
-+                    print(f"chunk={chunk_idx} step={step_index} peak_MLX_GiB={mx.get_peak_memory()/2**30:.2f}", flush=True)
-+                if mx.get_peak_memory() > 8 * 1024**3:
-+                    raise RuntimeError("Candidate exceeded 8 GiB MLX allocation during actual generation")
-@@ -276,6 +286,3 @@ class LipsyncPipelineMLX:
+-                latent_input = mx.concatenate([latents] * 2, axis=0) if do_cfg else latents
+-                latent_input = self.sampler.scale_model_input(latent_input, t)
+-
+-                # 13 channels: noise(4) + mask(1) + masked(4) + ref(4)
+-                unet_input = mx.concatenate(
+-                    [latent_input, mask_latents, masked_latents, ref_latents], axis=-1
+-                )
+-
+-                timestep_mx = mx.array([t])
+-                noise_pred = self.unet(
+-                    unet_input, timestep_mx, encoder_hidden_states=audio_embeds_mlx
+-                )
+-
+-                if do_cfg:
+-                    pred_uncond, pred_audio = mx.split(noise_pred, 2, axis=0)
+-                    noise_pred = pred_uncond + guidance_scale * (pred_audio - pred_uncond)
+-
+-                latents = self.sampler.step(noise_pred, t, latents)
+-                mx.eval(latents)
+-
+-            # VAE decode
+-            decoded = self._vae_decode(latents.reshape(-1, latent_h, latent_w, 4))
+-
+-            # Paste surrounding pixels back: generated in mouth, original elsewhere
+-            # masks_mlx has 1 where we keep original, 0 where we regenerate (mouth)
+-            inv_mask = 1.0 - masks_mlx  # 1 in mouth region
+-            combined = decoded[:F_count] * inv_mask + ref_pv_mlx * masks_mlx
+-            synced_frames_list.append(combined)
+-
+-        del self.unet
+-        self.unet = None
+-        gc.collect()
+-        mx.clear_cache()
+-        print("Freed UNet and cleared MLX cache.")
+-
+-        # --- Stage 4: Restore faces to original frames ---
+-        print("Restoring faces to video...")
+-        all_synced = mx.concatenate(synced_frames_list, axis=0)  # (total_F, H, W, C) in [-1,1]
+-
+-        # Convert to PyTorch (C, H, W) for restore_img
+-        all_synced_np = np.array(all_synced.astype(mx.float32))  # NHWC, ensure float32 for torch
+-        all_synced_torch = torch.from_numpy(all_synced_np).permute(0, 3, 1, 2)  # NCHW
+-
+-        del self.vae
+-        self.vae = None
+-        gc.collect()
+-        mx.clear_cache()
+-        print("Freed VAE and cleared MLX cache.")
+-
+-        restored = self._restore_video(
+-            all_synced_torch, video_frames, boxes, affine_matrices
+-        )
+-
+-        # --- Stage 5: Write output ---
+-        if os.path.exists(temp_dir):
+-            shutil.rmtree(temp_dir)
+-        os.makedirs(temp_dir, exist_ok=True)
++        def restored_frames():
++            with closing(_video_frames(normalized)) as source:
++                for index, path in enumerate(tqdm.tqdm(staged, desc="MLX inference")):
++                    start = index * num_frames
++                    end = min(start + num_frames, actual_frames)
++                    faces, boxes, transforms = torch.load(path, map_location="cpu", weights_only=True)
++                    os.unlink(path)
++                    synced = self._infer_window(
++                        index, faces, whisper_chunks[start:end], all_latents[:, start:end], guidance_scale,
++                    )
++                    originals = _read_window(source, end - start)
++                    device = self.image_processor.restorer.device
++                    transforms = [matrix.to(device) for matrix in transforms]
++                    yield from self._restore_video(synced, originals, boxes, transforms)
++                    del faces, boxes, transforms, synced, originals
++                    mx.clear_cache()
++                    if torch.backends.mps.is_available():
++                        torch.mps.empty_cache()
+@@ -269,4 +201,3 @@
+-
+-        write_video_frames(video_temp, restored, fps=video_fps)
+-
+-        audio_remain_len = int(restored.shape[0] / video_fps * audio_sample_rate)
++        with closing(restored_frames()) as frames:
++            write_video_frames(video_temp, frames, fps=video_fps)
++        audio_remain_len = int(actual_frames / video_fps * audio_sample_rate)
+@@ -276,4 +207,11 @@
 -        cmd = (
 -            f"ffmpeg -y -loglevel error -nostdin "
 -            f"-i {video_temp} -i {audio_temp} "
 -            f"-c:v libx264 -crf 18 -c:a aac -q:v 0 -q:a 0 {video_out_path}"
--        )
--        subprocess.run(cmd, shell=True)
 +        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-nostdin", "-i", video_temp,
 +                        "-i", audio_temp, "-c:v", "libx264", "-crf", "18", "-c:a", "aac",
 +                        "-q:v", "0", "-q:a", "0", str(video_out_path)], check=True)
++        print(f"Output saved to: {video_out_path}")
++
++    def _infer_window(self, chunk_idx, chunk_faces, audio_chunks, latents, guidance_scale):
++        do_cfg = guidance_scale > 1.0
++        latent_h, latent_w = latents.shape[2:4]
++        # Use PyTorch ImageProcessor for mask/normalize (matches MPS baseline exactly)
++        ref_pv, masked_pv, masks_pt = self.image_processor.prepare_masks_and_masked_images(
++            chunk_faces, affine_transform=False
+@@ -281,2 +219,73 @@
+-        subprocess.run(cmd, shell=True)
+-        print(f"Output saved to: {video_out_path}")
++        # ref_pv: (F, C, H, W) [-1,1], masked_pv: (F, C, H, W) [-1,1], masks_pt: (F, 1, H, W) [0,1]
++
++        # Convert to MLX NHWC
++        ref_pv_mlx = mx.array(ref_pv.numpy().transpose(0, 2, 3, 1)).astype(self.dtype)
++        masked_pv_mlx = mx.array(masked_pv.numpy().transpose(0, 2, 3, 1)).astype(self.dtype)
++        masks_mlx = mx.array(masks_pt.numpy().transpose(0, 2, 3, 1)).astype(self.dtype)
++
++        # VAE encode
++        masked_latents = self._vae_encode(masked_pv_mlx)  # (F, h, w, 4)
++        ref_latents = self._vae_encode(ref_pv_mlx)
++
++        # Resize mask to latent space
++        F_count = masked_latents.shape[0]
++        mask_resized = torch.nn.functional.interpolate(
++            masks_pt, size=(latent_h, latent_w)
++        ).numpy().transpose(0, 2, 3, 1)  # (F, h, w, 1)
++        mask_latents = mx.array(mask_resized).astype(self.dtype)
++
++        # Add batch dim: (F,...) → (1,F,...)
++        masked_latents = masked_latents[None]
++        ref_latents = ref_latents[None]
++        mask_latents = mask_latents[None]
++
++        # CFG doubling
++        if do_cfg:
++            masked_latents = mx.concatenate([masked_latents] * 2, axis=0)
++            ref_latents = mx.concatenate([ref_latents] * 2, axis=0)
++            mask_latents = mx.concatenate([mask_latents] * 2, axis=0)
++
++        # Audio embeddings
++        audio_embeds = torch.stack(audio_chunks)
++        audio_embeds_mlx = mx.array(audio_embeds.float().numpy()).astype(self.dtype)
++        audio_embeds_mlx = audio_embeds_mlx[None]  # (1, F, S, 384)
++        if do_cfg:
++            null_audio = mx.zeros_like(audio_embeds_mlx)
++            audio_embeds_mlx = mx.concatenate([null_audio, audio_embeds_mlx], axis=0)
++
++        # Denoising loop
++        for step_index, t in enumerate(self.sampler.timesteps):
++            latent_input = mx.concatenate([latents] * 2, axis=0) if do_cfg else latents
++            latent_input = self.sampler.scale_model_input(latent_input, t)
++
++            # 13 channels: noise(4) + mask(1) + masked(4) + ref(4)
++            unet_input = mx.concatenate(
++                [latent_input, mask_latents, masked_latents, ref_latents], axis=-1
++            )
++
++            timestep_mx = mx.array([t])
++            noise_pred = self.unet(
++                unet_input, timestep_mx, encoder_hidden_states=audio_embeds_mlx
++            )
++
++            if do_cfg:
++                pred_uncond, pred_audio = mx.split(noise_pred, 2, axis=0)
++                noise_pred = pred_uncond + guidance_scale * (pred_audio - pred_uncond)
++
++            latents = self.sampler.step(noise_pred, t, latents)
++            mx.eval(latents)
++            if step_index % 5 == 0:
++                print(f"chunk={chunk_idx} step={step_index} peak_MLX_GiB={mx.get_peak_memory()/2**30:.2f}", flush=True)
++            if mx.get_peak_memory() > 8 * 1024**3:
++                raise RuntimeError("Candidate exceeded 8 GiB MLX allocation during actual generation")
++
++        # VAE decode
++        decoded = self._vae_decode(latents.reshape(-1, latent_h, latent_w, 4))
++
++        # Paste surrounding pixels back: generated in mouth, original elsewhere
++        # masks_mlx has 1 where we keep original, 0 where we regenerate (mouth)
++        inv_mask = 1.0 - masks_mlx  # 1 in mouth region
++        combined = decoded[:F_count] * inv_mask + ref_pv_mlx * masks_mlx
++        # Materialize the window before releasing lazy MLX model state.
++        synced = np.array(combined.astype(mx.float32))
++        return torch.from_numpy(synced).permute(0, 3, 1, 2)
+@@ -310 +318,0 @@
+-        out_frames = []
+@@ -324,2 +332 @@
+-            out_frames.append(frame)
+-        return np.stack(out_frames)
++            yield frame
