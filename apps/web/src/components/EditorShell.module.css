@@ -1,13 +1,31 @@
-.shell { --sidebar-width:var(--editor-left); --inspector-width:var(--editor-right); grid-template-rows:44px minmax(0,1fr); font-family:var(--font-ui); }
-.shell :global(.desktop-sidebar) { grid-row:2; grid-template-rows:minmax(0,1fr) auto; min-height:0; border:0; background:var(--sidebar-bg); }
-.shell :global(.desktop-workspace) { grid-row:2; min-width:0; grid-template-rows:minmax(0,1fr); padding:0 8px 8px 8px; container:workspace-shell / size; }
+/* One compact title row and a continuous gutter so the editor gets the remaining area. */
+.shell {
+  --shell-title-height:40px;
+  --shell-inset:8px;
+  --sidebar-width:var(--editor-left);
+  --inspector-width:var(--editor-right);
+  position:relative;
+  grid-template-rows:var(--shell-title-height) minmax(0,1fr);
+  font-family:var(--font-ui);
+}
+.shell :global(.desktop-sidebar) { grid-area:2 / 1; grid-template-rows:minmax(0,1fr) auto; min-height:0; border:0; background:var(--sidebar-bg); }
+.shell :global(.desktop-workspace) { grid-area:2 / 2; min-width:0; grid-template-rows:minmax(0,1fr); padding:0 var(--shell-inset) var(--shell-inset); container:workspace-shell / size; }
 .shell :global(.desktop-main-scroll) { grid-column:2; grid-row:1; min-width:0; min-height:0; overflow:auto; scrollbar-gutter:stable; background:var(--surface-1); container:workbench / inline-size; }
 .shell:global(.video-editor-shell) :global(.desktop-main-scroll) { position:relative; overflow:hidden; scrollbar-gutter:auto; }
-.contentGrid { display:grid; grid-template-columns:var(--editor-right) minmax(0,1fr); grid-template-rows:minmax(0,1fr); min-width:0; min-height:0; overflow:hidden; border:1px solid var(--border-1); border-radius:var(--radius-lg); background:var(--surface-1); }
+.contentGrid { display:grid; grid-template-columns:var(--editor-right) minmax(0,1fr); grid-template-rows:minmax(0,1fr); min-width:0; min-height:0; overflow:clip; border-radius:var(--radius-lg); background:var(--surface-1); }
+/* Opaque panes fill the grid. Paint its single outside keyline above them without changing the tracks. */
+.contentGrid::after {
+  content:"";
+  grid-area:1 / 1 / 2 / -1;
+  z-index:36;
+  border:1px solid var(--border-1);
+  border-radius:inherit;
+  pointer-events:none;
+}
 .conversation { position:relative; grid-column:1; grid-row:1; display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid var(--border-1); background:var(--surface-1); }
-.conversationHeader { display:flex; align-items:center; justify-content:space-between; flex:0 0 48px; gap:8px; min-width:0; padding:0 12px; }
-.conversationHeader > span { display:flex; align-items:center; gap:8px; min-width:0; white-space:nowrap; font-weight:600; }
-.conversationContext { display:flex; align-items:center; gap:6px; min-height:34px; margin:0 12px 8px; padding:4px 8px; border-radius:6px; background:var(--surface-2); color:var(--text-2); font-size:12px; }
+.conversationHeader { display:flex; align-items:center; justify-content:space-between; flex:0 0 var(--shell-title-height); gap:var(--shell-inset); min-width:0; padding:0 12px; }
+.conversationHeader > span { display:flex; align-items:center; gap:8px; min-width:0; white-space:nowrap; }
+.conversationContext { display:flex; align-items:center; gap:4px; min-height:28px; margin:0 12px var(--shell-inset); color:var(--text-2); font-size:var(--font-size-meta); line-height:var(--line-meta); }
 .conversationContext > * { min-width:0; max-width:100%; }
 .conversationContext :global(.conversation-work-target) { max-width:100%; }
 .conversationContext :global(.conversation-work-target) span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -20,19 +38,39 @@
 .conversationBody :global(.assistant-conversation-history) { flex:1; min-height:0; max-height:none; }
 .conversationBody :global(.home-composer__service) { font-size:var(--font-size-meta); }
 .separator { position:absolute; top:0; bottom:0; z-index:35; width:8px; touch-action:none; cursor:col-resize; }
-.separator::after { content:""; position:absolute; top:44%; left:3px; width:2px; height:26px; border-radius:2px; background:var(--border-2); }
+.separator::after { content:""; position:absolute; inset-block:0; inset-inline-start:3px; width:2px; }
 .separator:hover::after, .separator:focus-visible::after { background:var(--focus); }
 .separator:focus-visible { outline:1px solid var(--focus); outline-offset:-2px; }
 .leftSeparator,.chatSeparator { right:-4px; }
 .collapsed :global(.desktop-nav-row > span), .collapsed :global(.desktop-nav-section--creation-tasks) { display:none; }
 .collapsed :global(.desktop-nav-row) { justify-content:center; padding-inline:0; }
-.collapsed :global(.desktop-sidebar__scroll) { padding-inline:8px; }
-.shell :global(.desktop-sidebar__scroll) { padding:8px 8px 12px; gap:16px; }
+.shell :global(.desktop-sidebar__scroll) { padding:var(--shell-inset); overscroll-behavior:contain; }
+.shell .navigationDrawer {
+  position:absolute;
+  grid-area:auto;
+  inset:var(--shell-title-height) auto var(--shell-inset) var(--shell-inset);
+  z-index:45;
+  inline-size:224px;
+  border:1px solid var(--border-1);
+  border-radius:var(--radius-lg);
+  background:var(--surface-1);
+  box-shadow:var(--shadow-float);
+  overflow:clip;
+}
+.drawerBackdrop {
+  position:absolute;
+  inset:var(--shell-title-height) 0 0;
+  z-index:40;
+  border:0;
+  background:transparent;
+}
+.shell .creatorControls { margin-block-end:var(--shell-inset); padding-block:4px; }
+.recentTask > span { display:block; }
+.shell :global(.desktop-creation-task:focus-visible) { outline-offset:-2px; }
 .shell :global(.desktop-nav-group) { display:grid; gap:2px; }
 .shell :global(.desktop-nav-row) { min-height:32px; border-radius:6px; color:var(--text-2); font-size:var(--font-size-body); font-weight:400; transition:background 140ms ease,color 140ms ease; }
 .shell :global(.desktop-nav-row svg), .shell :global(.shell-icon-button svg) { flex-shrink:0; width:16px; height:16px; stroke-width:1.7; }
 .shell :global(.desktop-nav-row.is-active) { background:var(--selection-bg); color:var(--text-1); font-weight:500; }
-.shell :global(.desktop-nav-row.is-active) svg { color:var(--accent); stroke-width:2; }
 .shell :global(.shell-icon-button) { border-radius:6px; }
 .shell :global(.shell-icon-button:hover) { background:var(--surface-3); }
 .shell :global(.desktop-nav-heading) { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 8px; font-size:var(--font-size-meta); font-weight:500; }

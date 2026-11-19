@@ -188,6 +188,7 @@ describe("source and output playback identity", () => {
     const view = render(stage());
     const video = screen.getByLabelText("源素材预览") as HTMLVideoElement;
     expect(screen.getByText("源素材 · 原始画面，非成片")).toBeInTheDocument();
+    expect(screen.getByText("当前剪辑尚未合成")).toBeInTheDocument();
     fireEvent.error(video);
     expect(screen.getByRole("alert")).toHaveTextContent("原片暂时无法读取");
     fireEvent.click(screen.getByRole("button", { name: "重新读取原片" }));
@@ -206,6 +207,19 @@ describe("source and output playback identity", () => {
     expect(screen.getByText("画面")).toBeInTheDocument();
     expect(screen.getByText("配音")).toBeInTheDocument();
     expect(screen.getByText("字幕")).toBeInTheDocument();
+  });
+
+  it("moves the actual composition playhead using the monitor controls", () => {
+    render(stage(workspace(clip, "/output.mp4")));
+    const video = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+    const ruler = screen.getByRole("slider", { name: "时间线播放位置" });
+    expect(screen.getByText("合成预览")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "跳到结尾" }));
+    expect(video.currentTime).toBe(3);
+    expect(ruler).toHaveAttribute("aria-valuetext", "00:03.0");
+    fireEvent.click(screen.getByRole("button", { name: "跳到开头" }));
+    expect(video.currentTime).toBe(0);
+    expect(ruler).toHaveAttribute("aria-valuetext", "00:00.0");
   });
 
   it("repositions the same source after a trim and separates person render identity", () => {

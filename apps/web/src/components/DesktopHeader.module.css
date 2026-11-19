@@ -1,16 +1,32 @@
-.header { grid-column:1 / -1; grid-row:1; display:flex; align-items:center; gap:6px; min-width:0; min-height:44px; padding:0 12px; background:var(--sidebar-bg); -webkit-app-region:drag; }
-.header :is(a,button,input,select,[role="tablist"]) { -webkit-app-region:no-drag; }
-.mac { padding-left:80px; }
-.brand { display:flex; flex:0 0 auto; align-items:center; justify-content:space-between; gap:4px; width:calc(var(--sidebar-width) - 12px); min-width:126px; }
-.mac .brand { width:calc(var(--sidebar-width) - 80px); }
-.brand > a:first-child { display:flex; align-items:center; gap:6px; color:var(--text-1); text-decoration:none; white-space:nowrap; }
-.icon { display:inline-flex; flex:0 0 28px; align-items:center; justify-content:center; width:28px; height:28px; min-height:28px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--text-2); text-decoration:none; }
-.icon:hover { background:var(--surface-3); color:var(--text-1); }
-.icon:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
-.tabs { flex:1 1 180px; min-width:80px; overflow:hidden; }
-.location { display:flex; flex:1 1 auto; align-items:center; gap:4px; min-width:0; }
+/* Leave native caption controls outside the web actions. Empty chrome stays draggable on macOS. */
+.header {
+  --header-start: 12px;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--shell-inset);
+  min-inline-size: 0;
+  padding-inline: var(--header-start) var(--shell-inset);
+  background: var(--sidebar-bg);
+}
+.mac { --header-start: 80px; -webkit-app-region: drag; }
+.mac :is(a,button,input,select,[role="scrollbar"]) { -webkit-app-region: no-drag; }
+.brand {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  inline-size: max(0px,calc(var(--sidebar-width) - var(--header-start)));
+  min-inline-size: max-content;
+}
+.brand > a:first-child { color:var(--text-1); text-decoration:none; white-space:nowrap; }
+.icon { inline-size:28px; block-size:28px; min-block-size:28px; }
+.tabs, .location { flex:1 1 auto; min-inline-size:0; overflow:clip; }
+.location { display:flex; align-items:center; gap:4px; }
+.actions { display:flex; align-items:center; flex:none; gap:2px; margin-inline-start:auto; }
 .actions > div { flex-wrap:nowrap; }
-.actions { display:flex; align-items:center; flex:0 0 auto; gap:2px; min-width:0; margin-left:auto; }
 @media (prefers-reduced-motion:reduce) { .header * { transition:none; } }
 
 .layoutMenu { display:grid; gap:2px; min-width:168px; padding:6px; border:1px solid var(--border-1); border-radius:8px; background:var(--surface-1); color:var(--text-1); box-shadow:0 6px 20px #0002; }

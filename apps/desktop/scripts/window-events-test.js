@@ -21,12 +21,13 @@ class BrowserWindow extends EventEmitter {
 }
 const options = {
   app: { dock: { setIcon: icon => { assert.ok(require('node:fs').existsSync(icon)); } } },
-  BrowserWindow, ipcMain, preloadPath: '/fixture/preload.js', webOrigin: 'http://localhost:32101', isDev: false,
+  BrowserWindow, ipcMain, nativeTheme: { shouldUseDarkColors: false }, preloadPath: '/fixture/preload.js', webOrigin: 'http://localhost:32101', isDev: false,
   shell: { openExternal: url => external.push(url) },
   onCreated: window => { currentWindow = window; },
   onClosed: window => { if (currentWindow === window) currentWindow = null; },
 };
 const first = createDesktopWindow(options);
+assert.equal(first.options.backgroundColor, '#efeff1');
 assert.equal(first.options.webPreferences.contextIsolation, true);
 assert.equal(first.options.webPreferences.nodeIntegration, false);
 assert.ok(require('node:fs').existsSync(first.options.icon), 'the native window uses a shipped brand icon');
@@ -52,7 +53,9 @@ assert.deepEqual(external, ['https://fixture.invalid']);
 first.emit('closed');
 assert.equal(currentWindow, null);
 assert.equal(ipcMain.listenerCount('set-card-media-escape'), 0);
+options.nativeTheme.shouldUseDarkColors = true;
 const second = createDesktopWindow(options);
+assert.equal(second.options.backgroundColor, '#202024');
 ipcMain.emit('set-card-media-escape', { sender: first.webContents }, 'stale-card');
 second.webContents.emit('before-input-event', { preventDefault: () => { prevented += 1; } }, { type: 'keyDown', key: 'Escape' });
 assert.equal(prevented, 1, 'a closed window cannot arm its replacement');

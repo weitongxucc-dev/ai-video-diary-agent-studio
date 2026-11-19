@@ -3,6 +3,8 @@ import type { MaterialAssistantSelection } from './materials';
 import type { CreationTaskTopicsResponse, CreationTaskScript, CreationExecutionStatus } from './creation-tasks';
 import type { CreationTaskEditPreviewResponse, TaskMediaJob } from './task-edits';
 import type { CreationRequest } from './creation-requests';
+export type AssistantResultStage = "script" | "narration" | "montage";
+
 export type AssistantEditRequest = {
     task_id: string;
     request_id: string;

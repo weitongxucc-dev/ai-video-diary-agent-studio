@@ -18,7 +18,7 @@ function startupCheckpoint(stage) {
 }
 startupCheckpoint('main-entry');
 startupCheckpoint('electron-require-start');
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, utilityProcess } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, nativeTheme, shell, utilityProcess } = require('electron');
 startupCheckpoint('electron-require-end');
 const path = require('path');
 const fs = require('fs');
@@ -181,7 +181,7 @@ function reportServiceFailure(name, error, label) {
 
 function createWindow() {
   createDesktopWindow({
-    app, BrowserWindow, ipcMain, shell, preloadPath: path.join(__dirname, 'preload.js'), webOrigin, isDev,
+    app, BrowserWindow, ipcMain, nativeTheme, shell, preloadPath: path.join(__dirname, 'preload.js'), webOrigin, isDev,
     onCreated: (window) => { mainWindow = window; },
     onClosed: (window) => { if (mainWindow === window) mainWindow = null; },
   });

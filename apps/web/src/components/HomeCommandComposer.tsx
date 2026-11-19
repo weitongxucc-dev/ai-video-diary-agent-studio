@@ -1,4 +1,5 @@
 "use client";
+import type { AssistantResultStage } from "@/lib/types/assistant";
 
 import { AlertCircle, LoaderCircle, RotateCcw, Undo2 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -36,6 +37,7 @@ export type HomeCommandComposerProps = {
     getPlayheadMs: () => number | null;
     onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void;
     transferDraftState?: "none" | "draft" | "confirmed";
+    onOpenResultStage?: (stage: AssistantResultStage) => void;
     onOpenEditProposal?: (turn: AssistantConversationTurn) => void;
   };
   materialContext?: {
@@ -506,6 +508,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         onSend={sendToAssistant}
         onTransferReply={taskContext?.onTransferReply}
         transferDraftState={taskContext?.transferDraftState}
+        onOpenResultStage={taskContext?.onOpenResultStage}
         onOpenEditProposal={taskContext?.onOpenEditProposal}
         onCreatePlanFromReply={scopeKind === "home" && !task ? startPlanFromReply : undefined}
         onOpenCreationRequest={scopeKind === "home" ? turn => {
