@@ -3131,6 +3131,8 @@ class CreationPlanPresenterSelectionResponse(BaseModel):
     script_id: str
     script_updated_at: datetime
     section_id: str
+    voice_profile_id: str
+    voice_version: str
 
 
 class CreationPlanPreviewResponse(BaseModel):
