@@ -8,6 +8,7 @@ import { editExecutionReadinessMessage } from './creation-task/stage-labels';
 import { saveTaskVideo, saveTaskCover, saveTaskSubtitles, type SaveFeedback } from "./creation-task/output-saving";
 import { ReviewOutputView } from "./creation-task/ReviewOutputView";
 import { NarrationPreparation } from "./creation-task/NarrationPreparation";
+import type { AuditionVoice } from "./creation-task/DeliveryVoiceSample";
 import { ScriptWindowStart } from "./creation-task/ScriptWindowEditor";
 import { useScriptGenerationRequest } from "./creation-task/useScriptGenerationRequest";
 import { TopicSelection } from "./creation-task/TopicSelection";
@@ -446,6 +447,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   });
   const windowScript = latestScript?.selection_status === "draft" && (!latestScript.draft_complete || latestScript.sections_total_count > 20);
   const runnableVoices = workspace.available_voices.filter((voice) => voice.runnable);
+  const scriptAuditionLanguage = workspace.plan.language === "zh-CN" ? "zh"
+    : workspace.plan.language === "en-US" ? "en" : null;
+  const scriptAuditionVoice = workspace.plan.selected_voice;
+  const scriptAudition: AuditionVoice | undefined = scriptAuditionVoice && scriptAuditionLanguage &&
+    (scriptAuditionVoice.language === scriptAuditionLanguage || scriptAuditionVoice.language === "zh-en")
+    ? { language: scriptAuditionLanguage, profileId: scriptAuditionVoice.profile_id, version: scriptAuditionVoice.version }
+    : undefined;
   const zhSubtitleValid = workspace.subtitle_tracks.some((track) => track.language === "zh-CN" && track.status === "valid");
   const enSubtitleValid = workspace.subtitle_tracks.some((track) => track.language === "en-US" && track.status === "valid");
   const coverValid = workspace.cover_asset?.status === "valid";
@@ -1905,7 +1913,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
               </details>
             </section> : null}
         {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript &&
-          !retainedScript && (!retainedCheckKey || retainedCheck?.key === retainedCheckKey && !retainedCheck.error) ? <ScriptEditor taskId={task.id} busy={busy !== null} key={windowScript ? `${task.id}:${latestScript.id}` : `${task.id}:${latestScript.id}:${latestScript.updated_at}`} onWindowSaved={async () => { await refresh(true); }} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
+          !retainedScript && (!retainedCheckKey || retainedCheck?.key === retainedCheckKey && !retainedCheck.error) ? <ScriptEditor taskId={task.id} auditionVoice={scriptAudition} busy={busy !== null} key={windowScript ? `${task.id}:${latestScript.id}` : `${task.id}:${latestScript.id}:${latestScript.updated_at}`} onWindowSaved={async () => { await refresh(true); }} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
         {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ReadonlyScriptsView scripts={workspace.scripts} confirmedScriptId={task.confirmed_script_id} /> : null}
 
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <details className={styles.runDetails}><summary>保存到文案库</summary><ScriptLibrarySave key={latestScript.id} script={latestScript} onReloadSource={async () => { await refresh(true); }} /></details> : null}

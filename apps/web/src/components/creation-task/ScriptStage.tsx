@@ -9,6 +9,7 @@ import { transferAssistantReplyToScript, getAssistantScriptContext, getCreationT
 import type { CreationTask, CreationTaskScript, CreationTaskScriptSectionWindow, CreationTaskWorkspace as WorkspaceState } from "@/lib/types";
 import styles from "../CreationTaskWorkspace.module.css";
 import { ScriptWindowEditor } from "./ScriptWindowEditor";
+import type { AuditionVoice } from "./DeliveryVoiceSample";
 import { getScriptLibraryRequest, isScriptLibraryWriteRejected } from "@/lib/api/script-library";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
 export function ScriptGenerationStatus({ requestId, receipt, working, stopping, error, onRead, onStop }: {
@@ -264,10 +265,12 @@ type ScriptEditorProps = {
     repairing: boolean;
     onConfirm: (script: LoadedScript) => void;
     onWindowSaved?: () => Promise<void>;
+    auditionVoice?: AuditionVoice;
 };
 export function ScriptEditor(props: ScriptEditorProps) {
     if (props.script.selection_status === "draft" && (!props.script.draft_complete || props.script.sections_total_count > 20)) {
-        return <ScriptWindowEditor key={`${props.taskId}:${props.script.id}`} taskId={props.taskId} script={props.script} onSaved={async () => { await props.onWindowSaved?.(); }}/>;
+        return <ScriptWindowEditor key={`${props.taskId}:${props.script.id}`} taskId={props.taskId} script={props.script}
+            auditionVoice={props.auditionVoice} onSaved={async () => { await props.onWindowSaved?.(); }}/>;
     }
     if (props.script.sections_loaded) return <CompleteScriptEditor {...props} script={props.script}/>;
     return <ScriptEditorLoader key={`${props.taskId}:${props.script.id}:${props.script.updated_at}`} {...props}/>;

@@ -76,7 +76,7 @@ async function narrationShape(voice: Voice, text: string): Promise<NarrationPrep
   };
 }
 
-export function useVoiceSamplePreparation({ profileId, version, language }: Voice) {
+export function useVoiceSamplePreparation({ profileId, version, language, sourceKey }: Voice & { sourceKey?: string }) {
   const [status, setStatus] = useState<DeviceResourceStatus | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [receipt, setReceipt] = useState<DevicePreparationReceipt | null>(null);
@@ -88,7 +88,8 @@ export function useVoiceSamplePreparation({ profileId, version, language }: Voic
   const lastScope = useRef<string | null>(null);
 
   const keyFor = useCallback((scope: string) =>
-    "yaohe:voice-preparation:v1:" + JSON.stringify([scope, profileId, version, language]), [profileId, version, language]);
+    "yaohe:voice-preparation:v1:" + JSON.stringify([scope, profileId, version, language, ...(sourceKey ? [sourceKey] : [])]),
+    [profileId, version, language, sourceKey]);
 
   const refresh = useCallback(async (expected?: string) => {
     const token = readLocalMemberToken();
