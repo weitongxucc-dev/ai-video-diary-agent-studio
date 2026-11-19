@@ -163,6 +163,7 @@ export type CreationTaskScriptWindowStartInput = {
     title: string;
     sections: CreationTaskScriptSection[];
     assistant_turn_id?: string;
+    retained_script?: { script_id: string; expected_updated_at: string };
 };
 export type CreationTaskScriptSectionsPatchInput = {
     request_id: string;

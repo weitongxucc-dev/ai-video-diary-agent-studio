@@ -479,6 +479,7 @@ class ScriptDraftUseCase:
                              verified_body_digest=facts.body_digest)
 
     def _review_saved_ranges(self, workspace_id, task_id, script_id, expected_updated_at, instruction_origin, reread_origin, write_guard, *, draft_only):
+        from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT
         from app.topics import CreationTaskScriptReviewWindow
         context=self.scripts.saved_script_review_context(workspace_id,task_id,script_id,expected_updated_at)
         metadata=context['metadata']
@@ -489,10 +490,13 @@ class ScriptDraftUseCase:
             raise ScriptDraftRejected(status_code=409,detail="真实全稿段数尚未满足采用要求，请补齐草稿后继续。")
         binding=self._window_binding(plan,topic,sources,refs,reader,entry)
         current_guard=self._source_commit_guard(workspace_id,task_id,binding,write_guard,instruction_origin,reread_origin,draft_only=draft_only,source_metadata=metadata)
+        route = self.route_snapshot(workspace_id)
+        # Keep the report schema and context bounded on the same device as the editor.
+        review_limit = 1 if route["execution_location"] == "local" else SCRIPT_SECTION_WINDOW_LIMIT
         cursor,review_binding=0,None
         while cursor is not None:
             page=self.scripts.read_creation_task_script_sections(workspace_id,task_id,script_id,
-                expected_updated_at=expected_updated_at,after_ordinal=cursor)
+                expected_updated_at=expected_updated_at,after_ordinal=cursor,limit=review_limit)
             parts=[CreationTaskScriptSection(**item['section']) for item in page['items']]
             window=CreationTaskScriptReviewWindow(script_id,metadata['updated_at'],tuple(part.id for part in parts),context['total_count'],finalizing=True)
             review_binding=self._review_candidate(workspace_id,task,plan,topic,sources,reader,metadata['title'],parts,instruction_origin,
@@ -531,8 +535,19 @@ class ScriptDraftUseCase:
             if prior['request_digest'] != request_digest:
                 raise ScriptDraftRejected(status_code=409, detail="首窗原请求不能更换输入，请读取原结果。")
             return prior['result']
-        if self.scripts.active_creation_task_script_headers(workspace_id,task_id):
-            raise ScriptDraftRejected(status_code=409, detail="当前已有稿件，请用稳定段落ID窗口修改或明确整稿替换，不重新创建稿件。")
+        retained = payload.retained_script
+        if retained is not None and instruction_origin is not None:
+            raise ScriptDraftRejected(status_code=409, detail="请在作品页手动基于新资料另存。")
+
+        def guard_start(conn):
+            if write_guard is not None:
+                write_guard(conn)
+            self.scripts.require_manual_window_start(
+                conn, workspace_id, task_id,
+                retained_script_id=retained.script_id if retained else None,
+                expected_retained_updated_at=retained.expected_updated_at if retained else None,
+            )
+
         identity = uuid5(NAMESPACE_URL, json.dumps([workspace_id,task_id,member_id,request_id])).hex
         script_id, run_id = 'script_'+identity, 'script_run_'+identity
         try:
@@ -543,7 +558,7 @@ class ScriptDraftUseCase:
             raise ScriptDraftRejected(status_code=409, detail="首窗原请求已有运行记录，请查询原状态，不重复启动。")
         window = CreationTaskScriptReviewWindow(script_id,'new',tuple(part.id for part in payload.sections),len(payload.sections))
         self.save(workspace_id,task_id,payload,instruction_origin=instruction_origin,reread_origin=reread_origin,
-            write_guard=write_guard,window_start={'script_id':script_id,'run_id':run_id,'request_id':request_id,
+            write_guard=guard_start,window_start={'script_id':script_id,'run_id':run_id,'request_id':request_id,
                 'member_id':member_id,'request_digest':request_digest,'review_window':window})
         return self.scripts.script_window_start_result(workspace_id,task_id,request_id,member_id)['result']
 

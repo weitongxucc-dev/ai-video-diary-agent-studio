@@ -4250,6 +4250,72 @@ def test_narration_units_commit_release_restore_and_merge_on_original_job(tmp_pa
     assert len(queued) == 1 and queued[0]['unit_key'].startswith('montage_plan:')
 
 
+def test_explicit_presenter_waits_after_full_narration_and_resumes_original_job(tmp_path, monkeypatch):
+    from app import creation_execution as execution_module
+    from app.creation.execution_control import CreationExecutionControl
+    from app.creation.contracts import CreationPlanPersonReference
+    from app.creation.plan_contracts import CreationPlanPresenterSelection
+
+    case = _narration_units_case(tmp_path, section_count=3, start_job=False)
+    task = case.repo.task_records.get_creation_task('local', case.task_id)
+    script = case.repo.script_records.get_creation_task_script('local', case.script_id)
+    plan = case.repo.plan_records.get_creation_plan('local', task.plan_id)
+    plan.selected_person = CreationPlanPersonReference('person_1', 'v1')
+    plan.presenter_share_target = 20
+    plan.presenter_selection = CreationPlanPresenterSelection(script.id, script.updated_at,
+        'section_1', plan.selected_voice.profile_id, plan.selected_voice.version)
+    with case.repo._connect() as conn:
+        case.repo.plan_records.write_plan_payload(conn, 'local', plan)
+    job = case.execution.start('local', task.id, script.id, revision_digest(script, plan), actor=case.actor)
+    def fail_interleaved(*args, **kwargs):
+        pytest.fail('指定出镜需要先完成整条旁白，不能准备段落画面')
+    case.owner.segments = case.executor.segments = SimpleNamespace(
+        next_initial=fail_interleaved, prepare_video=fail_interleaved, waiting_for_visual_decision=lambda *_: False)
+    case.owner.montage_budget = None
+
+    submit_creation_stage(case.execution, case.scheduler, job, case.actor)
+    for ordinal in range(1, 4):
+        grant = case.scheduler.pick_and_grant()
+        assert grant.unit_key.startswith(f'narration:segment:v1:section_{ordinal}:')
+        case.executor.execute(grant, case.scheduler)
+    merge = case.scheduler.pick_and_grant()
+    assert merge.unit_key.startswith('narration:merge:v1:')
+    case.executor.execute(merge, case.scheduler)
+    merged_task = case.repo.task_records.get_creation_task('local', task.id)
+    artifact = case.repo.narration_artifacts.get_narration_artifact('local', merged_task.narration_cache_key)
+    assert artifact.duration_seconds == 3 and Path(artifact.audio_path).is_file()
+    assert case.scheduler._get(merge.request_id).state == 'done'
+    usage = case.repo.narration_units.creation_narration_usage('local', job.id)
+    assert not usage['unsettled'] and usage['used_output_bytes'] > 0
+
+    control = CreationExecutionControl(case.repo, case.execution, SimpleNamespace(valid=lambda *_a, **_k: False), lambda _: 'ready')
+    runtime = SimpleNamespace(scheduler=case.scheduler,
+        registrations={'creation_job': SimpleNamespace(owner=case.owner, executor=case.executor)}, wake=lambda: None)
+    waiting = control.status('local', task.id, verify_media=False)
+    assert waiting['job']['id'] == job.id and waiting['job']['status'] == 'interrupted'
+    assert waiting['current_stage'] == 'person_render' and '口型资源准备' in waiting['job']['failure_reason']
+    assert case.scheduler.pick_and_grant() is None
+    assert control.resume('local', task.id, case.actor, runtime, verify_media=False)['job']['id'] == job.id
+    case.owner.presenter_budget = object()
+    case.owner.presenter_models[plan.lipsync_quality] = 'test'
+    rendered = []
+    monkeypatch.setattr(case.owner, 'person_valid', lambda _task: bool(rendered))
+    case.executor.person_stage = SimpleNamespace(generate_stage=lambda *_args: rendered.append('section_1'))
+    monkeypatch.setattr(execution_module, 'presenter_stage_facts',
+        lambda *_args, **_kwargs: ('person_render:prepared', {'kind': 'creation_person_render',
+            'timeout_seconds': 20, 'max_output_bytes': 10000, 'threads': 1}))
+    control.resume('local', task.id, case.actor, runtime, verify_media=False)
+    following = case.scheduler.pick_and_grant()
+    assert following.owner_id == job.id and following.unit_key == 'person_render:prepared'
+    case.executor.execute(following, case.scheduler)
+    waiting = control.status('local', task.id, verify_media=False)
+    assert case.scheduler._get(following.request_id).state == 'done'
+    assert waiting['job']['status'] == 'interrupted' and waiting['current_stage'] == 'montage_plan'
+    assert next(item for item in waiting['stages'] if item['stage'] == 'person_render'
+                and item['status'] == 'completed')
+    assert len(case.generated) == 3 and case.repo.narration_units.creation_narration_usage('local', job.id) == usage
+
+
 def _queued_narration_voice_selection_case(tmp_path):
     from app.creation.execution_control import CreationExecutionControl
     from app.creation.task_authorization import TaskAuthorizationUseCase
