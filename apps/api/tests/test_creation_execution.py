@@ -4316,7 +4316,9 @@ def test_narration_units_commit_release_restore_and_merge_on_original_job(tmp_pa
     assert len(queued) == 1 and queued[0]['unit_key'].startswith('montage_plan:')
 
 
-def test_explicit_presenter_waits_after_full_narration_and_resumes_original_job(tmp_path, monkeypatch):
+@pytest.mark.parametrize("foreign_montage_budget", [False, True])
+def test_explicit_presenter_waits_after_full_narration_and_resumes_original_job(
+        tmp_path, monkeypatch, foreign_montage_budget):
     from app import creation_execution as execution_module
     from app.creation.execution_control import CreationExecutionControl
     from app.creation.contracts import CreationPlanPersonReference
@@ -4373,10 +4375,21 @@ def test_explicit_presenter_waits_after_full_narration_and_resumes_original_job(
     control.resume('local', task.id, case.actor, runtime, verify_media=False)
     following = case.scheduler.pick_and_grant()
     assert following.owner_id == job.id and following.unit_key == 'person_render:prepared'
+    if foreign_montage_budget:
+        from app.host_resource_probes import montage_scope_digest
+        scope = montage_scope_digest('another-work', 'another-dependency', 'another-manifest', [])
+        case.owner.montage_budget = MontageBudget(3, 1, 100000, 100000, 30, 1024**2,
+                                                  preparation_basis_digest=scope)
+        case.owner.task_authorizations = SimpleNamespace(
+            identity=lambda current: current, status=lambda *_a, **_k: 'valid',
+            material_asset_ids=lambda *_a, **_k: set())
     case.executor.execute(following, case.scheduler)
     waiting = control.status('local', task.id, verify_media=False)
     assert case.scheduler._get(following.request_id).state == 'done'
     assert waiting['job']['status'] == 'interrupted' and waiting['current_stage'] == 'montage_plan'
+    assert '故事板资源准备' in waiting['job']['failure_reason']
+    assert not any(item['unit_key'].startswith('montage_plan:')
+                   for item in case.repo.job_records.list_creation_job_request_states('local', job.id))
     assert next(item for item in waiting['stages'] if item['stage'] == 'person_render'
                 and item['status'] == 'completed')
     assert len(case.generated) == 3 and case.repo.narration_units.creation_narration_usage('local', job.id) == usage
