@@ -6374,3 +6374,78 @@ def test_ffv1_intermediate_does_not_widen_h264_preview_or_final_gate(tmp_path, m
     with pytest.raises(OSError, match='H.264'):
         montage._validate_rendered_media(path, scheduler=context.scheduler, grant=context.grant,
             expected_size=(1920,1080), deadline_monotonic=context.deadline_monotonic)
+
+
+def test_presenter_fixed_picture_matches_ffv1_pixels_and_rejects_incomplete_scratch(tmp_path, monkeypatch, granted_media):
+    import app.montage as montage
+
+    size = (64, 64)
+    monkeypatch.setattr(montage, 'canvas_size', lambda _: size)
+    frames = 16
+    duration = 2 * frames / 30
+    presenter, material, audio = (tmp_path / name for name in ('presenter.mp4', 'material.mp4', 'voice.wav'))
+    for path, source, source_rate, color_range in (
+            (presenter, 'testsrc2=s=64x64', 25, 'pc'),
+            (material, 'color=c=blue:s=64x64', 30, 'tv')):
+        subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', f'{source}:r={source_rate}:d=1',
+            '-an', '-c:v', 'libx264', '-threads', '1', '-pix_fmt', 'yuv420p', '-color_range', color_range, str(path)],
+            check=True, capture_output=True)
+    subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', f'sine=frequency=440:duration={duration}',
+        str(audio)], check=True, capture_output=True)
+    clips = [MontageClip(str(index), 'cue', 'asset', 'segment', str(path),
+        0, frames / 30, index * frames / 30, (index + 1) * frames / 30, 1, [], False)
+        for index, path in enumerate((presenter, material))]
+    plan = CreationTaskMontagePlan('plan', 'workspace', 'task', 'script', 'title', 'ready',
+        [NarrationCue('cue', 'section', 'Caption', duration)], clips, duration, 0)
+    renderer = montage.MontageRenderer(tmp_path)
+    serial_outputs = {}
+    run = montage._run_granted_media_command
+
+    def record(scheduler, grant, command, **options):
+        result = run(scheduler, grant, command, **options)
+        target = Path(command[-1])
+        if command[0] == 'ffmpeg' and target.suffix in {'.nut', '.y4m'}:
+            serial_outputs.setdefault(target.suffix, []).append(target.read_bytes())
+        return result
+
+    monkeypatch.setattr(montage, '_run_granted_media_command', record)
+    rendered = {}
+    for label, picture_format in (('legacy', None), ('fixed', montage.Y4M_SERIAL_PICTURE_FORMAT)):
+        stage = tmp_path / label
+        with granted_media([presenter, material, audio], kind='creation_presenter_render',
+                           serial_picture_format=picture_format) as context:
+            outcome = renderer.render(replace(plan), audio, job_staging_path=stage, subtitle_tracks=[],
+                scheduler=context.scheduler, grant=context.grant, max_output_bytes=context.max_output_bytes,
+                threads=context.threads, deadline_monotonic=context.deadline_monotonic)
+        assert outcome.status == 'rendered'
+        assert not list(stage.glob('.subtitle-overlays-*'))
+        rendered[label] = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(stage / 'preview.mp4'),
+            '-map', '0:v', '-pix_fmt', 'yuv420p', '-f', 'rawvideo', 'pipe:1'], check=True, capture_output=True).stdout
+    assert len(rendered['fixed']) == 2 * frames * 64 * 64 * 3 // 2
+    assert rendered['fixed'] == rendered['legacy']
+
+    sizes = []
+    for index, (legacy, fixed) in enumerate(zip(serial_outputs['.nut'], serial_outputs['.y4m'], strict=True)):
+        expected, actual = tmp_path / f'{index}.nut', tmp_path / f'{index}.y4m'
+        expected.write_bytes(legacy)
+        actual.write_bytes(fixed)
+        sizes.append(montage.validate_y4m_picture(actual, size=size, frames=frames))
+        def pixels(path):
+            return subprocess.run(['ffmpeg', '-v', 'error', '-i', str(path), '-pix_fmt', 'yuv420p',
+                '-f', 'rawvideo', 'pipe:1'], check=True, capture_output=True).stdout
+        assert pixels(actual) == pixels(expected)
+        actual.write_bytes(fixed[:-1])
+        with pytest.raises(ValueError, match='帧数或容量不完整'):
+            montage.validate_y4m_picture(actual, size=size, frames=frames)
+    assert sizes[0] == sizes[1] <= montage.y4m_picture_bytes(*size, frames)
+
+    output = tmp_path / 'refused' / 'preview.mp4'
+    output.parent.mkdir()
+    (output.parent / 'timeline-mix.wav').write_bytes(b'mix')
+    limit = (montage.y4m_picture_bytes(*size, 2 * frames, 2)
+        + len(montage.picture_concat_manifest([frames, frames], '.y4m').encode()) + 2)
+    with pytest.raises(ValueError, match='同一许可的临时磁盘上限'):
+        renderer._render_serial_picture_input(plan, output.parent / 'pictures', output, limit,
+            scheduler=None, grant=None, cancel_event=None, threads=1, deadline_monotonic=None,
+            picture_format=montage.Y4M_SERIAL_PICTURE_FORMAT)
+    assert not (output.parent / 'pictures').exists()

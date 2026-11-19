@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import sqlite3
 import subprocess
@@ -29,6 +30,7 @@ from app.audio_timeline import AudioTimeline, FINITE_LOUDNESS_FILTER
 from app.device_scheduler import DeviceScheduler, Grant
 from app.host_resource_probes import (
     HostCapacity,
+    Y4M_SERIAL_PICTURE_FORMAT,
     ResourceAdmission,
     ResourceAdmissionRejected,
     ResourceSamplingUnavailable,
@@ -922,6 +924,7 @@ class MontageRenderer:
         subtitle_path.write_text(subtitle_text or "\n", encoding="utf-8")
 
         temporary_disk_bytes = None
+        serial_picture_format = None
         if isinstance(plan, CreationTaskMontagePlan):
             resources = scheduler.resources._grant_resources(grant)
             if resources is None or resources.get("kind") not in {"creation_render", "creation_presenter_render"}:
@@ -931,6 +934,8 @@ class MontageRenderer:
             if budget is None:
                 raise PermissionError("成片临时磁盘预算尚未标定")
             temporary_disk_bytes = budget.additional_disk_bytes
+            if resources["kind"] == "creation_presenter_render":
+                serial_picture_format = budget.serial_picture_format
         plan.status = "rendering"
         plan.narration_audio_path = str(narration_path)
         try:
@@ -983,7 +988,7 @@ class MontageRenderer:
                     picture_sequence = self._render_serial_picture_input(plan, Path(overlay_dir) / "pictures",
                         output_path, temporary_disk_bytes, scheduler=scheduler, grant=grant,
                         cancel_event=cancel_event, threads=threads,
-                        deadline_monotonic=deadline_monotonic)
+                        deadline_monotonic=deadline_monotonic, picture_format=serial_picture_format)
                 command = self.build_command(
                     plan, narration_path, output_path, subtitle_overlays,
                     subtitle_intervals=intervals,
@@ -1042,32 +1047,42 @@ class MontageRenderer:
         return paths
 
     def _render_serial_picture_input(self, plan, directory: Path, output_path: Path, temporary_disk_bytes: int,
-        *, scheduler, grant, cancel_event, threads, deadline_monotonic) -> Path:
+        *, scheduler, grant, cancel_event, threads, deadline_monotonic, picture_format=None) -> Path:
         from app.creation_execution import CpuRenderGrantContext
         width, height = canvas_size(plan.aspect_ratio)
         context = CpuRenderGrantContext(scheduler, grant, deadline_monotonic, temporary_disk_bytes, threads, cancel_event)
         frame_counts = [round(clip.timeline_end_seconds * 30) - round(clip.timeline_start_seconds * 30)
             for clip in plan.clips]
+        fixed = picture_format == Y4M_SERIAL_PICTURE_FORMAT
+        extension = ".y4m" if fixed else ".nut"
+        manifest_text = picture_concat_manifest(frame_counts, extension)
+        if fixed:
+            other_bytes = sum(path.stat().st_size for path in self._temporary_render_paths(output_path, temporary_disk_bytes))
+            required = y4m_picture_bytes(width, height, sum(frame_counts), len(frame_counts))
+            if other_bytes + required + len(manifest_text.encode("utf-8")) > temporary_disk_bytes:
+                raise ValueError("当前画面、字幕和混音超过同一许可的临时磁盘上限，请按当前规格重新准备")
         directory.mkdir()
-        lines = ["ffconcat version 1.0"]
         for index, (clip, frames) in enumerate(zip(plan.clips, frame_counts)):
             source = Path(clip.source_path).expanduser().resolve()
             if not source.is_file() or source.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
                 raise ValueError(f"混剪镜头文件不存在或格式不支持：{source.name}")
-            target = directory / f"clip-{index:03}.nut"
+            target = directory / f"clip-{index:03}{extension}"
             paths = self._temporary_render_paths(output_path, temporary_disk_bytes)
             remaining_bytes = temporary_disk_bytes - sum(path.stat().st_size for path in paths)
             if remaining_bytes <= 0:
                 raise ValueError("成片中间文件已耗尽同一许可磁盘上限")
             command = serial_picture_command(clip, source, target, size=(width, height),
-                frames=frames, threads=threads, max_bytes=remaining_bytes)
+                frames=frames, threads=threads, max_bytes=remaining_bytes, picture_format=picture_format)
             _run_granted_media_command(scheduler, grant, command, timeout_seconds=None, cancel_event=cancel_event,
                 deadline_monotonic=deadline_monotonic, output_paths=(*paths, target), max_output_file_bytes=temporary_disk_bytes)
             self._temporary_render_paths(output_path, temporary_disk_bytes)
-            _probe_serial_picture_input(target, context, expected_size=(width,height), expected_frames=frames)
-            lines.extend((f"file {target.name}", f"duration {frames/30:.10f}"))
+            if fixed:
+                validate_y4m_picture(target, size=(width, height), frames=frames)
+                context.check()
+            else:
+                _probe_serial_picture_input(target, context, expected_size=(width,height), expected_frames=frames)
         manifest = directory / "picture.ffconcat"
-        manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        manifest.write_text(manifest_text, encoding="utf-8", newline="\n")
         self._temporary_render_paths(output_path, temporary_disk_bytes)
         return manifest
 
@@ -1917,16 +1932,61 @@ def _srt_time(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
-def serial_picture_command(clip, source: Path, target: Path, *, size, frames, threads, max_bytes):
+def _y4m_max_header_bytes(width, height):
+    # Longest header for progressive 30fps, square pixels, 8-bit 4:2:0.
+    return len(f"YUV4MPEG2 W{width} H{height} F30:1 Ip A1:1 C420mpeg2 XYSCSS=420MPEG2 XCOLORRANGE=LIMITED\n")
+
+
+def y4m_picture_bytes(width, height, frames, clip_count=1):
+    return clip_count * _y4m_max_header_bytes(width, height) + frames * (width * height * 3 // 2 + len(b"FRAME\n"))
+
+
+def validate_y4m_picture(path, *, size, frames):
     width, height = size
+    with path.open("rb") as file:
+        header = file.readline(_y4m_max_header_bytes(width, height) + 1)
+        fields = header.split()
+        if (len(header) > _y4m_max_header_bytes(width, height) or not header.endswith(b"\n")
+                or fields[:6] != [b"YUV4MPEG2", f"W{width}".encode(), f"H{height}".encode(), b"F30:1", b"Ip", b"A1:1"]
+                or fields[6:7] not in ([b"C420jpeg"], [b"C420mpeg2"], [b"C420paldv"], [b"C420"])):
+            raise ValueError("成片内部中间片不符合固定 Y4M 画幅、像素或帧率")
+        frame_bytes = width * height * 3 // 2
+        expected = len(header) + frames * (frame_bytes + len(b"FRAME\n"))
+        if path.stat().st_size != expected:
+            raise ValueError("成片内部 Y4M 中间片帧数或容量不完整")
+        for _ in range(frames):
+            if file.read(6) != b"FRAME\n":
+                raise ValueError("成片内部 Y4M 中间片帧头不完整")
+            file.seek(frame_bytes, os.SEEK_CUR)
+        return expected
+
+
+def picture_concat_manifest(frame_counts, extension):
+    lines = ["ffconcat version 1.0"]
+    for index, frames in enumerate(frame_counts):
+        lines.extend((f"file clip-{index:03}{extension}", f"duration {frames/30:.10f}"))
+    return "\n".join(lines) + "\n"
+
+
+def serial_picture_command(clip, source: Path, target: Path, *, size, frames, threads, max_bytes, picture_format=None):
+    width, height = size
+    filters = clip_video_filters(clip, width=width, height=height)
+    fixed = picture_format == Y4M_SERIAL_PICTURE_FORMAT
+    codec = (["-c:v", "wrapped_avframe"] if fixed else
+             ["-c:v", "ffv1", "-level", "3", "-coder", "0", "-context", "0",
+              "-g", "1", "-slices", "4", "-slicecrc", "1"])
+    if fixed:
+        # FFV1's yuv420p encoder negotiates limited range. Match its
+        # conversion before wrapping frames, including full-range inputs.
+        filters += ",scale=iw:ih:out_range=tv,format=yuv420p,setfield=prog"
+        max_bytes = min(max_bytes, y4m_picture_bytes(width, height, frames))
     return ["ffmpeg", "-v", "error", "-y", "-protocol_whitelist", "file,pipe",
         "-filter_threads", str(threads), "-filter_complex_threads", str(threads),
         "-ss", f"{clip.source_start_seconds:.3f}", "-t", f"{clip.source_end_seconds-clip.source_start_seconds:.3f}",
-        "-threads", str(threads), "-i", str(source), "-vf", clip_video_filters(clip, width=width, height=height),
-        "-an", "-c:v", "ffv1", "-level", "3", "-coder", "0", "-context", "0",
-        "-g", "1", "-slices", "4", "-slicecrc", "1", "-pix_fmt", "yuv420p",
+        "-threads", str(threads), "-i", str(source), "-vf", filters,
+        "-an", *codec, "-pix_fmt", "yuv420p",
         "-frames:v", str(frames), "-threads:v", str(threads), "-fs", str(max_bytes),
-        "-f", "nut", str(target)]
+        "-f", "yuv4mpegpipe" if fixed else "nut", str(target)]
 
 
 def _run_granted_media_command(scheduler: DeviceScheduler, grant: Grant, command: list[str], *,

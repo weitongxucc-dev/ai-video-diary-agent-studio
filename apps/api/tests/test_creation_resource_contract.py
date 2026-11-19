@@ -87,8 +87,10 @@ def test_short_preview_profile_is_independent_complete_and_has_no_guessed_defaul
     assert clip_preview_budget_from_env(full_movie) is None
     with pytest.raises(HostBudgetUncalibrated, match='缺少'):
         clip_preview_budget_from_env({'DEVICE_CLIP_PREVIEW_MAX_DURATION_SECONDS':'5'})
-    profile = {'DEVICE_CLIP_PREVIEW_' + key.upper():str(value) for key, value in asdict(_render_budget()).items()}
+    profile = {'DEVICE_CLIP_PREVIEW_' + key.upper():str(value)
+        for key, value in asdict(_render_budget()).items() if value is not None}
     assert clip_preview_budget_from_env(profile) == _render_budget()
+    assert clip_preview_budget_from_env({**profile, 'DEVICE_CLIP_PREVIEW_SERIAL_PICTURE_FORMAT': 'None'}) == _render_budget()
 
 
 def test_short_preview_admission_and_child_limits_consume_the_same_profile(tmp_path, render_metadata_host):

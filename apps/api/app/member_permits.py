@@ -219,15 +219,18 @@ def presenter_budgets_from_env(env: Mapping[str, str] | None = None):
     budgets = []
     for kind, prefix in ((PresenterBudget, "DEVICE_PRESENTER_"),
                          (CpuRenderBudget, "DEVICE_PRESENTER_CPU_RENDER_")):
-        budget_fields = fields(kind)
         if kind is PresenterBudget:
             # Window measurements and their model identity come only from the device profile.
+            budget_fields = fields(kind)
             measured = [item for item in budget_fields if item.default is not MISSING]
             if any(environment.get(prefix + item.name.upper(), "").strip() for item in measured):
                 raise HostBudgetUncalibrated("人物模型和标定范围必须来自实测设备档案")
-            budget_fields = tuple(item for item in budget_fields if item.default is MISSING)
-        names = {item.name: prefix + item.name.upper() for item in budget_fields if item.name != "running_cpu_policy"
-            and (item.name != "max_template_count" or environment.get(prefix + "MAX_TEMPLATE_COUNT", "").strip())}
+            names = {item.name: prefix + item.name.upper() for item in budget_fields if item.default is MISSING}
+        else:
+            names = {field: prefix + field.upper() for field in _CPU_RENDER_ENV}
+            template_limit = prefix + "MAX_TEMPLATE_COUNT"
+            if environment.get(template_limit, "").strip():
+                names["max_template_count"] = template_limit
         if not any(environment.get(name, "").strip() for name in names.values()):
             budgets.append(None)
             continue
@@ -393,7 +396,7 @@ def cpu_render_budget_from_env(
 def clip_preview_budget_from_env(environ: Mapping[str, str] | None = None) -> CpuRenderBudget | None:
     """Independent measured profile; never borrow the full-movie allowance."""
     source = os.environ if environ is None else environ
-    names = {item.name: "DEVICE_CLIP_PREVIEW_" + item.name.upper() for item in fields(CpuRenderBudget) if item.name != "running_cpu_policy"}
+    names = {field: "DEVICE_CLIP_PREVIEW_" + field.upper() for field in (*_CPU_RENDER_ENV, "max_template_count")}
     if not any(source.get(name, "").strip() for name in names.values()):
         return None
     missing = [name for name in names.values() if not source.get(name, "").strip()]

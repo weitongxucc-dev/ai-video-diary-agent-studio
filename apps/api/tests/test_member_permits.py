@@ -554,7 +554,7 @@ def test_chosen_presenter_section_survives_reload_and_controls_admission(tmp_pat
 
 def test_presenter_budget_absence_and_partial_configuration_do_not_borrow_cpu():
     from dataclasses import asdict
-    from app.host_resource_probes import PresenterBudget
+    from app.host_resource_probes import PresenterBudget, Y4M_SERIAL_PICTURE_FORMAT
     from app.member_permits import presenter_budgets_from_env
     assert presenter_budgets_from_env(_CPU_RENDER_ENV) == (None, None)
     with pytest.raises(HostBudgetUncalibrated, match="人物专属预算"):
@@ -565,6 +565,9 @@ def test_presenter_budget_absence_and_partial_configuration_do_not_borrow_cpu():
                 for name, value in _CPU_RENDER_ENV.items()})
     actual, cpu = presenter_budgets_from_env(env)
     assert actual == budget and cpu == cpu_render_budget_from_env(_CPU_RENDER_ENV)
+    assert cpu.serial_picture_format is None
+    assert presenter_budgets_from_env({**env,
+        "DEVICE_PRESENTER_CPU_RENDER_SERIAL_PICTURE_FORMAT": Y4M_SERIAL_PICTURE_FORMAT}) == (actual, cpu)
     with pytest.raises(HostBudgetUncalibrated, match="实测设备档案"):
         presenter_budgets_from_env({**env, "DEVICE_PRESENTER_PREPARATION_SCOPE": "windowed_measured_v1"})
 
@@ -612,8 +615,10 @@ def test_default_presenter_budget_required_before_queueing(presenter_permit_case
 def test_presenter_owner_reads_original_sources_under_exclusive_transaction(presenter_permit_case, stage):
     from dataclasses import replace
     import sqlite3
+    from app.creation.montage_stage_use_case import montage_dependency
     from app.creation.task_authorization import TaskAuthorizationUseCase
-    from app.creation_execution import submit_creation_stage
+    from app.creation_execution import creation_stage_facts, submit_creation_stage
+    from app.host_resource_probes import montage_scope_digest
 
     case = presenter_permit_case
     owner = case.registration.owner
@@ -625,10 +630,19 @@ def test_presenter_owner_reads_original_sources_under_exclusive_transaction(pres
         else:
             owner.task_authorizations = TaskAuthorizationUseCase(case.repo, lambda _identity: "ready")
             owner.task_authorizations.ensure(case.task, case.actor)
-            owner.montage_budget = replace(owner.montage_budget, preparation_basis_digest="a" * 64)
+            with case.repo.execution_inputs.creation_execution_read() as conn:
+                snapshot, dependency = montage_dependency(case.repo, case.task, connection=conn)
+                key, _ = creation_stage_facts(case.repo, snapshot.task, snapshot.script_header, snapshot.plan,
+                    stage, owner.narration_budget, owner.montage_budget, connection=conn)
+                authorized_assets = owner.task_authorizations.material_asset_ids(
+                    case.task.workspace_id, case.task.id, connection=conn)
+            owner.montage_budget = replace(owner.montage_budget, preparation_basis_digest=montage_scope_digest(
+                case.task.id, dependency, key.removeprefix("montage_plan:"), authorized_assets))
     scheduler = _presenter_scheduler(case)
     try:
-        request = scheduler._get(submit_creation_stage(case.execution, scheduler, case.job, case.actor))
+        request_id = submit_creation_stage(case.execution, scheduler, case.job, case.actor)
+        assert request_id is not None
+        request = scheduler._get(request_id)
         assert request.unit_key.startswith(f"{stage}:")
         with case.repo._connect() as conn:
             conn.execute("BEGIN EXCLUSIVE")
