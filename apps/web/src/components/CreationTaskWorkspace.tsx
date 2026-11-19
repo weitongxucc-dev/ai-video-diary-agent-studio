@@ -62,7 +62,7 @@ import { TaskIssue } from './creation-task/TaskIssue';
 import { Inspector, SubtitleCoverInspector } from './creation-task/TaskInspector';
 import { ConfirmedTopicView } from './creation-task/TopicStage';
 import { ReadonlyScriptsView, ConfirmedScriptView, ScriptGenerationStatus, ScriptLibrarySave, PlanReplyDraftAction, ScriptEditor } from './creation-task/ScriptStage';
-import { NarrationResultView, SegmentProductionPanel } from './creation-task/NarrationStage';
+import { NarrationDurationReviewPanel, NarrationResultView, SegmentProductionPanel } from './creation-task/NarrationStage';
 import { PersonStageView } from './creation-task/PersonStage';
 import { CreationExecutionPanel } from './creation-task/CreationExecutionPanel';
 import { EditPreviewCard } from './creation-task/EditPreviewCard';
@@ -1928,6 +1928,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
             onRecord={() => setRecordingOpen(true)} onReviseScript={() => openView("script")} onAdoptRecording={recording => void adoptRecordedVoice(recording)} onVoiceChange={setSelectedVoiceId}
             onUseVoice={() => void handleNarrationVoice()} />
         ) : null}
+        {activeView === "narration" && task.stage === "narration" && task.stage_status === "not_started"
+          && task.stage_reason && task.confirmed_script_id && !workspace.narration ?
+          <NarrationDurationReviewPanel key={task.id} taskId={task.id} onSaved={() => {
+            void refresh(true).catch(cause => {
+              if (currentTaskId.current === task.id) setError(errorDetails(cause));
+            });
+          }} /> : null}
         {activeView === "narration" && workspace.narration ? <NarrationResultView busy={busy !== null} onGeneratePersonRender={generatePersonRender} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} narration={workspace.narration} personRenders={workspace.person_renders} hasPerson={Boolean(workspace.plan.selected_person)} taskId={task.id} /> : null}
 
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>准备视频剪辑</h2><p>在上方核对文案与要求后继续制作。</p></div></section> : null}
