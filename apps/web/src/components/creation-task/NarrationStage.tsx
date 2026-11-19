@@ -16,11 +16,13 @@ import type { CreationTaskSegments, CreationTaskSegment, CreationTaskBudget, Cre
 export function NarrationDurationReviewPanel({ taskId, onSaved }: { taskId: string; onSaved?: () => void }) {
   const [status, setStatus] = useState<NarrationDurationStatus>();
   const [error, setError] = useState("");
+  const [readError, setReadError] = useState("");
   const [saved, setSaved] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uncertain, setUncertain] = useState(false);
   const pending = useRef<NarrationDurationRequest | null>(null);
   const saving = useRef(false);
+  const readVersion = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -28,11 +30,17 @@ export function NarrationDurationReviewPanel({ taskId, onSaved }: { taskId: stri
     async function refresh() {
       if (reading || saving.current) return;
       reading = true;
+      const version = readVersion.current;
       try {
         const result = await readNarrationDuration(taskId);
-        if (active && result.task_id === taskId) setStatus(result);
+        if (!active || version !== readVersion.current) return;
+        if (result.task_id !== taskId) throw new Error("配音进度返回的作品不匹配。");
+        setStatus(result);
+        setReadError("");
       } catch (cause) {
-        if (active && !pending.current) setError(visibleError(cause, "无法读取配音进度。"));
+        if (active && version === readVersion.current && !pending.current) {
+          setReadError(visibleError(cause, "无法读取配音进度。"));
+        }
       } finally {
         reading = false;
       }
@@ -50,6 +58,8 @@ export function NarrationDurationReviewPanel({ taskId, onSaved }: { taskId: stri
     const input = pending.current;
     if (!input) return;
     saving.current = true;
+    readVersion.current += 1;
+    setReadError("");
     setSubmitting(true);
     setError("");
     try {
@@ -70,11 +80,12 @@ export function NarrationDurationReviewPanel({ taskId, onSaved }: { taskId: stri
     }
   }
 
-  if (!status?.review_id && !error && !uncertain && saved === null) return null;
+  if (!status && !readError && !error && !uncertain && saved === null) return null;
   return <section className={styles.workSection} aria-label="配音进度与交付时长">
-    {status && <p>正式配音已完成 {status.completed_sections} / {status.total_sections} 段 ·
+    {status && <p role="status">正式配音已完成 {status.completed_sections} / {status.total_sections} 段 ·
       实测 {status.measured_seconds.toFixed(2)} 秒 · 目标 {status.target_seconds.toFixed(2)} 秒</p>}
     {status?.review_id && !uncertain && <p>完整配音已保存。将交付时长调整为 {status.minimum_delivery_seconds.toFixed(2)} 秒后，可以继续使用这些配音。</p>}
+    {readError && <p role="status">{readError}</p>}
     {error && <p role="alert">{error}</p>}
     {saved !== null && <p role="status">已保存 {saved.toFixed(2)} 秒的交付时长。点击继续制作即可合并已有配音。</p>}
     {(status?.review_id || uncertain) && <Button type="button" onClick={() => void adopt()} disabled={submitting}>

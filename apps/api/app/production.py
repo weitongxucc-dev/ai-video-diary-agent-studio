@@ -691,11 +691,9 @@ class ProductionRepository:
             read_person=lambda conn, workspace_id, profile_id, version=None: self.profile_records._get_person_profile(conn, workspace_id, profile_id, version),
             current_authorization=lambda conn, workspace_id, authorization: self._current_authorization(conn, workspace_id, authorization),
             read_authorization=lambda conn, workspace_id, authorization_id, version: self._get_authorization(conn, workspace_id, authorization_id, version),
-            list_pronunciation=lambda *, workspace_id, person_profile_id, episode_id: self.profile_records.list_applicable_pronunciation_entries(
-                workspace_id=workspace_id, person_profile_id=person_profile_id, episode_id=episode_id),
+            list_pronunciation=lambda **kwargs: self.profile_records.list_applicable_pronunciation_entries(**kwargs),
             profile_readable=lambda profile, user_id, local_diagnostic=False: self.profile_readable(profile, user_id, local_diagnostic),
-            profile_reference_input=lambda profile, *, viewer_user_id=None, local_diagnostic=False: self.profile_reference_input(
-                profile, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic),
+            profile_reference_input=lambda profile, **kwargs: self.profile_reference_input(profile, **kwargs),
         )
         self.creation_execution_jobs = CreationExecutionJobTransactions(
             connection_factory=lambda: self._connect(), job_records=self.job_records,
@@ -894,8 +892,10 @@ class ProductionRepository:
 
     def profile_reference_input(self, profile: PersonProfile | VersionedVoiceProfile, *,
                                 viewer_user_id: str | None = None, local_diagnostic: bool = False,
-                                for_generation: bool = True) -> ProfileReferenceInput:
-        return self._profile_references.profile_reference_input(profile, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic, for_generation=for_generation)
+                                for_generation: bool = True,
+                                connection: sqlite3.Connection | None = None) -> ProfileReferenceInput:
+        return self._profile_references.profile_reference_input(profile, viewer_user_id=viewer_user_id,
+            local_diagnostic=local_diagnostic, for_generation=for_generation, connection=connection)
 
     def materialize_profile_reference(self, profile: PersonProfile | VersionedVoiceProfile, *,
                                       grant_context, viewer_user_id: str | None = None,

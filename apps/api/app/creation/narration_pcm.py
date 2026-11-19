@@ -193,7 +193,7 @@ def prepare_narration_source(repository, task, plan, actor, *, binding=None, sel
 
 def verify_narration_source(repository, task, plan, prepared, *, connection):
     """Short SQL/FD/path CAS only; full reads and qualification already happened."""
-    narration_reference_facts(repository, task, plan, prepared['narration_reference'])
+    narration_reference_facts(repository, task, plan, prepared['narration_reference'], connection=connection)
     reference = prepared['narration_reference']['reference']
     if _source_stat(os.fstat(prepared['fd'])) != tuple(reference[key] for key in (
             'device', 'inode', 'size_bytes', 'mtime_ns', 'ctime_ns')):
@@ -212,28 +212,28 @@ def source_binding_payload(prepared, *, input_digest, origin_event_id):
         'sampling_receipt': prepared['sampling_receipt'], 'narration_reference': prepared['narration_reference']}
 
 
-def narration_reference_facts(repository,task,plan,prepared=None):
+def narration_reference_facts(repository, task, plan, prepared=None, *, connection=None):
     """Reuse qualified reference evidence with current SQL facts and file CAS."""
     from app.profile_reference_media import ProfileReferenceInput
     def json_value(value):
         return json.loads(json.dumps(asdict(value),sort_keys=True,default=str))
     def asset_digest(identity):
-        return (hashlib.sha256(json.dumps(json_value(repository.get_asset(task.workspace_id,identity)),
+        return (hashlib.sha256(json.dumps(json_value(repository.get_asset(task.workspace_id, identity, connection=connection)),
             sort_keys=True).encode()).hexdigest() if identity else None)
     if prepared is None:
         inputs=repository.profile_inputs.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,task_id=task.id,
-            voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
-        reference=repository.profile_reference_input(inputs.voice,viewer_user_id=task.owner_user_id)
+            voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version, connection=connection)
+        reference=repository.profile_reference_input(inputs.voice,viewer_user_id=task.owner_user_id, connection=connection)
         prepared={'profile':json_value(inputs.voice),'reference':asdict(reference),'reader':task.owner_user_id,
             'source_asset_digest':asset_digest(reference.asset_id)}
     else:
         inputs=repository.profile_inputs.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
-            voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version)
+            voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version, connection=connection)
         reference=ProfileReferenceInput(**prepared['reference'])
         from app.profiles.contracts import profile_use_failure
         from app.source_policy import knowledge_item_readable as content_readable
         current=repository.profile_inputs.resolve_narration_inputs(workspace_id=task.workspace_id,episode_id=task.id,
-            voice_profile_id=plan.selected_voice.profile_id).voice
+            voice_profile_id=plan.selected_voice.profile_id, connection=connection).voice
         for profile in (inputs.voice,current):
             failure=profile_use_failure(profile,content_type='voice',usage_scope='narration')
             if failure is not None or not content_readable(user_id=task.owner_user_id,local_diagnostic=False,
@@ -243,7 +243,7 @@ def narration_reference_facts(repository,task,plan,prepared=None):
                 or asset_digest(reference.asset_id)!=prepared['source_asset_digest']):
             raise RecoveryBlocked('已核验声音参考的身份、许可或来源权限版本已变化')
         path=repository.resolve_workspace_media_reference(task.workspace_id,inputs.voice.reference_audio_path,
-            require_registered=reference.asset_id is None)
+            require_registered=reference.asset_id is None, connection=connection)
         if str(Path(path).resolve())!=reference.source_path:
             raise RecoveryBlocked('已核验声音参考的路径绑定已变化')
         info=os.stat(path)

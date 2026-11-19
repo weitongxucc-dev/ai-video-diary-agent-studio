@@ -876,15 +876,16 @@ class SegmentProductionUseCase:
             from app.schemas import NarrationRevisionRequest
             command = NarrationRevisionRequest.model_validate(event['command'])
             self.verify_revision(task.workspace_id, task.id, actor, command, connection=connection)
-            plan = self.repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
-            if reference_preparation is None:
-                with self.repository._connect() if connection is None else nullcontext(connection) as conn:
-                    reference_preparation = self.repository.creation_execution_jobs.creation_narration_reference(job.workspace_id, job.id, connection=conn)
+            with self.repository._connect() if connection is None else nullcontext(connection) as conn:
+                plan = self.repository.plan_records.read_creation_plan(conn, task.workspace_id, task.plan_id)
                 if reference_preparation is None:
-                    from app.device_scheduler import RecoveryBlocked
-                    raise RecoveryBlocked('original_source_content_proof_missing: 原局部配音缺少来源封存')
+                    reference_preparation = self.repository.creation_execution_jobs.creation_narration_reference(job.workspace_id, job.id, connection=conn)
+            if reference_preparation is None:
+                from app.device_scheduler import RecoveryBlocked
+                raise RecoveryBlocked('original_source_content_proof_missing: 原局部配音缺少来源封存')
             from app.creation.narration_pcm import narration_reference_facts
-            inputs, reference, reference_preparation = narration_reference_facts(self.repository, task, plan, reference_preparation)
+            inputs, reference, reference_preparation = narration_reference_facts(
+                self.repository, task, plan, reference_preparation, connection=connection)
             budget = owner.narration_budget
             if budget is None or budget.input_scope not in {'single_call_experiment_v1', 'single_call_prepared_v1'}:
                 raise ValueError('局部改写配音缺少原单次资源档')
@@ -893,7 +894,8 @@ class SegmentProductionUseCase:
                 'reference_bytes': Path(reference.source_path).stat().st_size, 'duration_seconds': budget.max_duration_seconds,
                 'max_output_bytes': budget.max_output_bytes, 'threads': budget.max_threads, 'timeout_seconds': budget.max_timeout_seconds}
             from app.creation_execution import narration_scope_fields
-            script = self.repository.script_records.get_creation_task_script(task.workspace_id, task.confirmed_script_id)
+            script = self.repository.script_records.get_creation_task_script(
+                task.workspace_id, task.confirmed_script_id, connection=connection)
             language = {'zh-CN': 'zh', 'en-US': 'en', 'zh-CN/en-US': 'zh-en'}[script.language]
             resources.update(narration_scope_fields(budget, task=task, inputs=inputs, reference=reference,
                 language=language, max_output_bytes=resources['max_output_bytes'],

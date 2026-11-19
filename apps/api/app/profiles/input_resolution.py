@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
+import sqlite3
 
 from app.avatar_lipsync import AvatarAndLipSyncRequest
 from app.creation.task_records import TaskRecordStore
@@ -37,8 +39,9 @@ class ProfileInputResolver:
         episode_id: str,
         voice_profile_id: str,
         voice_version: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> VersionedNarrationInputs:
-        with self._connect() as conn:
+        with nullcontext(connection) if connection is not None else self._connect() as conn:
             historical_voice = self._get_versioned_voice_profile(
                 conn,
                 workspace_id,
@@ -57,16 +60,15 @@ class ProfileInputResolver:
                     historical_voice.authorization,
                 ),
             )
-        return VersionedNarrationInputs(
-            voice=voice,
-            pronunciation_entries=tuple(
+            pronunciation_entries = tuple(
                 self.list_applicable_pronunciation_entries(
                     workspace_id=workspace_id,
                     person_profile_id=voice.person_profile_id,
                     episode_id=episode_id,
+                    connection=conn,
                 )
-            ),
-        )
+            )
+        return VersionedNarrationInputs(voice=voice, pronunciation_entries=pronunciation_entries)
 
     def resolve_avatar_lipsync_request(
         self,
@@ -221,13 +223,15 @@ class ProfileInputResolver:
         task_id: str,
         voice_profile_id: str,
         voice_version: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> VersionedNarrationInputs:
         inputs = self.resolve_narration_inputs(
             workspace_id=workspace_id,
             episode_id=task_id,
             voice_profile_id=voice_profile_id,
             voice_version=voice_version,
+            connection=connection,
         )
-        task = self.task_records.get_creation_task(workspace_id, task_id)
-        self.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id)
+        task = self.task_records.get_creation_task(workspace_id, task_id, connection=connection)
+        self.profile_reference_input(inputs.voice, viewer_user_id=task.owner_user_id, connection=connection)
         return inputs
