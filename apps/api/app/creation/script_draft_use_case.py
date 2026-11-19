@@ -535,8 +535,19 @@ class ScriptDraftUseCase:
             if prior['request_digest'] != request_digest:
                 raise ScriptDraftRejected(status_code=409, detail="首窗原请求不能更换输入，请读取原结果。")
             return prior['result']
-        if self.scripts.active_creation_task_script_headers(workspace_id,task_id):
-            raise ScriptDraftRejected(status_code=409, detail="当前已有稿件，请用稳定段落ID窗口修改或明确整稿替换，不重新创建稿件。")
+        retained = payload.retained_script
+        if retained is not None and instruction_origin is not None:
+            raise ScriptDraftRejected(status_code=409, detail="请在作品页手动基于新资料另存。")
+
+        def guard_start(conn):
+            if write_guard is not None:
+                write_guard(conn)
+            self.scripts.require_manual_window_start(
+                conn, workspace_id, task_id,
+                retained_script_id=retained.script_id if retained else None,
+                expected_retained_updated_at=retained.expected_updated_at if retained else None,
+            )
+
         identity = uuid5(NAMESPACE_URL, json.dumps([workspace_id,task_id,member_id,request_id])).hex
         script_id, run_id = 'script_'+identity, 'script_run_'+identity
         try:
@@ -547,7 +558,7 @@ class ScriptDraftUseCase:
             raise ScriptDraftRejected(status_code=409, detail="首窗原请求已有运行记录，请查询原状态，不重复启动。")
         window = CreationTaskScriptReviewWindow(script_id,'new',tuple(part.id for part in payload.sections),len(payload.sections))
         self.save(workspace_id,task_id,payload,instruction_origin=instruction_origin,reread_origin=reread_origin,
-            write_guard=write_guard,window_start={'script_id':script_id,'run_id':run_id,'request_id':request_id,
+            write_guard=guard_start,window_start={'script_id':script_id,'run_id':run_id,'request_id':request_id,
                 'member_id':member_id,'request_digest':request_digest,'review_window':window})
         return self.scripts.script_window_start_result(workspace_id,task_id,request_id,member_id)['result']
 

@@ -1583,6 +1583,13 @@ class CreationTaskScriptDraftRequest(BaseModel):
     edit_mode: Literal["replace_all"] | None = None
 
 
+class RetainedScriptStartReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    script_id: str = Field(min_length=1)
+    expected_updated_at: datetime
+
+
 class CreationTaskScriptWindowStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: UUID
@@ -1590,6 +1597,7 @@ class CreationTaskScriptWindowStartRequest(BaseModel):
     sections: list[CreationTaskScriptDraftSectionRequest] = Field(
         min_length=1, max_length=SCRIPT_SECTION_WINDOW_LIMIT)
     assistant_turn_id: UUID | None = None
+    retained_script: RetainedScriptStartReference | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class CreationTaskScriptSectionsPatchRequest(BaseModel):

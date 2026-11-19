@@ -385,12 +385,20 @@ function WindowEditorBody({ taskId, script, onSaved }: WindowEditorProps) {
     </section>;
 }
 
-type WindowStartProps = { taskId: string; onSaved: (receipt: CreationTaskScriptWindowSaved) => Promise<void> };
+type WindowStartProps = {
+    taskId: string;
+    retainedScript?: Pick<CreationTaskScript, "id" | "title" | "updated_at">;
+    onSaved: (receipt: CreationTaskScriptWindowSaved) => Promise<void>;
+};
 export function ScriptWindowStart(props: WindowStartProps) {
-    return <WindowStartBody key={props.taskId} {...props}/>;
+    const draftScope = props.retainedScript?.id ?? "first";
+    return <WindowStartBody key={`${props.taskId}:${draftScope}`} {...props}/>;
 }
-function WindowStartBody({ taskId, onSaved }: WindowStartProps) {
-    const [form, setForm] = useWorkspaceViewState<{ title: string; sections: CreationTaskScriptSection[] }>(`script-window-start:${taskId}`, () => ({ title: "", sections: [newSection()] }));
+function WindowStartBody({ taskId, retainedScript, onSaved }: WindowStartProps) {
+    const formKey = retainedScript ? `script-window-start:${taskId}:${retainedScript.id}` : `script-window-start:${taskId}`;
+    const [form, setForm] = useWorkspaceViewState<{ title: string; sections: CreationTaskScriptSection[] }>(
+        formKey, () => ({ title: retainedScript?.title ?? "", sections: [newSection()] }));
+
     const [saving, setSaving] = useState(false);
     const recovery = useScriptWindowRequestRecovery(taskId, null);
     const [receipt, setReceipt] = useState<CreationTaskScriptWindowSaved | null>(null);
@@ -408,7 +416,12 @@ function WindowStartBody({ taskId, onSaved }: WindowStartProps) {
         catch (cause) { if (active.current) setError(cause instanceof Error ? cause.message : "首窗已保存，但作品状态未能刷新。"); }
     }
     async function save() {
-        const command = { request_id: crypto.randomUUID(), title: form.title, sections: form.sections };
+        const command = {
+            request_id: crypto.randomUUID(), title: form.title, sections: form.sections,
+            ...(retainedScript ? { retained_script: {
+                script_id: retainedScript.id, expected_updated_at: retainedScript.updated_at,
+            } } : {}),
+        };
         setSaving(true);
         setError(null);
         try {
@@ -423,7 +436,7 @@ function WindowStartBody({ taskId, onSaved }: WindowStartProps) {
     }
     const locked = saving || !recovery.ready || recovery.pending !== null || receipt !== null;
     return <section className={styles.workSection} aria-label="手动编写文案">
-        <h2>手动编写文案</h2><p>先保存首个窗口，再在同一稿件继续追加；首窗不是完整文案，不会自动确认或启动制作。</p>
+        <h2>{retainedScript ? "基于新资料另存文案" : "手动编写文案"}</h2><p>先保存首个窗口，再在同一稿件继续追加；首窗不是完整文案，不会自动确认或启动制作。</p>
         {restored ? <p role="status">已恢复上次提交的正文和画面建议，请继续编辑或保存草稿。</p> : null}
         {recovery.error ? <p role="alert">{recovery.error}</p> : null}
         <p>刷新仅保留原请求定位；尚未提交的修改不会随刷新恢复。原请求输入需从服务端回执读取。</p>

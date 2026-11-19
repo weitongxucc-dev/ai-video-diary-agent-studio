@@ -675,6 +675,28 @@ class ScriptRecordStore:
             if not reference_id or item != expected.get(reference_id):
                 raise ValueError("文案输入来源与当前方案的固定版本不一致")
 
+    def require_manual_window_start(
+        self, conn, workspace_id, task_id, *, retained_script_id=None, expected_retained_updated_at=None
+    ):
+        task = self._require_creation_task(conn, workspace_id, task_id)
+        latest = conn.execute(
+            """SELECT id, updated_at, json_extract(payload, '$.selection_status') AS selection_status
+               FROM creation_task_scripts WHERE workspace_id=? AND task_id=?
+               ORDER BY updated_at DESC, id DESC LIMIT 1""",
+            (workspace_id, task_id),
+        ).fetchone()
+        if retained_script_id is None:
+            if latest is not None:
+                raise ValueError("当前已有稿件，请编辑当前稿件，或按已追加的资料另存。")
+            return
+        if (latest is None or latest["id"] != retained_script_id
+                or _revision_value(latest["updated_at"]) != _revision_value(expected_retained_updated_at)):
+            raise ValueError("原稿版本已变化，请重新读取当前稿件。")
+        if (task.stage != "script" or task.confirmed_script_id
+                or latest["selection_status"] != "draft"
+                or self._script_knowledge_inputs_current(conn, task, retained_script_id)):
+            raise ValueError("现有稿件可继续编辑，不能通过资料更新入口另存。")
+
     def save_script_candidate(
         self, run, script, *, write_guard=None, result_write=None
     ):
