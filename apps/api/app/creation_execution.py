@@ -1210,7 +1210,8 @@ class CreationJobOwnerVerifier:
             source_digest = pcm_manifest_digest(manifest, segments())
             resources = self.pcm_resources(conn, job, common, ready_inputs, source_files,
                 source_digest, ordered_ids, limits, plan, pcm_preparation=pcm_preparation, request=request,
-                review_duration=plan.presenter_selection is not None or self.segments is None)
+                review_duration=plan.presenter_selection is not None
+                    or plan.material_selection_mode == "source_order" or self.segments is None)
             return 'narration:merge:v1:' + pcm_manifest_digest(manifest, segments(), resources=resources), resources
         digest = hashlib.sha256(json.dumps([manifest, resources], sort_keys=True, default=str).encode()).hexdigest()
         return prefix + digest, resources
@@ -2265,7 +2266,8 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         task, script, plan = snapshot.task, snapshot.script_header, snapshot.plan
     source_mode = plan.source_media is not None
     explicit_presenter = plan.presenter_selection is not None
-    if (not source_mode and not explicit_presenter and owner.segments is not None
+    if (not source_mode and not explicit_presenter and plan.material_selection_mode == "automatic"
+            and owner.segments is not None
             and job.kind == KIND and not event.get('operation')):
         intent = owner.segments.next_initial(job,owner,connection=connection)
         if intent is not None:
@@ -2298,12 +2300,12 @@ def next_creation_intent(repository, scheduler: DeviceScheduler, job: JobRun, *,
         stage = "montage_plan"
     else:
         stage = "render"
-    if explicit_presenter:
+    if explicit_presenter or plan.material_selection_mode == "source_order":
         if stage == 'person_render' and (owner.presenter_budget is None or plan.lipsync_quality not in owner.presenter_models):
             raise CreationStagePreparationRequired(stage, "请先完成人物口型资源准备，再继续原作业。")
         if stage == 'montage_plan' and owner.montage_budget is None:
             raise CreationStagePreparationRequired(stage, "请先完成故事板资源准备，再继续原作业。")
-        if stage == 'render' and owner.presenter_cpu_render_limits is None:
+        if stage == 'render' and plan.presenter_share_target and owner.presenter_cpu_render_limits is None:
             raise CreationStagePreparationRequired(stage, "请先完成人物组合 CPU 成片准备，再继续原作业。")
     if stage == "render":
         event = repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start")
@@ -2892,7 +2894,8 @@ class CreationJobUnitExecutor:
             try:
                 video_preparation = (self.segments.prepare_video(job,event.payload,task,segment.source_section_id,
                     artifact,owner,text=segment.text)
-                    if self.segments is not None and segment is not None and plan.presenter_selection is None else None)
+                    if self.segments is not None and segment is not None and plan.presenter_selection is None
+                    and plan.material_selection_mode == "automatic" else None)
             except DurationConflict as conflict:
                 video_preparation = self.segments.planning_conflict_event(job,task,segment.source_section_id,artifact,conflict)
             if artifact is not None:

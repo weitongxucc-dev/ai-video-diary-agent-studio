@@ -3169,6 +3169,8 @@ class CreationPlanPreviewResponse(BaseModel):
     pronunciation_references: list[CreationPlanPronunciationReferenceResponse]
     approved_asset_count: int = Field(ge=0)
     selected_material_asset_ids: list[str] = Field(default_factory=list)
+    material_selection_mode: Literal["automatic", "source_order"] = "automatic"
+    material_source_start_seconds: dict[str, float] = Field(default_factory=dict)
     approved_clip_count: int = Field(ge=0)
     material_rule_summary: str
     material_matches: list[MaterialSegmentMatchResponse]
