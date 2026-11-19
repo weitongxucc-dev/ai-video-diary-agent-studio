@@ -688,6 +688,11 @@ class ResourceAdmission:
     load_avg_1m: float | None
 
 
+def presenter_render_total_timeout(picture_seconds: float, audio_seconds: float) -> float:
+    """Reserve sequential work under the existing wall-clock ceiling."""
+    return min(CREATION_RENDER_WALL_CLOCK_S_MAX, picture_seconds + audio_seconds)
+
+
 _RESOURCE_KINDS: Mapping[str, ResourceKindSpec] = {
     "creation_render": ResourceKindSpec("creation_render", (
         ResourceField("source_duration_s", float, 0.0, CREATION_RENDER_SOURCE_DURATION_S_MAX),
@@ -1483,6 +1488,17 @@ class HostResourceProbe:
                     value = resources.get(name)
                     if type(value) is not int or not resources[actual] <= value <= cap:
                         return decision(None, "render_integer_fields_invalid")
+            picture_timeout = resources["timeout_seconds"]
+            if "picture_timeout_seconds" in resources:
+                picture_timeout = resources["picture_timeout_seconds"]
+                audio_mix = resources.get("audio_mix")
+                audio_timeout = audio_mix.get("timeout_seconds") if isinstance(audio_mix, dict) else None
+                if (kind != "creation_presenter_render" or render.serial_picture_format != Y4M_SERIAL_PICTURE_FORMAT
+                        or any(type(seconds) not in {int, float} or not math.isfinite(seconds) or seconds <= 0
+                               for seconds in (picture_timeout, audio_timeout))
+                        or picture_timeout >= resources["timeout_seconds"]
+                        or resources["timeout_seconds"] != presenter_render_total_timeout(picture_timeout, audio_timeout)):
+                    return decision(False, "render_phase_timeout_contract_invalid")
             if (resources["duration_seconds"] > render.max_duration_seconds
                     or resources["width_px"] > render.max_width_px
                     or resources["height_px"] > render.max_height_px
@@ -1493,7 +1509,7 @@ class HostResourceProbe:
                     or resources["overlay_count"] > render.max_overlay_count
                     or resources["max_output_bytes"] > render.max_output_bytes
                     or resources["threads"] > render.max_threads
-                    or resources["timeout_seconds"] > render.max_timeout_seconds):
+                    or picture_timeout > render.max_timeout_seconds):
                 return decision(False, "declared_resources_exceed_budget")
             required_memory = self.budget.min_available_memory_bytes + (0 if running_render else render.additional_memory_bytes)
             required_disk = (self.budget.min_free_disk_bytes + render.additional_disk_bytes

@@ -157,13 +157,14 @@ class MemberDeviceAccess:
 def cpu_render_limits_from_budget(
     budget: CpuRenderBudget | None,
 ) -> CpuRenderLimits | None:
-    """成片预算里验证者真正用到的三项；没有标定就返回 ``None``（不放行）。"""
+    """没有标定时拒绝准入，按已准备的画面协议构造声明上限。"""
     if budget is None:
         return None
     return CpuRenderLimits(
         max_output_bytes=budget.max_output_bytes,
         threads=budget.max_threads,
         timeout_seconds=int(budget.max_timeout_seconds),
+        serial_picture_format=budget.serial_picture_format,
     )
 
 

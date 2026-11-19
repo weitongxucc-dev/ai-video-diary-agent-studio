@@ -771,7 +771,7 @@ class RenderStageUseCase:
             media_options = (
                 {"scheduler": render_context.scheduler, "grant": render_context.grant,
                  "cancel_event": render_context.cancel_event,
-                 "deadline_monotonic": render_context.deadline_monotonic}
+                 "deadline_monotonic": render_context.command_deadline_monotonic}
                 if render_context is not None else {}
             )
             _validate_rendered_media(path, expected_size=canvas_size(str(plan["aspect_ratio"])),

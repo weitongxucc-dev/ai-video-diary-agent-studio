@@ -594,3 +594,34 @@ def test_failed_audio_section_preserves_consumed_time(monkeypatch, failure):
         with bounded_audio_context(context) as audio:
             assert audio.deadline_monotonic == 125.
             clock[0] = 125.
+
+
+def test_presenter_picture_can_use_its_full_allowance_after_measured_audio_time(monkeypatch):
+    import app.audio_timeline as audio_module
+    import app.creation_execution as execution_module
+    from app.audio_timeline import bounded_audio_context
+    from app.creation_execution import CpuRenderGrantContext
+    from app.granted_subprocess import GrantedCommandTimeout
+
+    clock = [100.]
+    timer = SimpleNamespace(monotonic=lambda: clock[0])
+    monkeypatch.setattr(audio_module, 'time', timer)
+    monkeypatch.setattr(execution_module, 'time', timer)
+    monkeypatch.setattr(audio_module, '_audio_grant_resources', lambda *_: {
+        'kind': 'creation_presenter_render',
+        'audio_mix': {'timeout_seconds': 3763., 'threads': 1, 'max_output_bytes': 899072}})
+    scheduler = SimpleNamespace(assert_grant=lambda _: None)
+    context = CpuRenderGrantContext(scheduler, object(), 4111., 8_000_000, 1,
+        started_monotonic=100., picture_timeout_seconds=248.)
+    assert context.command_deadline_monotonic == 348.
+    clock[0] = 105.  # Time outside the audio context still counts against picture.
+    with bounded_audio_context(context) as audio:
+        assert audio.command_deadline_monotonic == 3868.
+        clock[0] = 195.
+        audio.check()
+    assert context.command_deadline_monotonic == 438.
+    clock[0] = 348.  # The old single clock expired here.
+    context.check()
+    clock[0] = 438.
+    with pytest.raises(GrantedCommandTimeout):
+        context.check()

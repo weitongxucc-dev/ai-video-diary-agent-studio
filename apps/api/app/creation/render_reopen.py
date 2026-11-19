@@ -50,7 +50,7 @@ def _settled_presenter_attempt(repository, render_stage, conn, task, request_row
             or conn.execute("SELECT 1 FROM artifact_records WHERE workspace_id=? AND producer_job_id=? LIMIT 1",
                 (task.workspace_id, inner['id'])).fetchone() is not None):
         raise RecoveryBlocked('原人物渲染产物或结算不明确，不能重复制作')
-    return version.id, inner['id']
+    return version.id, inner['id'], inner['failure_reason']
 
 
 def continue_failed_presenter_render(execution, render_stage, job, actor, scheduler, *, write_guard=None):
@@ -105,9 +105,20 @@ def continue_failed_presenter_render(execution, render_stage, job, actor, schedu
                     (prior['id'], prior['last_grant_generation'], prior['attempt_number'])).fetchone() is None):
             raise RecoveryBlocked('原人物成片缺少明确释放的失败许可')
         try:
-            version_id, inner_id = _settled_presenter_attempt(repository, render_stage, conn, snapshot.task, prior)
+            version_id, inner_id, failure_reason = _settled_presenter_attempt(repository, render_stage, conn, snapshot.task, prior)
             failed = scheduler._request(prior)
-            unit_key, _ = owner.render_facts(conn, snapshot.task, snapshot.plan, actor=actor, retry_from=failed)
+            unit_key, resources = owner.render_facts(conn, snapshot.task, snapshot.plan, actor=actor, retry_from=failed)
+            if failure_reason in {
+                    'Command exceeded its unit deadline', 'Child session did not start before deadline',
+                    '渲染阶段已超出总时限', '制作阶段总时限已到'}:
+                previous_total, current_total = failed.resources['timeout_seconds'], resources['timeout_seconds']
+                previous_mix = failed.resources.get('audio_mix', {}).get('timeout_seconds', 0)
+                current_mix = resources.get('audio_mix', {}).get('timeout_seconds', 0)
+                if (current_total <= previous_total
+                        and resources.get('picture_timeout_seconds', current_total)
+                            <= failed.resources.get('picture_timeout_seconds', previous_total)
+                        and min(current_total, current_mix) <= min(previous_total, previous_mix)):
+                    raise RecoveryBlocked('原人物成片已耗尽许可时限，请先重新准备覆盖当前作品的 CPU 资源再继续')
         except KeyError as exc:
             raise RecoveryBlocked('原人物成片缺少完整结算记录') from exc
         except OSError as exc:
