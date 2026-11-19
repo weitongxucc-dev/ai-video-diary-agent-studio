@@ -648,6 +648,8 @@ describe("HomeCommandComposer", () => {
     const tools = await within(record).findByRole("list", { name: "操作" });
     expect(within(tools).getByText("读取当前工作区").parentElement).toHaveTextContent("已返回");
     expect(within(tools).getByText("已读取 1 项任务摘要。")).toBeVisible();
+    expect(mocks.readTrace).not.toHaveBeenCalled();
+    fireEvent.click(within(record).getByText("用量与技术详情"));
     expect(await within(record).findByLabelText("本轮用量")).toBeVisible();
     const conversationId = mocks.ask.mock.calls[0][1];
     const turnId = mocks.saved.get(conversationId)!.turns[0].id;
