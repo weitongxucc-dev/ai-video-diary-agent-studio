@@ -2,6 +2,7 @@ import type { VideoTemplateSettings } from './templates';
 import type { ContentVisibility } from './common';
 import type { MaterialSegmentMatch } from './materials';
 import type { CreationTask } from './creation-tasks';
+export type MaterialSelectionMode = 'automatic' | 'source_order';
 export type CreationPlanInput = {
     template_id?: string | null;
     template_version?: number | null;
@@ -92,6 +93,8 @@ export type CreationPlanPreview = Omit<CreationPlanInput, "selected_voice"> & {
     pronunciation_references: CreationPlanPronunciationReference[];
     approved_asset_count: number;
     selected_material_asset_ids?: string[];
+    material_selection_mode?: MaterialSelectionMode;
+    material_source_start_seconds?: Record<string, number>;
     approved_clip_count: number;
     material_rule_summary: string;
     material_matches: MaterialSegmentMatch[];

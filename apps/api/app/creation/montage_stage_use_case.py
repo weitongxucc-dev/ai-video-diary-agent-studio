@@ -303,12 +303,14 @@ class MontageStageUseCase:
                     renders[segment.source_section_id] = render
         # Complete real captions/queries are required by global allocation and
         # the existing semantic batch. No database snapshot outlives preparation.
+        from app.creation.reference_picture_order import ReferencePictureOrder
         montage = planner.build_for_creation_inputs(workspace_id=workspace_id, task_id=task.id,
             script_header=header, prepared=prepared, assets=assets,
             media_reference_for_asset=lambda asset_id: self.repository.workspace_media_reference_for_asset(workspace_id, asset_id),
             narration_audio_path=self.repository.narration_artifacts.narration_artifact_reference(narration.cache_key),
             person_render_by_section={key: (f'pending:{key}', audio[key]['duration']) for key in selected_sections},
-            presenter_share_target=creation_plan.presenter_share_target, delivery_windows=windows)
+            presenter_share_target=creation_plan.presenter_share_target, delivery_windows=windows,
+            reference_order=ReferencePictureOrder.from_plan(creation_plan))
         montage.duration_requirement = requirement.payload()
         montage.audio_timeline = voice_timeline_from_audio(audio, {window.section_id: window for window in windows})
         montage.narration_linkage_created_audio_timeline = True

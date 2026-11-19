@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronUp, ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getProductionMaterial, getProductionMaterials } from "@/lib/api/materials";
 import {
@@ -8,6 +9,7 @@ import {
 } from "@/lib/api/material-scope";
 import { ApiRequestError } from "@/lib/api/transport";
 import type { MaterialAsset, MaterialLibrary } from "@/lib/types";
+import type { MaterialSelectionMode } from "@/lib/types/creation-plans";
 import { HomeCardDialog } from "../HomeCardDialog";
 import { visibleError } from "../material-library/material-errors";
 import { duration } from "../material-library/material-labels";
@@ -21,6 +23,8 @@ type Props = {
   taskId: string;
   planUpdatedAt: string;
   selectedAssetIds: string[];
+  selectionMode?: MaterialSelectionMode;
+  sourceStarts?: Record<string, number>;
   disabled?: boolean;
   onSaved: (receipt: MaterialScopeReceipt) => void;
 };
@@ -33,12 +37,16 @@ function eligible(asset: MaterialAsset) {
     asset.segments.some(segment => segment.review_status !== "rejected" && segment.usage_role !== "exclude");
 }
 
-function ScopeDialog({ taskId, planUpdatedAt, selectedAssetIds, disabled, onSaved, onClose }: Props & {
+function ScopeDialog({ taskId, planUpdatedAt, selectedAssetIds, selectionMode, sourceStarts, disabled, onSaved, onClose }: Props & {
   onClose: () => void;
 }) {
   const [selection, setSelection] = useState(() => new Map<string, MaterialAsset | null>(
     selectedAssetIds.map(id => [id, null]),
   ));
+  const [startInputs, setStartInputs] = useState<Record<string, string>>(() =>
+    Object.fromEntries(Object.entries(sourceStarts ?? {}).map(([id, seconds]) => [id, String(seconds)])),
+  );
+  const [mode, setMode] = useState<MaterialSelectionMode>(selectionMode ?? "automatic");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
@@ -55,6 +63,11 @@ function ScopeDialog({ taskId, planUpdatedAt, selectedAssetIds, disabled, onSave
   const originalSelection = useRef(selectedAssetIds);
   const planChanged = planUpdatedAt !== originalRevision.current;
   const blocked = [...selection.values()].some(asset => asset === null || !eligible(asset));
+  const invalidStart = mode === "source_order" && [...selection].some(([id, asset]) => {
+    const seconds = Number(startInputs[id] || 0);
+    return !Number.isFinite(seconds) || seconds < 0 ||
+      (asset?.duration_seconds != null && seconds >= asset.duration_seconds);
+  });
   const editable = !disabled && !saving && !uncertain && !checkingSelection && !planChanged;
 
   useEffect(() => {
@@ -99,19 +112,32 @@ function ScopeDialog({ taskId, planUpdatedAt, selectedAssetIds, disabled, onSave
     });
   }
 
+  function moveAsset(index: number, delta: number) {
+    const items = Array.from(selection);
+    const next = index + delta;
+    if (next < 0 || next >= items.length) return;
+    [items[index], items[next]] = [items[next], items[index]];
+    setSelection(new Map(items));
+    setSaveError("");
+  }
+
   async function save() {
-    if (active.current || disabled || (!uncertain && (!editable || blocked))) return;
+    if (active.current || disabled || (!uncertain && (!editable || blocked || invalidStart))) return;
     active.current = true;
     setSaving(true);
     setSaveError("");
     if (!pending.current) {
       const assets: MaterialScopeSelection[] = Array.from(selection).flatMap(([asset_id, asset]) =>
-        asset ? [{ asset_id, expected_asset_updated_at: asset.updated_at }] : [],
+        asset ? [{
+          asset_id, expected_asset_updated_at: asset.updated_at,
+          ...(mode === "source_order" && { source_start_seconds: Number(startInputs[asset_id] || 0) }),
+        }] : [],
       );
       pending.current = {
         request_id: crypto.randomUUID(),
         expected_plan_updated_at: originalRevision.current,
         assets,
+        ...(selectionMode && { selection_mode: assets.length ? mode : "automatic" }),
       };
     }
     const input = pending.current;
@@ -145,22 +171,51 @@ function ScopeDialog({ taskId, planUpdatedAt, selectedAssetIds, disabled, onSave
   return <HomeCardDialog title="本作品的选材范围" onClose={() => { if (!active.current && !uncertain) onClose(); }}
     footer={<>
       <Button variant="ghost" disabled={saving || uncertain} onClick={onClose}>取消</Button>
-      <Button disabled={saving || disabled || (!uncertain && (!editable || blocked))} onClick={() => void save()}>
+      <Button disabled={saving || disabled || (!uncertain && (!editable || blocked || invalidStart))} onClick={() => void save()}>
         {saving ? "正在核对保存" : uncertain ? "查询原请求" : "保存范围"}
       </Button>
     </>}>
     <div className={styles.review}>
       <p>{selection.size ? `本作品已选 ${selection.size} 项，自动选材将限于这些视频。` : "未指定视频，作品将使用原有选材策略。"}</p>
+      {selection.size > 0 && selectionMode && <label className={styles.field}>镜头顺序
+        <select value={mode} disabled={!editable} onChange={event => {
+          setMode(event.target.value === "source_order" ? "source_order" : "automatic");
+          setSaveError("");
+        }}>
+          <option value="automatic">按文案匹配镜头</option>
+          <option value="source_order">按原片顺序</option>
+        </select>
+      </label>}
       {selection.size > 0 && <div>
-        <ul className={styles.results}>
-          {[...selection].map(([id, asset]) => <li key={id}>
-            <span>{asset?.file_name ?? (checkingSelection ? "正在读取已选素材" : `素材不可读取（${id}）`)}</span>
-            {" "}<Button variant="ghost" disabled={!editable} onClick={() => {
-              setSelection(new Map([...selection].filter(([key]) => key !== id)));
-              setSaveError("");
-            }}>移除</Button>
+        <ol className={styles.selectedAssets} aria-label="已选视频">
+          {[...selection].map(([id, asset], index) => <li key={id}>
+            <div className={styles.assetRow}>
+              <span>{asset?.file_name ?? (checkingSelection ? "正在读取已选素材" : "素材不可读取")}</span>
+              <div className={styles.assetActions}>
+                {mode === "source_order" && selection.size > 1 && <>
+                  <Button variant="ghost" aria-label={`上移 ${asset?.file_name ?? id}`} disabled={!editable || index === 0}
+                    onClick={() => moveAsset(index, -1)}><ChevronUp size={15} aria-hidden /></Button>
+                  <Button variant="ghost" aria-label={`下移 ${asset?.file_name ?? id}`} disabled={!editable || index === selection.size - 1}
+                    onClick={() => moveAsset(index, 1)}><ChevronDown size={15} aria-hidden /></Button>
+                </>}
+                <Button variant="ghost" disabled={!editable} onClick={() => {
+                  setSelection(new Map([...selection].filter(([key]) => key !== id)));
+                  setSaveError("");
+                }}>移除</Button>
+              </div>
+            </div>
+            {mode === "source_order" && asset && <label className={styles.sourceIn}>
+              从原片第
+              <input type="number" min="0" step="any" disabled={!editable}
+                aria-label={`${asset.file_name} 起点（秒）`}
+                value={startInputs[id] ?? "0"} onChange={event => {
+                  setStartInputs({ ...startInputs, [id]: event.target.value });
+                  setSaveError("");
+                }} />
+              秒开始
+            </label>}
           </li>)}
-        </ul>
+        </ol>
         <Button variant="ghost" disabled={!editable} onClick={() => { setSelection(new Map()); setSaveError(""); }}>
           清空选择
         </Button>
@@ -196,6 +251,7 @@ function ScopeDialog({ taskId, planUpdatedAt, selectedAssetIds, disabled, onSave
           </div>
         </>}
       {planChanged && !uncertain && <p role="alert" className={styles.error}>制作方案已更新，请重新打开后核对素材。</p>}
+      {invalidStart && <p role="alert" className={styles.error}>起点须在原片时长以内，且大于或等于 0 秒。</p>}
       {blocked && !checkingSelection && <p role="status">部分已选素材已不可用，请移除后保存。</p>}
       {saveError && <p role="alert" className={styles.error}>{saveError}</p>}
     </div>
@@ -208,7 +264,7 @@ export function MaterialScopePicker(props: Props) {
   const count = props.selectedAssetIds.length;
   return <>
     <Button variant="outline" disabled={props.disabled} onClick={() => { setSaved(""); setOpen(true); }}>
-      {count ? `选材范围（${count} 项）` : "选择本作品素材"}
+      {count ? `选材范围（${count} 项）${props.selectionMode === "source_order" ? " · 按原片顺序" : ""}` : "选择本作品素材"}
     </Button>
     {saved && <span role="status">{saved}</span>}
     {open && <ScopeDialog {...props} onClose={() => setOpen(false)} onSaved={receipt => {

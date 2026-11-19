@@ -80,7 +80,8 @@ export function useVoiceSamplePreparation({ profileId, version, language, source
   const [status, setStatus] = useState<DeviceResourceStatus | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [receipt, setReceipt] = useState<DevicePreparationReceipt | null>(null);
-  const [busy, setBusy] = useState(false);
+  // On mount, restore the desktop binding and any in-flight preparation before enabling another audition.
+  const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
   const [identityChanged, setIdentityChanged] = useState(false);
   const mounted = useRef(false);

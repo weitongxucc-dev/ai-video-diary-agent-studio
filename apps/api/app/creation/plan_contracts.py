@@ -104,6 +104,8 @@ class CreationPlan:
     lipsync_model_id: str | None = None
     presenter_selection: CreationPlanPresenterSelection | None = None
     selected_material_asset_ids: list[str] = field(default_factory=list)
+    material_selection_mode: Literal["automatic", "source_order"] = "automatic"
+    material_source_start_seconds: dict[str, float] = field(default_factory=dict)
 
 
 def creation_plan_payload(plan: CreationPlan) -> dict[str, object]:
@@ -117,6 +119,10 @@ def creation_plan_payload(plan: CreationPlan) -> dict[str, object]:
         del payload['presenter_selection']
     if not plan.selected_material_asset_ids:
         del payload['selected_material_asset_ids']
+    if plan.material_selection_mode == "automatic":
+        del payload["material_selection_mode"]
+    if not plan.material_source_start_seconds:
+        del payload["material_source_start_seconds"]
     return payload
 
 
