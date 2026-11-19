@@ -1501,3 +1501,80 @@ def test_compound_unknown_claim_with_projection_has_no_durable_edit_and_no_exact
     refused = state.client.post(state.url + f'/edits/{proposal_id}/confirm', json=request)
     assert refused.status_code == 409 and '尚未确定' in refused.text
     assert not state.repo.edit_records.list_edit_operations('local', state.task.id)
+
+
+@pytest.mark.parametrize('message', [
+    '把当前选中的镜头末尾裁短半秒，只把这段镜头原片和时间线的结束从 4.0 秒改成 3.5 秒，从 0 秒开始不变。直接保存，别生成预览或重新导出。',
+    "Trim the end of the selected clip only; don't delete across all tracks.",
+    '把当前镜头末尾裁短半秒，不要全轨删除。',
+])
+def test_assistant_clip_tail_cannot_create_or_save_linked_edit(linked_speed_http_state, monkeypatch, message):
+    state = linked_speed_http_state
+    conversations = ConversationRepository(state.repo.database_path)
+    monkeypatch.setattr(main, 'conversation_repo', conversations)
+    member = state.members.resolve_member(state.token)
+    chat = conversations.create('local', member.member_id, 'task', state.task.id)
+    draft = conversations.save_draft(chat['id'], 'local', member.member_id, message, chat['draft_version'])
+    turn, created = conversations.create_turn_idempotent(chat['id'], 'local', member.member_id,
+        message, str(uuid4()), draft['draft_version'], request_context={
+            'kind': 'task', 'task_id': state.task.id, 'stage': 'montage', 'selected_object_refs': ['clip:clip'],
+            'target_snapshot': {'timeline_version_id': state.base.id, 'timeline_sequence': state.base.sequence}})
+    assert created
+    scope = {'assistant_turn_id': turn['id'], 'expected_timeline_version_id': state.base.id,
+             'expected_timeline_sequence': state.base.sequence}
+    linked = {'operation_type': 'RemoveTimelineRanges',
+              'range_edit': {'removed_ranges_ms': [[500, 1000]], 'reason': '确实提交的全轨动作'}}
+    for path, fields in [
+        ('/edits/exact', linked),
+        ('/edits/exact/preview?draft=true', linked),
+        ('/edits/exact', {'operation_type': 'TrimClip', 'clip_id': 'clip', 'source_start_seconds': .5}),
+    ]:
+        response = state.client.post(state.url + path, json={**fields, **scope, 'request_id': str(uuid4())})
+        assert response.status_code == 409, response.text
+        detail = response.json()['detail']
+        assert detail['error'] == 'edit_scope_conflict' and detail['submission_effect'] == 'not_submitted'
+        assert '不能单独裁短' in detail['reason']
+    natural = state.client.post(state.url + '/edits/preview?draft=true', json={
+        'raw_command': '删除这个镜头', 'context_stage': 'montage', 'selected_object_refs': ['clip:clip'],
+        'assistant_turn_id': turn['id']})
+    assert natural.status_code == 409, natural.text
+
+    # Simulate a draft saved by the previous candidate. Adoption must bind the
+    # original instruction even if preview was already generated.
+    with monkeypatch.context() as old:
+        old.setattr('app.creation.editing.exact_preview_use_case.edit_scope_blocker', lambda *_a, **_k: None)
+        old.setattr('app.creation.editing.linked_timeline_use_case.edit_scope_blocker', lambda *_a, **_k: None)
+        preview = state.client.post(state.url + '/edits/exact/preview?draft=true',
+            json={**linked, **scope, 'request_id': str(uuid4())})
+    assert preview.status_code == 200, preview.text
+    proposal_id = preview.json()['proposal']['id']
+    confirm = state.url + f'/edits/{proposal_id}/confirm'
+    claim = {'request_id': str(uuid4())}
+    for _ in range(2):
+        refused = state.client.post(confirm, json=claim)
+        assert refused.status_code == 409 and '不能单独裁短' in refused.json()['detail'], refused.text
+    assert state.repo.task_records.get_creation_task('local', state.task.id).current_timeline_version_id == state.base.id
+    assert state.repo.timeline_records.get_timeline_version('local', state.base.id) == state.base
+    assert not state.repo.edit_records.list_edit_operations('local', state.task.id)
+
+
+def test_explicit_assistant_all_track_removal_still_commits(linked_speed_http_state, monkeypatch):
+    state = linked_speed_http_state
+    conversations = ConversationRepository(state.repo.database_path)
+    monkeypatch.setattr(main, 'conversation_repo', conversations)
+    member = state.members.resolve_member(state.token)
+    chat = conversations.create('local', member.member_id, 'task', state.task.id)
+    message = '把时间线 0.5 到 1 秒全轨同步删除，画面、配音和字幕都一起删除。'
+    draft = conversations.save_draft(chat['id'], 'local', member.member_id, message, chat['draft_version'])
+    turn, _ = conversations.create_turn_idempotent(chat['id'], 'local', member.member_id,
+        message, str(uuid4()), draft['draft_version'], request_context={'kind': 'task', 'task_id': state.task.id,
+            'target_snapshot': {'timeline_version_id': state.base.id, 'timeline_sequence': state.base.sequence}})
+    response = state.client.post(state.url + '/edits/exact', json={
+        'operation_type': 'RemoveTimelineRanges', 'range_edit': {'removed_ranges_ms': [[500, 1000]], 'reason': '明确全轨'},
+        'assistant_turn_id': turn['id'], 'expected_timeline_version_id': state.base.id,
+        'expected_timeline_sequence': state.base.sequence, 'request_id': str(uuid4())})
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result['operation']['operation_type'] == 'RemoveTimelineRanges'
+    assert result['operation']['result_version_id'] != state.base.id
+    assert result['montage']['duration_seconds'] == 3.5

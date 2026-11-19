@@ -868,6 +868,10 @@ class NativeOperationHandler:
             if cancel_event.is_set():
                 raise PermissionError('当前原生调用已取消，未开始新操作')
             origin = self.verify_binding(source_binding,None)
+            from app.creation.editing.edit_scope import native_edit_blocker
+            if blocker := native_edit_blocker(origin, operation, arguments):
+                return {'ok': False, 'failure': {'status_code': 409, 'error': 'edit_scope_conflict',
+                    'reason': blocker, 'submission_effect': 'not_submitted'}}
             def guard(conn):
                 if cancel_event.is_set():
                     raise PermissionError('提交时原生调用已取消')

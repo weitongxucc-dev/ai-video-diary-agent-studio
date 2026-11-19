@@ -21,12 +21,16 @@ export async function openCreationSession({ modulePath, cwd, sessionDir, session
     throw new Error(`视频创作运行候选需要 Pi ${PI_VERSION}，当前为 ${installed.version}；请先验证升级兼容性。`);
   }
   const sdk = await import(pathToFileURL(modulePath).href);
-  const nativeRuntime=nativeEnabled?createNativeTaskTools({sdk,callNative:nativeCall,
-    turnId:process.env.AI_VIDEO_DIARY_AGENT_TURN_ID,inputId:process.env.AI_VIDEO_DIARY_AGENT_INPUT_ID || process.env.AI_VIDEO_DIARY_AGENT_TURN_ID}):null;
-  const nativeTools=nativeRuntime?.tools ?? [];
-  process.env.AI_VIDEO_DIARY_AGENT_NATIVE_TOOLS=nativeTools.map(tool=>tool.name).join(',');
   const productModule = extensionPath ? await import(pathToFileURL(extensionPath).href) : null;
   const productExtension = productModule?.createDiaryExtension(process.env, businessCall);
+  const nativeRuntime = nativeEnabled ? createNativeTaskTools({
+    sdk, callNative: nativeCall, turnId: process.env.AI_VIDEO_DIARY_AGENT_TURN_ID,
+    inputId: process.env.AI_VIDEO_DIARY_AGENT_INPUT_ID || process.env.AI_VIDEO_DIARY_AGENT_TURN_ID,
+    userInstruction: process.env.AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION,
+    needsEditDirection: productExtension?.needsEditDirection,
+  }) : null;
+  const nativeTools=nativeRuntime?.tools ?? [];
+  process.env.AI_VIDEO_DIARY_AGENT_NATIVE_TOOLS=nativeTools.map(tool=>tool.name).join(',');
   const settingsManager = sdk.SettingsManager.inMemory({
     steeringMode: "one-at-a-time", followUpMode: "one-at-a-time",
     retry: { enabled: false },

@@ -699,12 +699,14 @@ class MaterialAssetStore:
             ),
         )
 
-    def update_asset_use_state(self, workspace_id: str, asset_id: str, use_state: ContentUseState) -> MaterialAsset:
+    def update_asset_use_state(self, workspace_id: str, asset_id: str, use_state: ContentUseState, *,
+                               editor_identity: tuple[str | None, bool] | None = None) -> MaterialAsset:
         if use_state not in {"available", "reference_only", "excluded", "not_for_automation", "not_for_publish"}:
             raise ValueError("素材使用状态无效")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             asset = self.get_asset(workspace_id, asset_id, connection=conn)
+            _require_material_editor(asset, editor_identity)
             asset.use_state = use_state
             asset.updated_at = utc_now()
             self._write_asset(conn, asset)

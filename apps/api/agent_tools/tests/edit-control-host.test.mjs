@@ -75,3 +75,38 @@ test('unknown discard response keeps the original attempted control and never re
   await assert.rejects(()=>app.tools.get('discard_edit_proposal').execute('repeat',{proposal_index:1}),/已提交一次/);
   assert.equal(app.calls.filter(item=>item.operation==='discard_edit_proposal').length,1);
 });
+
+
+test('generic shot feedback cannot become a write by being recorded as an explicit edit', async () => {
+  const task = '/api/creation-tasks/task';
+  const calls = [];
+  let userInstruction = '当前这一个镜头总觉得有点怪，帮我改好一点。';
+  const request = createBusinessRequest({
+    taskId: 'task', getSignal: () => undefined,
+    readActionSource: () => ({turnId: 'turn', userInstruction}),
+    businessCall: async (operation, args) => {
+      calls.push({operation, args});
+      return {ok: true, value: {}};
+    },
+  });
+  const post = (path, body) => request(task + path, {method: 'POST', body: JSON.stringify(body)});
+  await request(task);
+  const blocked = error => error instanceof RequestNotSubmitted
+      && error.businessFailure.error === 'edit_direction_missing';
+  await assert.rejects(() => post('/assistant/input-understanding', {kind: 'effective_modification'}), blocked);
+  await assert.rejects(() => post('/edits/exact', {operation_type: 'AdjustVisualEffects'}), blocked);
+  await assert.rejects(() => post('/observations', {}), blocked);
+  await post('/assistant/input-understanding', {kind: 'clarification'});
+  assert.deepEqual(calls.map(call => call.operation), ['read_task_workspace', 'record_input_understanding']);
+
+  for (const [instruction, operation] of [
+    ['镜头有点怪，把当前镜头裁短半秒。', 'TrimClip'],
+    ['把当前镜头的原声音量降低 3 dB。', 'EditAudioTimeline'],
+  ]) {
+    userInstruction = instruction;
+    await post('/assistant/input-understanding', {kind: 'effective_modification'});
+    await post('/edits/exact', {operation_type: operation});
+    assert.equal(calls.at(-1).operation, 'apply_task_edit');
+    assert.equal(calls.at(-1).args.payload.operation_type, operation);
+  }
+});

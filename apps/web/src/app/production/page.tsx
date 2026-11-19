@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { randomUUID } from "node:crypto";
 import {
   AlertCircle,
   ArrowRight,
@@ -11,7 +13,10 @@ import {
   Settings2,
 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
-import { CreateProductionTaskForm } from "@/components/CreateProductionTaskForm";
+import draftStyles from "@/components/CreateProductionTaskForm.module.css";
+import { WorkbenchCreationDraftForm } from "@/components/workbench/WorkbenchCreationDraftForm";
+import { WorkspaceRoute } from "@/components/workbench/WorkspaceRoute";
+import { NEW_VIDEO_HREF } from "@/lib/preflight-draft-url";
 import { ScheduledTasksWorkspace } from "@/components/ScheduledTasksWorkspace";
 import { getProductionFoundation, listCreationTasks, listVideoTemplates } from "@/lib/api.server";
 import { creationTaskShortStatus, creationTaskStatusPresentation } from "@/lib/creation-task-status";
@@ -74,9 +79,19 @@ function CreationTaskRow({ task }: { task: CreationTask }) {
 export default async function ProductionPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string; draft_id?: string; knowledge_item_id?: string; knowledge_version?: string; reply_conversation_id?: string; reply_turn_id?: string; reply_request_id?: string }>;
+  searchParams?: Promise<{ new?: string; goal?: string; view?: string; template_id?: string; template_version?: string; draft_id?: string; draft_start?: string; knowledge_item_id?: string; knowledge_version?: string; reply_conversation_id?: string; reply_turn_id?: string; reply_request_id?: string }>;
 }) {
   const params = searchParams ? await searchParams : {};
+  if (params.new === "1" && params.view !== "automations" && !params.draft_id) {
+    const draftParams = new URLSearchParams();
+    for (const key of ["goal", "template_id", "template_version", "knowledge_item_id", "knowledge_version", "reply_conversation_id", "reply_turn_id", "reply_request_id"] as const) {
+      const value = params[key];
+      if (typeof value === "string") draftParams.set(key, value);
+    }
+    draftParams.set("draft_id", randomUUID());
+    draftParams.set("draft_start", "1");
+    redirect(`${NEW_VIDEO_HREF}&${draftParams}`);
+  }
   const [foundation, persistedTasks] = await Promise.all([
     loadFoundation(),
     loadCreationTasks(),
@@ -99,29 +114,36 @@ export default async function ProductionPage({
     const replyOrigin = replyValues.every(isUuid) ? {
       conversation_id: params.reply_conversation_id!, turn_id: params.reply_turn_id!, request_id: params.reply_request_id!,
     } : null;
-    if (hasReplyOrigin && !replyOrigin) return <AppShell creationTasks={creationTasks}><section role="alert"><h1>回复来源无法识别</h1><p>没有读取对话正文或创建任务；请从已完成的首页回复重新选择。</p></section></AppShell>;
+    if (!isUuid(params.draft_id)) return <WorkspaceRoute label="新视频草稿"><AppShell><p role="alert">草稿地址无效。<Link href={NEW_VIDEO_HREF}>新建视频</Link></p></AppShell></WorkspaceRoute>;
+    if (hasReplyOrigin && !replyOrigin) return <WorkspaceRoute label="新视频草稿"><AppShell><section role="alert"><h1>回复来源无法识别</h1><p>请从已完成的首页回复重新选择。</p></section></AppShell></WorkspaceRoute>;
     let template = null;
     if (params.template_id || params.template_version) {
       const templates = await listVideoTemplates().catch(() => null);
       template = templates?.items.find((item) => item.id === params.template_id && item.version === Number(params.template_version)) ?? null;
-      if (!template) return <AppShell creationTasks={creationTasks}><section role="alert"><p>无法读取所选模板版本，请返回模板页重新选择。</p><Link href="/templates">返回视频模板</Link></section></AppShell>;
+      if (!template) return <WorkspaceRoute label="新视频草稿"><AppShell><section role="alert"><p>无法读取所选模板版本，请返回模板页重新选择。</p><Link href="/templates">返回视频模板</Link></section></AppShell></WorkspaceRoute>;
     }
     return (
-      <AppShell creationTasks={creationTasks}>
-        <div className="modern-queue">
-          <div className="creation-plan-form__actions"><Link href="/production">返回任务列表</Link></div>
-          <section>
-            <CreateProductionTaskForm
-              autoFocus={!initialGoal}
-              initialGoal={initialGoal}
-              initialKnowledgePin={params.knowledge_item_id && params.knowledge_version ? { knowledge_item_id: params.knowledge_item_id, version: params.knowledge_version } : null}
-              draftId={params.draft_id}
-              replyOrigin={replyOrigin}
-              template={template}
-            />
-          </section>
-        </div>
-      </AppShell>
+      <WorkspaceRoute label="新视频草稿">
+        <AppShell creationTasks={creationTasks}>
+          <div className="modern-queue">
+            <section>
+              <header className={draftStyles.draftHeader}>
+                <h1>新视频草稿</h1>
+                <Link href="/production">返回任务列表</Link>
+              </header>
+              <WorkbenchCreationDraftForm
+                autoFocus={params.draft_start === "1" && !initialGoal}
+                initialGoal={initialGoal}
+                initialKnowledgePin={params.knowledge_item_id && params.knowledge_version ? { knowledge_item_id: params.knowledge_item_id, version: params.knowledge_version } : null}
+                draftId={params.draft_id}
+                draftStart={params.draft_start === "1"}
+                replyOrigin={replyOrigin}
+                template={template}
+              />
+            </section>
+          </div>
+        </AppShell>
+      </WorkspaceRoute>
     );
   }
 
@@ -213,7 +235,7 @@ export default async function ProductionPage({
         <section className="queue-section">
           <header>
             <h2>最近任务</h2>
-            <Link className="modern-primary-button" href="/?new=1">
+            <Link className="modern-primary-button" href={NEW_VIDEO_HREF}>
               <Plus size={16} />新建视频
             </Link>
           </header>

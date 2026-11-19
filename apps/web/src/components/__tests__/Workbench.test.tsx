@@ -107,3 +107,29 @@ it("keeps one conversation and explicit task target while browsing, isolates two
   expect(screen.getByLabelText("页面草稿 /tasks/a")).toHaveValue("A 的裁剪输入");
   expect(composerMount).toHaveBeenCalledTimes(1);
 });
+
+it("keeps a new draft separate from the open task and returns to the original editing state", async () => {
+  const view = render(fixture(route()));
+  const work = await screen.findByRole("textbox", { name: "页面草稿 /tasks/a" });
+  fireEvent.change(work, { target: { value: "原剪辑位置的输入" } });
+  const player = screen.getByLabelText("预览 /tasks/a") as HTMLVideoElement;
+  player.currentTime = 9;
+  fireEvent.timeUpdate(player);
+
+  navigation.path = "/production";
+  navigation.search = "new=1&draft_id=a7872828-c7ba-449c-a988-e5679d163a81";
+  view.rerender(fixture(<WorkspaceRoute label="新视频草稿"><Page id="draft" /></WorkspaceRoute>));
+  expect(await screen.findByRole("tab", { name: "新视频草稿" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByLabelText("发送目标")).toHaveTextContent("home");
+  fireEvent.change(screen.getByRole("textbox", { name: "页面草稿 draft" }), { target: { value: "另一条视频目标" } });
+
+  fireEvent.click(screen.getByRole("tab", { name: "作品 a" }));
+  expect(navigation.push).toHaveBeenLastCalledWith("/tasks/a");
+  navigation.path = "/tasks/a";
+  navigation.search = "";
+  view.rerender(fixture(route()));
+  expect(await screen.findByRole("textbox", { name: "页面草稿 /tasks/a" })).toHaveValue("原剪辑位置的输入");
+  expect(screen.getByLabelText("发送目标")).toHaveTextContent("a");
+  expect(screen.getByLabelText("预览 /tasks/a")).toBe(player);
+  expect(player.currentTime).toBe(9);
+});

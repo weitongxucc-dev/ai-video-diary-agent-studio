@@ -2,6 +2,7 @@ import { getProductionFoundation } from "@/lib/api";
 import { fetchLocalMemberIdentity } from "@/lib/local-member-auth";
 import { isLocalAuthMode } from "@/lib/auth/routing";
 import { createClient } from "@/lib/supabase/client";
+import { NEW_VIDEO_HREF } from "./preflight-draft-url";
 import type { CreationPlanInput } from "@/lib/types";
 
 export type DraftScope = { memberId: string; workspaceId: string };
@@ -95,9 +96,9 @@ export function clearPreflightDraft(storage: Storage, scope: DraftScope, id: str
 }
 export function preflightReturnUrl(id: string, template: PreflightDraftFields["template"]): string {
   if (!validDraftId(id)) throw new Error("草稿编号无效。");
-  const params = new URLSearchParams({ new: "1", draft_id: id });
+  const params = new URLSearchParams({ draft_id: id });
   if (template) { params.set("template_id", template.id); params.set("template_version", String(template.version)); }
-  return `/production?${params.toString()}`;
+  return `${NEW_VIDEO_HREF}&${params.toString()}`;
 }
 export function boundedPreflightReturn(raw: string, origin: string): { href: string; draftId: string; template: PreflightDraftFields["template"] } | null {
   if (raw.length > 800 || /[\u0000-\u001f\\]/.test(raw)) return null;
@@ -126,6 +127,13 @@ function parseRepairMarker(raw: string, scope: DraftScope): { draftId: string; r
   if (!record(value) || Object.keys(value).sort().join() !== "draftId,memberId,returnTo,version,workspaceId" || value.version !== 1
     || value.memberId !== scope.memberId || value.workspaceId !== scope.workspaceId || typeof value.draftId !== "string" || !validDraftId(value.draftId) || typeof value.returnTo !== "string") throw new Error("修复定位无效，没有读取其他草稿。");
   return { draftId: value.draftId, returnTo: value.returnTo };
+}
+export function matchesPreflightRepairTarget(storage: Storage, scope: DraftScope, id: string): boolean {
+  const raw = storage.getItem(repairKey(scope));
+  return raw !== null && parseRepairMarker(raw, scope).draftId.toLowerCase() === id.toLowerCase();
+}
+export function clearPreflightRepairTarget(storage: Storage, scope: DraftScope, id: string): void {
+  if (matchesPreflightRepairTarget(storage, scope, id)) storage.removeItem(repairKey(scope));
 }
 export function sameDraftTemplate(a: PreflightDraftFields["template"], b: PreflightDraftFields["template"]): boolean {
   return a?.id === b?.id && a?.version === b?.version;

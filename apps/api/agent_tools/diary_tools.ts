@@ -3,7 +3,7 @@
 import {createDiaryTools} from './diary/runtime.ts';
 import {readAgentContext} from './diary/trusted-context.ts';
 import type {ToolRegistrar} from './diary/contracts.ts';
-import type {HostBusinessCall} from './diary/transport.ts';
+import {needsEditDirection, type HostBusinessCall} from './diary/transport.ts';
 
 export {createDiaryTools};
 
@@ -41,6 +41,7 @@ export function createDiaryExtension(environment: Record<string, string | undefi
     }});
   }
   return {
+    needsEditDirection,
     extension(agent: ToolRegistrar) { api=agent; return current.register(registry(true,activeTools)); },
     async rebind(nextEnvironment: Record<string,string|undefined>) {
       current=createDiaryTools(nextEnvironment, declarations, businessCall);

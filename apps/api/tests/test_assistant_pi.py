@@ -745,7 +745,8 @@ def test_task_stage_is_context_and_shared_tools_keep_session_scope(monkeypatch, 
     for task_id in ("task-one", "task-one", "task-two"):
         reply, preview = run_task_turn(settings, workspace_id="workspace-one", task_id=task_id,
                                        message="把开头改短", stage="script", selected_refs=[], playhead_ms=None)
-        assert (reply, preview) == ("请检查文案。", {"script_id": "draft-one"})
+        assert (reply, preview) == ("请检查文案。", {"script_id": "draft-one",
+                                                "session_id": commands[-1]["sessionId"]})
     assert commands[0]["sessionId"] == commands[1]["sessionId"]
     assert commands[0]["sessionId"] != commands[2]["sessionId"]
     tools = commands[0]["tools"]
@@ -753,7 +754,7 @@ def test_task_stage_is_context_and_shared_tools_keep_session_scope(monkeypatch, 
     assert "generate_creation_task_topics" in tools
     _, edit_preview = run_task_turn(settings, workspace_id="workspace-one", task_id="task-one",
                                     message="检查镜头", stage="montage", selected_refs=[], playhead_ms=None)
-    assert edit_preview is None
+    assert edit_preview == {"kind": "runtime_receipt", "session_id": commands[3]["sessionId"]}
     assert commands[3]["sessionId"] != commands[0]["sessionId"]
     edit_tools = set(commands[3]["tools"])
     assert {"preview_typed_edit", "read_task_edit_capabilities", "read_task_object", "start_creation_execution"} <= edit_tools
@@ -847,8 +848,8 @@ def test_pi_turn_uses_isolated_disk_and_keeps_secret_out_of_arguments(monkeypatc
     answer, preview = run_task_turn(settings, workspace_id="workspace-1", task_id="task-1",
                                     message="请说明当前任务", stage="montage",
                                     selected_refs=["clip:clip-1"], playhead_ms=1200)
-    assert (answer, preview) == ("收到。", None)
     payload = json.loads(captured['kwargs']['message'])
+    assert (answer, preview) == ("收到。", {"kind": "runtime_receipt", "session_id": payload["sessionId"]})
     model_input = json.loads(payload["message"].split("本轮输入（JSON）：\n", 1)[1])
     assert model_input["original_user_instruction"] == "请说明当前任务"
     assert model_input['task_binding']['current_timeline_version_id'] == 'read-version'

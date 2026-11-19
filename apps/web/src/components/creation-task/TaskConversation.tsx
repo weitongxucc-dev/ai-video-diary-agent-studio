@@ -1,5 +1,5 @@
 "use client";
-import type { AssistantResultStage } from "@/lib/types/assistant";
+import type { OpenAssistantResult } from "@/lib/types/assistant";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AssistantConversationPanel } from "@/components/AssistantConversationPanel";
 import { useAssistantConversation } from "@/components/useAssistantConversation";
@@ -50,7 +50,7 @@ export function ContextCommandBar({ localConfirmation = false, compact = false, 
     preview: CreationTaskEditPreviewResponse | null;
     assistantState: ReturnType<typeof useAssistantConversation>;
     onTransferReply?: (turn: AssistantConversationTurn, replace: boolean) => void;
-    onOpenResultStage?: (stage: AssistantResultStage) => void;
+    onOpenResultStage?: OpenAssistantResult;
     onOpenEditProposal?: (turn: AssistantConversationTurn) => void;
     transferDraftState: "none" | "draft" | "confirmed";
     onAssistantSend: () => Promise<void>;

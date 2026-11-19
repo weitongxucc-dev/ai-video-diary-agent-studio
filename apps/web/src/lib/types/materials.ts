@@ -118,6 +118,14 @@ export type MaterialIntakeStatus = {
         blocked_disk: number;
     };
 };
+export type MaterialLibraryHit = {
+    segment_id: string;
+    basis: string;
+    excerpt: string;
+    reference_allowed: boolean;
+    manual_use_allowed: boolean;
+    restriction: string | null;
+};
 export type MaterialAsset = {
     id: string;
     workspace_id: string;
@@ -128,6 +136,8 @@ export type MaterialAsset = {
     modified_at: string;
     media_type: "video" | "audio" | "image";
     source_url: string | null;
+    search_hits?: MaterialLibraryHit[];
+    source_available?: boolean | null;
     duration_seconds: number | null;
     usage_role: "unassigned" | "a_roll" | "b_roll" | "exclude";
     suggested_usage_role: "unassigned" | "a_roll" | "b_roll";

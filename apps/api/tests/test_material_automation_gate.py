@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import app.main as main_module
+from app.local_members import LocalMemberService
 from app.montage import MontagePlanner
 from app.production import (
     ContentUseState,
@@ -220,14 +221,17 @@ def test_the_use_state_api_persists_and_the_gate_follows_it(tmp_path: Path, monk
         duration_reader=lambda path: 1.0,
         scene_reader=lambda path, duration: [],
     )
-    asset = repo._save_asset(_asset(library, "api.mp4"))
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    uploader, token = members.join(members.create_invite_code(), "素材上传者")
+    asset = repo._save_asset(replace(_asset(library, "api.mp4"), owner_user_id=uploader.member_id))
     monkeypatch.setattr(main_module, "production_repo", repo)
+    monkeypatch.setattr(main_module, "local_members_service", members)
     monkeypatch.setattr(
         main_module,
         "current_workspace_id",
         lambda request: WORKSPACE,
     )
-    client = TestClient(main_module.app)
+    client = TestClient(main_module.app, headers={"X-Local-Member-Token": token})
 
     base = f"/api/production/materials/{asset.id}"
     assert material_allows_automation(repo.get_asset(WORKSPACE, asset.id)) is True

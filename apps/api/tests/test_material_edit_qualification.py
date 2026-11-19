@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 
@@ -123,6 +124,28 @@ def test_current_material_qualification_blocks_invalid_source(material_edit_stat
     state.production._save_asset(state.asset)
     before = _current(state)
     response = _preview(state, "ReplaceClip")
+    assert response.status_code == 409, response.text
+    assert _current(state) == before
+
+
+@pytest.mark.parametrize("condition", ["excluded", "reference_only", "stale_version"])
+def test_direct_replacement_rejects_a_restricted_source_or_stale_target(material_edit_state, condition):
+    state = material_edit_state
+    before = _current(state)
+    base = state.production.timeline_records.get_timeline_version(state.workspace_id, before[0])
+    if condition != "stale_version":
+        state.asset.use_state = condition
+        state.production.material_assets.save_asset(state.asset)
+    response = state.client.post(f"{state.base_url}/edits/exact", json={
+        "operation_type": "ReplaceClip",
+        "clip_id": state.clip.id,
+        "asset_id": state.asset.id,
+        "segment_id": state.asset.segments[0].id,
+        "source_start_seconds": state.asset.segments[0].start_seconds,
+        "request_id": str(uuid4()),
+        "expected_timeline_version_id": "stale-timeline" if condition == "stale_version" else base.id,
+        "expected_timeline_sequence": base.sequence,
+    })
     assert response.status_code == 409, response.text
     assert _current(state) == before
 

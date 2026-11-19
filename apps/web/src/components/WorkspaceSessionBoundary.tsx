@@ -15,12 +15,14 @@ function ReadyWorkbench({ children }: { children: ReactNode }) {
 }
 
 export function WorkspaceSessionBoundary({ children }: { children: ReactNode }) {
-  if (isLocalAuthMode()) return <ReadyWorkbench>{children}</ReadyWorkbench>;
-  return <FormalWorkspaceSession>{children}</FormalWorkspaceSession>;
+  const pathname = usePathname() ?? '';
+  if (isLocalAuthMode()) {
+    return isPublicAuthPath(pathname) ? children : <ReadyWorkbench>{children}</ReadyWorkbench>;
+  }
+  return <FormalWorkspaceSession pathname={pathname}>{children}</FormalWorkspaceSession>;
 }
 
-function FormalWorkspaceSession({ children }: { children: ReactNode }) {
-  const pathname = usePathname() ?? '';
+function FormalWorkspaceSession({ children, pathname }: { children: ReactNode; pathname: string }) {
   const phase = isPublicAuthPath(pathname) ? 'auth' : pathname === '/onboarding' ? 'onboarding' : 'workspace';
   const [snapshot, setSnapshot] = useState<WorkspaceSessionSnapshot | null>(null);
   const phaseRef = useRef(phase);

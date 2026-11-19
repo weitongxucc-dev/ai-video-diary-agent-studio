@@ -19,6 +19,7 @@ from app.materials.assets import MaterialVersionConflict
 from app.materials.usage_records import MaterialUsageRecordReader
 from app.materials.contracts import AssetUsageRole, MaterialAssetNote
 from app.materials.candidate_bundle import build_candidate_bundle
+from app.materials.library_search_hits import MaterialLibraryHit, material_library_hits
 from app.schemas import (
     ContentVisibilityRequest, MaterialAssetResponse, MaterialAssetTagsRequest,
     MaterialBatchTagsRequest, MaterialBatchTagsResponse, MaterialAssetNotesRequest,
@@ -36,6 +37,15 @@ class MaterialSegmentUsageRequest(BaseModel):
     expected_segment_updated_at: AwareDatetime
 
 
+class MaterialLibrarySearchAsset(MaterialAssetResponse):
+    search_hits: list[MaterialLibraryHit]
+    source_available: bool | None = None
+
+
+class MaterialLibrarySearchPage(MaterialLibraryResponse):
+    assets: list[MaterialLibrarySearchAsset]
+
+
 class MaterialLibraryRecords(Protocol):
     def list_assets_page(self, workspace_id, *, limit, offset, query=None, tag=None,
                          review_status=None, media_type=None, include_private=True,
@@ -43,7 +53,6 @@ class MaterialLibraryRecords(Protocol):
     def get_asset(self, workspace_id, asset_id): ...
     def update_asset_notes(self, workspace_id, notes): ...
     def set_asset_visibility(self, workspace_id, asset_id, visibility): ...
-    def update_asset_use_state(self, workspace_id, asset_id, use_state): ...
     def update_asset_review(self, workspace_id, asset_id, *, review_status, usage_role='unassigned'): ...
     material_usage_records: MaterialUsageRecordReader
     material_assets: MaterialAssetStore
@@ -73,7 +82,7 @@ class MaterialLibraryHTTPAdapter:
         self._profile_candidate_for = profile_candidate_for
 
 
-    def list_production_materials(self, request: Request, limit: int=24, offset: int=0, q: str | None=None, tag: str | None=None, review_status: str | None=None, media_type: str | None=None) -> MaterialLibraryResponse:
+    def list_production_materials(self, request: Request, limit: int=24, offset: int=0, q: str | None=None, tag: str | None=None, review_status: str | None=None, media_type: str | None=None) -> MaterialLibrarySearchPage:
         if limit < 1 or limit > 100 or offset < 0:
             raise HTTPException(status_code=422, detail='invalid material pagination')
         if review_status not in {None, 'raw', 'approved', 'rejected'}:
@@ -83,7 +92,15 @@ class MaterialLibraryHTTPAdapter:
         workspace_id = self._workspace_for(request)
         viewer_user_id, local_diagnostic = self._reader_for(request, workspace_id)
         assets, total = self._records_for().list_assets_page(workspace_id, limit=limit, offset=offset, query=q, tag=tag, review_status=review_status, media_type=media_type, include_private=local_diagnostic, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
-        return MaterialLibraryResponse(assets=[self._asset_response(asset) for asset in assets], total_count=total, limit=limit, offset=offset, has_more=offset + len(assets) < total)
+        results = []
+        for asset in assets:
+            hits = material_library_hits(asset, query=q or "", tag=tag)
+            path = self._material_path(asset.path) if hits else None
+            results.append(MaterialLibrarySearchAsset(
+                **self._asset_response(asset).model_dump(), search_hits=hits,
+                source_available=bool(path and path.is_file()) if hits else None,
+            ))
+        return MaterialLibrarySearchPage(assets=results, total_count=total, limit=limit, offset=offset, has_more=offset + len(assets) < total)
 
     def update_material_asset_tags(self, asset_id: str, request: Request, payload: MaterialAssetTagsRequest) -> MaterialAssetResponse:
         workspace_id = self._workspace_for(request)
@@ -278,6 +295,11 @@ class MaterialLibraryHTTPAdapter:
             raise HTTPException(status_code=404, detail='material asset not found')
         return self._asset_response(asset)
 
+    def _material_path(self, stored_path: str) -> Path | None:
+        root = Path(self._library_root()).expanduser().resolve()
+        path = Path(stored_path).expanduser().resolve()
+        return path if path.is_relative_to(root) else None
+
     def stream_production_material(self, asset_id: str, request: Request) -> FileResponse:
         """Stream a workspace-scoped library asset for the desktop review player."""
         workspace_id = self._workspace_for(request)
@@ -287,22 +309,25 @@ class MaterialLibraryHTTPAdapter:
             raise HTTPException(status_code=404, detail='material asset not found') from exc
         if not self._visible(request, workspace_id, asset.visibility, asset.owner_user_id):
             raise HTTPException(status_code=404, detail='material asset not found')
-        root = Path(self._library_root()).expanduser().resolve()
-        path = Path(asset.path).expanduser().resolve()
-        try:
-            path.relative_to(root)
-        except ValueError as exc:
-            raise HTTPException(status_code=403, detail='material asset is outside the library') from exc
+        path = self._material_path(asset.path)
+        if path is None:
+            raise HTTPException(status_code=403, detail='material asset is outside the library')
         if not path.is_file():
             raise HTTPException(status_code=404, detail='material file not found')
         media_type = {'.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif'}.get(path.suffix.lower(), 'application/octet-stream')
         return FileResponse(path, media_type=media_type, filename=path.name, content_disposition_type='inline')
 
     def update_material_use_state(self, asset_id: str, request: Request, payload: MaterialUseStateRequest) -> MaterialAssetResponse:
+        workspace_id = self._workspace_for(request)
+        actor = self._reader_for(request, workspace_id)
         try:
-            asset = self._records_for().update_asset_use_state(self._workspace_for(request), asset_id, payload.use_state)
+            asset = self._records_for().material_assets.update_asset_use_state(
+                workspace_id, asset_id, payload.use_state, editor_identity=actor,
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail='material asset not found') from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
         return self._asset_response(asset)
 
     def review_production_material(self, asset_id: str, request: Request, payload: MaterialReviewRequest) -> MaterialAssetResponse:
@@ -359,8 +384,8 @@ def build_material_library_router(adapter_for, route_names: tuple[str, ...] | No
     """Keep registration at the host's original positions among other families."""
     router = APIRouter()
 
-    @router.get('/api/production/materials', response_model=MaterialLibraryResponse)
-    def list_production_materials(request: Request, limit: int=24, offset: int=0, q: str | None=None, tag: str | None=None, review_status: str | None=None, media_type: str | None=None) -> MaterialLibraryResponse:
+    @router.get('/api/production/materials', response_model=MaterialLibrarySearchPage)
+    def list_production_materials(request: Request, limit: int=24, offset: int=0, q: str | None=None, tag: str | None=None, review_status: str | None=None, media_type: str | None=None) -> MaterialLibrarySearchPage:
         return adapter_for().list_production_materials(request, limit, offset, q, tag, review_status, media_type)
 
     @router.put('/api/production/materials/{asset_id}/tags', response_model=MaterialAssetResponse)

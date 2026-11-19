@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode, type SetStateAction } from "react";
 import { useSearchParams } from "next/navigation";
 import type { AppShellProps } from "../AppShell";
+import { NEW_VIDEO_HREF } from "@/lib/preflight-draft-url";
 
 export type WorkspacePage = { id: string; href: string; label: string; content: ReactNode; open: boolean };
 export type WorkspacePageSlot = {
@@ -14,13 +15,21 @@ export const WorkspacePanelContext = createContext<{
   inspectorOpen: boolean; resourceOpen: boolean; conversationFocused: boolean; revealTaskPanel: () => void;
   openQuickInspector?: () => void;
 }>({ inspectorOpen: false, resourceOpen: false, conversationFocused: false, revealTaskPanel: () => {} });
-export const WorkbenchRegistry = createContext<{ register: (page: Omit<WorkspacePage, "open">) => void } | null>(null);
+export const WorkbenchRegistry = createContext<{ register: (page: Omit<WorkspacePage, "open">) => void; forget: (id: string) => void } | null>(null);
 export const WorkspacePageContext = createContext<WorkspacePageSlot | null>(null);
 export const WorkbenchAssistantTargetContext = createContext<AppShellProps["assistantContext"]>(undefined);
 
 export const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates"];
-export function isWorkbenchManagedPath(pathname: string) {
-  return pathname === "/" || workspaceResourcePaths.includes(pathname) || pathname.startsWith("/tasks/");
+export function isCreationDraftRoute(pathname: string, search?: Pick<URLSearchParams, "get"> | null) {
+  return pathname === "/production" && search?.get("new") === "1" && search.get("view") !== "automations";
+}
+
+export function isCreationDraftPage(id: string) {
+  return id.startsWith(NEW_VIDEO_HREF);
+}
+
+export function isWorkbenchManagedPath(pathname: string, search?: Pick<URLSearchParams, "get"> | null) {
+  return isCreationDraftRoute(pathname, search) || pathname === "/" || workspaceResourcePaths.includes(pathname) || pathname.startsWith("/tasks/");
 }
 
 export function useWorkspacePage() { return useContext(WorkspacePageContext); }
@@ -53,6 +62,10 @@ export function useWorkspaceSearchParams() {
 }
 export function workspacePageId(pathname: string, search: Pick<URLSearchParams, "get">) {
   if (pathname.startsWith("/tasks/")) return pathname;
+  if (isCreationDraftRoute(pathname, search)) {
+    const id = search.get("draft_id");
+    return id ? `${NEW_VIDEO_HREF}&draft_id=${encodeURIComponent(id)}` : NEW_VIDEO_HREF;
+  }
   if (pathname === "/production" && search.get("view") === "automations") return "/production?view=automations";
   return pathname;
 }

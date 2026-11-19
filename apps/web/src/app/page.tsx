@@ -1,10 +1,9 @@
-"use client";
-
-import { useWorkspaceSearchParams as useSearchParams } from "@/components/workbench/context";
+import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { AppShell } from "@/components/AppShell";
 import { HomeDashboardLive } from "@/components/HomeWorkspace";
 import { WorkspaceRoute } from "@/components/workbench/WorkspaceRoute";
+import { NEW_VIDEO_HREF } from "@/lib/preflight-draft-url";
 
 export const dynamic = "force-dynamic";
 
@@ -16,12 +15,12 @@ export const dynamic = "force-dynamic";
  * 这里不预发任何 owner 私有任务、词云或成果，只渲染容器外壳。
  */
 function HomeShell() {
-  const params = useSearchParams();
-  return <AppShell autoFocus={params.get("new") === "1"}>
+  return <AppShell>
     <HomeDashboardLive />
   </AppShell>;
 }
 
-export default function HomePage() {
+export default async function HomePage({ searchParams }: { searchParams?: Promise<{ new?: string }> }) {
+  if ((await searchParams)?.new === "1") redirect(NEW_VIDEO_HREF);
   return <Suspense fallback={null}><WorkspaceRoute label="首页"><HomeShell /></WorkspaceRoute></Suspense>;
 }

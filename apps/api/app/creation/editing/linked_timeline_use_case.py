@@ -9,6 +9,7 @@ from app.audio_timeline import bounded_audio_context
 from datetime import datetime
 from app.visual_effects import fade_filters
 from app.linked_timeline import remove_time_ranges
+from app.creation.editing.edit_scope import edit_scope_blocker
 from dataclasses import dataclass, field, replace
 import subprocess
 
@@ -96,6 +97,8 @@ class LinkedTimelineEditUseCase:
         operation = command.operation_type
         if operation not in LINKED_EDIT_OPERATIONS:
             raise LinkedEditInputError('提案不是关联时轴编辑')
+        if blocker := edit_scope_blocker(command.source, linked=True):
+            raise EditConflict(blocker)
         if operation == 'RemoveTimelineRanges':
             if not command.values.get('range_edit') or command.values.keys() - {'base_version_id', 'range_edit'}:
                 raise LinkedEditInputError('区间精剪只接受当前时间线区间和取舍依据')
@@ -226,6 +229,8 @@ class LinkedTimelineEditUseCase:
         if ((control.base_version_submitted and control.expected_base_version_id != base_id)
                 or (control.expected_input_digest is not None and control.expected_input_digest != digest)):
             raise EditConflict('请求与原提案基础版本或输入摘要不一致')
+        if proposal.status == 'proposed' and (blocker := edit_scope_blocker(source, linked=True)):
+            raise EditConflict(blocker)
         event_id = None
         if control.request_id is not None:
             try:
@@ -304,6 +309,9 @@ class LinkedTimelineEditUseCase:
 
 
     def preview_remove_silence(self, task, payload, *, identity, request_source, draft_only, execution, actor):
+        scope_source = request_source or {'assistant_turn_id': payload.assistant_turn_id, 'raw_command': payload.raw_command}
+        if blocker := edit_scope_blocker(scope_source, linked=True):
+            raise EditPreviewRejected(409, blocker)
         workspace_id, _unused_task_id = (task.workspace_id, task.id)
         from app.silence_edits import detect_silence_cuts
         if len(payload.selected_object_refs) != 1 or not payload.selected_object_refs[0].startswith('clip:'):

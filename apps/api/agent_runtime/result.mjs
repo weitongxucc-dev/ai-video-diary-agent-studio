@@ -1,11 +1,13 @@
+import { randomUUID } from "node:crypto";
+
 /** This invocation's results only; restoring SDK history never replays receipts. */
 export function createSessionResult(sessionId) {
   const result = {type:"creation_session_result", protocol:1, owner:"pi-coding-agent-sdk",
     session_id:sessionId, status:"failed", answer:"", tool_results:[],
     provider_usage:null, usage_status:"unknown", trace_events:[]};
   const usageKeys = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"];
-  const usageSeen = new Set();
-  const traceSeen = new Set();
+  const usageSeen = new WeakSet();
+  const invocationId = randomUUID();
   const eventIds = new Map();
   let traceStep = 0;
   function eventTime(event) {
@@ -13,11 +15,8 @@ export function createSessionResult(sessionId) {
   }
   function traceEvent(event, type, fields = {}) {
     const toolId = event?.toolCallId ?? fields.tool_call_id ?? "";
-    const key = `${type}|${toolId}|${event?.timestamp ?? ""}|${fields.nested_tool_id ?? ""}`;
-    if (traceSeen.has(key)) return;
-    traceSeen.add(key);
     const step = ++traceStep;
-    const eventId = `${sessionId}:${step}`;
+    const eventId = `${invocationId}:${step}`;
     const parentEventId = fields.parent_event_id ?? (toolId ? eventIds.get(`tool:${toolId}`) : undefined);
     result.trace_events.push({step, event_id:eventId, ...(parentEventId ? {parent_event_id:parentEventId} : {}), type,
       at_ms:eventTime(event), ...fields});
@@ -42,7 +41,8 @@ export function createSessionResult(sessionId) {
     const values = Object.fromEntries(usageKeys
       .filter(key => Number.isInteger(usage[key]) && usage[key] >= 0)
       .map(key => [key, usage[key]]));
-    if (!Object.keys(values).length) return;
+    // Pi initializes usage to zero before receipt of provider accounting.
+    if (!Object.values(values).some(value => value > 0)) return;
     result.provider_usage ??= {};
     for (const [key, value] of Object.entries(values)) result.provider_usage[key] =
       (result.provider_usage[key] ?? 0) + value;
@@ -73,15 +73,14 @@ export function createSessionResult(sessionId) {
       }
       if (eventType === "compaction_start") traceEvent(event, "compaction_start", {status:"started"});
       if (eventType === "compaction_end") traceEvent(event, "compaction_end", {
-        status:event.aborted === true ? "cancelled" : event.errorMessage ? "failed" : "completed"});
+        status:event.aborted === true ? "cancelled" : event.errorMessage || !event.result ? "failed" : "completed"});
       if (eventType === "retry" || event.retry === true || eventType?.includes?.("retry")) {
         traceEvent(event, "retry", {status:"started"});
       }
       if (event.type === "tool_execution_end") result.tool_results.push(event);
       if (event.type === "message_end" && event.message.role === "assistant") {
-        const usageKey = event.message.id ?? event.message.timestamp ?? JSON.stringify(event.message.usage ?? null);
-        if (!usageSeen.has(String(usageKey))) {
-          usageSeen.add(String(usageKey));
+        if (!usageSeen.has(event.message)) {
+          usageSeen.add(event.message);
           recordUsage(event.message.usage);
         }
         if (event.message.stopReason === "stop") result.answer = event.message.content

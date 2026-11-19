@@ -8,9 +8,6 @@ import type { HomeAggregation, ProductionFoundation } from "@/lib/types";
 // slot contract (conversation slot, panel behavior) is covered by
 // components/__tests__/AppShell.test.tsx and is not re-implemented here.
 
-let pathname = "/";
-let search = "";
-
 const apiMocks = vi.hoisted(() => ({
   getHomeDashboard: vi.fn(),
   getMaterialLibraryInsights: vi.fn(),
@@ -22,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
 }));
 const identityState = vi.hoisted(() => ({ token: "tok-a" as string | null, ready: true }));
 const routerPush = vi.fn();
+const redirect = vi.fn((href: string): never => { throw new Error(`redirect: ${href}`); });
 
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <a href={href} {...props}>{children}</a>,
@@ -30,9 +28,10 @@ vi.mock("next/image", () => ({
   default: ({ alt, ...props }: ImgHTMLAttributes<HTMLImageElement>) => <img alt={alt} {...props} />,
 }));
 vi.mock("next/navigation", () => ({
-  usePathname: () => pathname,
+  redirect: (href: string) => redirect(href),
+  usePathname: () => "/",
   useRouter: () => ({ back: vi.fn(), refresh: vi.fn(), push: routerPush }),
-  useSearchParams: () => new URLSearchParams(search),
+  useSearchParams: () => new URLSearchParams(),
 }));
 // 身份钩子照既有约定返回 token/ready/refresh；页面只消费它，不自己读身份。
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({
@@ -112,8 +111,7 @@ const foundation = {
 
 describe("HomePage workspace overview", () => {
   beforeEach(() => {
-    pathname = "/";
-    search = "";
+    redirect.mockClear();
     identityState.token = "tok-a";
     identityState.ready = true;
     routerPush.mockReset();
@@ -142,7 +140,7 @@ describe("HomePage workspace overview", () => {
   });
 
   it("opens the assistant on demand and shows the seven real overview metrics", async () => {
-    render(<HomePage />);
+    render(await HomePage({}));
 
     expect(screen.queryByRole("region", { name: "曜核哈力斯" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "打开曜核哈力斯" }));
@@ -163,19 +161,22 @@ describe("HomePage workspace overview", () => {
     expect(apiMocks.getHomeDashboard).toHaveBeenCalledWith(7);
   });
 
-  it("keeps the ?new=1 creation entry and sends queued tasks to their real route", async () => {
-    search = "new=1";
-    render(<HomePage />);
+  it("links to the independent video draft and retains queued task navigation", async () => {
+    render(await HomePage({}));
 
-    const assistant = await screen.findByRole("region", { name: "曜核哈力斯" });
-    const input = within(assistant).getByRole("textbox", { name: "制作要求" });
-    // 既有创作入口：带 ?new=1 打开首页时输入框直接获得焦点。
-    await waitFor(() => expect(document.activeElement).toBe(input));
+    const main = screen.getByRole("main");
+    expect(await within(main).findByRole("link", { name: "新建视频" })).toHaveAttribute("href", "/production?new=1");
+    expect(screen.queryByRole("region", { name: "曜核哈力斯" })).not.toBeInTheDocument();
 
     // 首页队列按真实 task_id 进入既有任务路由，不用依赖另一份任务列表。
     const queue = await screen.findByRole("region", { name: "创作任务看板" });
     fireEvent.click(within(queue).getByRole("button", { name: /waiting_for_user 任务/ }));
     const detail = await screen.findByRole("dialog", { name: /waiting_for_user 任务/ });
     expect(within(detail).getByRole("link")).toHaveAttribute("href", "/tasks/task-waiting_for_user");
+  });
+
+  it("redirects the legacy new-video URL to the draft entry", async () => {
+    await expect(HomePage({ searchParams: Promise.resolve({ new: "1" }) })).rejects.toThrow("redirect");
+    expect(redirect).toHaveBeenCalledWith("/production?new=1");
   });
 });

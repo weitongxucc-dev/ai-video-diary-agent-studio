@@ -6257,3 +6257,69 @@ it('keeps polling and reserves the original generation until its draft-ready run
   expect(getCreationTaskScriptGenerationRequest).toHaveBeenCalledWith('task-1',id);
   expect(result.current.blocked).toBe(false);
 });
+
+it("opens the saved audio clip and rejects historical, missing, or foreign result targets", async () => {
+  const initial = subtitleCoverWorkspace();
+  const task = initial.task;
+  task.stage = "montage";
+  task.output_ready = false;
+  initial.montage!.output_url = null;
+  initial.montage!.clips = [{ id: "shot-1", cue_id: null, asset_id: "asset-1", segment_id: null,
+    source_reference: "workspace://shot.mp4", source_start_seconds: 0, source_end_seconds: 12,
+    timeline_start_seconds: 0, timeline_end_seconds: 12, match_score: 1, match_reasons: [],
+    needs_confirmation: false, manually_selected: true, locked: false, role: "a_roll" }];
+  initial.montage!.audio_timeline = { format_version: 1, tracks: [{ id: "narration-track", name: "配音", role: "narration",
+    gain_db: 0, muted: false, locked: false, duck_under_voice: false,
+    clips: [{ id: "narration-1", name: "目标配音段", source_ref: "narration://test",
+      source_start_ms: 0, source_end_ms: 2500, timeline_start_ms: 1250, gain_db: -3, fade_in_ms: 0, fade_out_ms: 0,
+      muted: false, locked: false, denoise_db: 0, gain_points: [], envelope_offset_ms: 0, envelope_duration_ms: null }] }] };
+  const turns = [
+    { id: "current", version: task.current_timeline_version_id, target: "narration-1", workspace: task.workspace_id },
+    { id: "old", version: "timeline-version-5", target: "narration-1", workspace: task.workspace_id },
+    { id: "removed", version: task.current_timeline_version_id, target: "missing-audio", workspace: task.workspace_id },
+    { id: "foreign", version: task.current_timeline_version_id, target: "narration-1", workspace: "another-workspace" },
+    { id: "structural", version: task.current_timeline_version_id, target: "narration-1", workspace: task.workspace_id, action: "split" },
+  ].map(({ id, version, target, workspace, action = "update" }, sequence) => ({
+    id, sequence: sequence + 1, status: "completed" as const, user_message: "修改配音音量", assistant_text: "音量修改回执",
+    events: [], created_at: task.created_at, updated_at: task.updated_at,
+    result: { kind: "task_turn", response: { edit_request: { task_id: task.id, phase: "apply", status: "recorded",
+      result: { operation: { task_id: task.id, workspace_id: workspace, status: "applied", operation_type: "EditAudioTimeline",
+        result_version_id: version, payload: { edit: { action, target_id: target } } } } } } },
+  }));
+  const id = "conversation-audio";
+  mocks.currentAssistantConversation.set(`task:${task.id}`, id);
+  mocks.assistantConversations.set(id, { id, workspace_id: task.workspace_id, scope_kind: "task", scope_id: task.id,
+    title: "配音修改", draft_text: "", draft_version: 0, turns, created_at: task.created_at, updated_at: task.updated_at });
+  mocks.getWorkspace.mockResolvedValue(initial);
+  renderTaskSubject(<CreationTaskWorkspace initialWorkspace={initial} initialTasks={[task]} initialTopics={null} />);
+
+  const locate = async (turnId: string) => {
+    const element = document.querySelector<HTMLElement>(`article[data-turn-id="${turnId}"]`);
+    expect(element).not.toBeNull();
+    fireEvent.click(await within(element!).findByRole("button", { name: "查看当前剪辑" }));
+  };
+  await screen.findAllByRole("button", { name: "查看当前剪辑" });
+  const video = screen.getByRole("button", { name: /^定位镜头 1/ });
+  const audio = screen.getByRole("button", { name: "选择音频：目标配音段" });
+  fireEvent.click(video);
+  expect(audio).toHaveAttribute("aria-pressed", "false");
+
+  await locate("current");
+  expect(audio).toHaveAttribute("aria-pressed", "true");
+  expect(video).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("slider", { name: "时间线播放位置" })).toHaveAttribute("aria-valuenow", "1.25");
+  expect(screen.getByRole("spinbutton", { name: "音量（dB）" })).toHaveValue(-3);
+  fireEvent.click(video);
+
+  await locate("old");
+  expect(screen.getByText(/另一个时间线版本/)).toBeVisible();
+  await locate("removed");
+  expect(screen.getByText(/找不到本次修改的音频对象/)).toBeVisible();
+  await locate("foreign");
+  expect(screen.getByText(/请回到该作品查看/)).toBeVisible();
+  await locate("structural");
+  expect(document.querySelector('article[data-turn-id="structural"] [role="status"]')).toBeNull();
+  expect(video).toHaveAttribute("aria-pressed", "true");
+  expect(audio).toHaveAttribute("aria-pressed", "false");
+  expect(mocks.askAssistant).not.toHaveBeenCalled();
+});

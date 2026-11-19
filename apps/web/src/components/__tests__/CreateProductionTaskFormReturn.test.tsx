@@ -7,13 +7,17 @@ vi.mock("@/lib/api", () => ({ previewCreationPlan: mocks.preview, confirmCreatio
 vi.mock("@/lib/media-profiles-api", () => ({ listVoiceProfiles: mocks.voices, listPersonProfiles: mocks.people, getDefaultVoice: mocks.defaultVoice }));
 vi.mock("@/lib/preflight-draft", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/preflight-draft")>(), readPreflightDraftScope: mocks.scope }));
 import { CreateProductionTaskForm } from "@/components/CreateProductionTaskForm";
-import { loadPreflightDraft, resolvePreflightRepairContext, savePreflightDraft, type PreflightDraftFields } from "@/lib/preflight-draft";
+import { loadPreflightDraft, resolvePreflightRepairContext, savePreflightDraft, savePreflightRepairContext, type PreflightDraftFields } from "@/lib/preflight-draft";
 const scope = { memberId: "local:member-a", workspaceId: "space-a" };
 const id = "12345678-1234-4123-8123-123456789abc", nextId = "12345678-1234-4123-8123-123456789abd";
 const template: VideoTemplate = { id: "template-fixed", version: 3, name: "60秒模板", visibility: "private", origin: "user", source_task_id: "old", source_timeline_version_id: "old-version", created_at: "2026-10-09", settings: { language: "zh-CN", aspect_ratio: "16:9", duration_target_seconds: 60, voice: null, style_instruction: "短句", fit_mode: "fit", subtitle_style: {} } };
 const fields: PreflightDraftFields = { goal: "原制作目标", name: "原名称", targetCount: "1", duration: "30", language: "zh-CN", aspectRatio: "16:9", presenterShare: 40, lipsyncQuality: "fast", voicePin: { profile_id: "voice-a", version: "v2" }, personPin: { profile_id: "person-b", version: "p3" }, voiceEdited: true, template: { id: template.id, version: template.version } };
 function preview(overrides: Partial<CreationPlanPreview> = {}): CreationPlanPreview {
   return { goal: fields.goal, name: fields.name, target_count: 1, language: "zh-CN", aspect_ratio: "16:9", duration_target_seconds: 30, knowledge_references: [], source_references: [], selected_voice: null, pronunciation_references: [], approved_asset_count: 0, approved_clip_count: 0, material_rule_summary: "真实预检返回", material_matches: [], model_snapshot: [], confirmation_points: [], blockers: [], confirmable: true, preflight_fingerprint: "n".repeat(64), ...overrides };
+}
+function saveRepairDraft(draftId = id, value = fields) {
+  savePreflightDraft(sessionStorage, scope, draftId, value);
+  savePreflightRepairContext(sessionStorage, scope, draftId, value.template);
 }
 function check() { fireEvent.submit(screen.getByRole("button", { name: "检查可用内容" }).closest("form")!); }
 function defer<T>() { let resolve!: (value: T) => void; let reject!: (cause: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -101,7 +105,7 @@ describe("uncreated task repair return", () => {
     expect(new URL(mocks.assign.mock.calls[0][0], window.location.origin).pathname).toBe(path); expect(mocks.confirm).not.toHaveBeenCalled();
   });
   it("explicit abandonment clears only its own draft without creating a task", async () => {
-    savePreflightDraft(sessionStorage, scope, id, fields); savePreflightDraft(sessionStorage, scope, nextId, fields);
+    saveRepairDraft(); savePreflightDraft(sessionStorage, scope, nextId, fields);
     render(<CreateProductionTaskForm draftId={id} template={template} assignLocation={mocks.assign} />);
     await screen.findByRole("button", { name: "确认并创建任务" });
     fireEvent.click(screen.getByRole("button", { name: "放弃本次草稿并返回列表" }));
@@ -109,14 +113,14 @@ describe("uncreated task repair return", () => {
     expect(loadPreflightDraft(sessionStorage, scope, id)).toBeNull(); expect(loadPreflightDraft(sessionStorage, scope, nextId)).toEqual(fields); expect(mocks.confirm).not.toHaveBeenCalled();
   });
   it("keeps the draft and inputs when abandonment storage is denied", async () => {
-    savePreflightDraft(sessionStorage, scope, id, fields); render(<CreateProductionTaskForm draftId={id} template={template} assignLocation={mocks.assign} />);
+    saveRepairDraft(); render(<CreateProductionTaskForm draftId={id} template={template} assignLocation={mocks.assign} />);
     await screen.findByRole("button", { name: "确认并创建任务" });
     const denied = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new Error("denied"); });
     fireEvent.click(screen.getByRole("button", { name: "放弃本次草稿并返回列表" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("没有放弃草稿，当前输入仍保留：denied"); expect(mocks.assign).not.toHaveBeenCalled(); expect(screen.getByLabelText("目标时长（秒）")).toHaveValue(30); denied.mockRestore();
   });
   it("keeps actual creation successful and reports a failed storage cleanup in its destination toast", async () => {
-    savePreflightDraft(sessionStorage, scope, id, fields); render(<CreateProductionTaskForm draftId={id} template={template} assignLocation={mocks.assign} />);
+    saveRepairDraft(); render(<CreateProductionTaskForm draftId={id} template={template} assignLocation={mocks.assign} />);
     await screen.findByRole("button", { name: "确认并创建任务" });
     const denied = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => { throw new Error("denied"); });
     fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));
@@ -133,12 +137,12 @@ describe("uncreated task repair return", () => {
     expect(mocks.assign).not.toHaveBeenCalled(); blocked.mockRestore();
   });
   it.each([{ memberId: "local:other-member", workspaceId: "space-a" }, { ...scope, workspaceId: "space-b" }])("refuses another member/space's draft without sending its goal", async other => {
-    savePreflightDraft(sessionStorage, scope, id, fields); mocks.scope.mockResolvedValue(other);
+    saveRepairDraft(); mocks.scope.mockResolvedValue(other);
     render(<CreateProductionTaskForm draftId={id} template={template} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("没有这份临时草稿"); expect(screen.getByLabelText("制作目标")).toHaveValue(""); expect(mocks.preview).not.toHaveBeenCalled();
   });
   it("does not restore a template version mismatch", async () => {
-    savePreflightDraft(sessionStorage, scope, id, fields); render(<CreateProductionTaskForm draftId={id} template={{ ...template, version: 4 }} />);
+    saveRepairDraft(); render(<CreateProductionTaskForm draftId={id} template={{ ...template, version: 4 }} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("模板固定版本与入口不符"); expect(mocks.preview).not.toHaveBeenCalled();
   });
   it("does not show a former member's late profile list after a trusted scope switch", async () => {
@@ -156,17 +160,18 @@ describe("uncreated task repair return", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("成员或工作区已切换"); expect(screen.queryByRole("button", { name: "确认并创建任务" })).toBeNull(); expect(mocks.confirm).not.toHaveBeenCalled();
   });
   it("does not overwrite edited inputs with a late draft identity reply", async () => {
-    savePreflightDraft(sessionStorage, scope, id, fields); const late = defer<typeof scope>(); mocks.scope.mockReturnValue(late.promise);
+    saveRepairDraft(); const late = defer<typeof scope>(); mocks.scope.mockReturnValue(late.promise);
     render(<CreateProductionTaskForm draftId={id} template={template} />);
     fireEvent.change(screen.getByLabelText("制作目标"), { target: { value: "最新手工目标" } });
     await act(async () => late.resolve(scope));
     expect(await screen.findByRole("alert")).toHaveTextContent("晚到的草稿没有覆盖"); expect(screen.getByLabelText("制作目标")).toHaveValue("最新手工目标"); expect(mocks.preview).not.toHaveBeenCalled();
   });
   it.each(["success", "failure"])("ignores a late %s from an adjacent draft and confirms only its fresh fingerprint", async outcome => {
-    savePreflightDraft(sessionStorage, scope, id, fields); savePreflightDraft(sessionStorage, scope, nextId, { ...fields, goal: "第二目标", duration: "45" });
+    saveRepairDraft(); savePreflightDraft(sessionStorage, scope, nextId, { ...fields, goal: "第二目标", duration: "45" });
     const late = defer<CreationPlanPreview>(); mocks.preview.mockReturnValueOnce(late.promise).mockResolvedValueOnce(preview({ goal: "第二目标", duration_target_seconds: 45, preflight_fingerprint: "b".repeat(64) }));
     const view = render(<CreateProductionTaskForm draftId={id} template={template} assignLocation={mocks.assign} />);
     await waitFor(() => expect(mocks.preview).toHaveBeenCalledTimes(1));
+    savePreflightRepairContext(sessionStorage, scope, nextId, fields.template);
     view.rerender(<CreateProductionTaskForm draftId={nextId} template={template} assignLocation={mocks.assign} />);
     await screen.findByText("预检目标时长：45 秒");
     await act(async () => { if (outcome === "success") late.resolve(preview()); else late.reject(new Error("旧草稿失败")); });
@@ -176,7 +181,7 @@ describe("uncreated task repair return", () => {
     expect(loadPreflightDraft(sessionStorage, scope, id)).toEqual(fields);
   });
   it("clears the previous draft while a new UUID is unresolved and cannot preview the former goal", async () => {
-    savePreflightDraft(sessionStorage, scope, id, fields);
+    saveRepairDraft();
     const view = render(<CreateProductionTaskForm draftId={id} template={template} />);
     await screen.findByRole("button", { name: "确认并创建任务" });
     const late = defer<typeof scope>(); mocks.scope.mockReturnValueOnce(late.promise);
@@ -188,7 +193,7 @@ describe("uncreated task repair return", () => {
     expect(screen.getByLabelText("制作目标")).toHaveValue(""); expect(mocks.preview).toHaveBeenCalledTimes(1); expect(mocks.confirm).not.toHaveBeenCalled();
   });
   it("blocks stale scope before preview/confirm and does not misreport an actual success after a scope switch", async () => {
-    savePreflightDraft(sessionStorage, scope, id, fields); render(<CreateProductionTaskForm draftId={id} template={template} assignLocation={mocks.assign} />);
+    saveRepairDraft(); render(<CreateProductionTaskForm draftId={id} template={template} assignLocation={mocks.assign} />);
     await screen.findByRole("button", { name: "确认并创建任务" });
     mocks.scope.mockResolvedValue({ ...scope, workspaceId: "changed" }); fireEvent.click(screen.getByRole("button", { name: "确认并创建任务" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("成员或工作区已切换"); expect(mocks.confirm).not.toHaveBeenCalled();
@@ -198,4 +203,24 @@ describe("uncreated task repair return", () => {
     expect(screen.getByText(/任务已创建，但当前成员或工作区未重新确认/)).toBeInTheDocument(); expect(mocks.assign).not.toHaveBeenCalled();
     expect(loadPreflightDraft(sessionStorage, scope, id)).toBeNull(); expect(screen.getByRole("button", { name: "任务已创建" })).toBeDisabled();
   });
+});
+
+it("saves and reopens a multi-video draft without opening a creation request or running a preflight", async () => {
+  const onDraftSaved = vi.fn();
+  const setup = render(<CreateProductionTaskForm draftId={id} draftStart onDraftSaved={onDraftSaved} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "制作目标" }), { target: { value: "演示目标" } });
+  fireEvent.change(screen.getByRole("spinbutton", { name: "成片数量" }), { target: { value: "2" } });
+  const save = screen.getByRole("button", { name: "保存草稿" });
+  await waitFor(() => expect(save).toBeEnabled());
+  fireEvent.click(save);
+  await screen.findByText(/草稿已保存/);
+  expect(onDraftSaved).toHaveBeenCalledWith(`/production?new=1&draft_id=${id}`);
+  expect(loadPreflightDraft(sessionStorage, scope, id)).toMatchObject({ goal: "演示目标", targetCount: "2" });
+  setup.unmount();
+  render(<CreateProductionTaskForm draftId={id} onDraftSaved={onDraftSaved} />);
+  await screen.findByText(/已恢复本次输入/);
+  expect(screen.getByRole("textbox", { name: "制作目标" })).toHaveValue("演示目标");
+  expect(screen.getByRole("spinbutton", { name: "成片数量" })).toHaveValue(2);
+  expect(mocks.preview).not.toHaveBeenCalled();
+  expect(mocks.confirm).not.toHaveBeenCalled();
 });
