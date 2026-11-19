@@ -343,7 +343,7 @@ class PicturePreviewRenderer:
             render_options = (
                 {"scheduler": render_context.scheduler, "grant": render_context.grant,
                  "cancel_event": render_context.cancel_event,
-                 "deadline_monotonic": render_context.deadline_monotonic,
+                 "deadline_monotonic": render_context.command_deadline_monotonic,
                  "max_output_bytes": render_context.max_output_bytes,
                  "threads": render_context.threads}
                 if render_context is not None else {}

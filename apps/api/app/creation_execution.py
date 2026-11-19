@@ -24,7 +24,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.canvas import canvas_size
 from app.graphic_overlays import validate_overlays
 from app.device_scheduler import DeviceScheduler, Grant, RecoveryBlocked, SchedulePolicy, SubmissionIntent, VerifiedRetry, VerifiedWork, WorkRequest
-from app.host_resource_probes import HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget, admit_resource, sample_host_capacity, audio_resource_refusal
+from app.host_resource_probes import (HostResourceRefusal, MontageBudget, NarrationBudget, PresenterBudget,
+    Y4M_SERIAL_PICTURE_FORMAT, admit_resource, audio_resource_refusal, presenter_render_total_timeout,
+    sample_host_capacity)
 from app.montage import creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.creation.presenter_selection import planned_presenter_sections
 from app.avatar_lipsync import _authorization_failure, avatar_lipsync_cache_key
@@ -118,11 +120,15 @@ class CreationStageGrantContext:
     _audio_active_seconds: list[float] = field(default_factory=lambda: [0.0], repr=False, compare=False)
     narration_output_usage: list[int | None] | None = field(default=None, repr=False, compare=False)
 
+    @property
+    def command_deadline_monotonic(self) -> float:
+        return self.deadline_monotonic
+
     def check_execution_limits(self) -> None:
         from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandTimeout
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise GrantedCommandCancelled("制作阶段已取消")
-        if time.monotonic() >= self.deadline_monotonic:
+        if time.monotonic() >= self.command_deadline_monotonic:
             raise GrantedCommandTimeout("制作阶段总时限已到")
 
     def check(self) -> None:
@@ -156,7 +162,7 @@ class CreationStageGrantContext:
         try:
             return run_granted_command(
                 self.scheduler, self.grant, command,
-                timeout_seconds=self.deadline_monotonic - time.monotonic(),
+                timeout_seconds=self.command_deadline_monotonic - time.monotonic(),
                 max_stdout_bytes=65536, max_stderr_bytes=65536, cancel_event=self.cancel_event,
                 env=env, output_paths=output_paths, max_output_file_bytes=limit,
                 resource_purpose=self.resource_purpose)
@@ -226,7 +232,16 @@ class CreationStageGrantContext:
 
 @dataclass(frozen=True)
 class CpuRenderGrantContext(CreationStageGrantContext):
-    pass
+    picture_timeout_seconds: float | None = None
+
+    @property
+    def command_deadline_monotonic(self) -> float:
+        if self.picture_timeout_seconds is None or self.resource_purpose == "audio_mix":
+            return self.deadline_monotonic
+        # Only actual time charged to the independently bounded audio phase
+        # can extend the picture clock. Unused audio time is never transferable.
+        return min(self.deadline_monotonic,
+            self.started_monotonic + self.picture_timeout_seconds + self._audio_active_seconds[0])
 
 
 @dataclass(frozen=True)
@@ -234,6 +249,7 @@ class CpuRenderLimits:
     max_output_bytes: int
     threads: int
     timeout_seconds: float
+    serial_picture_format: str | None = None
 
     def __post_init__(self) -> None:
         if (type(self.max_output_bytes) is not int or self.max_output_bytes <= 0
@@ -810,7 +826,14 @@ def cpu_render_facts(repository, conn: sqlite3.Connection, task: CreationTask,
         "threads": limits.threads,
     }
     if audio_mix is not None:
-        resources["audio_mix"] = audio_mix["resources"]
+        audio_resources = audio_mix["resources"]
+        resources["audio_mix"] = audio_resources
+        if (presenter and limits.serial_picture_format == Y4M_SERIAL_PICTURE_FORMAT
+                and (request is None or "picture_timeout_seconds" in request.resources)):
+            combined_timeout = presenter_render_total_timeout(limits.timeout_seconds, audio_resources["timeout_seconds"])
+            if combined_timeout > limits.timeout_seconds:
+                resources["picture_timeout_seconds"] = limits.timeout_seconds
+                resources["timeout_seconds"] = combined_timeout
     return key, resources
 
 
@@ -3710,6 +3733,8 @@ class CreationJobUnitExecutor:
             context = CpuRenderGrantContext(
                 scheduler, grant, deadline, int(resources["max_output_bytes"]),
                 int(resources["threads"]), cancellation,
+                started_monotonic=deadline - float(resources["timeout_seconds"]),
+                picture_timeout_seconds=resources.get("picture_timeout_seconds"),
             )
             try:
                 if deadline <= time.monotonic():

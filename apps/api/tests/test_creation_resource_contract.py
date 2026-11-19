@@ -93,6 +93,36 @@ def test_short_preview_profile_is_independent_complete_and_has_no_guessed_defaul
     assert clip_preview_budget_from_env({**profile, 'DEVICE_CLIP_PREVIEW_SERIAL_PICTURE_FORMAT': 'None'}) == _render_budget()
 
 
+def test_presenter_render_admission_checks_combined_timeout_and_both_phase_limits(tmp_path, render_metadata_host):
+    from dataclasses import replace
+    from app.audio_timeline import narration_audio_timeline
+    from app.task_audio import audio_mix_resources
+    from app.host_resource_probes import CpuAudioBudget, Y4M_SERIAL_PICTURE_FORMAT
+
+    probe = _probe(tmp_path)
+    picture = _render_budget(max_timeout_seconds=248, serial_picture_format=Y4M_SERIAL_PICTURE_FORMAT)
+    audio = CpuAudioBudget(36, 1_000_000, 162, 162, 48000, 2, 100_000_000, 1, 3763, 1024, 80, .1, 1024, 1024)
+    probe.budget = replace(probe.budget, presenter_cpu_render=picture, cpu_audio=audio)
+    source = {'reference': 'artifacts/task/audio.wav', 'path': '/fixture/audio.wav', 'uses': 1,
+        'size_bytes': 192000, 'duration_seconds': 1., 'sample_rate': 48000, 'channels': 2}
+    mix = audio_mix_resources([source], [narration_audio_timeline(source['reference'], 1.)], 1.,
+        budget=audio, normalize_voice_sources=False)
+    resources = {'kind': 'creation_presenter_render', 'execution_mode': 'cpu_ffmpeg', 'duration_seconds': 1.,
+        'width_px': 10, 'height_px': 10, 'input_bytes': 1, 'clip_count': 2, 'overlay_count': 0,
+        'max_output_bytes': 10000, 'threads': 1, 'audio_mix': mix, 'timeout_seconds': 4011,
+        'picture_timeout_seconds': 248}
+    assert probe._sample(resources).verdict is True
+    assert probe._sample({**resources, 'timeout_seconds': 4012}).reason == 'render_phase_timeout_contract_invalid'
+    assert probe._sample({**resources, 'timeout_seconds': 4012, 'picture_timeout_seconds': 249}).reason == (
+        'declared_resources_exceed_budget')
+    assert probe._sample({**resources, 'timeout_seconds': 4012, 'audio_mix': {**mix, 'timeout_seconds': 3764}}).reason == (
+        'declared_resources_exceed_budget')
+    legacy = {key: value for key, value in resources.items() if key != 'picture_timeout_seconds'}
+    assert probe._sample({**legacy, 'timeout_seconds': 248}).verdict is True
+    probe.budget = replace(probe.budget, presenter_cpu_render=replace(picture, serial_picture_format=None))
+    assert probe._sample(resources).reason == 'render_phase_timeout_contract_invalid'
+
+
 def test_short_preview_admission_and_child_limits_consume_the_same_profile(tmp_path, render_metadata_host):
     from dataclasses import replace
     from app.device_scheduler import RecoveryBlocked
