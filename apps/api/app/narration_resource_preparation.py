@@ -80,7 +80,9 @@ class NarrationPreparationPolicy:
     memory_fraction: float = .5
     measured_margin: float = 2.0
     threads: int = 1
-    process_thread_multiplier: int = 2
+    # MLX Metal inference uses auxiliary threads in the registered process
+    # group even when the model's configured CPU thread count is one.
+    process_thread_multiplier: int = 3
     sample_seconds: float = .1
     output_sample_rate: int = 48000
     output_channels: int = 2

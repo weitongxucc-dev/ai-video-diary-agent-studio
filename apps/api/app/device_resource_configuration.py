@@ -4,12 +4,14 @@ from __future__ import annotations
 from dataclasses import asdict, replace
 from functools import lru_cache
 import hashlib
+from importlib.util import source_from_cache
 import json
 import os
 import csv
 from pathlib import Path
 import platform
 import shutil
+import stat
 import sys
 from types import SimpleNamespace
 
@@ -23,7 +25,10 @@ from app.device_resource_profile import (
 
 def _file_key(path):
     path = Path(path).resolve(strict=True)
-    info = path.stat()
+    return _stat_key(path, path.stat())
+
+
+def _stat_key(path, info):
     return str(path), info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
@@ -52,6 +57,7 @@ def narration_runtime_identity_files(runtime_python):
     native libraries or importing a model on a capability read.
     """
     root = Path(runtime_python).absolute().parent.parent
+    resolved_root = root.resolve()
     config = root / 'pyvenv.cfg'
     lines = {key.strip().lower(): value.strip().lower()
              for line in config.read_text().splitlines() if '=' in line for key, value in [line.split('=', 1)]}
@@ -67,13 +73,32 @@ def narration_runtime_identity_files(runtime_python):
     if not required <= packages:
         raise ValueError('Narration runtime dependencies are not installed')
     identities = [_file_key(config)]
+    resolved_directories = {}
+
+    def installed_file(path):
+        # Resolve shared path components once per observation. Every recorded
+        # file still contributes a fresh filesystem identity to each check.
+        parent = path.parent
+        if parent not in resolved_directories:
+            resolved_directories[parent] = parent.resolve()
+        resolved = resolved_directories[parent] / path.name
+        if not resolved.is_relative_to(resolved_root):
+            raise ValueError('Runtime package inventory leaves its installation')
+        info = resolved.lstat()
+        if stat.S_ISLNK(info.st_mode) or path.name in {'.', '..'}:
+            resolved = resolved.resolve()
+            if not resolved.is_relative_to(resolved_root):
+                raise ValueError('Runtime package inventory leaves its installation')
+            info = resolved.stat()
+        return _stat_key(resolved, info)
+
     # Bind installed import hooks too. External path roots are not in this
     # installation inventory and need their own runtime adapter.
     for path in site.glob('*.pth'):
         identities.append((_file_key(path), _hash_file(path)))
         for line in path.read_text().splitlines():
             if line.strip() and not line.startswith(('#', 'import ', 'import\t')):
-                if not (site / line.strip()).resolve().is_relative_to(root.resolve()):
+                if not (site / line.strip()).resolve().is_relative_to(resolved_root):
                     raise ValueError('Narration runtime has an external import path')
     for record in records:
         identities.append((_file_key(record), _hash_file(record)))
@@ -81,10 +106,20 @@ def narration_runtime_identity_files(runtime_python):
             for item in csv.reader(stream):
                 if not item or not item[0]:
                     raise ValueError('Invalid runtime package inventory')
-                path = (site / item[0]).resolve(strict=True)
-                if not path.is_relative_to(root.resolve()):
-                    raise ValueError('Runtime package inventory leaves its installation')
-                identities.append(_file_key(path))
+                path = site / item[0]
+                try:
+                    identity = installed_file(path)
+                except FileNotFoundError:
+                    # Pip records generated, unhashed bytecode even when it has
+                    # since been cleared. The granted worker disables writes.
+                    if (len(item) != 3 or item[1] or item[2] or path.suffix != '.pyc'
+                            or path.parent.name != '__pycache__'):
+                        raise
+                    source = Path(source_from_cache(str(path)))
+                    if not source.is_file():
+                        raise ValueError('Runtime bytecode source is missing')
+                    identity = installed_file(source)
+                identities.append(identity)
     return identities
 
 
