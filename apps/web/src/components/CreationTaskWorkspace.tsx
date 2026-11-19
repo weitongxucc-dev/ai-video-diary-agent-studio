@@ -67,6 +67,7 @@ import { PersonStageView } from './creation-task/PersonStage';
 import { CreationExecutionPanel } from './creation-task/CreationExecutionPanel';
 import { EditPreviewCard } from './creation-task/EditPreviewCard';
 import { ContextCommandBar, TaskConversationHistory } from './creation-task/TaskConversation';
+import { MaterialScopePicker } from './creation-task/MaterialScopePicker';
 import { PrepareMaterialsView } from './creation-task/PrepareMaterialsView';
 import { PublishStageView } from './creation-task/PublishStageView';
 import { FinalVideoQualityCheck } from './creation-task/FinalVideoQualityCheck';
@@ -1938,7 +1939,25 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {(activeView === "review" || activeView === "montage") && workspace.montage ? <FinalVideoQualityCheck compact={isEditor} taskId={task.id} versionId={task.current_timeline_version_id} outputUrl={workspace.montage.output_url} onLocate={locateQualityFinding} /> : null}
         {(activeView === "review" || activeView === "montage") && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}
         </div>
-        {activeView === "prepare" ? <PrepareMaterialsView matches={workspace.plan.material_matches} approvedAssetCount={workspace.plan.approved_asset_count} approvedClipCount={workspace.plan.approved_clip_count} /> : null}
+        {activeView === "prepare" ? <PrepareMaterialsView matches={workspace.plan.material_matches}
+          approvedAssetCount={workspace.plan.approved_asset_count} approvedClipCount={workspace.plan.approved_clip_count}
+          selectedAssetIds={workspace.plan.selected_material_asset_ids}>
+          {!workspace.plan.source_media && workspace.plan.updated_at && workspace.plan.selected_material_asset_ids &&
+            <MaterialScopePicker key={task.id} taskId={task.id} planUpdatedAt={workspace.plan.updated_at}
+              selectedAssetIds={workspace.plan.selected_material_asset_ids}
+              disabled={busy !== null || task.stage_status === "running" || Boolean(task.montage_plan_id || task.current_timeline_version_id)}
+              onSaved={receipt => {
+                const current = currentWorkspace.current;
+                if (receipt.task_id !== current.task.id) return;
+                if (current.plan.updated_at === workspace.plan.updated_at) {
+                  acceptWorkspace({ ...current, plan: { ...current.plan, updated_at: receipt.plan_updated_at,
+                    selected_material_asset_ids: receipt.selected_material_asset_ids } }, workspaceReceiptRevision.current);
+                }
+                void refresh(true).catch(cause => {
+                  if (currentTaskId.current === receipt.task_id) setError(errorDetails(cause));
+                });
+              }} />}
+        </PrepareMaterialsView> : null}
         {activeView === "person" ? <PersonStageView busy={busy !== null} onGenerate={generatePersonRender} onOpenNarration={() => openView("narration")} onSelect={selectNarrationSegment} selectedSegmentId={selectedNarrationSegmentId} narration={workspace.narration} renders={workspace.person_renders} selectedPerson={workspace.plan.selected_person} lipsyncQuality={workspace.plan.lipsync_quality} presenterShareTarget={workspace.plan.presenter_share_target ?? workspace.montage?.presenter_share_target ?? null} presenterShareActual={workspace.montage?.presenter_share_actual} capability={workspace.person_render_capability} portraitAvailable={workspace.portrait_available} /> : null}
         {activeView === "publish" ? <PublishStageView ready={Boolean(workspace.montage?.output_url)} onOpenReview={() => openView("review")} /> : null}
         {recordingOpen ? <HomeCardDialog title="电脑录音" onClose={() => setRecordingOpen(false)}>{workspace.scripts.filter(script => script.id === task.confirmed_script_id).map(script => <div key={script.id}><p>录音提词：以下按页显示已确认文案，不是全文载入。</p><ConfirmedScriptView script={script}/></div>)}<DesktopVoiceRecorder onRecorded={submitRecordedVoice} onCancel={() => setRecordingOpen(false)} /></HomeCardDialog> : null}
