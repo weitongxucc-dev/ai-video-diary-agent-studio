@@ -86,6 +86,7 @@ it.each([true, false])("auditions the saved text after editing the manuscript lo
   await screen.findByLabelText("英文样句录音");
   expect(api.create).toHaveBeenCalledExactlyOnceWith({
     voice_profile_id:"studio",voice_version:"v3",language:"en",preview_text:section.content,retry:false,
+    saved_section:{task_id:"task",script_id:script.id,section_id:section.id},
   });
 });
 

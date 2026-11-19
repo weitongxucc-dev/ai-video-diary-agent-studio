@@ -341,7 +341,7 @@ function WindowEditorBody({ taskId, script, auditionVoice, onSaved }: WindowEdit
         {!script.draft_complete && !confirmed ? <p>当前为部分稿，已存 {page?.total_count ?? script.sections_total_count} 段不代表目标已完整；可分窗修改或追加，尚未核查并采用为完整文案。</p> : null}
         <p>每次只保存当前修改的段落，其他已存段保留。窗口保存不等于整稿核查或采用。</p>
         {auditionVoice && page?.items.length ? <SavedScriptAudition voice={auditionVoice} items={page.items}
-            sourceVersion={JSON.stringify([taskId, script.id, page.updated_at])} /> : null}
+            taskId={taskId} scriptId={script.id} updatedAt={page.updated_at} /> : null}
         {reading ? <p role="status">正在读取文案窗口…</p> : null}
         {notice ? <p role="status">{notice}</p> : null}
         {recovery.error ? <p role="alert">{recovery.error}</p> : null}
