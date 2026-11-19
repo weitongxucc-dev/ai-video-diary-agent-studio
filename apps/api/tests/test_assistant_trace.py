@@ -142,3 +142,16 @@ def test_project_turn_trace_preserves_estimated_usage_as_estimated():
     })
     assert trace["usage_status"] == "estimated"
     assert trace["usage_source"] == "local_estimate"
+
+
+def test_chained_usage_requires_both_invocations_to_report_it():
+    from app.assistant.trace import append_runtime_receipt
+
+    first = {"session_id": "session", "usage_status": "known", "provider_usage": {"totalTokens": 8},
+             "trace_events": [{"type": "turn_end", "step": 1}]}
+    following = {"session_id": "session", "trace_events": [{"type": "turn_start", "step": 1}]}
+    result = append_runtime_receipt(first, following)
+    assert result["usage_status"] == "unknown" and result["provider_usage"] is None
+    assert [event["step"] for event in result["trace_events"]] == [1, 2]
+    result = append_runtime_receipt(first, {**following, "usage_status": "known", "provider_usage": {"totalTokens": 3}})
+    assert result["provider_usage"] == {"totalTokens": 11}

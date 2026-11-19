@@ -10,6 +10,7 @@ from app.config import Settings
 from app.assistant.failures import _fail, AssistantUnavailable, FAILURE_RUNTIME_MISSING, FAILURE_UNKNOWN, FAILURE_TOOL_FAILED
 from app.assistant.projection import _safe_business_failure
 from app.assistant.turn_control import AssistantStopped, TurnControl
+from app.assistant.trace import runtime_receipt_fields
 from app.assistant.sessions import SessionLocks
 from app.assistant.runtime_context import prepare_runtime
 from app.assistant.runtime_checks import runtime_bundle
@@ -190,16 +191,20 @@ def run_turn(
         ) from exc
     finally:
         session_lock.release()
-    if result.returncode:
-        failure = _fail(classify_output(result.stdout, result.stderr or ""))
-        record_service(settings, ok=False, cause=failure.cause, workspace_id=workspace_id)
-        raise failure
+    failure = _fail(classify_output(result.stdout, result.stderr or "")) if result.returncode else None
     try:
         answer, preview = parse_result(result.stdout, preview_kind)
     except AssistantUnavailable as exc:
-        # 不完整回复也可能是密钥被拒或超时打回来的，日志里能看出来就照实记。
-        record_service(settings, ok=False, cause=exc.cause, workspace_id=workspace_id)
-        raise
+        failure = failure or exc
+        runtime = exc.runtime_receipt
+    else:
+        runtime = runtime_receipt_fields(preview)
+    if failure is not None:
+        if runtime:
+            failure.runtime_receipt = {**runtime, "session_id": str(session_id)}
+        record_service(settings, ok=False, cause=failure.cause, workspace_id=workspace_id)
+        raise failure
     # 走到这里说明这一轮真的连了服务、也真的拿到了回复。
     record_service(settings, ok=True, cause="verified", workspace_id=workspace_id)
-    return answer, preview
+    # The Python owner fixed this identity before starting the SDK process.
+    return answer, {**(preview or {"kind": "runtime_receipt"}), "session_id": str(session_id)}

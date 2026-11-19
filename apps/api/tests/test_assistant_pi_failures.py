@@ -7,6 +7,7 @@ from __future__ import annotations
 from assistant_sdk_fixtures import project_event_fixture, sdk_completed, install_sdk_fixture
 
 import json
+from subprocess import CompletedProcess
 from pathlib import Path
 
 import pytest
@@ -62,7 +63,7 @@ def _install_fake_pi(monkeypatch, tmp_path):
     return fake_pi
 
 
-def _turn(monkeypatch, tmp_path, *, returncode=0, stdout="", stderr="", key=KEY):
+def _turn(monkeypatch, tmp_path, *, returncode=0, stdout="", stderr="", key=KEY, sdk_frame=False):
     _install_fake_pi(monkeypatch, tmp_path)
     settings = _settings(tmp_path, key)
 
@@ -76,7 +77,8 @@ def _turn(monkeypatch, tmp_path, *, returncode=0, stdout="", stderr="", key=KEY)
             event = projector.project(line)
             if event:
                 on_event(event)
-        return sdk_completed(cmd, returncode, stdout=stdout, stderr=stderr)
+        result = CompletedProcess if sdk_frame else sdk_completed
+        return result(cmd, returncode, stdout=stdout, stderr=stderr)
 
     monkeypatch.setattr("app.assistant_pi.subprocess.run", fake_run)
     monkeypatch.setattr("app.assistant_pi._run_pi_streaming", fake_stream)
@@ -312,6 +314,23 @@ def test_runtime_usage_without_business_preview_is_a_runtime_receipt():
         "usage_status": "known",
         "trace_events": [{"type": "model_end", "at_ms": 10}],
     }
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_failed_sdk_completion_keeps_measured_runtime_receipt(monkeypatch, tmp_path, returncode):
+    output = json.dumps({
+        "type": "creation_session_result", "protocol": 1, "owner": "pi-coding-agent-sdk",
+        "status": "settled", "answer": "", "failure": "529 provider overloaded",
+        "session_id": "untrusted-process-value", "tool_results": [],
+        "provider_usage": {"input": 8, "output": 2, "totalTokens": 10}, "usage_status": "known",
+        "trace_events": [{"type": "turn_end", "at_ms": 12, "thinking": "private"}],
+    })
+    with pytest.raises(AssistantUnavailable) as failure:
+        _turn(monkeypatch, tmp_path, stdout=output, returncode=returncode, sdk_frame=True)
+    receipt = failure.value.runtime_receipt
+    assert receipt["session_id"] != "untrusted-process-value"
+    assert receipt["provider_usage"]["totalTokens"] == 10
+    assert receipt["trace_events"] == [{"type": "turn_end", "at_ms": 12}]
 
 
 @pytest.mark.parametrize("stdout,stderr", [

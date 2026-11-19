@@ -13,7 +13,9 @@ from app.assistant.failures import AssistantUnavailable
 from app.assistant.turn_control import AssistantStopped
 from app.assistant.task_turn_scope_use_case import TaskTurnSelection
 from app.assistant.projection import _safe_business_failure, _safe_compaction_event
+from app.assistant.trace import runtime_receipt_fields
 from app.creation.media_result_use_case import MediaResultRejected
+from app.creation.task_authorization import TaskAuthorizationDenied
 from app.assistant.turn_admission_use_case import (
     TurnRejected, ReadWorkspace, CleanText, ResolveTurnScope, ReadTaskClipMaterial,
     ProfileSnapshot, KnowledgeSnapshot, AccessTask, RegisterControl, ReadTimelineForTask,
@@ -402,6 +404,7 @@ class TaskAssistantTurnUseCase:
                 self._conversations_for().finish_turn(turn_id, 'failed', failure_message, result={
                     'kind': 'failure', 'message': failure_message,
                     'business_failure': _safe_business_failure(getattr(exc, 'business_failure', None)),
+                    **exc.runtime_receipt,
                 })
                 return
             except AssistantStopped:
@@ -479,7 +482,8 @@ class TaskAssistantTurnUseCase:
             return response
         except AssistantUnavailable as exc:
             yield ForgetControl(turn_id)
-            self._conversations_for().finish_turn(turn_id, 'failed', result={'kind': 'failure', 'message': (yield SafeText(str(exc), workspace_id))})
+            self._conversations_for().finish_turn(turn_id, 'failed', result={'kind': 'failure', 'message': (yield SafeText(str(exc), workspace_id)),
+                **exc.runtime_receipt})
             raise TurnRejected(status_code=503, detail=str(exc)) from exc
         runtime_receipt = preview if isinstance(preview, dict) and preview.get('kind') == 'runtime_receipt' else None
         return (yield from self.finish(task_id, payload, turn_id, reply, None if runtime_receipt else preview, trusted_stage, runtime_receipt=runtime_receipt))
@@ -523,9 +527,7 @@ class TaskAssistantTurnUseCase:
         # SDK evidence belongs to the invocation even when its business receipt
         # fails the final ownership check. Mixed business/runtime receipts carry
         # the same evidence as runtime-only replies.
-        runtime = {key: preview[key] for key in ('provider_usage', 'usage_status', 'trace_events')
-                   if isinstance(preview, dict) and key in preview}
-        runtime.update(runtime_receipt or {})
+        runtime = {**runtime_receipt_fields(preview), **runtime_receipt_fields(runtime_receipt)}
         try:
             return (yield from self._finish(task_id, payload, turn_id, reply, preview,
                                            trusted_stage, runtime_receipt=runtime))
@@ -704,10 +706,12 @@ class TaskAssistantTurnUseCase:
             edit_preview = (yield RenderEditPreview(actual_intent, actual_proposal))
         else:
             edit_preview = None
+        edit_readiness = None
         if edit_request is not None and isinstance(edit_request.result, dict):
             from app.assistant.result_projection import execution_readiness_message
-            readiness_message = execution_readiness_message(edit_request.result.get('execution_readiness'))
-            if readiness_message:
+            edit_readiness = edit_request.result.get('execution_readiness')
+            readiness_message = execution_readiness_message(edit_readiness)
+            if readiness_message and not reply.endswith(readiness_message):
                 reply += ' ' + readiness_message
         completed_local_edit = None
         if edit_request is not None and not any((media_job, edit_preview, execution_status, script_draft,
@@ -721,14 +725,18 @@ class TaskAssistantTurnUseCase:
         result = {'kind': 'task_turn', 'goal_business_actions': self.action_proofs(workspace_id, task_id, turn_id, media_job=media_job, edit_preview=edit_preview, edit_request=edit_request, execution_status=execution_status), 'edit_preview': bool(edit_preview), 'script_draft': script_draft.id if script_draft else None, 'execution_action': execution_action, 'execution_status': execution_status.get('job', {}).get('status') if isinstance(execution_status, dict) and isinstance(execution_status.get('job'), dict) else None, 'topic_candidates': bool(topic_candidates), 'timeline_action': timeline_action, 'storyboard_regeneration': (yield SerializeView(storyboard_regeneration, 'json')) if storyboard_regeneration else None, 'response': (yield SerializeView(response, 'json'))}
         if completed_local_edit is not None:
             result['completed_local_edit'] = completed_local_edit
-        if isinstance(runtime_receipt, dict):
-            for key in ('provider_usage', 'usage_status', 'trace_events'):
-                if key in runtime_receipt:
-                    result[key] = runtime_receipt[key]
+        result.update(runtime_receipt_fields(runtime_receipt))
         self._conversations_for().finish_turn(turn_id, 'completed', reply, result)
         registered_goal = (yield RegisterGoal(turn_id))
         if registered_goal is not None:
-            yield BindGoalScope(registered_goal)
+            try:
+                yield BindGoalScope(registered_goal)
+            except TaskAuthorizationDenied:
+                # The saved edit remains valid. Its original receipt already
+                # explains why background execution cannot continue.
+                if timeline_action != 'apply' or not edit_readiness or edit_readiness.get('status') != 'not_ready':
+                    raise
+                return response
         yield WakeContinuations()
         return response
 

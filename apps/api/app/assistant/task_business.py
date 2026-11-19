@@ -380,6 +380,8 @@ class TaskBusiness:
         return {**frozen,'target_snapshot':snapshot,'selected_object_refs':timeline_object_refs(items,task.id,tracks)}
 
     def finish_goal(self, claim, reply, preview, runtime_receipt=None):
+        from app.assistant.trace import runtime_receipt_fields
+        runtime_receipt = {**runtime_receipt_fields(preview), **runtime_receipt_fields(runtime_receipt)}
         if isinstance(preview, dict) and preview.get('kind') == 'script_window_request':
             return self.finish(claim, reply, script_window_request=preview, runtime_receipt=runtime_receipt)
         if isinstance(preview, dict) and preview.get('kind') == 'quality_continuation':
@@ -478,10 +480,8 @@ class TaskBusiness:
             'input_id':goal.get('source_input_id'),'input_turn_id':goal.get('source_input_turn_id')}
         from fastapi.encoders import jsonable_encoder
         result = {'kind':'task_turn','response':response,'goal_business_actions':proofs}
-        if isinstance(runtime_receipt, dict):
-            for key in ('provider_usage', 'usage_status', 'trace_events'):
-                if key in runtime_receipt:
-                    result[key] = runtime_receipt[key]
+        from app.assistant.trace import runtime_receipt_fields
+        result.update(runtime_receipt_fields(runtime_receipt))
         self.conversations.finish_turn(claim['turn_id'],'completed',reply,
             jsonable_encoder(result),
             write_guard=lambda conn:self.check(binding,Event(),float('inf'),connection=conn,check_version=False),

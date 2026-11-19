@@ -112,8 +112,24 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
         return f"新建方案预检已返回，{len(blockers)} 项需处理；尚未创建任务。"
     if tool_name == "preview_script_draft":
         return "实际文案版本已按原委托采用，尚未生成成片。" if (details.get("preview") or {}).get("adopted") else "文案草稿已保存，尚未采用。"
-    if tool_name == "apply_typed_edit":
-        return "修改保存请求已返回；以原请求回读的时间线版本为准，可整项撤销。"
+    if details.get("kind") == "edit_applied":
+        edit = details.get("result") if isinstance(details.get("result"), dict) else {}
+        operation = edit.get("operation") if isinstance(edit.get("operation"), dict) else {}
+        if operation.get("status") == "applied" and operation.get("result_version_id"):
+            action = {"ChangeCrop": "画面构图", "ReplaceClip": "镜头替换", "TrimClip": "镜头裁切",
+                      "AdjustVisualEffects": "画面效果", "EditAudioTimeline": "音轨调整", "UpdateSubtitleCue": "字幕修改"}.get(operation.get("operation_type"), "修改")
+            return f"{action}已保存到时间线，可在当前作品中查看或撤销。"
+        return "修改回执已返回，仍需沿原请求核对保存结果。"
+    if tool_name == "record_input_understanding":
+        understanding = details.get("understanding") if isinstance(details.get("understanding"), dict) else {}
+        return {
+            "query": "已记录为查询，本次记录未改动作品。",
+            "clarification": "已记录待澄清的要求，尚未应用修改。",
+            "candidate": "已记录为候选尝试，尚未采用。",
+            "effective_modification": "已记录为修改要求，请查看后续保存回执。",
+            "adoption": "已记录为采用要求，请查看后续采用回执。",
+            "independent_goal": "已记录为独立目标，请查看后续任务保存回执。",
+        }.get(understanding.get("kind"), "已记录本次要求，请查看后续操作回执。")
     if tool_name == "preview_typed_edit":
         return "修改预览已生成；草稿尚未应用。"
     if tool_name in {"undo_last_edit", "redo_last_edit", "discard_edit_proposal"}:
@@ -135,6 +151,15 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
         return f"已读取 {len(values)} 项{label}。"
     if tool_name == "read_current_task":
         return "当前任务和所选对象状态已读取。"
+    if tool_name == "read_task_media_jobs" and isinstance(details.get("items"), list):
+        count = len(details["items"])
+        return f"已读取本页 {count} 条媒体作业记录。" if count else "本页未查到媒体作业。"
+    if tool_name == "read_execution_capabilities":
+        return "已读取执行能力与预算来源。"
+    if tool_name == "read_task_edit_capabilities":
+        return "已读取当前作品可用的编辑动作。"
+    if tool_name == "read_task_quality_check":
+        return "已回读原成片的质检状态。"
     if tool_name == "read_clip_candidates":
         return "当前镜头的可用替换候选已读取；尚未修改。"
     if tool_name == "suggest_selected_material_tags":
@@ -143,7 +168,7 @@ def _safe_tool_result_summary(tool_name: str, result: object, failed: bool) -> s
         return "与本次创作有关的偏好已读取。"
     if tool_name == "update_preference_memory":
         return str(details.get("summary") or "长期偏好已保存并回读。")
-    return "业务步骤已完成。"
+    return "工具已返回，请查看对应操作回执。"
 
 
 def _business_event_lines(output: str, seen: set[str] | None = None):

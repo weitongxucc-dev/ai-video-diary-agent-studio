@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from app.assistant.failures import AssistantUnavailable
 from app.assistant.turn_control import AssistantStopped
 from app.assistant.inputs import active_input, latest_consumed_input
+from app.assistant.trace import append_runtime_receipt, runtime_receipt_fields
 
 
 class HomePlanTurnRejected(Exception):
@@ -133,11 +134,12 @@ class HomePlanTurnUseCase:
 
     def execute(self, turn_id: str, message: str, *, material_selection: dict | None = None):
         preview = None
-        runtime_receipt = None
+        runtime_receipt = {}
         try:
             reply, preview = yield RunPlanning()
+            runtime_receipt = runtime_receipt_fields(preview)
             if isinstance(preview, dict) and preview.get("kind") == "runtime_receipt":
-                runtime_receipt, preview = preview, None
+                preview = None
             if isinstance(preview, dict) and preview.get("kind") == "creation_request":
                 saved_request = preview["request"]
                 save_only = re.search(r"只(?:先)?保存|仅保存|不(?:要|用)(?:准备|规划|出)(?:方案|计划)", message)
@@ -145,12 +147,13 @@ class HomePlanTurnUseCase:
                     latest = yield ReadOwnedRequest(saved_request["id"])
                     try:
                         next_reply, next_preview = yield ContinuePlanning(latest)
+                        runtime_receipt = append_runtime_receipt(runtime_receipt, runtime_receipt_fields(next_preview))
                         if isinstance(next_preview, dict) and next_preview.get("kind") == "runtime_receipt":
-                            runtime_receipt = next_preview
                             next_preview = None
                         if isinstance(next_preview, dict) and next_preview.get("kind") == "creation_request":
                             reply, preview = next_reply, next_preview
                     except AssistantUnavailable as exc:
+                        runtime_receipt = append_runtime_receipt(runtime_receipt, exc.runtime_receipt)
                         reply = "制作目标已保存，当前这组方案尚未完成。" + (yield SafeFailureText(str(exc)))
         except AssistantStopped:
             saved = self.get_turn(turn_id)
@@ -166,7 +169,7 @@ class HomePlanTurnUseCase:
         except AssistantUnavailable as exc:
             yield ForgetTurnControl()
             safe_message = yield SafeFailureText(str(exc))
-            self.finish_turn(turn_id, "failed", result={"kind": "failure", "message": safe_message})
+            self.finish_turn(turn_id, "failed", result={"kind": "failure", "message": safe_message, **exc.runtime_receipt})
             raise HomePlanTurnRejected(503, str(exc)) from exc
 
         material_result = None
@@ -202,9 +205,6 @@ class HomePlanTurnUseCase:
             "plan_preview": plan_preview,
             "response": facts,
         }
-        if isinstance(runtime_receipt, dict):
-            for key in ("provider_usage", "usage_status", "trace_events"):
-                if key in runtime_receipt:
-                    result[key] = runtime_receipt[key]
+        result.update(runtime_receipt)
         self.finish_turn(turn_id, "completed", facts["reply"], result)
         return HomeTurnResult(rendered, completed=True)

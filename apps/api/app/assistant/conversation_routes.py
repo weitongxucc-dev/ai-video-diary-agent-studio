@@ -27,7 +27,7 @@ from app.schemas import (
     CreationPlanPreviewRequest,
     CreationPlanPreviewResponse,
 )
-from app.assistant.trace import project_turn_trace, project_usage_ledger
+from app.assistant.trace import project_turn_trace, project_usage_ledger, safe_runtime_trace_events
 
 
 class ConversationHTTPAdapter:
@@ -65,6 +65,10 @@ class ConversationHTTPAdapter:
     def history(self, row: dict, request: Request) -> dict:
         turns = self._conversations_for().list_turns(row['id'])
         for index, turn in enumerate(turns):
+            result = turn.get('result')
+            if isinstance(result, dict) and 'trace_events' in result:
+                turn = {**turn, 'result': {**result, 'trace_events': safe_runtime_trace_events(result['trace_events'])}}
+                turns[index] = turn
             if (turn.get('result') or {}).get('kind') == 'task_turn':
                 context = self._conversations_for().consumed_turn_request_context(turn['id'], row['id'], row['workspace_id'], row['member_id'])
                 if context.get('kind') == 'task' and context.get('task_id') and (row['scope_kind'] != 'task' or context['task_id'] == row['scope_id']):

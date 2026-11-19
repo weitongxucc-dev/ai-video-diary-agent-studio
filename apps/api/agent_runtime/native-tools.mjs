@@ -5,10 +5,10 @@ import {createHash} from 'node:crypto';
  * the existing host pipe. This module never opens task files or spawns a shell.
  * The native owner supplies filesystem, process and device authorization.
  */
-export function createNativeTaskTools({sdk,callNative,turnId,inputId=turnId}) {
+export function createNativeTaskTools({sdk,callNative,turnId,inputId=turnId,userInstruction,needsEditDirection}) {
   if (!callNative || !turnId) throw new Error('原生工具缺少可信宿主与原轮次');
   const calls=new AsyncLocalStorage();
-  let currentInput=inputId,round=0;
+  let currentInput=inputId,currentInstruction=userInstruction,round=0;
   const unresolvedCommands=new Map();
   const unresolvedRegistrations=new Map();
   const unresolvedFiles=new Map();
@@ -202,6 +202,14 @@ export function createNativeTaskTools({sdk,callNative,turnId,inputId=turnId}) {
       const pendingFile=unresolvedFiles.get(call.fileKey);
       if (pendingFile) call.fileReceipt=pendingFile;
       try {
+        const readsOnly = tool.name === 'read' || tool.name === 'read_task_command'
+          || (tool.name === 'open_task_working_context' && !params.input_refs?.length);
+        if (!readsOnly && needsEditDirection?.(currentInstruction)) {
+          const reason = '当前反馈没有指定修改方向，未写入工作文件、执行程序或提交产物。';
+          const error = new Error(reason);
+          error.failure = {error: 'edit_direction_missing', reason, stage: 'input_understanding', submission_effect: 'not_submitted'};
+          throw error;
+        }
         call.context=await request('open_task_working_context',tool.name==='open_task_working_context'?params:{});
         if (pendingFile) {
           const receipt=await request('read_task_command',{request_id:pendingFile.request_id,offset:0,
@@ -238,5 +246,8 @@ export function createNativeTaskTools({sdk,callNative,turnId,inputId=turnId}) {
       }
     }),
   }));
-  return {tools,beginRound:()=>{round++;},rebind:environment=>{currentInput=environment.AI_VIDEO_DIARY_AGENT_INPUT_ID || turnId;}};
+  return {tools,beginRound:()=>{round++;},rebind:environment=>{
+    currentInput=environment.AI_VIDEO_DIARY_AGENT_INPUT_ID || turnId;
+    currentInstruction=environment.AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION;
+  }};
 }

@@ -5,7 +5,8 @@ from app.assistant.projection import _business_event_lines, media_processing_sta
 from app.assistant.business_failure import _safe_business_failure
 from app.assistant.catalogue import SCRIPT_WINDOW_TOOL_OPERATIONS
 from app.assistant.script_window_receipts import project_script_window_request, script_window_message
-from app.assistant.failures import _fail, _classify_output, FAILURE_UNKNOWN, FAILURE_TOOL_FAILED
+from app.assistant.failures import AssistantUnavailable, _fail, _classify_output, FAILURE_UNKNOWN, FAILURE_TOOL_FAILED
+from app.assistant.trace import safe_runtime_trace_events
 
 
 
@@ -598,7 +599,7 @@ def read_sdk_result(output: str, kind: str = "edit_preview") -> tuple[str, dict 
             event = json.loads(line)
         except json.JSONDecodeError as exc:
             raise _fail(FAILURE_UNKNOWN, explanation="创作会话返回了无法读取的协议消息。") from exc
-        if event.get("type") == "creation_session_result":
+        if isinstance(event, dict) and event.get("type") == "creation_session_result":
             if result is not None or event.get("protocol") != 1:
                 raise _fail(FAILURE_UNKNOWN, explanation="创作会话结果协议或身份不可核验。")
             result = event
@@ -609,7 +610,6 @@ def read_sdk_result(output: str, kind: str = "edit_preview") -> tuple[str, dict 
             or any(not isinstance(item, dict) or item.get("type") != "tool_execution_end"
                    for item in result["tool_results"])):
         raise _fail(FAILURE_UNKNOWN, explanation="创作会话没有返回可核验的完成结果，请查询已有操作回执。")
-    answer, preview = project_business_result(result, kind)
     # Keep the provider's measured usage alongside the business result. This
     # is deliberately unknown when the provider omitted usage; no price or
     # token estimate is synthesized here.
@@ -617,21 +617,16 @@ def read_sdk_result(output: str, kind: str = "edit_preview") -> tuple[str, dict 
     measured = {key: value for key, value in (usage or {}).items()
                 if key in {"input", "output", "cacheRead", "cacheWrite", "totalTokens"}
                 and type(value) is int and value >= 0}
-    runtime = None
+    runtime = {}
     if result.get("usage_status") == "known" and measured:
-        runtime = {"kind": "runtime_receipt", "provider_usage": measured, "usage_status": "known"}
-        if preview is not None and isinstance(preview, dict):
-            preview = {**preview, **{key: value for key, value in runtime.items() if key != "kind"}}
-        elif preview is None:
-            preview = runtime
-    trace_events = result.get("trace_events")
-    if isinstance(trace_events, list) and trace_events:
-        safe_trace = [event for event in trace_events[:1000]
-                      if isinstance(event, dict) and isinstance(event.get("type"), str)]
-        if preview is None:
-            preview = {"kind": "runtime_receipt", "trace_events": safe_trace}
-        elif isinstance(preview, dict) and preview.get("kind") == "runtime_receipt":
-            preview = {**preview, "trace_events": safe_trace}
-        elif isinstance(preview, dict):
-            preview = {**preview, "trace_events": safe_trace}
+        runtime.update(provider_usage=measured, usage_status="known")
+    if safe_trace := safe_runtime_trace_events(result.get("trace_events")):
+        runtime["trace_events"] = safe_trace
+    try:
+        answer, preview = project_business_result(result, kind)
+    except AssistantUnavailable as exc:
+        exc.runtime_receipt = runtime
+        raise
+    if runtime:
+        preview = {**(preview or {"kind": "runtime_receipt"}), **runtime}
     return answer, preview
