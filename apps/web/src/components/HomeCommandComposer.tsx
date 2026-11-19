@@ -32,6 +32,7 @@ export type HomeCommandComposerProps = {
   taskContext?: {
     stage: string;
     materialUsage?: MaterialUsageContext;
+    onReplaceClipFromMaterial?: (source: { assetId: string; segmentId: string; startSeconds: number; clipId: string; versionId: string }) => Promise<boolean>;
     timelinePresent?: boolean;
     selectedObjectRefs: string[];
     getPlayheadMs: () => number | null;

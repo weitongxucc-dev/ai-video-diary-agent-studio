@@ -482,6 +482,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         : null;
 
   const selectionState = useAssistantSelection();
+  const replacementTarget = useRef<string | null>(null);
+  replacementTarget.current = selectedEditContext?.kind === "clip" ? selectedEditContext.id : null;
   const selectionSnapshot = JSON.stringify([selectionState?.version, selectionState?.items]);
   const latestSelectionSnapshot = useRef(selectionSnapshot);
   latestSelectionSnapshot.current = selectionSnapshot;
@@ -1720,6 +1722,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     <AppShell editingPane={hasTimeline && !isEditor ? activeView : undefined} closeBlockedReason={recordingOpen ? "录音窗口仍打开，请先保存或结束录音，再关闭作品页签。" : undefined} assistantContext={{ task, legacyHistory, onTaskUpdated: () => { void refresh(true); }, taskContext: {
       timelinePresent: hasTimeline,
       materialUsage: workspace.montage && task.current_timeline_version_id ? { taskId: task.id, taskName: task.name, versionId: task.current_timeline_version_id, clips: workspace.montage.clips, selectedClipId } : undefined,
+      onReplaceClipFromMaterial: selectedEditContext?.kind === "clip" ? async source => {
+        if (currentTaskId.current !== task.id || currentWorkspace.current.task.current_timeline_version_id !== source.versionId ||
+          replacementTarget.current !== source.clipId) return false;
+        return saveMetadataEdit({ operation_type: "ReplaceClip", clip_id: source.clipId,
+          asset_id: source.assetId, segment_id: source.segmentId, source_start_seconds: source.startSeconds });
+      } : undefined,
       stage: activeView,
       selectedObjectRefs: selectedTaskReference ? [selectedTaskReference.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : [],
       getPlayheadMs: () => playheadRef.current === null ? null : Math.round(playheadRef.current * 1000),
@@ -1801,7 +1809,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
         {pendingVoiceSelection ? <p role="status">声音采用请求等待核对。<Button variant="outline" type="button" disabled={busy !== null} onClick={() => void handleNarrationVoice("query")}>查询声音采用结果</Button>{voiceSelectionNotFound === pendingVoiceSelection.request_id ? <Button variant="outline" type="button" disabled={busy !== null} onClick={() => void handleNarrationVoice("replay")}>继续原声音采用请求</Button> : null}</p> : null}
         {activeView === "narration" && task.stage === "narration" && !workspace.narration ? (
-          <NarrationPreparation taskId={task.id} canReviseScript={Boolean(task.can_revise_script)} scriptConfirmed={latestScript?.selection_status === "confirmed"} scriptSectionCount={workspace.scripts.find(script => script.id === task.confirmed_script_id)?.sections_total_count ?? 0} hasSelectedVoice={Boolean(workspace.plan.selected_voice)} voices={workspace.available_voices} selectedVoiceId={selectedVoiceId} recordings={recordings} recordingsError={recordingsError} busy={busy ?? (pendingVoiceSelection ? "voice-select" : null)}
+          <NarrationPreparation taskId={task.id} canReviseScript={Boolean(task.can_revise_script)} scriptConfirmed={latestScript?.selection_status === "confirmed"} scriptSectionCount={workspace.scripts.find(script => script.id === task.confirmed_script_id)?.sections_total_count ?? 0} boundVoice={workspace.plan.selected_voice} deliveryLanguage={workspace.plan.language} voices={workspace.available_voices} selectedVoiceId={selectedVoiceId} recordings={recordings} recordingsError={recordingsError} busy={busy ?? (pendingVoiceSelection ? "voice-select" : null)}
             onRecord={() => setRecordingOpen(true)} onReviseScript={() => openView("script")} onAdoptRecording={recording => void adoptRecordedVoice(recording)} onVoiceChange={setSelectedVoiceId}
             onUseVoice={() => void handleNarrationVoice()} />
         ) : null}
