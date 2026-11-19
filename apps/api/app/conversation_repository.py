@@ -1641,8 +1641,8 @@ class ConversationRepository:
                 and not any(response.get(key) for key in ('media_job', 'edit_preview', 'execution_status', 'script_draft',
                     'timeline_restore', 'quality_continuation', 'script_window_request', 'segment_revision',
                     'storyboard_regeneration', 'script_tool', 'topic_candidates'))):
-            from app.assistant.local_edit_completion import completed_music_gain_edit
-            completed = completed_music_gain_edit(conn, turn_id, response.get('edit_request'))
+            from app.assistant.local_edit_completion import completed_audio_gain_edit
+            completed = completed_audio_gain_edit(conn, turn_id, response.get('edit_request'))
             if completed is not None and completed == result.get('completed_local_edit'):
                 return None  # The finite save and readback are already complete; no model round is needed.
         goal={"original_turn_id":root_id,"original_instruction":authorization["original_instruction"] if authorization else root_row["user_message"],
@@ -1656,10 +1656,10 @@ class ConversationRepository:
         self._write_goal(conn,{"id":root_id},goal)
         return goal
 
-    def completed_music_gain_edit(self, turn_id, locator):
-        from app.assistant.local_edit_completion import completed_music_gain_edit
+    def completed_audio_gain_edit(self, turn_id, locator):
+        from app.assistant.local_edit_completion import completed_audio_gain_edit
         with self._connect() as conn:
-            return completed_music_gain_edit(conn, turn_id, locator)
+            return completed_audio_gain_edit(conn, turn_id, locator)
 
     def get_task_goal(self, turn_id: str) -> dict | None:
         with self._connect() as conn:

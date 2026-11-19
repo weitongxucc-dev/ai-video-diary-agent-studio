@@ -731,7 +731,7 @@ class TaskAssistantTurnUseCase:
         if edit_request is not None and not any((media_job, edit_preview, execution_status, script_draft,
                 timeline_restore, quality_continuation, script_window_request, segment_revision,
                 storyboard_regeneration, script_tool, topic_candidates)):
-            completed_local_edit = self._conversations_for().completed_music_gain_edit(turn_id, edit_request.model_dump(mode='json'))
+            completed_local_edit = self._conversations_for().completed_audio_gain_edit(turn_id, edit_request.model_dump(mode='json'))
             if completed_local_edit is not None:
                 reply = (yield SafeText(completed_local_edit['summary'], workspace_id))
         response = (yield BuildTaskResponse({'quality_continuation': quality_continuation, 'script_window_request': script_window_request, 'storyboard_regeneration': storyboard_regeneration, 'segment_revision': segment_revision, 'timeline_restore': timeline_restore, 'script_tool': script_tool, 'edit_request': edit_request, 'reply': reply, 'provider': (yield ReadSettings(workspace_id)).effective_llm_provider, 'model': (yield ReadSettings(workspace_id)).effective_llm_model, 'edit_preview': edit_preview, 'script_draft': script_draft, 'execution_action': execution_action, 'execution_status': execution_status, 'topic_candidates': topic_candidates, 'timeline_action': timeline_action, 'media_job': media_job, 'turn_id': turn_id, 'draft_version': payload.expected_draft_version + 1}))
