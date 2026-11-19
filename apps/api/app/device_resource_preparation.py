@@ -22,7 +22,8 @@ import time
 import psutil
 
 from app.audio_timeline import PCM_CONTAINER_ALLOWANCE_BYTES
-from app.cpu_preparation_video import preparation_video_command, preparation_delivery_command
+from app.cpu_preparation_video import (PRESENTER_DELIVERY_CONTRACT, measure_presenter_delivery,
+    preparation_video_command, preparation_delivery_command)
 from app.artwork_resource_preparation import (extend_render_budget, measure_template_inputs,
     measure_native_inputs, extend_native_budget)
 from app.device_resource_configuration import backend_identity
@@ -63,6 +64,7 @@ class CpuPreparationShape:
     source_width_px: int | None = None
     source_height_px: int | None = None
     visual_effects: dict | None = None
+    presenter_clip_count: int = 0
 
     def __post_init__(self):
         if any(type(value) is not int or value <= 0 for value in (
@@ -75,6 +77,12 @@ class CpuPreparationShape:
             raise ValueError('HTML动画图层数必须属于总叠加图层数')
         if type(self.native_command) is not bool:
             raise ValueError('程序化执行准备需要明确的布尔选择')
+        if type(self.presenter_clip_count) is not int or not 0 <= self.presenter_clip_count < self.clip_count:
+            raise ValueError('人物组合准备需要保留至少一个素材镜头，人物镜头数必须小于总镜头数')
+        if self.presenter_clip_count and (self.frame_rate != 30 or self.overlay_count or self.native_command):
+            raise ValueError('人物组合准备覆盖30帧、带字幕的直接切换，不包含额外图层或原生程序')
+        if self.presenter_clip_count and self.source_bytes is None:
+            raise ValueError('人物组合准备需要已知的生产输入总字节数')
         if self.source_bytes is not None and (type(self.source_bytes) is not int or self.source_bytes <= 0):
             raise ValueError('Known source bytes must be a positive exact file size')
         if (self.source_width_px, self.source_height_px) != (None, None) and any(
@@ -214,6 +222,8 @@ class DeviceResourcePreparation:
             values.pop('template_count')
         if not shape.native_command:
             values.pop('native_command')
+        if not shape.presenter_clip_count:
+            values.pop('presenter_clip_count')
         for key in ('source_width_px', 'source_height_px', 'visual_effects'):
             if values[key] is None:
                 values.pop(key)
@@ -269,24 +279,32 @@ class DeviceResourcePreparation:
         if memory.pressure == 'critical' or memory.available_bytes <= preparation_reserve:
             raise DeviceProfileUnavailable('当前内存压力过高；请等待或关闭占用较大的应用后重新准备。')
         memory_limit = math.floor((memory.available_bytes - preparation_reserve) * self.policy.probe_headroom_fraction)
-        probe_seconds = min(shape.duration_seconds, self.policy.probe_seconds)
-        if shape.clip_count > math.ceil(probe_seconds * shape.frame_rate):
+        presenter = bool(shape.presenter_clip_count)
+        probe_seconds = (max(1, round(shape.duration_seconds * 30)) / 30 if presenter
+                         else min(shape.duration_seconds, self.policy.probe_seconds))
+        frames = round(probe_seconds * 30) if presenter else math.ceil(probe_seconds * shape.frame_rate)
+        if shape.clip_count > frames:
             raise DeviceProfileUnavailable('本次单位包含的镜头多于有限小样本帧数；请拆小执行单元或选择成本更高的准备策略。')
         # Raw RGBA and float PCM bytes provide a declared finite output envelope.
         # Encoded output is still checked; this formula is not an encoder guarantee.
         raw_video = math.ceil(shape.width_px * shape.height_px * 4 * shape.frame_rate * probe_seconds)
         raw_audio = math.ceil(shape.sample_rate * shape.channels * 4 * probe_seconds)
         output_limit = raw_video + raw_audio
-        cpu = RuntimeCpuPolicy(mode='darwin_nice', nice=self.policy.cpu_nice, evidence_reference=self.policy.id)
+        # The production presenter render uses the dedicated FFmpeg execution
+        # class. Measure its full frame clock in that same class.
+        timeout = self.policy.timeout_seconds * (max(1, probe_seconds / self.policy.probe_seconds) if presenter else 1)
+        cpu = None if presenter else RuntimeCpuPolicy(
+            mode='darwin_nice', nice=self.policy.cpu_nice, evidence_reference=self.policy.id)
         render = CpuRenderBudget(probe_seconds, shape.width_px * shape.height_px * probe_seconds,
             shape.width_px, shape.height_px, output_limit, shape.clip_count, shape.overlay_count, output_limit, 1,
-            self.policy.timeout_seconds, memory_limit, output_limit, max((psutil.cpu_count() or 1) + 2,
+            timeout, memory_limit, output_limit, max((psutil.cpu_count() or 1) + 2,
                 max(3, shape.clip_count, shape.audio_input_count, shape.overlay_count) * self.policy.probe_threads_per_input
                 + self.policy.probe_controller_threads + self.policy.probe_output_stream_threads), cpu)
         render = extend_render_budget(shape, render, output_limit)
         cadence = self.policy.poll_seconds + self.policy.sample_seconds
         budget = HostBudget(100, reserve, None, output_limit, None, output_limit,
-            sample_seconds=self.policy.sample_seconds, cpu_render=render,
+            sample_seconds=self.policy.sample_seconds, cpu_render=None if presenter else render,
+            presenter_cpu_render=render if presenter else None,
             memory_policy=MemoryPolicy('darwin', cadence * 3, cadence * 2, self.policy.id))
         try:
             budget = replace(budget, **inherited)
@@ -297,18 +315,21 @@ class DeviceResourcePreparation:
             reserve_bytes=budget.min_free_disk_bytes, verify_writable=True)
         if not all(item['passed'] for item in disks.values()):
             raise DeviceProfileUnavailable('实际输出卷或临时卷空间不足；请释放对应卷空间或更改该目录后重新准备。')
-        identities = {name: backend_identity(name, render, settings=self.settings)
-                      for name in ('cpu_render', 'cpu_audio', 'clip_preview')}
+        operations = ('presenter_cpu_render',) if presenter else ('cpu_render', 'cpu_audio', 'clip_preview')
+        identities = {name: backend_identity(name, render, settings=self.settings) for name in operations}
         if shape.native_command:
             from app.native_preparation_probe import require_native_dependencies
             require_native_dependencies(self.settings)
             identities['native_command'] = backend_identity('native_command', None, settings=self.settings)
         if not all(identities.values()):
             raise DeviceProfileUnavailable('基础媒体工具身份无法核验；请修复应用工具后重新准备。')
+        planned_shape = asdict(shape)
+        if not presenter:
+            planned_shape.pop('presenter_clip_count')
         plan = {'format_version': 1, 'id': plan_id, 'device': asdict(self.device),
             'request_binding': request_binding, 'actor_identity': actor.identity_payload(),
             'workspace_id': actor.workspace_id, 'member_id': actor.member_id,
-            'shape': asdict(shape), 'policy': asdict(self.policy), 'bootstrap_budget': asdict(budget),
+            'shape': planned_shape, 'policy': asdict(self.policy), 'bootstrap_budget': asdict(budget),
             'backends': identities, 'write_paths': self.write_paths, 'ffmpeg': ffmpeg, 'ffprobe': ffprobe,
             'host_observation': {'pressure': memory.pressure, 'available_bytes': memory.available_bytes,
                 'host_rss_bytes': host_rss, 'recovery_allowance_bytes': reserve,
@@ -347,11 +368,18 @@ class DeviceResourcePreparation:
             plan['workspace_id'], plan['member_id']) and actor.identity_payload() == plan['actor_identity'] and self.verify_identity(actor) == 'ready'
 
     def _resources(self, plan):
-        shape, limits = plan['shape'], plan['bootstrap_budget']['cpu_render']
-        return {'kind': 'creation_render', 'execution_mode': 'cpu_ffmpeg', 'duration_seconds': plan['probe_seconds'],
+        shape = plan['shape']
+        operation = self._render_operation(plan)
+        limits = plan['bootstrap_budget'][operation]
+        kind = 'creation_presenter_render' if operation == 'presenter_cpu_render' else 'creation_render'
+        return {'kind': kind, 'execution_mode': 'cpu_ffmpeg', 'duration_seconds': plan['probe_seconds'],
             'width_px': shape['width_px'], 'height_px': shape['height_px'], 'input_bytes': 0,
             'clip_count': shape['clip_count'], 'overlay_count': shape.get('overlay_count', 0), 'max_output_bytes': limits['max_output_bytes'],
             'threads': limits['max_threads'], 'timeout_seconds': limits['max_timeout_seconds']}
+
+    @staticmethod
+    def _render_operation(plan):
+        return 'presenter_cpu_render' if plan['shape'].get('presenter_clip_count') else 'cpu_render'
 
     def verify_submission(self, intent, actor):
         plan = self._plan(intent.owner_id)
@@ -399,8 +427,10 @@ class DeviceResourcePreparation:
 
     def bootstrap_budget(self, plan_id):
         from app.device_resource_profile import _budget
-        data = dict(self._plan(plan_id)['bootstrap_budget'])
-        data['cpu_render'] = _budget(CpuRenderBudget, data['cpu_render'])
+        plan = self._plan(plan_id)
+        data = dict(plan['bootstrap_budget'])
+        operation = self._render_operation(plan)
+        data[operation] = _budget(CpuRenderBudget, data[operation])
         data['memory_policy'] = MemoryPolicy(**data['memory_policy'])
         return HostBudget(**data)
 
@@ -409,10 +439,11 @@ class DeviceResourcePreparation:
         shape = CpuPreparationShape(**plan['shape'])
         duration = plan['probe_seconds']
         started = time.monotonic()
-        deadline = started + plan['policy']['timeout_seconds']
+        limits = plan['bootstrap_budget'][self._render_operation(plan)]
+        deadline = started + limits['max_timeout_seconds']
         observations = []
         native_receipt = None
-        limit = plan['bootstrap_budget']['cpu_render']['max_output_bytes']
+        limit = limits['max_output_bytes']
         def run(argv, paths=(), *, env=None):
             result = run_granted_command(scheduler, grant, argv,
                 timeout_seconds=deadline - time.monotonic(), max_stdout_bytes=65536, max_stderr_bytes=65536,
@@ -428,25 +459,31 @@ class DeviceResourcePreparation:
         try:
             with tempfile.TemporaryDirectory(prefix='cpu-preparation-', dir=self.write_paths['temporary']) as temporary:
                 video, audio = Path(temporary) / 'sample.mp4', Path(temporary) / 'sample.wav'
-                command, graphic_paths = preparation_video_command(plan, shape, video)
-                measure_template_inputs(shape, video, duration, command, run)
-                run(command, (video, *graphic_paths))
+                presenter = bool(shape.presenter_clip_count)
+                if not presenter:
+                    command, graphic_paths = preparation_video_command(plan, shape, video)
+                    measure_template_inputs(shape, video, duration, command, run)
+                    run(command, (video, *graphic_paths))
                 command = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-filter_complex_threads', '1']
                 graph = ''.join(f'sine=frequency={440 + index}:sample_rate={shape.sample_rate}:'
                     f'duration={duration}[a{index}];' for index in range(shape.audio_input_count))
                 graph += ''.join(f'[a{i}]' for i in range(shape.audio_input_count)) + f'amix=inputs={shape.audio_input_count}:normalize=0[a]'
                 command += ['-filter_complex', graph, '-map', '[a]', '-t', str(duration), '-ar', str(shape.sample_rate),
                     '-ac', str(shape.channels), '-threads', '1', '-c:a', 'pcm_f32le', str(audio)]
-                run(command, (video, audio))
-                command, delivery_paths = preparation_delivery_command(plan, shape, video, audio)
-                delivery = run(command, (video, audio, *graphic_paths, *delivery_paths))
-                delivery_probe = {'contract': 'montage-picture-audio-caption/v1',
-                    'sha256': hashlib.sha256(delivery_paths[0].read_bytes()).hexdigest(),
-                    'bytes': delivery_paths[0].stat().st_size,
-                    'observed_resources': asdict(delivery.observed_resources)}
-                native_receipt = measure_native_inputs(shape, video, duration, self.settings, run)
+                run(command, (audio,) if presenter else (video, audio))
+                if presenter:
+                    delivery_probe = measure_presenter_delivery(plan, shape, audio, run, max_bytes=limit)
+                else:
+                    command, delivery_paths = preparation_delivery_command(plan, shape, video, audio)
+                    delivery = run(command, (video, audio, *graphic_paths, *delivery_paths))
+                    delivery_probe = {'contract': 'montage-picture-audio-caption/v1',
+                        'sha256': hashlib.sha256(delivery_paths[0].read_bytes()).hexdigest(),
+                        'bytes': delivery_paths[0].stat().st_size,
+                        'observed_resources': asdict(delivery.observed_resources)}
+                    native_receipt = measure_native_inputs(shape, video, duration, self.settings, run)
                 media = {}
-                for name, path in (('video', video), ('audio', audio)):
+                media_paths = (('audio', audio),) if presenter else (('video', video), ('audio', audio))
+                for name, path in media_paths:
                     result = run([plan['ffprobe'], '-v', 'error', '-show_entries',
                         'format=duration:stream=codec_type,width,height,sample_rate,channels', '-of', 'json', str(path)])
                     payload = json.loads(result.stdout)
@@ -536,13 +573,52 @@ class DeviceResourcePreparation:
     def _publish(self, plan, receipt, identities):
         shape, policy = CpuPreparationShape(**plan['shape']), CpuPreparationPolicy(**plan['policy'])
         original = self.bootstrap_budget(plan['id'])
+        operation = self._render_operation(plan)
+        bootstrap_render = getattr(original, operation)
         samples = receipt['observed_resources']
         if not samples or any(not item['rss_sample_complete'] or not item['threads_sample_complete'] for item in samples):
             raise DeviceProfileUnavailable('完整进程资源采样缺失；不能把未知值当作零。')
-        rss = min(original.cpu_render.additional_memory_bytes,
+        rss = min(bootstrap_render.additional_memory_bytes,
             math.ceil(max(item['peak_rss_bytes'] for item in samples) * policy.measured_margin))
-        threads = min(original.cpu_render.max_process_threads,
+        threads = min(bootstrap_render.max_process_threads,
             math.ceil(max(item['peak_threads'] for item in samples) * policy.measured_margin))
+        if shape.presenter_clip_count:
+            presenter = self._presenter_render_budget(plan, receipt, shape, policy, bootstrap_render, rss, threads)
+            budget = replace(original, presenter_cpu_render=presenter,
+                max_unit_input_bytes=max(original.max_unit_input_bytes, presenter.max_input_bytes))
+            owned = {operation}
+        else:
+            budget = self._base_cpu_budget(plan, receipt, shape, policy, original, rss, threads)
+            owned = {'cpu_render', 'cpu_audio', 'clip_preview'}
+            if shape.native_command:
+                owned.add('native_command')
+        return self._publish_profile(plan, receipt, identities, budget, owned)
+
+    @staticmethod
+    def _presenter_render_budget(plan, receipt, shape, policy, bootstrap_render, rss, threads):
+        delivery = receipt.get('delivery_probe', {})
+        frames = round(plan['probe_seconds'] * 30)
+        if (delivery.get('contract') != PRESENTER_DELIVERY_CONTRACT
+                or delivery.get('clip_count') != shape.clip_count
+                or delivery.get('presenter_clip_count') != shape.presenter_clip_count
+                or delivery.get('frames') != frames
+                or delivery.get('codec') != 'h264' or delivery.get('serial_codec') != 'ffv1'
+                or delivery.get('audio_codec') != 'aac'
+                or set(delivery.get('inputs', {})) != {'presenter', 'material'}
+                or any(row['codec'] != 'h264' for row in delivery['inputs'].values())):
+            raise DeviceProfileUnavailable('人物组合 CPU 样片缺少完整的解码、镜头或交付记录。')
+        duration = max(shape.duration_seconds, frames / 30)
+        temporary_bytes = delivery['temporary_bytes'] + receipt['media']['audio']['bytes']
+        return replace(bootstrap_render, max_duration_seconds=duration,
+            max_pixel_seconds=shape.width_px * shape.height_px * duration,
+            max_input_bytes=shape.source_bytes,
+            max_output_bytes=math.ceil(delivery['bytes'] * policy.measured_margin),
+            max_timeout_seconds=math.ceil(receipt['elapsed_seconds'] * policy.measured_margin),
+            additional_memory_bytes=rss, additional_disk_bytes=math.ceil(temporary_bytes * policy.measured_margin),
+            max_process_threads=threads)
+
+    @staticmethod
+    def _base_cpu_budget(plan, receipt, shape, policy, original, rss, threads):
         video_bytes = math.ceil(shape.width_px * shape.height_px * 4 * shape.frame_rate * shape.duration_seconds)
         # The CPU delivery contract rounds picture to whole 30fps frames; its
         # PCM master is also a later mix input. Prepare both sides of that clock.
@@ -573,20 +649,20 @@ class DeviceResourcePreparation:
         budget = replace(original, cpu_render=render, cpu_audio=audio,
             clip_preview=replace(render, max_pixel_seconds=render.max_pixel_seconds * 2),
             max_unit_input_bytes=max(original.max_unit_input_bytes, render.max_input_bytes))
-        budget = extend_native_budget(shape, budget, receipt, plan, delivery_duration, original, policy)
+        return extend_native_budget(shape, budget, receipt, plan, delivery_duration, original, policy)
+
+    def _publish_profile(self, plan, receipt, identities, budget, owned):
         with _profile_lock(self.profile_path):
             old = _read(self.profile_path) if self.profile_path.exists() else None
             if old and old['profile_id'] == plan['id']:
-                return load_device_resource_profile(self.profile_path, device=self.device, backend_identities=identities)
+                return load_device_resource_profile(self.profile_path, device=self.device,
+                    backend_identities=lambda name, operation: backend_identity(name, operation, settings=self.settings))
             if (old['revision'] if old else None, _digest(old) if old else None) != (plan['expected_revision'], plan['expected_profile_digest']):
                 raise DeviceProfileUnavailable('设备档已由另一次准备更新；本次回执已保留，不能覆盖更新版本。')
             if old and old['device'] != asdict(self.device):
                 raise DeviceProfileUnavailable('原设备档属于另一设备；不能覆盖。')
             document = deepcopy(old) if old else {'format_version': 1, 'device': asdict(self.device), 'backends': {}, 'evidence': {}, 'budget': {}}
             document.update(profile_id=plan['id'], revision=(old['revision'] + 1 if old else 1))
-            owned = {'cpu_render', 'cpu_audio', 'clip_preview'}
-            if shape.native_command:
-                owned.add('native_command')
             prepared_budget = asdict(budget)
             # Only the prepared operation budgets and per-unit input capacity
             # change. Existing host policy is inherited before the probe itself;
@@ -603,16 +679,20 @@ class DeviceResourcePreparation:
                 evidence = {'format_version': 1, 'device': asdict(self.device),
                     'backend_identity': None if name == 'host' else identities[name], 'budget_digest': _digest(payload),
                     'method': ('native-task-shell-preparation/v1' if name == 'native_command'
-                        else policy.id + ':synthetic-granted-cpu'),
+                        else PRESENTER_DELIVERY_CONTRACT if name == 'presenter_cpu_render'
+                        else plan['policy']['id'] + ':synthetic-granted-cpu'),
                     'input_range': {'requested_unit': plan['shape'], 'sample_seconds': plan['probe_seconds'],
                         'scope': 'synthetic_cpu_only', 'policy': plan['policy'], 'host_observation': plan['host_observation'],
                         'host_policy_source': plan.get('host_policy_source')},
                     'observations': {'request_id': receipt['request_id'], 'permit_generation': receipt['generation'],
                         'input_digest': receipt['input_digest'], 'media': receipt['media'],
-                        'elapsed_seconds': receipt['elapsed_seconds'], 'process_samples': samples}}
+                        'elapsed_seconds': receipt['elapsed_seconds'], 'process_samples': receipt['observed_resources']}}
                 if name == 'native_command':
                     evidence['input_range']['scope'] = 'synthetic_native_task_shell'
                     evidence['observations']['native_command'] = receipt['native_command']
+                if name == 'presenter_cpu_render':
+                    evidence['input_range']['scope'] = 'synthetic_presenter_h264_cpu'
+                    evidence['observations']['delivery_probe'] = receipt['delivery_probe']
                 record_id = f"{plan['id']}_{name}"
                 digest = _atomic_json(self.profile_path.parent / 'resource-profile-evidence' / f'{record_id}.json', evidence)
                 document['evidence'][name] = {'record_id': record_id, 'sha256': digest}

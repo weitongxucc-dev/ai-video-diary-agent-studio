@@ -1,9 +1,123 @@
-"""Construct the measured CPU video probe, including actual RGBA compositing."""
+"""Construct measured CPU video probes for the production render paths."""
+import hashlib
+import json
 import math
 
 from PIL import Image
 
 from app.visual_effects import color_filters, framing_filter, geometry_filters
+
+
+PRESENTER_DELIVERY_CONTRACT = 'presenter-h264-serial-ffv1-delivery/v1'
+
+
+def _media_digest(path):
+    with path.open('rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
+def _probe_video(plan, run, path, *, codec, size, frames, audio_codec=None):
+    counter = 'frames' if audio_codec else 'packets'
+    count_field = f'nb_read_{counter}'
+    result = run([plan['ffprobe'], '-v', 'error', '-threads', '1', f'-count_{counter}',
+        '-show_entries', f'stream=codec_type,codec_name,width,height,{count_field}:format=duration',
+        '-of', 'json', str(path)])
+    if result.stderr:
+        raise ValueError('人物组合 CPU 样片媒体检查报告了解码错误')
+    probe = json.loads(result.stdout)
+    video = next(item for item in probe['streams'] if item['codec_type'] == 'video')
+    duration = float(probe['format']['duration'])
+    if (video['codec_name'] != codec or (video['width'], video['height']) != size
+            or int(video[count_field]) != frames
+            or not math.isfinite(duration) or abs(duration - frames / 30) > 1 / 30 + 1e-6):
+        raise ValueError(f'人物组合 CPU 样片未达到 {codec} 尺寸或帧数')
+    if audio_codec and not any(item['codec_type'] == 'audio' and item['codec_name'] == audio_codec
+                               for item in probe['streams']):
+        raise ValueError('人物组合 CPU 样片缺少预期音轨')
+    return {'codec': codec, 'width_px': size[0], 'height_px': size[1], 'frames': frames,
+        'duration_seconds': duration, 'bytes': path.stat().st_size, 'sha256': _media_digest(path)}
+
+
+def measure_presenter_delivery(plan, shape, audio, run, *, max_bytes):
+    """Use encoded H.264 inputs and the production FFV1 and delivery commands."""
+    from app.audio_timeline import narration_audio_timeline
+    from app.montage import (CreationTaskMontagePlan, MontageClip, MontageRenderer,
+        _write_frame_subtitle_input, bounded_render_command, serial_picture_command)
+
+    root = audio.parent
+    size = shape.width_px, shape.height_px
+    material_size = shape.source_width_px or size[0], shape.source_height_px or size[1]
+    total_frames = round(plan['probe_seconds'] * 30)
+    frame_counts = [total_frames // shape.clip_count + (index < total_frames % shape.clip_count)
+                    for index in range(shape.clip_count)]
+    groups = (('presenter', size, frame_counts[:shape.presenter_clip_count]),
+              ('material', material_size, frame_counts[shape.presenter_clip_count:]))
+    paths = [audio]
+    inputs, clips, shot_paths, caption_spans = {}, [], [], []
+    picture_lines = ['ffconcat version 1.0']
+    caption = root / 'presenter-caption.png'
+    with Image.new('RGBA', size, (255, 255, 255, 32)) as bitmap:
+        bitmap.save(caption)
+    paths.append(caption)
+    position = 0
+    for kind, source_size, counts in groups:
+        source = root / f'{kind}-h264.mp4'
+        fixture_frames = max(counts) + 1
+        fixture_filter = f'testsrc2=size={source_size[0]}x{source_size[1]}:rate=30'
+        if kind == 'presenter':
+            fixture_filter += ',hue=s=0.5'
+        paths.append(source)
+        run([plan['ffmpeg'], '-v', 'error', '-y', '-filter_threads', '1', '-f', 'lavfi',
+            '-i', fixture_filter, '-frames:v', str(fixture_frames), '-an', '-c:v', 'libx264',
+            '-threads', '1', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+            '-fs', str(max_bytes), str(source)], tuple(paths))
+        inputs[kind] = _probe_video(plan, run, source, codec='h264', size=source_size, frames=fixture_frames)
+        for frames in counts:
+            index = len(clips)
+            target = root / f'presenter-probe-{index:03}.nut'
+            clip = MontageClip(f'probe-{index}', 'probe', kind, None, str(source),
+                0, frames / 30, position / 30, (position + frames) / 30, 1, [], False,
+                person_render_id='probe-person' if kind == 'presenter' else None,
+                visual_effects=shape.visual_effects or {})
+            remaining = max_bytes - sum(path.stat().st_size for path in paths)
+            if remaining <= 0:
+                raise ValueError('人物组合 CPU 样片已达到中间文件磁盘上限')
+            command = serial_picture_command(clip, source, target, size=size, frames=frames,
+                threads=1, max_bytes=remaining)
+            command[0] = plan['ffmpeg']
+            paths.append(target)
+            run(command, tuple(paths))
+            _probe_video(plan, run, target, codec='ffv1', size=size, frames=frames)
+            shot_paths.append(target)
+            picture_lines.extend((f'file {target.name}', f'duration {frames / 30:.10f}'))
+            caption_spans.append((position, position + frames))
+            clips.append(clip)
+            position += frames
+
+    pictures = root / 'presenter-probe.ffconcat'
+    pictures.write_text('\n'.join(picture_lines) + '\n', encoding='utf-8')
+    captions, offset = _write_frame_subtitle_input(caption_spans, [caption] * len(caption_spans),
+        root, size=size, frame_count=total_frames)
+    caption_paths = captions, root / 'subtitle-transparent.png'
+    duration = total_frames / 30
+    montage = CreationTaskMontagePlan(id='presenter-cpu-preparation', workspace_id=plan['workspace_id'],
+        task_id='presenter-cpu-preparation', script_id='probe', script_title='Presenter CPU preparation',
+        status='ready', cues=[], clips=clips, duration_seconds=duration, low_confidence_clip_count=0,
+        audio_timeline=narration_audio_timeline('narration://artifact/presenter-cpu-preparation', duration))
+    output = root / 'presenter-delivery.mp4'
+    command = MontageRenderer(root).build_command(montage, audio, output, [], subtitle_intervals=[],
+        subtitle_sequence=(captions, offset), picture_sequence=pictures)
+    command[0] = plan['ffmpeg']
+    temporary_bytes = sum(path.stat().st_size for path in (caption, *caption_paths, pictures, *shot_paths))
+    bounded_paths = (*paths, pictures, *caption_paths)
+    output_limit = max_bytes - sum(path.stat().st_size for path in bounded_paths)
+    if output_limit <= 0:
+        raise ValueError('人物组合 CPU 样片已达到交付文件磁盘上限')
+    run(bounded_render_command(command, 1, output_limit), (*bounded_paths, output))
+    media = _probe_video(plan, run, output, codec='h264', size=size, frames=total_frames, audio_codec='aac')
+    return {**media, 'contract': PRESENTER_DELIVERY_CONTRACT, 'inputs': inputs,
+        'clip_count': len(shot_paths), 'presenter_clip_count': shape.presenter_clip_count,
+        'serial_codec': 'ffv1', 'audio_codec': 'aac', 'temporary_bytes': temporary_bytes}
 
 
 def preparation_video_command(plan, shape, video):

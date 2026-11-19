@@ -74,6 +74,7 @@ class DevicePreparationShapeRequest(BaseModel):
     source_width_px: int | None = Field(default=None, gt=0, multiple_of=2)
     source_height_px: int | None = Field(default=None, gt=0, multiple_of=2)
     visual_effects: VisualEffects | None = None
+    presenter_clip_count: int = Field(default=0, ge=0)
 
 
 class NarrationPreparationPronunciationReference(BaseModel):
@@ -3126,6 +3127,12 @@ class CreationTaskEditJobReplayResponse(BaseModel):
     failure_reason: str | None = None
 
 
+class CreationPlanPresenterSelectionResponse(BaseModel):
+    script_id: str
+    script_updated_at: datetime
+    section_id: str
+
+
 class CreationPlanPreviewResponse(BaseModel):
     updated_at: datetime | None = None
     creation_intent: dict[str, object] | None = None
@@ -3143,6 +3150,7 @@ class CreationPlanPreviewResponse(BaseModel):
     duration_mode: Literal["exact", "approximate"] = "exact"
     duration_range_seconds: tuple[float, float] | None = None
     presenter_share_target: Literal[0, 20, 40, 60, 80, 100] = 0
+    presenter_selection: CreationPlanPresenterSelectionResponse | None = None
     lipsync_quality: Literal["high", "fast"] = "fast"
     knowledge_references: list[CreationPlanKnowledgeReferenceResponse]
     source_references: list[CreationPlanSourceReferenceResponse]

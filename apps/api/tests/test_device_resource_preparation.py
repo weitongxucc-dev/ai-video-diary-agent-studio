@@ -52,13 +52,15 @@ def metadata_preparation(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform != 'darwin' or not shutil.which('ffmpeg') or not shutil.which('ffprobe'), reason='macOS CPU preparation backend unavailable')
-@pytest.mark.parametrize('clip_count,overlay_count', [(2, 0), (6, 2)])
-def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_without_rerun(tmp_path, clip_count, overlay_count):
+@pytest.mark.parametrize('clip_count,overlay_count,presenter_clip_count', [(2, 0, 0), (6, 2, 0), (3, 0, 1)])
+def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_without_rerun(
+        tmp_path, clip_count, overlay_count, presenter_clip_count):
     repository, actor, access, service, paths = preparation(tmp_path)
-    treatment = {'source_width_px': 128, 'source_height_px': 72,
-        'visual_effects': {'exposure': .15}} if overlay_count else {}
-    shape = CpuPreparationShape(64, 64, 24, 1.0, clip_count, 2, 8000, 1,
-        overlay_count=overlay_count, **treatment)
+    treatment = ({'source_width_px': 128, 'source_height_px': 72,
+        'visual_effects': {'exposure': .15}} if overlay_count or presenter_clip_count else {})
+    shape = CpuPreparationShape(64, 64, 30 if presenter_clip_count else 24,
+        1.0, clip_count, 2, 8000, 1, source_bytes=1024**2 if presenter_clip_count else None,
+        overlay_count=overlay_count, presenter_clip_count=presenter_clip_count, **treatment)
     plan_id, budget = service.prepare(shape, actor, request_id=str(uuid4()))
     assert budget.max_disk_io_bytes_per_second is None
     assert not service.profile_path.exists()
@@ -81,14 +83,21 @@ def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_w
             time.sleep(.1)
         assert row['state'] == 'done', (dict(row), runtime.last_error)
         result = service.finalize(database_path=repository.database_path, request_id=request.id, actor=actor)
-        assert result.revision == 1 and result.budget.cpu_render.max_clip_count == clip_count
-        assert result.budget.cpu_render.max_overlay_count == overlay_count
-        assert result.budget.cpu_audio.max_input_count == 2
-        assert result.budget.cpu_audio.max_output_bytes >= 32000
+        operation = 'presenter_cpu_render' if presenter_clip_count else 'cpu_render'
+        render = getattr(result.budget, operation)
+        assert result.revision == 1 and render.max_clip_count == clip_count
+        assert render.max_overlay_count == overlay_count
+        if presenter_clip_count:
+            assert render.max_input_bytes == shape.source_bytes
+            assert result.budget.cpu_render is None and result.budget.cpu_audio is None
+        else:
+            assert result.budget.presenter_cpu_render is None
+            assert result.budget.cpu_audio.max_input_count == 2
+            assert result.budget.cpu_audio.max_output_bytes >= 32000
         assert result.budget.narration is None and result.budget.presenter is None
         assert result.budget.max_disk_io_bytes_per_second is None
-        assert result.evidence['cpu_render']['status'] == 'recorded'
-        assert result.evidence['cpu_render']['verification_status'] == 'unknown'
+        assert result.evidence[operation]['status'] == 'recorded'
+        assert result.evidence[operation]['verification_status'] == 'unknown'
         again = service.finalize(database_path=repository.database_path, request_id=request.id, actor=actor)
         assert again.digest == result.digest and again.revision == 1
         assert list(Path(paths['temporary']).iterdir()) == []
@@ -96,11 +105,20 @@ def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_w
             assert connection.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 1
         # A modified receipt cannot be adopted just because a caller supplies facts.
         receipt_path = next((service.root / 'receipts').glob('*.json'))
-        delivery = json.loads(receipt_path.read_bytes())['delivery_probe']
-        assert delivery['contract'] == 'montage-picture-audio-caption/v1'
+        receipt = json.loads(receipt_path.read_bytes())
+        delivery = receipt['delivery_probe']
         assert delivery['bytes'] > 0 and len(delivery['sha256']) == 64
-        assert delivery['observed_resources']['threads_sample_complete']
-        assert result.budget.cpu_render.max_process_threads >= delivery['observed_resources']['peak_threads']
+        if presenter_clip_count:
+            assert delivery['contract'] == 'presenter-h264-serial-ffv1-delivery/v1'
+            assert [delivery['codec'], delivery['serial_codec'], delivery['audio_codec']] == ['h264', 'ffv1', 'aac']
+            assert delivery['frames'] == 30 and delivery['presenter_clip_count'] == presenter_clip_count
+            assert delivery['inputs']['presenter']['width_px'] == 64
+            assert delivery['inputs']['material']['width_px'] == 128
+            assert delivery['temporary_bytes'] > delivery['bytes']
+        else:
+            assert delivery['contract'] == 'montage-picture-audio-caption/v1'
+            assert delivery['observed_resources']['threads_sample_complete']
+            assert render.max_process_threads >= delivery['observed_resources']['peak_threads']
         receipt_path.write_text('{}')
         original_profile = service.profile_path.read_bytes()
         with pytest.raises(DeviceProfileUnavailable, match='检查点不匹配'):
@@ -198,6 +216,34 @@ def _synthetic_publication(service, plan_id):
         'rss_sample_complete': True, 'threads_sample_complete': True}],
         'elapsed_seconds': 1.0, 'request_id': 'writer-fixture', 'generation': 1,
         'input_digest': plan['input_digest'], 'media': {'audio': {'bytes': 32114}, 'fixture': 'no-media-executed'}}
+
+
+def test_presenter_preparation_requires_its_own_full_shape_receipt_and_keeps_normal_budgets(tmp_path, monkeypatch):
+    _, actor, _, service, _ = metadata_preparation(tmp_path, monkeypatch)
+    shape = CpuPreparationShape(64, 64, 30, 151, 8, 2, 8000, 1, source_bytes=1234567)
+    normal_plan_id, _ = service.prepare(shape, actor, request_id='normal')
+    normal_plan, normal_receipt = _synthetic_publication(service, normal_plan_id)
+    assert 'presenter_clip_count' not in normal_plan['request_binding']['shape']
+    normal = service._publish(normal_plan, normal_receipt, normal_plan['backends'])
+    original = json.loads(service.profile_path.read_bytes())
+    plan_id, bootstrap = service.prepare(replace(shape, presenter_clip_count=2), actor, request_id='person')
+    plan, receipt = _synthetic_publication(service, plan_id)
+    assert plan['probe_seconds'] == 151
+    assert bootstrap.cpu_render is None and bootstrap.presenter_cpu_render.max_clip_count == 8
+    assert service._resources(plan)['kind'] == 'creation_presenter_render'
+    with pytest.raises(DeviceProfileUnavailable, match='样片缺少'):
+        service._publish(plan, receipt, plan['backends'])
+    assert json.loads(service.profile_path.read_bytes()) == original
+    receipt['delivery_probe'] = {'contract': 'presenter-h264-serial-ffv1-delivery/v1',
+        'inputs': {'presenter': {'codec': 'h264'}, 'material': {'codec': 'h264'}},
+        'codec': 'h264', 'serial_codec': 'ffv1', 'audio_codec': 'aac', 'frames': 4530,
+        'clip_count': 8, 'presenter_clip_count': 2, 'temporary_bytes': 100000, 'bytes': 50000}
+    result = service._publish(plan, receipt, plan['backends'])
+    updated = json.loads(service.profile_path.read_bytes())
+    assert result.revision == normal.revision + 1 and result.budget.presenter_cpu_render.max_duration_seconds == 151
+    for key in ('cpu_render', 'cpu_audio', 'clip_preview'):
+        for section in ('budget', 'backends', 'evidence'):
+            assert updated[section][key] == original[section][key]
 
 
 def test_writer_rejects_stale_revision_and_failure_preserves_existing_profile(tmp_path, monkeypatch):
