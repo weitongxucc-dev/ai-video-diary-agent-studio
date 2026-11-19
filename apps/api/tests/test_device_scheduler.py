@@ -186,6 +186,30 @@ def _complete(scheduler, grant):
                                    checkpoint_write=lambda conn, current: current.unit_key)
 
 
+@pytest.mark.parametrize("busy_at", [1, 2])
+def test_busy_candidate_read_defers_same_request_without_taking_permit(tmp_path, busy_at):
+    class ContendedOwner(Owners):
+        reads = 0
+
+        def check_current(self, request, conn):
+            if not conn.in_transaction:
+                self.reads += 1
+                if self.reads == busy_at:
+                    with closing(sqlite3.connect(scheduler.database_path)) as writer:
+                        writer.execute("BEGIN EXCLUSIVE")
+                        conn.execute("PRAGMA busy_timeout = 0")
+                        conn.execute("SELECT state FROM device_permit").fetchone()
+            return super().check_current(request, conn)
+
+    scheduler = _scheduler(tmp_path, owners=ContendedOwner())
+    request = scheduler.submit(_intent("local-render"), "member-a")
+    assert scheduler.pick_and_grant() is None
+    assert scheduler._get(request.id).state == "waiting"
+    grant = scheduler.pick_and_grant()
+    assert grant and grant.request_id == request.id and grant.generation == 1
+    _complete(scheduler, grant)
+
+
 def test_streaming_dependency_check_keeps_live_permissions_without_per_chunk_resource_sampling(tmp_path, monkeypatch):
     class VersionedOwners(Owners):
         def capture_local(self, request, conn):

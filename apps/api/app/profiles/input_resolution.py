@@ -88,10 +88,11 @@ class ProfileInputResolver:
         model_id: str,
         viewer_user_id: str | None = None, local_diagnostic: bool = False,
         for_generation: bool = True,
+        connection: sqlite3.Connection | None = None,
     ) -> AvatarAndLipSyncRequest:
         if language not in {"zh", "en", "zh-en"}:
             raise ValueError("人物口型语言必须是 zh、en 或 zh-en")
-        with self._connect() as conn:
+        with self._connect() if connection is None else nullcontext(connection) as conn:
             historical_person = self._get_person_profile(
                 conn,
                 workspace_id,
@@ -140,9 +141,10 @@ class ProfileInputResolver:
             raise PermissionError("档案不属于当前成员或已取消共享")
         visual_input = None
         if for_generation:
-            self.profile_reference_input(voice, viewer_user_id=viewer_user_id, local_diagnostic=local_diagnostic)
+            self.profile_reference_input(voice, viewer_user_id=viewer_user_id,
+                                         local_diagnostic=local_diagnostic, connection=connection)
             visual_input = self.profile_reference_input(person, viewer_user_id=viewer_user_id,
-                                                        local_diagnostic=local_diagnostic)
+                                                        local_diagnostic=local_diagnostic, connection=connection)
         return AvatarAndLipSyncRequest(
             workspace_id=workspace_id,
             person=person,

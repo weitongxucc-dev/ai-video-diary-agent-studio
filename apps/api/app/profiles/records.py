@@ -130,8 +130,10 @@ class ProfileRecordStore:
         workspace_id: str,
         person_id: str,
         version: str | None = None,
+        *,
+        connection: sqlite3.Connection | None = None,
     ) -> PersonProfile:
-        with self._connect() as conn:
+        with self._connect() if connection is None else nullcontext(connection) as conn:
             return self._get_person_profile(conn, workspace_id, person_id, version)
 
     def list_person_profiles(self, workspace_id: str) -> list[PersonProfile]:

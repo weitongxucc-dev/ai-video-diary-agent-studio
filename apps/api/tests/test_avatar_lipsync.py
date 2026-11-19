@@ -690,6 +690,43 @@ def test_latentsync_16_mlx_requires_grant_and_uses_registered_offline_process(tm
     assert kwargs["env"]["OMP_NUM_THREADS"] == "2"
 
 
+def test_latentsync_16_registered_still_prepares_a_loopable_video(tmp_path):
+    from PIL import Image
+    from app.profile_reference_media import ProfileReferenceInput
+
+    photo = tmp_path / "portrait.jpg"
+    Image.new("RGB", (1080, 1920), (180, 85, 100)).save(photo)
+    original = photo.read_bytes()
+    request = _request(tmp_path)
+    reference = ProfileReferenceInput.from_source(
+        workspace_id=request.workspace_id, profile_id=request.person.id,
+        profile_version=request.person.version, asset_id="portrait", segment_id=None,
+        source_path=photo, source_type="image", kind="person_visual",
+        start_seconds=None, end_seconds=None, source_duration_seconds=None)
+    request = replace(request, visual_path=str(photo), visual_reference_input=reference)
+    provider = LatentSync16Provider.__new__(LatentSync16Provider)
+
+    def run(argv, *, output_paths):
+        assert len(output_paths) == 1 and output_paths[0] != photo
+        return subprocess.run(argv, capture_output=True, timeout=10)
+
+    loopable = provider._prepare_worker_visual(request, photo, tmp_path,
+                                               SimpleNamespace(threads=2, run=run))
+    output = tmp_path / "normalized.mp4"
+    # Run the same fixed-frame normalization as the measured inference worker.
+    subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-stream_loop", "-1",
+        "-i", str(loopable), "-map", "0:v:0", "-an", "-vf", "fps=25", "-frames:v", "160",
+        "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", str(output)],
+        check=True, timeout=15)
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,nb_frames,r_frame_rate", "-of", "json", str(output)],
+        check=True, capture_output=True, timeout=10)
+    assert json.loads(probe.stdout)["streams"] == [
+        {"width": 1080, "height": 1920, "r_frame_rate": "25/1", "nb_frames": "160"}
+    ]
+    assert photo.read_bytes() == original
+
+
 @pytest.mark.parametrize("frames", [16, 32, 33])
 def test_latentsync_16_mlx_mux_keeps_exact_frames_and_fractional_audio_tail(tmp_path, monkeypatch, frames):
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "model_workers"))

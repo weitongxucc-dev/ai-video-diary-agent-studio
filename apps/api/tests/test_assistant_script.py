@@ -167,7 +167,7 @@ def test_review_task_allows_real_history_objects_and_rejects_foreign_refs(tmp_pa
             SimpleNamespace(id="segment-current", status="ready"),
         ])
     monkeypatch.setattr(material_repo, "get_creation_task_montage_plan",
-        lambda workspace_id, task_id: creation_task_montage_plan_to_payload(montage))
+        lambda workspace_id, task_id, *, connection=None: creation_task_montage_plan_to_payload(montage))
     monkeypatch.setattr(main_module, "production_repo", material_repo)
     monkeypatch.setattr(CreationTaskResponseAdapter, "effective_audio_timeline", lambda adapter, plan: SimpleNamespace(tracks=[]))
     def no_execution(*_):
