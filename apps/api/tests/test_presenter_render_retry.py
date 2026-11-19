@@ -17,7 +17,7 @@ from test_creation_execution import _render_version_fixture
 
 
 @pytest.fixture
-def failed_presenter(tmp_path, monkeypatch):
+def failed_presenter(tmp_path, monkeypatch, request):
     repo, task_id, script_id, _, actor, execution, owner, scheduler, base, _ = _render_version_fixture(tmp_path)
     script = repo.script_records.get_creation_task_script('local', script_id)
     plan = repo.plan_records.get_creation_plan('local', 'plan_local')
@@ -57,7 +57,9 @@ def failed_presenter(tmp_path, monkeypatch):
         lambda *args, **kwargs: [(narration, 'fixture-presenter-input')])
     monkeypatch.setattr('app.creation_execution.current_presenter_render',
         lambda *args, **kwargs: SimpleNamespace(id='fixture-render', duration_seconds=1))
-    mix_policy = {'threads': 1, 'timeout_seconds': 20, 'source_duration_limit_seconds': 1,
+    failure_reason = getattr(request, 'param', '进程组线程数 76 > 上限 20')
+    mix_timeout = 120 if failure_reason == 'Command exceeded its unit deadline' else 20
+    mix_policy = {'threads': 1, 'timeout_seconds': mix_timeout, 'source_duration_limit_seconds': 1,
                   'source_sample_rate_limit': 48000, 'source_channels_limit': 2}
     owner.audio_mix_facts = lambda *args, **kwargs: {'sources': [], 'resources': dict(mix_policy)}
     monkeypatch.setattr(main, 'artifact_store', ArtifactStore(tmp_path / 'artifacts'))
@@ -72,7 +74,7 @@ def failed_presenter(tmp_path, monkeypatch):
         render_context.check()
         calls.append(render_context.grant.request_id)
         if len(calls) == 1:
-            raise OSError('进程组线程数 76 > 上限 20')
+            raise OSError(failure_reason)
         (job_staging_path / 'preview.mp4').write_bytes(b'fixture-render-output')
         (job_staging_path / 'subtitles.srt').write_text('1\n00:00:00,000 --> 00:00:01,000\nfixture\n')
         return replace(current, status='rendered')
@@ -95,13 +97,13 @@ def failed_presenter(tmp_path, monkeypatch):
         scheduler.assert_released(original)
         before = control.status('local', task_id, verify_media=False)
         assert before['job']['status'] == 'failed' and before['current_stage'] == 'render'
-        assert '76 > 上限 20' in before['job']['failure_reason'] and not before['video_ready']
+        assert failure_reason in before['job']['failure_reason'] and not before['video_ready']
         inner, = [row for row in repo.job_records.list_job_runs('local', task_id)
                   if row.kind == 'creation_task_montage_render']
         assert inner.status == 'failed' and inner.output_refs == []
         yield SimpleNamespace(repo=repo, task_id=task_id, actor=actor, job=job, inner=inner,
             version=version, scheduler=scheduler, original=original, executor=executor, control=control,
-            runtime=runtime, mix_policy=mix_policy, calls=calls, source_path=source_path)
+            runtime=runtime, owner=owner, mix_policy=mix_policy, calls=calls, source_path=source_path)
     finally:
         scheduler.close()
 
@@ -160,3 +162,38 @@ def test_presenter_resume_refuses_unsettled_or_changed_attempt(failed_presenter,
     assert case.repo.job_records.get_job_run('local', case.job.id).status == 'failed'
     assert case.scheduler._get(case.original.request_id).state == 'failed'
     assert case.calls == [case.original.request_id]
+
+
+@pytest.mark.parametrize('failed_presenter', ['Command exceeded its unit deadline'], indirect=True)
+def test_presenter_timeout_retries_only_with_a_new_bound(failed_presenter):
+    from app.host_resource_probes import Y4M_SERIAL_PICTURE_FORMAT
+
+    case = failed_presenter
+    prior = case.scheduler._get(case.original.request_id)
+    with pytest.raises(ExecutionControlRejected, match='重新准备') as rejection:
+        case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False)
+    assert rejection.value.status_code == 409
+    assert case.scheduler._get(prior.id) == prior
+    assert case.calls == [prior.id]
+
+    # Increasing an audio cap already above the old outer cap buys no usable time.
+    case.mix_policy['timeout_seconds'] += 1
+    with pytest.raises(ExecutionControlRejected, match='重新准备'):
+        case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False)
+    case.mix_policy['timeout_seconds'] -= 1
+    limits = case.owner.presenter_cpu_render_limits
+    case.owner.presenter_cpu_render_limits = replace(limits, serial_picture_format=Y4M_SERIAL_PICTURE_FORMAT)
+    queued = case.control.resume('local', case.task_id, case.actor, case.runtime, verify_media=False)
+    assert queued['job']['id'] == case.job.id and queued['job']['status'] == 'queued'
+    attempt = case.scheduler.pick_and_grant()
+    assert attempt is not None and attempt.unit_key.endswith(':retry:' + prior.id)
+    actual = case.scheduler._get(attempt.request_id)
+    assert 'picture_timeout_seconds' not in prior.resources
+    assert actual.resources['picture_timeout_seconds'] == prior.resources['timeout_seconds'] == limits.timeout_seconds
+    assert actual.resources['timeout_seconds'] == limits.timeout_seconds + case.mix_policy['timeout_seconds']
+    assert actual.resources['audio_mix'] == prior.resources['audio_mix']
+    assert case.scheduler._get(prior.id) == prior
+
+    case.executor.execute(attempt, case.scheduler)
+    assert case.control.status('local', case.task_id, verify_media=False)['video_ready']
+    assert case.calls == [prior.id, attempt.request_id]
