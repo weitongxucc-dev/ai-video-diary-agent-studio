@@ -6,7 +6,8 @@ import type { CreationPlanPreview, CreationRequest, CreationTask, MaterialAsset 
 import { CreationRequestPanel } from "../CreationRequestPanel";
 
 const voiceApi = vi.hoisted(() => ({ list: vi.fn() }));
-vi.mock("@/lib/media-profiles-api", () => ({ listVoiceProfiles: voiceApi.list, mediaProfilesErrorMessage: (cause: unknown) => cause instanceof Error ? cause.message : "声音读取失败" }));
+const personApi = vi.hoisted(() => ({ list: vi.fn() }));
+vi.mock("@/lib/media-profiles-api", () => ({ listVoiceProfiles: voiceApi.list, listPersonProfiles: personApi.list, mediaProfilesErrorMessage: (cause: unknown) => cause instanceof Error ? cause.message : "声音读取失败" }));
 const api = vi.hoisted(() => ({ get: vi.fn(), items: vi.fn(), update: vi.fn(), prepare: vi.fn(), confirm: vi.fn(), replan: vi.fn() }));
 vi.mock("@/lib/creation-request-api", () => ({ getCreationRequest: api.get, getCreationRequestItems: api.items, updateCreationRequest: api.update, prepareCreationRequestWindow: api.prepare, confirmCreationRequestWindow: api.confirm, replanCreationRequestWindow: api.replan }));
 
@@ -36,7 +37,7 @@ function proposed(): CreationRequest {
       created_at: "2026-10-11", confirmed_at: null, entries: ["键盘操作", "屏幕设置"].map((goal, index) => ({ ordinal: index + 1,
         plan_id: `plan-${index}`, task_id: `reserved-${index}`, plan: plan(goal), task: { id: `reserved-${index}`, name: goal } as CreationTask })) } });
 }
-beforeEach(() => { vi.resetAllMocks(); voiceApi.list.mockResolvedValue({ items: [], total_count: 0 }); api.items.mockResolvedValue({ items: [], next_after_ordinal: null, has_more: false }); });
+beforeEach(() => { vi.resetAllMocks(); voiceApi.list.mockResolvedValue({ items: [], total_count: 0 }); personApi.list.mockResolvedValue({ items: [], total_count: 0 }); api.items.mockResolvedValue({ items: [], next_after_ordinal: null, has_more: false }); });
 
 describe("persistent creation request panel", () => {
   it("rechecks a stale proposed group without losing already created tasks", async () => {
@@ -330,6 +331,35 @@ it("does not recheck or replace request state when the voice PATCH is rejected",
   expect(await screen.findByRole("alert")).toHaveTextContent("制作要求已变化");
   expect(api.update).toHaveBeenCalledTimes(1);
   expect(api.prepare).not.toHaveBeenCalled();
+  expect(api.confirm).not.toHaveBeenCalled();
+});
+
+it("binds a repaired person in the original request while preserving the English voice override", async () => {
+  const user = userEvent.setup();
+  const before = proposed();
+  before.requirements = { ...before.requirements, presenter_share_target: 20 };
+  const english = before.current_window!.entries[1].plan!;
+  const englishVoice = { profile_id: "voice-en-owned", version: "v2" };
+  english.language = "en-US";
+  english.selected_voice = { ...englishVoice, person_profile_id: "", person_version: "",
+    person_authorization_id: "", person_authorization_version: "", authorization_id: "auth-en",
+    authorization_version: "v1", language: "en", model_id: "local" };
+  const person = { profile_id: "person-owned", version: "v1" };
+  const revised = { ...before, revision: 7, status: "awaiting_plan", current_window: null,
+    requirements: { ...before.requirements, selected_person: person } };
+  api.get.mockResolvedValue(before);
+  api.update.mockResolvedValue(revised);
+  api.prepare.mockResolvedValue({ ...revised, revision: 8, status: "awaiting_confirmation", current_window: before.current_window });
+  personApi.list.mockResolvedValue({ items: [{ id: person.profile_id, version: person.version, display_name: "本人形象",
+    runnable: true, body_reference_available: true }], total_count: 1 });
+  render(<CreationRequestPanel requestId={before.id} scopeKey="member-a" isCurrentScope={() => true} />);
+  await user.click(await screen.findByRole("combobox", { name: "人物版本" }));
+  await user.click(await screen.findByRole("option", { name: "本人形象 · v1" }));
+  await user.click(screen.getByRole("button", { name: "保存人物并重新核对" }));
+  expect(api.update).toHaveBeenCalledWith(before.id, { expected_revision: 6, output_relation: before.output_relation, requirements: revised.requirements });
+  await waitFor(() => expect(api.prepare).toHaveBeenCalledWith(before.id, { expected_revision: 7, goals: expect.arrayContaining([
+    { goal: english.goal, name: english.name, requirements: { language: "en-US", selected_voice: englishVoice } },
+  ]) }));
   expect(api.confirm).not.toHaveBeenCalled();
 });
 
