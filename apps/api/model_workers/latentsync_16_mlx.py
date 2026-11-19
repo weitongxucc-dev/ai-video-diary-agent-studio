@@ -22,7 +22,7 @@ WEIGHTS_REVISION = "c42c7e6c8e9c213626389fa7d9a3c444b8536353"
 MLX_REVISION = "8370f1ff2b7c240c9ea78cbeb134c254336f6806"
 # Apache-2.0 upstream port and official utility snapshot with verified local
 # timing, memory and inference corrections, including the pose adapter.
-SOURCE_SHA256 = "9321f92bbb0ae8baba51a56a2552a3c4b07a0f310686e72a61dab294c03fc92c"
+SOURCE_SHA256 = "0486e1768ac1a461ba7a4d28bfd9d8a4e8aa4f3010d364ab99ce099d096a419c"
 UNET_FILE = ("unet/latentsync_unet_mlx.safetensors", 2536073912,
              "dac23792c44475e48f8a3fa40f8db53c56b9d5ab97f41044297f12040bf3972b")
 RUNTIME_WEIGHTS = (
