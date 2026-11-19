@@ -12,7 +12,7 @@ import pytest
 
 from app.config import Settings
 from app.creation_execution import CreationExecutionActor
-from app.device_resource_preparation import DeviceResourcePreparation, CpuPreparationShape
+from app.device_resource_preparation import DeviceResourcePreparation, CpuPreparationShape, FILE_AUDIO_MIX_PROBE
 from app.device_resource_profile import DeviceProfileIdentity, DeviceProfileUnavailable
 from app.device_runtime import build_device_runtime
 from app.host_resource_probes import HostResourceProbe, HostProcessProbe
@@ -52,14 +52,15 @@ def metadata_preparation(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform != 'darwin' or not shutil.which('ffmpeg') or not shutil.which('ffprobe'), reason='macOS CPU preparation backend unavailable')
-@pytest.mark.parametrize('clip_count,overlay_count,presenter_clip_count', [(2, 0, 0), (6, 2, 0), (3, 0, 1)])
+@pytest.mark.parametrize('clip_count,overlay_count,presenter_clip_count,audio_input_count',
+                         [(2, 0, 0, 2), (6, 2, 0, 2), (3, 0, 1, 2), (2, 0, 0, 36)])
 def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_without_rerun(
-        tmp_path, clip_count, overlay_count, presenter_clip_count):
+        tmp_path, clip_count, overlay_count, presenter_clip_count, audio_input_count):
     repository, actor, access, service, paths = preparation(tmp_path)
     treatment = ({'source_width_px': 128, 'source_height_px': 72,
         'visual_effects': {'exposure': .15}} if overlay_count or presenter_clip_count else {})
     shape = CpuPreparationShape(64, 64, 30 if presenter_clip_count else 24,
-        1.0, clip_count, 2, 8000, 1, source_bytes=1024**2 if presenter_clip_count else None,
+        1.0, clip_count, audio_input_count, 8000, 1, source_bytes=1024**2 if presenter_clip_count else None,
         overlay_count=overlay_count, presenter_clip_count=presenter_clip_count, **treatment)
     plan_id, budget = service.prepare(shape, actor, request_id=str(uuid4()))
     assert budget.max_disk_io_bytes_per_second is None
@@ -92,7 +93,7 @@ def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_w
             assert result.budget.cpu_render is None and result.budget.cpu_audio is None
         else:
             assert result.budget.presenter_cpu_render is None
-            assert result.budget.cpu_audio.max_input_count == 2
+            assert result.budget.cpu_audio.max_input_count == audio_input_count
             assert result.budget.cpu_audio.max_output_bytes >= 32000
         assert result.budget.narration is None and result.budget.presenter is None
         assert result.budget.max_disk_io_bytes_per_second is None
@@ -121,6 +122,10 @@ def test_real_granted_cpu_preparation_publishes_bound_profile_and_can_finalize_w
             assert delivery['contract'] == 'montage-picture-audio-caption/v1'
             assert delivery['observed_resources']['threads_sample_complete']
             assert render.max_process_threads >= delivery['observed_resources']['peak_threads']
+            mix = receipt['audio_mix_probe']
+            assert mix['contract'] == FILE_AUDIO_MIX_PROBE and mix['input_count'] == audio_input_count
+            assert mix['observed_resources']['threads_sample_complete']
+            assert result.budget.cpu_audio.max_process_threads >= mix['observed_resources']['peak_threads']
         receipt_path.write_text('{}')
         original_profile = service.profile_path.read_bytes()
         with pytest.raises(DeviceProfileUnavailable, match='检查点不匹配'):
@@ -214,10 +219,25 @@ def test_held_legacy_lock_or_uncertain_receipt_prevents_lock_root_change(tmp_pat
 def _synthetic_publication(service, plan_id):
     """Writer failure fixture only; never accepted by public finalize without DB proof."""
     plan = service._plan(plan_id)
-    return plan, {'observed_resources': [{'peak_rss_bytes': 1024**2, 'peak_threads': 2,
+    receipt = {'observed_resources': [{'peak_rss_bytes': 1024**2, 'peak_threads': 2,
         'rss_sample_complete': True, 'threads_sample_complete': True}],
         'elapsed_seconds': 1.0, 'request_id': 'writer-fixture', 'generation': 1,
         'input_digest': plan['input_digest'], 'media': {'audio': {'bytes': 32114}, 'fixture': 'no-media-executed'}}
+    if plan.get('audio_mix_probe') == FILE_AUDIO_MIX_PROBE:
+        receipt['audio_mix_probe'] = {'contract': FILE_AUDIO_MIX_PROBE, 'input_count': plan['shape']['audio_input_count'],
+                                     'observed_resources': receipt['observed_resources'][0]}
+    return plan, receipt
+
+
+def test_new_audio_profile_requires_a_complete_multi_file_probe(tmp_path, monkeypatch):
+    _, actor, _, service, _ = metadata_preparation(tmp_path, monkeypatch)
+    plan_id, _ = service.prepare(CpuPreparationShape(64, 64, 24, 2, 2, 36, 48000, 2),
+                                 actor, request_id=str(uuid4()))
+    plan, receipt = _synthetic_publication(service, plan_id)
+    receipt['audio_mix_probe']['input_count'] = 1
+    with pytest.raises(DeviceProfileUnavailable, match='多文件混音'):
+        service._publish(plan, receipt, plan['backends'])
+    assert not service.profile_path.exists()
 
 
 def test_presenter_preparation_requires_its_own_full_shape_receipt_and_keeps_normal_budgets(tmp_path, monkeypatch):

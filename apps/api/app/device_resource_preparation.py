@@ -41,6 +41,7 @@ from app.visual_effects import VisualEffects
 
 OWNER_TYPE = 'device_preparation'
 POLICY_ID = 'interactive-cpu-preparation/v1'
+FILE_AUDIO_MIX_PROBE = 'concurrent-pcm-file-inputs/v1'
 
 
 class PreparationSamplingIncomplete(ValueError):
@@ -289,7 +290,9 @@ class DeviceResourcePreparation:
         # Encoded output is still checked; this formula is not an encoder guarantee.
         raw_video = math.ceil(shape.width_px * shape.height_px * 4 * shape.frame_rate * probe_seconds)
         raw_audio = math.ceil(shape.sample_rate * shape.channels * 4 * probe_seconds)
-        output_limit = raw_video + raw_audio
+        audio_fixture_bytes = (0 if presenter else
+            math.ceil(shape.sample_rate * shape.channels * 2 * probe_seconds) + 2 * PCM_CONTAINER_ALLOWANCE_BYTES)
+        output_limit = raw_video + raw_audio + audio_fixture_bytes
         # The production presenter render uses the dedicated FFmpeg execution
         # class. Measure its full frame clock in that same class.
         timeout = self.policy.timeout_seconds * (max(1, probe_seconds / self.policy.probe_seconds) if presenter else 1)
@@ -341,6 +344,8 @@ class DeviceResourcePreparation:
                 'new_fields_source': self.policy.id,
                 'max_unit_input_bytes_scope': 'per_unit_input_capacity_not_cumulative_authorization'},
             'expected_revision': expected_revision, 'expected_profile_digest': expected_digest, 'probe_seconds': probe_seconds}
+        if not presenter:
+            plan['audio_mix_probe'] = FILE_AUDIO_MIX_PROBE
         plan['input_digest'] = _digest(plan)
         _atomic_json(self.root / 'plans' / f'{plan_id}.json', plan)
         return plan_id, budget
@@ -443,6 +448,7 @@ class DeviceResourcePreparation:
         deadline = started + limits['max_timeout_seconds']
         observations = []
         native_receipt = None
+        audio_mix_probe = None
         limit = limits['max_output_bytes']
         def run(argv, paths=(), *, env=None):
             result = run_granted_command(scheduler, grant, argv,
@@ -464,13 +470,16 @@ class DeviceResourcePreparation:
                     command, graphic_paths = preparation_video_command(plan, shape, video)
                     measure_template_inputs(shape, video, duration, command, run)
                     run(command, (video, *graphic_paths))
-                command = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-filter_complex_threads', '1']
-                graph = ''.join(f'sine=frequency={440 + index}:sample_rate={shape.sample_rate}:'
-                    f'duration={duration}[a{index}];' for index in range(shape.audio_input_count))
-                graph += ''.join(f'[a{i}]' for i in range(shape.audio_input_count)) + f'amix=inputs={shape.audio_input_count}:normalize=0[a]'
-                command += ['-filter_complex', graph, '-map', '[a]', '-t', str(duration), '-ar', str(shape.sample_rate),
-                    '-ac', str(shape.channels), '-threads', '1', '-c:a', 'pcm_f32le', str(audio)]
-                run(command, (audio,) if presenter else (video, audio))
+                if plan.get('audio_mix_probe') == FILE_AUDIO_MIX_PROBE:
+                    audio_mix_probe = self._measure_file_audio_mix(plan, shape, video, audio, run)
+                else:
+                    command = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y', '-filter_threads', '1', '-filter_complex_threads', '1']
+                    graph = ''.join(f'sine=frequency={440 + index}:sample_rate={shape.sample_rate}:'
+                        f'duration={duration}[a{index}];' for index in range(shape.audio_input_count))
+                    graph += ''.join(f'[a{i}]' for i in range(shape.audio_input_count)) + f'amix=inputs={shape.audio_input_count}:normalize=0[a]'
+                    command += ['-filter_complex', graph, '-map', '[a]', '-t', str(duration), '-ar', str(shape.sample_rate),
+                        '-ac', str(shape.channels), '-threads', '1', '-c:a', 'pcm_f32le', str(audio)]
+                    run(command, (audio,) if presenter else (video, audio))
                 if presenter:
                     delivery_probe = measure_presenter_delivery(plan, shape, audio, run, max_bytes=limit)
                 else:
@@ -507,6 +516,8 @@ class DeviceResourcePreparation:
                     'delivery_probe': delivery_probe}
                 if native_receipt is not None:
                     receipt['native_command'] = native_receipt
+                if audio_mix_probe is not None:
+                    receipt['audio_mix_probe'] = audio_mix_probe
                 receipt_path = self.root / 'receipts' / f'{grant.request_id}-{grant.generation}.json'
                 digest = _atomic_json(receipt_path, receipt)
             scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
@@ -517,6 +528,32 @@ class DeviceResourcePreparation:
             reason = ('device_preparation_sampling_incomplete' if isinstance(exc, PreparationSamplingIncomplete)
                 else 'device_preparation_failed')
             scheduler.fail_unit(grant, reason=reason, failure_write=lambda conn, current: None)
+
+    @staticmethod
+    def _measure_file_audio_mix(plan, shape, video, audio, run):
+        seconds = plan['probe_seconds']
+        duration = str(seconds)
+        count = shape.audio_input_count
+        source = audio.with_name('mix-source.wav')
+        ffmpeg = [plan['ffmpeg'], '-hide_banner', '-loglevel', 'error', '-y',
+                  '-filter_threads', '1', '-filter_complex_threads', '1']
+        run([*ffmpeg, '-f', 'lavfi', '-i',
+            f'sine=frequency=440:sample_rate={shape.sample_rate}:duration={duration}',
+            '-af', f'volume=1/{count}', '-ac', str(shape.channels),
+            '-threads:a', '1', '-c:a', 'pcm_s16le', str(source)], (video, source))
+        # Each -i starts an independent demuxer, even for this common synthetic
+        # WAV. Pace all readers so periodic sampling sees them live together.
+        rate = min(1, seconds / (4 * plan['policy']['sample_seconds']))
+        inputs = ['-readrate', str(rate), '-protocol_whitelist', 'file,pipe',
+                  '-threads', '1', '-i', str(source)] * count
+        graph = ''.join(f'[{index}:a:0]' for index in range(count))
+        graph += f'amix=inputs={count}:normalize=0:dropout_transition=0[a]'
+        result = run([*ffmpeg, *inputs, '-filter_complex', graph, '-map', '[a]',
+            '-t', duration, '-ar', str(shape.sample_rate), '-ac', str(shape.channels),
+            '-threads:a', '1', '-c:a', 'pcm_f32le', str(audio)], (video, source, audio))
+        source.unlink()
+        return {'contract': FILE_AUDIO_MIX_PROBE, 'input_count': count,
+                'observed_resources': asdict(result.observed_resources)}
 
     def _request(self, *, database_path, request_id, actor):
         with sqlite3.connect(Path(database_path).resolve().as_uri() + '?mode=ro', uri=True) as connection:
@@ -578,6 +615,12 @@ class DeviceResourcePreparation:
         samples = receipt['observed_resources']
         if not samples or any(not item['rss_sample_complete'] or not item['threads_sample_complete'] for item in samples):
             raise DeviceProfileUnavailable('完整进程资源采样缺失；不能把未知值当作零。')
+        if plan.get('audio_mix_probe') == FILE_AUDIO_MIX_PROBE:
+            probe = receipt.get('audio_mix_probe', {})
+            if (probe.get('contract') != FILE_AUDIO_MIX_PROBE
+                    or probe.get('input_count') != shape.audio_input_count
+                    or probe.get('observed_resources') not in samples):
+                raise DeviceProfileUnavailable('多文件混音缺少同次准备的完整进程采样。')
         rss = min(bootstrap_render.additional_memory_bytes,
             math.ceil(max(item['peak_rss_bytes'] for item in samples) * policy.measured_margin))
         threads = min(bootstrap_render.max_process_threads,
@@ -695,6 +738,8 @@ class DeviceResourcePreparation:
                 if name == 'presenter_cpu_render':
                     evidence['input_range']['scope'] = 'synthetic_presenter_h264_cpu'
                     evidence['observations']['delivery_probe'] = receipt['delivery_probe']
+                if name == 'cpu_audio' and 'audio_mix_probe' in receipt:
+                    evidence['observations']['audio_mix_probe'] = receipt['audio_mix_probe']
                 record_id = f"{plan['id']}_{name}"
                 digest = _atomic_json(self.profile_path.parent / 'resource-profile-evidence' / f'{record_id}.json', evidence)
                 document['evidence'][name] = {'record_id': record_id, 'sha256': digest}

@@ -78,6 +78,19 @@ def render_input_digest_for(payload: dict[str, object]) -> str:
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def render_input_for_version(plan, version, tracks, *, bind_timeline_version, portrait_runtime_fingerprint=None):
+    explicit = version is not None and "subtitle_track_ids" in version.snapshot
+    visible = (any(track.status == "valid" and track.style.get("enabled", True) for track in tracks)
+        if tracks or explicit else bool(plan.cues))
+    return render_input_payload(
+        plan, subtitles_visible=visible, subtitle_tracks=[
+            {"language": track.language, "style": track.style, "cues": [asdict(cue) for cue in track.cues]}
+            for track in tracks if track.status == "valid"
+        ], timeline_version_id=version.id if version is not None else None,
+        bind_timeline_version=bind_timeline_version, portrait_runtime_fingerprint=portrait_runtime_fingerprint,
+    )
+
+
 class RenderStageUseCase:
     def __init__(self, repository, metadata, person_preview, video_job_runner, settings):
         self.repository = repository
@@ -129,8 +142,6 @@ class RenderStageUseCase:
             else None
         )
         explicit_subtitles = active_version is not None and "subtitle_track_ids" in active_version.snapshot
-        subtitles_visible = (any(track.status == "valid" and track.style.get("enabled", True) for track in active_subtitle_tracks)
-            if active_subtitle_tracks or explicit_subtitles else bool(plan.cues))
         active_cover = (
             self.metadata.cover_asset_for_version(workspace_id, task.id, active_version)
             if active_version is not None
@@ -142,23 +153,12 @@ class RenderStageUseCase:
                 portrait_runtime_fingerprint = self.metadata.picture_renderer.portrait_processor(workspace_id).fingerprint()
             except ValueError as exc:
                 raise RenderRejected(status_code=422,detail=str(exc)) from exc
-        subtitle_tracks = [
-            {
-                "language": track.language,
-                "style": track.style,
-                "cues": [asdict(cue) for cue in track.cues],
-            }
-            for track in active_subtitle_tracks
-            if track.status == "valid"
-        ]
-        plan_input = render_input_payload(
-            plan,
-            subtitles_visible=subtitles_visible,
-            subtitle_tracks=subtitle_tracks,
-            timeline_version_id=task.current_timeline_version_id,
+        plan_input = render_input_for_version(
+            plan, active_version, active_subtitle_tracks,
             bind_timeline_version=render_context is not None,
             portrait_runtime_fingerprint=portrait_runtime_fingerprint,
         )
+        subtitles_visible = plan_input["subtitles_visible"]
         input_refs = render_input_refs(task, plan)
         input_digest = render_input_digest_for(plan_input)
         if (render_context is not None and active_version is not None
