@@ -21,8 +21,8 @@ import time
 
 import psutil
 
-from app.audio_timeline import PCM_CONTAINER_ALLOWANCE_BYTES
-from app.cpu_preparation_video import (PRESENTER_DELIVERY_CONTRACT, PRESENTER_SOURCE_FRAME_RATE, measure_presenter_delivery,
+from app.audio_timeline import PCM_CONTAINER_ALLOWANCE_BYTES, audio_mix_output_bounds
+from app.cpu_preparation_video import (LEGACY_PRESENTER_DELIVERY_CONTRACT, PRESENTER_DELIVERY_CONTRACT, PRESENTER_SOURCE_FRAME_RATE, measure_presenter_delivery,
     preparation_video_command, preparation_delivery_command)
 from app.artwork_resource_preparation import (extend_render_budget, measure_template_inputs,
     measure_native_inputs, extend_native_budget)
@@ -34,7 +34,7 @@ from app.device_resource_volumes import sample_write_volumes
 from app.device_scheduler import SubmissionIntent, SchedulePolicy, VerifiedWork
 from app.device_runtime import OwnerRegistration
 from app.host_memory import MemoryPolicy, sample_host_memory
-from app.host_resource_probes import HostBudget, CpuRenderBudget, CpuAudioBudget, RuntimeCpuPolicy
+from app.host_resource_probes import HostBudget, CpuRenderBudget, CpuAudioBudget, RuntimeCpuPolicy, Y4M_SERIAL_PICTURE_FORMAT
 from app.granted_subprocess import run_granted_command, GrantedCommandError
 from app.visual_effects import VisualEffects
 
@@ -303,6 +303,8 @@ class DeviceResourcePreparation:
             timeout, memory_limit, output_limit, max((psutil.cpu_count() or 1) + 2,
                 max(3, shape.clip_count, shape.audio_input_count, shape.overlay_count) * self.policy.probe_threads_per_input
                 + self.policy.probe_controller_threads + self.policy.probe_output_stream_threads), cpu)
+        if presenter:
+            render = replace(render, serial_picture_format=Y4M_SERIAL_PICTURE_FORMAT)
         render = extend_render_budget(shape, render, output_limit)
         cadence = self.policy.poll_seconds + self.policy.sample_seconds
         budget = HostBudget(100, reserve, None, output_limit, None, output_limit,
@@ -344,7 +346,9 @@ class DeviceResourcePreparation:
                 'new_fields_source': self.policy.id,
                 'max_unit_input_bytes_scope': 'per_unit_input_capacity_not_cumulative_authorization'},
             'expected_revision': expected_revision, 'expected_profile_digest': expected_digest, 'probe_seconds': probe_seconds}
-        if not presenter:
+        if presenter:
+            plan['presenter_delivery_probe'] = PRESENTER_DELIVERY_CONTRACT
+        else:
             plan['audio_mix_probe'] = FILE_AUDIO_MIX_PROBE
         plan['input_digest'] = _digest(plan)
         _atomic_json(self.root / 'plans' / f'{plan_id}.json', plan)
@@ -641,11 +645,14 @@ class DeviceResourcePreparation:
     def _presenter_render_budget(plan, receipt, shape, policy, bootstrap_render, rss, threads):
         delivery = receipt.get('delivery_probe', {})
         frames = round(plan['probe_seconds'] * 30)
-        if (delivery.get('contract') != PRESENTER_DELIVERY_CONTRACT
+        contract = plan.get('presenter_delivery_probe', LEGACY_PRESENTER_DELIVERY_CONTRACT)
+        fixed_picture = contract == PRESENTER_DELIVERY_CONTRACT
+        if (contract not in {PRESENTER_DELIVERY_CONTRACT, LEGACY_PRESENTER_DELIVERY_CONTRACT}
+                or delivery.get('contract') != contract
                 or delivery.get('clip_count') != shape.clip_count
                 or delivery.get('presenter_clip_count') != shape.presenter_clip_count
                 or delivery.get('frames') != frames
-                or delivery.get('codec') != 'h264' or delivery.get('serial_codec') != 'ffv1'
+                or delivery.get('codec') != 'h264' or delivery.get('serial_codec') != ('rawvideo' if fixed_picture else 'ffv1')
                 or delivery.get('audio_codec') != 'aac'
                 or set(delivery.get('inputs', {})) != {'presenter', 'material'}
                 or any(delivery['inputs'][kind].get('codec') != 'h264'
@@ -653,13 +660,32 @@ class DeviceResourcePreparation:
                        for kind, rate in (('presenter', PRESENTER_SOURCE_FRAME_RATE), ('material', 30)))):
             raise DeviceProfileUnavailable('人物组合 CPU 样片缺少完整的解码、镜头或交付记录。')
         duration = max(shape.duration_seconds, frames / 30)
-        temporary_bytes = delivery['temporary_bytes'] + receipt['media']['audio']['bytes']
+        if fixed_picture:
+            from app.montage import y4m_picture_bytes
+            picture_limit = y4m_picture_bytes(shape.width_px, shape.height_px, frames, shape.clip_count)
+            picture_bytes, auxiliary_bytes = delivery.get('picture_bytes'), delivery.get('auxiliary_bytes')
+            if (delivery.get('serial_picture_format') != Y4M_SERIAL_PICTURE_FORMAT
+                    or bootstrap_render.serial_picture_format != Y4M_SERIAL_PICTURE_FORMAT
+                    or type(picture_bytes) is not int or not 0 < picture_bytes <= picture_limit
+                    or type(auxiliary_bytes) is not int or auxiliary_bytes <= 0
+                    or picture_bytes + auxiliary_bytes != delivery.get('temporary_bytes')):
+                raise DeviceProfileUnavailable('人物组合 CPU 样片的定长画面容量记录不完整。')
+            # The probe repeats a synthetic subtitle bitmap. Reserve at least
+            # one full-canvas RGBA raster per prepared shot for distinct real
+            # captions. The renderer checks their actual on-disk size.
+            caption_allowance = shape.clip_count * shape.width_px * shape.height_px * 4
+            auxiliary_limit = max(caption_allowance, math.ceil(auxiliary_bytes * policy.measured_margin))
+            mix_bytes = audio_mix_output_bounds(None, (), duration, normalize_voice_sources=False)['mix_output_bytes']
+            temporary_bytes = picture_limit + mix_bytes + auxiliary_limit
+        else:
+            temporary_bytes = math.ceil((delivery['temporary_bytes'] + receipt['media']['audio']['bytes'])
+                * policy.measured_margin)
         return replace(bootstrap_render, max_duration_seconds=duration,
             max_pixel_seconds=shape.width_px * shape.height_px * duration,
             max_input_bytes=shape.source_bytes,
             max_output_bytes=math.ceil(delivery['bytes'] * policy.measured_margin),
             max_timeout_seconds=math.ceil(receipt['elapsed_seconds'] * policy.measured_margin),
-            additional_memory_bytes=rss, additional_disk_bytes=math.ceil(temporary_bytes * policy.measured_margin),
+            additional_memory_bytes=rss, additional_disk_bytes=temporary_bytes,
             max_process_threads=threads)
 
     @staticmethod
@@ -724,7 +750,7 @@ class DeviceResourcePreparation:
                 evidence = {'format_version': 1, 'device': asdict(self.device),
                     'backend_identity': None if name == 'host' else identities[name], 'budget_digest': _digest(payload),
                     'method': ('native-task-shell-preparation/v1' if name == 'native_command'
-                        else PRESENTER_DELIVERY_CONTRACT if name == 'presenter_cpu_render'
+                        else receipt['delivery_probe']['contract'] if name == 'presenter_cpu_render'
                         else plan['policy']['id'] + ':synthetic-granted-cpu'),
                     'input_range': {'requested_unit': plan['shape'], 'sample_seconds': plan['probe_seconds'],
                         'scope': 'synthetic_cpu_only', 'policy': plan['policy'], 'host_observation': plan['host_observation'],

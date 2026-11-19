@@ -73,6 +73,9 @@ class CoverBudget:
         return hashlib.sha256(json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+Y4M_SERIAL_PICTURE_FORMAT = "y4m_yuv420p"
+
+
 @dataclass(frozen=True)
 class CpuRenderBudget:
     """Device-calibrated limits for the explicitly bounded FFmpeg CPU path."""
@@ -92,6 +95,7 @@ class CpuRenderBudget:
     max_process_threads: int
     running_cpu_policy: RuntimeCpuPolicy | None = None
     max_template_count: int = 0
+    serial_picture_format: str | None = None
 
     def __post_init__(self) -> None:
         if (not math.isfinite(self.max_duration_seconds) or self.max_duration_seconds <= 0
@@ -115,6 +119,8 @@ class CpuRenderBudget:
             raise ValueError("Render running CPU policy must be explicit")
         if self.running_cpu_policy is not None and self.running_cpu_policy.mode != "darwin_nice":
             raise ValueError("CPU成片必须使用显式darwin_nice策略")
+        if self.serial_picture_format not in {None, Y4M_SERIAL_PICTURE_FORMAT}:
+            raise ValueError("未知的串行画面中间格式")
 
 
 @dataclass(frozen=True)

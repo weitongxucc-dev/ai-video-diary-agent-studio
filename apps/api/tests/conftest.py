@@ -73,7 +73,7 @@ def granted_media(tmp_path):
     sequence = 0
 
     @contextmanager
-    def acquire(paths=(), *, kind="task_audio"):
+    def acquire(paths=(), *, kind="task_audio", serial_picture_format=None):
         nonlocal sequence
         sequence += 1
         root = tmp_path / f"media-grant-{sequence}"
@@ -97,10 +97,12 @@ def granted_media(tmp_path):
         grant = runtime.scheduler.pick_and_grant()
         assert grant is not None and grant.owner_id == job.id
         # Synthetic media fixture metadata only; not real host/RSS calibration.
-        if kind == "creation_render":
+        if kind in {"creation_render", "creation_presenter_render"}:
             from types import SimpleNamespace
+            render = SimpleNamespace(additional_disk_bytes=64 * 1024**2, serial_picture_format=serial_picture_format)
             runtime.scheduler.resources.budget = SimpleNamespace(
-                cpu_render=SimpleNamespace(additional_disk_bytes=64 * 1024**2), presenter_cpu_render=None)
+                cpu_render=render if kind == "creation_render" else None,
+                presenter_cpu_render=render if kind == "creation_presenter_render" else None)
             def granted_resources(current):
                 assert current == grant
                 with repository._connect() as conn:

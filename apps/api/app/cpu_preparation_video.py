@@ -6,10 +6,12 @@ from fractions import Fraction
 
 from PIL import Image
 
+from app.host_resource_probes import Y4M_SERIAL_PICTURE_FORMAT
 from app.visual_effects import color_filters, framing_filter, geometry_filters
 
 
-PRESENTER_DELIVERY_CONTRACT = 'presenter-h264-serial-ffv1-delivery/v1'
+LEGACY_PRESENTER_DELIVERY_CONTRACT = 'presenter-h264-serial-ffv1-delivery/v1'
+PRESENTER_DELIVERY_CONTRACT = 'presenter-h264-serial-y4m-delivery/v2'
 PRESENTER_SOURCE_FRAME_RATE = 25
 
 
@@ -42,11 +44,16 @@ def _probe_video(plan, run, path, *, codec, size, frames, frame_rate=30, audio_c
 
 
 def measure_presenter_delivery(plan, shape, audio, run, *, max_bytes):
-    """Use encoded H.264 inputs and the production FFV1 and delivery commands."""
+    """Use encoded H.264 inputs and the production serial picture and delivery commands."""
     from app.audio_timeline import narration_audio_timeline
     from app.montage import (CreationTaskMontagePlan, MontageClip, MontageRenderer,
-        _write_frame_subtitle_input, bounded_render_command, serial_picture_command)
+        _write_frame_subtitle_input, bounded_render_command, picture_concat_manifest, serial_picture_command,
+        validate_y4m_picture)
 
+    contract = plan.get('presenter_delivery_probe', LEGACY_PRESENTER_DELIVERY_CONTRACT)
+    fixed_picture = contract == PRESENTER_DELIVERY_CONTRACT
+    picture_format = Y4M_SERIAL_PICTURE_FORMAT if fixed_picture else None
+    extension = '.y4m' if fixed_picture else '.nut'
     root = audio.parent
     size = shape.width_px, shape.height_px
     material_size = shape.source_width_px or size[0], shape.source_height_px or size[1]
@@ -59,7 +66,6 @@ def measure_presenter_delivery(plan, shape, audio, run, *, max_bytes):
               ('material', material_size, 30, frame_counts[shape.presenter_clip_count:]))
     paths = [audio]
     inputs, clips, shot_paths, caption_spans = {}, [], [], []
-    picture_lines = ['ffconcat version 1.0']
     caption = root / 'presenter-caption.png'
     with Image.new('RGBA', size, (255, 255, 255, 32)) as bitmap:
         bitmap.save(caption)
@@ -80,7 +86,7 @@ def measure_presenter_delivery(plan, shape, audio, run, *, max_bytes):
             frames=fixture_frames, frame_rate=source_rate)
         for frames in counts:
             index = len(clips)
-            target = root / f'presenter-probe-{index:03}.nut'
+            target = root / f'clip-{index:03}{extension}'
             clip = MontageClip(f'probe-{index}', 'probe', kind, None, str(source),
                 0, frames / 30, position / 30, (position + frames) / 30, 1, [], False,
                 person_render_id='probe-person' if kind == 'presenter' else None,
@@ -89,19 +95,21 @@ def measure_presenter_delivery(plan, shape, audio, run, *, max_bytes):
             if remaining <= 0:
                 raise ValueError('人物组合 CPU 样片已达到中间文件磁盘上限')
             command = serial_picture_command(clip, source, target, size=size, frames=frames,
-                threads=1, max_bytes=remaining)
+                threads=1, max_bytes=remaining, picture_format=picture_format)
             command[0] = plan['ffmpeg']
             paths.append(target)
             run(command, tuple(paths))
-            _probe_video(plan, run, target, codec='ffv1', size=size, frames=frames)
+            if fixed_picture:
+                validate_y4m_picture(target, size=size, frames=frames)
+            else:
+                _probe_video(plan, run, target, codec='ffv1', size=size, frames=frames)
             shot_paths.append(target)
-            picture_lines.extend((f'file {target.name}', f'duration {frames / 30:.10f}'))
             caption_spans.append((position, position + frames))
             clips.append(clip)
             position += frames
 
     pictures = root / 'presenter-probe.ffconcat'
-    pictures.write_text('\n'.join(picture_lines) + '\n', encoding='utf-8')
+    pictures.write_text(picture_concat_manifest(frame_counts, extension), encoding='utf-8', newline='\n')
     captions, offset = _write_frame_subtitle_input(caption_spans, [caption] * len(caption_spans),
         root, size=size, frame_count=total_frames)
     caption_paths = captions, root / 'subtitle-transparent.png'
@@ -114,16 +122,23 @@ def measure_presenter_delivery(plan, shape, audio, run, *, max_bytes):
     command = MontageRenderer(root).build_command(montage, audio, output, [], subtitle_intervals=[],
         subtitle_sequence=(captions, offset), picture_sequence=pictures)
     command[0] = plan['ffmpeg']
-    temporary_bytes = sum(path.stat().st_size for path in (caption, *caption_paths, pictures, *shot_paths))
+    picture_bytes = sum(path.stat().st_size for path in shot_paths)
+    auxiliary_bytes = sum(path.stat().st_size for path in (caption, *caption_paths, pictures))
+    temporary_bytes = picture_bytes + auxiliary_bytes
     bounded_paths = (*paths, pictures, *caption_paths)
     output_limit = max_bytes - sum(path.stat().st_size for path in bounded_paths)
     if output_limit <= 0:
         raise ValueError('人物组合 CPU 样片已达到交付文件磁盘上限')
     run(bounded_render_command(command, 1, output_limit), (*bounded_paths, output))
     media = _probe_video(plan, run, output, codec='h264', size=size, frames=total_frames, audio_codec='aac')
-    return {**media, 'contract': PRESENTER_DELIVERY_CONTRACT, 'inputs': inputs,
+    evidence = {**media, 'contract': contract, 'inputs': inputs,
         'clip_count': len(shot_paths), 'presenter_clip_count': shape.presenter_clip_count,
-        'serial_codec': 'ffv1', 'audio_codec': 'aac', 'temporary_bytes': temporary_bytes}
+        'serial_codec': 'rawvideo' if fixed_picture else 'ffv1',
+        'audio_codec': 'aac', 'temporary_bytes': temporary_bytes}
+    if fixed_picture:
+        evidence.update(serial_picture_format=picture_format, picture_bytes=picture_bytes,
+                        auxiliary_bytes=auxiliary_bytes)
+    return evidence
 
 
 def preparation_video_command(plan, shape, video):
