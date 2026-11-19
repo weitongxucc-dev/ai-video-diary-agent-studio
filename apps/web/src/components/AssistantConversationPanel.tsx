@@ -843,7 +843,7 @@ export function AssistantConversationPanel({
   }
 
   if (state.loading && conversation) return <section ref={panelRef} className={`assistant-conversation-panel${compact ? " is-compact" : ""}`} aria-label="助手对话" data-assistant-loading>
-    <p className="assistant-conversation-loading" role="status">{conversation ? "正在切换对话…" : "正在恢复对话…"}</p>
+    <p className="assistant-conversation-loading" role="status">正在切换对话…</p>
   </section>;
 
   const headerActions = <AssistantConversationHeaderActions state={state} busy={busy} onConversationChange={onConversationChange} onInput={onInput} legacyHistory={legacyHistory}>{capabilities ? <Button variant="ghost" className="assistant-icon-action" type="button" aria-expanded={diagnosticsExpanded} aria-controls={diagnosticsId} aria-label="技术能力状态（诊断）" title="技术能力状态（诊断）" onClick={() => setDiagnosticsExpanded(value => !value)}><MoreHorizontal size={15}/></Button> : null}</AssistantConversationHeaderActions>;
