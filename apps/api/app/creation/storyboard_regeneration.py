@@ -144,14 +144,17 @@ def narration_signature(repository, task, *, connection=None) -> str:
 
 
 def material_signature(repository, task, *, connection=None) -> str:
-    assets = {asset.id: asset for asset, _segment in repository.automatic_material_segments(
-        task.workspace_id, viewer_user_id=task.owner_user_id, connection=connection)}
-    manifest = []
-    for asset_id in sorted(assets):
-        reference = repository.workspace_media_reference_for_asset(task.workspace_id, asset_id, connection=connection)
-        path = repository.resolve_clip_media_reference(task.workspace_id, asset_id, reference, connection=connection)
-        info = path.stat()
-        manifest.append((asset_id, reference, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+    with repository.execution_inputs.creation_execution_read(connection) as conn:
+        plan = repository.plan_records.read_creation_plan(conn, task.workspace_id, task.plan_id)
+        assets = {asset.id: asset for asset, _segment in repository.automatic_material_segments(
+            task.workspace_id, viewer_user_id=task.owner_user_id,
+            asset_ids=plan.selected_material_asset_ids or None, connection=conn)}
+        manifest = []
+        for asset_id in sorted(assets):
+            reference = repository.workspace_media_reference_for_asset(task.workspace_id, asset_id, connection=conn)
+            path = repository.resolve_clip_media_reference(task.workspace_id, asset_id, reference, connection=conn)
+            info = path.stat()
+            manifest.append((asset_id, reference, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
     return hashlib.sha256(json.dumps(manifest).encode()).hexdigest()
 
 

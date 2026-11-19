@@ -268,6 +268,9 @@ class MontageStageUseCase:
         with self.repository.execution_inputs.creation_execution_read() as conn:
             snapshot, dependency = montage_dependency(self.repository, task, connection=conn)
             task, creation_plan, header = snapshot.task, snapshot.plan, snapshot.script_header
+            if creation_plan.selected_material_asset_ids:
+                selected = set(creation_plan.selected_material_asset_ids)
+                asset_ids = selected if asset_ids is None else selected.intersection(asset_ids)
             narration = self.repository.narration_artifacts.get_narration_artifact(workspace_id, task.narration_cache_key, connection=conn)
             audio = {}
             for section, segment in self.repository.section_inputs.iter_creation_narration_sections(task, header, connection=conn):

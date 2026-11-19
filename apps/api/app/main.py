@@ -328,6 +328,8 @@ from app.creation.script_library_use_case import ScriptLibraryUseCase
 from app.task_workspace_routes import TaskWorkspaceResponseAdapter, build_task_workspace_router
 from app.task_topic_routes import build_task_topic_router
 from app.task_knowledge_adoption_routes import build_task_knowledge_adoption_router
+from app.creation.material_scope_use_case import MaterialScopeUseCase
+from app.task_material_scope_routes import build_task_material_scope_router
 from app.creation.script_context_use_case import ScriptContextUseCase
 from app.task_script_routes import build_task_script_router
 from app.task_assistant_history_routes import build_task_assistant_history_router
@@ -3117,6 +3119,9 @@ app.include_router(build_task_knowledge_adoption_router(
     http_error_for=lambda: HTTPException,
     response_for=lambda: TaskKnowledgeAdoptionResponse,
 ))
+
+app.include_router(build_task_material_scope_router(access=_exact_edit_access,
+    case_for=lambda: MaterialScopeUseCase(production_repo, production_repo._connect)))
 
 
 def _assistant_creation_adoption_scope(task_id: str, request: Request, turn_id: str, *, draft_only: bool = False):
