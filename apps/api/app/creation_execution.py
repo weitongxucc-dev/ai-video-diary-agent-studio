@@ -462,14 +462,16 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
             or not segment.audio_reference or plan.selected_voice is None):
         raise ValueError("配音片段或当前确认文案已变化，请重新预览")
     from app.creation.narration_pcm import narration_reference_facts
-    inputs,reference,reference_preparation=narration_reference_facts(repository,task,plan,reference_preparation)
+    inputs,reference,reference_preparation=narration_reference_facts(
+        repository, task, plan, reference_preparation, connection=connection)
     if not plan.selected_voice.version or inputs.voice.version != plan.selected_voice.version:
         raise ValueError('局部配音需要明确的声音固定版本')
     if segment.audio_reference.startswith("narration://artifact/"):
         artifact = repository.narration_artifacts.get_narration_artifact(task.workspace_id, segment.audio_reference.removeprefix("narration://artifact/"), connection=connection)
         if artifact is None or artifact.task_id != task.id or artifact.script_id != script.id:
             raise ValueError("原配音产物不属于当前任务及文案版本")
-    original = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, segment.audio_reference)
+    original = repository.narration_artifacts.resolve_authorized_narration_audio_reference(
+        task.workspace_id, segment.audio_reference, connection=connection)
     stat = original.stat()
     if not original.is_file() or stat.st_size <= 0:
         raise ValueError("原配音来源缺失，未安排局部重做")
@@ -493,7 +495,8 @@ def narration_edit_stage_facts(repository, task, proposal, plan, budget, *, refe
                 or record.task_id != task.id or record.script_id != script.id):
             raise ValueError("合并配音产物不属于当前任务及文案版本")
         segment_artifacts.append(asdict(record))
-        path = repository.narration_artifacts.resolve_authorized_narration_audio_reference(task.workspace_id, item.audio_reference)
+        path = repository.narration_artifacts.resolve_authorized_narration_audio_reference(
+            task.workspace_id, item.audio_reference, connection=connection)
         info = path.stat()
         if not path.is_file() or info.st_size <= 0:
             raise ValueError("合并配音来源缺失，未安排局部重做")
@@ -811,7 +814,8 @@ def creation_stage_facts(repository, task, script, plan, stage, narration_budget
         if narration_budget is None:
             raise ValueError("配音预算尚未标定，请配置 DEVICE_NARRATION_* 标定值")
         from app.creation.narration_pcm import narration_reference_facts
-        inputs, reference_input, qualified = narration_reference_facts(repository, task, plan, reference_preparation)
+        inputs, reference_input, qualified = narration_reference_facts(
+            repository, task, plan, reference_preparation, connection=connection)
         reference = Path(reference_input.source_path)
         stat = reference.stat()
         saved = (comparison_reference or qualified)['reference']
@@ -1127,7 +1131,8 @@ class CreationJobOwnerVerifier:
                 self.repository.creation_execution_jobs.creation_narration_reference(job.workspace_id, job.id, connection=conn))
             if reference_preparation is None and job.attempt == 0 and job.started_at is None:
                 self.repository.creation_execution_jobs.creation_narration_source_binding(job.workspace_id, job.id, connection=conn)
-        inputs,reference_input,reference_preparation=narration_reference_facts(self.repository,task,plan,reference_preparation)
+        inputs,reference_input,reference_preparation=narration_reference_facts(
+            self.repository, task, plan, reference_preparation, connection=conn)
         pronunciation = _pronunciation_version(_pronunciation_dictionary(entries=inputs.pronunciation_entries,
             workspace_id=task.workspace_id, person_profile_id=inputs.voice.person_profile_id, task_id=task.id))
         reference = Path(reference_input.source_path)

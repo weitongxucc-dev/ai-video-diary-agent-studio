@@ -1932,9 +1932,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
             onRecord={() => setRecordingOpen(true)} onReviseScript={() => openView("script")} onAdoptRecording={recording => void adoptRecordedVoice(recording)} onVoiceChange={setSelectedVoiceId}
             onUseVoice={() => void handleNarrationVoice()} />
         ) : null}
-        {activeView === "narration" && task.stage === "narration" && task.stage_status === "not_started"
-          && task.stage_reason && task.confirmed_script_id && !workspace.narration ?
-          <NarrationDurationReviewPanel key={task.id} taskId={task.id} onSaved={() => {
+        {activeView === "narration" && task.stage === "narration" && task.confirmed_script_id && !workspace.narration ?
+          <NarrationDurationReviewPanel key={`${task.id}:${task.confirmed_script_id}`} taskId={task.id} onSaved={() => {
+            if (currentTaskId.current !== task.id) return;
             void refresh(true).catch(cause => {
               if (currentTaskId.current === task.id) setError(errorDetails(cause));
             });
