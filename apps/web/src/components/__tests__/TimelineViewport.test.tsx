@@ -50,3 +50,10 @@ it("seeks accurately by ruler pointer and keyboard without changing clips", () =
   fireEvent.keyDown(ruler,{key:"ArrowRight",shiftKey:true});
   expect(onSeek).toHaveBeenLastCalledWith(10);
 });
+
+it("keeps timeline tools available and disables time navigation on an empty timeline", () => {
+  render(<TimelineViewport {...props} duration={0} actions={<button>历史版本</button>}>{null}</TimelineViewport>);
+  expect(screen.getByRole("button", { name: "历史版本" })).toBeEnabled();
+  expect(screen.getByRole("slider", { name: "时间线缩放" })).toBeDisabled();
+  expect(screen.queryByRole("slider", { name: "时间线播放位置" })).toBeNull();
+});
