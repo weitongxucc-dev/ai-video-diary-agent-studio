@@ -212,6 +212,13 @@ it("summarizes completed calls by their public action labels and retains the ful
   const receipts = within(openExecutionRecord(summary)).getByRole("list", {name: "操作回执"});
   expect(within(receipts).getAllByRole("listitem")).toHaveLength(6);
   expect(within(receipts).getAllByText("保存镜头")).toHaveLength(2);
+  const items = within(receipts).getAllByRole("listitem");
+  expect(within(receipts).getByText("实际回执 6。")).not.toBeVisible();
+  fireEvent.click(items[5].querySelector("summary")!);
+  expect(within(receipts).getByText("实际回执 6。")).toBeVisible();
+  expect(within(receipts).getByText("实际回执 5。")).not.toBeVisible();
+  fireEvent.click(summary.closest("summary")!);
+  fireEvent.click(summary.closest("summary")!);
   expect(within(receipts).getByText("实际回执 6。")).toBeVisible();
 });
 
@@ -2999,6 +3006,9 @@ it("keeps success groups closed while running and omits empty tool receipt text"
   expect(group).not.toHaveAttribute("open");
   expect(screen.getByText("正在检查时间线")).toBeVisible();
   fireEvent.click(group.querySelector("summary")!);
+  expect(within(group).getByText("已读取 3 条素材。")).not.toBeVisible();
+  expect(group.querySelectorAll(".assistant-item-receipt")).toHaveLength(1);
+  fireEvent.click(group.querySelector(".assistant-item-receipt > summary")!);
   expect(within(group).getByText("已读取 3 条素材。")).toBeVisible();
   expect(within(group).queryByText(/工具已返回/)).not.toBeInTheDocument();
   expect(group.querySelector(".assistant-activity-target.is-filename")).toHaveTextContent("script.md");

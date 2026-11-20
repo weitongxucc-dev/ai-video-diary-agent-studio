@@ -221,6 +221,24 @@ function ToolName({ tool, running = false }: { tool: TurnTool; running?: boolean
     ? <span className={`assistant-activity-target${filename ? " is-filename" : program ? " is-program" : ""}`} title={target}> · {target}</span> : null}</span>;
 }
 
+function CompletedToolReceipt({ tool, summary, readingKey, reading }: {
+  tool: TurnTool; summary: string | null; readingKey: string; reading?: TurnReadingState;
+}) {
+  const [open, setOpen] = useState(() => reading?.get(readingKey, false) ?? false);
+  const label = <><ToolIcon tools={[tool]}/><ToolName tool={tool}/></>;
+  if (!summary) return <div className="assistant-activity-row">{label}</div>;
+  return <details className="assistant-item-receipt" data-reading-key={readingKey} open={open} onToggle={event => {
+    if (event.target !== event.currentTarget) return;
+    const next = event.currentTarget.open;
+    if (next === open) return;
+    setOpen(next);
+    reading?.save(readingKey, next);
+  }}>
+    <summary className="assistant-activity-row">{label}<span className="assistant-activity-state">回执</span></summary>
+    <p>{summary}</p>
+  </details>;
+}
+
 function CompletedTools({ tools, turnId, anchorId, reading, reply }: {
   tools: TurnTool[]; turnId: string; anchorId: number; reading?: TurnReadingState; reply: string;
 }) {
@@ -233,10 +251,12 @@ function CompletedTools({ tools, turnId, anchorId, reading, reply }: {
     <ToolIcon tools={tools}/><ToolName tool={single}/>
   </div>;
   return <details className="assistant-inline-completed" data-reading-key={`${turnId}:tool:${anchorId}`} open={expanded} onToggle={event => {
+    if (event.target !== event.currentTarget) return;
     const next = event.currentTarget.open;
     if (next === expanded) return;
     setManualOpen(next);
     for (const tool of tools) reading?.save(readingKey(tool), next);
+    if (single) reading?.save(`${readingKey(single)}:receipt`, next);
   }}>
     <summary><ToolIcon tools={tools}/>
       {tools.length === 1 ? <ToolName tool={tools[0]}/> : <span className="assistant-activity-name">{completedToolSummary(tools)}</span>}
@@ -244,8 +264,9 @@ function CompletedTools({ tools, turnId, anchorId, reading, reply }: {
     <ol className="assistant-inline-receipts" aria-label="操作回执">{tools.map(tool => {
       const summary = receiptText(tool.summary);
       return <li key={tool.id}>
-        {tools.length > 1 ? <div className="assistant-activity-row"><ToolIcon tools={[tool]}/><ToolName tool={tool}/></div> : null}
-        {summary && !reply.includes(summary) ? <p>{summary}</p> : null}
+        {single ? <p>{singleReceipt}</p> : <CompletedToolReceipt tool={tool}
+          summary={summary && !reply.includes(summary) ? summary : null}
+          readingKey={`${readingKey(tool)}:receipt`} reading={reading}/>}
       </li>;
     })}</ol>
   </details>;

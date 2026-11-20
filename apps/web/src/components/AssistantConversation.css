@@ -216,6 +216,20 @@
   padding-inline-start:var(--space-1);
   border-inline-start:1px solid var(--border-1);
 }
+.assistant-conversation-panel .assistant-item-receipt > summary {
+  background:transparent;
+  border:0;
+  box-shadow:none;
+  cursor:pointer;
+  list-style:none;
+}
+.assistant-item-receipt > summary::-webkit-details-marker { display:none; }
+.assistant-conversation-panel .assistant-item-receipt > summary:focus-visible {
+  outline:1px solid var(--focus);
+  outline-offset:-1px;
+}
+.assistant-item-receipt > summary:hover .assistant-activity-state,
+.assistant-item-receipt[open] > summary .assistant-activity-state { text-decoration:underline; }
 .assistant-inline-receipts p { padding-inline-start:var(--space-5); color:var(--text-3); }
 .assistant-inline-receipts p,.assistant-inline-failure p { margin:0; overflow-wrap:anywhere; }
 .assistant-inline-failure p + p { margin-block-start:var(--space-1); }
