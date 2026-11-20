@@ -433,6 +433,21 @@ def test_pi_native_activity_displays_only_task_file_short_names_and_real_calls()
     assert skill["display_target"] == "narration-edit"
 
 
+def test_public_reasoning_filter_hides_private_tail_after_public_text_but_keeps_examples():
+    from app.assistant.projection import PublicReasoningFilter, public_history_turn
+
+    assert PublicReasoningFilter().feed("公开结论。<think>secret</think>", final=True) == "公开结论。"
+    assert PublicReasoningFilter().feed("正文中的标签示例：<think>示例内容</think>。", final=True) == "正文中的标签示例：<think>示例内容</think>。"
+    saved = public_history_turn({
+        "assistant_text": "公开结论。<think>legacy secret</think>",
+        "events": [{"type": "text_delta", "delta": "公开结论。<think>legacy secret</think>"}],
+        "result": {"response": {"reply": "公开结论。<think>legacy secret</think>"}},
+    }, lambda value, _workspace: value)
+    assert saved["assistant_text"] == "公开结论。"
+    assert saved["events"] == [{"type": "text_delta", "delta": "公开结论。"}]
+    assert saved["result"]["response"]["reply"] == "公开结论。"
+
+
 def test_pi_final_reply_excludes_marked_reasoning():
     from app.assistant.result_projection import project_business_result
 

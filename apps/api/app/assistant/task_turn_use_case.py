@@ -14,7 +14,7 @@ from app.assistant.inputs import latest_consumed_input
 from app.creation.editing.edit_scope import clip_tail_blocker
 from app.assistant.turn_control import AssistantStopped
 from app.assistant.task_turn_scope_use_case import TaskTurnSelection
-from app.assistant.projection import _safe_business_failure, _safe_compaction_event
+from app.assistant.projection import _safe_business_failure, _safe_compaction_event, public_assistant_text
 from app.assistant.trace import runtime_receipt_fields
 from app.creation.media_result_use_case import MediaResultRejected
 from app.creation.task_authorization import TaskAuthorizationDenied
@@ -468,7 +468,7 @@ class TaskAssistantTurnUseCase:
             reply, preview = (yield RunTask(workspace_id, member_id, task_id, str(payload.conversation_id), turn_id, message, trusted_stage, trusted_refs, payload.playhead_ms, caller_user_id, local_diagnostic, profile_reference, knowledge_reference, task_version, material_selection))
         except AssistantStopped:
             saved = self._conversations_for().get_turn(turn_id)
-            response = (yield BuildTaskResponse({'reply': saved['assistant_text'] if saved else '', 'provider': (yield ReadSettings(workspace_id)).effective_llm_provider, 'model': (yield ReadSettings(workspace_id)).effective_llm_model, 'turn_id': turn_id, 'turn_status': 'stopped', 'draft_version': payload.expected_draft_version + 1, 'script_window_request': ((saved or {}).get('result') or {}).get('response', {}).get('script_window_request'), 'quality_continuation': ((saved or {}).get('result') or {}).get('response', {}).get('quality_continuation')}))
+            response = (yield BuildTaskResponse({'reply': public_assistant_text(saved['assistant_text']) if saved else '', 'provider': (yield ReadSettings(workspace_id)).effective_llm_provider, 'model': (yield ReadSettings(workspace_id)).effective_llm_model, 'turn_id': turn_id, 'turn_status': 'stopped', 'draft_version': payload.expected_draft_version + 1, 'script_window_request': ((saved or {}).get('result') or {}).get('response', {}).get('script_window_request'), 'quality_continuation': ((saved or {}).get('result') or {}).get('response', {}).get('quality_continuation')}))
             self._conversations_for().finish_turn(turn_id, 'stopped', result={'kind': 'task_turn', 'response': (yield SerializeView(response, 'json'))})
             return response
         except AssistantUnavailable as exc:

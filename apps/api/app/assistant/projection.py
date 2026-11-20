@@ -353,20 +353,80 @@ class PublicReasoningFilter:
         for match in self._pattern.finditer(text, 0, stop):
             tag = match[0].lower()
             closing = tag.startswith("</")
-            if not self._sections:
-                add_visible(text[start:match.start()])
-                if not self._line_start or closing:
-                    add_visible(match[0])  # Quoted/inline examples stay visible.
+            if self._sections:
+                if closing and tag == self._sections[-1]:
+                    self._sections.pop()
+                start = match.end()
+                continue
+
+            add_visible(text[start:match.start()])
+            if closing:
+                add_visible(match[0])
+            else:
+                closing_tag = "</" + tag[1:]
+                closing_at = text.lower().find(closing_tag, match.end(), stop)
+                body = text[match.end():closing_at if closing_at >= 0 else stop]
+                context = text[max(start, match.start() - 24):match.start()] + body[:96]
+                quoted = bool(re.search(r"示例|范例|标签|example|sample|tag", context, re.IGNORECASE))
+                if quoted:
+                    add_visible(match[0])
                 else:
-                    self._sections.append("</" + tag[1:])
-            elif not closing:
-                self._sections.append("</" + tag[1:])
-            elif tag == self._sections[-1]:
-                self._sections.pop()
+                    self._sections.append(closing_tag)
             start = match.end()
         if not self._sections:
             add_visible(text[start:stop])
         return "".join(visible)
+
+
+def public_assistant_text(value: object) -> str:
+    return PublicReasoningFilter().feed(str(value or ""), final=True).strip()
+
+
+def public_history_turn(turn: dict, safe_text) -> dict:
+    """Project saved turns again so legacy raw assistant text cannot reach clients."""
+    result_turn = dict(turn)
+    workspace_id = turn.get("workspace_id")
+    def redact(value):
+        return safe_text(value, workspace_id)
+    result_turn["assistant_text"] = public_assistant_text(turn.get("assistant_text"))
+    events = []
+    reasoning = PublicReasoningFilter()
+    for event in turn.get("events", []):
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "text_delta" and isinstance(event.get("delta"), str):
+            delta = reasoning.feed(event["delta"])
+            if delta:
+                events.append({"type": "text_delta", "delta": redact(delta),
+                    **({key: event[key] for key in ("at",) if key in event})})
+        elif event.get("type") in {"tool_start", "tool_end"}:
+            projected = public_tool_event(event, redact)
+            if projected is not None:
+                events.append(projected)
+        elif event.get("type") == "context_compaction":
+            projected = _safe_compaction_event(event)
+            if projected is not None:
+                events.append(projected)
+        else:
+            events.append(event)
+    tail = reasoning.feed("", final=True)
+    if tail:
+        events.append({"type": "text_delta", "delta": redact(tail)})
+    result_turn["events"] = events
+    result = turn.get("result")
+    if isinstance(result, dict):
+        result = dict(result)
+        response = result.get("response")
+        if isinstance(response, dict):
+            response = dict(response)
+            if isinstance(response.get("reply"), str):
+                response["reply"] = PublicReasoningFilter().feed(response["reply"], final=True).strip()
+            result["response"] = response
+        if isinstance(result.get("message"), str):
+            result["message"] = PublicReasoningFilter().feed(result["message"], final=True).strip()
+        result_turn["result"] = result
+    return result_turn
+
 
 
 class _PiStreamProjector:

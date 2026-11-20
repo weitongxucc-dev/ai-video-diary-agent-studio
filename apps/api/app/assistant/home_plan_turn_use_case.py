@@ -5,6 +5,8 @@ Only the existing Conversation owner commits turn results here.
 """
 from __future__ import annotations
 
+from app.assistant.projection import public_assistant_text
+
 import re
 from dataclasses import dataclass
 from typing import Callable
@@ -158,7 +160,7 @@ class HomePlanTurnUseCase:
         except AssistantStopped:
             saved = self.get_turn(turn_id)
             saved_goal = preview.get("request") if isinstance(preview, dict) and preview.get("kind") == "creation_request" else None
-            response = yield BuildStoppedResponse(saved["assistant_text"] if saved else "", saved_goal)
+            response = yield BuildStoppedResponse(public_assistant_text(saved["assistant_text"]) if saved else "", saved_goal)
             yield ForgetTurnControl()
             rendered = yield SerializeStoppedResponse(response)
             self.finish_turn(turn_id, "stopped", result={
