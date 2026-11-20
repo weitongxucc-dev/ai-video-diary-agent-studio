@@ -442,7 +442,7 @@ def test_public_reasoning_filter_hides_private_tail_after_public_text_but_keeps_
         "assistant_text": "公开结论。<think>legacy secret</think>",
         "events": [{"type": "text_delta", "delta": "公开结论。<think>legacy secret</think>"}],
         "result": {"response": {"reply": "公开结论。<think>legacy secret</think>"}},
-    }, lambda value, _workspace: value)
+    }, lambda value: value)
     assert saved["assistant_text"] == "公开结论。"
     assert saved["events"] == [{"type": "text_delta", "delta": "公开结论。"}]
     assert saved["result"]["response"]["reply"] == "公开结论。"

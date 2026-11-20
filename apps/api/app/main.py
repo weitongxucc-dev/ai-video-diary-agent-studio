@@ -2649,6 +2649,7 @@ def _conversation_http_adapter():
         validate_scope=_validate_assistant_scope,
         owned_conversation=_assistant_conversation_for_request,
         clean_text=_assistant_text_without_credentials,
+        clean_text_factory=_assistant_text_redactor,
         validate_reference=_validate_saved_assistant_reference,
         recover_request=_assistant_creation_request_for_turn,
         require_actor=_require_permit_actor,
@@ -3246,20 +3247,30 @@ app.include_router(build_task_assistant_history_router(
 ))
 
 
+def _assistant_text_redactor(workspace_id: str):
+    # History readers call this once per workspace, then reuse the pure closure.
+    known_secrets = (
+        _workspace_settings_for(workspace_id).effective_llm_api_key,
+        settings.tencentcloud_secret_id,
+        settings.tencentcloud_secret_key,
+    )
+    def redact(value: str) -> str:
+        safe = value
+        for known in known_secrets:
+            if known and len(known) >= 8:
+                safe = safe.replace(known, "[已隐藏凭据]")
+        for pattern in (
+            r"(?i)(\bauthorization\s*:\s*bearer\s+)\S+",
+            r"(?i)(\b(?:api[_ -]?key|token|password|secret)\s*[:=]\s*)\S+",
+            r"\bsk-[A-Za-z0-9_-]{16,}\b",
+        ):
+            safe = re.sub(pattern, lambda match: (match.group(1) if match.lastindex else "") + "[已隐藏凭据]", safe)
+        return safe
+    return redact
+
+
 def _assistant_text_without_credentials(value: str, workspace_id: str) -> str:
-    safe = value
-    for known in (_workspace_settings_for(workspace_id).effective_llm_api_key,
-                  settings.tencentcloud_secret_id,
-                  settings.tencentcloud_secret_key):
-        if known and len(known) >= 8:
-            safe = safe.replace(known, "[已隐藏凭据]")
-    for pattern in (
-        r"(?i)(\bauthorization\s*:\s*bearer\s+)\S+",
-        r"(?i)(\b(?:api[_ -]?key|token|password|secret)\s*[:=]\s*)\S+",
-        r"\bsk-[A-Za-z0-9_-]{16,}\b",
-    ):
-        safe = re.sub(pattern, lambda match: (match.group(1) if match.lastindex else "") + "[已隐藏凭据]", safe)
-    return safe
+    return _assistant_text_redactor(workspace_id)(value)
 
 
 def _assistant_stream_safe_text(value: str, workspace_id: str) -> str:

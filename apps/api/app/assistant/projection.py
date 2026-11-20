@@ -385,9 +385,8 @@ def public_assistant_text(value: object) -> str:
 def public_history_turn(turn: dict, safe_text) -> dict:
     """Project saved turns again so legacy raw assistant text cannot reach clients."""
     result_turn = dict(turn)
-    workspace_id = turn.get("workspace_id")
     def redact(value):
-        return safe_text(value, workspace_id)
+        return safe_text(value)
     result_turn["assistant_text"] = public_assistant_text(turn.get("assistant_text"))
     events = []
     reasoning = PublicReasoningFilter()
