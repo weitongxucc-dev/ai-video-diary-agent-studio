@@ -5,7 +5,7 @@ import { Tooltip } from "./ui/tooltip";
 import { segmentRevisionStatus, segmentAdoptionReason, editExecutionReadinessMessage } from './creation-task/stage-labels';
 
 import { ConversationMessage } from "./ui/conversation-message";
-import { AssistantTurnExecutionRecord, TurnActivity, TurnToolActivity, hasPrivateExecutionText, publicExecutionText, turnBlocks, type TurnReadingState } from "./AssistantTurnExecutionRecord";
+import { TurnActivity, TurnToolActivity, hasPrivateExecutionText, publicExecutionText, turnBlocks, type TurnReadingState } from "./AssistantTurnExecutionRecord";
 import { ReferencePicker } from "./ui/reference-picker";
 import type { MaterialUsageContext } from "./ui/material-usage";
 import { ReferenceChips } from "./ui/reference-chips";
@@ -609,13 +609,12 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
       : productionRecovered ? "本轮回复曾中断；成片已生成，输出尚未检查，历史记录保留。"
       : businessContinuation ? "接续未完成；原要求和实际结果保留在记录中。" : "本轮未完成；本条要求保留在记录中。"}</p> : null}
     {turn.status === "stopped" ? <p role="status">本轮已停止；先前的业务动作不会因此撤销。</p> : null}
-    {turn.sequence > 0 || hasReplyActions ? <footer className="assistant-turn-footer">
+    {model || hasReplyActions ? <footer className="assistant-turn-footer">
       <div className="assistant-turn-actions">
         {hasReplyActions ? <ReplyActions turn={turn} onTransferReply={turn.status === "completed" ? onTransferReply : undefined}
           onCreatePlanFromReply={turn.status === "completed" ? onCreatePlanFromReply : undefined} transferDraftState={transferDraftState}/> : null}
       </div>
       {model ? <TurnModel model={model} settledAt={turn.status === "running" ? undefined : turn.updated_at}/> : null}
-      {turn.sequence > 0 && turn.status !== "running" ? <AssistantTurnExecutionRecord turn={turn} hasPublicTools={tools.length > 0} model={model} reading={reading}/> : null}
     </footer> : null}
   </article>;
 }
@@ -979,7 +978,6 @@ export function AssistantConversationPanel({
               {turn.user_message ? <ConversationMessage className="assistant-user-message" savedOpen={reading.get(`${turn.id}:user`, false)}
                 onOpenChange={open => reading.save(`${turn.id}:user`, open)}>{turn.user_message}</ConversationMessage> : null}
               <TurnContent turn={turn} blocks={blocks} reading={reading} latest={false}/>
-              <footer className="assistant-turn-footer"><AssistantTurnExecutionRecord turn={turn} hasPublicTools={blocks.some(block => block.kind === "tools")} model={null} reading={reading}/></footer>
             </article>;
           })}
         </ReadingDetails>)}
