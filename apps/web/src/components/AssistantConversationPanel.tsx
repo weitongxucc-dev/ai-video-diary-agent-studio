@@ -261,7 +261,15 @@ export function AssistantConversationHeaderActions({ state, busy, onConversation
   const running = state.conversation?.turns.at(-1)?.status === "running";
   const disabled = state.loading || busy || running;
   const fail = (cause: unknown) => state.setError(cause instanceof Error ? cause.message : "对话操作没有完成，请重试。");
+  const scopeLabel = state.conversation?.scope_kind === "task"
+    ? "当前作品会话"
+    : state.conversation?.scope_kind === "material"
+      ? "素材会话"
+      : "工作区会话";
   return <div className="assistant-header-actions">
+    <span className="assistant-session-scope" aria-label={`当前会话范围：${scopeLabel}`} title={state.conversation?.title ?? scopeLabel}>
+      {scopeLabel}{state.conversation?.title ? ` · ${state.conversation.title}` : ""}
+    </span>
     <Button variant="ghost" className="assistant-icon-action" type="button" aria-label="历史对话" title="历史对话" disabled={disabled}
       onClick={() => { void state.loadList().then(() => setHistoryOpen(true)).catch(fail); }}><History size={15}/></Button>
     <Button variant="ghost" className="assistant-icon-action" type="button" aria-label="新对话" title="新对话，保留当前作品" disabled={disabled}

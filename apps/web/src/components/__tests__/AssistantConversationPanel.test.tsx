@@ -1225,6 +1225,7 @@ describe("AssistantConversationPanel", () => {
       <AssistantConversationPanel state={controller} input="当前草稿" onInput={onInput} onSend={send}
         onConversationChange={changed} busy={false} configured scopeLabel="首页" legacyHistory={<details><summary>旧版只读历史</summary><p>任务原始旧回复</p></details>}/></section>);
     const slot = view.container.querySelector<HTMLElement>("[data-assistant-header-actions]")!;
+    expect(within(slot).getByLabelText("当前会话范围：工作区会话")).toHaveTextContent("工作区会话 · 新对话");
     expect(within(slot).getByRole("button", { name: "新对话" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "新对话" })).toHaveLength(1);
     expect(view.container.querySelector(".assistant-conversation-caption .assistant-header-actions")).toBeNull();
