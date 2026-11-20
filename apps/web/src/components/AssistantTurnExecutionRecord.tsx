@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
+import { Activity, AudioLines, ChevronRight, CircleAlert, Clapperboard, FileText, Images, Layers2, LoaderCircle, SquareTerminal } from "lucide-react";
 import { getAssistantTurnTrace } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantToolFailure } from "@/lib/types";
 import type { AssistantTraceEvent, AssistantTurnTrace } from "@/lib/types/assistant";
@@ -189,43 +189,65 @@ function completedToolSummary(tools: TurnTool[]) {
   return labels.join(" · ");
 }
 
+function toolIcon(tool: TurnTool) {
+  const label = tool.label;
+  if (/^(?:运行命令|执行命令|已运行命令|执行任务程序|运行任务程序)(?:$|[：:\s])/.test(label)) return SquareTerminal;
+  if (/声音|旁白|配音|音轨|音效|配乐/.test(label)) return AudioLines;
+  if (/文案|字幕|文件|稿|资料/.test(label)) return FileText;
+  if (/素材|图像|图片|模板/.test(label)) return Images;
+  if (/时间线|镜头|剪辑|画幅|修改/.test(label)) return Clapperboard;
+  return Activity;
+}
+
+function ToolIcon({ tools }: { tools: TurnTool[] }) {
+  const first = toolIcon(tools[0]);
+  const Icon = tools.every(tool => toolIcon(tool) === first) ? first : Layers2;
+  return <Icon className="assistant-activity-icon" aria-hidden size={14}/>;
+}
+
+function receiptText(text?: string) {
+  const summary = publicExecutionText(text);
+  return summary && !/^工具已返回[，,。]?\s*(?:请查看对应操作回执[。.]?)?$/.test(summary) ? summary : null;
+}
+
 function ToolName({ tool, running = false }: { tool: TurnTool; running?: boolean }) {
   const label = toolLabel(tool);
   const activeLabel = label === "工具调用" ? "执行" : label;
   const name = running && !activeLabel.startsWith("正在") ? `正在${activeLabel}` : label;
   const target = publicExecutionText(tool.target);
-  return <span className="assistant-activity-name">{name}{target && label !== target ? <span className="assistant-activity-target"> · {target}</span> : null}</span>;
+  const filename = target && /^[\p{Script=Latin}\d_.-]+\.[a-z0-9]{1,8}$/iu.test(target);
+  const program = target && toolIcon(tool) === SquareTerminal && /^[a-z][\w.-]*$/i.test(target);
+  return <span className="assistant-activity-name" title={name}>{name}{target && label !== target
+    ? <span className={`assistant-activity-target${filename ? " is-filename" : program ? " is-program" : ""}`} title={target}> · {target}</span> : null}</span>;
 }
 
-function CompletedTools({ tools, turnId, anchorId, reading, reply, active }: {
-  tools: TurnTool[]; turnId: string; anchorId: number; reading?: TurnReadingState; reply: string; active: boolean;
+function CompletedTools({ tools, turnId, anchorId, reading, reply }: {
+  tools: TurnTool[]; turnId: string; anchorId: number; reading?: TurnReadingState; reply: string;
 }) {
   function readingKey(tool: TurnTool) { return `${turnId}:tool:${tool.id}`; }
   const [manualOpen, setManualOpen] = useState<boolean>();
-  const selected = tools.map(tool => reading?.get(readingKey(tool), false) ?? false);
-  const expanded = manualOpen ?? (selected.some(Boolean) || tools.length > 1 && active
-    && tools.every(tool => reading?.get(readingKey(tool), true) ?? true));
+  const expanded = manualOpen ?? tools.some(tool => reading?.get(readingKey(tool), false));
   return <details className="assistant-inline-completed" data-reading-key={`${turnId}:tool:${anchorId}`} open={expanded} onToggle={event => {
     const next = event.currentTarget.open;
     if (next === expanded) return;
     setManualOpen(next);
     for (const tool of tools) reading?.save(readingKey(tool), next);
   }}>
-    <summary>{tools.length === 1 ? <><Check aria-hidden size={14}/><ToolName tool={tools[0]}/><span className="assistant-activity-state">已返回</span></>
-      : <span className="assistant-activity-name">{completedToolSummary(tools)}</span>}
+    <summary><ToolIcon tools={tools}/>
+      {tools.length === 1 ? <ToolName tool={tools[0]}/> : <span className="assistant-activity-name">{completedToolSummary(tools)}</span>}
       <ChevronRight className="assistant-activity-chevron" aria-hidden size={14}/></summary>
     <ol className="assistant-inline-receipts" aria-label="操作回执">{tools.map(tool => {
-      const summary = publicExecutionText(tool.summary);
+      const summary = receiptText(tool.summary);
       return <li key={tool.id}>
-        {tools.length > 1 ? <ToolName tool={tool}/> : null}
+        {tools.length > 1 ? <div className="assistant-activity-row"><ToolIcon tools={[tool]}/><ToolName tool={tool}/></div> : null}
         {summary && !reply.includes(summary) ? <p>{summary}</p> : null}
       </li>;
     })}</ol>
   </details>;
 }
 
-export function TurnToolActivity({ tools, turnTools, turn, active, reading, surfacedElsewhere = "", recoveryToolId, recovery }: {
-  tools: TurnTool[]; turnTools: TurnTool[]; turn: AssistantConversationTurn; active: boolean; reading?: TurnReadingState; surfacedElsewhere?: string;
+export function TurnToolActivity({ tools, turnTools, turn, reading, surfacedElsewhere = "", recoveryToolId, recovery }: {
+  tools: TurnTool[]; turnTools: TurnTool[]; turn: AssistantConversationTurn; reading?: TurnReadingState; surfacedElsewhere?: string;
   recoveryToolId?: number; recovery?: ReactNode;
 }) {
   const rows: ReactNode[] = [];
@@ -233,7 +255,7 @@ export function TurnToolActivity({ tools, turnTools, turn, active, reading, surf
   function addCompleted() {
     if (!completed.length) return;
     const anchor = completed.find(tool => reading?.get(`${turn.id}:tool:${tool.id}`, false)) ?? completed[0];
-    rows.push(<CompletedTools key={anchor.id} anchorId={anchor.id} tools={completed} turnId={turn.id} reading={reading} reply={surfacedElsewhere} active={active}/>);
+    rows.push(<CompletedTools key={anchor.id} anchorId={anchor.id} tools={completed} turnId={turn.id} reading={reading} reply={surfacedElsewhere}/>);
     completed = [];
   }
   for (const tool of tools) {
@@ -261,10 +283,10 @@ export function TurnToolActivity({ tools, turnTools, turn, active, reading, surf
     }
     if (tool.state === "running" || tool.state === "waiting") {
       const running = tool.state === "running";
-      const observation = publicExecutionText(tool.summary);
+      const observation = receiptText(tool.summary);
       rows.push(<div key={tool.id} className="assistant-tool-observation">
         <div className="assistant-activity-row">
-          {running ? <LoaderCircle aria-hidden size={14} className="is-spinning"/> : null}
+          <ToolIcon tools={[tool]}/>
           <span className="assistant-activity-status" role="status"><ToolName tool={tool} running={running}/></span>
           {running ? <ElapsedTime at={tool.startedAt}/> : <span className="assistant-activity-state">等待确认</span>}
         </div>
@@ -274,7 +296,7 @@ export function TurnToolActivity({ tools, turnTools, turn, active, reading, surf
       continue;
     }
     const reason = tool.state === "unreturned" ? "此调用没有返回，后台作业是否完成仍待核对。"
-      : publicExecutionText(tool.failure?.reason) ?? publicExecutionText(tool.summary);
+      : publicExecutionText(tool.failure?.reason) ?? receiptText(tool.summary);
     const unknown = tool.state === "unreturned" || tool.failure?.submission_effect === "unknown";
     const notes = [reason, publicExecutionText(tool.failure?.impact), recovery && tool.id === recoveryToolId ? null : publicExecutionText(tool.failure?.repair_action)]
       .filter((note): note is string => Boolean(note && !surfacedElsewhere.includes(note)));

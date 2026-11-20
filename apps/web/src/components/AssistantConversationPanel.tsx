@@ -113,6 +113,7 @@ function GoalProgress({ value, reading, refreshPaused, onRead, readingResult }: 
   const reason = goal.waiting_reason && goalReasonLabels[goal.waiting_reason];
   const completed = completedGoalOutput(value);
   const active = ["running", "waiting_result", "waiting_adoption", "waiting_identity", "waiting_unknown"].includes(goal.status);
+  if (goal.status === "no_progress" && goal.waiting_reason === "no_new_business_action" && !completed && !job && !media) return null;
   const currentStep = goal.status === "waiting_result" && job ? `${executionStageLabels[execution?.current_stage ?? ""] ?? "制作作业"}：${executionStatusLabels[job.status] ?? "状态待核实"}`
     : goal.status === "waiting_result" && media ? `${String(media.result_kind) === "observation" ? "输出检查" : media.result_kind === "graphic_source" ? "准备图片" : "后台预览"}：${executionStatusLabels[media.status] ?? "状态待核实"}`
       : reason;
@@ -183,6 +184,23 @@ function TurnModel({ model, settledAt }: { model: string; settledAt?: string }) 
   </span>;
 }
 
+// Keep the latest public words visible while withholding incomplete inline
+// delimiters from the current line. Settled content keeps its original source.
+function streamingMarkdown(text: string) {
+  const end = text.lastIndexOf("\n") + 1;
+  const line = text.slice(end).replace(/(?<!\\)\[([^\[\]]*)\]\([^)]*$/, "$1");
+  const markers = new Map<string, number>();
+  for (const token of line.matchAll(/(?<![\\*_`])(?:\*{1,3}|_{1,3}|`+)(?![*_`])/g)) {
+    if (token[0] === "*" && /^\s*$/.test(line.slice(0, token.index)) && /\s/.test(line[token.index + 1] ?? "")) continue;
+    if (token[0].startsWith("_") && /[\p{L}\p{N}]/u.test(line[token.index - 1] ?? "")
+      && /[\p{L}\p{N}]/u.test(line[token.index + token[0].length] ?? "")) continue;
+    if (markers.has(token[0])) markers.delete(token[0]);
+    else markers.set(token[0], token.index);
+  }
+  return text.slice(0, end) + [...markers].sort((a,b) => b[1] - a[1])
+    .reduce((visible, [marker, index]) => visible.slice(0, index) + visible.slice(index + marker.length), line);
+}
+
 function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continuation, visibleResultNotes, recoveryToolId, recovery, receipt }: {
   turn: AssistantConversationTurn; blocks?: ReturnType<typeof turnBlocks>; reading?: ReadingState; latest: boolean;
   continuation?: boolean; visibleResultNotes?: string; recoveryToolId?: number; recovery?: ReactNode; receipt?: ReactNode;
@@ -194,7 +212,6 @@ function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continu
   const receiptIndex = blocks.findIndex(block => block.kind === "result");
   const lastBlock = blocks.at(-1);
   const useBeforeAnswer = receiptIndex < 0 && lastBlock?.kind === "text" && turnTools.length > 0 && turn.status !== "running";
-  const activeTools = blocks.filter(block => block.kind === "tools").at(-1);
   const displayedNotices = new Set<string>();
   const toolFailureMessages = turnTools.flatMap(tool => tool.state === "failed"
     ? [tool.failure?.reason, tool.summary].map(publicExecutionText).filter(Boolean) : []);
@@ -213,7 +230,6 @@ function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continu
         </div>;
       }
       if (block.kind === "tools") return <TurnToolActivity key={block.key} tools={block.tools} turnTools={turnTools} turn={turn}
-        active={turn.status === "running" && activeTools === block}
         reading={reading} surfacedElsewhere={surfacedElsewhere} recoveryToolId={recoveryToolId} recovery={recovery}/>;
       if (goal && block === lastBlock) return null;
       if (hasPrivateExecutionText(block.text)) return null;
@@ -223,7 +239,7 @@ function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continu
         <div className="assistant-markdown-wrap" aria-busy={turn.status === "running"}>
         <ConversationMessage className="assistant-markdown" savedOpen={reading?.get(readingKey, latest) ?? latest}
           onOpenChange={open => reading?.save(readingKey, open)}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.status === "running" && block === lastBlock ? streamingMarkdown(block.text) : block.text}</ReactMarkdown>
         </ConversationMessage>
         </div>
       </Fragment>;

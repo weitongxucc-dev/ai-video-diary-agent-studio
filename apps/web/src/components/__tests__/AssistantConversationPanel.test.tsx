@@ -169,7 +169,7 @@ it("keeps parallel receipts in event order and expanded as the original turn set
   view.rerender(panel());
   expect(screen.getByText("正在读取原作品")).toBeVisible();
   expect(screen.queryByText("7 秒")).not.toBeInTheDocument();
-  const receipt = openExecutionRecord(screen.getByText("已返回"));
+  const receipt = openExecutionRecord(screen.getByText("检查素材", {exact:true}));
   expect(within(receipt).getByText("实际返回 3 段。")).toBeVisible();
 
   saved.turns[0].events.push({type:"tool_end", tool_id:7, label:"读取原作品", ok:true, summary:"已核对原作品。", at:new Date(now - 2000).toISOString()});
@@ -253,7 +253,7 @@ it("marks a failed duplicate attempt as historical after the same action succeed
   expect(within(activity).queryByText("请补齐参数后重试。")).not.toBeVisible();
   fireEvent.click(within(activity).getByText("查看历史失败"));
   expect(within(activity).getByText("按工具参数契约补齐后再提交。")).toBeVisible();
-  fireEvent.click(within(completed).getByText("已返回"));
+  fireEvent.click(completed.querySelector("summary")!);
   expect(within(completed).getByText("已保存 1 项素材。")).toBeVisible();
   expect(screen.getByText("请补齐参数后重试。")).toBeVisible();
 });
@@ -482,7 +482,7 @@ describe("actual goal progress", () => {
     const details = summary.closest("details")!;
     expect(details).not.toHaveAttribute("open");
     expect(within(details).queryByText("开始制作")).not.toBeInTheDocument();
-    expect(screen.getByText("开始制作").parentElement).toHaveTextContent("已返回");
+    expect(screen.getAllByText("开始制作")[0].closest("summary")).toBeInTheDocument();
     expect(within(details).getByText("生成成片 · 待执行")).toBeInTheDocument();
     expect(within(details).queryByText(/成片已生成/)).not.toBeInTheDocument();
     expect(view.container.querySelector('[role="progressbar"]')).toBeNull();
@@ -1504,7 +1504,7 @@ describe("AssistantConversationPanel", () => {
     expect(assistantText.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(summary.closest("details")).not.toHaveAttribute("open");
     const completed = screen.getByText("读取当前方案").closest("summary")!;
-    expect(completed).toHaveTextContent("已返回");
+    expect(completed).toHaveTextContent("读取当前方案");
     expect(completed.closest("details")).not.toHaveAttribute("open");
     expect(screen.getByText("检查新建方案").parentElement).toHaveTextContent("未完成");
     expect(screen.getByText("这一步没有完成。")).toBeVisible();
@@ -2845,20 +2845,20 @@ it("replays the OpenFilm reference at C0–C8 and C6b with the production readin
       if (checkpoint.id === "C2") {
         const narrative = Array.from(turn.querySelectorAll(".assistant-markdown-wrap, .assistant-inline-activity"));
         expect(narrative.map(el => el.className)).toEqual(["assistant-markdown-wrap", "assistant-inline-activity", "assistant-markdown-wrap"]);
-        expect(narrative[1]).toHaveTextContent("读取当前作品已返回");
+        expect(narrative[1]).toHaveTextContent("读取当前作品");
         expect(narrative[1]).not.toHaveTextContent(/×|已运行命令/);
       }
       const checks = fixtureToolChecks.get(checkpoint.id);
       if (checks) {
         const group = within(turn).getByText(new RegExp(`^检查素材 ×${checks.groupCount}(?: |$)`)).closest("details")!;
-        if (typeof checkpoint.expect.groupExpanded === "boolean") expect(group.open, checkpoint.id).toBe(checkpoint.expect.groupExpanded);
+        expect(group.open, checkpoint.id).toBe(false);
         if (checkpoint.id === "C8") {
           expect(group.querySelector("summary")).toHaveTextContent("另 2 项");
           expect(group.querySelectorAll("li")).toHaveLength(13);
         }
         if (checkpoint.id === "C5") {
           expect(group.querySelector("summary")).toHaveTextContent("读取文件");
-          expect(within(group).getAllByRole("listitem")).toHaveLength(6);
+          expect(group.querySelectorAll("li")).toHaveLength(6);
           expect(turn).not.toHaveTextContent(/\/Users|MEMORY.md/);
         }
         const timers = Array.from(turn.querySelectorAll(".assistant-activity-row:has([role=status])")).map(row => row.textContent);
@@ -2979,4 +2979,45 @@ it("reads the confirmed timeline save once while keeping the version action and 
   fireEvent.click(screen.getByRole("button",{name:"查看当前剪辑"}));
   expect(open).toHaveBeenCalledWith("montage", turn);
   expect(turn.assistant_text).toContain(repeated);
+});
+
+it("keeps success groups closed while running and omits empty tool receipt text", () => {
+  const saved = conversation();
+  const turn = saved.turns[0];
+  turn.status = "running";
+  turn.assistant_text = "";
+  turn.result = null;
+  turn.events = [
+    {type:"tool_end",tool_id:1,label:"读取文案",display_target:"script.md",ok:true,summary:"工具已返回，请查看对应操作回执。"},
+    {type:"tool_end",tool_id:2,label:"读取素材",ok:true,summary:"已读取 3 条素材。"},
+    {type:"tool_start",tool_id:3,label:"检查时间线"},
+  ];
+  render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()}
+    onSend={vi.fn()} busy={false} configured scopeLabel="当前作品"/>);
+  const group = screen.getByText("读取文案 · 读取素材").closest("details")!;
+  expect(group).not.toHaveAttribute("open");
+  expect(screen.getByText("正在检查时间线")).toBeVisible();
+  fireEvent.click(group.querySelector("summary")!);
+  expect(within(group).getByText("已读取 3 条素材。")).toBeVisible();
+  expect(within(group).queryByText(/工具已返回/)).not.toBeInTheDocument();
+  expect(group.querySelector(".assistant-activity-target.is-filename")).toHaveTextContent("script.md");
+  expect(group.querySelectorAll("li .assistant-activity-icon")).toHaveLength(2);
+});
+
+it("shows streaming prose immediately while its emphasis delimiter is incomplete", () => {
+  const saved = conversation();
+  const turn = saved.turns[0];
+  turn.status = "running";
+  turn.result = null;
+  turn.assistant_text = "我正在核对 **当前画幅";
+  turn.events = [{type:"text_delta",delta:turn.assistant_text}];
+  const panel = () => <AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()}
+    onSend={vi.fn()} busy={false} configured scopeLabel="当前作品"/>;
+  const view = render(panel());
+  expect(screen.getByText("我正在核对 当前画幅")).toBeVisible();
+  expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
+  turn.assistant_text += "**。";
+  turn.events.push({type:"text_delta",delta:"**。"});
+  view.rerender(panel());
+  expect(screen.getByText("当前画幅").tagName).toBe("STRONG");
 });
