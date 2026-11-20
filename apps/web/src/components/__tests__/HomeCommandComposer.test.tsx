@@ -639,19 +639,13 @@ describe("HomeCommandComposer", () => {
     await waitFor(() => expect(input).toHaveFocus());
     const article = finalBody.closest("article")!;
     const activity = within(article).getByText("读取当前工作区").closest("details")!;
-    const diagnostics = within(article).getByText("用量与诊断").closest("details")!;
     expect(activity.compareDocumentPosition(finalBody) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(activity).not.toHaveAttribute("open");
-    expect(diagnostics).not.toHaveAttribute("open");
+    expect(within(article).queryByText("用量与诊断")).not.toBeInTheDocument();
     expect(mocks.readTrace).not.toHaveBeenCalled();
     fireEvent.click(activity.querySelector("summary")!);
     expect(await within(activity).findByText("已读取 1 项任务摘要。")).toBeVisible();
     expect(mocks.readTrace).not.toHaveBeenCalled();
-    fireEvent.click(diagnostics.querySelector("summary")!);
-    expect(await within(diagnostics).findByLabelText("本轮用量")).toBeVisible();
-    const conversationId = mocks.ask.mock.calls[0][1];
-    const turnId = mocks.saved.get(conversationId)!.turns[0].id;
-    expect(mocks.readTrace).toHaveBeenCalledExactlyOnceWith(turnId);
     expect(mocks.ask).toHaveBeenCalledOnce();
   });
 

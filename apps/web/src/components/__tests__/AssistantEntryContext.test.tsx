@@ -91,8 +91,7 @@ describe("assistant empty conversation entry context", () => {
     expect(screen.getByText("答复").tagName).toBe("STRONG");
     expect(screen.queryByLabelText("空对话")).not.toBeInTheDocument();
     const history = screen.getByRole("region", { name: "持久对话记录" });
-    const record = within(history).getByText("用量与诊断").closest("details")!;
-    expect(record).not.toHaveAttribute("open");
+    expect(within(history).queryByText("用量与诊断")).not.toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "当前页面建议入口" })).not.toBeInTheDocument();
     expect(screen.queryByText("点击建议只填入草稿，发送后才处理。")).not.toBeInTheDocument();
     expect(mocks.createNew).not.toHaveBeenCalled(); expect(mocks.setDraftText).not.toHaveBeenCalled();
