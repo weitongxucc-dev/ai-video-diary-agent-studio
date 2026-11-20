@@ -83,3 +83,19 @@ test("Pi lifecycle and tool progress stay ordered without serializing partial pa
   assert.equal(events[4].references.request_id, "original-request");
   assert.doesNotMatch(JSON.stringify(events), /PRIVATE_PARTIAL_RESULT/);
 });
+
+test("automatic retries and input queue updates remain bounded trace facts", () => {
+  const result = createSessionResult("session-retry");
+  result.observe({type:"agent_end", timestamp:2000, willRetry:true,
+    errorMessage:"PRIVATE_PROVIDER_ERROR", retryPrompt:"PRIVATE_RETRY_PROMPT"});
+  result.observe({type:"queue_update", timestamp:2100, status:"queued",
+    messages:[{role:"user", content:"PRIVATE_QUEUED_PROMPT"}]});
+  result.observe({type:"queue_update", timestamp:2200, status:"PRIVATE_QUEUE_STATUS",
+    messages:[{role:"user", content:"PRIVATE_QUEUED_PROMPT_2"}]});
+  const events = result.value().trace_events;
+  assert.deepEqual(events.map(event=>event.type), ["agent_end", "retry", "queue_update", "queue_update"]);
+  assert.equal(events[1].status, "started");
+  assert.equal(events[2].status, "queued");
+  assert.equal("status" in events[3], false);
+  assert.equal(JSON.stringify(events).includes("PRIVATE_"), false);
+});
