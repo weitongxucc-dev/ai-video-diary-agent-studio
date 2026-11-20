@@ -66,46 +66,15 @@ export function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
   // persisted body is authoritative for the final text after the last tool,
   // but it may contain the whole reply, only its settled suffix, or a rewrite.
   const persisted = turn.assistant_text.trimEnd();
-  const textBlocks = blocks.filter((block): block is Extract<TurnBlock, {kind: "text"}> => block.kind === "text");
-  const hasTools = blocks.some(block => block.kind === "tools");
   if (!persisted.trim()) return blocks;
-  if (!hasTools) return [{kind: "text", key: "text:saved", text: persisted}];
+  const last = blocks[blocks.length - 1];
+  const preceding = last?.kind === "text" ? blocks.slice(0, -1) : blocks;
+  const workText = preceding.map(block => block.kind === "text" ? block.text : "").join("");
+  const final = workText.trim() && persisted.trimStart().startsWith(workText.trimStart())
+    ? persisted.trimStart().slice(workText.trimStart().length) : persisted;
+  if (!final.trim()) return preceding;
+  return [...preceding, {kind: "text", key: last?.kind === "text" ? last.key : "text:saved", text: final}];
 
-  const trailing = textBlocks[textBlocks.length - 1];
-  const lastBlock = blocks[blocks.length - 1];
-  const trailingFollowsTool = trailing != null && trailing === lastBlock;
-  if (!trailingFollowsTool) {
-    const streamedWork = textBlocks.map(block => block.text).join("");
-    const preserveWorkNote = /^(?:我|正在|先|首先|接下来|目前|已|核对|检查|读取)/.test(streamedWork.trim());
-    if (!persisted.startsWith(streamedWork) && !preserveWorkNote) {
-      return [...blocks.filter(block => block.kind === "tools"), {kind: "text", key: "text:saved", text: persisted}];
-    }
-    const replacement = streamedWork && persisted.startsWith(streamedWork)
-      ? persisted.slice(streamedWork.length) : persisted;
-    if (!replacement.trim()) return blocks;
-    return [...blocks, {kind: "text" as const, key: "text:saved", text: replacement}];
-  }
-
-  const prefix = textBlocks.slice(0, -1).map(block => block.text).join("");
-  const streamedText = textBlocks.map(block => block.text).join("");
-  const finalText = trailing?.text ?? "";
-  let replacement = persisted;
-  let removeTrailing = false;
-  if (streamedText && persisted.startsWith(streamedText)) {
-    replacement = persisted.slice(prefix.length);
-  } else if (prefix && persisted.startsWith(prefix)) {
-    replacement = persisted.slice(prefix.length);
-    removeTrailing = !replacement.trim();
-  } else if (finalText && persisted.startsWith(finalText)) {
-    replacement = persisted;
-  }
-  if (!replacement.trim() && !removeTrailing) return blocks;
-  const next = blocks.filter(block => removeTrailing || block !== trailing);
-  const index = trailing ? next.findIndex(block => block.kind === "tools" && blocks.indexOf(block) > blocks.indexOf(trailing)) : -1;
-  const textBlock = {kind: "text" as const, key: trailing?.key ?? "text:saved", text: replacement};
-  if (index >= 0) next.splice(index, 0, textBlock);
-  else next.push(textBlock);
-  return next;
 }
 
 export type TurnReadingState = {
@@ -224,13 +193,10 @@ export function TurnToolActivity({ tools, turn, reading, surfacedElsewhere = "",
       continue;
     }
     addCompleted();
-    const explicitNotSubmitted = tool.state === "failed"
-      && /未执行|未提交|没有提交|not[_ -]?submitted|not[_ -]?executed/i.test(
-        [tool.failure?.reason, tool.failure?.impact, tool.summary].filter(Boolean).join(" "));
-    const recoveredByLaterAttempt = explicitNotSubmitted
+    const explicitNotSubmitted = tool.state === "failed" && tool.failure?.submission_effect === "not_submitted";
+    const recoveredByLaterAttempt = turn.status === "completed" && explicitNotSubmitted
       && tools.slice(index + 1).some(candidate => candidate.state === "succeeded"
-        && toolLabel(candidate) === toolLabel(tool)
-        && (!tool.target || !candidate.target || tool.target === candidate.target));
+        && candidate.label === tool.label && candidate.target === tool.target);
     if (recoveredByLaterAttempt) {
       const historicalNotes = [publicExecutionText(tool.failure?.reason), publicExecutionText(tool.failure?.impact),
         publicExecutionText(tool.failure?.repair_action)].filter((note): note is string => Boolean(note));

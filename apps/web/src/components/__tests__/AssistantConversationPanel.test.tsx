@@ -239,7 +239,7 @@ it("marks a failed duplicate attempt as historical after the same action succeed
   const saved = conversation();
   saved.turns[0].events = [
     {type:"tool_end", tool_id:11, label:"保存素材", ok:false, summary:"未执行保存。", failure:{
-      reason:"按工具参数契约补齐后再提交。", repair_action:"请补齐参数后重试。",
+      submission_effect:"not_submitted", reason:"按工具参数契约补齐后再提交。", repair_action:"请补齐参数后重试。",
     }},
     {type:"tool_end", tool_id:12, label:"保存素材", ok:true, summary:"已保存 1 项素材。"},
   ];
@@ -256,13 +256,25 @@ it("marks a failed duplicate attempt as historical after the same action succeed
   expect(screen.getByText("请补齐参数后重试。")).toBeVisible();
 });
 
+it("keeps a pre-tool work note in either language when the answer only arrives at settlement", () => {
+  const saved = conversation();
+  saved.turns[0].assistant_text = "Two versions are available.";
+  saved.turns[0].events = [{type:"text_delta", delta:"Checking the timeline."},
+    {type:"tool_end", tool_id:1, label:"读取时间线", ok:true, summary:"已读取"}];
+  render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()} onSend={vi.fn()}
+    busy={false} configured scopeLabel="当前作品"/>);
+  const operation = screen.getByText("读取时间线");
+  expect(screen.getByText("Checking the timeline.").compareDocumentPosition(operation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(operation.compareDocumentPosition(screen.getByText("Two versions are available.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 it("keeps rewritten saved replies and never replays superseded text deltas", () => {
   const saved = conversation();
   saved.turns[0].assistant_text = "服务端核对后的正文与实际保存回执。";
   saved.turns[0].events = [
-    {type: "text_delta", delta: "未核对的话。"},
     {type: "tool_start", tool_id: 1, label: "核对回执"},
     {type: "tool_end", tool_id: 1, label: "核对回执", ok: true, summary: "已核对"},
+    {type: "text_delta", delta: "未核对的话。"},
   ];
   render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()} onSend={vi.fn()}
     busy={false} configured scopeLabel="当前作品"/>);

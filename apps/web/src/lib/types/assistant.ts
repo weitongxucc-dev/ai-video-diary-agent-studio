@@ -159,6 +159,7 @@ export type AssistantGoalContinuation = {
     };
 };
 export type AssistantToolFailure = {
+    submission_effect?: "not_submitted" | "rejected" | "unknown" | null;
     impact?: string;
     failure_category?: string;
     reason: string;
