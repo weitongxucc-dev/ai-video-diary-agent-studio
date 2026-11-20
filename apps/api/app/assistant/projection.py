@@ -224,6 +224,13 @@ def _safe_compaction_event(value: dict) -> dict | None:
     return safe
 
 
+_PUBLIC_ACTIVITY_MESSAGES = {
+    "confirmation_wait": "等待确认后继续。",
+    "unknown": "本轮结果仍待核实，请先回查原请求。",
+    "error": "本次助手调用未能正常返回。",
+}
+
+
 _PUBLIC_TOOL_TARGETS = {
     "read_workspace_context": "当前工作区",
     "read_current_task": "当前作品",
@@ -303,7 +310,7 @@ def _observed_event_at(event: dict) -> str | None:
 
 def public_tool_event(event: dict, safe_text) -> dict | None:
     kind, tool_id = event.get("type"), event.get("tool_id")
-    if kind not in {"tool_start", "tool_end"} or type(tool_id) is not int or tool_id < 0:
+    if kind not in {"tool_start", "tool_progress", "tool_end", "confirmation_wait"} or type(tool_id) is not int or tool_id < 0:
         return None
     projected = {"type": kind, "tool_id": tool_id, "label": safe_text(str(event.get("label", "助手操作")))}
     if (target := event.get("display_target")) and isinstance(target, str) and _PUBLIC_FILENAME.fullmatch(target):
@@ -311,12 +318,38 @@ def public_tool_event(event: dict, safe_text) -> dict | None:
             projected["display_target"] = target
     if at := public_event_at(event.get("at")):
         projected["at"] = at
+    if kind in {"tool_start", "tool_end"} and isinstance(event.get("activity_label"), str):
+        projected["activity_label"] = safe_text(event["activity_label"])
+    if kind == "tool_progress" and type(progress := event.get("progress")) in {int, float} and 0 <= progress <= 1:
+        projected["progress"] = progress
+    if kind == "confirmation_wait":
+        projected["message"] = _PUBLIC_ACTIVITY_MESSAGES[kind]
     if kind == "tool_end":
         projected.update(ok=event.get("ok") is True, summary=safe_text(str(event.get("summary", ""))))
         if isinstance(event.get("failure"), dict):
             projected["failure"] = {key: safe_text(value) if isinstance(value, str) else value
                 for key, value in _safe_business_failure(event["failure"]).items()}
     return projected
+
+
+PUBLIC_ACTIVITY_TYPES = frozenset({
+    "agent_start", "agent_end", "text_delta", "assistant_text", "tool_start",
+    "tool_progress", "tool_end", "confirmation_wait", "unknown", "error",
+})
+
+
+def public_activity_event(event: dict, safe_text) -> dict | None:
+    kind = event.get("type")
+    at = public_event_at(event.get("at"))
+    projected = {"type": kind, **({"at": at} if at else {})}
+    if kind in {"agent_start", "agent_end"}:
+        return projected
+    if kind == "assistant_text" and isinstance(event.get("text"), str):
+        text = safe_text(public_assistant_text(event["text"]))
+        return {**projected, "text": text} if text else None
+    if kind in {"unknown", "error"}:
+        return {**projected, "message": _PUBLIC_ACTIVITY_MESSAGES[kind]}
+    return public_tool_event(event, safe_text)
 
 
 class PublicReasoningFilter:
@@ -385,8 +418,6 @@ def public_assistant_text(value: object) -> str:
 def public_history_turn(turn: dict, safe_text) -> dict:
     """Project saved turns again so legacy raw assistant text cannot reach clients."""
     result_turn = dict(turn)
-    def redact(value):
-        return safe_text(value)
     result_turn["assistant_text"] = public_assistant_text(turn.get("assistant_text"))
     events = []
     reasoning = PublicReasoningFilter()
@@ -396,10 +427,10 @@ def public_history_turn(turn: dict, safe_text) -> dict:
         if event.get("type") == "text_delta" and isinstance(event.get("delta"), str):
             delta = reasoning.feed(event["delta"])
             if delta:
-                events.append({"type": "text_delta", "delta": redact(delta),
-                    **({key: event[key] for key in ("at",) if key in event})})
-        elif event.get("type") in {"tool_start", "tool_end"}:
-            projected = public_tool_event(event, redact)
+                at = public_event_at(event.get("at"))
+                events.append({"type": "text_delta", "delta": safe_text(delta), **({"at": at} if at else {})})
+        elif event.get("type") in PUBLIC_ACTIVITY_TYPES:
+            projected = public_activity_event(event, safe_text)
             if projected is not None:
                 events.append(projected)
         elif event.get("type") == "context_compaction":
@@ -410,7 +441,7 @@ def public_history_turn(turn: dict, safe_text) -> dict:
             events.append(event)
     tail = reasoning.feed("", final=True)
     if tail:
-        events.append({"type": "text_delta", "delta": redact(tail)})
+        events.append({"type": "text_delta", "delta": safe_text(tail)})
     result_turn["events"] = events
     result = turn.get("result")
     if isinstance(result, dict):
@@ -432,8 +463,9 @@ class _PiStreamProjector:
     """Project SDK events into a small UI-safe event vocabulary."""
 
     def __init__(self) -> None:
-        self._calls: dict[str, tuple[int, str, str, str | None, str | None]] = {}
+        self._calls: dict[str, tuple[int, str, str | None, str | None]] = {}
         self._next_id = 0
+        self._saw_text_delta = False
 
     def project(self, line: str) -> dict[str, object] | None:
         try:
@@ -445,6 +477,12 @@ class _PiStreamProjector:
         event_type = event.get("type")
         at = _observed_event_at(event)
         timestamp = {"at": at} if at else {}
+        if event_type == "agent_start":
+            return {"type": "agent_start", **timestamp}
+        if event_type == "agent_end":
+            return {"type": "agent_end", **timestamp} if event.get("willRetry") is not True else None
+        if event_type in {"error", "unknown"}:
+            return {"type": event_type, "message": _PUBLIC_ACTIVITY_MESSAGES[event_type], **timestamp}
         if event_type in {'compaction_start','compaction_end'}:
             started = event_type == 'compaction_start'
             result = event.get('result') or {}
@@ -469,8 +507,37 @@ class _PiStreamProjector:
             update = event.get("assistantMessageEvent")
             if isinstance(update, dict) and update.get("type") == "text_delta":
                 delta = update.get("delta")
-                return {"type": "text_delta", "delta": delta, **timestamp} if isinstance(delta, str) and delta else None
+                if isinstance(delta, str) and delta:
+                    self._saw_text_delta = True
+                    return {"type": "text_delta", "delta": delta, **timestamp}
+                return None
             return None
+        if event_type == "message_end":
+            message = event.get("message") or {}
+            if message.get("role") != "assistant":
+                return None
+            saw_delta = self._saw_text_delta
+            self._saw_text_delta = False
+            if saw_delta:
+                return {"type": "text_end"}
+            if message.get("stopReason") in {"error", "aborted"}:
+                return None  # The host reports the final failure after retries settle.
+            text = "".join(item["text"] for item in message.get("content", [])
+                           if item.get("type") == "text" and isinstance(item.get("text"), str))
+            if visible := public_assistant_text(text):
+                return {"type": "assistant_text", "text": visible, **timestamp}
+            return None
+        if event_type == "tool_execution_update":
+            raw_id = event.get("toolCallId")
+            stored = self._calls.get(raw_id) if isinstance(raw_id, str) else None
+            if stored is None or stored[1] != event.get("toolName"):
+                return None
+            tool_id, name, target, _command = stored
+            partial = event.get("partialResult") or {}
+            progress = (partial.get("details") or {}).get("progress")
+            return {"type": "tool_progress", "tool_id": tool_id, "label": _PI_TOOL_LABELS[name],
+                **({"progress": progress} if type(progress) in {int, float} and 0 <= progress <= 1 else {}),
+                **timestamp, **({"display_target": target} if target else {})}
         if event_type == "tool_execution_start":
             name = event.get("toolName")
             raw_id = event.get("toolCallId")
@@ -482,8 +549,9 @@ class _PiStreamProjector:
             arguments = event.get("args")
             target = _tool_display_target(name, arguments)
             command = _command_executable(arguments) if name == "bash" else None
-            self._calls[call_key] = (self._next_id, name, label, target, command)
-            return {"type": "tool_start", "tool_id": self._next_id, "label": label, **timestamp,
+            self._calls[call_key] = (self._next_id, name, target, command)
+            return {"type": "tool_start", "tool_id": self._next_id, "label": label,
+                "activity_label": f"正在{label}", **timestamp,
                 **({"display_target": target} if target else {})}
         if event_type == "tool_execution_end":
             raw_id = event.get("toolCallId")
@@ -491,17 +559,38 @@ class _PiStreamProjector:
             call_key = raw_id if isinstance(raw_id, str) else ""
             stored = self._calls.pop(call_key, None)
             if stored:
-                tool_id, stored_name, label, target, command = stored
-                name = stored_name
+                tool_id, name, target, command = stored
             else:
                 if name not in _PI_TOOL_LABELS:
                     return None
                 self._next_id += 1
-                tool_id, label = self._next_id, _PI_TOOL_LABELS[name]
+                tool_id = self._next_id
                 target, command = _tool_display_target(name, None), None
+            label = _PI_TOOL_LABELS[name]
             failed = bool(event.get("isError"))
             details = (event.get("result") or {}).get("details") or {}
             summary_result = event.get("result")
+            failure = details.get("failure") if isinstance(details.get("failure"), dict) else None
+            unknown = failure is not None and failure.get("submission_effect") == "unknown"
+            if name == "read" and unknown:
+                # Native file reads cannot submit a business write.
+                failure = {key: value for key, value in failure.items() if key != "submission_effect"}
+                summary_result = {"details": {"failure": failure}}
+                failed, unknown = True, False
+            preview = details.get("preview") or {}
+            waiting = (
+                name in {"preview_creation_plan", "prepare_creation_window"}
+                and details.get("kind") == "plan_preview" and preview.get("kind") == "creation_request"
+                and (preview.get("request") or {}).get("status") == "awaiting_confirmation"
+            ) or (
+                name in {"preview_typed_edit", "preview_edit_selection"}
+                and details.get("kind") == "edit_preview"
+                and (preview.get("proposal") or {}).get("status") == "proposed"
+            )
+            if waiting and not failed and not unknown:
+                return {"type": "confirmation_wait", "tool_id": tool_id, "label": label,
+                    "message": _PUBLIC_ACTIVITY_MESSAGES["confirmation_wait"], **timestamp,
+                    **({"display_target": target} if target else {})}
             native = details.get("native_execution")
             if (command and isinstance(native, dict) and native.get("process_state") == "exited"
                     and native.get("release_state") == "released" and native.get("job_id") and native.get("request_id")):
@@ -510,7 +599,6 @@ class _PiStreamProjector:
                 skill = details.get("name")
                 if isinstance(skill, str) and _PUBLIC_FILENAME.fullmatch(skill) and not _OPAQUE_VALUE.search(skill):
                     target = skill
-            failure = details.get("failure") if isinstance(details.get("failure"), dict) else None
             if failure is None and details.get("kind") == "edit_request_status":
                 reason = details.get("failure_reason")
                 if isinstance(reason, dict) and isinstance(reason.get("text"), str):
@@ -531,9 +619,12 @@ class _PiStreamProjector:
             return {
                 "type": "tool_end", "tool_id": tool_id, "label": label, **timestamp,
                 **({"display_target": target} if target else {}),
-                "ok": not failed,
-                "summary": _safe_tool_result_summary(name, summary_result, failed),
-                **({"failure": _safe_business_failure(failure)} if failed and failure else {}),
+                "ok": not (failed or unknown),
+                "summary": (_PUBLIC_ACTIVITY_MESSAGES["unknown"] if unknown
+                            else _safe_tool_result_summary(name, summary_result, failed)),
+                **({"activity_label": f"已{label}" if label.startswith("读取") else "已返回操作回执"}
+                   if not (failed or unknown) else {}),
+                **({"failure": _safe_business_failure(failure)} if (failed or unknown) and failure else {}),
                 **({"script_window_request": window,"invocation_input_id":invocation_input} if window is not None else {}),
             }
         return None

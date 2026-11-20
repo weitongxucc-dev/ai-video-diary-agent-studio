@@ -115,6 +115,34 @@ def test_only_completed_plan_turn_can_store_a_server_checked_preview(tmp_path):
                                                  "preflight_fingerprint": "b" * 64}
 
 
+def test_running_turn_reopen_preserves_mixed_assistant_text_once(tmp_path):
+    database = tmp_path / "mixed-turn.sqlite3"
+    repository = ConversationRepository(database)
+    conversation = repository.current_or_create("workspace-one", "member-one", "home", "home")
+    turn_id = _send(repository, conversation, "先检查当前条件", "mixed-turn")["id"]
+    events = [
+        {"type": "text_delta", "delta": "先看素材。"},
+        {"type": "tool_start", "tool_id": 1, "label": "读取素材"},
+        {"type": "assistant_text", "text": "已找到原片。"},
+        {"type": "text_delta", "delta": "可以继续。"},
+    ]
+    for event in events[:3]:
+        repository.append_event(turn_id, event)
+
+    reopened = ConversationRepository(database)
+    running = reopened.get_turn(turn_id)
+    assert running["status"] == "running"
+    assert running["assistant_text"] == "先看素材。已找到原片。"
+    assert running["events"] == events[:3]
+
+    reopened.append_event(turn_id, events[3])
+    reopened.finish_turn(turn_id, "completed")
+    saved = ConversationRepository(database).get_turn(turn_id)
+    assert saved["status"] == "completed"
+    assert saved["assistant_text"] == "先看素材。已找到原片。可以继续。"
+    assert saved["events"] == events
+
+
 def test_failed_turn_persists_failure_result_without_erasing_partial_reply(tmp_path):
     repository = ConversationRepository(tmp_path / "failed-turn.sqlite3")
     conversation = repository.current_or_create("workspace-one", "member-one", "home", "home")

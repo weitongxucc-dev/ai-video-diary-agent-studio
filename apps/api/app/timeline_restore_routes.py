@@ -1,5 +1,6 @@
 """Timeline restore HTTP; durable restore history and execution remain with the original owner."""
 from fastapi import APIRouter, Request
+from app.assistant.workspace_save_notifications import notify_workspace_save
 from app.schemas import CreationTaskEditConfirmResponse, CreationTaskTimelineRestoreRequest
 
 def build_timeline_restore_router(*, workspace_for, access_for, restore_for, command_type_for, actor_type_for, unavailable_type_for, legacy_type_for, topic_failure_for, invalid_type_for, http_error_for, blocked_type_for, response_for, route_names):
@@ -28,6 +29,12 @@ def build_timeline_restore_router(*, workspace_for, access_for, restore_for, com
             raise http_error_for()(status_code=403, detail=str(exc)) from exc
         except (ValueError, OSError, blocked_type_for()) as exc:
             raise http_error_for()(status_code=409, detail=str(exc)) from exc
+        receipt = outcome.restore_request
+        if (source is not None and receipt and receipt.get("status") == "applied"
+                and receipt.get("task_id") == task.id and receipt.get("operation_id") == outcome.operation.id
+                and receipt.get("result_version_id") == outcome.operation.result_version_id):
+            notify_workspace_save(
+                request, workspace_id, member_id, task.id, control.assistant_turn_id, f"timeline:{outcome.operation.id}")
         return response_for()(outcome)
 
     @router.get('/api/creation-tasks/{task_id}/timeline/restore-requests/{request_id}')

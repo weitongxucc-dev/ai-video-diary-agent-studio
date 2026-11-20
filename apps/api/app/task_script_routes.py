@@ -1,9 +1,15 @@
 """Task script context, drafts, reply transfer and adoption HTTP; transactional owners and model validation remain unchanged."""
 from fastapi import APIRouter, Request
+from app.assistant.workspace_save_notifications import notify_workspace_save
 from app.schemas import AssistantReplyScriptTransferRequest, CreationTaskScriptsResponse, CreationTaskScriptDraftRequest, CreationTaskScriptResponse, CreationTaskScriptConfirmRequest
 
 def build_task_script_router(*, workspace_for, reader_for, context_for, draft_error_for, http_error_for, reply_for, current_inputs_for, production_for, uuid_for, section_type_for, scripts_response_for, adoption_for, draft_for, script_response_for, asdict_for, readable_for, task_for, plan_for, library_for, route_names):
     router = APIRouter()
+
+    def publish_script_save(request, workspace_id, task_id, member_id, script, turn_id):
+        if member_id is not None and turn_id is not None and script.task_id == task_id and script.workspace_id == workspace_id:
+            event_id = f"script:{script.id}:{script.updated_at:%Y%m%dT%H%M%S%f}"
+            notify_workspace_save(request, workspace_id, member_id, task_id, turn_id, event_id)
 
     @router.get('/api/creation-tasks/{task_id}/assistant/script-context')
     def get_assistant_script_context(task_id: str, request: Request) -> dict[str, object]:
@@ -43,12 +49,15 @@ def build_task_script_router(*, workspace_for, reader_for, context_for, draft_er
     def save_assistant_script_draft(task_id: str, request: Request, payload: CreationTaskScriptDraftRequest) -> CreationTaskScriptResponse:
         workspace_id = workspace_for()(request)
         origin = adoption_for()(task_id, request, str(payload.assistant_turn_id), draft_only=True) if payload.assistant_turn_id is not None else None
+        member_id = reader_for()(request, workspace_id)[0] if origin is not None else None
         case = draft_for()(workspace_id, validate_inputs=lambda ws, plan, refs: current_inputs_for()(request, ws, plan, refs))
         try:
             draft = case.save(workspace_id, task_id, payload, instruction_origin=origin, reread_origin=lambda draft_only: adoption_for()(task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
         except draft_error_for() as exc:
             raise http_error_for()(status_code=exc.status_code, detail=exc.detail) from exc
-        return script_response_for().model_validate(asdict_for()(draft))
+        result = script_response_for().model_validate(asdict_for()(draft))
+        publish_script_save(request, workspace_id, task_id, member_id, draft, payload.assistant_turn_id)
+        return result
 
     @router.get('/api/creation-tasks/{task_id}/scripts', response_model=CreationTaskScriptsResponse)
     def get_creation_task_scripts(task_id: str, request: Request) -> CreationTaskScriptsResponse:
@@ -82,12 +91,15 @@ def build_task_script_router(*, workspace_for, reader_for, context_for, draft_er
             except KeyError as exc:
                 raise http_error_for()(status_code=409, detail='文案来源记录已不可用，请重新读取任务。') from exc
             current_inputs_for()(request, workspace_id, plan, generation_run.input_references)
+        member_id = reader_for()(request, workspace_id)[0]
         try:
-            task, adopted_script = draft_for()(workspace_id, validate_inputs=lambda ws, plan, refs: current_inputs_for()(request, ws, plan, refs), content_reader=lambda ws: reader_for()(request, ws)).confirm(workspace_id, task_id, script_id, payload, member_id=reader_for()(request, workspace_id)[0], origin=instruction_origin, reread_origin=lambda draft_only: adoption_for()(task_id, request, str(payload.assistant_turn_id), draft_only=False))
+            task, adopted_script = draft_for()(workspace_id, validate_inputs=lambda ws, plan, refs: current_inputs_for()(request, ws, plan, refs), content_reader=lambda ws: reader_for()(request, ws)).confirm(workspace_id, task_id, script_id, payload, member_id=member_id, origin=instruction_origin, reread_origin=lambda draft_only: adoption_for()(task_id, request, str(payload.assistant_turn_id), draft_only=False))
         except draft_error_for() as exc:
             raise http_error_for()(status_code=exc.status_code, detail=exc.detail) from exc
         except (KeyError, ValueError) as exc:
             raise http_error_for()(status_code=409, detail=str(exc)) from exc
+        if instruction_origin is not None:
+            publish_script_save(request, workspace_id, task_id, member_id, adopted_script, payload.assistant_turn_id)
         return scripts_response_for()(workspace_id, task)
     router.routes[:] = [route for route in router.routes if route.name in route_names]
     return router

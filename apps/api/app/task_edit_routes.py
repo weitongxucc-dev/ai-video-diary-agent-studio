@@ -3,6 +3,7 @@ from dataclasses import asdict
 import json
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+from app.assistant.workspace_save_notifications import notify_workspace_save
 from app.creation.editing.metadata_use_case import EditPreviewRejected, LegacyMontageReference
 from app.creation.editing.picture import EditConflict
 from app.creation.cover_use_case import CoverUnavailable, CoverUnresolved
@@ -290,6 +291,12 @@ def build_task_edit_router(*, edit_controls_for, audio_command_preview_for, audi
         actor = request_permit_actor_for()(request, task.workspace_id) if auth_context_for().enabled else creation_execution_actor_for()(task.workspace_id, member_id)
         try:
             result = exact_preview_use_case_for()().apply(task, actor, payload, identity={'member_id': member_id, 'local_diagnostic': False}, expected_input_id=request.headers.get('X-Assistant-Input-ID'))
+            operation = result.value.get("operation")
+            if (payload.assistant_turn_id is not None and result.status_code == 200 and isinstance(operation, dict)
+                    and operation.get("status") == "applied" and operation.get("result_version_id")
+                    and operation.get("task_id") == task.id and operation.get("workspace_id") == task.workspace_id):
+                notify_workspace_save(
+                    request, task.workspace_id, member_id, task.id, payload.assistant_turn_id, f"timeline:{operation['id']}")
             if result.changed:
                 wake_assistant_continuations_for()()
             return json_response_for()(status_code=result.status_code, content=result.value)

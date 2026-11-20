@@ -551,6 +551,7 @@ class TaskAssistantTurnUseCase:
         script_window_request = None
         quality_continuation = None
         timeline_action = None
+        media_authorization_refused = False
         media_job, edit_request, script_tool, segment_revision, timeline_restore = (None, None, None, None, None)
         if isinstance(preview, dict) and preview.get('kind') in {'execution_action', 'execution_result'} and (preview.get('applied_edit') is not None):
             edit_request = (yield ReadAppliedEdit(task_id, turn_id, preview['applied_edit']))
@@ -608,9 +609,18 @@ class TaskAssistantTurnUseCase:
             if preview.get('related_media_job') is not None:
                 media_job = (yield RelatedMedia(task_id, turn_id, str(payload.conversation_id), preview['related_media_job']))
             edit_preview = None
+            detail = (edit_request.result or {}).get('detail')
+            media_authorization_refused = (
+                edit_request.phase == 'apply' and isinstance(detail, dict)
+                and detail.get('error') == 'edit_media_authorization_rejected'
+                and detail.get('submission_effect') == 'rejected'
+            )
             refused_observation = edit_request.phase == 'observation' and (edit_request.status in {'rejected', 'not_submitted'}
                 or edit_request.result_status_code is not None and edit_request.result_status_code >= 400)
-            if refused_observation:
+            if media_authorization_refused:
+                reply = (yield SafeText(
+                    f"{detail['reason']}{detail['impact']} 下一步：{detail['repair_action']}", workspace_id))
+            elif refused_observation:
                 if not (media_job is not None and media_job.result_kind == 'observation' and media_job.status == 'succeeded'):
                     detail = (edit_request.result or {}).get('detail') or (preview.get('failure') or {}).get('reason')
                     reply = (yield SafeText('本次输出观察请求被拒绝：' + str(detail or '请查看原请求的具体原因。'), workspace_id))
@@ -725,6 +735,8 @@ class TaskAssistantTurnUseCase:
             result['completed_local_edit'] = completed_local_edit
         result.update(runtime_receipt_fields(runtime_receipt))
         self._conversations_for().finish_turn(turn_id, 'completed', reply, result)
+        if media_authorization_refused:
+            return response
         registered_goal = (yield RegisterGoal(turn_id))
         if registered_goal is not None:
             try:
