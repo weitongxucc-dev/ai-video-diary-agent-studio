@@ -225,7 +225,7 @@ function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continu
         displayedNotices.add(message);
         return <div key={block.key} className="assistant-inline-failure" data-unknown={block.state === "unknown" || undefined}
           role={block.state === "unknown" ? "status" : "alert"}>
-          <div className="assistant-activity-row">{message}</div>
+          <p className="assistant-notice-message">{message}</p>
           {block.state === "unknown" && !message.includes("查询") ? <p>先查询原请求。</p> : null}
         </div>;
       }

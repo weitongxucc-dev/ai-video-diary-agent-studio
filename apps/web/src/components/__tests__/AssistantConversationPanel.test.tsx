@@ -2939,6 +2939,7 @@ it.each(["error", "unknown"] as const)("keeps standalone %s in place without rep
   render(<AssistantConversationPanel state={state({conversation:saved,error:message})} input=""
     onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前作品"/>);
   const notice = screen.getByText(message);
+  expect(notice).toHaveClass("assistant-notice-message");
   expect(screen.getByText(turn.assistant_text).compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(screen.queryByText("正在处理")).not.toBeInTheDocument();
   if (type === "unknown") expect(screen.getByText("先查询原请求。")).toBeVisible();
@@ -3021,3 +3022,20 @@ it("shows streaming prose immediately while its emphasis delimiter is incomplete
   view.rerender(panel());
   expect(screen.getByText("当前画幅").tagName).toBe("STRONG");
 });
+
+it.each(["", "工具已返回，请查看对应操作回执。", "正文已经说明保存结果。"])(
+  "keeps the lone tool as a plain row when its receipt adds no information (%s)", summary => {
+    const saved = conversation();
+    const turn = saved.turns[0];
+    turn.result = null;
+    turn.assistant_text = "正文已经说明保存结果。";
+    turn.events = [{type:"tool_end",tool_id:1,label:"确认素材",ok:true,summary}];
+    render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前作品"/>);
+    const row = screen.getByText("确认素材").closest(".assistant-activity-row")!;
+    expect(row.querySelector(".assistant-activity-icon")).toBeInTheDocument();
+    expect(row.closest("details")).toBeNull();
+    expect(row.querySelector(".assistant-activity-chevron")).toBeNull();
+    expect(screen.getAllByText(turn.assistant_text)).toHaveLength(1);
+  },
+);

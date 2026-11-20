@@ -227,6 +227,11 @@ function CompletedTools({ tools, turnId, anchorId, reading, reply }: {
   function readingKey(tool: TurnTool) { return `${turnId}:tool:${tool.id}`; }
   const [manualOpen, setManualOpen] = useState<boolean>();
   const expanded = manualOpen ?? tools.some(tool => reading?.get(readingKey(tool), false));
+  const single = tools.length === 1 ? tools[0] : null;
+  const singleReceipt = single && receiptText(single.summary);
+  if (single && (!singleReceipt || reply.includes(singleReceipt))) return <div className="assistant-activity-row">
+    <ToolIcon tools={tools}/><ToolName tool={single}/>
+  </div>;
   return <details className="assistant-inline-completed" data-reading-key={`${turnId}:tool:${anchorId}`} open={expanded} onToggle={event => {
     const next = event.currentTarget.open;
     if (next === expanded) return;
