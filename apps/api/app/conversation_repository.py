@@ -2054,7 +2054,11 @@ class ConversationRepository:
                 return
             events = json.loads(row["events_json"])
             events.append(event)
-            assistant_text = row["assistant_text"] + (event["delta"] if event.get("type") == "text_delta" else "")
+            assistant_text = row["assistant_text"]
+            if event.get("type") == "text_delta":
+                assistant_text += event["delta"]
+            elif event.get("type") == "assistant_text":
+                assistant_text += event["text"]
             conn.execute(
                 "UPDATE assistant_conversation_turns SET events_json=?,assistant_text=?,updated_at=? WHERE id=? AND status='running'",
                 (json.dumps(events, ensure_ascii=False), assistant_text, _now(), turn_id),

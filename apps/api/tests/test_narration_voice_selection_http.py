@@ -1,3 +1,6 @@
+import json
+from threading import Event
+
 from app.content_identity_http import ContentIdentityHttpAdapter
 from uuid import uuid4
 from types import SimpleNamespace
@@ -7,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.main as main
+from app.assistant.workspace_save_notifications import WorkspaceSaveNotifications
 from app.conversation_repository import ConversationRepository
 from app.schemas import CreationTaskNarrationVoiceSelectionRequest
 from test_narration_voice_selection_receipts import state as state, command
@@ -104,3 +108,68 @@ def test_voice_selection_guard_runs_in_real_transaction_before_mutation(http_sta
         main._creation_execution_control().select_narration_voice(runtime=None,write_guard=revoked,
             **command(http_state))
     assert snapshot(http_state.repo)==before
+
+
+def test_committed_voice_receipt_reaches_the_original_sse_before_the_model_finishes(http_state, monkeypatch, request):
+    from assistant_turn_control_fixtures import isolate_assistant_turn_control
+
+    isolate_assistant_turn_control(monkeypatch, request)
+    state = http_state
+    app = state.client.app
+    app.state.workspace_save_notifications = WorkspaceSaveNotifications()
+    endpoint = '/api/creation-tasks/{task_id}/assistant/turn'
+    app.add_api_route(endpoint, next(route.endpoint for route in main.app.routes if route.path == endpoint),
+                      methods=['POST'])
+    monkeypatch.setattr(main, '_workspace_settings_for', lambda _: SimpleNamespace(
+        effective_llm_provider='controlled', effective_llm_model='fixture', effective_llm_api_key=None))
+    monkeypatch.setattr(main, '_request_permit_actor', lambda *_: None)
+    monkeypatch.setattr(main, 'start_assistant_continuation_driver', lambda: None)
+    voice_path = '/api/creation-tasks/task/narration/voice'
+    instruction = '为本作品选择指定声音。'
+    chat = state.conversations.create('workspace', 'owner', 'task', 'task')
+    draft = state.conversations.save_draft(chat['id'], 'workspace', 'owner', instruction, 0)
+    voice = body(state)
+    model_can_finish = Event()
+    saved_frames = []
+
+    def model(_settings, *, turn_id, on_event, **_):
+        post = {**voice, 'assistant_turn_id': turn_id}
+        rejected = state.client.post(voice_path, json={**post, 'expected_task_updated_at': '2020-01-01T00:00:00Z'})
+        assert rejected.status_code == 409, rejected.text
+        selected = state.client.post(voice_path, json=post)
+        assert selected.status_code == 200, selected.text
+        assert model_can_finish.wait(5), 'the SSE did not deliver the save while the model was active'
+        on_event({'type':'text_delta','delta':'已采用指定声音。'})
+        return '已采用指定声音。', None
+
+    monkeypatch.setattr(main, 'run_task_turn', model)
+
+    async def capture_stream(scope, receive, send):
+        async def send_and_release(message):
+            for line in message.get('body', b'').splitlines():
+                if not line.startswith(b'data: '):
+                    continue
+                frame = json.loads(line[6:])
+                if frame['type'] != 'workspace_saved':
+                    continue
+                saved_frames.append(frame)
+                actual = state.repo.narration_voice_selection.get_creation_task_narration_voice_selection(
+                    'workspace', 'task', voice['request_id'], member_id='owner')
+                assert actual['status'] == 'selected'
+                assert state.repo.plan_records.get_creation_plan('workspace', 'plan').selected_voice.profile_id == 'voice-1'
+                model_can_finish.set()
+            await send(message)
+
+        await app(scope, receive, send_and_release)
+
+    response = TestClient(capture_stream).post(endpoint.format(task_id='task'),
+        headers={'Accept':'text/event-stream'}, json={
+            'conversation_id':chat['id'], 'message':instruction, 'context_stage':'narration',
+            'client_request_id':str(uuid4()), 'expected_draft_version':draft['draft_version'],
+        })
+    assert response.status_code == 200, response.text
+    assert saved_frames == [{'type':'workspace_saved','status':'saved','task_id':'task',
+                             'event_id':f"voice:{voice['request_id']}"}], response.text
+    events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith('data: ')]
+    assert events[-1]['type'] == 'result', events
+    assert events[-1]['result']['reply'] == '已采用指定声音。'

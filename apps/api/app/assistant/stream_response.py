@@ -9,8 +9,19 @@ import threading
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.assistant.projection import PublicReasoningFilter, _safe_compaction_event, public_event_at, public_tool_event
+from app.assistant.projection import (
+    PUBLIC_ACTIVITY_TYPES,
+    PublicReasoningFilter,
+    _safe_compaction_event,
+    public_activity_event,
+    public_event_at,
+)
+from app.assistant.turn_control import AssistantProcessReleaseError
 from app.schemas import AssistantStreamEvent
+
+
+_RECEIPT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}")
+
 
 class AssistantStreamTextSanitizer:
     """Hold only suffixes that could complete a known secret or sensitive marker."""
@@ -78,13 +89,14 @@ class AssistantStreamTextSanitizer:
         if kind == "text_delta" and isinstance(event.get("delta"), str):
             self._text_at = public_event_at(event.get("at"))
             delta = self.feed(event["delta"])
-        elif kind == "text_end":
+            if delta:
+                return {"type": "text_delta", "delta": delta, **({"at": self._text_at} if self._text_at else {})}
+            return None
+        if kind == "text_end":
             delta = self.feed("", final=True)
-        else:
-            return public_tool_event(event, lambda value: self._safe_text(value, self._workspace_id))
-        if delta:
-            return {"type": "text_delta", "delta": delta, **({"at": self._text_at} if self._text_at else {})}
-        return None
+            self._reasoning = PublicReasoningFilter()
+            return {"type": "text_delta", "delta": delta, **({"at": self._text_at} if self._text_at else {})} if delta else None
+        return public_activity_event(event, lambda value: self._safe_text(value, self._workspace_id))
 
 
 class AssistantStreamTransport:
@@ -120,10 +132,19 @@ class AssistantStreamTransport:
                 if diagnostic is not None and turn_ref['id']:
                     stream_conversation_repo.append_event(turn_ref['id'],diagnostic)
                 return  # Diagnostic history does not extend the existing SSE schema.
-            if event_type in {"text_delta", "text_end", "tool_start", "tool_end"}:
+            if event_type in PUBLIC_ACTIVITY_TYPES or event_type == "text_end":
                 event = text_sanitizer.activity_event(raw_event)
                 if event is None:
                     return
+            elif event_type == "workspace_saved":
+                # The business adapter emits this after committing its receipt.
+                # It is a notification; the existing business record owns replay.
+                task_id, event_id = raw_event.get("task_id"), raw_event.get("event_id")
+                if (raw_event.get("status") != "saved" or not isinstance(task_id, str)
+                        or not isinstance(event_id, str) or not _RECEIPT_ID.fullmatch(task_id)
+                        or not _RECEIPT_ID.fullmatch(event_id)):
+                    return
+                event = {"type": "workspace_saved", "status": "saved", "task_id": task_id, "event_id": event_id}
             elif event_type == "turn_started":
                 event = {key: raw_event[key] for key in ("type", "turn_id", "turn_state", "draft_version") if key in raw_event}
                 turn_ref["id"] = str(raw_event["turn_id"])
@@ -133,10 +154,22 @@ class AssistantStreamTransport:
                 return
             validated = AssistantStreamEvent.model_validate(event)
             safe_event = validated.model_dump(mode="json", exclude_none=True)
-            if turn_ref["id"] and validated.type in {"text_delta", "tool_start", "tool_end"}:
+            if turn_ref["id"] and validated.type in PUBLIC_ACTIVITY_TYPES:
                 stream_conversation_repo.append_event(turn_ref["id"], safe_event)
             if not disconnected.is_set():
                 events.put(safe_event)
+
+        def persist_failure(message: str) -> None:
+            if not turn_ref["id"]:
+                return
+            try:
+                self._forget_control(turn_ref["id"])
+            except AssistantProcessReleaseError:
+                self._logger.warning("assistant turn release remains unverified")
+            publish({"type": "text_end"})
+            stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
+                "kind": "failure", "message": message,
+            })
 
         def work() -> None:
             terminal_event: dict[str, object] | None = None
@@ -156,22 +189,14 @@ class AssistantStreamTransport:
                         and isinstance(exc.detail.get("message"), str)):
                     detail = exc.detail["message"]
                     failure = {"code": "creation_task_timeline_version_conflict"}
-                if turn_ref["id"]:
-                    self._forget_control(turn_ref["id"])
-                    stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
-                        "kind": "failure", "message": self._safe_text(detail, workspace_id),
-                    })
+                persist_failure(self._safe_text(detail, workspace_id))
                 if not disconnected.is_set():
                     terminal_event = AssistantStreamEvent(
                         type="error", status=exc.status_code,
                         message=self._safe_text(detail, workspace_id), failure=failure,
                     ).model_dump(mode="json", exclude_none=True)
             except Exception as exc:
-                if turn_ref["id"]:
-                    self._forget_control(turn_ref["id"])
-                    stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
-                        "kind": "failure", "message": "对话服务未能完整返回结果，请查看当前任务状态。",
-                    })
+                persist_failure("对话服务未能完整返回结果，请查看当前任务状态。")
                 self._logger.error("assistant stream worker failed (%s)", type(exc).__name__)
                 if not disconnected.is_set():
                     terminal_event = AssistantStreamEvent(
@@ -204,12 +229,12 @@ class AssistantStreamTransport:
                     if event is None:
                         if not result_seen and not error_seen:
                             incomplete = AssistantStreamEvent(
-                                type="error", message="连接中断，未收到完整的对话结果。",
+                                type="error", status=502, message="连接中断，未收到完整的对话结果。",
                             ).model_dump(mode="json", exclude_none=True)
                             yield f"data: {json.dumps(incomplete, ensure_ascii=False)}\n\n"
                         break
                     result_seen = result_seen or event.get("type") == "result"
-                    error_seen = error_seen or event.get("type") == "error"
+                    error_seen = error_seen or (event.get("type") == "error" and isinstance(event.get("status"), int))
                     yield f"data: {json.dumps(event, ensure_ascii=False, separators=(',', ':'))}\n\n"
             finally:
                 disconnected.set()

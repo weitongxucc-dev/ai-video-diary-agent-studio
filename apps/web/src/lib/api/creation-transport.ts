@@ -128,7 +128,7 @@ export async function assistantStreamRequest<T>(path: string, body: unknown, onE
             result = value.result as T;
             return;
         }
-        if (value.type === "error") {
+        if (value.type === "error" && typeof value.status === "number") {
             const failure = value.failure && typeof value.failure === "object" ? value.failure as Record<string, unknown> : null;
             const code = failure?.code === "creation_task_timeline_version_conflict" ? failure.code : null;
             throw new CreationPlanApiError(typeof value.status === "number" ? value.status : 0, code, typeof value.message === "string" ? value.message : "对话没有完成，请检查任务状态。");
@@ -145,20 +145,44 @@ export async function assistantStreamRequest<T>(path: string, body: unknown, onE
             && (value.turn_state === "completed" || value.turn_state === "failed" || value.turn_state === "stopped")) {
             onEvent({ type: "turn_status", turn_id: value.turn_id, turn_state: value.turn_state });
         }
-        else if (value.type === "text_delta" && typeof value.delta === "string") {
-            onEvent({ type: "text_delta", delta: value.delta });
+        else if (value.type === "workspace_saved" && value.status === "saved"
+            && typeof value.task_id === "string" && typeof value.event_id === "string") {
+            onEvent({ type: "workspace_saved", status: "saved", task_id: value.task_id, event_id: value.event_id });
         }
-        else if (value.type === "tool_start" && typeof value.tool_id === "number" && typeof value.label === "string") {
-            onEvent({ type: "tool_start", tool_id: value.tool_id, label: value.label });
-        }
-        else if (value.type === "tool_end" && typeof value.tool_id === "number"
-            && typeof value.label === "string" && typeof value.ok === "boolean" && typeof value.summary === "string") {
-            const failure = value.failure && typeof value.failure === "object"
-                ? value.failure as Record<string, unknown> : null;
-            onEvent({ type: "tool_end", tool_id: value.tool_id, label: value.label, ok: value.ok, summary: value.summary,
-                ...(value.ok === false && typeof failure?.reason === "string" ? { failure: { reason: failure.reason,
-                        ...(typeof failure.impact === "string" ? { impact: failure.impact } : {}),
-                        ...(typeof failure.repair_action === "string" ? { repair_action: failure.repair_action } : {}) } } : {}) });
+        else {
+            const time = typeof value.at === "string" ? { at: value.at } : {};
+            if (value.type === "agent_start" || value.type === "agent_end") {
+                onEvent({ type: value.type, ...time });
+            } else if (value.type === "text_delta" && typeof value.delta === "string") {
+                onEvent({ type: "text_delta", delta: value.delta, ...time });
+            } else if (value.type === "assistant_text" && typeof value.text === "string") {
+                onEvent({ type: "assistant_text", text: value.text, ...time });
+            } else if ((value.type === "unknown" || value.type === "error") && typeof value.message === "string") {
+                onEvent({ type: value.type, message: value.message, ...time });
+            } else if (typeof value.tool_id === "number" && typeof value.label === "string") {
+                const tool = { tool_id: value.tool_id, label: value.label, ...time,
+                    ...(typeof value.display_target === "string" ? { display_target: value.display_target } : {}) };
+                const activity = typeof value.activity_label === "string" ? { activity_label: value.activity_label } : {};
+                if (value.type === "tool_start") {
+                    onEvent({ type: "tool_start", ...tool, ...activity });
+                } else if (value.type === "tool_progress") {
+                    const progress = value.progress;
+                    onEvent({ type: "tool_progress", ...tool,
+                        ...(typeof progress === "number" && progress >= 0 && progress <= 1 ? { progress } : {}) });
+                } else if (value.type === "confirmation_wait" && typeof value.message === "string") {
+                    onEvent({ type: "confirmation_wait", ...tool, message: value.message });
+                } else if (value.type === "tool_end" && typeof value.ok === "boolean" && typeof value.summary === "string") {
+                    const failure = value.failure && typeof value.failure === "object"
+                        ? value.failure as Record<string, unknown> : null;
+                    const effect = failure?.submission_effect;
+                    onEvent({ type: "tool_end", ...tool, ...activity, ok: value.ok, summary: value.summary,
+                        ...(!value.ok && typeof failure?.reason === "string" ? { failure: { reason: failure.reason,
+                            ...(effect === "not_submitted" || effect === "rejected" || effect === "unknown" ? { submission_effect: effect } : {}),
+                            ...(typeof failure.failure_category === "string" ? { failure_category: failure.failure_category } : {}),
+                            ...(typeof failure.impact === "string" ? { impact: failure.impact } : {}),
+                            ...(typeof failure.repair_action === "string" ? { repair_action: failure.repair_action } : {}) } } : {}) });
+                }
+            }
         }
     };
     try {

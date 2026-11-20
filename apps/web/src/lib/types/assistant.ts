@@ -165,7 +165,29 @@ export type AssistantToolFailure = {
     reason: string;
     repair_action?: string;
 };
-export type AssistantStreamEvent = {
+type AssistantToolEvent = {
+    tool_id: number;
+    label: string;
+    display_target?: string;
+};
+type AssistantActivityEvent = (
+    | { type: "agent_start" | "agent_end" }
+    | { type: "text_delta"; delta: string }
+    | { type: "assistant_text"; text: string }
+    | { type: "unknown" | "error"; message: string }
+    | (AssistantToolEvent & (
+        | { type: "tool_start"; activity_label?: string }
+        | { type: "tool_progress"; progress?: number }
+        | { type: "confirmation_wait"; message: string }
+        | { type: "tool_end"; ok: boolean; summary: string; activity_label?: string; failure?: AssistantToolFailure }
+    ))
+) & { at?: string };
+export type AssistantStreamEvent = AssistantActivityEvent | {
+    type: "workspace_saved";
+    status: "saved";
+    task_id: string;
+    event_id: string;
+} | {
     type: "turn_started";
     turn_id: string;
     turn_state: "running" | "completed" | "failed" | "stopped";
@@ -174,25 +196,6 @@ export type AssistantStreamEvent = {
     type: "turn_status";
     turn_id: string;
     turn_state: "running" | "completed" | "failed" | "stopped";
-} | {
-    type: "text_delta";
-    delta: string;
-    at?: string;
-} | {
-    type: "tool_start";
-    tool_id: number;
-    label: string;
-    display_target?: string;
-    at?: string;
-} | {
-    type: "tool_end";
-    tool_id: number;
-    label: string;
-    display_target?: string;
-    at?: string;
-    ok: boolean;
-    summary: string;
-    failure?: AssistantToolFailure;
 };
 export type AssistantToolActivity = {
     tool_id: number;
@@ -209,9 +212,7 @@ export type AssistantBusinessResultEvent = AssistantBusinessContinuation & {
 export type AssistantTurnActivity = {
     text: string;
     tools: AssistantToolActivity[];
-    events: (Extract<AssistantStreamEvent, {
-        type: "text_delta" | "tool_start" | "tool_end";
-    }> | AssistantBusinessResultEvent | AssistantInputReceipt | {
+    events: (AssistantActivityEvent | AssistantBusinessResultEvent | AssistantInputReceipt | {
         type: "goal_continuation_started";
         source_kind: "business_event";
         original_turn_id: string;
