@@ -21,7 +21,8 @@ type TurnTool = {
 type TurnBlock =
   | { kind: "text"; key: string; text: string }
   | { kind: "tools"; key: string; tools: TurnTool[] }
-  | { kind: "result"; key: string };
+  | { kind: "result"; key: string }
+  | { kind: "notice"; key: string; state: "unknown" | "error"; message: string };
 
 export function turnBlocks(turn: AssistantConversationTurn, resultEventId?: string): TurnBlock[] {
   const blocks: TurnBlock[] = [];
@@ -35,22 +36,32 @@ export function turnBlocks(turn: AssistantConversationTurn, resultEventId?: stri
   }
 
   for (const [index, event] of turn.events.entries()) {
-    const eventType: string = event.type;
-    if (eventType === "assistant_text" && "text" in event && typeof event.text === "string") {
+    if (event.type === "assistant_text") {
       flushText();
       textStart = index;
       text = event.text;
       continue;
     }
-    if ((eventType === "tool_progress" || eventType === "confirmation_wait") && "tool_id" in event && typeof event.tool_id === "number") {
+    if (event.type === "unknown" || event.type === "error" || event.type === "agent_end") {
+      if (event.type === "unknown" || event.type === "error") {
+        flushText();
+        blocks.push({kind: "notice", key: `notice:${index}`, state: event.type, message: event.message});
+      }
+      for (const tool of tools.values()) {
+        if (tool.state === "running") tool.state = "unreturned";
+      }
+      continue;
+    }
+    if (event.type === "tool_progress" || event.type === "confirmation_wait") {
       const tool = tools.get(event.tool_id);
-      if (tool?.state !== "running") continue;
-      if (eventType === "tool_progress") {
-        if ("progress" in event && typeof event.progress === "number" && event.progress >= 0 && event.progress <= 1) tool.progress = event.progress;
+      if (!tool || tool.state === "failed" || tool.state === "succeeded") continue;
+      if (event.type === "tool_progress") {
+        if (tool.state !== "running") continue;
+        if (event.progress !== undefined && event.progress >= 0 && event.progress <= 1) tool.progress = event.progress;
         if ("summary" in event && typeof event.summary === "string") tool.summary = event.summary;
       } else {
         tool.state = "waiting";
-        tool.summary = "message" in event && typeof event.message === "string" ? event.message : undefined;
+        tool.summary = event.message;
       }
       continue;
     }
@@ -94,7 +105,7 @@ export function turnBlocks(turn: AssistantConversationTurn, resultEventId?: stri
   const persisted = turn.assistant_text.trimEnd();
   if (!persisted.trim()) return blocks;
   let finalIndex = blocks.length - 1;
-  while (blocks[finalIndex]?.kind === "result") finalIndex -= 1;
+  while (blocks[finalIndex]?.kind === "result" || blocks[finalIndex]?.kind === "notice") finalIndex -= 1;
   const last = blocks[finalIndex];
   const workText = blocks.slice(0, last?.kind === "text" ? finalIndex : blocks.length)
     .map(block => block.kind === "text" ? block.text : "").join("");
@@ -144,16 +155,14 @@ export function TurnActivity({ turn, continuation }: { turn: AssistantConversati
   let recent: AssistantConversationTurn["events"][number] | undefined;
   for (let index = turn.events.length - 1; index >= 0; index--) {
     const event = turn.events[index];
-    const type: string = event.type;
     if (event.type === "tool_end" || event.type === "text_delta" && event.delta.trim()
-      || type === "assistant_text" || type === "confirmation_wait") {
+      || event.type === "assistant_text" || event.type === "confirmation_wait"
+      || event.type === "unknown" || event.type === "error" || event.type === "agent_end") {
       recent = event;
       break;
     }
   }
-  const recentType: string | undefined = recent?.type;
-  if (recentType === "text_delta" || recentType === "assistant_text" || recentType === "confirmation_wait"
-    || !recent && turn.assistant_text.trim()) return null;
+  if (recent && recent.type !== "tool_end" || !recent && turn.assistant_text.trim()) return null;
   const activity = continuation && !recent ? "继续完成原要求" : "正在处理";
   return <p className="assistant-stream-status">
     <LoaderCircle aria-hidden size={14} className="is-spinning"/>

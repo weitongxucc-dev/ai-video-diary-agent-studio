@@ -2927,3 +2927,33 @@ it("shows projected progress and confirmation waiting where the tool started, wi
   expect(screen.getByText("需要查看人物授权。")).toBeVisible();
   expect(screen.queryByRole("button", {name:/确认|开始制作/})).not.toBeInTheDocument();
 });
+
+it.each(["error", "unknown"] as const)("keeps standalone %s in place without repeating the transport error", (type) => {
+  const saved = conversation();
+  const turn = saved.turns[0];
+  const message = "服务连接中途断开。";
+  turn.status = "running";
+  turn.assistant_text = "先核对原件。";
+  turn.result = null;
+  turn.events = [{type:"text_delta",delta:turn.assistant_text}, {type,message}, {type,message}, {type:"agent_end"}];
+  render(<AssistantConversationPanel state={state({conversation:saved,error:message})} input=""
+    onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前作品"/>);
+  const notice = screen.getByText(message);
+  expect(screen.getByText(turn.assistant_text).compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByText("正在处理")).not.toBeInTheDocument();
+  if (type === "unknown") expect(screen.getByText("先查询原请求。")).toBeVisible();
+});
+
+it("keeps a persisted confirmation waiting after reopening the settled turn", () => {
+  const saved = conversation();
+  const turn = saved.turns[0];
+  turn.assistant_text = "";
+  turn.result = null;
+  turn.events = [{type:"tool_start",tool_id:1,label:"核对制作要求"},
+    {type:"confirmation_wait",tool_id:1,label:"核对制作要求",message:"请先确认制作要求。"}, {type:"agent_end"}];
+  render(<AssistantConversationPanel state={state({conversation:saved})} input=""
+    onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="当前作品"/>);
+  expect(screen.getByText("等待确认")).toBeVisible();
+  expect(screen.getByText("请先确认制作要求。")).toBeVisible();
+  expect(screen.queryByText("未收到结果")).not.toBeInTheDocument();
+});

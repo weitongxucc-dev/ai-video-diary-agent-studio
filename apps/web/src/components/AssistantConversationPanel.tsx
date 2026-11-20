@@ -195,9 +195,23 @@ function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continu
   const lastBlock = blocks.at(-1);
   const useBeforeAnswer = receiptIndex < 0 && lastBlock?.kind === "text" && turnTools.length > 0 && turn.status !== "running";
   const activeTools = blocks.filter(block => block.kind === "tools").at(-1);
+  const displayedNotices = new Set<string>();
+  const toolFailureMessages = turnTools.flatMap(tool => tool.state === "failed"
+    ? [tool.failure?.reason, tool.summary].map(publicExecutionText).filter(Boolean) : []);
   return <>
     {blocks.map(block => {
       if (block.kind === "result") return <Fragment key={block.key}>{receipt}</Fragment>;
+      if (block.kind === "notice") {
+        const message = publicExecutionText(block.message) ?? (block.state === "unknown"
+          ? "这次请求的结果仍待核实。" : "这轮回复未能完成。");
+        if (displayedNotices.has(message) || toolFailureMessages.includes(message) || surfacedElsewhere.includes(message)) return null;
+        displayedNotices.add(message);
+        return <div key={block.key} className="assistant-inline-failure" data-unknown={block.state === "unknown" || undefined}
+          role={block.state === "unknown" ? "status" : "alert"}>
+          <div className="assistant-activity-row">{message}</div>
+          {block.state === "unknown" && !message.includes("查询") ? <p>先查询原请求。</p> : null}
+        </div>;
+      }
       if (block.kind === "tools") return <TurnToolActivity key={block.key} tools={block.tools} turnTools={turnTools} turn={turn}
         active={turn.status === "running" && activeTools === block}
         reading={reading} surfacedElsewhere={surfacedElsewhere} recoveryToolId={recoveryToolId} recovery={recovery}/>;
@@ -505,7 +519,8 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
     && !outputRecovered && !productionRecovered ? failedTool.id : undefined;
   const model = publicExecutionText(taskResult?.response?.model ?? (typeof result?.model === "string" ? result.model : null));
   const canContinue = (turn.status === "failed" || turn.status === "stopped")
-    && Boolean(turn.user_message.trim()) && !waitingForOriginal && !unknownRequest && !unknownTool && !savedStage && !productionRecovered && !outputRecovered;
+    && Boolean(turn.user_message.trim()) && !waitingForOriginal && !unknownRequest && !unknownTool
+    && !blocks.some(block => block.kind === "notice" && block.state === "unknown") && !savedStage && !productionRecovered && !outputRecovered;
   const hasReplyActions = turn.status !== "running" && Boolean(turn.assistant_text.trim());
   const queryResult = unknownRequest || waitingForOriginal && (turn.status !== "running" || refreshPaused)
     ? <Button variant="ghost" type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : unknownRequest ? "先查询原请求" : "查询本轮结果"}</Button> : null;
@@ -564,7 +579,7 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
     {inputReceipts.length ? <div className="assistant-turn-inputs" aria-label="本轮补充要求">{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</div> : null}
     <TurnContent turn={turn} blocks={blocks} reading={reading} latest={latest} continuation={businessContinuation}
       visibleResultNotes={visibleResultNotes} recoveryToolId={recoveryToolId} recovery={recovery} receipt={receipt}/>
-    {turn.status === "failed" ? <p role="status">{outputRecovered ? "本轮回复曾中断；制作与技术检查已恢复完成，历史失败保留。"
+    {turn.status === "failed" && (outputRecovered || productionRecovered || !blocks.some(block => block.kind === "notice")) ? <p role="status">{outputRecovered ? "本轮回复曾中断；制作与技术检查已恢复完成，历史失败保留。"
       : productionRecovered ? "本轮回复曾中断；成片已生成，输出尚未检查，历史记录保留。"
       : businessContinuation ? "接续未完成；原要求和实际结果保留在记录中。" : "本轮未完成；本条要求保留在记录中。"}</p> : null}
     {turn.status === "stopped" ? <p role="status">本轮已停止；先前的业务动作不会因此撤销。</p> : null}
@@ -983,6 +998,8 @@ export function AssistantConversationPanel({
         <p>引用会固定到选中时的版本；版本变化后需要重新选择。助手会区分工具回执与实际画面、声音的检查结果。</p>
       </div></HomeCardDialog> : null}
     {historyOpen ? <HomeCardDialog title="历史对话" onClose={() => setHistoryOpen(false)}><div className="assistant-resume-list">{state.conversations.map(item => <Button variant="ghost" type="button" key={item.id} onClick={() => void state.resume(item.id).then(next => { onConversationChange?.(); onInput(next.draft_text); setHistoryOpen(false); focus?.focus(); }).catch(cause => setError(cause.message))}><strong>{item.title}</strong><small>{new Date(item.updated_at).toLocaleString()}</small></Button>)}</div></HomeCardDialog> : null}
-    {error || state.error ? <div className="assistant-conversation-error" role="alert"><AssistantFailureMessage message={error ?? state.error ?? ""}/></div> : null}
+    {(error || state.error) && !turns.at(-1)?.events.some(event =>
+      (event.type === "error" || event.type === "unknown") && event.message.trim() === (error ?? state.error)?.trim())
+      ? <div className="assistant-conversation-error" role="alert"><AssistantFailureMessage message={error ?? state.error ?? ""}/></div> : null}
   </section>;
 }
