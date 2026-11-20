@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 from app.config import Settings
@@ -95,9 +96,10 @@ def run_turn(
     first_business_failure = None
     pending_tools: set[object] = set()
     saw_tool = False
+    saw_text = False
 
     def observe_event(event):
-        nonlocal first_business_failure, saw_tool
+        nonlocal first_business_failure, saw_tool, saw_text
         if event.get("type") == "tool_start":
             saw_tool = True
             pending_tools.add(event.get("tool_id"))
@@ -108,6 +110,15 @@ def run_turn(
                 first_business_failure = _safe_business_failure(event.get("failure")) or None
         if on_event:
             on_event(event)
+            saw_text = saw_text or event.get("type") == "text_delta"
+
+    def note_preflight(ok=None, summary=None):
+        if on_event:
+            kind = "tool_start" if ok is None else "tool_end"
+            at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            on_event({"type": kind, "tool_id": 0, "label": "读取当前任务（发送前）",
+                "display_target": "当前作品", "at": at,
+                **({"ok": ok, "summary": summary} if ok is not None else {})})
 
     model_message = message
     task_context = None
@@ -116,25 +127,18 @@ def run_turn(
         if caller_user_id:
             memory_facts = read_memory(extension, env, runtime_root, **business_options)
         if task_id and stage not in {"material", "plan", "home"}:
-            label = "读取当前任务（发送前）"
-            if on_event:
-                on_event({"type": "tool_start", "tool_id": 0, "label": label})
+            note_preflight()
             try:
                 facts = read_task(extension, env, runtime_root, **business_options)
             except AssistantStopped:
                 if turn_id:
                     control.forget(turn_id)
-                if on_event:
-                    on_event({"type": "tool_end", "tool_id": 0, "label": label, "ok": False,
-                              "summary": "发送前读取已停止，本轮助手尚未启动，也未提交操作。"})
+                note_preflight(False, "发送前读取已停止，本轮助手尚未启动，也未提交操作。")
                 raise
             except AssistantUnavailable as exc:
-                if on_event:
-                    on_event({"type": "tool_end", "tool_id": 0, "label": label, "ok": False, "summary": str(exc)})
+                note_preflight(False, str(exc))
                 raise
-            if on_event:
-                on_event({"type": "tool_end", "tool_id": 0, "label": label, "ok": True,
-                          "summary": "已读取当前任务、固定输入、已确认文案和后台安排；尚未提交操作。"})
+            note_preflight(True, "已读取当前任务、固定输入、已确认文案和后台安排；尚未提交操作。")
             if turn_id:
                 if control.is_stopped(turn_id):
                     control.forget(turn_id)
@@ -191,6 +195,8 @@ def run_turn(
         ) from exc
     finally:
         session_lock.release()
+        if on_event and saw_text:
+            on_event({"type": "text_end"})
     failure = _fail(classify_output(result.stdout, result.stderr or "")) if result.returncode else None
     try:
         answer, preview = parse_result(result.stdout, preview_kind)

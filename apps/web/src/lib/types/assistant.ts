@@ -176,14 +176,19 @@ export type AssistantStreamEvent = {
 } | {
     type: "text_delta";
     delta: string;
+    at?: string;
 } | {
     type: "tool_start";
     tool_id: number;
     label: string;
+    display_target?: string;
+    at?: string;
 } | {
     type: "tool_end";
     tool_id: number;
     label: string;
+    display_target?: string;
+    at?: string;
     ok: boolean;
     summary: string;
     failure?: AssistantToolFailure;
@@ -191,6 +196,8 @@ export type AssistantStreamEvent = {
 export type AssistantToolActivity = {
     tool_id: number;
     label: string;
+    display_target?: string;
+    at?: string;
     state: "running" | "succeeded" | "failed";
     summary?: string;
     failure?: AssistantToolFailure;

@@ -365,23 +365,9 @@ class TaskAssistantTurnUseCase:
             def on_event(event):
                 self.record_window_event(event, workspace_id=workspace_id, member_id=goal['member_id'],
                     task_id=task_id, turn_id=turn_id)
-                if event.get('type') == 'context_compaction':
-                    diagnostic = _safe_compaction_event(event)
-                    if diagnostic is not None:
-                        self._conversations_for().append_event(turn_id, diagnostic)
-                    return
-                if event.get('type') == 'text_delta':
-                    delta = sanitizer.feed(str(event.get('delta', '')))
-                    if delta:
-                        self._conversations_for().append_event(turn_id, {'type': 'text_delta', 'delta': delta})
-                elif event.get('type') in {'tool_start', 'tool_end'}:
-                    safe = {key: value for key, value in event.items() if key in {'type', 'tool_id', 'label', 'ok', 'summary'}}
-                    for key in ('label', 'summary'):
-                        if key in safe:
-                            safe[key] = safe_text(str(safe[key]))
-                    if isinstance(event.get('failure'), dict):
-                        safe['failure'] = {key: safe_text(value) if isinstance(value, str) else value
-                            for key, value in _safe_business_failure(event['failure']).items()}
+                safe = (_safe_compaction_event(event) if event.get('type') == 'context_compaction'
+                        else sanitizer.activity_event(event))
+                if safe is not None:
                     self._conversations_for().append_event(turn_id, safe)
 
             try:
@@ -399,9 +385,7 @@ class TaskAssistantTurnUseCase:
                      'completed_source_slots': goal.get('completed_source_slots', []),
                      'completed_output_checkpoint': goal.get('completed_output_checkpoint'),
                      'unfinished_steps': goal['unfinished_steps'], 'next_checkpoint': goal.get('next_checkpoint')}, on_event))
-                tail = sanitizer.feed('', final=True)
-                if tail:
-                    self._conversations_for().append_event(turn_id, {'type': 'text_delta', 'delta': tail})
+                on_event({'type': 'text_end'})
                 runtime_receipt = preview if isinstance(preview, dict) and preview.get('kind') == 'runtime_receipt' else None
                 yield from self.finish_goal(business, claim, reply, None if runtime_receipt else preview, runtime_receipt)
             except AssistantUnavailable as exc:

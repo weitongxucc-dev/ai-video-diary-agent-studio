@@ -3366,6 +3366,8 @@ class AssistantStreamEvent(BaseModel):
     delta: str | None = None
     tool_id: int | None = None
     label: str | None = None
+    display_target: str | None = Field(default=None, max_length=64)
+    at: str | None = None
     ok: bool | None = None
     summary: str | None = None
     failure: dict[str, str | int | bool | None | list[dict[str, str | int | bool | None]]] | None = None

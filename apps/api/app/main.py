@@ -79,7 +79,7 @@ from app.assistant_pi import (
     request_stop_turn, run_material_turn as run_material_turn, run_plan_turn, run_task_turn,
     stop_all_assistant_turns,
 )
-from app.assistant.projection import _safe_business_failure, _safe_compaction_event
+from app.assistant.projection import _safe_compaction_event, public_tool_event
 from app.assistant_goal_continuation import GoalContinuationService, GoalResultProjection, GoalProjectionRejected
 
 from app.compound_edits import compile_compound_edit as compile_compound_edit
@@ -3582,12 +3582,7 @@ def _run_script_generation_agent(workspace_id, member_id, case, record):
         if event.get("type") == "context_compaction":
             safe = _safe_compaction_event(event)
         elif event.get("type") in {"tool_start", "tool_end"}:
-            safe = {key: event[key] for key in ("type", "tool_id", "label", "ok", "summary") if key in event}
-            for key in ("label", "summary"):
-                if key in safe:
-                    safe[key] = _assistant_stream_safe_text(str(safe[key]), workspace_id)
-            if isinstance(event.get("failure"), dict):
-                safe["failure"] = _safe_business_failure(event["failure"])
+            safe = public_tool_event(event, lambda value: _assistant_stream_safe_text(value, workspace_id))
         else:
             return
         if safe is not None:

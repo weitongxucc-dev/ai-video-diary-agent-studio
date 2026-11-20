@@ -9,7 +9,7 @@ import threading
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.assistant.projection import _safe_business_failure, _safe_compaction_event
+from app.assistant.projection import PublicReasoningFilter, _safe_compaction_event, public_event_at, public_tool_event
 from app.schemas import AssistantStreamEvent
 
 class AssistantStreamTextSanitizer:
@@ -18,23 +18,25 @@ class AssistantStreamTextSanitizer:
     _markers = (
         "authorization: bearer ", "api_key=", "api_key: ", "api-key=", "api-key: ",
         "api key=", "api key: ", "token=", "token: ", "password=", "password: ",
-        "secret=", "secret: ", "sk-", "file://", "/users/", "/private/", "/tmp/", "/var/folders/",
+        "secret=", "secret: ", "sk-", "file://", "/users/", "/volumes/", "/private/", "/tmp/", "/var/folders/",
     )
     _sensitive_patterns = (
         re.compile(r"(?i)\bauthorization\s*:\s*bearer\s+\S+"),
         re.compile(r"(?i)\b(?:api[_ -]?key|token|password|secret)\s*[:=]\s*\S+"),
         re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
-        re.compile(r"(?:file://)?(?:/Users/|/private/|/tmp/|/var/folders/)[^\s,;\"']+", re.IGNORECASE),
+        re.compile(r"(?:file://)?(?:/Users/|/Volumes/|/private/|/tmp/|/var/folders/)[^\s,;\"']+", re.IGNORECASE),
     )
 
     def __init__(self, workspace_id: str, *, known_secrets, safe_text) -> None:
         self._workspace_id = workspace_id
         self._pending = ""
+        self._reasoning = PublicReasoningFilter()
+        self._text_at: str | None = None
         self._safe_text = safe_text
         self._known_secrets = tuple(secret for secret in known_secrets if secret and len(secret) >= 8)
 
     def feed(self, delta: str, *, final: bool = False) -> str:
-        combined = self._pending + delta
+        combined = self._pending + self._reasoning.feed(delta, final=final)
         if final:
             self._pending = ""
             return self._safe_text(combined, self._workspace_id)
@@ -71,6 +73,18 @@ class AssistantStreamTextSanitizer:
         self._pending = combined[safe_end:]
         return self._safe_text(safe_text, self._workspace_id) if safe_text else ""
 
+    def activity_event(self, event: dict) -> dict | None:
+        kind = event.get("type")
+        if kind == "text_delta" and isinstance(event.get("delta"), str):
+            self._text_at = public_event_at(event.get("at"))
+            delta = self.feed(event["delta"])
+        elif kind == "text_end":
+            delta = self.feed("", final=True)
+        else:
+            return public_tool_event(event, lambda value: self._safe_text(value, self._workspace_id))
+        if delta:
+            return {"type": "text_delta", "delta": delta, **({"at": self._text_at} if self._text_at else {})}
+        return None
 
 
 class AssistantStreamTransport:
@@ -106,26 +120,10 @@ class AssistantStreamTransport:
                 if diagnostic is not None and turn_ref['id']:
                     stream_conversation_repo.append_event(turn_ref['id'],diagnostic)
                 return  # Diagnostic history does not extend the existing SSE schema.
-            if event_type == "text_delta" and isinstance(raw_event.get("delta"), str):
-                delta = text_sanitizer.feed(str(raw_event["delta"]))
-                if not delta:
+            if event_type in {"text_delta", "text_end", "tool_start", "tool_end"}:
+                event = text_sanitizer.activity_event(raw_event)
+                if event is None:
                     return
-                event = {"type": "text_delta", "delta": delta}
-            elif event_type == "tool_start":
-                event = {
-                    "type": "tool_start", "tool_id": raw_event["tool_id"],
-                    "label": self._safe_text(str(raw_event.get("label", "助手操作")), workspace_id),
-                }
-            elif event_type == "tool_end":
-                event = {
-                    "type": "tool_end", "tool_id": raw_event["tool_id"],
-                    "label": self._safe_text(str(raw_event.get("label", "助手操作")), workspace_id),
-                    "ok": bool(raw_event.get("ok")),
-                    "summary": self._safe_text(str(raw_event.get("summary", "")), workspace_id),
-                }
-                if isinstance(raw_event.get("failure"), dict):
-                    event["failure"] = {key: self._safe_text(value, workspace_id) if isinstance(value, str) else value
-                        for key, value in _safe_business_failure(raw_event["failure"]).items()}
             elif event_type == "turn_started":
                 event = {key: raw_event[key] for key in ("type", "turn_id", "turn_state", "draft_version") if key in raw_event}
                 turn_ref["id"] = str(raw_event["turn_id"])
@@ -135,7 +133,7 @@ class AssistantStreamTransport:
                 return
             validated = AssistantStreamEvent.model_validate(event)
             safe_event = validated.model_dump(mode="json", exclude_none=True)
-            if turn_ref["id"] and event_type in {"text_delta", "tool_start", "tool_end"}:
+            if turn_ref["id"] and validated.type in {"text_delta", "tool_start", "tool_end"}:
                 stream_conversation_repo.append_event(turn_ref["id"], safe_event)
             if not disconnected.is_set():
                 events.put(safe_event)
@@ -181,9 +179,7 @@ class AssistantStreamTransport:
                         message="对话服务未能完整返回结果，请查看当前任务状态。",
                     ).model_dump(exclude_none=True)
             finally:
-                tail = text_sanitizer.feed("", final=True)
-                if tail:
-                    publish({"type": "text_delta", "delta": tail})
+                publish({"type": "text_end"})
                 if terminal_event is not None and not disconnected.is_set():
                     events.put(terminal_event)
                 events.put(None)
