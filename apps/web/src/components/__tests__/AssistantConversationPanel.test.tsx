@@ -214,6 +214,48 @@ it("summarizes completed calls by their public action labels and retains the ful
   expect(within(receipts).getByText("实际回执 6。")).toBeVisible();
 });
 
+it.each([
+  ["only the settled suffix", "核对完成，两项都是只读查询。"],
+  ["the full saved reply", "我先核对当前任务。核对完成，两项都是只读查询。"],
+])("keeps event-ordered work notes when the server returns %s", (_shape, savedText) => {
+  const saved = conversation();
+  saved.turns[0].assistant_text = savedText;
+  saved.turns[0].events = [
+    {type: "text_delta", delta: "我先核对当前任务。"},
+    {type: "tool_start", tool_id: 9, label: "读取当前任务"},
+    {type: "tool_end", tool_id: 9, label: "读取当前任务", ok: true, summary: "已返回任务事实。"},
+    {type: "text_delta", delta: "旧的流式结论。"},
+  ];
+  render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()} onSend={vi.fn()}
+    busy={false} configured scopeLabel="当前作品"/>);
+  expect(screen.getByText("我先核对当前任务。")).toBeVisible();
+  if (savedText !== "我先核对当前任务。") {
+    expect(screen.getByText("核对完成，两项都是只读查询。")).toBeVisible();
+  }
+  expect(screen.queryByText("旧的流式结论。")).not.toBeInTheDocument();
+});
+
+it("marks a failed duplicate attempt as historical after the same action succeeds", () => {
+  const saved = conversation();
+  saved.turns[0].events = [
+    {type:"tool_end", tool_id:11, label:"保存素材", ok:false, summary:"未执行保存。", failure:{
+      reason:"按工具参数契约补齐后再提交。", repair_action:"请补齐参数后重试。",
+    }},
+    {type:"tool_end", tool_id:12, label:"保存素材", ok:true, summary:"已保存 1 项素材。"},
+  ];
+  saved.turns[0].assistant_text = "素材已保存。";
+  render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()} onSend={vi.fn()}
+    busy={false} configured scopeLabel="当前作品"/>);
+  const activity = screen.getByLabelText("本轮操作");
+  expect(within(activity).getByText("本次尝试未执行")).toBeVisible();
+  expect(within(activity).queryByText("请补齐参数后重试。")).not.toBeVisible();
+  fireEvent.click(within(activity).getByText("查看历史失败"));
+  expect(within(activity).getByText("按工具参数契约补齐后再提交。")).toBeVisible();
+  fireEvent.click(within(activity).getByText("已返回"));
+  expect(within(activity).getByText("已保存 1 项素材。")).toBeVisible();
+  expect(screen.getByText("请补齐参数后重试。")).toBeVisible();
+});
+
 it("keeps rewritten saved replies and never replays superseded text deltas", () => {
   const saved = conversation();
   saved.turns[0].assistant_text = "服务端核对后的正文与实际保存回执。";

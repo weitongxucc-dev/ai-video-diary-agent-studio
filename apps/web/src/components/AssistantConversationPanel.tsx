@@ -466,6 +466,7 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
     || ["failed", "interrupted", "rejected"].includes(outcomeStatus ?? "");
   const resultNeedsAttention = otherResultNeedsAttention || readinessBlocked;
   const completedAudioReply = !otherResultNeedsAttention && !businessSummary && completedAudioReplyMatchesReceipt(turn);
+  const resultSummaryRepeated = Boolean(resultSummary && turn.assistant_text.includes(resultSummary) && !resultNeedsAttention);
   const summaryInHeading = Boolean(taskResult && resultSummary);
   const savedStage = taskScopeId && !windowInputMismatch ? savedResultStage(turn, taskScopeId) : null;
   const resultStage = onOpenResultStage ? savedStage : null;
@@ -498,7 +499,7 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
     <TurnContent turn={turn} blocks={blocks} reading={reading} latest={latest} continuation={businessContinuation}
       visibleResultNotes={visibleResultNotes} recoveryToolId={recoveryToolId} recovery={recovery}/>
     {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
-    {resultSummary && !completedAudioReply ? <TurnResult summary={resultSummary} summaryInHeading={summaryInHeading} reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult) && (resultNeedsAttention || !turn.assistant_text.trim())}>
+    {resultSummary && !completedAudioReply && !resultSummaryRepeated ? <TurnResult summary={resultSummary} summaryInHeading={summaryInHeading} reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult) && (resultNeedsAttention || !turn.assistant_text.trim())}>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
       {storyboardSummary && storyboardSummary !== resultSummary ? <p>{storyboardSummary}</p> : null}
       {segment?.failure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:segment:diagnostic`} message={segment.failure.reason}/>{segment.failure.repair_action ? <p>{segment.failure.repair_action}</p> : null}</div> : null}

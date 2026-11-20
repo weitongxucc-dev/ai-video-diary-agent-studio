@@ -62,21 +62,38 @@ export function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
       tool.target ??= event.display_target;
     }
   }
-
-  // The saved body is authoritative, including any suffix added at settlement.
-  const persisted = turn.assistant_text.trimEnd();
-  if (!streamed.trim() || !persisted.trimStart().startsWith(streamed.trimStart().trimEnd())) {
-    const activity: TurnBlock[] = blocks.filter(block => block.kind === "tools");
-    if (persisted.trim()) activity.push({kind: "text", key: "text:saved", text: persisted});
-    return activity;
-  }
-  if (persisted.trim() !== streamed.trim()) {
-    const suffix = persisted.trimStart().slice(streamed.trim().length);
-    if (!text) textStart = turn.events.length;
-    text = text.trimEnd() + suffix;
-  }
   flushText();
-  return blocks;
+
+  // Public text before and between tools is an event-ordered work log. The
+  // persisted body is authoritative for the final text after the last tool,
+  // but it may contain the whole reply, only its settled suffix, or a rewrite.
+  const persisted = turn.assistant_text.trimEnd();
+  const textBlocks = blocks.filter((block): block is Extract<TurnBlock, {kind: "text"}> => block.kind === "text");
+  const hasTools = blocks.some(block => block.kind === "tools");
+  if (!persisted.trim()) return blocks;
+  if (!hasTools) return [{kind: "text", key: "text:saved", text: persisted}];
+
+  const trailing = textBlocks[textBlocks.length - 1];
+  const prefix = textBlocks.slice(0, -1).map(block => block.text).join("");
+  const streamedText = textBlocks.map(block => block.text).join("");
+  const finalText = trailing?.text ?? "";
+  let replacement = persisted;
+  let removeTrailing = false;
+  if (streamedText && persisted.startsWith(streamedText)) {
+    replacement = trailing ? persisted.slice(prefix.length) : "";
+  } else if (prefix && persisted.startsWith(prefix)) {
+    replacement = persisted.slice(prefix.length);
+    removeTrailing = !replacement.trim();
+  } else if (finalText && persisted.startsWith(finalText)) {
+    replacement = persisted;
+  }
+  if (!replacement.trim() && !removeTrailing) return blocks;
+  const next = blocks.filter(block => removeTrailing || block !== trailing);
+  const index = trailing ? next.findIndex(block => block.kind === "tools" && blocks.indexOf(block) > blocks.indexOf(trailing)) : -1;
+  const textBlock = {kind: "text" as const, key: trailing?.key ?? "text:saved", text: replacement};
+  if (index >= 0) next.splice(index, 0, textBlock);
+  else next.push(textBlock);
+  return next;
 }
 
 export type TurnReadingState = {
@@ -189,12 +206,27 @@ export function TurnToolActivity({ tools, turn, reading, surfacedElsewhere = "",
     rows.push(<CompletedTools key={anchor.id} anchorId={anchor.id} tools={completed} turnId={turn.id} reading={reading} reply={surfacedElsewhere}/>);
     completed = [];
   }
-  for (const tool of tools) {
+  for (const [index, tool] of tools.entries()) {
     if (tool.state === "succeeded") {
       completed.push(tool);
       continue;
     }
     addCompleted();
+    const recoveredByLaterAttempt = (tool.state === "failed" || tool.state === "unreturned")
+      && tools.slice(index + 1).some(candidate => candidate.state === "succeeded" && toolLabel(candidate) === toolLabel(tool));
+    if (recoveredByLaterAttempt) {
+      const historicalNotes = [publicExecutionText(tool.failure?.reason), publicExecutionText(tool.failure?.impact),
+        publicExecutionText(tool.failure?.repair_action)].filter((note): note is string => Boolean(note));
+      rows.push(<div key={tool.id} className="assistant-inline-history-failure">
+        <div className="assistant-activity-row"><CircleAlert aria-hidden size={14}/><ToolName tool={tool}/>
+          <span className="assistant-activity-state">本次尝试未执行</span></div>
+        {historicalNotes.length ? <details className="assistant-inline-history-details">
+          <summary>查看历史失败</summary>
+          {historicalNotes.map(note => <p key={note}>{note}</p>)}
+        </details> : null}
+      </div>);
+      continue;
+    }
     if (tool.state === "running") {
       rows.push(<div key={tool.id} className="assistant-activity-row">
         <LoaderCircle aria-hidden size={14} className="is-spinning"/>
