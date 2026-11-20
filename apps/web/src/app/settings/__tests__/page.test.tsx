@@ -262,6 +262,7 @@ it("exposes every settings destination directly and keeps public legal links in 
  const nav=screen.getByRole("navigation",{name:"设置分类"});
  expect(within(nav).getAllByRole("link")).toHaveLength(10);
  for(const label of ["我的空间","外观与操作","AI 服务","创作默认","人物与声音","素材与存储","听写与设备","信息源","高级诊断","隐私、帮助与关于"])expect(within(nav).getByRole("link",{name:label})).toBeInTheDocument();
+ expect(screen.queryByText("对话用量与诊断")).not.toBeInTheDocument();
  expect(screen.getByRole("link",{name:"隐私政策"})).toHaveAttribute("href","/privacy");expect(screen.getByRole("link",{name:"使用条款"})).toHaveAttribute("href","/terms");expect(screen.getByRole("button",{name:"打开使用帮助"})).toBeInTheDocument();
 });
 
@@ -281,4 +282,14 @@ it.each(["model", "production", "voices", "asr"] as const)("keeps creation deep 
  const nav=screen.getByRole("navigation",{name:"设置分类"});
  expect(within(nav).getByRole("link",{current:"page"})).toHaveAttribute("href",`/settings?section=${section}`);
  expect(within(nav).getByRole("link",{name:{model:"AI 服务",production:"创作默认",voices:"人物与声音",asr:"听写与设备"}[section]!})).toHaveAttribute("href",`/settings?section=${section}`);
+});
+
+it("places conversation diagnostics behind a closed advanced-settings disclosure", async () => {
+  api.getRuntimeSettings.mockResolvedValue(runtimeWithServiceState("available"));
+  api.getLocalModels.mockResolvedValue({models:[]});
+  api.getProductionFoundation.mockResolvedValue(null);
+  render(await SettingsPage({searchParams:Promise.resolve({section:"runtime"})}));
+  const runtime = screen.getByRole("region", {name:"运行与诊断"});
+  expect(within(runtime).getByText("对话用量与诊断").closest("details")).not.toHaveAttribute("open");
+  expect(within(runtime).queryByRole("combobox",{name:"对话范围"})).not.toBeInTheDocument();
 });
