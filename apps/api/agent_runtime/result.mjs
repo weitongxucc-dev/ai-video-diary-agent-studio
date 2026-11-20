@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+const QUEUE_STATUSES = new Set(["queued", "dequeued", "consumed", "cancelled", "pending", "running", "completed"]);
+
 /** This invocation's results only; restoring SDK history never replays receipts. */
 export function createSessionResult(sessionId) {
   const result = {type:"creation_session_result", protocol:1, owner:"pi-coding-agent-sdk",
@@ -59,6 +61,12 @@ export function createSessionResult(sessionId) {
       if (eventType === "agent_end") traceEvent(event, "agent_end", {
         ...(event.willRetry ? {status:"retrying"} : {}),
       });
+      // Pi can signal an automatic retry only through agent_end.willRetry.
+      // Keep that decision in the bounded trace without exposing provider
+      // error text or the private retry prompt to the conversation stream.
+      if (eventType === "agent_end" && event.willRetry === true) {
+        traceEvent(event, "retry", {status:"started"});
+      }
       if (eventType === "tool_execution_start") {
         traceEvent(event, "tool_start", {tool_call_id:event.toolCallId, tool_name:event.toolName});
       }
@@ -84,6 +92,11 @@ export function createSessionResult(sessionId) {
       if (eventType === "compaction_start") traceEvent(event, "compaction_start", {status:"started"});
       if (eventType === "compaction_end") traceEvent(event, "compaction_end", {
         status:event.aborted === true ? "cancelled" : event.errorMessage || !event.result ? "failed" : "completed"});
+      if (eventType === "queue_update") {
+        traceEvent(event, "queue_update", {
+          ...(QUEUE_STATUSES.has(event.status) ? {status:event.status} : {}),
+        });
+      }
       if (eventType === "retry" || event.retry === true || eventType?.includes?.("retry")) {
         traceEvent(event, "retry", {status:"started"});
       }

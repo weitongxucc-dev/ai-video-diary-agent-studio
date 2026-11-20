@@ -12,7 +12,7 @@ type TurnTool = {
   label: string;
   target?: string;
   startedAt?: string;
-  state: "running" | "waiting" | "succeeded" | "failed" | "unreturned";
+  state: "running" | "waiting" | "succeeded" | "failed" | "cancelled" | "unreturned";
   progress?: number;
   summary?: string;
   failure?: AssistantToolFailure;
@@ -48,7 +48,7 @@ export function turnBlocks(turn: AssistantConversationTurn, resultEventId?: stri
         blocks.push({kind: "notice", key: `notice:${index}`, state: event.type, message: event.message});
       }
       for (const tool of tools.values()) {
-        if (tool.state === "running") tool.state = "unreturned";
+        if (tool.state === "running") tool.state = turn.status === "stopped" ? "cancelled" : "unreturned";
       }
       continue;
     }
@@ -79,7 +79,8 @@ export function turnBlocks(turn: AssistantConversationTurn, resultEventId?: stri
     let tool = tools.get(event.tool_id);
     if (!tool) {
       flushText();
-      tool = {id: event.tool_id, label: event.label, state: turn.status === "running" ? "running" : "unreturned"};
+      tool = {id: event.tool_id, label: event.label,
+        state: turn.status === "running" ? "running" : turn.status === "stopped" ? "cancelled" : "unreturned"};
       tools.set(tool.id, tool);
       const previous = blocks.at(-1);
       if (previous?.kind === "tools") previous.tools.push(tool);
@@ -321,6 +322,14 @@ export function TurnToolActivity({ tools, turnTools, turn, reading, surfacedElse
       </div>);
       continue;
     }
+    if (tool.state === "cancelled") {
+      rows.push(<div key={tool.id} className="assistant-inline-failure" data-cancelled="true">
+        <div className="assistant-activity-row"><CircleAlert aria-hidden size={14}/><ToolName tool={tool}/>
+          <span className="assistant-activity-state">已取消</span></div>
+        <p>本轮已停止，未取得这次工具调用的回执。</p>
+      </div>);
+      continue;
+    }
     const reason = tool.state === "unreturned" ? "此调用没有返回，后台作业是否完成仍待核对。"
       : publicExecutionText(tool.failure?.reason) ?? receiptText(tool.summary);
     const unknown = tool.state === "unreturned" || tool.failure?.submission_effect === "unknown";
@@ -343,6 +352,7 @@ const eventLabels: Record<string, string> = {
   turn_start: "开始一轮回复", turn_end: "结束一轮回复", agent_start: "开始执行", agent_end: "结束执行",
   agent_settled: "运行已收尾", tool_start: "开始工具调用", tool_end: "工具调用返回", nested_tool: "业务工具返回",
   business_result: "收到业务回执", retry: "内部重试", context_compaction: "上下文压缩",
+  queue_update: "追加要求队列更新",
   compaction_start: "开始上下文压缩", compaction_end: "结束上下文压缩",
 };
 const statusLabels: Record<string, string> = {

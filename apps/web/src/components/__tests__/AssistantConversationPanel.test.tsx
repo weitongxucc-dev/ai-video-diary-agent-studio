@@ -557,9 +557,9 @@ describe("actual goal progress", () => {
     render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
     const activity = screen.getByLabelText("本轮操作");
-    expect(within(activity).getByText("未收到结果")).toBeVisible();
+    expect(within(activity).getByText("已取消")).toBeVisible();
+    expect(within(activity).getByText(/未取得这次工具调用的回执/)).toBeVisible();
     expect(within(activity).queryByText("进行中")).not.toBeInTheDocument();
-    expect(within(activity).getByText(/后台作业是否完成仍待核对/)).toBeVisible();
   });
 
   it("does not revive an older goal after a newer user instruction or trust another workspace's projection", () => {
