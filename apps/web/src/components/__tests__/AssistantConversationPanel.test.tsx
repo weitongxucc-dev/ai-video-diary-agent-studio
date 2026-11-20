@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import conversationReplay from "../../../../../docs/reference/openfilm-chat/replay-fixture.json";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantConversationPanel } from "../AssistantConversationPanel";
@@ -2765,11 +2765,8 @@ type OpenFilmReplayEvent = { t: number } & (
   | { type: "tool_end"; id: string; status: string }
 );
 
-const replayPath = process.env.YAOHE_OPENFILM_REPLAY
-  ?? new URL("../../../../../docs/reference/openfilm-chat/replay-fixture.json", import.meta.url);
-
 it("replays the OpenFilm reference at C0–C8 and C6b with the production reading component", () => {
-  const fixture = JSON.parse(readFileSync(replayPath, "utf8")) as {
+  const fixture = conversationReplay as {
     model: {name: string};
     events: OpenFilmReplayEvent[];
     checkpoints: {
