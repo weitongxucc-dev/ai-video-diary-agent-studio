@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
+import { Check, ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import { getAssistantTurnTrace } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantToolFailure } from "@/lib/types";
 import type { AssistantTraceEvent, AssistantTurnTrace } from "@/lib/types/assistant";
@@ -12,16 +12,18 @@ type TurnTool = {
   label: string;
   target?: string;
   startedAt?: string;
-  state: "running" | "succeeded" | "failed" | "unreturned";
+  state: "running" | "waiting" | "succeeded" | "failed" | "unreturned";
+  progress?: number;
   summary?: string;
   failure?: AssistantToolFailure;
 };
 
 type TurnBlock =
   | { kind: "text"; key: string; text: string }
-  | { kind: "tools"; key: string; tools: TurnTool[] };
+  | { kind: "tools"; key: string; tools: TurnTool[] }
+  | { kind: "result"; key: string };
 
-export function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
+export function turnBlocks(turn: AssistantConversationTurn, resultEventId?: string): TurnBlock[] {
   const blocks: TurnBlock[] = [];
   const tools = new Map<number, TurnTool>();
   let text = "";
@@ -33,9 +35,33 @@ export function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
   }
 
   for (const [index, event] of turn.events.entries()) {
+    const eventType: string = event.type;
+    if (eventType === "assistant_text" && "text" in event && typeof event.text === "string") {
+      flushText();
+      textStart = index;
+      text = event.text;
+      continue;
+    }
+    if ((eventType === "tool_progress" || eventType === "confirmation_wait") && "tool_id" in event && typeof event.tool_id === "number") {
+      const tool = tools.get(event.tool_id);
+      if (tool?.state !== "running") continue;
+      if (eventType === "tool_progress") {
+        if ("progress" in event && typeof event.progress === "number" && event.progress >= 0 && event.progress <= 1) tool.progress = event.progress;
+        if ("summary" in event && typeof event.summary === "string") tool.summary = event.summary;
+      } else {
+        tool.state = "waiting";
+        tool.summary = "message" in event && typeof event.message === "string" ? event.message : undefined;
+      }
+      continue;
+    }
     if (event.type === "text_delta") {
       if (!text) textStart = index;
       text += event.delta;
+      continue;
+    }
+    if (event.type === "business_result" && event.event_id === resultEventId) {
+      flushText();
+      blocks.push({ kind: "result", key: `result:${event.event_id}` });
       continue;
     }
     if (event.type !== "tool_start" && event.type !== "tool_end") continue;
@@ -67,14 +93,17 @@ export function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
   // but it may contain the whole reply, only its settled suffix, or a rewrite.
   const persisted = turn.assistant_text.trimEnd();
   if (!persisted.trim()) return blocks;
-  const last = blocks[blocks.length - 1];
-  const preceding = last?.kind === "text" ? blocks.slice(0, -1) : blocks;
-  const workText = preceding.map(block => block.kind === "text" ? block.text : "").join("");
+  let finalIndex = blocks.length - 1;
+  while (blocks[finalIndex]?.kind === "result") finalIndex -= 1;
+  const last = blocks[finalIndex];
+  const workText = blocks.slice(0, last?.kind === "text" ? finalIndex : blocks.length)
+    .map(block => block.kind === "text" ? block.text : "").join("");
   const final = workText.trim() && persisted.trimStart().startsWith(workText.trimStart())
     ? persisted.trimStart().slice(workText.trimStart().length) : persisted;
-  if (!final.trim()) return preceding;
-  return [...preceding, {kind: "text", key: last?.kind === "text" ? last.key : "text:saved", text: final}];
-
+  const finalBlock = { kind: "text", key: last?.kind === "text" ? last.key : "text:saved", text: final } as const;
+  if (last?.kind === "text") blocks.splice(finalIndex, 1, ...(final.trim() ? [finalBlock] : []));
+  else if (final.trim()) blocks.push(finalBlock);
+  return blocks;
 }
 
 export type TurnReadingState = {
@@ -99,7 +128,9 @@ function ElapsedTime({ at }: { at?: string }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     if (!Number.isFinite(start)) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    const tick = () => setNow(Date.now());
+    tick();
+    const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
   }, [start]);
   const seconds = Math.max(0, Math.floor((now - start) / 1000));
@@ -113,13 +144,17 @@ export function TurnActivity({ turn, continuation }: { turn: AssistantConversati
   let recent: AssistantConversationTurn["events"][number] | undefined;
   for (let index = turn.events.length - 1; index >= 0; index--) {
     const event = turn.events[index];
-    if (event.type === "tool_end" || event.type === "text_delta") {
+    const type: string = event.type;
+    if (event.type === "tool_end" || event.type === "text_delta" && event.delta.trim()
+      || type === "assistant_text" || type === "confirmation_wait") {
       recent = event;
       break;
     }
   }
-  if (recent?.type === "text_delta" || !recent && turn.assistant_text.trim()) return null;
-  const activity = recent?.type === "tool_end" ? "正在处理" : continuation ? "继续完成原要求" : turn.sequence === 0 ? "正在发送要求" : "正在等待回复";
+  const recentType: string | undefined = recent?.type;
+  if (recentType === "text_delta" || recentType === "assistant_text" || recentType === "confirmation_wait"
+    || !recent && turn.assistant_text.trim()) return null;
+  const activity = continuation && !recent ? "继续完成原要求" : "正在处理";
   return <p className="assistant-stream-status">
     <LoaderCircle aria-hidden size={14} className="is-spinning"/>
     <span role="status">{activity}</span><ElapsedTime at={recent?.type === "tool_end" ? recent.at : turn.created_at}/>
@@ -127,7 +162,9 @@ export function TurnActivity({ turn, continuation }: { turn: AssistantConversati
 }
 
 function toolLabel(tool: TurnTool) {
-  return publicExecutionText(tool.label) ?? "工具调用";
+  const label = publicExecutionText(tool.label);
+  return label && !/^(?:bash|sh|zsh|pwsh|powershell|cmd|exec(?:_command)?|shell|terminal|read_file|command)(?:$|[\s:])/i.test(label)
+    && !/^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/i.test(label) ? label : "处理请求";
 }
 
 function completedToolSummary(tools: TurnTool[]) {
@@ -151,20 +188,23 @@ function ToolName({ tool, running = false }: { tool: TurnTool; running?: boolean
   return <span className="assistant-activity-name">{name}{target && label !== target ? <span className="assistant-activity-target"> · {target}</span> : null}</span>;
 }
 
-function CompletedTools({ tools, turnId, anchorId, reading, reply }: {
-  tools: TurnTool[]; turnId: string; anchorId: number; reading?: TurnReadingState; reply: string;
+function CompletedTools({ tools, turnId, anchorId, reading, reply, active }: {
+  tools: TurnTool[]; turnId: string; anchorId: number; reading?: TurnReadingState; reply: string; active: boolean;
 }) {
   function readingKey(tool: TurnTool) { return `${turnId}:tool:${tool.id}`; }
-  const [open, setOpen] = useState(() => tools.some(tool => reading?.get(readingKey(tool), false)));
-  // A parallel call may join this group after the user expands either receipt.
-  const expanded = open || tools.some(tool => reading?.get(readingKey(tool), false));
+  const [manualOpen, setManualOpen] = useState<boolean>();
+  const selected = tools.map(tool => reading?.get(readingKey(tool), false) ?? false);
+  const expanded = manualOpen ?? (selected.some(Boolean) || tools.length > 1 && active
+    && tools.every(tool => reading?.get(readingKey(tool), true) ?? true));
   return <details className="assistant-inline-completed" data-reading-key={`${turnId}:tool:${anchorId}`} open={expanded} onToggle={event => {
     const next = event.currentTarget.open;
-    setOpen(next);
+    if (next === expanded) return;
+    setManualOpen(next);
     for (const tool of tools) reading?.save(readingKey(tool), next);
   }}>
-    <summary><ChevronRight aria-hidden size={14}/>{tools.length === 1 ? <ToolName tool={tools[0]}/> : <span className="assistant-activity-name">{completedToolSummary(tools)}</span>}
-      {tools.length === 1 ? <span className="assistant-activity-state">已返回</span> : null}</summary>
+    <summary>{tools.length === 1 ? <><Check aria-hidden size={14}/><ToolName tool={tools[0]}/><span className="assistant-activity-state">已返回</span></>
+      : <span className="assistant-activity-name">{completedToolSummary(tools)}</span>}
+      <ChevronRight className="assistant-activity-chevron" aria-hidden size={14}/></summary>
     <ol className="assistant-inline-receipts" aria-label="操作回执">{tools.map(tool => {
       const summary = publicExecutionText(tool.summary);
       return <li key={tool.id}>
@@ -175,8 +215,8 @@ function CompletedTools({ tools, turnId, anchorId, reading, reply }: {
   </details>;
 }
 
-export function TurnToolActivity({ tools, turnTools, turn, reading, surfacedElsewhere = "", recoveryToolId, recovery }: {
-  tools: TurnTool[]; turnTools: TurnTool[]; turn: AssistantConversationTurn; reading?: TurnReadingState; surfacedElsewhere?: string;
+export function TurnToolActivity({ tools, turnTools, turn, active, reading, surfacedElsewhere = "", recoveryToolId, recovery }: {
+  tools: TurnTool[]; turnTools: TurnTool[]; turn: AssistantConversationTurn; active: boolean; reading?: TurnReadingState; surfacedElsewhere?: string;
   recoveryToolId?: number; recovery?: ReactNode;
 }) {
   const rows: ReactNode[] = [];
@@ -184,7 +224,7 @@ export function TurnToolActivity({ tools, turnTools, turn, reading, surfacedElse
   function addCompleted() {
     if (!completed.length) return;
     const anchor = completed.find(tool => reading?.get(`${turn.id}:tool:${tool.id}`, false)) ?? completed[0];
-    rows.push(<CompletedTools key={anchor.id} anchorId={anchor.id} tools={completed} turnId={turn.id} reading={reading} reply={surfacedElsewhere}/>);
+    rows.push(<CompletedTools key={anchor.id} anchorId={anchor.id} tools={completed} turnId={turn.id} reading={reading} reply={surfacedElsewhere} active={active}/>);
     completed = [];
   }
   for (const tool of tools) {
@@ -210,22 +250,30 @@ export function TurnToolActivity({ tools, turnTools, turn, reading, surfacedElse
       </div>);
       continue;
     }
-    if (tool.state === "running") {
-      rows.push(<div key={tool.id} className="assistant-activity-row">
-        <LoaderCircle aria-hidden size={14} className="is-spinning"/>
-        <span className="assistant-activity-status" role="status"><ToolName tool={tool} running/></span>
-        <ElapsedTime at={tool.startedAt}/>
+    if (tool.state === "running" || tool.state === "waiting") {
+      const running = tool.state === "running";
+      const observation = publicExecutionText(tool.summary);
+      rows.push(<div key={tool.id} className="assistant-tool-observation">
+        <div className="assistant-activity-row">
+          {running ? <LoaderCircle aria-hidden size={14} className="is-spinning"/> : null}
+          <span className="assistant-activity-status" role="status"><ToolName tool={tool} running={running}/></span>
+          {running ? <ElapsedTime at={tool.startedAt}/> : <span className="assistant-activity-state">等待确认</span>}
+        </div>
+        {observation && !surfacedElsewhere.includes(observation) ? <p>{observation}</p> : null}
+        {running && tool.progress !== undefined ? <progress aria-label={toolLabel(tool)} value={tool.progress} max={1}/> : null}
       </div>);
       continue;
     }
     const reason = tool.state === "unreturned" ? "此调用没有返回，后台作业是否完成仍待核对。"
       : publicExecutionText(tool.failure?.reason) ?? publicExecutionText(tool.summary);
-    const notes = [reason, publicExecutionText(tool.failure?.impact), publicExecutionText(tool.failure?.repair_action)]
+    const unknown = tool.state === "unreturned" || tool.failure?.submission_effect === "unknown";
+    const notes = [reason, publicExecutionText(tool.failure?.impact), recovery && tool.id === recoveryToolId ? null : publicExecutionText(tool.failure?.repair_action)]
       .filter((note): note is string => Boolean(note && !surfacedElsewhere.includes(note)));
-    rows.push(<div key={tool.id} className="assistant-inline-failure" role={tool.failure && notes.length ? "alert" : undefined}>
+    rows.push(<div key={tool.id} className="assistant-inline-failure" role={tool.failure && notes.length ? "alert" : undefined} data-unknown={unknown || undefined}>
       <div className="assistant-activity-row"><CircleAlert aria-hidden size={14}/><ToolName tool={tool}/>
-        <span className="assistant-activity-state">{tool.state === "failed" ? "未完成" : "未收到结果"}</span></div>
+        <span className="assistant-activity-state">{tool.state === "unreturned" ? "未收到结果" : unknown ? "结果待核实" : "未完成"}</span></div>
       {[...new Set(notes)].map(note => <p key={note}>{note}</p>)}
+      {unknown && !recovery ? <p>先查询原请求。</p> : null}
       {tool.id === recoveryToolId ? recovery : null}
     </div>);
   }
