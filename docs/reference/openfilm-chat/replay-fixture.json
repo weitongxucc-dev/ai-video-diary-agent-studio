@@ -1,0 +1,145 @@
+{
+  "meta": {
+    "name": "openfilm-first-run",
+    "description": "OpenFilm 对话栏录屏（用户问\"你看下当前能做什么视频剪辑\"）还原成的事件剧本。时间 t 为毫秒，0 = 用户点击发送。录屏时间 = t/1000 + 9 秒。",
+    "how_to_use": [
+      "1. 写一个回放器：按 t 顺序把 events 喂给对话栏的事件处理层（不要直接操作 UI）。支持 1x / 5x / 暂停 / 跳到检查点。",
+      "2. 在每个 checkpoint 的 at_ms 暂停，把 UI 状态与 expect 比对，并与 frames/ 里对应截图肉眼对照。",
+      "3. expect 里值为 \"unspecified\" 的项，规格未确定，不要据此断言。"
+    ],
+    "assumptions": [
+      "assistant_text 的 streamMs 是估计值（录屏没有测出流式速度），仅用于回放。",
+      "t8 以及 t9~t12 的具体命令内容在录屏里不可见，title 为占位；t2/t5/t7 的命令在录屏里被省略号截断。",
+      "用户目录已替换为 <user>。"
+    ],
+    "mapping_to_pi_events": {
+      "user_message": "发送给 pi 的 prompt 命令（不是 pi 事件）",
+      "agent_start": "agent_start",
+      "assistant_text": "message_update（assistantMessageEvent 为 text_delta）",
+      "tool_start": "tool_execution_start（toolCallId / toolName / args）",
+      "tool_progress": "tool_execution_update（partialResult）",
+      "tool_end": "tool_execution_end（isError 决定 status）",
+      "agent_end": "agent_end",
+      "note": "事件名以所用 pi 版本的文档为准；适配器的职责就是把 pi 的真实事件翻译成本文件的 events 格式。"
+    }
+  },
+  "model": { "name": "6.2 Sol", "effort": "High" },
+  "events": [
+    { "t": 0, "type": "user_message", "text": "你看下当前能做什么视频剪辑" },
+    { "t": 0, "type": "session_title", "title": "你看下当前能做什么视频剪辑" },
+    { "t": 0, "type": "agent_start" },
+
+    { "t": 25000, "type": "assistant_text", "id": "a1", "streamMs": 1000,
+      "text": "我先看当前 OpenFilm 项目里的素材和时间线，再告诉你现在能剪出哪些版本。" },
+    { "t": 26500, "type": "tool_start", "id": "t1", "kind": "command", "title": "openfilm" },
+    { "t": 27500, "type": "tool_end",   "id": "t1", "status": "done" },
+    { "t": 28500, "type": "assistant_text", "id": "a2", "streamMs": 1800,
+      "text": "我会按 OpenFilm 的成片和媒体技能检查项目，看看哪些剪法有现成素材支撑。" },
+
+    { "t": 31000, "type": "tool_start", "id": "t2", "kind": "command", "title": "rtk read /Users/<user>/.co…" },
+    { "t": 31600, "type": "tool_end",   "id": "t2", "status": "done" },
+    { "t": 32000, "type": "tool_start", "id": "t3", "kind": "command", "title": "openfilm skill media" },
+    { "t": 33000, "type": "tool_end",   "id": "t3", "status": "done" },
+    { "t": 33500, "type": "tool_start", "id": "t4", "kind": "command", "title": "openfilm skill film" },
+    { "t": 34500, "type": "tool_end",   "id": "t4", "status": "done" },
+    { "t": 35000, "type": "tool_start", "id": "t5", "kind": "command", "title": "rtk rg -n -i 'openfilm|未命…" },
+    { "t": 37000, "type": "tool_end",   "id": "t5", "status": "done" },
+
+    { "t": 44000, "type": "tool_start", "id": "t6", "kind": "read_file", "title": "MEMORY.md" },
+    { "t": 44400, "type": "tool_end",   "id": "t6", "status": "done" },
+    { "t": 46000, "type": "tool_start", "id": "t7", "kind": "command", "title": "pwd && rtk ls -la && rg --…" },
+    { "t": 48000, "type": "tool_end",   "id": "t7", "status": "done" },
+
+    { "t": 54000, "type": "tool_start", "id": "t8", "kind": "command", "title": "openfilm get …" },
+    { "t": 60000, "type": "tool_end",   "id": "t8", "status": "done" },
+
+    { "t": 63200, "type": "tool_start", "id": "t9",  "kind": "command", "title": "（占位）命令 9" },
+    { "t": 63200, "type": "tool_start", "id": "t10", "kind": "command", "title": "（占位）命令 10" },
+    { "t": 63200, "type": "tool_start", "id": "t11", "kind": "command", "title": "（占位）命令 11" },
+    { "t": 63200, "type": "tool_start", "id": "t12", "kind": "command", "title": "（占位）命令 12" },
+    { "t": 64000, "type": "tool_end", "id": "t9",  "status": "done" },
+    { "t": 64000, "type": "tool_end", "id": "t10", "status": "done" },
+    { "t": 64000, "type": "tool_end", "id": "t11", "status": "done" },
+    { "t": 64000, "type": "tool_end", "id": "t12", "status": "done" },
+
+    { "t": 75000, "type": "tool_start", "id": "t13", "kind": "command", "title": "openfilm get music-search -…" },
+    { "t": 75000, "type": "tool_start", "id": "t14", "kind": "command", "title": "openfilm get sfx-search --p…" },
+    { "t": 80000, "type": "tool_end",   "id": "t14", "status": "done" },
+    { "t": 80500, "type": "tool_end",   "id": "t13", "status": "done" },
+
+    { "t": 85000, "type": "assistant_text", "id": "a3", "streamMs": 4500,
+      "text": "当前「未命名 2」是个空白横屏项目，时间线和个人素材库里都还没有素材。现在可以从文案做一支**动态文字短片**，也可以导入素材后做这些剪辑：\n\n- **口播或访谈精剪**：删停顿和重复段，保留重点，加字幕，做成竖屏短视频。\n- **活动或旅行混剪**：把视频和照片按故事或音乐节奏排起来，加片头、转场和音效。\n- **产品演示**：用录屏和截图做一支 30–60 秒介绍，放大关键操作，加步骤提示和片尾。\n\n剪好的版本可以在 Studio 里继续改，也可以导出 MP4。当前可搜索内置配乐和音效。自动转写、AI 配音和生成图片或视频需要先连接相应服务。" },
+    { "t": 90000, "type": "agent_end", "stopReason": "done" }
+  ],
+  "checkpoints": [
+    { "id": "C0", "at_ms": 3000, "frame": null,
+      "expect": {
+        "blocks": ["user_text"],
+        "statusLine": "正在处理 3s",
+        "modelBadge": "6.2 Sol · High",
+        "input": { "sendButton": "stop", "placeholder": "说说要改什么。输入 @ 可指向文件、skill、某…" },
+        "sessionTitle": "你看下当前能做什么视频剪辑"
+      } },
+    { "id": "C1", "at_ms": 24000, "frame": "03-processing-idle-timer",
+      "expect": { "blocks": ["user_text"], "statusLine": "正在处理 24s", "modelBadge": "6.2 Sol · High" } },
+    { "id": "C2", "at_ms": 30000, "frame": "04-narration-and-single-tool",
+      "expect": {
+        "blocks": ["user_text", "assistant_text(a1)", "tool_row(t1: 已运行命令 openfilm)", "assistant_text(a2)"],
+        "statusLine": null,
+        "modelBadge": "6.2 Sol · High"
+      } },
+    { "id": "C3", "at_ms": 36000, "frame": "05-group-expanded-plus-running-row",
+      "expect": {
+        "blocks": ["user_text", "assistant_text(a1)", "tool_row(t1)", "assistant_text(a2)",
+                   "tool_group(已运行命令 ×3; rows: t2,t3,t4)", "tool_row(t5: 正在运行命令; timer 1s)"],
+        "groupExpanded": true,
+        "statusLine": null
+      } },
+    { "id": "C4", "at_ms": 42000, "frame": "05b-group-x4-expanded-idle-timer",
+      "expect": {
+        "blocks": ["user_text", "assistant_text(a1)", "tool_row(t1)", "assistant_text(a2)",
+                   "tool_group(已运行命令 ×4; rows: t2,t3,t4,t5)"],
+        "groupExpanded": true,
+        "statusLine": "正在处理 5s"
+      } },
+    { "id": "C5", "at_ms": 54000, "frame": "06-group-with-file-read",
+      "expect": {
+        "blocks": ["user_text", "assistant_text(a1)", "tool_row(t1)", "assistant_text(a2)",
+                   "tool_group(已运行命令 ×5 · 已读取文件; rows: t2,t3,t4,t5,t6,t7)", "tool_row(t8: 正在运行命令; timer 0s)"],
+        "groupExpanded": true,
+        "statusLine": null
+      } },
+    { "id": "C6", "at_ms": 63000, "frame": "07-group-collapsed-idle-again",
+      "expect": {
+        "blocks": ["user_text", "assistant_text(a1)", "tool_row(t1)", "assistant_text(a2)",
+                   "tool_group(已运行命令 ×6 · 已读取文件)"],
+        "groupExpanded": "unspecified",
+        "statusLine": "正在处理 3s"
+      } },
+    { "id": "C6b", "at_ms": 66000, "frame": null,
+      "expect": {
+        "blocks": ["user_text", "assistant_text(a1)", "tool_row(t1)", "assistant_text(a2)",
+                   "tool_group(已运行命令 ×10 · 已读取文件)"],
+        "groupExpanded": "unspecified",
+        "statusLine": "正在处理 2s"
+      } },
+    { "id": "C7", "at_ms": 78000, "frame": "08-two-parallel-running-tools",
+      "expect": {
+        "blocks": ["user_text", "assistant_text(a1)", "tool_row(t1)", "assistant_text(a2)",
+                   "tool_group(已运行命令 ×10 · 已读取文件)",
+                   "tool_row(t13: 正在运行命令; timer 3s)", "tool_row(t14: 正在运行命令; timer 3s)"],
+        "groupExpanded": "unspecified",
+        "statusLine": null,
+        "scrollToBottomButton": "unspecified"
+      } },
+    { "id": "C8", "at_ms": 92000, "frame": "09-final-answer",
+      "expect": {
+        "blocks": ["user_text", "assistant_text(a1)", "tool_row(t1)", "assistant_text(a2)",
+                   "tool_group(已运行命令 ×12 · 已读取文件)", "assistant_text(a3)"],
+        "groupExpanded": false,
+        "statusLine": null,
+        "footer": { "copyIcon": true, "badge": "6.2 Sol · High", "relativeTime": "现在" },
+        "input": { "sendButton": "send", "placeholder": "说说要改什么。输入 @ 可指向文件、skill、某…" }
+      } }
+  ]
+}
