@@ -26,7 +26,6 @@ export function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
   const tools = new Map<number, TurnTool>();
   let text = "";
   let textStart = 0;
-  let streamed = "";
 
   function flushText() {
     if (text.trim()) blocks.push({kind: "text", key: `text:${textStart}`, text});
@@ -37,7 +36,6 @@ export function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
     if (event.type === "text_delta") {
       if (!text) textStart = index;
       text += event.delta;
-      streamed += event.delta;
       continue;
     }
     if (event.type !== "tool_start" && event.type !== "tool_end") continue;
@@ -74,13 +72,27 @@ export function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
   if (!hasTools) return [{kind: "text", key: "text:saved", text: persisted}];
 
   const trailing = textBlocks[textBlocks.length - 1];
+  const lastBlock = blocks[blocks.length - 1];
+  const trailingFollowsTool = trailing != null && trailing === lastBlock;
+  if (!trailingFollowsTool) {
+    const streamedWork = textBlocks.map(block => block.text).join("");
+    const preserveWorkNote = /^(?:我|正在|先|首先|接下来|目前|已|核对|检查|读取)/.test(streamedWork.trim());
+    if (!persisted.startsWith(streamedWork) && !preserveWorkNote) {
+      return [...blocks.filter(block => block.kind === "tools"), {kind: "text", key: "text:saved", text: persisted}];
+    }
+    const replacement = streamedWork && persisted.startsWith(streamedWork)
+      ? persisted.slice(streamedWork.length) : persisted;
+    if (!replacement.trim()) return blocks;
+    return [...blocks, {kind: "text" as const, key: "text:saved", text: replacement}];
+  }
+
   const prefix = textBlocks.slice(0, -1).map(block => block.text).join("");
   const streamedText = textBlocks.map(block => block.text).join("");
   const finalText = trailing?.text ?? "";
   let replacement = persisted;
   let removeTrailing = false;
   if (streamedText && persisted.startsWith(streamedText)) {
-    replacement = trailing ? persisted.slice(prefix.length) : "";
+    replacement = persisted.slice(prefix.length);
   } else if (prefix && persisted.startsWith(prefix)) {
     replacement = persisted.slice(prefix.length);
     removeTrailing = !replacement.trim();
@@ -212,8 +224,13 @@ export function TurnToolActivity({ tools, turn, reading, surfacedElsewhere = "",
       continue;
     }
     addCompleted();
-    const recoveredByLaterAttempt = (tool.state === "failed" || tool.state === "unreturned")
-      && tools.slice(index + 1).some(candidate => candidate.state === "succeeded" && toolLabel(candidate) === toolLabel(tool));
+    const explicitNotSubmitted = tool.state === "failed"
+      && /未执行|未提交|没有提交|not[_ -]?submitted|not[_ -]?executed/i.test(
+        [tool.failure?.reason, tool.failure?.impact, tool.summary].filter(Boolean).join(" "));
+    const recoveredByLaterAttempt = explicitNotSubmitted
+      && tools.slice(index + 1).some(candidate => candidate.state === "succeeded"
+        && toolLabel(candidate) === toolLabel(tool)
+        && (!tool.target || !candidate.target || tool.target === candidate.target));
     if (recoveredByLaterAttempt) {
       const historicalNotes = [publicExecutionText(tool.failure?.reason), publicExecutionText(tool.failure?.impact),
         publicExecutionText(tool.failure?.repair_action)].filter((note): note is string => Boolean(note));
