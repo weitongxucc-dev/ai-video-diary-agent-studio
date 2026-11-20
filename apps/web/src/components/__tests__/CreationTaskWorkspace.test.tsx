@@ -761,6 +761,148 @@ describe("CreationTaskWorkspace", () => {
     return input;
   }
 
+  async function startWorkspaceSaveTurn(initial = recoveryWorkspace()) {
+    mocks.getWorkspace.mockResolvedValue(initial);
+    let emit!: (event: unknown) => void;
+    let finish!: (value: unknown) => void;
+    mocks.askAssistant.mockImplementationOnce((_taskId, _input, onEvent) => {
+      emit = onEvent;
+      return new Promise(resolve => { finish = resolve; });
+    });
+    const view = renderTaskSubject(<CreationTaskWorkspace key={initial.task.id} initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    await waitFor(() => expect(mocks.getWorkspace).toHaveBeenCalledTimes(1));
+    if (initial.montage) {
+      fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
+      fireEvent.click(openStoryboardClip(2));
+    }
+    const inputLabel = initial.task.stage === "script" ? "文案要求" : "局部修改要求";
+    fireEvent.change(await readyInput(inputLabel), { target: { value: "保存这次修改并解释结果" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(mocks.askAssistant).toHaveBeenCalledTimes(1));
+    return {
+      initial, view,
+      emit,
+      saved: (eventId: string) => emit({ type: "workspace_saved", status: "saved", task_id: initial.task.id, event_id: eventId }),
+      finish: (draft: WorkspaceState["scripts"][number] | null = null) =>
+        finish({ reply: "最终说明已到达", edit_preview: null, script_draft: draft }),
+    };
+  }
+
+  it("reads committed workspace saves before the final reply and retains the reading position and selection", async () => {
+    const turn = await startWorkspaceSaveTurn();
+    const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+    const timeline = document.querySelector<HTMLElement>('[data-workspace-scroll="timeline"]')!;
+    timeline.scrollLeft = 120;
+    fireEvent.scroll(timeline);
+    player.currentTime = 4;
+    fireEvent.pause(player);
+    const latest = { ...turn.initial, task: { ...turn.initial.task, current_timeline_version_id: "saved-timeline",
+      timeline_sequence: 7, updated_at: "2026-10-10T04:28:00Z" } };
+    mocks.getWorkspace.mockResolvedValue(latest);
+
+    await act(async () => turn.saved("first-write"));
+    expect(document.querySelector("[data-timeline-version]")).toHaveAttribute("data-timeline-version", "7");
+    expect(screen.queryByText("最终说明已到达")).not.toBeInTheDocument();
+    expect(document.querySelector("[data-editor-workspace]")).toHaveAttribute("data-active-view", "montage");
+    expect(openStoryboardClip(2)).toHaveAttribute("aria-pressed", "true");
+    const updatedPlayer = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+    fireEvent.loadedMetadata(updatedPlayer);
+    expect(updatedPlayer.currentTime).toBe(4);
+    expect(document.querySelector<HTMLElement>('[data-workspace-scroll="timeline"]')!.scrollLeft).toBe(120);
+
+    await act(async () => {
+      turn.saved("first-write");
+      turn.emit({ type: "workspace_saved", status: "unknown", task_id: turn.initial.task.id, event_id: "uncertain" });
+      turn.emit({ type: "workspace_saved", status: "saved", task_id: "different-task", event_id: "foreign" });
+      turn.emit({ type: "tool_end", tool_id: 2, label: "写入失败", ok: false, summary: "拒绝" });
+      turn.emit({ type: "tool_end", tool_id: 3, label: "查询完成", ok: true, summary: "只读完成" });
+    });
+    expect(mocks.getWorkspace).toHaveBeenCalledTimes(2);
+    await act(async () => turn.finish());
+    expect(await screen.findByText("最终说明已到达")).toBeVisible();
+  });
+
+  it("re-reads the saved script on the same page and preserves the user's unfinished text and caret", async () => {
+    const task = { ...baseTask, stage: "script" as const, stage_status: "waiting_for_user" as const, confirmed_script_id: null };
+    const script = { ...sectionReaderScript("script-window"), task_id: task.id,
+      selection_status: "draft" as const, sections_total_count: 45, draft_complete: false, confirmed_at: null };
+    const initial = { ...workspace(task), scripts: [script] };
+    const latest = { ...script, updated_at: "2026-10-24T00:00:00.000001Z" };
+    const read = vi.fn(async (url: string) => {
+      const params = new URL(url, "http://local").searchParams;
+      const after = Number(params.get("after_ordinal"));
+      const saved = params.get("expected_updated_at") === latest.updated_at;
+      const page = sectionReaderPage(saved ? latest : script, after);
+      if (saved) page.items[0].section.content = "已保存的第 21 段正文";
+      return new Response(JSON.stringify(page));
+    });
+    vi.stubGlobal("fetch", (url: string) => url.endsWith("/sources")
+      ? Promise.resolve(new Response(JSON.stringify({ sources: [] }))) : read(url));
+    const turn = await startWorkspaceSaveTurn(initial);
+    const nextPage = await screen.findByRole("button", { name: "下一页文案" });
+    await waitFor(() => expect(nextPage).toBeEnabled());
+    fireEvent.click(nextPage);
+    const body = await screen.findByRole<HTMLTextAreaElement>("textbox", { name: "第 21 段正文" });
+    fireEvent.change(body, { target: { value: "刚输入、还没有提交的正文" } });
+    body.focus();
+    body.setSelectionRange(2, 4);
+    mocks.getWorkspace.mockResolvedValue({ ...initial, scripts: [latest] });
+
+    await act(async () => turn.saved("script-save"));
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(new URL(read.mock.calls[2][0], "http://local").searchParams.get("after_ordinal")).toBe("20");
+    expect(screen.getByRole("textbox", { name: "第 21 段正文" })).toBe(body);
+    expect(body).toHaveValue("刚输入、还没有提交的正文");
+    expect(body).toHaveFocus();
+    expect([body.selectionStart, body.selectionEnd]).toEqual([2, 4]);
+    expect(screen.getByRole("button", { name: "保存本页修改" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "撤回本页未保存修改" }));
+    expect(body).toHaveValue("已保存的第 21 段正文");
+    expect(screen.queryByText("最终说明已到达")).not.toBeInTheDocument();
+
+    await act(async () => turn.saved("script-save"));
+    expect(read).toHaveBeenCalledTimes(3);
+    await act(async () => turn.finish(latest));
+    expect(mocks.getWorkspace).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["newer save", "another conversation", "another task"])(
+    "discards a delayed workspace save read after %s", async change => {
+      const turn = await startWorkspaceSaveTurn();
+      let finishOld!: (snapshot: WorkspaceState) => void;
+      mocks.getWorkspace.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; }));
+      await act(async () => turn.saved("old-write"));
+      expect(mocks.getWorkspace).toHaveBeenCalledTimes(2);
+      const latestTaskId = change === "another task" ? "task-2" : turn.initial.task.id;
+      const latest = { ...turn.initial, task: { ...turn.initial.task, id: latestTaskId, current_timeline_version_id: "newer-timeline",
+        timeline_sequence: 8, updated_at: "2026-10-10T04:28:01Z" } };
+      mocks.getWorkspace.mockResolvedValue(latest);
+      if (change === "another task") {
+        turn.view.rerender(<CreationTaskWorkspace key={latestTaskId} initialTasks={[]} initialTopics={null} initialWorkspace={latest} />);
+        await waitFor(() => expect(mocks.getWorkspace).toHaveBeenLastCalledWith(latestTaskId));
+      } else if (change === "another conversation") {
+        await act(async () => {
+          await mocks.assistantActions!.assistantState.createNew();
+          mocks.assistantActions!.onConversationChange();
+        });
+      } else {
+        await act(async () => turn.saved("new-write"));
+        expect(mocks.getWorkspace).toHaveBeenCalledTimes(3);
+      }
+      const reads = mocks.getWorkspace.mock.calls.length;
+      await act(async () => finishOld({ ...turn.initial, task: { ...turn.initial.task, current_timeline_version_id: "old-timeline",
+        timeline_sequence: 7, updated_at: "2026-10-10T04:28:00Z" } }));
+      if (change === "another task") fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
+      expect(document.querySelector("[data-timeline-version]")).toHaveAttribute("data-timeline-version", change === "another conversation" ? "6" : "8");
+      if (change !== "newer save") {
+        await act(async () => turn.saved("offscreen-write"));
+        expect(mocks.getWorkspace).toHaveBeenCalledTimes(reads);
+      }
+      await act(async () => turn.finish());
+    },
+  );
+
   it("keeps generated topic candidates in the current task after its chat refresh", async () => {
     const topicTask: CreationTask = {
       ...baseTask,

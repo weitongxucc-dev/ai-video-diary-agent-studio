@@ -650,6 +650,21 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
+  function retainWorkspaceView(next: WorkspaceState, preserveActiveView: boolean) {
+    // 保留原视图只在该视图按既有门禁仍可呈现时成立。字幕确认会作废 output_url，
+    // 使 subtitle_cover 不可呈现；此时保留它会让主区没有任何视图命中（空白且丢失撤销入口）。
+    // 这里按既有可用/默认规则回落，不新增视图、不放开任何门禁。
+    setActiveView(current => preserveActiveView && canOpenStage(current, next) ? current : defaultWorkspaceView(next));
+    setSelectedClipId((current) => next.montage?.clips.some((clip) => clip.id === current) ? current : null);
+    setSelectedAudioId(current => next.montage?.audio_timeline?.tracks.some(track => track.id === current || track.clips.some(clip => clip.id === current)) ? current : null);
+    setActiveSubtitleTrackId((current) => next.subtitle_tracks.some((track) => track.id === current)
+      ? current
+      : next.subtitle_tracks.find((track) => track.language === "zh-CN")?.id ?? next.subtitle_tracks[0]?.id ?? null);
+    setSelectedCueId((current) => next.subtitle_tracks.some((track) => track.cues.some((cue) => cue.id === current)) ? current : null);
+    setSelectedCover((current) => current && (Boolean(next.cover_asset) || next.cover_frame_capability.available));
+    setSelectedNarrationSegmentId((current) => next.narration?.segments.some((segment) => segment.id === current) ? current : null);
+  }
+
   async function refresh(preserveActiveView = false, stillCurrent?: (next: WorkspaceState) => boolean, retainProposal = false) {
     const contextRevision = editContextRevision.current;
     const readRevision = workspaceReceiptRevision.current;
@@ -674,18 +689,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
     setEditorDraft(false);
     setSelectedOverlayId(current=>next.montage?.graphic_overlays?.some(item=>item.id===current)?current:null);
-    // 保留原视图只在该视图按既有门禁仍可呈现时成立。字幕确认会作废 output_url，
-    // 使 subtitle_cover 不可呈现；此时保留它会让主区没有任何视图命中（空白且丢失撤销入口）。
-    // 这里按既有可用/默认规则回落，不新增视图、不放开任何门禁。
-    setActiveView(current => preserveActiveView && canOpenStage(current, next) ? current : defaultWorkspaceView(next));
-    setSelectedClipId((current) => next.montage?.clips.some((clip) => clip.id === current) ? current : null);
-    setSelectedAudioId(current => next.montage?.audio_timeline?.tracks.some(track => track.id === current || track.clips.some(clip => clip.id === current)) ? current : null);
-    setActiveSubtitleTrackId((current) => next.subtitle_tracks.some((track) => track.id === current)
-      ? current
-      : next.subtitle_tracks.find((track) => track.language === "zh-CN")?.id ?? next.subtitle_tracks[0]?.id ?? null);
-    setSelectedCueId((current) => next.subtitle_tracks.some((track) => track.cues.some((cue) => cue.id === current)) ? current : null);
-    setSelectedCover((current) => current && (Boolean(next.cover_asset) || next.cover_frame_capability.available));
-    setSelectedNarrationSegmentId((current) => next.narration?.segments.some((segment) => segment.id === current) ? current : null);
+    retainWorkspaceView(next, preserveActiveView);
     if (next.task.stage === "topic") {
       const appliedRevision = editContextRevision.current;
       const nextTopics = await getCreationTaskTopics(task.id);
@@ -1038,7 +1042,31 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       const turn = assistantConversation.beginTurn(message);
       requestConversationId = turn.conversationId;
       requestLocalTurnId = turn.localTurnId;
-      const onStreamEvent = assistantConversation.bindTurnEvents(turn.conversationId, turn.localTurnId);
+      const onConversationEvent = assistantConversation.bindTurnEvents(turn.conversationId, turn.localTurnId);
+      const ownsTurn = () => ownsRequest() && assistantConversation.isCurrentConversation(turn.conversationId);
+      const savedEventIds = new Set<string>();
+      let savedReadSequence = 0;
+
+      async function readSavedWorkspace() {
+        const sequence = ++savedReadSequence;
+        const ownsRead = () => ownsTurn() && sequence === savedReadSequence;
+        try {
+          while (ownsRead()) {
+            const readRevision = workspaceReceiptRevision.current;
+            const next = await getCreationTaskWorkspace(task.id);
+            if (!ownsRead() || next.task.id !== task.id || next.task.workspace_id !== task.workspace_id) return;
+            // Another entry or save read may have landed while this read was in flight.
+            if (readRevision !== workspaceReceiptRevision.current) continue;
+            if (acceptWorkspace(next, readRevision)) {
+              pendingNavigationRead.current = null;
+              retainWorkspaceView(next, true);
+            }
+            return;
+          }
+        } catch (cause) {
+          if (ownsRead()) setError(errorDetails(cause));
+        }
+      }
       const expectedDraftVersion = await turn.draftCheckpoint;
       // Browsing a clip cannot retarget a frozen material-only request. Changes
       // to the explicit reference CAS or conversation still reject the send.
@@ -1049,7 +1077,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         return;
       }
       if (materialSnapshot) {
-        await sendMaterialAssistantTurn(message, turn.conversationId, materialSnapshot, turn.clientRequestId, expectedDraftVersion, onStreamEvent, selectionState?.version);
+        await sendMaterialAssistantTurn(message, turn.conversationId, materialSnapshot, turn.clientRequestId, expectedDraftVersion, onConversationEvent, selectionState?.version);
         if (assistantConversation.isCurrentConversation(turn.conversationId)) await assistantConversation.refresh();
         return;
       }
@@ -1067,13 +1095,36 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         // The API derives object refs from the frozen selection CAS, including multi-select.
         selected_object_refs: [],
         playhead_ms: snapshotPlayhead,
-      }, onStreamEvent);
+      }, event => {
+        if (event.type !== "workspace_saved") {
+          onConversationEvent(event);
+          return;
+        }
+        if (!ownsTurn() || event.status !== "saved" || event.task_id !== task.id
+          || !event.event_id || savedEventIds.has(event.event_id)) return;
+        savedEventIds.add(event.event_id);
+        void readSavedWorkspace();
+      });
       if (assistantConversation.isCurrentConversation(turn.conversationId)) await assistantConversation.refresh();
-      if (!ownsRequest() || revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) return;
+      if (!ownsTurn()) return;
+      // Some saved effects are reported only in the final result.
+      const { script_draft: draft, script_window_request: window, segment_revision: segment, timeline_restore: restore } = result;
+      const savedScript = draft?.task_id === task.id ? { id: draft.id, updatedAt: draft.updated_at }
+        : window?.task_id === task.id && (window.status === "saved" || window.status === "confirmed")
+          ? { id: window.script_id, updatedAt: window.updated_at } : null;
+      const workspaceAlreadyHasScript = savedScript && currentWorkspace.current.scripts.some(script =>
+        script.id === savedScript.id && savedScript.updatedAt?.replace(/\+00:00$/, "Z") === script.updated_at.replace(/\+00:00$/, "Z"));
+      const currentVersion = currentWorkspace.current.task.current_timeline_version_id;
+      const savedVersion = restore?.receipt?.task_id === task.id && restore.receipt.status === "applied"
+        ? restore.receipt.result_version_id
+        : segment?.revision?.task_id === task.id && segment.revision.status === "succeeded" && segment.revision.adoption.status === "current"
+          ? segment.revision.adoption.current_timeline_version_id : null;
+      if ((savedScript && !workspaceAlreadyHasScript) || (savedVersion && savedVersion !== currentVersion) || result.timeline_action) {
+        await readSavedWorkspace();
+      }
+      if (!ownsTurn() || revision !== editContextRevision.current) return;
       if (result.execution_status) executionController.acceptExecution(result.execution_status);
       executionController.pollExecution();
-      if (result.script_draft) await refresh(true, () => ownsRequest() && revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId));
-      if (result.timeline_action || result.segment_revision || result.timeline_restore) await refresh(true, () => ownsRequest() && revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId));
       if (ownsRequest() && revision === editContextRevision.current && assistantConversation.isCurrentConversation(turn.conversationId)) {
         const preview = result.media_job ? await resolveEditMedia(result.media_job, revision, turn.conversationId) : result.edit_preview;
         if (!ownsRequest() || revision !== editContextRevision.current || !assistantConversation.isCurrentConversation(turn.conversationId)) return;

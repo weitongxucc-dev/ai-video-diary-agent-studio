@@ -4,6 +4,7 @@ from datetime import datetime
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
+from app.assistant.workspace_save_notifications import notify_workspace_save
 from app.creation.narration_duration import NarrationDurationReview
 from app.schemas import CreationTaskNarrationVoiceSelectionRequest, CreationTaskNarrationVoiceSelectionResponse, CreationTaskNarrationResponse
 
@@ -48,7 +49,13 @@ def build_task_narration_router(*, access_for, adoption_for, production_for, exe
             raise failure_for()(status_code=409, error=exc.reason, reason=exc.reason, impact=exc.impact, repair_action=exc.repair_action, retryable=True) from exc
         except (ValueError, blocked_for()) as exc:
             raise failure_for()(status_code=409, error='creation_task_voice_selection_conflict', reason='当前任务不能选择这个声音版本。', impact='没有改变任务阶段，也没有调用声音模型。', repair_action=str(exc), retryable=False) from exc
-        return selection_response_for().model_validate(receipt)
+        result = selection_response_for().model_validate(receipt)
+        if payload.assistant_turn_id is not None and (
+            result.status, result.workspace_id, result.member_id, result.task_id, str(result.request_id)
+        ) == ('selected', task.workspace_id, member_id, task.id, str(payload.request_id)):
+            notify_workspace_save(
+                request, task.workspace_id, member_id, task.id, payload.assistant_turn_id, f"voice:{result.request_id}")
+        return result
 
     @router.get('/api/creation-tasks/{task_id}/narration/voice/requests/{request_id}', response_model=CreationTaskNarrationVoiceSelectionResponse)
     def get_creation_task_narration_voice_selection(task_id: str, request_id: UUID, request: Request):

@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Literal
 from uuid import UUID
 
+from app.assistant.workspace_save_notifications import notify_workspace_save
 from app.creation.script_windows import SCRIPT_SECTION_WINDOW_LIMIT, ScriptWindowConflict
 from app.creation.script_draft_use_case import ScriptDraftRejected
 from app.schemas import (
@@ -26,10 +27,13 @@ class ScriptWindowHttpAdapter:
         case = self.draft_use_case(task.workspace_id,
             validate_inputs=lambda ws, plan, refs: self.current_script_inputs(request, ws, plan, refs),
             content_reader=lambda ws: self.content_reader(request, ws))
-        return case.patch(task.workspace_id, task_id, script_id, payload, member_id=member_id,
+        receipt = case.patch(task.workspace_id, task_id, script_id, payload, member_id=member_id,
             instruction_origin=origin,
             reread_origin=lambda draft_only: self.adoption_scope(
                 task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
+        if origin is not None and receipt.get("status") == "saved":
+            self._publish_window_save(request, task, member_id, payload, receipt, "patch")
+        return receipt
 
     def start_creation_script_window(self, request, task_id, payload):
         task, member_id = self.exact_edit_access(task_id, request, write=True)
@@ -38,10 +42,13 @@ class ScriptWindowHttpAdapter:
         case = self.draft_use_case(task.workspace_id,
             validate_inputs=lambda ws, plan, refs: self.current_script_inputs(request, ws, plan, refs),
             content_reader=lambda ws: self.content_reader(request, ws))
-        return case.start_window(task.workspace_id, task_id, payload, member_id=member_id,
+        receipt = case.start_window(task.workspace_id, task_id, payload, member_id=member_id,
             instruction_origin=origin,
             reread_origin=lambda draft_only: self.adoption_scope(
                 task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
+        if origin is not None and receipt.get("status") == "saved":
+            self._publish_window_save(request, task, member_id, payload, receipt, "start")
+        return receipt
 
     def confirm_saved_creation_script(self, request, task_id, script_id, payload):
         task, member_id = self.exact_edit_access(task_id, request, write=True)
@@ -50,10 +57,20 @@ class ScriptWindowHttpAdapter:
         case = self.draft_use_case(task.workspace_id,
             validate_inputs=lambda ws, plan, refs: self.current_script_inputs(request, ws, plan, refs),
             content_reader=lambda ws: self.content_reader(request, ws))
-        return case.confirm_saved(task.workspace_id, task_id, script_id, payload, member_id=member_id,
+        receipt = case.confirm_saved(task.workspace_id, task_id, script_id, payload, member_id=member_id,
             instruction_origin=origin,
             reread_origin=lambda draft_only: self.adoption_scope(
                 task_id, request, str(payload.assistant_turn_id), draft_only=draft_only))
+        if origin is not None and receipt.get("status") == "confirmed":
+            self._publish_window_save(request, task, member_id, payload, receipt, "confirm")
+        return receipt
+
+    @staticmethod
+    def _publish_window_save(request, task, member_id, payload, receipt, operation):
+        if (receipt.get("task_id"), receipt.get("request_id")) != (task.id, str(payload.request_id)):
+            return
+        event_id = f"script-window:{operation}:{receipt['script_id']}:{receipt['request_id']}"
+        notify_workspace_save(request, task.workspace_id, member_id, task.id, payload.assistant_turn_id, event_id)
 
     def read_creation_script_window_request(self, request, task_id, request_id, operation, script_id, *, include_input=False):
         task, member_id = self.exact_edit_access(task_id, request)
