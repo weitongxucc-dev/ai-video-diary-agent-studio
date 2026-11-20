@@ -12,7 +12,6 @@ type TurnTool = {
   label: string;
   target?: string;
   startedAt?: string;
-  endedAt?: string;
   state: "running" | "succeeded" | "failed" | "unreturned";
   summary?: string;
   failure?: AssistantToolFailure;
@@ -60,7 +59,6 @@ export function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
       tool.state = event.ok ? "succeeded" : "failed";
       tool.summary = event.summary;
       tool.failure = event.failure;
-      tool.endedAt = event.at;
       tool.target ??= event.display_target;
     }
   }
@@ -112,19 +110,45 @@ function ElapsedTime({ at }: { at?: string }) {
   return <span className="assistant-activity-time" aria-hidden="true">{minutes ? `${minutes} 分 ` : ""}{seconds % 60} 秒</span>;
 }
 
-export function TurnActivity({ turn, continuation, at }: { turn: AssistantConversationTurn; continuation?: boolean; at?: string }) {
+export function TurnActivity({ turn, continuation }: { turn: AssistantConversationTurn; continuation?: boolean }) {
   if (turn.status !== "running") return null;
-  const replying = Boolean(turn.assistant_text.trim());
-  const activity = replying ? "正在回复" : continuation ? "继续完成原要求" : turn.sequence === 0 ? "正在发送要求" : "正在等待回复";
+  let recent: AssistantConversationTurn["events"][number] | undefined;
+  for (let index = turn.events.length - 1; index >= 0; index--) {
+    const event = turn.events[index];
+    if (event.type === "tool_end" || event.type === "text_delta") {
+      recent = event;
+      break;
+    }
+  }
+  if (recent?.type === "text_delta" || !recent && turn.assistant_text.trim()) return null;
+  const activity = recent?.type === "tool_end" ? "正在处理" : continuation ? "继续完成原要求" : turn.sequence === 0 ? "正在发送要求" : "正在等待回复";
   return <p className="assistant-stream-status">
     <LoaderCircle aria-hidden size={14} className="is-spinning"/>
-    <span role="status">{activity}</span>{!replying ? <ElapsedTime at={at}/> : null}
+    <span role="status">{activity}</span><ElapsedTime at={recent?.type === "tool_end" ? recent.at : turn.created_at}/>
   </p>;
 }
 
+function toolLabel(tool: TurnTool) {
+  return publicExecutionText(tool.label) ?? "工具调用";
+}
+
+function completedToolSummary(tools: TurnTool[]) {
+  const counts = new Map<string, number>();
+  for (const tool of tools) {
+    const label = toolLabel(tool);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  const representatives = [...counts].slice(0, 2);
+  const remaining = tools.length - representatives.reduce((sum, [, count]) => sum + count, 0);
+  const labels = representatives.map(([label, count]) => count > 1 ? `${label} ×${count}` : label);
+  if (remaining) labels.push(`另 ${remaining} 项`);
+  return labels.join(" · ");
+}
+
 function ToolName({ tool, running = false }: { tool: TurnTool; running?: boolean }) {
-  const label = publicExecutionText(tool.label) ?? "执行";
-  const name = running && !label.startsWith("正在") ? `正在${label}` : label;
+  const label = toolLabel(tool);
+  const activeLabel = label === "工具调用" ? "执行" : label;
+  const name = running && !activeLabel.startsWith("正在") ? `正在${activeLabel}` : label;
   const target = publicExecutionText(tool.target);
   return <span className="assistant-activity-name">{name}{target && label !== target ? <span className="assistant-activity-target"> · {target}</span> : null}</span>;
 }
@@ -141,7 +165,7 @@ function CompletedTools({ tools, turnId, anchorId, reading, reply }: {
     setOpen(next);
     for (const tool of tools) reading?.save(readingKey(tool), next);
   }}>
-    <summary><ChevronRight aria-hidden size={14}/>{tools.length === 1 ? <ToolName tool={tools[0]}/> : <span>已返回 {tools.length} 项操作</span>}
+    <summary><ChevronRight aria-hidden size={14}/>{tools.length === 1 ? <ToolName tool={tools[0]}/> : <span className="assistant-activity-name">{completedToolSummary(tools)}</span>}
       {tools.length === 1 ? <span className="assistant-activity-state">已返回</span> : null}</summary>
     <ol className="assistant-inline-receipts" aria-label="操作回执">{tools.map(tool => {
       const summary = publicExecutionText(tool.summary);

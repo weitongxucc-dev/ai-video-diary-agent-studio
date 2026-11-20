@@ -177,7 +177,7 @@ function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continu
   continuation?: boolean; visibleResultNotes?: string; recoveryToolId?: number; recovery?: ReactNode;
 }) {
   const goal = turn.result?.kind === "creation_task_adopted" ? assistantTurnGoalRefreshState(turn) : null;
-  const tools = blocks.flatMap(block => block.kind === "tools" ? block.tools : []);
+  const hasRunningTool = blocks.some(block => block.kind === "tools" && block.tools.some(tool => tool.state === "running"));
   const surfacedElsewhere = [goal ? null : turn.assistant_text, visibleResultNotes].filter(Boolean).join("\n");
   return <>
     {blocks.map(block => {
@@ -192,8 +192,7 @@ function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continu
         </ConversationMessage>
       </div>;
     })}
-    {!tools.some(tool => tool.state === "running") ? <TurnActivity turn={turn} continuation={continuation}
-      at={tools.length ? tools.at(-1)?.endedAt : turn.created_at}/> : null}
+    {!hasRunningTool ? <TurnActivity turn={turn} continuation={continuation}/> : null}
     {goal ? <div className="assistant-markdown-wrap">
       <p>{goalStateLabels[goal.status] ?? "任务状态待核实"}。</p>
       {goal.waiting_reason && goalReasonLabels[goal.waiting_reason] ? <p>{goalReasonLabels[goal.waiting_reason]}</p> : null}
