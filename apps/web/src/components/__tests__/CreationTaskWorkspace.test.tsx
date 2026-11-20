@@ -1193,13 +1193,10 @@ describe("CreationTaskWorkspace", () => {
     expect(stage).toBeVisible();
     expect(stage).toHaveTextContent("连续制作，已排队");
     await waitFor(() => expect(input).toHaveFocus());
-    const record = screen.getByText("执行记录").closest("details")!;
-    expect(record).not.toHaveAttribute("open");
-    await clickAndSettle(within(record).getByText("执行记录"));
-    const operation = within(await within(record).findByRole("list", { name: "操作" })).getByRole("listitem");
-    expect(within(operation).getByText("提交连续制作")).toBeVisible();
-    expect(within(operation).getByText("已返回")).toBeVisible();
-    expect(within(operation).getByText("制作请求已返回，当前作业已排队。")).toBeVisible();
+    const activity = screen.getByText("提交连续制作").closest("details")!;
+    expect(activity).not.toHaveAttribute("open");
+    await clickAndSettle(activity.querySelector("summary")!);
+    expect(within(activity).getByText("制作请求已返回，当前作业已排队。")).toBeVisible();
   });
 
   it("restores task dialogue from persisted history after reopening", async () => {
@@ -1209,7 +1206,9 @@ describe("CreationTaskWorkspace", () => {
       { role: "assistant", message: "已改好，请检查。", stage: "script", script_id: "draft-1", at: baseTask.updated_at },
     ] });
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    fireEvent.click(await screen.findByRole("button", { name: "历史对话" }));
+    const history = await screen.findByRole("button", { name: "历史对话" });
+    await waitFor(() => expect(history).toBeEnabled());
+    fireEvent.click(history);
     fireEvent.click(await screen.findByText("旧版只读历史"));
     expect(await screen.findByText("已改好，请检查。")).toBeInTheDocument();
     expect(mocks.getAssistantHistory).toHaveBeenCalledWith("task-1");
@@ -5114,11 +5113,31 @@ describe("作品视图与真实版本",()=>{
   const confirmed={...original,id:"confirmed-script",title:"实际确认稿",selection_status:"confirmed" as const,sections:[{...original.sections[0],content:"已经确认的正文"}]};
   const draft={...confirmed,id:"new-draft",title:"实际新草稿",selection_status:"draft" as const,sections:[{...confirmed.sections[0],content:"尚未确认的新正文"}]};
   initial.scripts=[draft,confirmed];initial.task={...initial.task,confirmed_script_id:confirmed.id,can_revise_script:false};mocks.getWorkspace.mockResolvedValue(initial);
+  const task = initial.task;
+  const conversationId = "conversation-script-results";
+  const turns = [draft, confirmed, {...draft, updated_at: "2025-01-01T00:00:00Z"}].map((script, index) => ({
+    id: "script-result-" + index, sequence: index + 1, status: "completed" as const,
+    user_message: "查看文案", assistant_text: "已保存", events: [], created_at: task.created_at, updated_at: task.updated_at,
+    result: {kind: "task_turn", response: {script_draft: script}},
+  }));
+  mocks.currentAssistantConversation.set(`task:${task.id}`, conversationId);
+  mocks.assistantConversations.set(conversationId, {id: conversationId, workspace_id: task.workspace_id, scope_kind: "task",
+    scope_id: task.id, title: "文案回执", draft_text: "", draft_version: 0, turns, created_at: task.created_at, updated_at: task.updated_at});
   stubLoadedScriptWindows(initial.scripts);
     initial.scripts=initial.scripts.map(script=>({...script,sections_loaded:false,sections:null}));
   renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial}/>);fireEvent.click(getWorkspaceViewControl("文案：有新草稿待确认"));
   expect(await screen.findByText("已经确认的正文")).toBeVisible();expect(screen.getByText("尚未确认的新正文")).not.toBeVisible();
   fireEvent.click(screen.getByRole("tab",{name:"新草稿"}));expect(screen.getByText("尚未确认的新正文")).toBeVisible();expect(screen.getByText("待确认草稿")).toBeVisible();
+  const locateScript = async (index: number) => {
+    const turn = document.querySelector<HTMLElement>(`article[data-turn-id="script-result-${index}"]`)!;
+    fireEvent.click(await within(turn).findByRole("button", {name: "查看当前文案"}));
+  };
+  await locateScript(1);
+  await waitFor(() => expect(screen.getByText("已经确认的正文")).toBeVisible());
+  await locateScript(0);
+  await waitFor(() => expect(screen.getByText("尚未确认的新正文")).toBeVisible());
+  await locateScript(2);
+  expect(screen.getByText(/对应较早的文案版本/)).toBeVisible();
   expect(mocks.confirmScript).not.toHaveBeenCalled();
  });
  it("does not equate a zero plan target with the rendered person's actual share",async()=>{

@@ -14,7 +14,7 @@ from app.assistant.inputs import latest_consumed_input
 from app.creation.editing.edit_scope import clip_tail_blocker
 from app.assistant.turn_control import AssistantStopped
 from app.assistant.task_turn_scope_use_case import TaskTurnSelection
-from app.assistant.projection import _safe_business_failure, _safe_compaction_event
+from app.assistant.projection import _safe_business_failure, _safe_compaction_event, public_assistant_text
 from app.assistant.trace import runtime_receipt_fields
 from app.creation.media_result_use_case import MediaResultRejected
 from app.creation.task_authorization import TaskAuthorizationDenied
@@ -365,23 +365,9 @@ class TaskAssistantTurnUseCase:
             def on_event(event):
                 self.record_window_event(event, workspace_id=workspace_id, member_id=goal['member_id'],
                     task_id=task_id, turn_id=turn_id)
-                if event.get('type') == 'context_compaction':
-                    diagnostic = _safe_compaction_event(event)
-                    if diagnostic is not None:
-                        self._conversations_for().append_event(turn_id, diagnostic)
-                    return
-                if event.get('type') == 'text_delta':
-                    delta = sanitizer.feed(str(event.get('delta', '')))
-                    if delta:
-                        self._conversations_for().append_event(turn_id, {'type': 'text_delta', 'delta': delta})
-                elif event.get('type') in {'tool_start', 'tool_end'}:
-                    safe = {key: value for key, value in event.items() if key in {'type', 'tool_id', 'label', 'ok', 'summary'}}
-                    for key in ('label', 'summary'):
-                        if key in safe:
-                            safe[key] = safe_text(str(safe[key]))
-                    if isinstance(event.get('failure'), dict):
-                        safe['failure'] = {key: safe_text(value) if isinstance(value, str) else value
-                            for key, value in _safe_business_failure(event['failure']).items()}
+                safe = (_safe_compaction_event(event) if event.get('type') == 'context_compaction'
+                        else sanitizer.activity_event(event))
+                if safe is not None:
                     self._conversations_for().append_event(turn_id, safe)
 
             try:
@@ -399,9 +385,7 @@ class TaskAssistantTurnUseCase:
                      'completed_source_slots': goal.get('completed_source_slots', []),
                      'completed_output_checkpoint': goal.get('completed_output_checkpoint'),
                      'unfinished_steps': goal['unfinished_steps'], 'next_checkpoint': goal.get('next_checkpoint')}, on_event))
-                tail = sanitizer.feed('', final=True)
-                if tail:
-                    self._conversations_for().append_event(turn_id, {'type': 'text_delta', 'delta': tail})
+                on_event({'type': 'text_end'})
                 runtime_receipt = preview if isinstance(preview, dict) and preview.get('kind') == 'runtime_receipt' else None
                 yield from self.finish_goal(business, claim, reply, None if runtime_receipt else preview, runtime_receipt)
             except AssistantUnavailable as exc:
@@ -484,7 +468,7 @@ class TaskAssistantTurnUseCase:
             reply, preview = (yield RunTask(workspace_id, member_id, task_id, str(payload.conversation_id), turn_id, message, trusted_stage, trusted_refs, payload.playhead_ms, caller_user_id, local_diagnostic, profile_reference, knowledge_reference, task_version, material_selection))
         except AssistantStopped:
             saved = self._conversations_for().get_turn(turn_id)
-            response = (yield BuildTaskResponse({'reply': saved['assistant_text'] if saved else '', 'provider': (yield ReadSettings(workspace_id)).effective_llm_provider, 'model': (yield ReadSettings(workspace_id)).effective_llm_model, 'turn_id': turn_id, 'turn_status': 'stopped', 'draft_version': payload.expected_draft_version + 1, 'script_window_request': ((saved or {}).get('result') or {}).get('response', {}).get('script_window_request'), 'quality_continuation': ((saved or {}).get('result') or {}).get('response', {}).get('quality_continuation')}))
+            response = (yield BuildTaskResponse({'reply': public_assistant_text(saved['assistant_text']) if saved else '', 'provider': (yield ReadSettings(workspace_id)).effective_llm_provider, 'model': (yield ReadSettings(workspace_id)).effective_llm_model, 'turn_id': turn_id, 'turn_status': 'stopped', 'draft_version': payload.expected_draft_version + 1, 'script_window_request': ((saved or {}).get('result') or {}).get('response', {}).get('script_window_request'), 'quality_continuation': ((saved or {}).get('result') or {}).get('response', {}).get('quality_continuation')}))
             self._conversations_for().finish_turn(turn_id, 'stopped', result={'kind': 'task_turn', 'response': (yield SerializeView(response, 'json'))})
             return response
         except AssistantUnavailable as exc:

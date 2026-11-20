@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import math
 import re
+from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from app.assistant.catalogue import _PI_TOOL_LABELS, SCRIPT_WINDOW_TOOL_OPERATIONS
 
 
@@ -193,7 +195,8 @@ def _business_event_lines(output: str, seen: set[str] | None = None):
                         continue
                     seen.add(nested_id)
                     yield json.dumps({"type": "tool_execution_end", "toolName": name, "toolCallId": nested_id,
-                                      "isError": bool(receipt.get("is_error")), "result": {"details": result}}, ensure_ascii=False)
+                                      "isError": bool(receipt.get("is_error")), "result": {"details": result},
+                                      "timestamp": event.get("timestamp")}, ensure_ascii=False)
         yield line
 
 
@@ -221,11 +224,215 @@ def _safe_compaction_event(value: dict) -> dict | None:
     return safe
 
 
+_PUBLIC_TOOL_TARGETS = {
+    "read_workspace_context": "当前工作区",
+    "read_current_task": "当前作品",
+    "read_video_templates": "视频模板库",
+    "read_editing_resource_catalog": "剪辑资源库",
+    "read_material_library_status": "素材库",
+    "search_material_library": "素材库",
+    "find_materials": "素材库",
+    "read_selected_material": "所选素材",
+    "read_clip_candidates": "当前镜头",
+    "read_task_edit_capabilities": "当前作品",
+    "read_narration_segments": "作品段落",
+    "read_script_sections": "文案段落",
+    "read_voice_profiles": "声音库",
+    "open_task_working_context": "任务工作区",
+    "bash": "任务工作区",
+}
+_PUBLIC_EXECUTABLES = frozenset({
+    "ffprobe", "ffmpeg", "ls", "python", "python3", "node", "cat", "rg", "wc", "find", "pwd",
+})
+_PUBLIC_FILE_EXTENSIONS = frozenset({
+    ".md", ".txt", ".srt", ".vtt", ".json", ".csv", ".py", ".js", ".mjs", ".ts",
+    ".html", ".css", ".png", ".jpg", ".webp", ".wav", ".mp4", ".mov",
+})
+_PUBLIC_FILENAME = re.compile(r"[\w][\w .-]{0,63}")
+_OPAQUE_VALUE = re.compile(r"(?i)(?:\bsk-|\b(?:token|secret|password|api[_ -]?key)\b|[a-z0-9_-]{28,})")
+
+
+def _tool_display_target(name: str, arguments: object) -> str | None:
+    if name in {"read", "write", "edit"} and isinstance(arguments, dict):
+        raw = arguments.get("path")
+        if not isinstance(raw, str) or not raw or len(raw) > 1024 or any(char in raw for char in ("\\", ":", "\x00")):
+            return None
+        path = PurePosixPath(raw)
+        if path.is_absolute() and path.parts[:3] not in {
+                ("/", "task", "work"), ("/", "task", "inputs"), ("/", "task", "outputs")}:
+            return None
+        if any(part == ".." for part in path.parts) or path.name.startswith((".", "_")):
+            return None
+        if (_PUBLIC_FILENAME.fullmatch(path.name) and not _OPAQUE_VALUE.search(path.name)
+                and path.suffix.lower() in _PUBLIC_FILE_EXTENSIONS):
+            return path.name
+    return _PUBLIC_TOOL_TARGETS.get(name)
+
+
+def _command_executable(arguments: object) -> str | None:
+    command = arguments.get("command") if isinstance(arguments, dict) else None
+    if not isinstance(command, str):
+        return None
+    leading = command.split(None, 1)
+    if leading and leading[0] in _PUBLIC_EXECUTABLES:
+        return leading[0]
+    return None
+
+
+def public_event_at(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) > 40:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    except (ValueError, OverflowError):
+        return None
+
+
+def _observed_event_at(event: dict) -> str | None:
+    stamp = event.get("timestamp")
+    if type(stamp) not in {int, float}:
+        return None
+    try:
+        return datetime.fromtimestamp(stamp / 1000, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    except (ValueError, OSError, OverflowError):
+        return None
+
+
+def public_tool_event(event: dict, safe_text) -> dict | None:
+    kind, tool_id = event.get("type"), event.get("tool_id")
+    if kind not in {"tool_start", "tool_end"} or type(tool_id) is not int or tool_id < 0:
+        return None
+    projected = {"type": kind, "tool_id": tool_id, "label": safe_text(str(event.get("label", "助手操作")))}
+    if (target := event.get("display_target")) and isinstance(target, str) and _PUBLIC_FILENAME.fullmatch(target):
+        if not _OPAQUE_VALUE.search(target) and safe_text(target) == target:
+            projected["display_target"] = target
+    if at := public_event_at(event.get("at")):
+        projected["at"] = at
+    if kind == "tool_end":
+        projected.update(ok=event.get("ok") is True, summary=safe_text(str(event.get("summary", ""))))
+        if isinstance(event.get("failure"), dict):
+            projected["failure"] = {key: safe_text(value) if isinstance(value, str) else value
+                for key, value in _safe_business_failure(event["failure"]).items()}
+    return projected
+
+
+class PublicReasoningFilter:
+    """Drop explicitly marked private blocks, including tags split across chunks."""
+    _tags = ("<think>", "</think>", "<analysis>", "</analysis>", "<reasoning>", "</reasoning>")
+    _pattern = re.compile("|".join(map(re.escape, _tags)), re.IGNORECASE)
+
+    def __init__(self) -> None:
+        self._pending = ""
+        self._sections: list[str] = []
+        self._line_start = True
+
+    def feed(self, value: str, *, final: bool = False) -> str:
+        text = self._pending + value
+        stop = len(text)
+        if not final:
+            lower = text.lower()
+            for tag in self._tags:
+                for length in range(min(len(tag) - 1, len(text)), 0, -1):
+                    if lower.endswith(tag[:length]):
+                        stop = min(stop, len(text) - length)
+                        break
+        self._pending = text[stop:]
+        visible = []
+
+        def add_visible(piece: str) -> None:
+            visible.append(piece)
+            if "\n" in piece:
+                self._line_start = not piece.rsplit("\n", 1)[1].strip()
+            elif piece.strip():
+                self._line_start = False
+
+        start = 0
+        for match in self._pattern.finditer(text, 0, stop):
+            tag = match[0].lower()
+            closing = tag.startswith("</")
+            if self._sections:
+                if closing and tag == self._sections[-1]:
+                    self._sections.pop()
+                start = match.end()
+                continue
+
+            add_visible(text[start:match.start()])
+            if closing:
+                add_visible(match[0])
+            else:
+                closing_tag = "</" + tag[1:]
+                closing_at = text.lower().find(closing_tag, match.end(), stop)
+                body = text[match.end():closing_at if closing_at >= 0 else stop]
+                context = text[max(start, match.start() - 24):match.start()] + body[:96]
+                quoted = bool(re.search(r"示例|范例|标签|example|sample|tag", context, re.IGNORECASE))
+                if quoted:
+                    add_visible(match[0])
+                else:
+                    self._sections.append(closing_tag)
+            start = match.end()
+        if not self._sections:
+            add_visible(text[start:stop])
+        return "".join(visible)
+
+
+def public_assistant_text(value: object) -> str:
+    return PublicReasoningFilter().feed(str(value or ""), final=True).strip()
+
+
+def public_history_turn(turn: dict, safe_text) -> dict:
+    """Project saved turns again so legacy raw assistant text cannot reach clients."""
+    result_turn = dict(turn)
+    def redact(value):
+        return safe_text(value)
+    result_turn["assistant_text"] = public_assistant_text(turn.get("assistant_text"))
+    events = []
+    reasoning = PublicReasoningFilter()
+    for event in turn.get("events", []):
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "text_delta" and isinstance(event.get("delta"), str):
+            delta = reasoning.feed(event["delta"])
+            if delta:
+                events.append({"type": "text_delta", "delta": redact(delta),
+                    **({key: event[key] for key in ("at",) if key in event})})
+        elif event.get("type") in {"tool_start", "tool_end"}:
+            projected = public_tool_event(event, redact)
+            if projected is not None:
+                events.append(projected)
+        elif event.get("type") == "context_compaction":
+            projected = _safe_compaction_event(event)
+            if projected is not None:
+                events.append(projected)
+        else:
+            events.append(event)
+    tail = reasoning.feed("", final=True)
+    if tail:
+        events.append({"type": "text_delta", "delta": redact(tail)})
+    result_turn["events"] = events
+    result = turn.get("result")
+    if isinstance(result, dict):
+        result = dict(result)
+        response = result.get("response")
+        if isinstance(response, dict):
+            response = dict(response)
+            if isinstance(response.get("reply"), str):
+                response["reply"] = PublicReasoningFilter().feed(response["reply"], final=True).strip()
+            result["response"] = response
+        if isinstance(result.get("message"), str):
+            result["message"] = PublicReasoningFilter().feed(result["message"], final=True).strip()
+        result_turn["result"] = result
+    return result_turn
+
+
+
 class _PiStreamProjector:
     """Project SDK events into a small UI-safe event vocabulary."""
 
     def __init__(self) -> None:
-        self._calls: dict[str, tuple[int, str, str]] = {}
+        self._calls: dict[str, tuple[int, str, str, str | None, str | None]] = {}
         self._next_id = 0
 
     def project(self, line: str) -> dict[str, object] | None:
@@ -233,7 +440,11 @@ class _PiStreamProjector:
             event = json.loads(line)
         except json.JSONDecodeError:
             return None  # The SDK result reader reports malformed protocol messages.
+        if not isinstance(event, dict):
+            return None
         event_type = event.get("type")
+        at = _observed_event_at(event)
+        timestamp = {"at": at} if at else {}
         if event_type in {'compaction_start','compaction_end'}:
             started = event_type == 'compaction_start'
             result = event.get('result') or {}
@@ -258,7 +469,7 @@ class _PiStreamProjector:
             update = event.get("assistantMessageEvent")
             if isinstance(update, dict) and update.get("type") == "text_delta":
                 delta = update.get("delta")
-                return {"type": "text_delta", "delta": delta} if isinstance(delta, str) and delta else None
+                return {"type": "text_delta", "delta": delta, **timestamp} if isinstance(delta, str) and delta else None
             return None
         if event_type == "tool_execution_start":
             name = event.get("toolName")
@@ -268,24 +479,37 @@ class _PiStreamProjector:
             self._next_id += 1
             call_key = raw_id if isinstance(raw_id, str) and raw_id else f"call-{self._next_id}"
             label = _PI_TOOL_LABELS[name]
-            self._calls[call_key] = (self._next_id, name, label)
-            return {"type": "tool_start", "tool_id": self._next_id, "label": label}
+            arguments = event.get("args")
+            target = _tool_display_target(name, arguments)
+            command = _command_executable(arguments) if name == "bash" else None
+            self._calls[call_key] = (self._next_id, name, label, target, command)
+            return {"type": "tool_start", "tool_id": self._next_id, "label": label, **timestamp,
+                **({"display_target": target} if target else {})}
         if event_type == "tool_execution_end":
             raw_id = event.get("toolCallId")
             name = event.get("toolName")
             call_key = raw_id if isinstance(raw_id, str) else ""
             stored = self._calls.pop(call_key, None)
             if stored:
-                tool_id, stored_name, label = stored
+                tool_id, stored_name, label, target, command = stored
                 name = stored_name
             else:
                 if name not in _PI_TOOL_LABELS:
                     return None
                 self._next_id += 1
                 tool_id, label = self._next_id, _PI_TOOL_LABELS[name]
+                target, command = _tool_display_target(name, None), None
             failed = bool(event.get("isError"))
             details = (event.get("result") or {}).get("details") or {}
             summary_result = event.get("result")
+            native = details.get("native_execution")
+            if (command and isinstance(native, dict) and native.get("process_state") == "exited"
+                    and native.get("release_state") == "released" and native.get("job_id") and native.get("request_id")):
+                target = command
+            if name == "read_creation_skill" and not failed:
+                skill = details.get("name")
+                if isinstance(skill, str) and _PUBLIC_FILENAME.fullmatch(skill) and not _OPAQUE_VALUE.search(skill):
+                    target = skill
             failure = details.get("failure") if isinstance(details.get("failure"), dict) else None
             if failure is None and details.get("kind") == "edit_request_status":
                 reason = details.get("failure_reason")
@@ -305,7 +529,8 @@ class _PiStreamProjector:
                     or window.get('input_id') is not None and window['input_id'] != invocation_input):
                 window = None
             return {
-                "type": "tool_end", "tool_id": tool_id, "label": label,
+                "type": "tool_end", "tool_id": tool_id, "label": label, **timestamp,
+                **({"display_target": target} if target else {}),
                 "ok": not failed,
                 "summary": _safe_tool_result_summary(name, summary_result, failed),
                 **({"failure": _safe_business_failure(failure)} if failed and failure else {}),

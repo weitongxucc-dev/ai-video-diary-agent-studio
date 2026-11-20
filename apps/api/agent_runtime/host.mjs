@@ -120,8 +120,12 @@ const inputExtension = creationInputExtension({ ask, getSession: () => session, 
 ({ session, rebindTools } = await openCreationSession({ ...input, businessCall,
   nativeCall:input.nativeEnabled?callBusiness:undefined,extensionFactories: input.inputEnabled ? [inputExtension] : [] }));
 const result = createSessionResult(input.sessionId);
-session.subscribe(event => { result.observe(event); emit(event.type === 'compaction_start'
-  ? {...event,contextUsage:session.getContextUsage()} : event); });
+session.subscribe(event => {
+  const observed = Number.isFinite(event.timestamp) ? event : {...event,timestamp:Date.now()};
+  result.observe(observed);
+  emit(observed.type === 'compaction_start'
+    ? {...observed,contextUsage:session.getContextUsage()} : observed);
+});
 try {
   try {
     if (abortRequested) await abortSession();

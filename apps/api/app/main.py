@@ -79,7 +79,7 @@ from app.assistant_pi import (
     request_stop_turn, run_material_turn as run_material_turn, run_plan_turn, run_task_turn,
     stop_all_assistant_turns,
 )
-from app.assistant.projection import _safe_business_failure, _safe_compaction_event
+from app.assistant.projection import _safe_compaction_event, public_tool_event
 from app.assistant_goal_continuation import GoalContinuationService, GoalResultProjection, GoalProjectionRejected
 
 from app.compound_edits import compile_compound_edit as compile_compound_edit
@@ -2649,6 +2649,7 @@ def _conversation_http_adapter():
         validate_scope=_validate_assistant_scope,
         owned_conversation=_assistant_conversation_for_request,
         clean_text=_assistant_text_without_credentials,
+        clean_text_factory=_assistant_text_redactor,
         validate_reference=_validate_saved_assistant_reference,
         recover_request=_assistant_creation_request_for_turn,
         require_actor=_require_permit_actor,
@@ -3246,20 +3247,30 @@ app.include_router(build_task_assistant_history_router(
 ))
 
 
+def _assistant_text_redactor(workspace_id: str):
+    # History readers call this once per workspace, then reuse the pure closure.
+    known_secrets = (
+        _workspace_settings_for(workspace_id).effective_llm_api_key,
+        settings.tencentcloud_secret_id,
+        settings.tencentcloud_secret_key,
+    )
+    def redact(value: str) -> str:
+        safe = value
+        for known in known_secrets:
+            if known and len(known) >= 8:
+                safe = safe.replace(known, "[已隐藏凭据]")
+        for pattern in (
+            r"(?i)(\bauthorization\s*:\s*bearer\s+)\S+",
+            r"(?i)(\b(?:api[_ -]?key|token|password|secret)\s*[:=]\s*)\S+",
+            r"\bsk-[A-Za-z0-9_-]{16,}\b",
+        ):
+            safe = re.sub(pattern, lambda match: (match.group(1) if match.lastindex else "") + "[已隐藏凭据]", safe)
+        return safe
+    return redact
+
+
 def _assistant_text_without_credentials(value: str, workspace_id: str) -> str:
-    safe = value
-    for known in (_workspace_settings_for(workspace_id).effective_llm_api_key,
-                  settings.tencentcloud_secret_id,
-                  settings.tencentcloud_secret_key):
-        if known and len(known) >= 8:
-            safe = safe.replace(known, "[已隐藏凭据]")
-    for pattern in (
-        r"(?i)(\bauthorization\s*:\s*bearer\s+)\S+",
-        r"(?i)(\b(?:api[_ -]?key|token|password|secret)\s*[:=]\s*)\S+",
-        r"\bsk-[A-Za-z0-9_-]{16,}\b",
-    ):
-        safe = re.sub(pattern, lambda match: (match.group(1) if match.lastindex else "") + "[已隐藏凭据]", safe)
-    return safe
+    return _assistant_text_redactor(workspace_id)(value)
 
 
 def _assistant_stream_safe_text(value: str, workspace_id: str) -> str:
@@ -3582,12 +3593,7 @@ def _run_script_generation_agent(workspace_id, member_id, case, record):
         if event.get("type") == "context_compaction":
             safe = _safe_compaction_event(event)
         elif event.get("type") in {"tool_start", "tool_end"}:
-            safe = {key: event[key] for key in ("type", "tool_id", "label", "ok", "summary") if key in event}
-            for key in ("label", "summary"):
-                if key in safe:
-                    safe[key] = _assistant_stream_safe_text(str(safe[key]), workspace_id)
-            if isinstance(event.get("failure"), dict):
-                safe["failure"] = _safe_business_failure(event["failure"])
+            safe = public_tool_event(event, lambda value: _assistant_stream_safe_text(value, workspace_id))
         else:
             return
         if safe is not None:
