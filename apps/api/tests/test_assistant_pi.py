@@ -379,19 +379,82 @@ def test_pi_stream_projects_only_text_and_safe_business_tool_status():
     started = projector.project(json.dumps({
         "type": "tool_execution_start", "toolCallId": "private-id",
         "toolName": "read_current_task", "args": {"path": "/private/user/key.json"},
+        "timestamp": 1795112476910,
     }))
-    assert started == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务"}
+    assert started == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务",
+                       "display_target": "当前作品", "at": "2026-11-19T18:21:16.910Z"}
     ended = projector.project(json.dumps({
         "type": "tool_execution_end", "toolCallId": "private-id",
         "toolName": "read_current_task", "isError": False,
         "result": {"details": {"status": "ready", "path": "/private/user/key.json"}},
+        "timestamp": 1795112477910,
     }))
     assert ended == {
         "type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
-        "summary": "当前任务和所选对象状态已读取。",
+        "summary": "当前任务和所选对象状态已读取。", "display_target": "当前作品",
+        "at": "2026-11-19T18:21:17.910Z",
     }
     assert "/private/" not in json.dumps([started, ended])
     assert "private-id" not in json.dumps([started, ended])
+
+
+def test_pi_native_activity_displays_only_task_file_short_names_and_real_calls():
+    projector = _PiStreamProjector()
+    def call(kind, name, call_id, **fields):
+        return projector.project(json.dumps({
+            "type": f"tool_execution_{kind}", "toolName": name, "toolCallId": call_id, **fields,
+        }))
+
+    started = call("start", "read", "native", args={"path": "/task/work/字幕/修订稿.srt"})
+    ended = call("end", "read", "native", result={"details": {"read_window": {"path": "/task/work/字幕/修订稿.srt"}}})
+    assert started["display_target"] == ended["display_target"] == "修订稿.srt"
+    assert started["tool_id"] == ended["tool_id"]
+    for untrusted in ("/Users/example/album.txt", "/task/work/.env", "/task/work/token.txt",
+                      "https://example.test/readme.md", "/task/work/../../settings.txt"):
+        event = call("start", "read", untrusted, args={"path": untrusted})
+        assert "display_target" not in event
+    assert call("start", "not_a_bash_tool", "unknown", args={"command": "private command"}) is None
+    command = call("start", "bash", "real", args={"command": "private command"})
+    assert command["label"] == "执行任务程序" and command["display_target"] == "任务工作区"
+    assert "private command" not in json.dumps(command)
+    probe = call("start", "bash", "probe", args={"command": "ffprobe -i /private/input.mp4"})
+    confirmed = call("end", "bash", "probe", result={"details": {"native_execution": {
+        "job_id": "private-job", "request_id": "private-request", "process_state": "exited", "release_state": "released",
+    }}})
+    assert probe["display_target"] == "任务工作区"
+    assert confirmed["display_target"] == "ffprobe" and confirmed["tool_id"] == probe["tool_id"]
+    assert "private" not in json.dumps(confirmed)
+    call("start", "bash", "refused", args={"command": "ls -la"})
+    refusal = call("end", "bash", "refused", isError=True, result={"details": {
+        "native_execution": {"process_state": "not_started", "release_state": "not_acquired"}
+    }})
+    assert refusal["display_target"] == "任务工作区"
+    skill = call("end", "read_creation_skill", "known", result={"details": {"name": "narration-edit"}})
+    assert skill["display_target"] == "narration-edit"
+
+
+def test_public_reasoning_filter_hides_private_tail_after_public_text_but_keeps_examples():
+    from app.assistant.projection import PublicReasoningFilter, public_history_turn
+
+    assert PublicReasoningFilter().feed("公开结论。<think>secret</think>", final=True) == "公开结论。"
+    assert PublicReasoningFilter().feed("正文中的标签示例：<think>示例内容</think>。", final=True) == "正文中的标签示例：<think>示例内容</think>。"
+    saved = public_history_turn({
+        "assistant_text": "公开结论。<think>legacy secret</think>",
+        "events": [{"type": "text_delta", "delta": "公开结论。<think>legacy secret</think>"}],
+        "result": {"response": {"reply": "公开结论。<think>legacy secret</think>"}},
+    }, lambda value: value)
+    assert saved["assistant_text"] == "公开结论。"
+    assert saved["events"] == [{"type": "text_delta", "delta": "公开结论。"}]
+    assert saved["result"]["response"]["reply"] == "公开结论。"
+
+
+def test_pi_final_reply_excludes_marked_reasoning():
+    from app.assistant.result_projection import project_business_result
+
+    result = {"answer": "<think>内部内容</think>公开结论。\n<analysis>仍未闭合",
+              "status": "settled", "tool_results": []}
+    answer, _ = project_business_result(result)
+    assert answer == "公开结论。"
 
 
 @pytest.mark.parametrize("name", ["preview_typed_edit", "observe_task_output"])
@@ -484,10 +547,14 @@ def test_assistant_stream_response_sends_safe_events_then_authoritative_result(m
             publish({**diagnostic,
                 'sdk_estimate':{'tokens_before':112607,'raw_prompt':'PRIVATE_CONTEXT'},
                 'reason':'压缩SDK失败 fixture-secret-123','summary':'PRIVATE_CONTEXT','provider_usage':{'input':61000,'cost':99}})
-            publish({"type": "text_delta", "delta": "输出 fixture-secret-"})
-            publish({"type": "tool_start", "tool_id": 1, "label": "读取当前任务", "args": {"path": "/private/key"}})
+            publish({"type": "text_delta", "delta": "<thi"})
+            publish({"type": "text_delta", "delta": "nk>PRIVATE_THOUGHT</th"})
+            publish({"type": "text_delta", "delta": "ink>输出 fixture-secret-", "at": "2026-11-19T18:21:15.000Z"})
+            publish({"type": "tool_start", "tool_id": 1, "label": "读取当前任务", "display_target": "当前作品",
+                     "at": "2026-11-19T18:21:16.000Z", "args": {"path": "/private/key"}})
             publish({"type": "text_delta", "delta": "123 完成"})
             publish({"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
+                     "display_target": "当前作品", "at": "2026-11-19T18:21:17.000Z",
                      "summary": "当前任务和所选对象状态已读取。", "result": {"token": "fixture-secret-123"}})
             return SimpleNamespace(model_dump=lambda mode: {"reply": "当前制作条件已回读。"})
         return main_module._assistant_stream_transport().response(execute, workspace_id="local",turn_id=turn['id'])
@@ -500,9 +567,14 @@ def test_assistant_stream_response_sends_safe_events_then_authoritative_result(m
     assert events[0]['turn_id'] == turn['id']
     streamed_text = "".join(event.get("delta", "") for event in events if event["type"] == "text_delta")
     assert "fixture-secret-123" not in streamed_text and "[已隐藏凭据]" in streamed_text
-    assert events[2] == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务"}
+    assert events[1]["at"] == "2026-11-19T18:21:15.000Z"
+    assert events[2] == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务",
+                         "display_target": "当前作品", "at": "2026-11-19T18:21:16.000Z"}
     assert events[4] == {"type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
+                         "display_target": "当前作品", "at": "2026-11-19T18:21:17.000Z",
                          "summary": "当前任务和所选对象状态已读取。"}
+    assert repo.get_turn(turn['id'])['events'][1:] == events[1:5]
+    assert "PRIVATE_THOUGHT" not in response.text
     assert events[-1]["result"]["reply"] == "当前制作条件已回读。"
     diagnostic=repo.get_turn(turn['id'])['events'][0]
     assert diagnostic['type']=='context_compaction' and diagnostic['status']=='failed'

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from app.assistant.projection import _business_event_lines, media_processing_state_message
+from app.assistant.projection import PublicReasoningFilter, _business_event_lines, media_processing_state_message
 from app.assistant.business_failure import _safe_business_failure
 from app.assistant.catalogue import SCRIPT_WINDOW_TOOL_OPERATIONS
 from app.assistant.script_window_receipts import project_script_window_request, script_window_message
@@ -162,7 +162,7 @@ def refresh_original_receipts(turn: dict, *, task_id: str, input_id: str, read_s
 
 def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[str, dict | None]:
     """Project typed SDK completion and real business receipts, never CLI history."""
-    answer = result["answer"]
+    answer = PublicReasoningFilter().feed(result["answer"], final=True).strip()
     output = json.dumps(result, ensure_ascii=False)
     preview = None
     media_job = None

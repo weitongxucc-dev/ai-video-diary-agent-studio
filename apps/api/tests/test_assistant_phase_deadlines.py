@@ -429,3 +429,19 @@ def test_non_streaming_and_streaming_share_the_phase_runner(tmp_path, monkeypatc
     else:
         run()
     assert len(calls) == 1
+
+
+def test_stop_entrypoint_returns_bounded_conflict_when_release_is_unknown():
+    from fastapi import HTTPException
+    from app.assistant.task_turn_routes import TaskTurnHTTPAdapter
+
+    adapter = object.__new__(TaskTurnHTTPAdapter)
+    adapter._answer = lambda *_args: (_ for _ in ()).throw(
+        AssistantProcessReleaseError("private device-profile detail"))
+    def operation():
+        yield object()
+    with pytest.raises(HTTPException) as failure:
+        adapter._drive(operation(), None)
+    assert failure.value.status_code == 409
+    assert "private device-profile detail" not in str(failure.value.detail)
+    assert "停止已登记" in str(failure.value.detail)

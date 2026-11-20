@@ -149,32 +149,58 @@
 .assistant-creation-context > summary { min-height:var(--space-5); cursor:pointer; color:var(--text-2); font-size:var(--font-size-meta); line-height:var(--line-meta); }
 .assistant-creation-context > article { margin-block:var(--space-2) var(--space-4); }
 
-/* History sits on the conversation surface, with spacing for the trace's three levels. */
-.assistant-trace { min-width:0; color:var(--text-2); font-size:var(--font-size-meta); line-height:var(--line-meta); }
-:is(.assistant-trace,.assistant-trace-technical) > summary { display:flex; align-items:center; gap:var(--space-1); width:fit-content; max-width:100%; min-height:28px; padding-inline:var(--space-1); border-radius:var(--radius-sm); cursor:pointer; list-style:none; }
-.assistant-trace > summary::-webkit-details-marker,.assistant-trace-technical > summary::-webkit-details-marker { display:none; }
-:is(.assistant-trace,.assistant-trace-technical) > summary:focus-visible { outline-offset:-2px; }
-:is(.assistant-trace,.assistant-trace-technical) > summary:hover,:is(.assistant-trace,.assistant-trace-technical)[open] > summary { background:var(--surface-2); color:var(--text-1); }
-:is(.assistant-trace,.assistant-trace-technical) > summary svg { flex:none; }
-:is(.assistant-trace,.assistant-trace-technical)[open] > summary svg { rotate:90deg; }
-.assistant-trace-step-count { color:var(--text-3); white-space:nowrap; font-variant-numeric:tabular-nums; }
+/* Public activity stays beside the text that introduced it. */
+.assistant-inline-activity,
+.assistant-trace {
+  min-width:0;
+  color:var(--text-2);
+  font-size:var(--font-size-meta);
+  line-height:var(--line-meta);
+}
+.assistant-inline-activity { display:grid; gap:var(--space-1); }
+.assistant-activity-row {
+  display:flex;
+  align-items:center;
+  gap:var(--space-1);
+  min-height:var(--space-5);
+  padding-inline:var(--space-1);
+}
+.assistant-activity-row svg { flex:none; }
+.assistant-activity-status,.assistant-activity-name { min-width:0; overflow-wrap:anywhere; }
+.assistant-activity-target,.assistant-activity-state,.assistant-activity-time { color:var(--text-3); }
+.assistant-activity-state,.assistant-activity-time { flex:none; white-space:nowrap; }
+.assistant-activity-time { min-width:4ch; font-variant-numeric:tabular-nums; text-align:end; margin-inline-start:auto; }
+:is(.assistant-inline-completed,.assistant-trace) > summary {
+  display:flex;
+  align-items:center;
+  gap:var(--space-1);
+  width:fit-content;
+  max-width:100%;
+  min-height:var(--control-height);
+  padding-inline:var(--space-1);
+  border-radius:var(--radius-sm);
+  cursor:pointer;
+  list-style:none;
+}
+:is(.assistant-inline-completed,.assistant-trace) > summary::-webkit-details-marker { display:none; }
+:is(.assistant-inline-completed,.assistant-trace) > summary:hover,
+:is(.assistant-inline-completed,.assistant-trace)[open] > summary { background:var(--surface-2); color:var(--text-1); }
+:is(.assistant-inline-completed,.assistant-trace) > summary svg { flex:none; }
+:is(.assistant-inline-completed,.assistant-trace)[open] > summary svg { rotate:90deg; }
+.assistant-inline-receipts,.assistant-trace-events { display:grid; gap:var(--space-2); margin:0; padding:0; list-style:none; }
+.assistant-inline-receipts,.assistant-inline-failure > :not(.assistant-activity-row) { margin-inline-start:var(--space-5); }
+.assistant-inline-receipts p,.assistant-inline-failure p { margin:0; overflow-wrap:anywhere; }
+.assistant-inline-failure p + p { margin-block-start:var(--space-1); }
+.assistant-inline-failure .assistant-activity-row { color:var(--danger); }
 .assistant-trace-body { margin-block-start:var(--space-2); margin-inline-start:var(--space-2); padding-inline-start:var(--space-3); border-inline-start:1px solid var(--border-1); overflow-wrap:anywhere; }
 .assistant-trace-body p { margin:0; }
 .assistant-trace-body > * + * { margin-block-start:var(--space-3); }
-.assistant-trace-tools,.assistant-trace-events { display:grid; gap:var(--space-2); padding:0; margin:0; list-style:none; }
-.assistant-trace-tool-heading { display:flex; justify-content:space-between; flex-wrap:wrap; gap:0 var(--space-2); }
-.assistant-trace-tool-heading > :first-child,.assistant-trace-events li > span { color:var(--text-1); }
-.assistant-trace-tool-heading > :last-child { white-space:nowrap; }
-.assistant-trace-usage { display:grid; gap:var(--space-1); padding-block-start:var(--space-2); border-block-start:1px solid var(--border-1); }
+.assistant-trace-usage { display:grid; gap:var(--space-1); }
 .assistant-trace-usage > div { display:grid; grid-template-columns:auto minmax(0,1fr); gap:var(--space-2); }
 .assistant-trace-usage dd { display:flex; flex-wrap:wrap; gap:0 var(--space-2); margin:0; color:var(--text-1); font-variant-numeric:tabular-nums; }
-.assistant-trace-technical > :not(summary) { margin-block:var(--space-2); }
-.assistant-trace-events { margin-block-start:var(--space-1); }
 .assistant-trace-events li { display:grid; }
+.assistant-trace-events li > span { color:var(--text-1); }
 .assistant-trace-events small { font:inherit; font-variant-numeric:tabular-nums; }
-.assistant-tool-summary-failure { color:var(--danger); overflow-wrap:anywhere; }
-.assistant-tool-summary-failure p { margin:0; }
-.assistant-tool-summary-failure p + p { margin-block-start:var(--space-1); }
 
 .assistant-reference-search { display:flex; align-items:center; gap:6px; margin:8px 0; padding:0 6px; border:1px solid var(--border-1); border-radius:6px; }
 .assistant-reference-search input { flex:1; min-width:0; min-height:32px; padding:0; border:0; background:transparent; color:var(--text-1); font:inherit; }
@@ -191,3 +217,7 @@
 .assistant-material-use-list button { display:flex; flex-direction:column; align-items:flex-start; width:100%; min-height:44px; height:auto; padding:6px 8px; }
 .assistant-material-use-list small { font-size:12px; color:var(--text-2); }
 .assistant-material-use-list button[aria-pressed="true"] { background:var(--accent-muted); }
+.assistant-inline-history-failure { color:var(--text-2); }
+.assistant-inline-history-details { margin-inline-start:var(--space-5); font-size:var(--font-size-meta); }
+.assistant-inline-history-details > summary { cursor:pointer; color:var(--text-3); }
+.assistant-inline-history-details p { margin:var(--space-1) 0 0; }

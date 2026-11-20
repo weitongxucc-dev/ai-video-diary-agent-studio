@@ -41,7 +41,7 @@ function emptyConversation() {
   expect(empty).toBeVisible();
   expect(empty).toHaveTextContent("输入制作目标或编辑要求。");
   expect(within(history).queryByRole("log")).not.toBeInTheDocument();
-  expect(within(history).queryByText("执行记录")).not.toBeInTheDocument();
+  expect(within(history).queryByText("用量与诊断")).not.toBeInTheDocument();
   return empty;
 }
 
@@ -91,7 +91,7 @@ describe("assistant empty conversation entry context", () => {
     expect(screen.getByText("答复").tagName).toBe("STRONG");
     expect(screen.queryByLabelText("空对话")).not.toBeInTheDocument();
     const history = screen.getByRole("region", { name: "持久对话记录" });
-    const record = within(history).getByText("执行记录").closest("details")!;
+    const record = within(history).getByText("用量与诊断").closest("details")!;
     expect(record).not.toHaveAttribute("open");
     expect(screen.queryByRole("navigation", { name: "当前页面建议入口" })).not.toBeInTheDocument();
     expect(screen.queryByText("点击建议只填入草稿，发送后才处理。")).not.toBeInTheDocument();

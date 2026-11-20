@@ -211,7 +211,9 @@ def test_actual_packaged_extension_node_read_is_before_pi_and_fail_closed(tmp_pa
             "/api/creation-tasks/task-real", "/api/creation-tasks/task-real/execution",
             "/api/creation-tasks/task-real/assistant/edit-capabilities",
             "/api/creation-tasks/task-real/assistant/media-script-capabilities", "/api/media-script-tools/capabilities")]
-    assert events[0] == {"type":"tool_start","tool_id":0,"label":"读取当前任务（发送前）"}
+    assert {key: value for key, value in events[0].items() if key != "at"} == {
+        "type": "tool_start", "tool_id": 0, "label": "读取当前任务（发送前）", "display_target": "当前作品"}
+    assert events[0]["at"].endswith("Z") and events[-1]["at"].endswith("Z")
 
 
 @pytest.mark.parametrize("streaming", [True, False])

@@ -105,7 +105,8 @@ function ScriptSectionReader({ script, expectedVersion, presenterSelection }: {
         </> : null}
     </section>;
 }
-export function ReadonlyScriptsView({ scripts, confirmedScriptId }: {
+export function ReadonlyScriptsView({ scripts, confirmedScriptId, initialScriptId }: {
+    initialScriptId?: string;
     scripts: WorkspaceState["scripts"];
     confirmedScriptId: string | null;
 }) {
@@ -115,7 +116,7 @@ export function ReadonlyScriptsView({ scripts, confirmedScriptId }: {
     const confirmed = scripts.find(script => script.id === confirmedScriptId && script.selection_status === "confirmed");
     if (!confirmed || confirmed.id === latest.id || latest.selection_status !== "draft")
         return <ConfirmedScriptView script={latest}/>;
-    return <Tabs.Root defaultValue="confirmed" className={styles.scriptReview}>
+    return <Tabs.Root defaultValue={initialScriptId === latest.id ? "draft" : "confirmed"} className={styles.scriptReview}>
     <Tabs.List className={styles.reviewTabs} aria-label="文案版本"><Tabs.Tab value="confirmed">当前确认稿</Tabs.Tab><Tabs.Tab value="draft">新草稿</Tabs.Tab></Tabs.List>
     <Tabs.Panel value="confirmed" keepMounted><ConfirmedScriptView script={confirmed}/></Tabs.Panel>
     <Tabs.Panel value="draft" keepMounted><ConfirmedScriptView script={latest}/></Tabs.Panel>

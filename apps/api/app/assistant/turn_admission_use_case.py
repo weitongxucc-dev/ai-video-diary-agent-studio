@@ -5,6 +5,8 @@ CAS, receipts and input transitions remain with the existing durable owner.
 """
 from __future__ import annotations
 
+from app.assistant.projection import public_assistant_text
+
 from dataclasses import dataclass
 import json
 from types import SimpleNamespace
@@ -303,7 +305,7 @@ class TurnAdmissionUseCase:
             if not isinstance(response, dict):
                 raise TurnRejected(500, "已持久化轮次缺少原始结果，未重复执行工具。")
             return (yield RenderReplay(response))
-        return (yield RenderRunningTurn(turn["assistant_text"], provider, model, turn_id, draft_version))
+        return (yield RenderRunningTurn(public_assistant_text(turn["assistant_text"]), provider, model, turn_id, draft_version))
 
     def stop(self, conversation_id, turn_id):
         workspace_id, member_id, _row = yield ReadConversationOwner(conversation_id)

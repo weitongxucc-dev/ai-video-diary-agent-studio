@@ -10,10 +10,11 @@ from fastapi.encoders import jsonable_encoder
 
 from app.assistant import turn_admission_use_case as admission
 from app.assistant import task_turn_use_case as task
+from app.assistant.turn_control import AssistantProcessReleaseError
 from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.creation.native_task_operations import NativeOperationHandler
 from app.assistant.input_delivery import AssistantInputDelivery
-from app.assistant.projection import _safe_business_failure, _safe_compaction_event
+from app.assistant.projection import _safe_compaction_event
 from app.assistant.result_projection import (
     resolve_quality_continuation, resolve_segment_revision, resolve_timeline_restore,
 )
@@ -168,6 +169,11 @@ class TaskTurnHTTPAdapter:
                     result = self._answer(stage, request, on_event, response_model)
                 except HTTPException as exc:
                     stage = operation.throw(admission.TurnRejected(exc.status_code, exc.detail))
+                except AssistantProcessReleaseError as exc:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="停止已登记，但原生执行的退出与资源释放尚未核实；请回读原请求。",
+                    ) from exc
                 except Exception as exc:
                     stage = operation.throw(exc)
                 else:
@@ -187,26 +193,10 @@ class TaskTurnHTTPAdapter:
             else:
                 # SSE persists in its publisher; ordinary JSON requests need
                 # the same safe history without depending on that publisher.
-                safe = None
-                if event.get('type') == 'context_compaction':
-                    safe = _safe_compaction_event(event)
-                elif event.get('type') == 'text_delta':
-                    delta = sanitizer.feed(str(event.get('delta', '')))
-                    if delta:
-                        safe = {'type': 'text_delta', 'delta': delta}
-                elif event.get('type') in {'tool_start', 'tool_end'}:
-                    safe = {key: value for key, value in event.items()
-                            if key in {'type', 'tool_id', 'label', 'ok', 'summary'}}
-                    if isinstance(event.get('failure'), dict):
-                        safe['failure'] = _safe_business_failure(event['failure'])
+                safe = (_safe_compaction_event(event) if event.get('type') == 'context_compaction'
+                        else sanitizer.activity_event(event))
                 if safe is not None:
-                    def redact(value):
-                        if isinstance(value, str):
-                            return self._safe_text(value, stage.workspace_id)
-                        if isinstance(value, dict):
-                            return {key: redact(item) for key, item in value.items()}
-                        return value
-                    self._conversations_for().append_event(stage.turn_id, redact(safe))
+                    self._conversations_for().append_event(stage.turn_id, safe)
 
         native_actor = self._request_actor(request, stage.workspace_id)
         native_binding = {'workspace_id':stage.workspace_id, 'member_id':stage.member_id,

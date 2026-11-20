@@ -5,7 +5,7 @@ import { Tooltip } from "./ui/tooltip";
 import { segmentRevisionStatus, segmentAdoptionReason, editExecutionReadinessMessage } from './creation-task/stage-labels';
 
 import { ConversationMessage } from "./ui/conversation-message";
-import { AssistantTurnExecutionRecord, TurnActivity, hasPrivateExecutionText, publicExecutionText, turnTools, type TurnReadingState } from "./AssistantTurnExecutionRecord";
+import { AssistantTurnExecutionRecord, TurnActivity, TurnToolActivity, hasPrivateExecutionText, publicExecutionText, turnBlocks, type TurnReadingState } from "./AssistantTurnExecutionRecord";
 import { ReferencePicker } from "./ui/reference-picker";
 import type { MaterialUsageContext } from "./ui/material-usage";
 import { ReferenceChips } from "./ui/reference-chips";
@@ -22,7 +22,7 @@ import Link from "next/link";
 import { getAssistantCapabilities, taskMediaJobLabel, taskMediaResourceCheckLabel } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantScriptToolReceipt, ResourceAdmissionReceipt } from "@/lib/types";
 import type { AssistantInputReceipt, AssistantStoryboardRegeneration, AssistantScriptWindowRequest, AssistantResultStage, OpenAssistantResult } from "@/lib/types/assistant";
-import type { CreationTaskEditConfirmResponse } from "@/lib/types/task-edits";
+import { savedAssistantResultLocation } from "./creation-task/assistant-result-location";
 import { completedAudioReplyMatchesReceipt } from "./creation-task/assistant-result-audio";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
 import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal, assistantTurnScriptWindowRequest, assistantScriptWindowReadKey, assistantTurnGoalRefreshState } from "./useAssistantConversation";
@@ -172,15 +172,34 @@ function AssistantText({ text }: { text: string }) {
   return <Button variant="ghost" className="assistant-copy assistant-icon-action" aria-label={label} title={label} onClick={() => void copy()} type="button">{copied ? <Check size={14}/> : <Copy size={14}/>}</Button>;
 }
 
-function TurnContent({ turn, reading, latest }: { turn: AssistantConversationTurn; reading?: ReadingState; latest: boolean }) {
+function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continuation, visibleResultNotes, recoveryToolId, recovery }: {
+  turn: AssistantConversationTurn; blocks?: ReturnType<typeof turnBlocks>; reading?: ReadingState; latest: boolean;
+  continuation?: boolean; visibleResultNotes?: string; recoveryToolId?: number; recovery?: ReactNode;
+}) {
   const goal = turn.result?.kind === "creation_task_adopted" ? assistantTurnGoalRefreshState(turn) : null;
-  if (goal) return <div className="assistant-markdown-wrap">
-    <p>{goalStateLabels[goal.status] ?? "任务状态待核实"}。</p>
-    {goal.waiting_reason && goalReasonLabels[goal.waiting_reason] ? <p>{goalReasonLabels[goal.waiting_reason]}</p> : null}
-    <Link className="assistant-text-action" href={`/tasks/${encodeURIComponent(goal.task_id)}`}>打开这个视频任务</Link>
-  </div>;
-  return <div className="assistant-markdown-wrap" aria-busy={turn.status === "running"}>{turn.assistant_text ? <ConversationMessage className="assistant-markdown" savedOpen={reading?.get(`${turn.id}:message`, latest) ?? latest} onOpenChange={open => reading?.save(`${turn.id}:message`, open)}><ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.assistant_text}</ReactMarkdown></ConversationMessage> : null}
-  </div>;
+  const turnTools = blocks.flatMap(block => block.kind === "tools" ? block.tools : []);
+  const hasRunningTool = turnTools.some(tool => tool.state === "running");
+  const surfacedElsewhere = [goal ? null : turn.assistant_text, visibleResultNotes].filter(Boolean).join("\n");
+  return <>
+    {blocks.map(block => {
+      if (block.kind === "tools") return <TurnToolActivity key={block.key} tools={block.tools} turnTools={turnTools} turn={turn}
+        reading={reading} surfacedElsewhere={surfacedElsewhere} recoveryToolId={recoveryToolId} recovery={recovery}/>;
+      if (goal) return null;
+      const readingKey = `${turn.id}:message${block.key === "text:saved" ? "" : `:${block.key}`}`;
+      return <div key={block.key} className="assistant-markdown-wrap" aria-busy={turn.status === "running"}>
+        <ConversationMessage className="assistant-markdown" savedOpen={reading?.get(readingKey, latest) ?? latest}
+          onOpenChange={open => reading?.save(readingKey, open)}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.text}</ReactMarkdown>
+        </ConversationMessage>
+      </div>;
+    })}
+    {!hasRunningTool ? <TurnActivity turn={turn} continuation={continuation}/> : null}
+    {goal ? <div className="assistant-markdown-wrap">
+      <p>{goalStateLabels[goal.status] ?? "任务状态待核实"}。</p>
+      {goal.waiting_reason && goalReasonLabels[goal.waiting_reason] ? <p>{goalReasonLabels[goal.waiting_reason]}</p> : null}
+      <Link className="assistant-text-action" href={`/tasks/${encodeURIComponent(goal.task_id)}`}>打开这个视频任务</Link>
+    </div> : null}
+  </>;
 }
 
 export function AssistantConversationHeaderActions({ state, busy, onConversationChange, onInput, children, legacyHistory }: {
@@ -275,37 +294,8 @@ const resultStageLabels: Record<AssistantResultStage, string> = {
 };
 
 function savedResultStage(turn: AssistantConversationTurn, taskId: string): AssistantResultStage | null {
-  const result = assistantTaskTurnResult(turn);
-  const response = result?.response;
-  if (!response || canOpenTurnProposal(turn) || assistantTurnHasUnknownRequest(turn, taskId)) return null;
-  const window = assistantTurnScriptWindowRequest(turn, taskId);
-  if (window?.script_id && (window.status === "saved" || window.status === "confirmed")) return "script";
-  const draft = response.script_draft;
-  if (draft?.task_id === taskId && draft.id && draft.updated_at) return "script";
-
-  const revision = response.segment_revision?.revision;
-  if (revision?.task_id === taskId && revision.status === "succeeded" && revision.adoption.status === "current"
-    && revision.adoption.current_timeline_version_id) return "narration";
-
-  const edit = response.edit_request;
-  if (edit?.task_id === taskId && edit.phase === "apply" && edit.status === "recorded") {
-    const saved = edit.result as CreationTaskEditConfirmResponse | null | undefined;
-    if (saved?.operation?.task_id === taskId && saved.operation.status === "applied" && saved.operation.result_version_id) {
-      // Saved timeline snapshots also carry the existing narration. The operation
-      // identifies what this turn changed; older receipts may omit its type.
-      if (saved.operation.operation_type === "RegenerateNarrationSegment"
-        || !saved.operation.operation_type && saved.narration?.task.id === taskId && saved.narration.audio_reference) return "narration";
-      return "montage";
-    }
-  }
-
-  const restore = response.timeline_restore?.receipt;
-  if (restore?.task_id === taskId && restore.status === "applied" && restore.result_version_id) return "montage";
-  const storyboard = response.storyboard_regeneration;
-  if (storyboard?.kind === "storyboard_regeneration_receipt" && storyboard.receipt.task_id === taskId
-    && storyboard.receipt.status === "succeeded" && storyboard.receipt.result?.timeline_version_id) return "montage";
-  const continuation = result?.continuation;
-  return continuation?.task_id === taskId && continuation.status === "confirmed" && continuation.result_version_id ? "montage" : null;
+  if (canOpenTurnProposal(turn) || assistantTurnHasUnknownRequest(turn, taskId)) return null;
+  return savedAssistantResultLocation(turn, taskId)?.stage ?? null;
 }
 
 function storyboardRegenerationSummary(outcome: AssistantStoryboardRegeneration | null | undefined) {
@@ -477,33 +467,40 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
     || ["failed", "interrupted", "rejected"].includes(outcomeStatus ?? "");
   const resultNeedsAttention = otherResultNeedsAttention || readinessBlocked;
   const completedAudioReply = !otherResultNeedsAttention && !businessSummary && completedAudioReplyMatchesReceipt(turn);
+  const resultSummaryRepeated = Boolean(resultSummary && turn.assistant_text.includes(resultSummary) && !resultNeedsAttention);
   const summaryInHeading = Boolean(taskResult && resultSummary);
   const savedStage = taskScopeId && !windowInputMismatch ? savedResultStage(turn, taskScopeId) : null;
   const resultStage = onOpenResultStage ? savedStage : null;
-  const tools = turnTools(turn);
-  const lastFailure = turn.status !== "running" && !resultNeedsAttention && !outputRecovered && !productionRecovered
-    ? tools.at(-1)?.failure : undefined;
-  const visibleFailure = publicExecutionText(lastFailure?.reason);
-  const failureImpact = publicExecutionText(lastFailure?.impact);
-  const repairAction = publicExecutionText(lastFailure?.repair_action);
-  const showFailure = visibleFailure && !turn.assistant_text.includes(visibleFailure) && !resultSummary?.includes(visibleFailure);
+  const blocks = turnBlocks(turn);
+  const tools = blocks.flatMap(block => block.kind === "tools" ? block.tools : []);
+  const lastTool = tools.at(-1);
+  const recoveryToolId = lastTool && (lastTool.state === "failed" || lastTool.state === "unreturned")
+    && !outputRecovered && !productionRecovered ? lastTool.id : undefined;
   const model = publicExecutionText(taskResult?.response?.model ?? (typeof result?.model === "string" ? result.model : null));
   const canContinue = (turn.status === "failed" || turn.status === "stopped")
     && Boolean(turn.user_message.trim()) && !waitingForOriginal && !unknownRequest && !savedStage && !productionRecovered && !outputRecovered;
   const hasReplyActions = turn.status !== "running" && Boolean(turn.assistant_text.trim());
+  const queryResult = unknownRequest || waitingForOriginal && (turn.status !== "running" || refreshPaused)
+    ? <Button variant="ghost" type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</Button> : null;
+  const continueEditing = canContinue ? <Button variant="ghost" type="button" disabled={Boolean(continueReason)}
+    title={continueReason ?? "只带入输入框，供你修改。"} onClick={() => onContinue(turn.user_message)}>继续编辑本条要求</Button> : null;
+  const recovery = recoveryToolId !== undefined ? queryResult ?? continueEditing : null;
+  const visibleResultNotes = [
+    resultSummary, segment?.failure?.reason, segment?.failure?.repair_action, readinessMessage,
+    restore?.failure?.reason, restore?.receipt?.failure?.reason,
+    restore?.failure?.repair_action, restore?.receipt?.failure?.repair_action,
+    storyboardFailure, storyboard && storyboard.kind !== "storyboard_regeneration_receipt" ? storyboard.failure.repair_action : null,
+    scriptWindow?.failure?.reason, scriptWindow?.failure?.impact, scriptWindow?.failure?.repair_action,
+    job?.status !== "cancelled" ? job?.failure_reason : null, job?.repair_action,
+  ].filter(Boolean).join("\n");
   return <article className="assistant-persisted-turn" data-turn-status={turn.status} data-turn-id={turn.id}>
     {turn.user_message.trim() ? <ConversationMessage className="assistant-user-message" savedOpen={reading?.get(`${turn.id}:user`, false)} onOpenChange={open => reading?.save(`${turn.id}:user`, open)}>{turn.user_message}</ConversationMessage> : null}
     {businessContinuation && turn.status !== "running" ? <p className="assistant-stream-status">继续完成原要求</p> : null}
-    <TurnActivity turn={turn} tools={tools} continuation={businessContinuation}/>
     {inputReceipts.length ? <div className="assistant-turn-inputs" aria-label="本轮补充要求">{inputReceipts.map(item => <InputReceipt key={item.input_id} item={item} reading={reading}/>)}</div> : null}
-    <TurnContent turn={turn} reading={reading} latest={latest} />
-    {showFailure ? <div className="assistant-tool-summary-failure" role="alert">
-      <p>{visibleFailure}</p>
-      {failureImpact && failureImpact !== visibleFailure ? <p>{failureImpact}</p> : null}
-      {repairAction && repairAction !== visibleFailure && repairAction !== failureImpact ? <p>{repairAction}</p> : null}
-    </div> : null}
+    <TurnContent turn={turn} blocks={blocks} reading={reading} latest={latest} continuation={businessContinuation}
+      visibleResultNotes={visibleResultNotes} recoveryToolId={recoveryToolId} recovery={recovery}/>
     {windowInputMismatch ? <p role="alert">窗口回执与本轮任务或输入不符，未更新本轮结果。</p> : null}
-    {resultSummary && !completedAudioReply ? <TurnResult summary={resultSummary} summaryInHeading={summaryInHeading} reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult) && (resultNeedsAttention || !turn.assistant_text.trim())}>
+    {resultSummary && !completedAudioReply && !resultSummaryRepeated ? <TurnResult summary={resultSummary} summaryInHeading={summaryInHeading} reading={reading} readingKey={`${turn.id}:result`} defaultOpen={Boolean(taskResult) && (resultNeedsAttention || !turn.assistant_text.trim())}>
       {toolSummary && toolSummary !== resultSummary ? <p>{toolSummary}</p> : null}
       {storyboardSummary && storyboardSummary !== resultSummary ? <p>{storyboardSummary}</p> : null}
       {segment?.failure ? <div><AssistantFailureMessage reading={reading} readingKey={`${turn.id}:segment:diagnostic`} message={segment.failure.reason}/>{segment.failure.repair_action ? <p>{segment.failure.repair_action}</p> : null}</div> : null}
@@ -530,7 +527,7 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
     <div className="assistant-result-actions">
       {resultStage ? <Button variant="ghost" className="assistant-text-action" type="button" onClick={() => setLocationNotice(onOpenResultStage?.(resultStage, turn) ?? null)}>{resultStageLabels[resultStage]}</Button> : null}
       {onOpenEditProposal && canOpenTurnProposal(turn) ? <Button variant="ghost" type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</Button> : null}
-      {unknownRequest || waitingForOriginal && (turn.status !== "running" || refreshPaused) ? <Button variant="ghost" type="button" disabled={readingResult} onClick={() => onReadResult(turn)}>{readingResult ? "正在查询…" : "查询本轮结果"}</Button> : null}
+      {recoveryToolId === undefined ? queryResult : null}
     </div>
     {locationNotice && resultStage ? <p className="assistant-stream-status" role="status">{locationNotice}</p> : null}
     {onOpenCreationRequest && turn.status !== "running" && result?.kind === "creation_request" && typeof result.creation_request_id === "string" ? <Button variant="ghost" className="assistant-text-action" type="button" disabled={Boolean(continueReason)} onClick={() => onOpenCreationRequest(turn)}>查看这次创作目标</Button> : null}
@@ -539,10 +536,9 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
       : businessContinuation ? "接续未完成；原要求和实际结果保留在记录中。" : "本轮未完成；本条要求保留在记录中。"}</p> : null}
     {turn.status === "stopped" ? <p role="status">本轮已停止；先前的业务动作不会因此撤销。</p> : null}
     {turn.sequence > 0 || canContinue || hasReplyActions ? <footer className="assistant-turn-footer">
-      {turn.sequence > 0 ? <AssistantTurnExecutionRecord turn={turn} tools={tools} model={model}
-        surfacedFailure={showFailure ? lastFailure : undefined} reading={reading}/> : null}
+      {turn.sequence > 0 ? <AssistantTurnExecutionRecord turn={turn} hasPublicTools={tools.length > 0} model={model} reading={reading}/> : null}
       <div className="assistant-turn-actions">
-        {canContinue ? <Button variant="ghost" className="assistant-icon-action" aria-label="继续编辑本条要求" type="button"
+        {canContinue && recoveryToolId === undefined ? <Button variant="ghost" className="assistant-icon-action" aria-label="继续编辑本条要求" type="button"
           disabled={Boolean(continueReason)} title={continueReason ?? "继续编辑本条要求；只带入输入框。"} onClick={() => onContinue(turn.user_message)}><Pencil size={14}/></Button> : null}
         {hasReplyActions ? <ReplyActions turn={turn} onTransferReply={turn.status === "completed" ? onTransferReply : undefined}
           onCreatePlanFromReply={turn.status === "completed" ? onCreatePlanFromReply : undefined} transferDraftState={transferDraftState}/> : null}
@@ -735,11 +731,14 @@ export function AssistantConversationPanel({
   useLayoutEffect(() => {
     const id = conversation?.id;
     const node = historyRef.current;
-    if (!node || !id || state.loading || restoredHistoryId.current !== id || !followBottom.current) return;
+    if (!node || !id || state.loading || restoredHistoryId.current !== id) return;
     const frame = window.requestAnimationFrame(() => {
-      if (node.dataset.conversationId !== id || restoredHistoryId.current !== id || !followBottom.current) return;
-      node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
-      state.historyScrollPositions?.current.set(id, node.scrollTop);
+      if (node.dataset.conversationId !== id || restoredHistoryId.current !== id) return;
+      if (followBottom.current) {
+        node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
+        state.historyScrollPositions?.current.set(id, node.scrollTop);
+      }
+      setShowJumpToLatest(!isNearBottom(node));
     });
     return () => window.cancelAnimationFrame(frame);
   }, [conversation?.id, state.loading, historyContent, state.historyScrollPositions]);
@@ -864,6 +863,19 @@ export function AssistantConversationPanel({
       onRead={() => void readTurnResult(goalProgress.root)} readingResult={readingResultTurn === goalProgress.root.id}/> : null}
     <div className="assistant-message-scroller">
     <div ref={historyRef} className="assistant-conversation-history" role="region" tabIndex={0} aria-label="持久对话记录" data-conversation-id={conversation?.id}
+      onClickCapture={event => {
+        if (!conversation || !(event.target instanceof Element)) return;
+        const summary = event.target.closest("details > summary");
+        const message = event.target.closest(".assistant-message > button[aria-expanded=false]");
+        if ((!summary || summary.closest("details")?.open) && !message) return;
+        const node = event.currentTarget;
+        const id = conversation.id;
+        followBottom.current = false;
+        state.historyFollowBottom?.current.set(id, false);
+        window.requestAnimationFrame(() => {
+          if (historyRef.current === node && node.dataset.conversationId === id) setShowJumpToLatest(!isNearBottom(node));
+        });
+      }}
       onScroll={event => {
         if (!conversation) return;
         const node = event.currentTarget;
@@ -878,12 +890,12 @@ export function AssistantConversationPanel({
           className="assistant-creation-context">
           <summary>创建要求与制作记录</summary>
           {context.turns.map(turn => {
-            const tools = turnTools(turn);
+            const blocks = turnBlocks(turn);
             return <article key={turn.id} className="assistant-persisted-turn" data-turn-status={turn.status} data-turn-id={turn.id}>
               {turn.user_message ? <ConversationMessage className="assistant-user-message" savedOpen={reading.get(`${turn.id}:user`, false)}
                 onOpenChange={open => reading.save(`${turn.id}:user`, open)}>{turn.user_message}</ConversationMessage> : null}
-              <TurnActivity turn={turn} tools={tools}/><TurnContent turn={turn} reading={reading} latest={false}/>
-              <footer className="assistant-turn-footer"><AssistantTurnExecutionRecord turn={turn} tools={tools} model={null} reading={reading}/></footer>
+              <TurnContent turn={turn} blocks={blocks} reading={reading} latest={false}/>
+              <footer className="assistant-turn-footer"><AssistantTurnExecutionRecord turn={turn} hasPublicTools={blocks.some(block => block.kind === "tools")} model={null} reading={reading}/></footer>
             </article>;
           })}
         </ReadingDetails>)}

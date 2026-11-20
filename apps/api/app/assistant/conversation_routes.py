@@ -28,6 +28,7 @@ from app.schemas import (
     CreationPlanPreviewResponse,
 )
 from app.assistant.trace import project_turn_trace, project_usage_ledger, safe_runtime_trace_events
+from app.assistant.projection import public_history_turn
 
 
 class ConversationHTTPAdapter:
@@ -38,6 +39,7 @@ class ConversationHTTPAdapter:
                  validate_scope,
                  owned_conversation,
                  clean_text,
+                 clean_text_factory=None,
                  validate_reference,
                  recover_request,
                  require_actor,
@@ -53,6 +55,7 @@ class ConversationHTTPAdapter:
         self._validate_scope = validate_scope
         self._owned_conversation = owned_conversation
         self._clean_text = clean_text
+        self._clean_text_factory = clean_text_factory
         self._validate_reference = validate_reference
         self._recover_request = recover_request
         self._require_actor = require_actor
@@ -89,6 +92,10 @@ class ConversationHTTPAdapter:
             saved = self._recover_request(request, turn)
             if saved is not None:
                 turn['result'] = {**turn['result'], 'kind': 'creation_request', 'creation_request_id': saved['id']}
+        redact = (self._clean_text_factory(row['workspace_id'])
+            if self._clean_text_factory is not None else
+            lambda value: self._clean_text(value, row['workspace_id']))
+        turns = [public_history_turn(turn, redact) for turn in turns]
         return {**row, 'turns': turns}
 
     def current(self, request: Request, payload: AssistantConversationCurrentRequest):
