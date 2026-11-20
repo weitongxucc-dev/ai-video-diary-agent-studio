@@ -707,6 +707,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     let persistedTurnId = localTurnId;
     const navigation = navigationRevision.current;
     return (event: AssistantStreamEvent) => {
+      if (event.type === "workspace_saved") return;
       // The stream receipt belongs to the submitted turn even after navigation
       // has moved the visible hook to another scope. Record its durable identity
       // before deciding whether this hook should render the event.
@@ -742,7 +743,8 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
         turns[index] = {
           ...turn,
           events,
-          assistant_text: event.type === "text_delta" ? turn.assistant_text + event.delta : turn.assistant_text,
+          assistant_text: event.type === "text_delta" ? turn.assistant_text + event.delta
+            : event.type === "assistant_text" ? turn.assistant_text + event.text : turn.assistant_text,
           updated_at: new Date().toISOString(),
         };
       }
