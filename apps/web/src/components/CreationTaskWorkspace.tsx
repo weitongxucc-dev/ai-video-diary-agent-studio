@@ -1763,6 +1763,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const currentAudioResultFocus = audioResultFocus?.versionId === task.current_timeline_version_id ? audioResultFocus : null;
   const [stageDetailsRequest, setStageDetailsRequest] = useState<object | null>(null);
 
+  const [scriptResultFocus, setScriptResultFocus] = useState<{ id: string; request: number } | null>(null);
+
   function openAssistantResult(stage: Parameters<OpenAssistantResult>[0], turn: AssistantConversationTurn) {
     const current = currentWorkspace.current;
     const location = savedAssistantResultLocation(turn, current.task.id);
@@ -1770,10 +1772,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       return "请回到这次操作所属的作品查看结果。";
     }
     if (location.stage === "script") {
-      const shown = current.scripts[0];
-      if (shown?.id !== location.scriptId || location.updatedAt && shown.updated_at !== location.updatedAt) {
+      const editable = current.task.stage === "script" || current.task.can_revise_script;
+      const shown = current.scripts.find(script => script.id === location.scriptId);
+      const accessible = shown && (shown.id === current.scripts[0]?.id || !editable && shown.id === current.task.confirmed_script_id);
+      if (!accessible || location.updatedAt && shown.updated_at.replace(/\+00:00$/, "Z") !== location.updatedAt.replace(/\+00:00$/, "Z")) {
         return "这条回复对应较早的文案版本。可在本轮回执中核对当时的修改。";
       }
+      setScriptResultFocus(previous => ({ id: shown.id, request: (previous?.request ?? 0) + 1 }));
       openEditingView("script");
       return;
     }
@@ -1943,7 +1948,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
             </section> : null}
         {activeView === "script" && (task.stage === "script" || task.can_revise_script) && latestScript &&
           !retainedScript && (!retainedCheckKey || retainedCheck?.key === retainedCheckKey && !retainedCheck.error) ? <ScriptEditor taskId={task.id} auditionVoice={scriptAudition} busy={busy !== null} key={windowScript ? `${task.id}:${latestScript.id}` : `${task.id}:${latestScript.id}:${latestScript.updated_at}`} onWindowSaved={async () => { await refresh(true); }} onConfirm={(draft) => run("script-confirm", () => confirmCreationTaskScript(task.id, draft.id, { title: draft.title, sections: draft.sections, expected_updated_at: draft.updated_at, edit_mode: "replace_all" }), "文案已确认，可以生成配音。") } repairing={task.stage_status === "failed" && latestScript.selection_status === "confirmed"} script={latestScript} /> : null}
-        {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ReadonlyScriptsView scripts={workspace.scripts} confirmedScriptId={task.confirmed_script_id} /> : null}
+        {activeView === "script" && task.stage !== "script" && !task.can_revise_script && latestScript ? <ReadonlyScriptsView key={scriptResultFocus?.request} initialScriptId={scriptResultFocus?.id} scripts={workspace.scripts} confirmedScriptId={task.confirmed_script_id} /> : null}
 
         {activeView === "script" && latestScript?.selection_status === "confirmed" ? <details className={styles.runDetails}><summary>保存到文案库</summary><ScriptLibrarySave key={latestScript.id} script={latestScript} onReloadSource={async () => { await refresh(true); }} /></details> : null}
 
