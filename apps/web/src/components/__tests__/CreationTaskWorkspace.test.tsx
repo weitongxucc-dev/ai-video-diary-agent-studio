@@ -1193,13 +1193,10 @@ describe("CreationTaskWorkspace", () => {
     expect(stage).toBeVisible();
     expect(stage).toHaveTextContent("连续制作，已排队");
     await waitFor(() => expect(input).toHaveFocus());
-    const record = screen.getByText("执行记录").closest("details")!;
-    expect(record).not.toHaveAttribute("open");
-    await clickAndSettle(within(record).getByText("执行记录"));
-    const operation = within(await within(record).findByRole("list", { name: "操作" })).getByRole("listitem");
-    expect(within(operation).getByText("提交连续制作")).toBeVisible();
-    expect(within(operation).getByText("已返回")).toBeVisible();
-    expect(within(operation).getByText("制作请求已返回，当前作业已排队。")).toBeVisible();
+    const activity = screen.getByText("提交连续制作").closest("details")!;
+    expect(activity).not.toHaveAttribute("open");
+    await clickAndSettle(activity.querySelector("summary")!);
+    expect(within(activity).getByText("制作请求已返回，当前作业已排队。")).toBeVisible();
   });
 
   it("restores task dialogue from persisted history after reopening", async () => {

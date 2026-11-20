@@ -435,7 +435,7 @@ describe("HomeCommandComposer", () => {
     const input = await readyInput("素材对话");
     const history = screen.getByRole("region", { name: "持久对话记录" });
     expect(within(history).getByLabelText("空对话")).toBeVisible();
-    expect(within(history).queryByText("执行记录")).not.toBeInTheDocument();
+    expect(within(history).queryByText("用量与诊断")).not.toBeInTheDocument();
     expect(input).toHaveValue("");
     expect(screen.queryByRole("button", { name: "素材库分析情况怎样？" })).not.toBeInTheDocument();
     fireEvent.change(input, { target: { value: "素材库分析情况怎样？" } });
@@ -613,7 +613,7 @@ describe("HomeCommandComposer", () => {
     const result = new Promise(resolve => { resolveTurn = resolve; });
     mocks.ask.mockImplementation((_command: string, _conversation: string, onEvent: (event: unknown) => void) => {
       emitDelta = onEvent;
-      onEvent({ type: "text_delta", delta: "已读到当前" });
+      onEvent({ type: "text_delta", delta: "我先查看工作区。" });
       onEvent({ type: "tool_start", tool_id: 1, label: "读取当前工作区" });
       onEvent({ type: "tool_end", tool_id: 1, label: "读取当前工作区", ok: true, summary: "已读取 1 项任务摘要。" });
       return result;
@@ -629,28 +629,26 @@ describe("HomeCommandComposer", () => {
     expect(mocks.ask).not.toHaveBeenCalled();
     fireEvent.change(input, { target: { value: "介绍产品" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(await screen.findByText("已读到当前", { exact: false })).toBeInTheDocument();
+    expect(await screen.findByText("我先查看工作区。", { exact: true })).toBeInTheDocument();
     expect(mocks.ask).toHaveBeenCalledWith("介绍产品", expect.any(String), expect.any(Function));
     await act(async () => {
-      emitDelta({ type: "text_delta", delta: "制作条件。" });
-      resolveTurn({ reply: "已读到当前制作条件。", provider: "minimax", model: "test", plan_preview: null });
+      emitDelta({ type: "text_delta", delta: "已读到当前制作条件。" });
+      resolveTurn({ reply: "我先查看工作区。已读到当前制作条件。", provider: "minimax", model: "test", plan_preview: null });
     });
     const finalBody = await screen.findByText("已读到当前制作条件。", { exact: true });
     await waitFor(() => expect(input).toHaveFocus());
     const article = finalBody.closest("article")!;
-    const record = within(article).getByText("执行记录").closest("details")!;
-    expect(finalBody.compareDocumentPosition(record) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(record).not.toHaveAttribute("open");
-    expect(within(record).queryByText("已读取 1 项任务摘要。")).not.toBeInTheDocument();
+    const activity = within(article).getByText("读取当前工作区").closest("details")!;
+    const diagnostics = within(article).getByText("用量与诊断").closest("details")!;
+    expect(activity.compareDocumentPosition(finalBody) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(activity).not.toHaveAttribute("open");
+    expect(diagnostics).not.toHaveAttribute("open");
     expect(mocks.readTrace).not.toHaveBeenCalled();
-
-    fireEvent.click(record.querySelector("summary")!);
-    const tools = await within(record).findByRole("list", { name: "操作" });
-    expect(within(tools).getByText("读取当前工作区").parentElement).toHaveTextContent("已返回");
-    expect(within(tools).getByText("已读取 1 项任务摘要。")).toBeVisible();
+    fireEvent.click(activity.querySelector("summary")!);
+    expect(await within(activity).findByText("已读取 1 项任务摘要。")).toBeVisible();
     expect(mocks.readTrace).not.toHaveBeenCalled();
-    fireEvent.click(within(record).getByText("用量与技术详情"));
-    expect(await within(record).findByLabelText("本轮用量")).toBeVisible();
+    fireEvent.click(diagnostics.querySelector("summary")!);
+    expect(await within(diagnostics).findByLabelText("本轮用量")).toBeVisible();
     const conversationId = mocks.ask.mock.calls[0][1];
     const turnId = mocks.saved.get(conversationId)!.turns[0].id;
     expect(mocks.readTrace).toHaveBeenCalledExactlyOnceWith(turnId);
