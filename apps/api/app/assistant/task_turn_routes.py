@@ -5,6 +5,8 @@ Only explicit owner/access ports are assembled by the application host.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 
@@ -203,20 +205,24 @@ class TaskTurnHTTPAdapter:
             'task_id':stage.task_id, 'conversation_id':stage.conversation_id,
             'turn_id':stage.turn_id, 'input_id':None, 'task_version':stage.task_version}
         native_handler = self._native_handler(native_actor, native_binding) if native_actor is not None else None
-        return self._run_task(self._settings_for(stage.workspace_id),
-            workspace_id=stage.workspace_id,
-            local_member_token=self._local_token(request) or None,
-            caller_user_id=stage.caller_user_id if not stage.local_diagnostic else None,
-            task_id=stage.task_id, conversation_id=stage.conversation_id,
-            message=stage.message, stage=stage.stage, selected_refs=stage.selected_refs,
-            playhead_ms=stage.playhead_ms,
-            authorization=request.headers.get('authorization'), cookie=request.headers.get('cookie'),
-            on_event=record_event, turn_id=stage.turn_id,
-            native_handler=native_handler, source_binding=native_binding,
-            selected_references=self.frozen_references(request, stage.conversation_id, stage.turn_id),
-            input_handler=self.input_delivery(request, stage.conversation_id, stage.turn_id),
-            profile_reference=stage.profile_reference, knowledge_reference=stage.knowledge_reference,
-            task_version=stage.task_version, material_selection=stage.material_selection)
+        listening = (request.app.state.workspace_save_notifications.listen(
+            stage.workspace_id, stage.member_id, stage.task_id, stage.turn_id, on_event)
+            if on_event is not None else nullcontext())
+        with listening:
+            return self._run_task(self._settings_for(stage.workspace_id),
+                workspace_id=stage.workspace_id,
+                local_member_token=self._local_token(request) or None,
+                caller_user_id=stage.caller_user_id if not stage.local_diagnostic else None,
+                task_id=stage.task_id, conversation_id=stage.conversation_id,
+                message=stage.message, stage=stage.stage, selected_refs=stage.selected_refs,
+                playhead_ms=stage.playhead_ms,
+                authorization=request.headers.get('authorization'), cookie=request.headers.get('cookie'),
+                on_event=record_event, turn_id=stage.turn_id,
+                native_handler=native_handler, source_binding=native_binding,
+                selected_references=self.frozen_references(request, stage.conversation_id, stage.turn_id),
+                input_handler=self.input_delivery(request, stage.conversation_id, stage.turn_id),
+                profile_reference=stage.profile_reference, knowledge_reference=stage.knowledge_reference,
+                task_version=stage.task_version, material_selection=stage.material_selection)
 
     def _answer(self, stage, request, on_event, response_model):
         if isinstance(stage, admission.ReadWorkspace):

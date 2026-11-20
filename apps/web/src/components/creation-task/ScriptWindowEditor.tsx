@@ -12,6 +12,10 @@ import { useScriptWindowRequestRecovery } from "./script-window-request-recovery
 import styles from "../CreationTaskWorkspace.module.css";
 
 const WINDOW_LIMIT = 20;
+
+function sameScriptRevision(left?: string, right?: string) {
+    return left?.replace(/\+00:00$/, "Z") === right?.replace(/\+00:00$/, "Z");
+}
 type Source = { reference_id: string; title: string };
 type Edit = { version: string; after: number; sections: CreationTaskScriptSection[] };
 type Append = { anchor: string | null; version: string; after: number; sections: CreationTaskScriptSection[] };
@@ -223,22 +227,40 @@ function WindowEditorBody({ taskId, script, auditionVoice, onSaved }: WindowEdit
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [readError, setReadError] = useState<string | null>(null);
-    const [conflict, setConflict] = useState(false);
+    const [readConflict, setConflict] = useState(false);
     const [notice, setNotice] = useState<string | null>(null);
     const [confirmed, setConfirmed] = useState<CreationTaskScriptConfirmed | null>(null);
     const readRevision = useRef(0);
     const active = useRef(true);
     const currentVersion = useRef(version);
+    const workspaceVersion = useRef(script.updated_at);
+    const workspaceReadVersion = useRef<string | undefined>(undefined);
     const { sources, error: sourceError } = useSources(taskId, script.id);
     const after = cursors[cursors.length - 1];
     useEffect(() => { active.current = true; return () => { active.current = false; readRevision.current += 1; }; }, []);
     useEffect(() => {
+        const previous = workspaceVersion.current;
+        workspaceVersion.current = script.updated_at;
+        if (sameScriptRevision(previous, script.updated_at) || sameScriptRevision(currentVersion.current, script.updated_at)) return;
+        readRevision.current += 1;
+        workspaceReadVersion.current = script.updated_at;
+        setReadAttempt(value => value + 1);
+    }, [script.updated_at]);
+    useEffect(() => {
         const revision = ++readRevision.current;
-        setReading(true);
-        setPage(null);
+        const savedVersion = workspaceReadVersion.current;
+        // Keep the current page and DOM mounted during a saved-version read.
+        if (!savedVersion) {
+            setReading(true);
+            setPage(null);
+        }
         setReadError(null);
-        void getCreationTaskScriptSections(taskId, script.id, { after_ordinal: after, expected_updated_at: currentVersion.current }).then(value => {
+        void getCreationTaskScriptSections(taskId, script.id, { after_ordinal: after,
+            expected_updated_at: savedVersion ?? currentVersion.current }).then(value => {
             if (!active.current || revision !== readRevision.current) return;
+            if (savedVersion && (value.task_id !== taskId || value.script_id !== script.id
+                || !sameScriptRevision(value.updated_at, savedVersion))) throw new Error("保存版本的文案窗口未能核实。");
+            workspaceReadVersion.current = undefined;
             currentVersion.current = value.updated_at;
             setPage(value);
             setVersion(value.updated_at);
@@ -251,6 +273,8 @@ function WindowEditorBody({ taskId, script, auditionVoice, onSaved }: WindowEdit
     }, [taskId, script.id, after, readAttempt]);
     const sections = form.edit?.sections ?? page?.items.map(item => item.section) ?? [];
     const dirty = form.edit !== null;
+    const draftVersion = form.edit?.version ?? form.append?.version;
+    const conflict = readConflict || (draftVersion !== undefined && !sameScriptRevision(draftVersion, version));
     const locked = saving || !recovery.ready || recovery.pending !== null || confirmed !== null;
     const canNavigate = !reading && !locked && !dirty && form.append === null && !conflict;
     async function settleSaved(receipt: CreationTaskScriptWindowSaved) {
@@ -261,6 +285,7 @@ function WindowEditorBody({ taskId, script, auditionVoice, onSaved }: WindowEdit
         setPage(null);
         setForm({ edit: null, append: null });
         readRevision.current += 1;
+        workspaceReadVersion.current = undefined;
         currentVersion.current = receipt.updated_at;
         setVersion(receipt.updated_at);
         setNotice(`已保存窗口，当前共 ${receipt.total_count} 段；尚未采用为完整文案。`);
@@ -277,6 +302,7 @@ function WindowEditorBody({ taskId, script, auditionVoice, onSaved }: WindowEdit
         setForm({ edit: null, append: null });
         readRevision.current += 1;
         setReading(false);
+        workspaceReadVersion.current = undefined;
         currentVersion.current = receipt.updated_at;
         setVersion(receipt.updated_at);
         setConfirmed(receipt);
@@ -328,6 +354,7 @@ function WindowEditorBody({ taskId, script, auditionVoice, onSaved }: WindowEdit
     }
     function restart() {
         setForm({ edit: null, append: null });
+        workspaceReadVersion.current = undefined;
         currentVersion.current = undefined;
         setVersion(undefined);
         setCursors([0]);
@@ -365,7 +392,7 @@ function WindowEditorBody({ taskId, script, auditionVoice, onSaved }: WindowEdit
             setNotice("核查未通过，已保存的草稿可以继续编辑。");
         }}/></> : null}
         {conflict && recovery.ready && !recovery.pending ? <Button variant="outline" onClick={restart}>放弃本页修改并读取最新版本</Button> : null}
-        {!page && !reading && !conflict ? <Button variant="outline" onClick={() => { setError(null); setReadAttempt(value => value + 1); }}>重试读取窗口</Button> : null}
+        {(!page || readError) && !reading && !conflict ? <Button variant="outline" onClick={() => { setError(null); setReadAttempt(value => value + 1); }}>重试读取窗口</Button> : null}
         <div className={styles.scriptSections}>{sections.map((section, index) => <div key={section.id}>
             <SectionFields section={section} ordinal={page?.items[index]?.ordinal ?? after + index + 1} disabled={locked || reading || form.append !== null} sources={sources} onChange={updateSection}/>
             <Button variant="outline" disabled={!canNavigate} onClick={() => setForm(current => ({ ...current, append: { anchor: section.id, version: currentVersion.current!, after, sections: [newSection()] } }))}>在第 {page?.items[index]?.ordinal ?? index + 1} 段后插入</Button>

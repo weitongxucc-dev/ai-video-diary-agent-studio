@@ -6,6 +6,7 @@ from app.assistant.execution_binding import AssistantExecutionBinding, Execution
 from app.assistant import home_plan_turn_use_case as home_plan
 from app.assistant.stream_response import AssistantStreamTransport
 from app.assistant.task_turn_routes import TaskTurnHTTPAdapter, build_task_turn_router
+from app.assistant.workspace_save_notifications import WorkspaceSaveNotifications
 from app.assistant.conversation_routes import ConversationHTTPAdapter, build_conversation_router
 from app.materials.library_routes import MaterialLibraryHTTPAdapter, build_material_library_router
 from app.materials.profile_feedback import ProfileCandidateFeedbackReader
@@ -389,6 +390,7 @@ def _device_operation_budget(name):
         return None
 
 app = FastAPI(title="AI视频日记 Agent Studio API")
+app.state.workspace_save_notifications = WorkspaceSaveNotifications()
 logger = logging.getLogger(__name__)
 app.state.creation_permit_client = None
 app.state.auth_http_client = None

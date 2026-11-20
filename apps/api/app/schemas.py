@@ -3359,13 +3359,20 @@ class MaterialAssistantTurnResponse(WorkspaceAssistantPlanTurnResponse):
 class AssistantStreamEvent(BaseModel):
     """UI-safe projection of Pi text/tool events and the existing final response."""
 
-    type: Literal["turn_started", "turn_status", "text_delta", "tool_start", "tool_end", "result", "error"]
+    type: Literal[
+        "turn_started", "turn_status", "agent_start", "agent_end",
+        "text_delta", "assistant_text", "tool_start", "tool_progress", "tool_end",
+        "confirmation_wait", "unknown", "workspace_saved", "result", "error"
+    ]
     turn_id: UUID | None = None
     turn_state: Literal["running", "completed", "failed", "stopped"] | None = None
     draft_version: int | None = Field(default=None, ge=0)
     delta: str | None = None
+    text: str | None = None
+    progress: float | None = Field(default=None, ge=0, le=1)
     tool_id: int | None = None
     label: str | None = None
+    activity_label: str | None = None
     display_target: str | None = Field(default=None, max_length=64)
     at: str | None = None
     ok: bool | None = None
@@ -3373,7 +3380,9 @@ class AssistantStreamEvent(BaseModel):
     failure: dict[str, str | int | bool | None | list[dict[str, str | int | bool | None]]] | None = None
     result: dict[str, object] | None = None
     message: str | None = None
-    status: int | None = None
+    status: int | Literal["saved"] | None = None
+    task_id: str | None = None
+    event_id: str | None = None
 
 
 class CreationPlanResponse(CreationPlanPreviewResponse):

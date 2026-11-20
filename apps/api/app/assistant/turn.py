@@ -100,17 +100,18 @@ def run_turn(
 
     def observe_event(event):
         nonlocal first_business_failure, saw_tool, saw_text
-        if event.get("type") == "tool_start":
+        kind = event.get("type")
+        if kind in {"tool_start", "tool_progress", "tool_end", "confirmation_wait"}:
             saw_tool = True
+        if kind == "tool_start":
             pending_tools.add(event.get("tool_id"))
-        elif event.get("type") == "tool_end":
-            saw_tool = True
+        elif kind in {"tool_end", "confirmation_wait"}:
             pending_tools.discard(event.get("tool_id"))
             if event.get("ok") is False and first_business_failure is None:
                 first_business_failure = _safe_business_failure(event.get("failure")) or None
         if on_event:
             on_event(event)
-            saw_text = saw_text or event.get("type") == "text_delta"
+            saw_text = saw_text or kind in {"text_delta", "assistant_text"}
 
     def note_preflight(ok=None, summary=None):
         if on_event:

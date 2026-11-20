@@ -17,6 +17,7 @@ from app.creation.editing.clips import CLIP_SETTING_OPERATIONS
 from app.creation.editing.edit_scope import edit_scope_blocker
 from app.creation.editing.metadata_use_case import (EditPreviewRejected, metadata_edit_command, effective_audio_timeline, logical_montage_output_refs)
 from app.creation.editing.subtitle_use_case import subtitle_values
+from app.materials.contracts import MediaAuthorityError
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.linked_timeline_use_case import LINKED_EDIT_OPERATIONS, LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError
 from app.media.clip_preview import ClipPreviewExecutor
@@ -103,6 +104,21 @@ def project_submitted_edit_input(phase, inputs):
     if len(json.dumps(submitted_input, ensure_ascii=False).encode("utf-8")) > 64 * 1024:
         raise EditPreviewRejected(409, "原请求字段超过有界查询范围，不能省略字段或换绑新版重放")
     return submitted_input
+
+
+def _media_root_refusal(exc: Exception) -> dict | None:
+    cause = exc
+    while cause is not None:
+        if isinstance(cause, MediaAuthorityError) and cause.reason in {
+                "asset_outside_authorized_root", "media_reference_outside_authorized_root"}:
+            return {
+                "error": "edit_media_authorization_rejected", "reason_code": cause.reason,
+                "reason": "服务端拒绝使用当前素材，素材路径超出本次授权范围。",
+                "impact": "本次修改未保存。", "repair_action": cause.repair_action,
+                "submission_effect": "rejected", "retryable": False,
+            }
+        cause = cause.__cause__
+    return None
 
 
 class ExactPreviewUseCase:
@@ -673,6 +689,8 @@ class ExactPreviewUseCase:
                 status, value = self.edit_result(outcome)
                 result = ExactEditResult(status, value, not isinstance(outcome, MetadataEditReplay))
         except (EditPreviewRejected,AudioEditRejected,PicturePreviewRejected,ExecutionControlRejected) as exc:
+            if refusal := _media_root_refusal(exc):
+                raise self._failure(task, event_id, exc.status_code, refusal) from exc
             self.record_request_result(task, event_id, status_code=exc.status_code, response={'detail': exc.detail})
             raise
         except SubtitleNoChange as exc:
@@ -688,6 +706,8 @@ class ExactPreviewUseCase:
         except PermissionError as exc:
             raise self._failure(task, event_id, 403, str(exc)) from exc
         except (ValueError, KeyError, OSError) as exc:
+            if refusal := _media_root_refusal(exc):
+                raise self._failure(task, event_id, 422, refusal) from exc
             raise self._failure(task, event_id, 409, str(exc)) from exc
         return self._record(task, event_id, result)
 

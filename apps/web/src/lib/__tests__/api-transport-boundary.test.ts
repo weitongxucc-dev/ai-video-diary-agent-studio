@@ -129,3 +129,31 @@ it('server requests use only the existing verified provider and preserve caller 
     signal, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer verified-server-fixture' },
   }));
 });
+
+it('delivers public activity and a committed workspace receipt before the final response', async () => {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({ start(sink) { controller = sink; } });
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(stream)));
+  const {assistantStreamRequest} = await import('../api/creation-transport');
+  const received = vi.fn();
+  const reply = assistantStreamRequest('/api/test-stream', {}, received);
+  const at = '2026-11-20T10:10:00.000Z';
+  const tool = { tool_id: 1, label: '读取素材', display_target: '素材库', at };
+  const events = [
+    { type: 'agent_start', at }, { type: 'text_delta', delta: '我先看素材。', at },
+    { type: 'tool_start', ...tool }, { type: 'tool_progress', ...tool, progress: 0.5 },
+    { type: 'tool_end', ...tool, ok: false, summary: '结果待核实', failure: { reason: '连接中断', submission_effect: 'unknown' } },
+    { type: 'unknown', message: '正在回查原请求', at },
+    { type: 'error', message: '本次调用未返回', at },
+    { type: 'confirmation_wait', ...tool, message: '等待确认' },
+    { type: 'assistant_text', text: '已经回查。', at },
+    { type: 'workspace_saved', status: 'saved', task_id: 'task-1', event_id: 'edit-1' },
+    { type: 'agent_end', at },
+  ];
+  const send = (value: unknown) => controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify(value) + '\n\n'));
+  for (const event of events) send({ ...event, raw_payload: 'private' });
+  await vi.waitFor(() => expect(received.mock.calls.map(([event]) => event)).toEqual(events));
+  send({type: 'result', result: {reply: '完成'}});
+  controller.close();
+  await expect(reply).resolves.toEqual({reply: '完成'});
+});

@@ -120,11 +120,26 @@ const inputExtension = creationInputExtension({ ask, getSession: () => session, 
 ({ session, rebindTools } = await openCreationSession({ ...input, businessCall,
   nativeCall:input.nativeEnabled?callBusiness:undefined,extensionFactories: input.inputEnabled ? [inputExtension] : [] }));
 const result = createSessionResult(input.sessionId);
+let authorizationRefusal = false;
+function finalResult() {
+  const collected = result.value();
+  return authorizationRefusal ? {...collected, status:"settled",
+    answer:"服务端核实素材路径超出本次授权范围，未保存这次修改。请选择已授权素材，或完成授权并重新扫描后再继续。"}
+    : collected;
+}
 session.subscribe(event => {
   const observed = Number.isFinite(event.timestamp) ? event : {...event,timestamp:Date.now()};
   result.observe(observed);
   emit(observed.type === 'compaction_start'
     ? {...observed,contextUsage:session.getContextUsage()} : observed);
+  const failure = observed.result?.details?.failure;
+  if (!abortRequested && observed.type === "tool_execution_end" && observed.toolName === "apply_typed_edit"
+      && observed.isError && failure?.error === "edit_media_authorization_rejected"
+      && failure.submission_effect === "rejected"
+      && ["asset_outside_authorized_root", "media_reference_outside_authorized_root"].includes(failure.reason_code)) {
+    authorizationRefusal = true;
+    void abortSession();
+  }
 });
 try {
   try {
@@ -132,10 +147,12 @@ try {
     else await session.prompt(input.message, { source: "rpc" });
     if (inputExtension.getFailure()) throw inputExtension.getFailure();
   } catch (error) {
-    emit({...result.value(), status: "failed", input_id: inputExtension.getLastConsumedInputId() ?? originalInputId});
-    throw error;
+    if (!authorizationRefusal) {
+      emit({...result.value(), status: "failed", input_id: inputExtension.getLastConsumedInputId() ?? originalInputId});
+      throw error;
+    }
   }
-  emit({...result.value(),input_id:inputExtension.getLastConsumedInputId() ?? originalInputId});
+  emit({...finalResult(),input_id:inputExtension.getLastConsumedInputId() ?? originalInputId});
 } finally {
   if (abortRun) await abortRun;
   session.dispose();
