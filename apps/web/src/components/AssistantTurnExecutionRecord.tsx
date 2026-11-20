@@ -175,8 +175,8 @@ function CompletedTools({ tools, turnId, anchorId, reading, reply }: {
   </details>;
 }
 
-export function TurnToolActivity({ tools, turn, reading, surfacedElsewhere = "", recoveryToolId, recovery }: {
-  tools: TurnTool[]; turn: AssistantConversationTurn; reading?: TurnReadingState; surfacedElsewhere?: string;
+export function TurnToolActivity({ tools, turnTools, turn, reading, surfacedElsewhere = "", recoveryToolId, recovery }: {
+  tools: TurnTool[]; turnTools: TurnTool[]; turn: AssistantConversationTurn; reading?: TurnReadingState; surfacedElsewhere?: string;
   recoveryToolId?: number; recovery?: ReactNode;
 }) {
   const rows: ReactNode[] = [];
@@ -187,7 +187,7 @@ export function TurnToolActivity({ tools, turn, reading, surfacedElsewhere = "",
     rows.push(<CompletedTools key={anchor.id} anchorId={anchor.id} tools={completed} turnId={turn.id} reading={reading} reply={surfacedElsewhere}/>);
     completed = [];
   }
-  for (const [index, tool] of tools.entries()) {
+  for (const tool of tools) {
     if (tool.state === "succeeded") {
       completed.push(tool);
       continue;
@@ -195,7 +195,7 @@ export function TurnToolActivity({ tools, turn, reading, surfacedElsewhere = "",
     addCompleted();
     const explicitNotSubmitted = tool.state === "failed" && tool.failure?.submission_effect === "not_submitted";
     const recoveredByLaterAttempt = turn.status === "completed" && explicitNotSubmitted
-      && tools.slice(index + 1).some(candidate => candidate.state === "succeeded"
+      && turnTools.slice(turnTools.indexOf(tool) + 1).some(candidate => candidate.state === "succeeded"
         && candidate.label === tool.label && candidate.target === tool.target);
     if (recoveredByLaterAttempt) {
       const historicalNotes = [publicExecutionText(tool.failure?.reason), publicExecutionText(tool.failure?.impact),

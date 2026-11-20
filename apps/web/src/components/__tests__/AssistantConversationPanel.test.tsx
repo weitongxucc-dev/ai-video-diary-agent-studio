@@ -241,18 +241,19 @@ it("marks a failed duplicate attempt as historical after the same action succeed
     {type:"tool_end", tool_id:11, label:"保存素材", ok:false, summary:"未执行保存。", failure:{
       submission_effect:"not_submitted", reason:"按工具参数契约补齐后再提交。", repair_action:"请补齐参数后重试。",
     }},
+    {type:"text_delta", delta:"重新核对后继续保存。"},
     {type:"tool_end", tool_id:12, label:"保存素材", ok:true, summary:"已保存 1 项素材。"},
   ];
   saved.turns[0].assistant_text = "素材已保存。";
   render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()} onSend={vi.fn()}
     busy={false} configured scopeLabel="当前作品"/>);
-  const activity = screen.getByLabelText("本轮操作");
+  const [activity, completed] = screen.getAllByLabelText("本轮操作");
   expect(within(activity).getByText("本次尝试未执行")).toBeVisible();
   expect(within(activity).queryByText("请补齐参数后重试。")).not.toBeVisible();
   fireEvent.click(within(activity).getByText("查看历史失败"));
   expect(within(activity).getByText("按工具参数契约补齐后再提交。")).toBeVisible();
-  fireEvent.click(within(activity).getByText("已返回"));
-  expect(within(activity).getByText("已保存 1 项素材。")).toBeVisible();
+  fireEvent.click(within(completed).getByText("已返回"));
+  expect(within(completed).getByText("已保存 1 项素材。")).toBeVisible();
   expect(screen.getByText("请补齐参数后重试。")).toBeVisible();
 });
 

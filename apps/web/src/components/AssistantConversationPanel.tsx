@@ -177,11 +177,12 @@ function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continu
   continuation?: boolean; visibleResultNotes?: string; recoveryToolId?: number; recovery?: ReactNode;
 }) {
   const goal = turn.result?.kind === "creation_task_adopted" ? assistantTurnGoalRefreshState(turn) : null;
-  const hasRunningTool = blocks.some(block => block.kind === "tools" && block.tools.some(tool => tool.state === "running"));
+  const turnTools = blocks.flatMap(block => block.kind === "tools" ? block.tools : []);
+  const hasRunningTool = turnTools.some(tool => tool.state === "running");
   const surfacedElsewhere = [goal ? null : turn.assistant_text, visibleResultNotes].filter(Boolean).join("\n");
   return <>
     {blocks.map(block => {
-      if (block.kind === "tools") return <TurnToolActivity key={block.key} tools={block.tools} turn={turn}
+      if (block.kind === "tools") return <TurnToolActivity key={block.key} tools={block.tools} turnTools={turnTools} turn={turn}
         reading={reading} surfacedElsewhere={surfacedElsewhere} recoveryToolId={recoveryToolId} recovery={recovery}/>;
       if (goal) return null;
       const readingKey = `${turn.id}:message${block.key === "text:saved" ? "" : `:${block.key}`}`;
