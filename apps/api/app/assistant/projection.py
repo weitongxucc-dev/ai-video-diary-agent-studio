@@ -572,12 +572,20 @@ class _PiStreamProjector:
             summary_result = event.get("result")
             failure = details.get("failure") if isinstance(details.get("failure"), dict) else None
             unknown = failure is not None and failure.get("submission_effect") == "unknown"
+            if name == "read" and unknown:
+                # Native file reads cannot submit a business write.
+                failure = {key: value for key, value in failure.items() if key != "submission_effect"}
+                summary_result = {"details": {"failure": failure}}
+                failed, unknown = True, False
             preview = details.get("preview") or {}
             waiting = (
-                details.get("status") == "waiting_for_user" or details.get("needs_confirmation") is True
-                or (details.get("kind") == "plan_preview" and preview.get("kind") == "creation_request"
-                    and (preview.get("request") or {}).get("status") == "awaiting_confirmation")
-                or (details.get("kind") == "edit_preview" and (preview.get("proposal") or {}).get("status") == "proposed")
+                name in {"preview_creation_plan", "prepare_creation_window"}
+                and details.get("kind") == "plan_preview" and preview.get("kind") == "creation_request"
+                and (preview.get("request") or {}).get("status") == "awaiting_confirmation"
+            ) or (
+                name in {"preview_typed_edit", "preview_edit_selection"}
+                and details.get("kind") == "edit_preview"
+                and (preview.get("proposal") or {}).get("status") == "proposed"
             )
             if waiting and not failed and not unknown:
                 return {"type": "confirmation_wait", "tool_id": tool_id, "label": label,

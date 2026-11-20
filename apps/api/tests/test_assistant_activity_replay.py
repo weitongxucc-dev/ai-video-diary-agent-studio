@@ -202,3 +202,19 @@ def test_runtime_trace_preserves_measured_tool_duration_and_unknown_status():
     assert start["tool_call_ref"] == progress["tool_call_ref"] == end["tool_call_ref"]
     assert end["duration_ms"] == 270 and end["status"] == "unknown"
     assert "PRIVATE_PARTIAL" not in json.dumps(trace) and "sdk-call" not in json.dumps(trace)
+
+
+
+def test_read_receipts_describe_the_read_instead_of_the_workflow_state():
+    projector = _PiStreamProjector()
+    task = project(projector, "tool_execution_end", 1000, toolName="read_current_task",
+                   result={"details": {"status": "waiting_for_user", "needs_confirmation": True}})
+    assert task["type"] == "tool_end" and task["ok"] is True
+
+    file = project(projector, "tool_execution_end", 2000, toolName="read", isError=True,
+                   result={"details": {"failure": {
+                       "reason": "原生文件路径必须位于 /task", "submission_effect": "unknown",
+                   }}})
+    assert file["type"] == "tool_end" and file["ok"] is False
+    assert file["summary"] == "原生文件路径必须位于 /task"
+    assert "submission_effect" not in file["failure"]
