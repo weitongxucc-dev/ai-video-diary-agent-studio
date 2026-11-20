@@ -57,3 +57,29 @@ test("pinned SDK round events have no timestamps, and reused sessions keep invoc
   assert.equal(new Set(events.map(event => event.event_id)).size, events.length);
   assert.ok(!JSON.stringify(first.value()).includes("PRIVATE SDK CONTENT"));
 });
+
+test("Pi lifecycle and tool progress stay ordered without serializing partial payloads", () => {
+  const session = createSessionResult("activity");
+  for (const event of [
+    {type:"agent_start", timestamp:1000},
+    {type:"tool_execution_start", timestamp:1010, toolCallId:"a", toolName:"read"},
+    {type:"tool_execution_start", timestamp:1012, toolCallId:"b", toolName:"write"},
+    {type:"tool_execution_update", timestamp:1020, toolCallId:"b", toolName:"write",
+      partialResult:{content:[{type:"text", text:"PRIVATE_PARTIAL_RESULT"}]}},
+    {type:"tool_execution_end", timestamp:1030, durationMs:17.4, toolCallId:"b", toolName:"write", isError:true,
+      result:{details:{failure:{submission_effect:"unknown", request_id:"original-request"}}}},
+    {type:"tool_execution_end", timestamp:1040, toolCallId:"a", toolName:"read", isError:false},
+    {type:"agent_end", timestamp:1050, willRetry:false},
+  ]) session.observe(event);
+  const events = session.value().trace_events;
+  assert.deepEqual(events.map(event => event.type), [
+    "agent_start", "tool_start", "tool_start", "tool_progress", "tool_end", "tool_end", "agent_end",
+  ]);
+  assert.equal(events[3].parent_event_id, events[2].event_id);
+  assert.equal(events[4].parent_event_id, events[2].event_id);
+  assert.equal(events[5].parent_event_id, events[1].event_id);
+  assert.equal(events[4].status, "unknown");
+  assert.equal(events[4].duration_ms, 17);
+  assert.equal(events[4].references.request_id, "original-request");
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE_PARTIAL_RESULT/);
+});

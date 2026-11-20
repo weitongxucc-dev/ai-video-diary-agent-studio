@@ -382,7 +382,7 @@ def test_pi_stream_projects_only_text_and_safe_business_tool_status():
         "timestamp": 1795112476910,
     }))
     assert started == {"type": "tool_start", "tool_id": 1, "label": "读取当前任务",
-                       "display_target": "当前作品", "at": "2026-11-19T18:21:16.910Z"}
+                       "activity_label": "正在读取当前任务", "display_target": "当前作品", "at": "2026-11-19T18:21:16.910Z"}
     ended = projector.project(json.dumps({
         "type": "tool_execution_end", "toolCallId": "private-id",
         "toolName": "read_current_task", "isError": False,
@@ -391,7 +391,7 @@ def test_pi_stream_projects_only_text_and_safe_business_tool_status():
     }))
     assert ended == {
         "type": "tool_end", "tool_id": 1, "label": "读取当前任务", "ok": True,
-        "summary": "当前任务和所选对象状态已读取。", "display_target": "当前作品",
+        "activity_label": "已读取当前任务", "summary": "当前任务和所选对象状态已读取。", "display_target": "当前作品",
         "at": "2026-11-19T18:21:17.910Z",
     }
     assert "/private/" not in json.dumps([started, ended])

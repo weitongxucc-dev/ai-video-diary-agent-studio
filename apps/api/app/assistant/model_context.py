@@ -35,7 +35,9 @@ def capability_envelope(*, tool_names, task_id, stage, selected_refs, material_s
     return capability_envelope
 
 def enrich_prompt(prompt, envelope, *, continuation_context, task_id, knowledge_reference, profile_reference):
-    prompt += "\n" + envelope
+    prompt += ("\n" + envelope + "\n本轮需要查证、多步操作或可能等待时，在第一次调用工具前先用一句用户可见的说明，"
+               "交代要核对的对象或接下来的动作。简单问答直接回答。只陈述公开工作步骤，"
+               "不展示内部推理或命令参数，也不把准备执行说成已经完成。")
     if continuation_context:
         prompt += ("\n本轮由宿主已经持久化的真实业务结果触发，是原真人指令的有限接续，不是新用户发言。"
                    "原指令仍是本轮message；下列结果和剩余检查点提供上下文，不扩大原授权、不代替用户采用。"

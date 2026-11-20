@@ -52,22 +52,32 @@ export function createSessionResult(sessionId) {
     observe(event) {
       if (!event || typeof event !== "object") return;
       const eventType = event.type;
-      if (eventType === "turn_start" || eventType === "turn_end" || eventType === "agent_start" ||
-          eventType === "agent_end" || eventType === "agent_settled") traceEvent(event, eventType);
+      if (eventType === "turn_start" || eventType === "turn_end" || eventType === "agent_settled") {
+        traceEvent(event, eventType);
+      }
+      if (eventType === "agent_start") traceEvent(event, "agent_start", {status:"running"});
+      if (eventType === "agent_end") traceEvent(event, "agent_end", {
+        ...(event.willRetry ? {status:"retrying"} : {}),
+      });
       if (eventType === "tool_execution_start") {
         traceEvent(event, "tool_start", {tool_call_id:event.toolCallId, tool_name:event.toolName});
+      }
+      if (eventType === "tool_execution_update") {
+        traceEvent(event, "tool_progress", {tool_call_id:event.toolCallId, tool_name:event.toolName});
       }
       if (eventType === "tool_execution_end") {
         const details = event.result?.details;
         const failure = details?.failure;
         const toolEventId = traceEvent(event, "tool_end", {tool_call_id:event.toolCallId, tool_name:event.toolName,
-          status:event.isError ? "failed" : "succeeded",
+          status:failure?.submission_effect === "unknown" ? "unknown" : event.isError ? "failed" : "succeeded",
+          ...(Number.isFinite(event.durationMs) && event.durationMs >= 0 ? {duration_ms:Math.round(event.durationMs)} : {}),
           failure_class: event.isError ? (failure?.error ?? failure?.code ?? "tool_failed") : undefined,
           references:traceReferences(details)});
         for (const receipt of (Array.isArray(details?.business_receipts) ? details.business_receipts : [])) {
           traceEvent(event, "nested_tool", {nested_tool_id:receipt.tool_call_id ?? receipt.tool_name,
             tool_call_id:receipt.tool_call_id, tool_name:receipt.tool_name,
-            status:receipt.is_error ? "failed" : "succeeded", parent_event_id:toolEventId,
+            status:receipt.result?.failure?.submission_effect === "unknown" ? "unknown" : receipt.is_error ? "failed" : "succeeded",
+            parent_event_id:toolEventId,
             references:traceReferences(receipt)});
         }
       }

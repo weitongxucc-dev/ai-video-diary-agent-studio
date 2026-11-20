@@ -9,7 +9,7 @@ REVIEWER_KINDS = ('evidence_scout', 'script_reviewer', 'visual_reviewer', 'audio
 RUNTIME_RECEIPT_FIELDS = ('session_id', 'provider_usage', 'usage_status', 'trace_events')
 _RUNTIME_EVENT_TYPES = {
     'agent_start', 'agent_end', 'agent_settled', 'turn_start', 'turn_end',
-    'tool_start', 'tool_end', 'nested_tool', 'compaction_start', 'compaction_end', 'retry',
+    'tool_start', 'tool_progress', 'tool_end', 'nested_tool', 'compaction_start', 'compaction_end', 'retry',
     'model_start', 'model_end',
 }
 _RUNTIME_EVENT_IDENTIFIERS = ('event_id', 'parent_event_id', 'tool_call_id', 'tool_name', 'status', 'failure_class')
@@ -49,7 +49,7 @@ def safe_runtime_trace_events(events: object) -> list[dict]:
                 or event['type'] not in _RUNTIME_EVENT_TYPES):
             continue
         item = {'type': event['type']}
-        for key in ('step', 'at_ms'):
+        for key in ('step', 'at_ms', 'duration_ms'):
             if type(value := event.get(key)) is int and 0 <= value <= 253402300799999:
                 item[key] = value
         for key in _RUNTIME_EVENT_IDENTIFIERS:
@@ -202,7 +202,9 @@ def _project_runtime_events(events: list[dict], turn_id: str) -> tuple[list[dict
             opened[correlation] = at_ms
         elif event_type in {'tool_end', 'compaction_end'}:
             begin = opened.pop(correlation, None)
-            if isinstance(begin, (int, float)) and isinstance(at_ms, (int, float)):
+            if type(source.get('duration_ms')) is int:
+                item['duration_ms'] = source['duration_ms']
+            elif isinstance(begin, (int, float)) and isinstance(at_ms, (int, float)):
                 item['duration_ms'] = max(0, int(at_ms - begin))
         projected.append(item)
     duration = int(ended_ms - started_ms) if isinstance(started_ms, (int, float)) and isinstance(ended_ms, (int, float)) else None
