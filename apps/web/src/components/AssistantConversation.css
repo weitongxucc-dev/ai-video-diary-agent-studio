@@ -141,7 +141,6 @@
 .assistant-confirmation { align-items:center; }
 .assistant-turn-footer { display:flex; align-items:flex-start; flex-wrap:wrap; gap:var(--space-1); }
 .assistant-turn-model { display:inline-flex; align-self:center; gap:var(--space-1); flex-wrap:wrap; color:var(--text-3); font-size:var(--font-size-meta); line-height:var(--line-meta); }
-.assistant-turn-footer .assistant-trace[open] { flex-basis:100%; }
 .assistant-turn-actions { display:flex; align-items:center; flex-wrap:wrap; }
 .assistant-turn-actions:empty { display:none; }
 .assistant-creation-context > summary { min-height:var(--space-5); cursor:pointer; color:var(--text-2); font-size:var(--font-size-meta); line-height:var(--line-meta); }
@@ -173,7 +172,7 @@
 .assistant-activity-target,.assistant-activity-state,.assistant-activity-time { color:color-mix(in srgb, var(--text-2) 90%, var(--surface-1)); }
 .assistant-activity-state,.assistant-activity-time { flex:none; white-space:nowrap; }
 .assistant-activity-time { min-width:4ch; font-variant-numeric:tabular-nums; text-align:end; margin-inline-start:auto; }
-:is(.assistant-inline-completed,.assistant-trace) > summary {
+.assistant-inline-completed > summary {
   display:flex;
   align-items:center;
   gap:var(--space-1);
@@ -185,7 +184,7 @@
   cursor:pointer;
   list-style:none;
 }
-:is(.assistant-inline-completed,.assistant-trace) > summary::-webkit-details-marker { display:none; }
+.assistant-inline-completed > summary::-webkit-details-marker { display:none; }
 .assistant-conversation-panel .assistant-inline-completed > summary {
   display:grid;
   grid-template-columns:14px minmax(0, 1fr) auto;
@@ -206,9 +205,8 @@
 .assistant-conversation-panel .assistant-inline-completed > summary:hover .assistant-activity-name {
   color:var(--text-1);
 }
-.assistant-trace > summary:hover { background:var(--surface-2); color:var(--text-1); }
-:is(.assistant-inline-completed,.assistant-trace) > summary svg { flex:none; }
-.assistant-inline-completed[open] > summary .assistant-activity-chevron,.assistant-trace[open] > summary svg { rotate:90deg; }
+.assistant-inline-completed > summary svg { flex:none; }
+.assistant-inline-completed[open] > summary .assistant-activity-chevron { rotate:90deg; }
 .assistant-inline-receipts,.assistant-trace-events { display:grid; gap:var(--space-2); margin:0; padding:0; list-style:none; }
 .assistant-inline-receipts,.assistant-inline-failure > :not(.assistant-activity-row) { margin-inline-start:var(--space-5); }
 .assistant-inline-receipts {
@@ -268,3 +266,7 @@
 .assistant-inline-history-details { margin-inline-start:var(--space-5); font-size:var(--font-size-meta); }
 .assistant-inline-history-details > summary { cursor:pointer; color:var(--text-3); }
 .assistant-inline-history-details p { margin:var(--space-1) 0 0; }
+
+.assistant-usage-selection { display:grid; gap:var(--space-2); margin-block-start:var(--space-2); }
+.assistant-usage-selection label { display:grid; gap:var(--space-1); min-width:0; }
+.assistant-usage-selection select { min-width:0; max-width:100%; }

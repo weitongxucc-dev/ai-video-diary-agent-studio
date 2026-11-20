@@ -384,11 +384,9 @@ function TurnUsage({ trace, model }: { trace: AssistantTurnTrace; model: string 
   </dl>;
 }
 
-export function AssistantTurnExecutionRecord({ turn, hasPublicTools, model, reading }: {
-  turn: AssistantConversationTurn; hasPublicTools: boolean; model: string | null; reading?: TurnReadingState;
+export function AssistantTurnDiagnostics({ turn, hasPublicTools, model, conversationId }: {
+  turn: AssistantConversationTurn; hasPublicTools: boolean; model: string | null; conversationId: string;
 }) {
-  const readingKey = `${turn.id}:trace`;
-  const [open, setOpen] = useState(() => reading?.get(readingKey, false) ?? false);
   const [trace, setTrace] = useState<AssistantTurnTrace | null>(null);
   const [error, setError] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -396,22 +394,22 @@ export function AssistantTurnExecutionRecord({ turn, hasPublicTools, model, read
   const loaded = useRef(false);
   const running = turn.status === "running";
   useEffect(() => {
-    if (!open || running || loaded.current) return;
+    if (running || loaded.current) return;
     let active = true;
     setError(false);
     void getAssistantTurnTrace(turn.id).then(value => {
-      if (value.turn_id !== turn.id) throw new Error("Unexpected turn trace");
+      if (value.turn_id !== turn.id || value.conversation_id !== conversationId) throw new Error("Unexpected turn trace");
       if (active) { loaded.current = true; setTrace(value); }
     }).catch(() => { if (active) setError(true); });
     return () => { active = false; };
-  }, [open, retry, running, turn.id]);
+  }, [retry, running, turn.id, conversationId]);
 
   async function loadEarlier(before: number) {
     if (earlier === "loading") return;
     setEarlier("loading");
     try {
       const value = await getAssistantTurnTrace(turn.id, before);
-      if (value.turn_id !== turn.id) throw new Error("Unexpected turn trace");
+      if (value.turn_id !== turn.id || value.conversation_id !== conversationId) throw new Error("Unexpected turn trace");
       setTrace(current => current ? { ...value, events: [...value.events, ...current.events] } : value);
       setEarlier("idle");
     } catch { setEarlier("error"); }
@@ -419,10 +417,7 @@ export function AssistantTurnExecutionRecord({ turn, hasPublicTools, model, read
 
   const events = trace?.events.filter(event => Object.hasOwn(eventLabels, event.type)
     && (!hasPublicTools || !["tool_start", "tool_end", "nested_tool"].includes(event.type))) ?? [];
-  return <details className="assistant-trace" data-reading-key={readingKey} open={open}
-    onToggle={event => { const next = event.currentTarget.open; setOpen(next); reading?.save(readingKey, next); }}>
-    <summary><ChevronRight aria-hidden size={14}/>用量与诊断</summary>
-    {open ? <div className="assistant-trace-body">
+  return <section className="assistant-trace" aria-label="轮次诊断详情"><div className="assistant-trace-body">
       {running ? <p>本轮结束后可查看用量和技术详情。</p>
         : error ? <div role="alert"><p>执行记录暂时无法读取。</p><Button variant="ghost" type="button" onClick={() => setRetry(value => value + 1)}>重试读取记录</Button></div>
           : trace ? <>
@@ -435,6 +430,5 @@ export function AssistantTurnExecutionRecord({ turn, hasPublicTools, model, read
             {earlier === "error" ? <p role="alert">较早的记录暂时无法读取。</p> : null}
             {trace.next_before != null ? <Button variant="ghost" type="button" disabled={earlier === "loading"} onClick={() => void loadEarlier(trace.next_before!)}>{earlier === "loading" ? "正在读取…" : "加载更早记录"}</Button> : null}
           </> : <p role="status">正在读取执行记录…</p>}
-    </div> : null}
-  </details>;
+    </div></section>;
 }
