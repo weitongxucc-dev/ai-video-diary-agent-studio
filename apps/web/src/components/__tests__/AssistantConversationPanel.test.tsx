@@ -3107,3 +3107,22 @@ it("selects an authorized work scope and ignores out-of-scope conversations", as
   expect(within(scoped).getByRole("option",{name:/当前作品对话/})).toBeInTheDocument();
   expect(within(scoped).queryByRole("option",{name:/其他作品|其他工作区/})).not.toBeInTheDocument();
 });
+
+
+it.each(["conversation", "plan_preview", "material_result"])(
+  "shows the saved response model for %s only in settings", async kind => {
+    const saved = conversation();
+    saved.turns[0].result = {kind,response:{model:"MiniMax-M3"}};
+    api.getAssistantTurnTrace.mockResolvedValueOnce({
+      turn_id:saved.turns[0].id, conversation_id:saved.id, events:[],
+      usage_status:"unknown", provider_usage:null, next_before:null,
+    });
+    render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()}
+      onSend={vi.fn()} busy={false} configured scopeLabel="当前工作区"/>);
+    expect(screen.queryByText("MiniMax-M3")).not.toBeInTheDocument();
+    const {record} = await selectSettingsRecord(saved);
+    const usage = await within(record).findByLabelText("本轮用量");
+    expect(usage).toHaveTextContent("MiniMax-M3");
+    expect(usage).toHaveTextContent("未提供");
+  },
+);

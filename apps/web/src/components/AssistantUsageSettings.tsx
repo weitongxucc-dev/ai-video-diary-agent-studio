@@ -7,7 +7,6 @@ import type { AssistantConversation, CreationTask } from "@/lib/types";
 import type { AssistantConversationScope } from "@/lib/types/assistant";
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
 import { AssistantTurnDiagnostics, publicExecutionText } from "./AssistantTurnExecutionRecord";
-import { assistantTaskTurnResult } from "./useAssistantConversation";
 import { useWorkspaceBoot } from "./WorkspaceBootContext";
 import "./AssistantConversation.css";
 
@@ -107,8 +106,11 @@ function TurnSelection({ conversation }: { conversation: AssistantConversation }
   const turns = conversation.turns.filter(turn => turn.sequence > 0);
   const turn = turns.find(item => item.id === selected);
   if (!turns.length) return <p>这段对话没有已保存的轮次。</p>;
-  const model = turn ? publicExecutionText(assistantTaskTurnResult(turn)?.response?.model
-    ?? (typeof turn.result?.model === "string" ? turn.result.model : null)) : null;
+  const response = turn?.result?.response;
+  const responseModel = response && typeof response === "object" && "model" in response
+    ? response.model : undefined;
+  const model = publicExecutionText(typeof responseModel === "string" ? responseModel
+    : typeof turn?.result?.model === "string" ? turn.result.model : null);
   return <>
     <label htmlFor={selectId}>轮次 <select id={selectId} value={selected} onChange={event => setSelected(event.target.value)}>
       <option value="">选择轮次</option>
