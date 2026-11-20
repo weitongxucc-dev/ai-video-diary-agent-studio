@@ -1206,7 +1206,9 @@ describe("CreationTaskWorkspace", () => {
       { role: "assistant", message: "已改好，请检查。", stage: "script", script_id: "draft-1", at: baseTask.updated_at },
     ] });
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    fireEvent.click(await screen.findByRole("button", { name: "历史对话" }));
+    const history = await screen.findByRole("button", { name: "历史对话" });
+    await waitFor(() => expect(history).toBeEnabled());
+    fireEvent.click(history);
     fireEvent.click(await screen.findByText("旧版只读历史"));
     expect(await screen.findByText("已改好，请检查。")).toBeInTheDocument();
     expect(mocks.getAssistantHistory).toHaveBeenCalledWith("task-1");
