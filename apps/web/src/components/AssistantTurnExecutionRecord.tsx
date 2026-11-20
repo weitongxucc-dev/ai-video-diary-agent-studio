@@ -1,31 +1,84 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { ChevronRight, LoaderCircle } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
 import { getAssistantTurnTrace } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantToolFailure } from "@/lib/types";
 import type { AssistantTraceEvent, AssistantTurnTrace } from "@/lib/types/assistant";
 import { Button } from "./ui/button";
 
-export type TurnTool = {
+type TurnTool = {
   id: number;
   label: string;
+  target?: string;
+  startedAt?: string;
+  endedAt?: string;
   state: "running" | "succeeded" | "failed" | "unreturned";
   summary?: string;
   failure?: AssistantToolFailure;
 };
 
-export function turnTools(turn: AssistantConversationTurn): TurnTool[] {
+type TurnBlock =
+  | { kind: "text"; key: string; text: string }
+  | { kind: "tools"; key: string; tools: TurnTool[] };
+
+export function turnBlocks(turn: AssistantConversationTurn): TurnBlock[] {
+  const blocks: TurnBlock[] = [];
   const tools = new Map<number, TurnTool>();
-  for (const event of turn.events) {
-    if (event.type === "tool_start" && !tools.has(event.tool_id)) {
-      tools.set(event.tool_id, { id: event.tool_id, label: event.label, state: turn.status === "running" ? "running" : "unreturned" });
-    } else if (event.type === "tool_end") {
-      tools.set(event.tool_id, { id: event.tool_id, label: event.label || tools.get(event.tool_id)?.label || "",
-        state: event.ok ? "succeeded" : "failed", summary: event.summary, failure: event.failure });
+  let text = "";
+  let textStart = 0;
+  let streamed = "";
+
+  function flushText() {
+    if (text.trim()) blocks.push({kind: "text", key: `text:${textStart}`, text});
+    text = "";
+  }
+
+  for (const [index, event] of turn.events.entries()) {
+    if (event.type === "text_delta") {
+      if (!text) textStart = index;
+      text += event.delta;
+      streamed += event.delta;
+      continue;
+    }
+    if (event.type !== "tool_start" && event.type !== "tool_end") continue;
+    let tool = tools.get(event.tool_id);
+    if (!tool) {
+      flushText();
+      tool = {id: event.tool_id, label: event.label, state: turn.status === "running" ? "running" : "unreturned"};
+      tools.set(tool.id, tool);
+      const previous = blocks.at(-1);
+      if (previous?.kind === "tools") previous.tools.push(tool);
+      else blocks.push({kind: "tools", key: `tools:${tool.id}`, tools: [tool]});
+      if (event.type === "tool_start") {
+        tool.target = event.display_target;
+        tool.startedAt = event.at;
+      }
+    }
+    if (event.type === "tool_end") {
+      tool.label ||= event.label;
+      tool.state = event.ok ? "succeeded" : "failed";
+      tool.summary = event.summary;
+      tool.failure = event.failure;
+      tool.endedAt = event.at;
+      tool.target ??= event.display_target;
     }
   }
-  return [...tools.values()];
+
+  // The saved body is authoritative, including any suffix added at settlement.
+  const persisted = turn.assistant_text.trimEnd();
+  if (!streamed.trim() || !persisted.trimStart().startsWith(streamed.trimStart().trimEnd())) {
+    const activity: TurnBlock[] = blocks.filter(block => block.kind === "tools");
+    if (persisted.trim()) activity.push({kind: "text", key: "text:saved", text: persisted});
+    return activity;
+  }
+  if (persisted.trim() !== streamed.trim()) {
+    const suffix = persisted.trimStart().slice(streamed.trim().length);
+    if (!text) textStart = turn.events.length;
+    text = text.trimEnd() + suffix;
+  }
+  flushText();
+  return blocks;
 }
 
 export type TurnReadingState = {
@@ -45,19 +98,102 @@ export function publicExecutionText(value?: string | null) {
     && !/(?:https?:\/\/|file:\/\/|Traceback|ECONNREFUSED|ENOTFOUND|\/(?:Users|Volumes|private|tmp|home|var)\/|[a-z]:\\|^[{[])/i.test(text) ? text : null;
 }
 
-export function TurnActivity({ turn, tools, continuation = false }: {
-  turn: AssistantConversationTurn; tools: TurnTool[]; continuation?: boolean;
-}) {
-  if (turn.status !== "running") return null;
-  const active = tools.filter(tool => tool.state === "running").at(-1);
-  const label = publicExecutionText(active?.label);
-  const activity = active ? label ? label.startsWith("正在") ? label : `正在${label}` : "正在执行"
-    : turn.assistant_text.trim() ? "正在回复"
-    : continuation ? "继续完成原要求" : turn.sequence === 0 ? "正在发送要求" : "正在等待回复";
-  return <p role="status" className="assistant-stream-status"><LoaderCircle aria-hidden size={14} className="is-spinning"/>{activity}</p>;
+function ElapsedTime({ at }: { at?: string }) {
+  const start = at ? Date.parse(at) : NaN;
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!Number.isFinite(start)) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [start]);
+  const seconds = Math.max(0, Math.floor((now - start) / 1000));
+  if (!Number.isFinite(seconds)) return null;
+  const minutes = Math.floor(seconds / 60);
+  return <span className="assistant-activity-time" aria-hidden="true">{minutes ? `${minutes} 分 ` : ""}{seconds % 60} 秒</span>;
 }
 
-const toolStateLabels = { running: "进行中", succeeded: "已返回", failed: "未完成", unreturned: "未收到结果" };
+export function TurnActivity({ turn, continuation, at }: { turn: AssistantConversationTurn; continuation?: boolean; at?: string }) {
+  if (turn.status !== "running") return null;
+  const replying = Boolean(turn.assistant_text.trim());
+  const activity = replying ? "正在回复" : continuation ? "继续完成原要求" : turn.sequence === 0 ? "正在发送要求" : "正在等待回复";
+  return <p className="assistant-stream-status">
+    <LoaderCircle aria-hidden size={14} className="is-spinning"/>
+    <span role="status">{activity}</span>{!replying ? <ElapsedTime at={at}/> : null}
+  </p>;
+}
+
+function ToolName({ tool, running = false }: { tool: TurnTool; running?: boolean }) {
+  const label = publicExecutionText(tool.label) ?? "执行";
+  const name = running && !label.startsWith("正在") ? `正在${label}` : label;
+  const target = publicExecutionText(tool.target);
+  return <span className="assistant-activity-name">{name}{target && label !== target ? <span className="assistant-activity-target"> · {target}</span> : null}</span>;
+}
+
+function CompletedTools({ tools, turnId, anchorId, reading, reply }: {
+  tools: TurnTool[]; turnId: string; anchorId: number; reading?: TurnReadingState; reply: string;
+}) {
+  function readingKey(tool: TurnTool) { return `${turnId}:tool:${tool.id}`; }
+  const [open, setOpen] = useState(() => tools.some(tool => reading?.get(readingKey(tool), false)));
+  // A parallel call may join this group after the user expands either receipt.
+  const expanded = open || tools.some(tool => reading?.get(readingKey(tool), false));
+  return <details className="assistant-inline-completed" data-reading-key={`${turnId}:tool:${anchorId}`} open={expanded} onToggle={event => {
+    const next = event.currentTarget.open;
+    setOpen(next);
+    for (const tool of tools) reading?.save(readingKey(tool), next);
+  }}>
+    <summary><ChevronRight aria-hidden size={14}/>{tools.length === 1 ? <ToolName tool={tools[0]}/> : <span>已返回 {tools.length} 项操作</span>}
+      {tools.length === 1 ? <span className="assistant-activity-state">已返回</span> : null}</summary>
+    <ol className="assistant-inline-receipts" aria-label="操作回执">{tools.map(tool => {
+      const summary = publicExecutionText(tool.summary);
+      return <li key={tool.id}>
+        {tools.length > 1 ? <ToolName tool={tool}/> : null}
+        {summary && !reply.includes(summary) ? <p>{summary}</p> : null}
+      </li>;
+    })}</ol>
+  </details>;
+}
+
+export function TurnToolActivity({ tools, turn, reading, surfacedElsewhere = "", recoveryToolId, recovery }: {
+  tools: TurnTool[]; turn: AssistantConversationTurn; reading?: TurnReadingState; surfacedElsewhere?: string;
+  recoveryToolId?: number; recovery?: ReactNode;
+}) {
+  const rows: ReactNode[] = [];
+  let completed: TurnTool[] = [];
+  function addCompleted() {
+    if (!completed.length) return;
+    const anchor = completed.find(tool => reading?.get(`${turn.id}:tool:${tool.id}`, false)) ?? completed[0];
+    rows.push(<CompletedTools key={anchor.id} anchorId={anchor.id} tools={completed} turnId={turn.id} reading={reading} reply={surfacedElsewhere}/>);
+    completed = [];
+  }
+  for (const tool of tools) {
+    if (tool.state === "succeeded") {
+      completed.push(tool);
+      continue;
+    }
+    addCompleted();
+    if (tool.state === "running") {
+      rows.push(<div key={tool.id} className="assistant-activity-row">
+        <LoaderCircle aria-hidden size={14} className="is-spinning"/>
+        <span className="assistant-activity-status" role="status"><ToolName tool={tool} running/></span>
+        <ElapsedTime at={tool.startedAt}/>
+      </div>);
+      continue;
+    }
+    const reason = tool.state === "unreturned" ? "此调用没有返回，后台作业是否完成仍待核对。"
+      : publicExecutionText(tool.failure?.reason) ?? publicExecutionText(tool.summary);
+    const notes = [reason, publicExecutionText(tool.failure?.impact), publicExecutionText(tool.failure?.repair_action)]
+      .filter((note): note is string => Boolean(note && !surfacedElsewhere.includes(note)));
+    rows.push(<div key={tool.id} className="assistant-inline-failure" role={tool.failure && notes.length ? "alert" : undefined}>
+      <div className="assistant-activity-row"><CircleAlert aria-hidden size={14}/><ToolName tool={tool}/>
+        <span className="assistant-activity-state">{tool.state === "failed" ? "未完成" : "未收到结果"}</span></div>
+      {[...new Set(notes)].map(note => <p key={note}>{note}</p>)}
+      {tool.id === recoveryToolId ? recovery : null}
+    </div>);
+  }
+  addCompleted();
+  return <div className="assistant-inline-activity" role="group" aria-label="本轮操作">{rows}</div>;
+}
+
 const usageSources: Record<string, string> = { provider: "供应商实测", local_estimate: "本地估算", compaction: "仅上下文压缩记录" };
 const eventLabels: Record<string, string> = {
   turn_start: "开始一轮回复", turn_end: "结束一轮回复", agent_start: "开始执行", agent_end: "结束执行",
@@ -104,17 +240,11 @@ function TurnUsage({ trace, model }: { trace: AssistantTurnTrace; model: string 
   </dl>;
 }
 
-export function AssistantTurnExecutionRecord({ turn, tools, model, surfacedFailure, reading }: {
-  turn: AssistantConversationTurn;
-  tools: TurnTool[];
-  model: string | null;
-  surfacedFailure?: AssistantToolFailure;
-  reading?: TurnReadingState;
+export function AssistantTurnExecutionRecord({ turn, hasPublicTools, model, reading }: {
+  turn: AssistantConversationTurn; hasPublicTools: boolean; model: string | null; reading?: TurnReadingState;
 }) {
   const readingKey = `${turn.id}:trace`;
-  const diagnosticsKey = `${turn.id}:technical`;
   const [open, setOpen] = useState(() => reading?.get(readingKey, false) ?? false);
-  const [diagnosticsOpen, setDiagnosticsOpen] = useState(() => reading?.get(diagnosticsKey, false) ?? false);
   const [trace, setTrace] = useState<AssistantTurnTrace | null>(null);
   const [error, setError] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -122,7 +252,7 @@ export function AssistantTurnExecutionRecord({ turn, tools, model, surfacedFailu
   const loaded = useRef(false);
   const running = turn.status === "running";
   useEffect(() => {
-    if (!open || !diagnosticsOpen || running || loaded.current) return;
+    if (!open || running || loaded.current) return;
     let active = true;
     setError(false);
     void getAssistantTurnTrace(turn.id).then(value => {
@@ -130,7 +260,7 @@ export function AssistantTurnExecutionRecord({ turn, tools, model, surfacedFailu
       if (active) { loaded.current = true; setTrace(value); }
     }).catch(() => { if (active) setError(true); });
     return () => { active = false; };
-  }, [open, diagnosticsOpen, retry, running, turn.id]);
+  }, [open, retry, running, turn.id]);
 
   async function loadEarlier(before: number) {
     if (earlier === "loading") return;
@@ -144,46 +274,23 @@ export function AssistantTurnExecutionRecord({ turn, tools, model, surfacedFailu
   }
 
   const events = trace?.events.filter(event => Object.hasOwn(eventLabels, event.type)
-    && (!tools.length || !["tool_start", "tool_end"].includes(event.type))) ?? [];
+    && (!hasPublicTools || !["tool_start", "tool_end", "nested_tool"].includes(event.type))) ?? [];
   return <details className="assistant-trace" data-reading-key={readingKey} open={open}
     onToggle={event => { const next = event.currentTarget.open; setOpen(next); reading?.save(readingKey, next); }}>
-    <summary><ChevronRight aria-hidden size={14}/><span>执行记录</span>{tools.length ? <span className="assistant-trace-step-count">{tools.length} 步</span> : null}</summary>
+    <summary><ChevronRight aria-hidden size={14}/>用量与诊断</summary>
     {open ? <div className="assistant-trace-body">
-      {tools.length ? <ol className="assistant-trace-tools" aria-label="操作">
-        {tools.map(tool => {
-          const label = publicExecutionText(tool.label) ?? "工具调用";
-          const inReply = tool.failure && tool.failure === surfacedFailure;
-          const detail = inReply ? null : publicExecutionText(tool.failure?.reason ?? tool.summary);
-          const impact = inReply ? null : publicExecutionText(tool.failure?.impact);
-          const repair = inReply ? null : publicExecutionText(tool.failure?.repair_action);
-          return <li key={tool.id}>
-            <div className="assistant-trace-tool-heading"><span>{label}</span><span>{toolStateLabels[tool.state]}</span></div>
-            {detail ? <p>{detail}</p> : tool.state === "unreturned" ? <p>此调用没有返回，后台作业是否完成仍待核对。</p> : null}
-            {impact && impact !== detail ? <p>{impact}</p> : null}
-            {repair && repair !== detail && repair !== impact ? <p>{repair}</p> : null}
-          </li>;
-        })}
-      </ol> : <p>本轮暂无公开操作记录。</p>}
-      <details className="assistant-trace-technical" data-reading-key={diagnosticsKey} open={diagnosticsOpen}
-        onToggle={event => {
-          const next = event.currentTarget.open;
-          setDiagnosticsOpen(next);
-          reading?.save(diagnosticsKey, next);
-        }}>
-        <summary><ChevronRight aria-hidden size={14}/>用量与技术详情</summary>
-        {diagnosticsOpen ? running ? <p>本轮结束后可查看用量和技术详情。</p>
-          : error ? <div role="alert"><p>执行记录暂时无法读取。</p><Button variant="ghost" type="button" onClick={() => setRetry(value => value + 1)}>重试读取记录</Button></div>
-            : trace ? <>
-              <TurnUsage trace={trace} model={model}/>
-              {trace.failure_class ? <p>运行记录包含{failureLabels[trace.failure_class] ?? "一次失败"}。</p> : null}
-              {trace.retry_count ? <p>内部重试 {trace.retry_count} 次</p> : null}
-              {events.length ? <ol className="assistant-trace-events" aria-label="技术事件">
-                {events.map((event, index) => <TraceEvent key={event.event_id ?? `${event.type}:${event.step ?? index}`} event={event}/>)}
-              </ol> : null}
-              {earlier === "error" ? <p role="alert">较早的记录暂时无法读取。</p> : null}
-              {trace.next_before != null ? <Button variant="ghost" type="button" disabled={earlier === "loading"} onClick={() => void loadEarlier(trace.next_before!)}>{earlier === "loading" ? "正在读取…" : "加载更早记录"}</Button> : null}
-            </> : <p role="status">正在读取执行记录…</p> : null}
-      </details>
+      {running ? <p>本轮结束后可查看用量和技术详情。</p>
+        : error ? <div role="alert"><p>执行记录暂时无法读取。</p><Button variant="ghost" type="button" onClick={() => setRetry(value => value + 1)}>重试读取记录</Button></div>
+          : trace ? <>
+            <TurnUsage trace={trace} model={model}/>
+            {trace.failure_class ? <p>运行记录包含{failureLabels[trace.failure_class] ?? "一次失败"}。</p> : null}
+            {trace.retry_count ? <p>内部重试 {trace.retry_count} 次</p> : null}
+            {events.length ? <ol className="assistant-trace-events" aria-label="技术事件">
+              {events.map((event, index) => <TraceEvent key={event.event_id ?? `${event.type}:${event.step ?? index}`} event={event}/>)}
+            </ol> : null}
+            {earlier === "error" ? <p role="alert">较早的记录暂时无法读取。</p> : null}
+            {trace.next_before != null ? <Button variant="ghost" type="button" disabled={earlier === "loading"} onClick={() => void loadEarlier(trace.next_before!)}>{earlier === "loading" ? "正在读取…" : "加载更早记录"}</Button> : null}
+          </> : <p role="status">正在读取执行记录…</p>}
     </div> : null}
   </details>;
 }
