@@ -54,6 +54,7 @@ import { VideoEditingStage, VideoClipInspector, VideoClipQuickEditor, createVide
 import editorUi from "./VideoEditor.module.css";
 import type { BusyAction, PendingLocalEdit } from './creation-task/edit-context';
 import type { OpenAssistantResult } from "@/lib/types/assistant";
+import { savedAssistantResultLocation } from "./creation-task/assistant-result-location";
 import { savedAssistantAudioResult } from "./creation-task/assistant-result-audio";
 import type { WorkspaceView } from './creation-task/stage-navigation';
 import { queuedEditNotice } from './creation-task/edit-context';
@@ -1763,13 +1764,36 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [stageDetailsRequest, setStageDetailsRequest] = useState<object | null>(null);
 
   function openAssistantResult(stage: Parameters<OpenAssistantResult>[0], turn: AssistantConversationTurn) {
+    const current = currentWorkspace.current;
+    const location = savedAssistantResultLocation(turn, current.task.id);
+    if (workbenchPage?.active === false || !location || location.stage !== stage) {
+      return "请回到这次操作所属的作品查看结果。";
+    }
+    if (location.stage === "script") {
+      const shown = current.scripts[0];
+      if (shown?.id !== location.scriptId || location.updatedAt && shown.updated_at !== location.updatedAt) {
+        return "这条回复对应较早的文案版本。可在本轮回执中核对当时的修改。";
+      }
+      openEditingView("script");
+      return;
+    }
     const audioResult = stage === "montage" ? savedAssistantAudioResult(turn) : null;
     if (!audioResult) {
+      if (current.task.current_timeline_version_id !== location.versionId) {
+        return "这次修改保存在另一个时间线版本中，请在原作品的版本历史中查看。";
+      }
+      if (location.stage === "narration" && (location.segmentId || location.sectionId)) {
+        const segment = current.narration?.segments.find(item => location.segmentId
+          ? item.id === location.segmentId : item.source_section_id === location.sectionId);
+        if (!segment) return "当前配音中找不到这次修改的段落，请重新读取原作品。";
+        openEditingView("narration");
+        selectNarrationSegment(segment.id);
+        return;
+      }
       openEditingView(stage);
       return;
     }
-    const current = currentWorkspace.current;
-    if (audioResult.taskId !== current.task.id || audioResult.workspaceId !== current.task.workspace_id || workbenchPage?.active === false) {
+    if (audioResult.taskId !== current.task.id || audioResult.workspaceId !== current.task.workspace_id) {
       return "这条音频修改属于原作品，请回到该作品查看。";
     }
     if (audioResult.versionId !== current.task.current_timeline_version_id) {
