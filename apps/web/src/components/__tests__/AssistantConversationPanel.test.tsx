@@ -2957,3 +2957,26 @@ it("keeps a persisted confirmation waiting after reopening the settled turn", ()
   expect(screen.getByText("请先确认制作要求。")).toBeVisible();
   expect(screen.queryByText("未收到结果")).not.toBeInTheDocument();
 });
+
+it("reads the confirmed timeline save once while keeping the version action and source receipt", () => {
+  const saved = projectedTaskConversation("confirmed");
+  const turn = saved.turns[0];
+  const reply = "修改已保存到可撤销的时间线版本；本次尚未重新生成视频。";
+  const repeated = "修改已应用并保存到草稿，可撤销；成片尚未重新生成。";
+  turn.assistant_text = `${reply}\n\n${repeated}`;
+  const event = {type:"business_result" as const,event_id:"confirmed-save",status:"confirmed",phase:"apply",
+    task_id:"task-one",actionable:false,result_version_id:"v2",waiting_reason:"当前草稿已保存；这次修改尚未反映到成片。"};
+  turn.events = [event];
+  turn.result!.continuation = event;
+  const open = vi.fn();
+  render(<AssistantConversationPanel state={state({conversation:saved})} input="" onInput={vi.fn()} onSend={vi.fn()}
+    onOpenResultStage={open} busy={false} configured scopeLabel="当前作品"/>);
+  expect(screen.getByText(reply)).toBeVisible();
+  expect(screen.queryByText(repeated)).not.toBeInTheDocument();
+  const details = screen.getByText("回执详情").closest("details")!;
+  expect(details).not.toHaveAttribute("open");
+  expect(within(details).getByText(event.waiting_reason)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button",{name:"查看当前剪辑"}));
+  expect(open).toHaveBeenCalledWith("montage", turn);
+  expect(turn.assistant_text).toContain(repeated);
+});

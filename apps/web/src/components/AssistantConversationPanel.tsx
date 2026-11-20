@@ -510,7 +510,17 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
   const showResultSummary = !resultSummaryRepeated && !repeatedTimelineSave;
   const savedStage = taskScopeId && !windowInputMismatch ? savedResultStage(turn, taskScopeId) : null;
   const resultStage = onOpenResultStage ? savedStage : null;
-  const blocks = turnBlocks(turn, continuation?.event_id);
+  // The saved reply can include both the host's timeline receipt and its
+  // standardized closing paragraph. Keep the former in the reading flow.
+  const savedReply = turn.assistant_text.trimEnd();
+  const closingReceipt = businessSummary ? `\n\n${businessSummary}` : null;
+  const duplicateClosingReceipt = continuation?.phase === "apply" && continuation.status === "confirmed"
+    && Boolean(continuation.result_version_id) && !unknownRequest && closingReceipt
+    && savedReply.endsWith(closingReceipt)
+    && savedReply.slice(0, -closingReceipt.length).includes("修改已保存到可撤销的时间线版本；本次尚未重新生成视频。");
+  const readingTurn = duplicateClosingReceipt && closingReceipt
+    ? {...turn, assistant_text: savedReply.slice(0, -closingReceipt.length)} : turn;
+  const blocks = turnBlocks(readingTurn, continuation?.event_id);
   const tools = blocks.flatMap(block => block.kind === "tools" ? block.tools : []);
   const unknownTool = tools.find(tool => tool.failure?.submission_effect === "unknown" || tool.state === "unreturned");
   const lastTool = tools.at(-1);
