@@ -16,6 +16,7 @@ from app.assistant.projection import (
     public_activity_event,
     public_event_at,
 )
+from app.assistant.turn_control import AssistantProcessReleaseError
 from app.schemas import AssistantStreamEvent
 
 
@@ -158,6 +159,18 @@ class AssistantStreamTransport:
             if not disconnected.is_set():
                 events.put(safe_event)
 
+        def persist_failure(message: str) -> None:
+            if not turn_ref["id"]:
+                return
+            try:
+                self._forget_control(turn_ref["id"])
+            except AssistantProcessReleaseError:
+                self._logger.warning("assistant turn release remains unverified")
+            publish({"type": "text_end"})
+            stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
+                "kind": "failure", "message": message,
+            })
+
         def work() -> None:
             terminal_event: dict[str, object] | None = None
             try:
@@ -176,22 +189,14 @@ class AssistantStreamTransport:
                         and isinstance(exc.detail.get("message"), str)):
                     detail = exc.detail["message"]
                     failure = {"code": "creation_task_timeline_version_conflict"}
-                if turn_ref["id"]:
-                    self._forget_control(turn_ref["id"])
-                    stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
-                        "kind": "failure", "message": self._safe_text(detail, workspace_id),
-                    })
+                persist_failure(self._safe_text(detail, workspace_id))
                 if not disconnected.is_set():
                     terminal_event = AssistantStreamEvent(
                         type="error", status=exc.status_code,
                         message=self._safe_text(detail, workspace_id), failure=failure,
                     ).model_dump(mode="json", exclude_none=True)
             except Exception as exc:
-                if turn_ref["id"]:
-                    self._forget_control(turn_ref["id"])
-                    stream_conversation_repo.finish_turn(turn_ref["id"], "failed", result={
-                        "kind": "failure", "message": "对话服务未能完整返回结果，请查看当前任务状态。",
-                    })
+                persist_failure("对话服务未能完整返回结果，请查看当前任务状态。")
                 self._logger.error("assistant stream worker failed (%s)", type(exc).__name__)
                 if not disconnected.is_set():
                     terminal_event = AssistantStreamEvent(

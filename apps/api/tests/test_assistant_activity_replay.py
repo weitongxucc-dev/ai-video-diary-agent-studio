@@ -218,3 +218,35 @@ def test_read_receipts_describe_the_read_instead_of_the_workflow_state():
     assert file["type"] == "tool_end" and file["ok"] is False
     assert file["summary"] == "原生文件路径必须位于 /task"
     assert "submission_effect" not in file["failure"]
+
+
+
+def test_stop_release_error_still_finishes_stream_and_persists_failure(tmp_path):
+    from app.assistant.turn_control import AssistantProcessReleaseError
+
+    repo = ConversationRepository(tmp_path / "stop.sqlite")
+    chat = repo.current_or_create("local", "member", "home", "home")
+    draft = repo.save_draft(chat["id"], "local", "member", "停止核查", 0)
+    turn, _ = repo.create_turn_idempotent(chat["id"], "local", "member", "停止核查", "send", draft["draft_version"])
+    message = "停止已登记，但原生执行的退出与资源释放尚未核实；请回读原请求。"
+
+    def forget(_turn_id):
+        raise AssistantProcessReleaseError("private cleanup details")
+
+    transport = AssistantStreamTransport(conversations_for=lambda: repo, runtime_lock=threading.Lock(),
+        workers=set(), safe_text=lambda text, _: text, known_secrets_for=lambda _: [],
+        forget_control=forget, logger=logging.getLogger(__name__))
+    api = FastAPI()
+
+    @api.get("/")
+    def stream():
+        def execute(_publish):
+            raise HTTPException(409, message)
+
+        return transport.response(execute, workspace_id="local", turn_id=turn["id"])
+
+    response = TestClient(api).get("/")
+    events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+    assert events[-1] == {"type": "error", "status": 409, "message": message}
+    saved = repo.get_turn(turn["id"])
+    assert saved["status"] == "failed" and saved["result"]["message"] == message
