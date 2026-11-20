@@ -10,6 +10,7 @@ from fastapi.encoders import jsonable_encoder
 
 from app.assistant import turn_admission_use_case as admission
 from app.assistant import task_turn_use_case as task
+from app.assistant.turn_control import AssistantProcessReleaseError
 from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.creation.native_task_operations import NativeOperationHandler
 from app.assistant.input_delivery import AssistantInputDelivery
@@ -168,6 +169,11 @@ class TaskTurnHTTPAdapter:
                     result = self._answer(stage, request, on_event, response_model)
                 except HTTPException as exc:
                     stage = operation.throw(admission.TurnRejected(exc.status_code, exc.detail))
+                except AssistantProcessReleaseError as exc:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="停止已登记，但原生执行的退出与资源释放尚未核实；请回读原请求。",
+                    ) from exc
                 except Exception as exc:
                     stage = operation.throw(exc)
                 else:
