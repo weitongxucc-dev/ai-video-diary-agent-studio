@@ -250,3 +250,24 @@ def test_stop_release_error_still_finishes_stream_and_persists_failure(tmp_path)
     assert events[-1] == {"type": "error", "status": 409, "message": message}
     saved = repo.get_turn(turn["id"])
     assert saved["status"] == "failed" and saved["result"]["message"] == message
+
+
+def test_media_root_refusal_requires_a_typed_authority_failure():
+    from app.creation.editing.exact_preview_use_case import _media_root_refusal
+    from app.creation.editing.metadata_use_case import EditPreviewRejected
+    from app.materials.contracts import MediaAuthorityError
+
+    plain = EditPreviewRejected(422, "重新扫描当前工作区已授权素材根内的文件。")
+    assert _media_root_refusal(plain) is None
+    wrapped = EditPreviewRejected(422, str(plain))
+    wrapped.__cause__ = MediaAuthorityError(reason="asset_outside_authorized_root",
+        impact="素材不会被采用。", repair_action="重新扫描已授权素材。")
+    assert _media_root_refusal(wrapped) == {
+        "error": "edit_media_authorization_rejected", "reason_code": "asset_outside_authorized_root",
+        "reason": "服务端拒绝使用当前素材，素材路径超出本次授权范围。",
+        "impact": "本次修改未保存。", "repair_action": "重新扫描已授权素材。",
+        "submission_effect": "rejected", "retryable": False,
+    }
+    wrapped.__cause__ = MediaAuthorityError(reason="media_reference_not_registered",
+        impact="素材尚未登记。", repair_action="登记后重试。")
+    assert _media_root_refusal(wrapped) is None
