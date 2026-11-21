@@ -55,6 +55,7 @@ export type DevicePreparationReceipt = {
   plan_id: string;
   state: string;
   wait_reason: string | null;
+  failure_code?: string;
   failure_reason?: string;
   repair_action?: string;
 };
@@ -86,7 +87,11 @@ export async function getDeviceResourceStatus(signal?: AbortSignal): Promise<Dev
 
 function receipt(value: DevicePreparationReceipt, expected?: string): DevicePreparationReceipt {
   if (!value || typeof value.id !== 'string' || !value.id || typeof value.plan_id !== 'string'
-      || typeof value.state !== 'string' || expected !== undefined && value.id !== expected) {
+      || typeof value.state !== 'string' || (value.wait_reason != null && typeof value.wait_reason !== 'string')
+      || (value.failure_code != null && typeof value.failure_code !== 'string')
+      || (value.failure_reason != null && typeof value.failure_reason !== 'string')
+      || (value.repair_action != null && typeof value.repair_action !== 'string')
+      || expected !== undefined && value.id !== expected) {
     throw new Error('原设备准备回执身份无法核对，请保留原请求继续查询。');
   }
   return value;

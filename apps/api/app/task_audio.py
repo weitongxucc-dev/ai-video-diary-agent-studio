@@ -1154,8 +1154,6 @@ class TaskMediaJobs:
         access = self._read_access(job, event, actor, check_scope=check_scope)
         if access != "ready":
             return access
-        if event.get("operation") == "ffmpeg_execution" and event.get("result_kind") == "media_output":
-            return self._check_media_output_result(job, event)
         try:
             if event["arguments"].get("_media_kind") == "clip_preview" and "_clip_preview" not in event["arguments"]:
                 if self.clip_preview is None:
@@ -1169,37 +1167,6 @@ class TaskMediaJobs:
         if current != event["input_facts"] or resources != event["resources"]:
             return "stale"
         return "ready"
-
-    def _check_media_output_result(self, job, event):
-        """Keep a published FFmpeg result readable after it advances the task version.
-
-        The sealed input facts intentionally point at the parent version. Once the
-        media execution publishes a child version, recomputing the original facts
-        against the task's current version would incorrectly mark the durable
-        result stale. The result event and child snapshot are the authoritative
-        post-publication facts for this operation.
-        """
-        if job.status != "succeeded":
-            return "ready"
-        try:
-            result = self.repository.execution_records.get_task_event(
-                job.workspace_id, f"event_{job.id}_result").payload["result"]
-            if result.get("status") != "succeeded":
-                return "stale"
-            timeline_version_id = result.get("timeline_version_id")
-            if not timeline_version_id or result.get("request_id") != event["arguments"]["edit_plan"]["request_id"]:
-                return "stale"
-            task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
-            if task.current_timeline_version_id != timeline_version_id:
-                return "stale"
-            version = self.repository.timeline_records.get_timeline_version(job.workspace_id, timeline_version_id)
-            media_snapshot = version.snapshot.get("media_execution")
-            if not isinstance(media_snapshot, dict) or media_snapshot.get("request_id") != result.get("request_id"):
-                return "stale"
-            output_refs = result.get("output_refs")
-            return "ready" if isinstance(output_refs, list) and output_refs else "stale"
-        except (KeyError, TypeError, AttributeError):
-            return "stale"
 
     def prepare_submission(self, actor, task_id, operation, arguments, result_kind):
         """Resolve identity, source facts and resources before a durable request claim."""

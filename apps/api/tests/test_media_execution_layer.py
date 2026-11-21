@@ -12,7 +12,7 @@ from threading import Event
 
 import pytest
 
-from app.creation.contracts import CreationTask, JobRun, TaskEvent, TimelineVersion
+from app.creation.contracts import CreationTask, JobRun, TimelineVersion
 from app.creation.plan_contracts import CreationPlan
 from app.media_execution import (
     FFMPEG_OPERATION,
@@ -28,7 +28,6 @@ from app.media_execution.capabilities import ToolDependency, detect_dependencies
 from app.media_execution.contracts import MediaExecutionError
 from app.media_execution.worker import FfmpegWorker
 from app.production import ProductionRepository
-from app.task_audio import TaskMediaJobs
 
 
 def _case(tmp_path: Path):
@@ -101,30 +100,6 @@ def test_real_media_chain_persists_job_artifacts_timeline_and_request_log(tmp_pa
     assert log_path.exists()
     assert all(json.loads(line)["request_id"] == "req-real-chain" for line in log_path.read_text().splitlines())
     assert repo.execution_records.list_artifact_records("local", "task")
-
-
-def test_published_media_output_remains_current_after_advancing_task_version(tmp_path):
-    repo, base = _case(tmp_path)
-    output = tmp_path / "inputs" / "source.mp4"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(b"media")
-    plan = EditPlan("local", "task", base.id, "req-readable-output", (MediaOperation("export", (str(output),), "final.mp4"),))
-    result = MediaExecutionLayer(repo, tmp_path / "outputs", worker=type("Worker", (), {
-        "execute": lambda self, plan, job_id, output_root, *, progress=None: {
-            "outputs": [{"path": str(output), "operation": "export", "output_name": "final.mp4", "summary": {"size_bytes": 5}}],
-            "log_path": str(output.with_suffix(".jsonl")), "request_id": plan.request_id,
-        },
-    })(), connection_factory=repo._connect).submit(plan)
-    outer_job = JobRun("outer-job", "local", "task", "task_media", "outer-key", "outer-digest")
-    event = {"operation": "ffmpeg_execution", "result_kind": "media_output", "arguments": {"edit_plan": plan.as_dict()}}
-    repo.job_records.create_job_run(outer_job)
-    repo.job_records.claim_job_run("local", "outer-job")
-    repo.job_records.finish_job_run("local", "outer-job", status="succeeded")
-    repo.execution_records.append_task_event(TaskEvent(
-        "event_outer-job_result", "local", "task", "outer-job", "task_media_result", {"result": result}
-    ))
-    media = TaskMediaJobs(repo, facts=lambda *args: ({}, {}), verify_identity=lambda actor: "ready")
-    assert media._check_media_output_result(outer_job, event) == "ready"
 
 
 def test_failure_is_persisted_and_retry_uses_original_request_id(tmp_path):

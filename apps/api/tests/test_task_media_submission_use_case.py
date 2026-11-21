@@ -157,4 +157,123 @@ def test_public_media_output_receipt_reads_inner_timeline_and_artifact_facts():
     assert result["result_url"] == "/api/creation-tasks/task-1/media-jobs/outer-job"
     assert result["result"]["timeline_version_id"] == "timeline-2"
     assert result["result"]["output_refs"] == ["media/inner-job/1-final.mp4"]
+    assert result["result"]["output_urls"] == [
+        "/api/creation-tasks/task-1/media-jobs/outer-job/outputs/1"]
+
+
+def test_public_media_output_download_requires_registered_timeline_and_artifact(tmp_path):
+    from app.creation.media_result_use_case import MediaResultRejected
+
+    outer = SimpleNamespace(
+        id='outer-job', workspace_id='local', task_id='task-1', input_digest='digest',
+        status='succeeded', created_at=datetime.now(UTC), failure_reason=None, repair_action=None,
+    )
+    ref = 'media/inner-job/1-final.mp4'
+    start = {
+        'member_id': 'member-1', 'operation': 'ffmpeg_execution', 'result_kind': 'media_output',
+        'input_digest': 'digest', 'input_facts': {'base_version_id': 'timeline-1'},
+        'arguments': {'edit_plan': {'request_id': 'request-1'}},
+    }
+    inner = {'job_id': 'inner-job', 'request_id': 'request-1', 'base_version_id': 'timeline-1',
+             'timeline_version_id': 'timeline-2', 'output_refs': [ref]}
+    output = tmp_path / 'final.mp4'
+    output.write_bytes(b'video')
+
+    class Media:
+        def read(self, workspace_id, job_id):
+            return outer, start
+
+        def authorization_verdict(self, *_args, **_kwargs):
+            return 'ready'
+
+        def check(self, *_args, **_kwargs):
+            return 'ready'
+
+        def resource_admission_receipt(self, *_args, **_kwargs):
+            return None
+
+    class Events:
+        def get_task_event(self, workspace_id, event_id):
+            return SimpleNamespace(payload={'result': inner})
+
+        def list_artifact_records(self, workspace_id, task_id):
+            return [SimpleNamespace(logical_ref=ref, producer_job_id='inner-job', kind='media_output', size_bytes=5)]
+
+    class Timeline:
+        def get_timeline_version(self, workspace_id, version_id):
+            return SimpleNamespace(task_id='task-1', snapshot={'media_execution': {'job_id': 'inner-job', 'outputs': [ref]}})
+
+    class Store:
+        def resolve_file(self, logical_ref):
+            assert logical_ref == ref
+            return output
+
+    class Repository:
+        execution_records = Events()
+        timeline_records = Timeline()
+
+    class Outputs:
+        artifact_store = Store()
+
+        def published_outputs_current(self, _job):
+            return True
+
+    class Scheduler:
+        def task_media_result_request(self, *_args):
+            return None, {}
+
+    use_case = MediaResultUseCase(Repository(), Outputs())
+    actor = CreationExecutionActor('local', 'member-1')
+    assert use_case.output_path(Media(), 'task-1', 'outer-job', 1, actor, Scheduler()) == output
+
+    class MissingArtifacts(Events):
+        def list_artifact_records(self, workspace_id, task_id):
+            return []
+
+    Repository.execution_records = MissingArtifacts()
+    with pytest.raises(MediaResultRejected, match='尚未登记') as missing:
+        use_case.output_path(Media(), 'task-1', 'outer-job', 1, actor, Scheduler())
+    assert missing.value.status_code == 409
+
+
+def test_public_media_output_download_rejects_cancelled_job_and_cross_workspace():
+    from app.creation.media_result_use_case import MediaResultRejected
+
+    job = SimpleNamespace(id='cancelled-job', workspace_id='local', task_id='task-1', input_digest='digest', status='cancelled',
+                          created_at=datetime.now(UTC), failure_reason='media_cancelled', repair_action='重试原请求')
+    event = {'member_id': 'member-1', 'operation': 'ffmpeg_execution', 'result_kind': 'media_output',
+             'input_facts': {'base_version_id': 'timeline-1'}, 'arguments': {'edit_plan': {'request_id': 'request-1'}}}
+
+    class Media:
+        def read(self, workspace_id, job_id):
+            return job, event
+
+        def authorization_verdict(self, *_args, **_kwargs):
+            return 'ready'
+
+        def check(self, *_args, **_kwargs):
+            return 'ready'
+
+        def resource_admission_receipt(self, *_args, **_kwargs):
+            return None
+
+    class Outputs:
+        def published_outputs_current(self, _job):
+            return False
+
+    class Scheduler:
+        def task_media_result_request(self, *_args):
+            return None, {}
+
+    use_case = MediaResultUseCase(SimpleNamespace(), Outputs())
+    with pytest.raises(MediaResultRejected, match='尚无可预览') as cancelled:
+        use_case.output_path(Media(), 'task-1', 'cancelled-job', 1,
+                             CreationExecutionActor('local', 'member-1'), Scheduler())
+    assert cancelled.value.status_code == 409
+
+    event['member_id'] = 'other-member'
+    with pytest.raises(MediaResultRejected) as foreign:
+        use_case.output_path(Media(), 'task-1', 'cancelled-job', 1,
+                             CreationExecutionActor('local', 'member-1'), Scheduler())
+    assert foreign.value.status_code == 404
 
