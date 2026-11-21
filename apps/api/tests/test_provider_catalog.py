@@ -4,7 +4,7 @@ from app.config import Settings
 
 
 def test_catalog_covers_openai_compatible_provider_presets_without_prices():
-    expected = {"minimax", "deepseek", "openai", "openrouter", "gemini", "anthropic", "moonshot", "qwen", "zhipu", "hunyuan", "siliconflow", "mistral", "groq", "together", "fireworks", "xai", "cohere", "perplexity", "ollama", "custom"}
+    expected = {"minimax", "deepseek", "openai", "openrouter", "gemini", "anthropic", "moonshot", "qwen", "zhipu", "baichuan", "hunyuan", "siliconflow", "mistral", "groq", "together", "fireworks", "xai", "cohere", "perplexity", "ollama", "lmstudio", "custom"}
     assert set(PROVIDER_CATALOG) == expected
     rows = provider_catalog_for_settings()
     assert all(row["usage"] == "provider_or_unknown" for row in rows)
@@ -28,6 +28,7 @@ def test_configured_model_requires_keys_only_for_keyed_providers():
     else:
         raise AssertionError("OpenAI without a key must remain recoverably unavailable")
     assert _configured_model(Settings(llm_provider="ollama", llm_model="qwen3:8b", llm_base_url="http://127.0.0.1:11434/v1"))[1] == "qwen3:8b"
+    assert _configured_model(Settings(llm_provider="lmstudio", llm_model="loaded-model", llm_base_url="http://127.0.0.1:1234/v1"))[1] == "loaded-model"
     assert _configured_model(Settings(llm_provider="custom", llm_model="fixture", llm_base_url="https://provider.example/v1"))[1] == "fixture"
 
 
