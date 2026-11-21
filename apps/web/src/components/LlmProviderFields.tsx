@@ -4,61 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import formStyles from "./SettingsForm.module.css";
 import styles from "./LlmProviderFields.module.css";
 import { CardSelect, HomeCardDialog } from "./HomeCardDialog";
-
-type ProviderPreset = {
-  id: string;
-  label: string;
-  baseUrl: string;
-  models: string[];
-  apiKeyOptional?: boolean;
-};
-
-const PROVIDERS: ProviderPreset[] = [
-  {
-    id: "minimax",
-    label: "MiniMax",
-    baseUrl: "https://api.minimax.cn/v1",
-    models: ["MiniMax-M3"],
-  },
-  {
-    id: "deepseek",
-    label: "DeepSeek",
-    baseUrl: "https://api.deepseek.com",
-    models: ["deepseek-flash", "deepseek-v4-pro"],
-  },
-  {
-    id: "openai",
-    label: "OpenAI",
-    baseUrl: "https://api.openai.com/v1",
-    models: ["gpt-5.4", "gpt-5-mini"],
-  },
-  {
-    id: "openrouter",
-    label: "OpenRouter",
-    baseUrl: "https://openrouter.ai/api/v1",
-    models: ["openai/gpt-5.4", "anthropic/claude-sonnet-4.6"],
-  },
-  {
-    id: "gemini",
-    label: "Google Gemini",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-    models: ["gemini-3-flash-preview", "gemini-3.1-pro-preview"],
-  },
-  {
-    id: "ollama",
-    label: "Ollama（本机）",
-    baseUrl: "http://127.0.0.1:11434/v1",
-    models: ["qwen3:8b", "gemma3:12b"],
-    apiKeyOptional: true,
-  },
-  {
-    id: "custom",
-    label: "自定义兼容接口",
-    baseUrl: "",
-    models: [],
-    apiKeyOptional: true,
-  },
-];
+import { LLM_PROVIDER_PRESETS, llmProviderPreset } from "@/lib/llm-providers";
 
 type LlmProviderFieldsProps = {
   provider: string;
@@ -73,7 +19,7 @@ export function LlmProviderFields({
   model: initialModel,
   apiKeyConfigured,
 }: LlmProviderFieldsProps) {
-  const fallbackProvider = PROVIDERS.some((item) => item.id === initialProvider)
+  const fallbackProvider = LLM_PROVIDER_PRESETS.some((item) => item.id === initialProvider)
     ? initialProvider
     : "custom";
   const [provider, setProvider] = useState(fallbackProvider);
@@ -82,12 +28,12 @@ export function LlmProviderFields({
   const [keyDeleteArmed, setKeyDeleteArmed] = useState(false);
   const keyDeleteSubmit = useRef<HTMLButtonElement>(null);
   const preset = useMemo(
-    () => PROVIDERS.find((item) => item.id === provider) ?? PROVIDERS.at(-1)!,
+    () => llmProviderPreset(provider),
     [provider],
   );
 
   function selectProvider(nextProvider: string) {
-    const next = PROVIDERS.find((item) => item.id === nextProvider);
+    const next = LLM_PROVIDER_PRESETS.find((item) => item.id === nextProvider);
     if (!next) return;
     setProvider(next.id);
     setBaseUrl(next.baseUrl);
@@ -100,7 +46,7 @@ export function LlmProviderFields({
     <div className={`llm-settings-stack ${formStyles.surface}`}>
       <label className="settings-field wide">
           <span>服务商</span>
-        <CardSelect label="模型服务" name="llm_provider" onChange={selectProvider} value={provider} options={PROVIDERS.map(item => ({ value:item.id, label:item.label }))} />
+        <CardSelect label="模型服务" name="llm_provider" onChange={selectProvider} value={provider} options={LLM_PROVIDER_PRESETS.map(item => ({ value:item.id, label:item.label }))} />
         <small className="settings-field-helper">
           选择你已开通的服务。
         </small>
