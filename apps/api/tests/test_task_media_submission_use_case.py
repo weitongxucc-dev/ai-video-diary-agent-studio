@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.creation.media_result_use_case import MediaResultUseCase
 from app.creation_execution import CreationExecutionActor
+from app.task_audio import TaskMediaJobs, media_digest
 from app.task_media_routes import build_task_media_router
 from app.task_media_submission_use_case import (
     BoundMediaSubmission,
@@ -276,4 +277,39 @@ def test_public_media_output_download_rejects_cancelled_job_and_cross_workspace(
         use_case.output_path(Media(), 'task-1', 'cancelled-job', 1,
                              CreationExecutionActor('local', 'member-1'), Scheduler())
     assert foreign.value.status_code == 404
+
+
+def test_successful_media_output_stays_current_after_publishing_child_version():
+    actor = CreationExecutionActor("local", "member-1")
+    event = {
+        "member_id": actor.member_id,
+        "operation": "ffmpeg_execution",
+        "result_kind": "media_output",
+        "input_facts": {"base_version_id": "timeline-base"},
+        "resources": {},
+        "arguments": {"edit_plan": {"request_id": "request-1"}},
+    }
+    event["input_digest"] = media_digest(event)
+    job = SimpleNamespace(id="outer-job", workspace_id="local", task_id="task-1",
+                          input_digest=event["input_digest"])
+    task = SimpleNamespace(owner_user_id=None, current_timeline_version_id="timeline-child")
+
+    class Events:
+        def get_task_event(self, workspace_id, event_id):
+            assert workspace_id == "local" and event_id == "event_outer-job_result"
+            return SimpleNamespace(payload={"result": {
+                "status": "succeeded", "request_id": "request-1",
+                "timeline_version_id": "timeline-child", "output_refs": ["media/child/1.mp4"],
+            }})
+
+    repository = SimpleNamespace(
+        execution_records=Events(),
+        task_records=SimpleNamespace(get_creation_task=lambda *_args: task),
+    )
+    media = TaskMediaJobs(repository, facts=lambda *_args: ({}, {}),
+                          verify_identity=lambda _actor: "ready")
+
+    assert media.check(job, event, actor) == "ready"
+    task.current_timeline_version_id = "timeline-other"
+    assert media.check(job, event, actor) == "stale"
 
