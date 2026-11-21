@@ -2,12 +2,13 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.creation.media_result_use_case import MediaResultRejected
 from app.creation_execution import CreationExecutionActor
 from app.device_resource_status import preparation_error_detail
 from app.task_media_submission_use_case import TaskMediaSubmissionRejected
 
 
-def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, read_for, read_components_for, runtime_for, repository_for, receipt_for, observations_for, submit_for=None, route_names) -> APIRouter:
+def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, read_for, read_components_for, runtime_for, repository_for, receipt_for, observations_for, output_for=None, file_response_for=None, submit_for=None, route_names) -> APIRouter:
     router = APIRouter()
 
     @router.post('/api/creation-tasks/{task_id}/media-jobs')
@@ -41,6 +42,17 @@ def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, rea
     @router.get('/api/creation-tasks/{task_id}/media-jobs/{job_id}')
     def get_task_media_job(task_id: str, job_id: str, request: Request):
         return read_for()(task_id, job_id, request)
+
+    @router.get('/api/creation-tasks/{task_id}/media-jobs/{job_id}/outputs/{output_index}')
+    def get_task_media_output(task_id: str, job_id: str, output_index: int, request: Request):
+        if output_for is None or file_response_for is None:
+            raise HTTPException(status_code=404, detail='媒体输出读取入口不可用')
+        try:
+            path = output_for()(task_id, job_id, output_index, request)
+        except MediaResultRejected as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return file_response_for()(path, media_type='video/mp4', filename=path.name,
+                                   content_disposition_type='inline', headers={'Cache-Control': 'no-store'})
 
     @router.post('/api/creation-tasks/{task_id}/media-jobs/{job_id}/cancel')
     def cancel_task_media_job(task_id: str, job_id: str, request: Request):

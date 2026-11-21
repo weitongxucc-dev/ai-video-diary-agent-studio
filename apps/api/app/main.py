@@ -1960,6 +1960,15 @@ def _read_media_result(task_id, job_id, request):
         raise HTTPException(exc.status_code, exc.detail) from exc
 
 
+def _media_result_output(task_id, job_id, output_index, request):
+    actor = _require_permit_actor(request, current_workspace_id(request))
+    media, requests = _media_result_read_components()
+    try:
+        return _media_results().output_path(media, task_id, job_id, output_index, actor, requests)
+    except MediaResultRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+
+
 def _related_media_result(task_id, request, turn_id, conversation_id, reported):
     # Schema validation precedes runtime acquisition, as in the original gate.
     related = TaskMediaJobResponse.model_validate(reported)
@@ -2068,6 +2077,8 @@ def _task_media_http_router(route_names):
         list_for=lambda: _list_goal_media_jobs,
         read_for=lambda: _read_media_result,
         read_components_for=lambda: _media_result_read_components,
+        output_for=lambda: _media_result_output,
+        file_response_for=lambda: FileResponse,
         runtime_for=lambda: _creation_runtime,
         repository_for=lambda: production_repo,
         receipt_for=lambda: _media_result_receipt,
@@ -2091,6 +2102,7 @@ def _submit_task_media_job(task_id, actor, payload):
 
 app.include_router(_task_media_http_router(("list_task_media_jobs",)))
 app.include_router(_task_media_http_router(("submit_task_media_job",)))
+app.include_router(_task_media_http_router(("get_task_media_output",)))
 
 
 def _list_goal_media_jobs(task, actor, *, cursor=None, limit=20):
