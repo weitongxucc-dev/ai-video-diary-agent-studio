@@ -1,4 +1,9 @@
-from app.assistant.provider_catalog import PROVIDER_CATALOG, provider_catalog_for_settings, provider_contract, provider_spec
+from app.assistant.provider_catalog import (
+    PROVIDER_CATALOG,
+    provider_catalog_for_settings,
+    provider_contract,
+    provider_spec,
+)
 from app.assistant.runtime_configuration import _configured_model
 from app.config import Settings
 
