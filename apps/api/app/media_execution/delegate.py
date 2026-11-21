@@ -1,10 +1,4 @@
-"""Internal TaskMediaJobs delegate for the future shared-owner wiring.
-
-This module deliberately does not expose an HTTP result kind. The existing
-TaskMediaJobResponse has no final-FFmpeg result variant, so the integration
-owner must map this internal receipt to an already-approved product result
-contract while keeping TaskMediaJobs as the public fact source.
-"""
+"""Adapt the public TaskMediaJobs execution boundary to media execution."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -81,12 +75,12 @@ class TaskMediaExecutionDelegate:
 
     def resume(self, job, event: Mapping[str, Any], actor_identity: Mapping[str, Any]) -> dict[str, Any]:
         plan = self.plan_from_event(event, actor_identity, job=job)
-        result = self.entrypoint.resume(job["id"], plan.workspace_id)
+        result = self.entrypoint.resume(self._job_value(job, "id"), plan.workspace_id)
         return self._receipt(job, plan, result)
 
     def retry(self, job, event: Mapping[str, Any], actor_identity: Mapping[str, Any]) -> dict[str, Any]:
         plan = self.plan_from_event(event, actor_identity, job=job)
-        result = self.entrypoint.retry(job["id"], plan.workspace_id)
+        result = self.entrypoint.retry(self._job_value(job, "id"), plan.workspace_id)
         return self._receipt(job, plan, result)
 
     @staticmethod

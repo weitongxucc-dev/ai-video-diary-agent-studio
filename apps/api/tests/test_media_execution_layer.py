@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from app.creation.contracts import CreationTask, TimelineVersion
+from app.creation.contracts import CreationTask, JobRun, TimelineVersion
 from app.creation.plan_contracts import CreationPlan
 from app.media_execution import (
     FFMPEG_OPERATION,
@@ -137,6 +137,33 @@ def test_retry_creates_a_new_job_but_keeps_the_original_request_id(tmp_path):
     assert retried["job_id"] != failed["job_id"]
 
 
+def test_repeated_submit_reuses_the_persisted_idempotent_job(tmp_path):
+    repo, base = _case(tmp_path)
+
+    class Worker:
+        calls = 0
+
+        def execute(self, plan, job_id, output_root, *, progress=None):
+            self.calls += 1
+            path = output_root / job_id / "final.mp4"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"media")
+            return {"outputs": [{"path": str(path), "operation": "export", "output_name": "final.mp4", "summary": {"size_bytes": 5}}],
+                    "log_path": str(path.with_suffix(".jsonl")), "request_id": plan.request_id}
+
+    worker = Worker()
+    layer = MediaExecutionLayer(repo, tmp_path / "outputs", worker=worker, connection_factory=repo._connect)
+    plan = EditPlan("local", "task", base.id, "req-idempotent", (MediaOperation("export", ("input.mp4",), "final.mp4"),))
+
+    first = layer.submit(plan)
+    second = layer.submit(plan)
+
+    assert first["status"] == "succeeded"
+    assert second == first
+    assert worker.calls == 1
+    assert len(repo.job_records.list_job_runs("local", "task")) == 1
+
+
 def test_caption_adapter_is_business_level_and_keeps_ffmpeg_flags_internal(tmp_path):
     subtitle = tmp_path / "captions.srt"
     subtitle.write_text("1\n00:00:00,000 --> 00:00:00,400\n你好\n", encoding="utf-8")
@@ -219,3 +246,32 @@ def test_task_media_delegate_rejects_failure_without_reason_and_resume_keeps_bas
     result = TaskMediaExecutionDelegate(EntryPoint()).resume({"id": "outer-job"}, event, {})
     assert result["failure_reason"] == "timeline_version_conflict"
     assert result["base_version_id"] == "base"
+
+
+def test_task_media_delegate_resume_and_retry_accept_persisted_jobrun():
+    calls = []
+
+    class EntryPoint:
+        def resume(self, job_id, workspace_id):
+            calls.append(("resume", job_id, workspace_id))
+            return {"status": "failed", "request_id": "req", "failure_reason": "interrupted",
+                    "impact": "未发布", "repair_action": "恢复后重试"}
+
+        def retry(self, job_id, workspace_id):
+            calls.append(("retry", job_id, workspace_id))
+            return {"status": "failed", "request_id": "req", "failure_reason": "retry_failed",
+                    "impact": "未发布", "repair_action": "修复后重试"}
+
+    event = {"workspace_id": "local", "task_id": "task", "arguments": {"edit_plan": {
+        "workspace_id": "local", "task_id": "task", "base_version_id": "base", "request_id": "req",
+        "operations": [{"operation": "export", "inputs": ["input.mp4"], "output_name": "final.mp4"}],
+    }}, "input_facts": {"base_version_id": "base"}}
+    job = JobRun("outer-job", "local", "task", "task_media", "outer-key", "digest", status="interrupted")
+    delegate = TaskMediaExecutionDelegate(EntryPoint())
+
+    resumed = delegate.resume(job, event, {})
+    retried = delegate.retry(job, event, {})
+
+    assert resumed["failure_reason"] == "interrupted"
+    assert retried["failure_reason"] == "retry_failed"
+    assert calls == [("resume", "outer-job", "local"), ("retry", "outer-job", "local")]

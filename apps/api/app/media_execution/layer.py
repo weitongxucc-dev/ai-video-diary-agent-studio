@@ -48,19 +48,43 @@ class MediaExecutionLayer:
 
     def submit(self, plan: EditPlan | dict, *, idempotency_suffix: str | None = None) -> dict[str, object]:
         plan = plan if isinstance(plan, EditPlan) else EditPlan.from_value(plan)
+        digest = hashlib.sha256(json.dumps(plan.as_dict(), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        idempotency_key = f"media:{plan.task_id}:{plan.request_id}{idempotency_suffix or ''}"
+        existing = self.repository.job_records.get_job_run_by_idempotency_key(plan.workspace_id, idempotency_key)
+        if existing is not None:
+            if existing.kind != "media_execution" or existing.task_id != plan.task_id or existing.input_digest != digest:
+                raise ValueError("幂等键已绑定到不同的媒体输入")
+            return self._existing_result(existing, plan)
         self._assert_plan_current(plan)
         job_id = f"media_{uuid4().hex}"
-        digest = hashlib.sha256(json.dumps(plan.as_dict(), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         job = JobRun(id=job_id, workspace_id=plan.workspace_id, task_id=plan.task_id,
-                     kind="media_execution", idempotency_key=f"media:{plan.task_id}:{plan.request_id}{idempotency_suffix or ''}", input_digest=digest)
+                     kind="media_execution", idempotency_key=idempotency_key, input_digest=digest)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            self.repository.job_records.create_job_run(job, connection=conn)
-            self.repository.execution_records.append_task_event(TaskEvent(
-                id=f"event_{job_id}_media_start", workspace_id=plan.workspace_id, task_id=plan.task_id, job_id=job_id,
-                event_type="media_execution_submitted", payload={"request_id": plan.request_id, "plan": plan.as_dict(),
-                "dependencies": dependency_payload(self.dependencies)}, created_at=job.created_at), connection=conn)
+            persisted = self.repository.job_records.create_job_run(job, connection=conn)
+            if persisted.id == job_id:
+                self.repository.execution_records.append_task_event(TaskEvent(
+                    id=f"event_{job_id}_media_start", workspace_id=plan.workspace_id, task_id=plan.task_id, job_id=job_id,
+                    event_type="media_execution_submitted", payload={"request_id": plan.request_id, "plan": plan.as_dict(),
+                    "dependencies": dependency_payload(self.dependencies)}, created_at=job.created_at), connection=conn)
+        if persisted.id != job_id:
+            return self._existing_result(persisted, plan)
         return self._run(job_id, plan)
+
+    def _existing_result(self, job: JobRun, plan: EditPlan) -> dict[str, object]:
+        """Return the durable receipt for a repeated idempotent submission."""
+        result = self.read(job.workspace_id, job.id)
+        return {
+            "job_id": result.id,
+            "status": result.status,
+            "request_id": result.request_id or plan.request_id,
+            "timeline_version_id": result.timeline_version_id,
+            "output_refs": list(result.output_refs),
+            "log_path": result.log_path,
+            "failure_reason": result.failure_reason,
+            "impact": result.impact,
+            "repair_action": result.repair_action,
+        }
 
     def resume(self, job_id: str, workspace_id: str | None = None) -> dict[str, object]:
         job = self.repository.job_records.get_job_run(self._job_workspace(job_id, workspace_id), job_id)
@@ -126,7 +150,8 @@ class MediaExecutionLayer:
                     "timeline_version_id": version.id, "log_path": result["log_path"]}), connection=conn)
             self.repository.job_records.finish_job_run(plan.workspace_id, job_id, status="succeeded", output_refs=refs, connection=conn)
         return {"job_id": job_id, "status": "succeeded", "request_id": plan.request_id,
-                "timeline_version_id": version.id, "output_refs": refs, "log_path": result["log_path"]}
+                "timeline_version_id": version.id, "output_refs": refs, "log_path": result["log_path"],
+                "failure_reason": None, "impact": None, "repair_action": None}
 
     def _fail(self, job_id: str, plan: EditPlan, error: MediaExecutionError) -> dict[str, object]:
         with self._connect() as conn:
