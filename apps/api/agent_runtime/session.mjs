@@ -64,7 +64,8 @@ ${nativeEnabled?'原生工具通过当前任务宿主执行。先读 open_task_w
     authPath: join(cwd, "auth.json"), modelsPath: join(cwd, "models.json"),
     allowModelNetwork: false,
   });
-  let model = modelRuntime.getModel("ai-video-diary", modelId);
+  const runtimeProvider = modelProvider === "anthropic" ? "anthropic" : "ai-video-diary";
+  let model = modelRuntime.getModel(runtimeProvider, modelId);
   if (!model) throw new Error("当前视频创作模型没有加载；未选择其他服务。");
   const known = modelProvider ? modelRuntime.getModel(modelProvider, modelId) : undefined;
   const endpoint = model.baseUrl.replace(/\/+$/,'');
