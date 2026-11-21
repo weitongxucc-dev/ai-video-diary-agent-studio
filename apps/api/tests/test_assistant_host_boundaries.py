@@ -238,7 +238,12 @@ def test_public_turn_binds_real_preflight_before_process_and_preserves_selected_
         task_version={"timeline_version_id": None, "timeline_sequence": 0})
     assert len(launches) == 1
     assert answer == "synthetic answer"
-    assert preview == {"kind": "runtime_receipt", "session_id": launches[0]}
+    assert preview == {
+        "kind": "runtime_receipt",
+        "session_id": launches[0],
+        "provider": "minimax",
+        "model": "fixture",
+    }
     assert observations == [{"ok": True, "cause": "verified", "workspace_id": "workspace"}]
     assert events[0]["type"] == "tool_start" and events[-1]["ok"] is True
 
