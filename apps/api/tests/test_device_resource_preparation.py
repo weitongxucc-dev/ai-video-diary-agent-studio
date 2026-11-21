@@ -472,6 +472,13 @@ def test_status_is_read_only_after_service_recreation_and_rejects_other_owner_or
         settings=service.settings, write_paths=paths, verify_identity=access.verify_identity)
     result = recreated.status(database_path=repository.database_path, request_id=request.id, actor=actor)
     assert result == {'id': request.id, 'plan_id': plan_id, 'state': 'waiting', 'wait_reason': None}
+    with repository._connect() as connection:
+        connection.execute("UPDATE device_work_requests SET state='failed',wait_reason='device_preparation_failed' WHERE id=?",
+                           (request.id,))
+    failed = recreated.status(database_path=repository.database_path, request_id=request.id, actor=actor)
+    assert failed['failure_code'] == 'device_preparation_failed'
+    assert '未启用新的资源档' in failed['failure_reason']
+    assert '新的 request_id' in failed['repair_action']
     with pytest.raises(PermissionError):
         recreated.status(database_path=repository.database_path, request_id=request.id,
             actor=CreationExecutionActor('local', 'other-member'))

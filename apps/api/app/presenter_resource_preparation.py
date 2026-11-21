@@ -285,6 +285,7 @@ class PresenterResourcePreparation(DeviceResourcePreparation):
         row, plan = self._request(database_path=database_path, request_id=request_id, actor=actor)
         result = {"id": row["id"], "plan_id": plan["id"], "state": row["state"], "wait_reason": row["wait_reason"]}
         if row["state"] == "failed" and row["wait_reason"] == "presenter_preparation_failed":
+            result["failure_code"] = row["wait_reason"]
             path = self.root / "failures" / f"{row['id']}-{row['last_grant_generation']}.json"
             if path.is_file():
                 failure = _read(path)
