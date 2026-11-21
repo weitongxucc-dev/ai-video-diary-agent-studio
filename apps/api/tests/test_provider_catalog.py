@@ -1,4 +1,4 @@
-from app.assistant.provider_catalog import PROVIDER_CATALOG, provider_catalog_for_settings, provider_spec
+from app.assistant.provider_catalog import PROVIDER_CATALOG, provider_catalog_for_settings, provider_contract, provider_spec
 from app.assistant.runtime_configuration import _configured_model
 from app.config import Settings
 
@@ -41,3 +41,16 @@ def test_native_protocol_is_catalogued_but_not_sent_through_openai_bridge():
         assert "原生协议" in str(exc)
     else:
         raise AssertionError("Anthropic must wait for a native runtime bridge")
+
+
+def test_every_provider_has_adapter_contract_for_errors_usage_and_redaction():
+    fields = {"provider", "model", "input", "output", "cacheRead", "cacheWrite", "totalTokens", "latency_ms", "estimated_cost"}
+    for provider in PROVIDER_CATALOG:
+        contract = provider_contract(provider)
+        assert contract["protocol"] in {"openai_compatible", "anthropic_messages"}
+        assert contract["auth"] in {"api_key", "optional"}
+        assert fields.issubset(set(contract["usage_fields"]))
+        assert contract["secret_redaction"] is True
+        assert isinstance(contract["recoverable_error"], str) and contract["recoverable_error"]
+    assert provider_contract("anthropic")["recoverable_error"] == "native_protocol_deferred"
+    assert provider_contract("ollama")["recoverable_error"] == "local_endpoint_unavailable"
