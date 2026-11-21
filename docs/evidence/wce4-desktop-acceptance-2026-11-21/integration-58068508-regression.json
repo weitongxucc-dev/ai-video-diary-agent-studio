@@ -1,0 +1,55 @@
+{
+  "integration_head": "58068508e8ef22a773d4d16bfb044d1911fe47fc",
+  "verification_worktree": "/Volumes/Dujiangyan-VM/AI视频日记/temporary/wce4-integration-58068508",
+  "replay": {
+    "command": "cd apps/api && uv run python scripts/replay_openfilm_acceptance.py",
+    "status": "passed",
+    "event_count": 33,
+    "checkpoints": ["C0", "C1", "C2", "C3", "C4", "C5", "C6", "C6b", "C7", "C8"],
+    "persistence_round_trip": true,
+    "stopped_turn": "stopped",
+    "assistant_input_final": "completed",
+    "provider_contacted": false
+  },
+  "api_pytest": {
+    "command": "uv run pytest -q tests/test_assistant_activity_replay.py tests/test_assistant_inputs.py tests/test_assistant_trace.py tests/test_assistant_host_boundaries.py tests/test_assistant_phase_deadlines.py tests/test_assistant_replay_eval.py",
+    "status": "passed",
+    "passed": 81
+  },
+  "agent_runtime_node": {
+    "command": "node --test agent_runtime/tests/result.test.mjs agent_runtime/tests/phase-deadlines.test.mjs tests/test_assistant_sdk.mjs",
+    "status": "failed_one_stale_expectation",
+    "passed": 22,
+    "failed": 1,
+    "failure": {
+      "test": "SDK owns two editing rounds, safe steering/follow-up, persisted history and trusted skills",
+      "file": "apps/api/tests/test_assistant_sdk.mjs:62",
+      "cause": "integration head adds the governed ffmpeg-skill manifest, while this assertion still expects the pre-integration seven-skill list",
+      "actual_extra_skill": "ffmpeg-skill",
+      "provider_or_runtime_regression": false
+    }
+  },
+  "agent_runtime_non_sdk": {
+    "command": "node --test agent_runtime/tests/result.test.mjs agent_runtime/tests/phase-deadlines.test.mjs agent_runtime/tests/ffmpeg-skill-manifest.test.mjs",
+    "status": "passed",
+    "passed": 9
+  },
+  "web": {
+    "command": "corepack pnpm exec vitest run src/components/__tests__/AssistantConversationPanel.test.tsx src/components/__tests__/AssistantSendControl.test.tsx --reporter=dot",
+    "status": "passed",
+    "test_files": 2,
+    "tests": 186
+  },
+  "scope": [
+    "Pi to SSE activity projection and reopened history",
+    "stop and owned-child cancellation",
+    "queued additional input lifecycle",
+    "trace redaction and usage receipt projection",
+    "provider usage ledger",
+    "assistant conversation stop and event-order UI"
+  ],
+  "unverified": [
+    "real external provider credentials and a real model round",
+    "real media output"
+  ]
+}
