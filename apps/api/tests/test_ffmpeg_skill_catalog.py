@@ -28,6 +28,7 @@ def test_ffmpeg_skill_manifest_is_catalog_only_with_explicit_capability_states()
     } <= by_id.keys()
     assert all(item["runnable"] is False for item in capabilities)
     assert by_id["probe"]["status"] == "catalog_only"
+    assert all(by_id[item]["status"] == "catalog_only" for item in ("graphics", "silence", "loudness"))
     assert by_id["caption"]["dependencies"]
     assert "字体" in by_id["caption"]["unavailable_reason"]
     assert by_id["scenes"]["status"] == "planned"

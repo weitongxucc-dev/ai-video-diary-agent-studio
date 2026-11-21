@@ -175,17 +175,17 @@
       "unavailable_reason": "尚未完成场景边界到曜核素材证据的适配。"
     },
     {
-      "id": "graphics", "label": "图形叠加", "status": "planned", "stability": "stable",
+      "id": "graphics", "label": "图形叠加", "status": "catalog_only", "stability": "stable",
       "inputs": ["图形/文本定义", "时间区间"], "outputs": ["图形叠加候选"], "dependencies": ["FFmpeg overlay/drawtext", "资产和字体许可证"], "risk": "字体、透明边缘和画幅需视觉验收。", "source_tool": "graphics", "runnable": false,
       "unavailable_reason": "现有图层路径不等同于外部 graphics 工具，尚未完成字段映射。"
     },
     {
-      "id": "silence", "label": "静音检测", "status": "planned", "stability": "stable",
+      "id": "silence", "label": "静音检测", "status": "catalog_only", "stability": "stable",
       "inputs": ["音频输入", "阈值和最小时长"], "outputs": ["静音区间候选"], "dependencies": ["FFmpeg silencedetect", "语音/字幕证据"], "risk": "误删停顿会改变叙事节奏。", "source_tool": "silence", "runnable": false,
       "unavailable_reason": "已有局部静音路径未与外部 silence 合并为同一能力契约。"
     },
     {
-      "id": "loudness", "label": "响度检查", "status": "planned", "stability": "stable",
+      "id": "loudness", "label": "响度检查", "status": "catalog_only", "stability": "stable",
       "inputs": ["音频或成片"], "outputs": ["响度、峰值和动态范围报告"], "dependencies": ["FFmpeg loudnorm/ebur128", "目标平台规格"], "risk": "测量结果不能替代人工听感。", "source_tool": "loudness", "runnable": false,
       "unavailable_reason": "尚未把外部 loudness 报告登记为曜核输出观察。"
     },
