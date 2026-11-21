@@ -301,9 +301,12 @@ def _packaged_skill_resources() -> list[EditingResource]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         _validate_packaged_skill_manifest(manifest, manifest_path)
         provenance = manifest["provenance"]
+        catalog_status = manifest.get("catalog_status", "connected")
+        status_reason = manifest.get("status_reason")
+        repair_action = manifest.get("repair_action")
         resources.append(EditingResource(
             id=f"skill:{manifest['name']}", category_id="skills", name=manifest["name"],
-            version=1, status="connected", resource_type="skill",
+            version=1, status=catalog_status, resource_type="skill",
             preview=ResourcePreview(kind="method_document"),
             provenance=[ResourceProvenance(
                 repository=provenance["repository"], revision=provenance["revision"],
@@ -313,12 +316,19 @@ def _packaged_skill_resources() -> list[EditingResource]:
             runtime_requirements={"manifest_schema_version": manifest["schema_version"],
                                   "manifest_version": manifest["version"], **manifest["runtime"],
                                   "adapter": manifest["entry"]["adapter"],
+                                  "dependencies": {"skills": manifest["dependencies"]["skills"],
+                                                    "tools": manifest["dependencies"]["tools"],
+                                                    "host": manifest.get("host_dependencies", [])},
                                   "capabilities": {"inputs": manifest["inputs"], "outputs": manifest["outputs"],
                                                     "permissions": manifest["permissions"], "dependencies": manifest["dependencies"]},
                                   "install_checks": manifest["install_checks"],
                                   "adoption": manifest["adoption"],
                                   "rollback": manifest["rollback"],
-                                  "evaluation": manifest["evaluation"]},
+                                  "evaluation": manifest["evaluation"],
+                                  **({"status_reason": status_reason} if status_reason else {}),
+                                  **({"repair_action": repair_action} if repair_action else {}),
+                                  **({"external_capabilities": manifest["capabilities"]}
+                                     if isinstance(manifest.get("capabilities"), list) else {})},
             entrypoints=["read_creation_skill"],
         ))
     return resources
@@ -372,6 +382,23 @@ def _validate_packaged_skill_manifest(manifest: object, path: Path) -> None:
     evaluation = manifest["evaluation"]
     if not isinstance(evaluation, dict) or not isinstance(evaluation.get("status"), str) or not isinstance(evaluation.get("evidence"), list):
         raise ValueError("Skill manifest 评测声明无效")
+    catalog_status = manifest.get("catalog_status", "connected")
+    if catalog_status not in {"connected", "catalog_only", "planned", "failed"}:
+        raise ValueError("Skill manifest catalog_status 无效")
+    if catalog_status != "connected" and not isinstance(manifest.get("status_reason"), str):
+        raise ValueError("非 connected Skill manifest 必须说明状态原因")
+    capabilities = manifest.get("capabilities")
+    if capabilities is not None:
+        if not isinstance(capabilities, list) or not capabilities:
+            raise ValueError("Skill manifest capabilities 无效")
+        for capability in capabilities:
+            if not isinstance(capability, dict) or not all(isinstance(capability.get(key), str) and capability[key].strip()
+                                                           for key in ("id", "status", "stability", "label")):
+                raise ValueError("Skill manifest capability 身份无效")
+            if capability["status"] not in {"connected", "catalog_only", "planned", "failed"}:
+                raise ValueError("Skill manifest capability status 无效")
+            if not isinstance(capability.get("inputs"), list) or not isinstance(capability.get("outputs"), list):
+                raise ValueError("Skill manifest capability 输入输出无效")
 
 
 def editing_resource_catalog() -> EditingResourceCatalog:
