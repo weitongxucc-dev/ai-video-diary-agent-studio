@@ -24,6 +24,7 @@ PROVIDER_CATALOG = {
     "moonshot": ProviderSpec("moonshot", "https://api.moonshot.cn/v1", "kimi-k2-0905-preview", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "qwen": ProviderSpec("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "zhipu": ProviderSpec("zhipu", "https://open.bigmodel.cn/api/paas/v4", "glm-4.5", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
+    "baichuan": ProviderSpec("baichuan", "https://api.baichuan-ai.com/v1", "Baichuan4-Turbo", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "hunyuan": ProviderSpec("hunyuan", "https://api.hunyuan.cloud.tencent.com/v1", "hunyuan-turbos", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "siliconflow": ProviderSpec("siliconflow", "https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V3.2", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "mistral": ProviderSpec("mistral", "https://api.mistral.ai/v1", "mistral-large-latest", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
@@ -34,6 +35,7 @@ PROVIDER_CATALOG = {
     "cohere": ProviderSpec("cohere", "https://api.cohere.com/compatibility/v1", "command-a-03-2025", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "perplexity": ProviderSpec("perplexity", "https://api.perplexity.ai", "sonar-pro", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "ollama": ProviderSpec("ollama", "http://127.0.0.1:11434/v1", "qwen3:8b", "optional", "openai_compatible", "provider_or_unknown", "unknown"),
+    "lmstudio": ProviderSpec("lmstudio", "http://127.0.0.1:1234/v1", "", "optional", "openai_compatible", "provider_or_unknown", "unknown"),
     "custom": ProviderSpec("custom", "", "", "optional", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
 }
 

@@ -26,8 +26,8 @@ def _configured_model(settings: Settings) -> tuple[str, str, str]:
                     repair_action="保留当前配置，待原生协议运行桥接入后再验证，不会自动改用其他服务。")
     local_endpoint = endpoint.hostname in {"localhost", "127.0.0.1", "::1"}
     if (not endpoint.hostname or endpoint.username or endpoint.password
-            or (endpoint.scheme != "https" and not (spec.id == "ollama" and endpoint.scheme == "http"))
-            or (local_endpoint and spec.id != "ollama")):
+            or (endpoint.scheme != "https" and spec.id not in {"ollama", "lmstudio"})
+            or (local_endpoint and spec.id not in {"ollama", "lmstudio"})):
         raise _fail(FAILURE_RUNTIME_MISSING, explanation="对话须选择外部文字模型，请先在设置里选 MiniMax 或 DeepSeek。",
                     repair_action="在设置页连接 MiniMax，或主动选择 DeepSeek；不会自动切换服务。")
     key = settings.effective_llm_api_key or ""
