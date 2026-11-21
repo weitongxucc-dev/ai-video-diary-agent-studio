@@ -1235,6 +1235,7 @@ describe("AssistantConversationPanel", () => {
     expect(onInput).toHaveBeenLastCalledWith("");
     fireEvent.click(within(slot).getByRole("button", { name: "历史对话" }));
     const dialog = await screen.findByRole("dialog", { name: "历史对话" });
+    expect(within(dialog).getByText("同一作品可以有多段对话；切换对话不会新建视频任务，当前作品的媒体预览和成片结果按作品版本共享。")).toBeVisible();
     expect(within(dialog).getByText("旧版只读历史")).toBeInTheDocument();
     expect(within(dialog).getByText("任务原始旧回复")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: /旧对话/ }));
