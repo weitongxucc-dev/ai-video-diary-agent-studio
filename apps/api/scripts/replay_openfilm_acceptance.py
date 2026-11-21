@@ -18,10 +18,10 @@ REPOSITORY_ROOT = API_ROOT.parent.parent
 FIXTURE_PATH = REPOSITORY_ROOT / "docs/reference/openfilm-chat/replay-fixture.json"
 sys.path.insert(0, str(API_ROOT))
 
-from app.assistant.projection import _PiStreamProjector, public_history_turn
-from app.assistant.stream_response import AssistantStreamTextSanitizer
-from app.conversation_repository import ConversationRepository
-from app.schemas import AssistantStreamEvent
+from app.assistant.projection import _PiStreamProjector, public_history_turn  # noqa: E402
+from app.assistant.stream_response import AssistantStreamTextSanitizer  # noqa: E402
+from app.conversation_repository import ConversationRepository  # noqa: E402
+from app.schemas import AssistantStreamEvent  # noqa: E402
 
 
 def assistant_message(text: str) -> dict:

@@ -40,9 +40,12 @@ def test_submission_builds_controlled_plan_and_reuses_same_request():
     class Repo:
         task_records = SimpleNamespace(get_creation_task=lambda *_: task)
         timeline_records = SimpleNamespace(get_timeline_version=lambda *_: timeline)
-        get_asset = lambda self, *_: asset
-        workspace_media_reference_for_asset = lambda self, *_: "workspace://clips/asset-1.mp4"
-        resolve_clip_media_reference = lambda self, *_: "/controlled/clips/asset-1.mp4"
+        def get_asset(self, *_):
+            return asset
+        def workspace_media_reference_for_asset(self, *_):
+            return "workspace://clips/asset-1.mp4"
+        def resolve_clip_media_reference(self, *_):
+            return "/controlled/clips/asset-1.mp4"
         def __init__(self):
             self.events = []
         class Conn:
