@@ -4,6 +4,8 @@
 .home-composer:has(> [data-assistant-loading]) > :not([data-assistant-loading]) { display:none; }
 .assistant-conversation-caption { display:flex; justify-content:flex-end; align-items:center; min-height:28px; }
 .assistant-header-actions { display:inline-flex; align-items:center; gap:3px; }
+.assistant-header-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.assistant-header-title:empty::before { content:"新对话"; }
 .assistant-session-scope { min-width:0; max-width:min(44%, 280px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-2); font-size:var(--font-size-meta); line-height:var(--line-meta); }
 .assistant-icon-action { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; border:0; border-radius:7px; background:transparent; color:var(--text-2); cursor:pointer; }
 .assistant-icon-action:hover:not(:disabled) { background:var(--surface-2); color:var(--text-1); }
