@@ -169,7 +169,7 @@
       "unavailable_reason": "当前没有外部 look review page 到任务观察的适配。"
     },
     {
-      "id": "scenes", "label": "场景分析", "status": "planned", "stability": "stable",
+      "id": "scenes", "label": "场景分析", "status": "planned", "stability": "beta",
       "inputs": ["媒体输入"], "outputs": ["场景边界和时间区间"],
       "dependencies": ["FFmpeg scene filter", "观察与人工复核"], "risk": "阈值和内容语义尚未核验。", "source_tool": "scenes", "runnable": false,
       "unavailable_reason": "尚未完成场景边界到曜核素材证据的适配。"
