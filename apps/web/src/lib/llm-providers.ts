@@ -10,10 +10,10 @@ export type LlmProviderPreset = {
 /**
  * Provider presets are connection starters, not availability claims.
  *
- * Pi currently sends OpenAI Chat Completions requests, so the catalog only
- * contains providers with a compatible endpoint or a local OpenAI-compatible
- * gateway. Users can still replace the endpoint and model when a region or
- * account uses a different host. Saving a preset never contacts the provider.
+ * The catalog includes every provider registered by the backend, including
+ * providers whose runtime protocol still needs a native adapter. Users can
+ * replace the endpoint and model when a region or account uses a different
+ * host. Saving a preset never contacts the provider.
  */
 export const LLM_PROVIDER_PRESETS: readonly LlmProviderPreset[] = [
   {
@@ -74,6 +74,19 @@ export const LLM_PROVIDER_PRESETS: readonly LlmProviderPreset[] = [
     helper: "通过一个兼容入口切换多个模型供应商。",
   },
   {
+    id: "anthropic",
+    label: "Anthropic · Claude",
+    baseUrl: "https://api.anthropic.com/v1",
+    models: ["claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-3-5"],
+    helper: "Anthropic Messages 协议入口，当前保存配置不会发起请求。",
+  },
+  {
+    id: "hunyuan",
+    label: "腾讯混元",
+    baseUrl: "https://api.hunyuan.cloud.tencent.com/v1",
+    models: ["hunyuan-turbos", "hunyuan-pro"],
+  },
+  {
     id: "siliconflow",
     label: "硅基流动",
     baseUrl: "https://api.siliconflow.cn/v1",
@@ -90,6 +103,36 @@ export const LLM_PROVIDER_PRESETS: readonly LlmProviderPreset[] = [
     label: "Together AI",
     baseUrl: "https://api.together.xyz/v1",
     models: ["meta-llama/Llama-3.3-70B-Instruct-Turbo", "Qwen/Qwen3-Next-80B-A3B-Instruct"],
+  },
+  {
+    id: "mistral",
+    label: "Mistral AI",
+    baseUrl: "https://api.mistral.ai/v1",
+    models: ["mistral-large-latest", "mistral-small-latest", "codestral-latest"],
+  },
+  {
+    id: "fireworks",
+    label: "Fireworks AI",
+    baseUrl: "https://api.fireworks.ai/inference/v1",
+    models: ["accounts/fireworks/models/llama-v3p1-70b-instruct", "accounts/fireworks/models/deepseek-v3"],
+  },
+  {
+    id: "xai",
+    label: "xAI · Grok",
+    baseUrl: "https://api.x.ai/v1",
+    models: ["grok-4", "grok-3"],
+  },
+  {
+    id: "cohere",
+    label: "Cohere",
+    baseUrl: "https://api.cohere.com/compatibility/v1",
+    models: ["command-a-03-2025", "command-r-plus"],
+  },
+  {
+    id: "perplexity",
+    label: "Perplexity",
+    baseUrl: "https://api.perplexity.ai",
+    models: ["sonar-pro", "sonar"],
   },
   {
     id: "ollama",
