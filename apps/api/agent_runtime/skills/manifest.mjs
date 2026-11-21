@@ -101,7 +101,12 @@ export function validateSkillManifest(manifest, {skillName, skillPath} = {}) {
       if (!RESOURCE_STATUSES.has(capability.status)) invalid("capability.status 无效");
       stringList(capability.inputs, "capability.inputs");
       stringList(capability.outputs, "capability.outputs");
+      if (!Array.isArray(capability.dependencies) || capability.dependencies.some(item => typeof item !== "string" || !item.trim())) {
+        invalid("capability.dependencies 必须是字符串数组");
+      }
+      nonEmptyString(capability.risk, "capability.risk");
       if (capability.runnable !== false) invalid("capability 必须明确不可直接运行");
+      if (capability.status !== "connected") nonEmptyString(capability.unavailable_reason, "capability.unavailable_reason");
     }
   }
   if (skillPath && typeof skillPath !== "string") invalid("skillPath 无效");

@@ -399,6 +399,12 @@ def _validate_packaged_skill_manifest(manifest: object, path: Path) -> None:
                 raise ValueError("Skill manifest capability status 无效")
             if not isinstance(capability.get("inputs"), list) or not isinstance(capability.get("outputs"), list):
                 raise ValueError("Skill manifest capability 输入输出无效")
+            if not isinstance(capability.get("dependencies"), list) or not isinstance(capability.get("risk"), str):
+                raise ValueError("Skill manifest capability 依赖或风险无效")
+            if capability.get("runnable") is not False:
+                raise ValueError("Skill manifest capability 必须明确不可直接运行")
+            if capability["status"] != "connected" and not isinstance(capability.get("unavailable_reason"), str):
+                raise ValueError("非 connected capability 必须说明不可用原因")
 
 
 def editing_resource_catalog() -> EditingResourceCatalog:

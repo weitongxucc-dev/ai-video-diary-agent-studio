@@ -62,12 +62,13 @@ def build_editing_resource_router(catalog_for: Callable):
         if item is None:
             raise HTTPException(status_code=404, detail="资源版本不存在")
         requirements = item.runtime_requirements
+        declared_runnable = requirements.get("runnable", item.status == "connected")
         return {
             "resource_id": item.id,
             "version": item.version,
             "status": item.status,
             "ready": item.status == "connected",
-            "runnable": requirements.get("runnable", item.status == "connected"),
+            "runnable": item.status == "connected" and declared_runnable is True,
             "provenance": [entry.model_dump(mode="json") for entry in item.provenance],
             "install_checks": requirements.get("install_checks", {"mode": "not_declared", "checks": []}),
             "adoption": requirements.get("adoption", {"status": "not_declared"}),

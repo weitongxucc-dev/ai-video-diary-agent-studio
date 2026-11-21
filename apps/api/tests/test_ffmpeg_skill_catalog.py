@@ -1,8 +1,10 @@
 """ffmpeg-skill is a governed capability catalog, not a media executor."""
 
 from fastapi.testclient import TestClient
+from fastapi import FastAPI
 
-from app.editing_resource_catalog import editing_resource_catalog
+from app.editing_resource_catalog import EditingResource, EditingResourceCatalog, ResourcePreview, editing_resource_catalog
+from app.editing_resource_routes import build_editing_resource_router
 from app.main import app
 
 
@@ -52,3 +54,20 @@ def test_resource_status_query_keeps_catalog_only_and_planned_distinct():
     assert any(item["id"] == "skill:ffmpeg-skill" for item in catalog_only.json()["resources"])
     assert all(item["status"] == "planned" for item in planned.json()["resources"])
     assert client.get("/api/editing-resource-catalog", params={"status": "failed"}).json()["resources"] == []
+
+
+def test_preflight_never_promotes_a_non_connected_resource_to_runnable():
+    fake = EditingResource(
+        id="skill:contradictory", category_id="skills", name="contradictory", version=1,
+        status="catalog_only", resource_type="skill", preview=ResourcePreview(kind="method_document"),
+        runtime_requirements={"runnable": True}, entrypoints=["read_creation_skill"],
+    )
+    catalog = EditingResourceCatalog(
+        categories=[], resources=[fake], provenance_fields=[], write_boundary="read-only",
+    )
+    local_app = FastAPI()
+    local_app.include_router(build_editing_resource_router(lambda: catalog))
+    response = TestClient(local_app).get("/api/editing-resources/skill:contradictory/preflight")
+    assert response.status_code == 200
+    assert response.json()["ready"] is False
+    assert response.json()["runnable"] is False
