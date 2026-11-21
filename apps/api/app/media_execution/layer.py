@@ -62,7 +62,8 @@ class MediaExecutionLayer:
                         log_path=result.payload.get("log_path") if result else None,
                         failure_reason=job.failure_reason, impact=job.impact, repair_action=job.repair_action)
 
-    def submit(self, plan: EditPlan | dict, *, idempotency_suffix: str | None = None) -> dict[str, object]:
+    def submit(self, plan: EditPlan | dict, *, idempotency_suffix: str | None = None,
+               cancel_event: threading.Event | None = None) -> dict[str, object]:
         plan = plan if isinstance(plan, EditPlan) else EditPlan.from_value(plan)
         self._assert_plan_current(plan)
         job_id = f"media_{uuid4().hex}"
@@ -76,7 +77,7 @@ class MediaExecutionLayer:
                 id=f"event_{job_id}_media_start", workspace_id=plan.workspace_id, task_id=plan.task_id, job_id=job_id,
                 event_type="media_execution_submitted", payload={"request_id": plan.request_id, "plan": plan.as_dict(),
                 "dependencies": dependency_payload(self.dependencies)}, created_at=job.created_at), connection=conn)
-        return self._run(job_id, plan)
+        return self._run(job_id, plan, cancel_event=cancel_event)
 
     def cancel(self, job_id: str, workspace_id: str | None = None) -> dict[str, object]:
         workspace = self._job_workspace(job_id, workspace_id)
@@ -116,9 +117,10 @@ class MediaExecutionLayer:
                               plan.operations, member_id=plan.member_id, metadata=plan.metadata)
         return self.submit(retry_plan, idempotency_suffix=f":retry:{uuid4().hex}")
 
-    def _run(self, job_id: str, plan: EditPlan) -> dict[str, object]:
+    def _run(self, job_id: str, plan: EditPlan,
+             cancel_event: threading.Event | None = None) -> dict[str, object]:
         key = (plan.workspace_id, job_id)
-        cancel_event = threading.Event()
+        cancel_event = cancel_event or threading.Event()
         with self._cancel_lock:
             if key in self._cancel_events:
                 raise ValueError("媒体作业已有执行者")

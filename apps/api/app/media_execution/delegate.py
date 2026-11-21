@@ -76,9 +76,10 @@ class TaskMediaExecutionDelegate:
             raise PermissionError("媒体 delegate 的成员身份与封存事件不一致")
         return plan
 
-    def submit(self, job, event: Mapping[str, Any], actor_identity: Mapping[str, Any]) -> dict[str, Any]:
+    def submit(self, job, event: Mapping[str, Any], actor_identity: Mapping[str, Any], *, cancel_event=None) -> dict[str, Any]:
         plan = self.plan_from_event(event, actor_identity, job=job)
-        result = self.entrypoint.submit(plan)
+        result = (self.entrypoint.submit(plan, cancel_event=cancel_event)
+                  if cancel_event is not None else self.entrypoint.submit(plan))
         return self._receipt(job, plan, result)
 
     def resume(self, job, event: Mapping[str, Any], actor_identity: Mapping[str, Any]) -> dict[str, Any]:
