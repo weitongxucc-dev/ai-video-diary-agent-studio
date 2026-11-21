@@ -52,6 +52,15 @@ def _make_media(root: Path) -> tuple[Path, Path, Path]:
     return first, second, audio
 
 
+def test_repository_exposes_its_connection_factory_for_composed_services(tmp_path):
+    repo, _ = _case(tmp_path)
+
+    assert repo.connection_factory.__func__ is repo._connect.__func__
+    with repo.connection_factory() as connection:
+        assert connection.row_factory is not None
+        assert connection.execute("SELECT 1").fetchone()[0] == 1
+
+
 def test_real_media_chain_persists_job_artifacts_timeline_and_request_log(tmp_path):
     repo, base = _case(tmp_path)
     first, second, audio = _make_media(tmp_path / "inputs")

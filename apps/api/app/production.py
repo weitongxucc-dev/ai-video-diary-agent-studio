@@ -854,6 +854,17 @@ class ProductionRepository:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @property
+    def connection_factory(self) -> Callable[[], sqlite3.Connection]:
+        """Return the repository-owned connection factory for composed services.
+
+        Composed execution layers must use the same workspace database
+        boundary as the repository. Exposing the existing factory keeps the
+        connection setup in one place and avoids consumers reaching into the
+        private ``_connect`` method.
+        """
+        return self._connect
+
 
     def save_authorization(self, authorization: Authorization) -> Authorization:
         return self._media_authorizations.save_authorization(authorization)

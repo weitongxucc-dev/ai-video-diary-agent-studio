@@ -937,7 +937,7 @@ def media_digest(value):
 class TaskMediaJobs:
     """Persist typed task-media inputs, dispatched by the existing creation owner."""
 
-    def __init__(self, repository, *, facts, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None, audio_edit=None, output_observation=None, media_script=None, media_script_for_task=None, visual_preview=None, compound_selection=None, exact_preview=None, command_preview=None, known_failure_secrets_for=None):
+    def __init__(self, repository, *, facts, verify_identity, on_settled=None, clip_preview=None, audio_ingress=None, audio_edit=None, output_observation=None, media_script=None, media_script_for_task=None, visual_preview=None, compound_selection=None, exact_preview=None, command_preview=None, media_execution_delegate=None, known_failure_secrets_for=None):
         self.repository = repository
         self.facts = facts
         self.clip_preview = clip_preview
@@ -950,6 +950,7 @@ class TaskMediaJobs:
         self.compound_selection = compound_selection
         self.exact_preview = exact_preview
         self.command_preview = command_preview
+        self.media_execution_delegate = media_execution_delegate
         self.on_settled = on_settled
         self.verify_identity = verify_identity
         self.task_authorizations = None
@@ -1403,6 +1404,8 @@ class TaskMediaJobs:
         direct_edit = AudioEditUseCase.handles(event["operation"],event["arguments"])
         direct_exact = event["operation"] == "exact_edit_preview" and not direct_edit and "_clip_preview" not in event["arguments"]
         direct_command = event["operation"] == "command_edit_preview" and not direct_edit and "_clip_preview" not in event["arguments"]
+        direct_media_execution = (self.media_execution_delegate is not None and
+                                  self.media_execution_delegate.handles(event["operation"], event["arguments"]))
         actor = CreationExecutionActor.from_event(job.workspace_id, event)
         media_script = self.media_script_for_task(job.task_id) if direct_script and self.media_script_for_task is not None else self.media_script
         cancellation = threading.Event()
@@ -1458,7 +1461,9 @@ class TaskMediaJobs:
             try:
                 result_event = self.repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_result")
             except KeyError:
-                if direct_command:
+                if direct_media_execution:
+                    result = self.media_execution_delegate.submit(job, event, actor.identity_payload())
+                elif direct_command:
                     if self.command_preview is None:
                         raise ValueError('指令编辑执行负责人未组装')
                     result = self.command_preview.execute(job,event,actor,context)
@@ -1500,8 +1505,17 @@ class TaskMediaJobs:
                     job_id=job.id, event_type="task_media_result", payload={"result": result}, created_at=job.created_at))
             else:
                 result = result_event.payload["result"]
+            if direct_media_execution and result.get("status") == "failed":
+                from app.media_execution.contracts import MediaExecutionError
+                raise MediaExecutionError(
+                    str(result.get("failure_reason") or "media_execution_failed"),
+                    str(result.get("impact") or "媒体输出未发布。"),
+                    str(result.get("repair_action") or "修复首个失败原因后沿原请求重试。"),
+                )
             context.check()
-            if direct_clip:
+            if direct_media_execution:
+                verification_facts = {"media_execution": result}
+            elif direct_clip:
                 verification_facts=self.clip_preview.validate_result(job,event,result,context)
             elif direct_command:
                 verification_facts=self.command_preview.validate_result(job,event,result,context)
