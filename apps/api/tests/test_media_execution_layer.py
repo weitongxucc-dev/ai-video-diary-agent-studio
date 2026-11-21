@@ -1,21 +1,31 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
+from threading import Event
 
+import pytest
 from app.creation.contracts import CreationTask, JobRun, TaskEvent, TimelineVersion
 from app.creation.plan_contracts import CreationPlan
 from app.media_execution import (
     FFMPEG_OPERATION,
     EditPlan,
+    MediaExecutionCancelled,
     MediaExecutionLayer,
     MediaOperation,
     TaskMediaExecutionDelegate,
     build_media_execution_entrypoint,
 )
-from app.media_execution.adapter import FfmpegAdapter
+from app.media_execution.adapter import FfmpegAdapter, PreparedCommand
+from app.media_execution.capabilities import ToolDependency, detect_dependencies
 from app.media_execution.contracts import MediaExecutionError
+from app.media_execution.worker import FfmpegWorker
 from app.production import ProductionRepository
 from app.task_audio import TaskMediaJobs
 
@@ -142,7 +152,7 @@ def test_retry_creates_a_new_job_but_keeps_the_original_request_id(tmp_path):
     class Worker:
         attempts = 0
 
-        def execute(self, plan, job_id, output_root, *, progress=None):
+        def execute(self, plan, job_id, output_root, *, progress=None, cancel_event=None):
             self.attempts += 1
             if self.attempts == 1:
                 raise MediaExecutionError("temporary_media_failure", "没有发布新版本。", "沿原请求重试。")
@@ -300,3 +310,146 @@ def test_task_media_delegate_resume_and_retry_accept_persisted_jobrun():
     assert resumed["failure_reason"] == "interrupted"
     assert retried["failure_reason"] == "retry_failed"
     assert calls == [("resume", "outer-job", "local"), ("retry", "outer-job", "local")]
+
+def _wait_for_log(path: Path, event: str):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if path.is_file():
+            for line in path.read_text().splitlines(keepends=True):
+                if line.endswith("\n"):
+                    item = json.loads(line)
+                    if item["event"] == event:
+                        return item
+        time.sleep(0.02)
+    pytest.fail(f"{path} 缺少 {event} 事件")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_cancel_releases_leader_and_child(tmp_path):
+    child_pid_file = tmp_path / "child.pid"
+    script = """
+import pathlib, signal, subprocess, sys
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(child.wait()))
+pathlib.Path(sys.argv[1]).write_text(str(child.pid))
+child.wait()
+"""
+    dependencies = {name: ToolDependency(name, sys.executable, "available") for name in ("ffmpeg", "ffprobe")}
+    worker = FfmpegWorker(dependencies, timeout_seconds=10)
+
+    class ChildAdapter:
+        def prepare(self, operation, output_path):
+            command = (sys.executable, "-c", script, str(child_pid_file))
+            return PreparedCommand(operation.operation, command, output_path, (), "media_file")
+
+    worker.adapter = ChildAdapter()
+    plan = EditPlan("local", "task", "base", "req-group", (MediaOperation("export", (), "final.mp4"),))
+    cancel = Event()
+    log_path = tmp_path / "group-job" / "request-req-group.jsonl"
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(worker.execute, plan, "group-job", tmp_path, cancel_event=cancel)
+        try:
+            started = _wait_for_log(log_path, "process_started")
+            deadline = time.monotonic() + 5
+            while not child_pid_file.is_file() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            child_pid = int(child_pid_file.read_text())
+            assert os.getpgid(child_pid) == started["process_group_id"]
+        finally:
+            cancel.set()
+        with pytest.raises(MediaExecutionCancelled):
+            future.result(timeout=5)
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(started["process_group_id"], 0)
+
+
+class SlowFirstExport(FfmpegAdapter):
+    def __init__(self, adapter):
+        super().__init__(adapter.ffmpeg, adapter.ffprobe)
+        self.attempts = 0
+
+    def prepare(self, operation, output_path):
+        command = super().prepare(operation, output_path)
+        self.attempts += 1
+        if self.attempts != 1:
+            return command
+        input_index = command.command.index("-i")
+        return replace(command, command=(
+            *command.command[:input_index], "-stream_loop", "20", "-re", *command.command[input_index:],
+        ))
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_running_ffmpeg_cancel_persists_and_retry_starts_fresh(tmp_path):
+    repo, base = _case(tmp_path)
+    first, _, _ = _make_media(tmp_path / "inputs")
+    worker = FfmpegWorker(detect_dependencies(), timeout_seconds=15)
+    worker.adapter = SlowFirstExport(worker.adapter)
+    outputs = tmp_path / "outputs"
+    layer = MediaExecutionLayer(repo, outputs, worker=worker, connection_factory=repo._connect)
+    plan = EditPlan("local", "task", base.id, "req-cancel", (
+        MediaOperation("export", (str(first),), "final.mp4", {"width": 160, "height": 120}),
+    ))
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(layer.submit, plan)
+        deadline = time.monotonic() + 5
+        jobs = repo.job_records.list_job_runs("local", "task")
+        while not jobs and time.monotonic() < deadline:
+            time.sleep(0.02)
+            jobs = repo.job_records.list_job_runs("local", "task")
+        job_id = jobs[0].id
+        log_path = outputs / job_id / "request-req-cancel.jsonl"
+        started = _wait_for_log(log_path, "process_started")
+        assert os.getpgid(started["pid"]) == started["process_group_id"]
+        assert layer.cancel(job_id, "local")["status"] == "cancellation_requested"
+        result = future.result(timeout=5)
+    assert result["status"] == "cancelled"
+    assert _wait_for_log(log_path, "command_end")["reason"] == "media_cancelled"
+    with pytest.raises(ProcessLookupError):
+        os.killpg(started["process_group_id"], 0)
+
+    reopened = MediaExecutionLayer(repo, outputs, worker=worker, connection_factory=repo._connect)
+    receipt = reopened.read("local", job_id)
+    assert (receipt.status, receipt.request_id, receipt.log_path) == ("cancelled", plan.request_id, str(log_path))
+    assert not receipt.output_refs and receipt.timeline_version_id is None
+    assert reopened.cancel(job_id, "local")["status"] == "cancelled"
+    assert repo.job_records.get_job_run("local", job_id).status == "cancelled"
+    event = repo.execution_records.get_task_event("local", f"event_{job_id}_media_cancelled")
+    assert event.payload["status"] == "cancelled"
+    assert event.payload["base_version_id"] == base.id
+    assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == base.id
+    assert not repo.execution_records.list_artifact_records("local", "task")
+
+    retried = reopened.retry(job_id, "local")
+    assert retried["job_id"] != job_id and retried["request_id"] == plan.request_id
+    assert retried["status"] == "succeeded"
+    version = repo.timeline_records.get_timeline_version("local", retried["timeline_version_id"])
+    assert version.parent_version_id == base.id
+    assert reopened.read("local", job_id) == receipt
+    assert worker.adapter.attempts == 2
+    retry_log = Path(retried["log_path"])
+    retry_started = _wait_for_log(retry_log, "process_started")
+    assert retry_started["process_group_id"] != started["process_group_id"]
+    assert (retry_log.parent / "final.mp4").stat().st_size > 0
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+def test_ffmpeg_timeout_releases_process_and_preserves_failure_reason(tmp_path):
+    repo, base = _case(tmp_path)
+    first, _, _ = _make_media(tmp_path / "inputs")
+    worker = FfmpegWorker(detect_dependencies(), timeout_seconds=0.5)
+    worker.adapter = SlowFirstExport(worker.adapter)
+    layer = MediaExecutionLayer(repo, tmp_path / "outputs", worker=worker, connection_factory=repo._connect)
+    plan = EditPlan("local", "task", base.id, "req-timeout", (
+        MediaOperation("export", (str(first),), "final.mp4", {"width": 160, "height": 120}),
+    ))
+    result = layer.submit(plan)
+    assert result["status"] == "failed"
+    assert layer.read("local", result["job_id"]).failure_reason == "media_command_timeout"
+    log_path = Path(result["log_path"])
+    started = _wait_for_log(log_path, "process_started")
+    assert _wait_for_log(log_path, "command_end")["reason"] == "media_command_timeout"
+    with pytest.raises(ProcessLookupError):
+        os.killpg(started["process_group_id"], 0)

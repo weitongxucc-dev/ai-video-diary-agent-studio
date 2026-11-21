@@ -18,6 +18,24 @@ class MediaExecutionError(RuntimeError):
         self.repair_action = repair_action
 
 
+class MediaExecutionCancelled(MediaExecutionError):
+    def __init__(self) -> None:
+        super().__init__(
+            "media_cancelled",
+            "媒体作业已取消，未发布新的时间线版本。",
+            "需要结果时沿原请求显式重试。",
+        )
+
+
+class MediaProcessReleaseUnverified(MediaExecutionError):
+    def __init__(self) -> None:
+        super().__init__(
+            "media_process_release_unverified",
+            "媒体进程组退出状态无法确认，未发布新的时间线版本。",
+            "检查本机进程权限和资源状态后沿原请求重试。",
+        )
+
+
 @dataclass(frozen=True)
 class MediaOperation:
     """One business-level operation mapped by the FFmpeg adapter."""

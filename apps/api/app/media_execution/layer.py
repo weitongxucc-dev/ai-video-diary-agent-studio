@@ -3,14 +3,22 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
 from app.creation.contracts import ArtifactRecord, JobRun, TaskEvent, TimelineVersion
 
 from .capabilities import dependency_payload, detect_dependencies
-from .contracts import EditPlan, MediaExecutionError, MediaJob
+from .contracts import (
+    EditPlan,
+    MediaExecutionCancelled,
+    MediaExecutionError,
+    MediaJob,
+    MediaProcessReleaseUnverified,
+)
 from .worker import FfmpegWorker
 
 
@@ -27,18 +35,26 @@ class MediaExecutionLayer:
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.dependencies = detect_dependencies()
         self.worker = worker
+        self._cancel_lock = threading.Lock()
+        self._cancel_events: dict[tuple[str, str], threading.Event] = {}
 
     def capabilities(self) -> dict[str, object]:
         from .capabilities import capability_catalog
         return {"dependencies": dependency_payload(self.dependencies), "capabilities": capability_catalog(self.dependencies)}
 
     def read(self, workspace_id: str, job_id: str) -> MediaJob:
-        job = self.repository.job_records.get_job_run(workspace_id, job_id)
-        if job.kind != "media_execution":
-            raise KeyError(job_id)
-        start = self.repository.execution_records.get_task_event(workspace_id, f"event_{job_id}_media_start")
-        result = next((item for item in self.repository.execution_records.list_task_events(workspace_id, job.task_id)
-                       if item.id in {f"event_{job_id}_media_result", f"event_{job_id}_media_failure"}), None)
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            job = self.repository.job_records.get_job_run(workspace_id, job_id, connection=conn)
+            if job.kind != "media_execution":
+                raise KeyError(job_id)
+            start = self.repository.execution_records.get_task_event(
+                workspace_id, f"event_{job_id}_media_start", connection=conn)
+            suffix = {"succeeded": "result", "failed": "failure", "cancelled": "cancelled"}.get(job.status)
+            result = None
+            if suffix is not None:
+                result = self.repository.execution_records.get_task_event(
+                    workspace_id, f"event_{job_id}_media_{suffix}", connection=conn)
         return MediaJob(id=job.id, workspace_id=job.workspace_id, task_id=job.task_id,
                         request_id=str(start.payload["request_id"]), base_version_id=str(start.payload["plan"]["base_version_id"]),
                         status=job.status, attempt=job.attempt, output_refs=tuple(job.output_refs),
@@ -86,6 +102,27 @@ class MediaExecutionLayer:
             "repair_action": result.repair_action,
         }
 
+    def cancel(self, job_id: str, workspace_id: str | None = None) -> dict[str, object]:
+        workspace = self._job_workspace(job_id, workspace_id)
+        with self._cancel_lock:
+            current = self.read(workspace, job_id)
+            if current.status in {"succeeded", "failed", "cancelled"}:
+                return self._job_receipt(current)
+            event = self._cancel_events.get((workspace, job_id))
+            if event is not None:
+                event.set()
+                return {"job_id": job_id, "status": "cancellation_requested", "request_id": current.request_id}
+            if current.status != "queued":
+                raise MediaProcessReleaseUnverified()
+            start = self.repository.execution_records.get_task_event(workspace, f"event_{job_id}_media_start")
+            return self._cancelled(job_id, EditPlan.from_value(start.payload["plan"]), queued_only=True)
+
+    @staticmethod
+    def _job_receipt(job: MediaJob) -> dict[str, object]:
+        receipt = asdict(job)
+        receipt["job_id"] = receipt.pop("id")
+        return receipt
+
     def resume(self, job_id: str, workspace_id: str | None = None) -> dict[str, object]:
         job = self.repository.job_records.get_job_run(self._job_workspace(job_id, workspace_id), job_id)
         if job.kind != "media_execution":
@@ -104,19 +141,42 @@ class MediaExecutionLayer:
         return self.submit(retry_plan, idempotency_suffix=f":retry:{uuid4().hex}")
 
     def _run(self, job_id: str, plan: EditPlan) -> dict[str, object]:
-        self.repository.job_records.get_job_run(plan.workspace_id, job_id)
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            self.repository.job_records.claim_job_run(plan.workspace_id, job_id, connection=conn)
+        key = (plan.workspace_id, job_id)
+        cancel_event = threading.Event()
+        with self._cancel_lock:
+            if key in self._cancel_events:
+                raise ValueError("媒体作业已有执行者")
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                job = self.repository.job_records.get_job_run(*key, connection=conn)
+                if job.status != "cancelled":
+                    self.repository.job_records.claim_job_run(*key, connection=conn)
+            if job.status == "cancelled":
+                return self._job_receipt(self.read(*key))
+            self._cancel_events[key] = cancel_event
         try:
             worker = self.worker or FfmpegWorker(self.dependencies)
-            result = worker.execute(plan, job_id, self.output_root,
-                                    progress=lambda value: self.repository.job_records.update_job_run_progress(plan.workspace_id, job_id, value))
-            return self._publish(job_id, plan, result)
+            result = worker.execute(
+                plan, job_id, self.output_root, cancel_event=cancel_event,
+                progress=lambda value: self.repository.job_records.update_job_run_progress(*key, value),
+            )
+            with self._cancel_lock:
+                if cancel_event.is_set():
+                    raise MediaExecutionCancelled()
+                return self._publish(job_id, plan, result)
+        except MediaExecutionCancelled:
+            with self._cancel_lock:
+                return self._cancelled(job_id, plan)
+        except MediaProcessReleaseUnverified:
+            # Without proof of release, preserve the running state and refuse retries.
+            raise
         except MediaExecutionError as exc:
             return self._fail(job_id, plan, exc)
         except (OSError, ValueError, KeyError, TypeError, RuntimeError, sqlite3.Error) as exc:
             return self._fail(job_id, plan, MediaExecutionError("media_execution_failed", str(exc) or type(exc).__name__, "修复首个失败原因后沿原请求重试。"))
+        finally:
+            with self._cancel_lock:
+                del self._cancel_events[key]
 
     def _publish(self, job_id: str, plan: EditPlan, result: dict[str, object]) -> dict[str, object]:
         with self._connect() as conn:
@@ -166,6 +226,26 @@ class MediaExecutionLayer:
         return {"job_id": job_id, "status": "failed", "request_id": plan.request_id,
                 "failure_reason": error.reason, "impact": error.impact, "repair_action": error.repair_action,
                 "log_path": str(self.output_root / job_id / f"request-{plan.request_id}.jsonl")}
+
+    def _cancelled(self, job_id: str, plan: EditPlan, *, queued_only: bool = False) -> dict[str, object]:
+        error = MediaExecutionCancelled()
+        log_path = self.output_root / job_id / f"request-{plan.request_id}.jsonl"
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = self.repository.job_records.get_job_run(plan.workspace_id, job_id, connection=conn)
+            if current.status not in {"succeeded", "failed", "cancelled"}:
+                if queued_only and current.status != "queued":
+                    raise MediaProcessReleaseUnverified()
+                self.repository.job_records.finish_job_run(plan.workspace_id, job_id, status="cancelled",
+                    failure_reason=error.reason, impact=error.impact, repair_action=error.repair_action, connection=conn)
+                self.repository.execution_records.append_task_event(TaskEvent(
+                    id=f"event_{job_id}_media_cancelled", workspace_id=plan.workspace_id,
+                    task_id=plan.task_id, job_id=job_id, event_type="media_execution_cancelled",
+                    payload={"request_id": plan.request_id, "base_version_id": plan.base_version_id,
+                        "status": "cancelled", "reason": error.reason, "impact": error.impact,
+                        "repair_action": error.repair_action, "log_path": str(log_path) if log_path.is_file() else None},
+                ), connection=conn)
+        return self._job_receipt(self.read(plan.workspace_id, job_id))
 
     def _assert_plan_current(self, plan: EditPlan) -> None:
         task = self.repository.task_records.get_creation_task(plan.workspace_id, plan.task_id)

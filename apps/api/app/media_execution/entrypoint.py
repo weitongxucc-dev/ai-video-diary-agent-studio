@@ -25,6 +25,9 @@ class MediaExecutionEntrypoint:
     def submit(self, plan: EditPlan | dict) -> dict[str, object]:
         return self.layer.submit(plan)
 
+    def cancel(self, job_id: str, workspace_id: str | None = None) -> dict[str, object]:
+        return self.layer.cancel(job_id, workspace_id)
+
     def read(self, workspace_id: str, job_id: str):
         return self.layer.read(workspace_id, job_id)
 
