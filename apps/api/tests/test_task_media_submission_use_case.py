@@ -1,9 +1,12 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.creation.media_result_use_case import MediaResultUseCase
+from app.creation_execution import CreationExecutionActor
 from app.task_media_routes import build_task_media_router
 from app.task_media_submission_use_case import (
     BoundMediaSubmission,
@@ -101,4 +104,57 @@ def test_formal_post_route_returns_receipt_and_domain_error():
     assert response.status_code == 202 and response.json() == {"job_id": "job-1"}
     rejected = client.post("/api/creation-tasks/task/media-jobs", json={**_command(), "source_path": "/tmp/x.mp4"})
     assert rejected.status_code == 422 and "未支持" in rejected.json()["detail"]
+
+
+def test_public_media_output_receipt_reads_inner_timeline_and_artifact_facts():
+    job = SimpleNamespace(
+        id="outer-job", workspace_id="local", task_id="task-1", input_digest="digest",
+        status="succeeded", created_at=datetime.now(UTC), failure_reason=None, repair_action=None,
+    )
+    start = {
+        "member_id": "member-1", "operation": "ffmpeg_execution", "result_kind": "media_output",
+        "input_digest": "digest", "input_facts": {"base_version_id": "timeline-1"},
+        "arguments": {"edit_plan": {"request_id": "request-1"}},
+    }
+    inner = {
+        "media_job_id": "inner-job", "request_id": "request-1", "base_version_id": "timeline-1",
+        "timeline_version_id": "timeline-2", "output_refs": ["media/inner-job/1-final.mp4"],
+        "log_path": "/tmp/request-request-1.jsonl",
+    }
+
+    class Media:
+        def read(self, workspace_id, job_id):
+            return job, start
+
+        def authorization_verdict(self, *_args, **_kwargs):
+            return "ready"
+
+        def check(self, *_args, **_kwargs):
+            return "ready"
+
+        def resource_admission_receipt(self, *_args, **_kwargs):
+            return None
+
+    class Events:
+        def get_task_event(self, workspace_id, event_id):
+            return SimpleNamespace(payload={"result": inner})
+
+    class Repository:
+        execution_records = Events()
+
+    class Outputs:
+        def published_outputs_current(self, _job):
+            return True
+
+    class Scheduler:
+        def task_media_result_request(self, *_args):
+            return None, {}
+
+    result = MediaResultUseCase(Repository(), Outputs()).read(
+        Media(), "task-1", "outer-job", CreationExecutionActor("local", "member-1"), Scheduler())
+    assert result["status"] == "succeeded"
+    assert result["result_kind"] == "media_output"
+    assert result["result_url"] == "/api/creation-tasks/task-1/media-jobs/outer-job"
+    assert result["result"]["timeline_version_id"] == "timeline-2"
+    assert result["result"]["output_refs"] == ["media/inner-job/1-final.mp4"]
 
