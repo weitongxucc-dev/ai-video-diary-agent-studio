@@ -6,7 +6,6 @@ import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-
 CAPABILITY_NAMES = (
     "probe", "scenes", "look", "cut", "join", "silence", "fit", "crop", "cropdetect",
     "deinterlace", "denoise", "redact", "sphere", "straighten", "insert", "background",

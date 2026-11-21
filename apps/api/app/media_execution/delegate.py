@@ -13,7 +13,6 @@ from typing import Any
 
 from .contracts import EditPlan, MediaExecutionError
 
-
 FFMPEG_OPERATION = "ffmpeg_execution"
 
 
@@ -59,10 +58,10 @@ class TaskMediaExecutionDelegate:
         arguments = event.get("arguments")
         input_facts = event.get("input_facts")
         if not isinstance(arguments, Mapping) or not isinstance(input_facts, Mapping):
-            raise ValueError("媒体 delegate 事件缺少 arguments 或 input_facts")
+            raise TypeError("媒体 delegate 事件缺少 arguments 或 input_facts")
         raw_plan = arguments.get("edit_plan")
         if not isinstance(raw_plan, Mapping):
-            raise ValueError("媒体 delegate 缺少封存 EditPlan")
+            raise TypeError("媒体 delegate 缺少封存 EditPlan")
         plan = EditPlan.from_value(raw_plan)
         expected_version = input_facts.get("base_version_id")
         if expected_version != plan.base_version_id:

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 
 class MediaExecutionError(RuntimeError):
@@ -35,7 +36,7 @@ class MediaOperation:
             raise ValueError("媒体输出名称必须是相对路径")
 
     @classmethod
-    def from_value(cls, value: Mapping[str, Any]) -> "MediaOperation":
+    def from_value(cls, value: Mapping[str, Any]) -> MediaOperation:
         return cls(
             operation=str(value["operation"]),
             inputs=tuple(str(item) for item in value.get("inputs", ())),
@@ -66,7 +67,7 @@ class EditPlan:
             raise ValueError("媒体计划至少需要一个操作")
 
     @classmethod
-    def from_value(cls, value: Mapping[str, Any]) -> "EditPlan":
+    def from_value(cls, value: Mapping[str, Any]) -> EditPlan:
         operations = tuple(item if isinstance(item, MediaOperation) else MediaOperation.from_value(item)
                            for item in value["operations"])
         return cls(
