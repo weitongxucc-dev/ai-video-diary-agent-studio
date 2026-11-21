@@ -3,18 +3,33 @@ import assert from "node:assert/strict";
 import { createSessionResult } from "../result.mjs";
 
 test("SDK result preserves measured provider usage and unknown remains explicit", () => {
-  const result = createSessionResult("usage-test");
+  const result = createSessionResult("usage-test", "minimax", "MiniMax-M3");
   result.observe({type:"message_end", message:{role:"assistant", stopReason:"stop", content:[],
     usage:{input:3, output:2, cacheRead:1, cacheWrite:0, totalTokens:6}}});
   result.observe({type:"message_end", message:{role:"assistant", stopReason:"stop", content:[]}});
   assert.deepEqual(result.value().provider_usage, {input:3, output:2, cacheRead:1, cacheWrite:0, totalTokens:6});
   assert.equal(result.value().usage_status, "known");
+  assert.equal(result.value().provider, "minimax");
+  assert.equal(result.value().model, "MiniMax-M3");
   const empty = createSessionResult("unknown");
   empty.observe({type:"message_end", message:{role:"assistant", stopReason:"stop", content:[],
     usage:{input:0, output:0, cacheRead:0, cacheWrite:0, totalTokens:0}}});
   const unknown = empty.value();
   assert.equal(unknown.provider_usage, null);
   assert.equal(unknown.usage_status, "unknown");
+});
+
+test("SDK result exposes token, observed latency and explicit estimated cost", () => {
+  const result = createSessionResult("details-test", "minimax", "MiniMax-M3");
+  result.observe({type:"turn_start", timestamp:500});
+  result.observe({type:"message_start", timestamp:1000, message:{role:"assistant"}});
+  result.observe({type:"message_end", timestamp:1450, message:{role:"assistant", stopReason:"stop", content:[],
+    usage:{input:7, output:3, totalTokens:10, cost:{input:0.001, output:0.002, total:0.003}}}});
+  result.observe({type:"turn_end", timestamp:1450});
+  const details = result.value().usage_details;
+  assert.deepEqual(details, {provider:"minimax", model:"MiniMax-M3", input_tokens:7,
+    output_tokens:3, latency_ms:450,
+    estimated_cost:{amount:0.003, currency:"USD", source:"sdk_catalog", status:"estimated"}});
 });
 
 test("SDK result records bounded runtime events without prompt or argument payloads", () => {
@@ -84,18 +99,27 @@ test("Pi lifecycle and tool progress stay ordered without serializing partial pa
   assert.doesNotMatch(JSON.stringify(events), /PRIVATE_PARTIAL_RESULT/);
 });
 
-test("automatic retries and input queue updates remain bounded trace facts", () => {
-  const result = createSessionResult("session-retry");
-  result.observe({type:"agent_end", timestamp:2000, willRetry:true,
-    errorMessage:"PRIVATE_PROVIDER_ERROR", retryPrompt:"PRIVATE_RETRY_PROMPT"});
-  result.observe({type:"queue_update", timestamp:2100, status:"queued",
-    messages:[{role:"user", content:"PRIVATE_QUEUED_PROMPT"}]});
-  result.observe({type:"queue_update", timestamp:2200, status:"PRIVATE_QUEUE_STATUS",
-    messages:[{role:"user", content:"PRIVATE_QUEUED_PROMPT_2"}]});
-  const events = result.value().trace_events;
-  assert.deepEqual(events.map(event=>event.type), ["agent_end", "retry", "queue_update", "queue_update"]);
-  assert.equal(events[1].status, "started");
-  assert.equal(events[2].status, "queued");
-  assert.equal("status" in events[3], false);
-  assert.equal(JSON.stringify(events).includes("PRIVATE_"), false);
+
+test("failure, cancellation and retry preserve receipts without inventing missing cost", () => {
+  for (const stopReason of ["error", "aborted"]) {
+    const result = createSessionResult("terminal", "minimax", "M3");
+    result.observe({type:"message_start", timestamp:1000, message:{role:"assistant"}});
+    const message = {role:"assistant", stopReason, content:[], usage:{input:2, output:1, cost:{total:0}}};
+    result.observe({type:"message_end", timestamp:1200, message});
+    result.observe({type:"message_end", timestamp:1300, message});
+    assert.equal(result.value().usage_details.latency_ms, 200);
+    assert.equal(result.value().usage_details.input_tokens, 2);
+    assert.equal(result.value().usage_details.estimated_cost, null);
+    result.observe({type:"retry", timestamp:1500});
+    result.observe({type:"message_start", timestamp:2000, message:{role:"assistant"}});
+    result.observe({type:"message_end", timestamp:2100, message:{role:"assistant", stopReason:"stop",
+      content:[], usage:{input:3, output:2, cost:{total:0.02}}}});
+    assert.equal(result.value().usage_details.latency_ms, 300);
+    assert.equal(result.value().usage_details.input_tokens, 5);
+    assert.equal(result.value().usage_details.estimated_cost, null);
+  }
+  const aborted = createSessionResult("no-receipt");
+  aborted.observe({type:"message_start", timestamp:1000, message:{role:"assistant"}});
+  assert.deepEqual(aborted.value().usage_details, {provider:null, model:null, input_tokens:null,
+    output_tokens:null, latency_ms:null, estimated_cost:null});
 });

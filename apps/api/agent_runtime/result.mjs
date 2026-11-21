@@ -3,15 +3,17 @@ import { randomUUID } from "node:crypto";
 const QUEUE_STATUSES = new Set(["queued", "dequeued", "consumed", "cancelled", "pending", "running", "completed"]);
 
 /** This invocation's results only; restoring SDK history never replays receipts. */
-export function createSessionResult(sessionId) {
+export function createSessionResult(sessionId, provider = null, model = null) {
   const result = {type:"creation_session_result", protocol:1, owner:"pi-coding-agent-sdk",
-    session_id:sessionId, status:"failed", answer:"", tool_results:[],
+    session_id:sessionId, provider, model, status:"failed", answer:"", tool_results:[],
     provider_usage:null, usage_status:"unknown", trace_events:[]};
   const usageKeys = ["input", "output", "cacheRead", "cacheWrite", "totalTokens"];
   const usageSeen = new WeakSet();
   const invocationId = randomUUID();
   const eventIds = new Map();
   let traceStep = 0;
+  let messageStarted = null;
+  let latency = 0, messageCount = 0, timedMessages = 0, estimatedMessages = 0, estimatedAmount = 0;
   function eventTime(event) {
     return Number.isFinite(event?.timestamp) ? event.timestamp : Date.now();
   }
@@ -50,10 +52,23 @@ export function createSessionResult(sessionId) {
       (result.provider_usage[key] ?? 0) + value;
     result.usage_status = "known";
   }
+  function usageDetails() {
+    const usage = result.provider_usage;
+    const details = {provider: result.provider || null, model: result.model || null,
+      input_tokens: Number.isInteger(usage?.input) ? usage.input : null,
+      output_tokens: Number.isInteger(usage?.output) ? usage.output : null,
+      latency_ms: null, estimated_cost: null};
+    // SDK message boundaries exclude tools, compaction and retry backoff.
+    if (messageStarted === null && messageCount && timedMessages === messageCount) details.latency_ms = latency;
+    if (messageCount && estimatedMessages === messageCount) details.estimated_cost = {
+      amount: estimatedAmount, currency: "USD", source: "sdk_catalog", status: "estimated"};
+    return details;
+  }
   return {
     observe(event) {
       if (!event || typeof event !== "object") return;
       const eventType = event.type;
+      if (eventType === "message_start" && event.message?.role === "assistant") messageStarted = eventTime(event);
       if (eventType === "turn_start" || eventType === "turn_end" || eventType === "agent_settled") {
         traceEvent(event, eventType);
       }
@@ -105,6 +120,19 @@ export function createSessionResult(sessionId) {
         if (!usageSeen.has(event.message)) {
           usageSeen.add(event.message);
           recordUsage(event.message.usage);
+          messageCount += 1;
+          if (messageStarted !== null) {
+            latency += Math.max(0, Math.round(eventTime(event) - messageStarted));
+            timedMessages += 1;
+            messageStarted = null;
+          }
+          const cost = event.message.usage?.cost;
+          // Pi's zero defaults are not proof of free usage; provider-billed
+          // totals are deliberately not relabelled as catalog estimates.
+          if (Number.isFinite(cost?.total) && cost.total > 0 && cost.totalFromProvider !== true) {
+            estimatedAmount += cost.total;
+            estimatedMessages += 1;
+          }
         }
         if (event.message.stopReason === "stop") result.answer = event.message.content
           .filter(item=>item.type === "text").map(item=>item.text).join("").trim();
@@ -115,6 +143,6 @@ export function createSessionResult(sessionId) {
       }
       if (event.type === "agent_settled") result.status = "settled";
     },
-    value:()=>result,
+    value:()=>{ const {_cost, ...publicResult} = result; return {...publicResult, usage_details:usageDetails()}; },
   };
 }

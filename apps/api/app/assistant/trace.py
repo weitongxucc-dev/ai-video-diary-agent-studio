@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from datetime import datetime, timezone
+from typing import Literal, TypedDict
 
 
 REVIEWER_KINDS = ('evidence_scout', 'script_reviewer', 'visual_reviewer', 'audio_reviewer')
-RUNTIME_RECEIPT_FIELDS = ('session_id', 'provider_usage', 'usage_status', 'trace_events')
+RUNTIME_RECEIPT_FIELDS = ('session_id', 'provider', 'model', 'provider_usage', 'usage_status', 'usage_details', 'trace_events')
 _RUNTIME_EVENT_TYPES = {
     'agent_start', 'agent_end', 'agent_settled', 'turn_start', 'turn_end',
     'tool_start', 'tool_progress', 'tool_end', 'nested_tool', 'compaction_start', 'compaction_end', 'retry',
@@ -63,13 +65,74 @@ def safe_runtime_trace_events(events: object) -> list[dict]:
     return safe
 
 
+class EstimatedCost(TypedDict):
+    amount: float
+    currency: Literal['USD']
+    source: Literal['sdk_catalog']
+    status: Literal['estimated']
+
+
+class UsageDetails(TypedDict):
+    provider: str | None
+    model: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    latency_ms: int | None
+    estimated_cost: EstimatedCost | None
+
+
+def _identity(value: object) -> str | None:
+    return value if isinstance(value, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,255}', value) else None
+
+
+def project_usage_details(result: dict) -> UsageDetails:
+    """Additive Trace contract, persisted in result_json; no schema migration.
+
+    GET /api/assistant/turns/{turn_id}/trace and read_agent_run_trace share
+    this projection and the existing owned-conversation authorization. Null
+    means unknown. Tokens come only from the persisted usage receipt; latency
+    is the sum of observed SDK assistant message intervals, excluding tools,
+    compaction and backoff (not time-to-first-token or turn wall duration).
+    Cost is an explicit SDK catalog estimate in USD, never a billed amount.
+    Old turns are not backfilled from current settings or model prices.
+    """
+    details = result.get('usage_details') if isinstance(result.get('usage_details'), dict) else {}
+    usage = result.get('provider_usage') if result.get('usage_status') in {'known', 'estimated'} else None
+    usage = usage if isinstance(usage, dict) else {}
+    def token(key):
+        value = usage.get(key)
+        return value if type(value) is int and value >= 0 else None
+    latency = details.get('latency_ms')
+    if type(latency) is not int or latency < 0:
+        latency = None
+    cost = details.get('estimated_cost')
+    amount = cost.get('amount') if isinstance(cost, dict) else None
+    if (type(amount) not in {int, float} or not math.isfinite(amount) or amount <= 0
+            or cost.get('currency') != 'USD' or cost.get('source') != 'sdk_catalog'
+            or cost.get('status') != 'estimated'):
+        cost = None
+    else:
+        cost = {'amount': amount, 'currency': 'USD', 'source': 'sdk_catalog', 'status': 'estimated'}
+    return {'provider': _identity(result.get('provider')), 'model': _identity(result.get('model')),
+            'input_tokens': token('input'), 'output_tokens': token('output'),
+            'latency_ms': latency, 'estimated_cost': cost}
+
+
 def runtime_receipt_fields(value: object) -> dict:
-    return {key: value[key] for key in RUNTIME_RECEIPT_FIELDS if key in value} if isinstance(value, dict) else {}
+    if not isinstance(value, dict):
+        return {}
+    fields = {key: value[key] for key in RUNTIME_RECEIPT_FIELDS if key in value}
+    for key in ('provider', 'model'):
+        if not _identity(fields.get(key)):
+            fields.pop(key, None)
+    if 'usage_details' in fields:
+        fields['usage_details'] = project_usage_details(fields)
+    return fields
 
 
 def append_runtime_receipt(first: dict, following: dict) -> dict:
     if first.get('session_id') and following.get('session_id') and first['session_id'] != following['session_id']:
-        return {**first, 'provider_usage': None, 'usage_status': 'unknown'}
+        return {**first, 'provider_usage': None, 'usage_status': 'unknown', 'usage_details': None}
     merged = {**first, **following}
     left, right = first.get('provider_usage'), following.get('provider_usage')
     status = first.get('usage_status')
@@ -79,6 +142,17 @@ def append_runtime_receipt(first: dict, following: dict) -> dict:
             merged['usage_status'] = 'unknown'
     else:
         merged.update(provider_usage=None, usage_status='unknown')
+    # Mixed-model chains cannot be attributed to the final model alone.
+    for key in ('provider', 'model'):
+        merged[key] = first.get(key) if first.get(key) == following.get(key) else None
+    if 'usage_details' in first or 'usage_details' in following:
+        ld, rd = project_usage_details(first), project_usage_details(following)
+        latency = (ld['latency_ms'] + rd['latency_ms']
+                   if ld['latency_ms'] is not None and rd['latency_ms'] is not None else None)
+        lc, rc = ld['estimated_cost'], rd['estimated_cost']
+        cost = {**lc, 'amount': lc['amount'] + rc['amount']} if lc and rc else None
+        merged['usage_details'] = {'latency_ms': latency, 'estimated_cost': cost}
+        merged['usage_details'] = project_usage_details(merged)
     events = [*first.get('trace_events', []), *following.get('trace_events', [])]
     if events:
         merged['trace_events'] = [{**event, 'step': index} for index, event in enumerate(events, 1)]
@@ -308,6 +382,7 @@ def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 20
     associations.extend(runtime_associations)
     associations.extend(_nested_references(result))
     result_usage = result.get('provider_usage') if isinstance(result.get('provider_usage'), dict) else None
+    usage_details = project_usage_details(result)
     requested_usage_status = result.get('usage_status')
     if requested_usage_status in {'known', 'estimated'} and result_usage:
         provider_usage = {key: value for key, value in result_usage.items()
@@ -337,6 +412,13 @@ def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 20
         'tool_counts': tool_counts,
         'compaction_count': compactions,
         'provider_usage': provider_usage or None,
+        'provider': usage_details['provider'],
+        'model': usage_details['model'],
+        'usage_details': usage_details,
+        'input_tokens': usage_details.get('input_tokens') if usage_details else None,
+        'output_tokens': usage_details.get('output_tokens') if usage_details else None,
+        'latency_ms': usage_details.get('latency_ms') if usage_details else None,
+        'estimated_cost': usage_details.get('estimated_cost') if usage_details else None,
         'usage_status': usage_status,
         'usage_source': usage_source,
         'associations': deduped,
