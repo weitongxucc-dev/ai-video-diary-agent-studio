@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "evidence_type": "wce3_source_task_timeline_recovery",
+  "verified_at": "2026-11-21",
+  "authority": "current WCE-3 worktree and live local API/UI run",
+  "source": {
+    "desktop_entry": true,
+    "file_name": "task_d860f92365c5.mp4",
+    "asset_id": "asset_f762e9d72b70f23b",
+    "workspace_reference": "workspace://task_d860f92365c5.mp4",
+    "desktop_runtime_log": "/tmp/yaohe-wce3-desktop-proof-20261121/logs/desktop-runtime.jsonl"
+  },
+  "task": {
+    "id": "task_source_cb4a6f2303a523738b91a8127cc0f03cd20eeb2e833fb424c2159457940f60cf",
+    "name": "WCE 时间线恢复验收",
+    "scenario": "source_video_edit",
+    "stage": "montage",
+    "stage_status": "waiting_for_user",
+    "montage_plan_id": "montage_source_cb4a6f2303a523738b91a8127cc0f03cd20eeb2e833fb424c2159457940f60cf",
+    "current_timeline_version_id": "timeline_source_cb4a6f2303a523738b91a8127cc0f03cd20eeb2e833fb424c2159457940f60cf",
+    "timeline_sequence": 1
+  },
+  "timeline_version": {
+    "id": "timeline_source_cb4a6f2303a523738b91a8127cc0f03cd20eeb2e833fb424c2159457940f60cf",
+    "task_id": "task_source_cb4a6f2303a523738b91a8127cc0f03cd20eeb2e833fb424c2159457940f60cf",
+    "sequence": 1,
+    "parent_version_id": null,
+    "clip_id": "clip-source",
+    "asset_id": "asset_f762e9d72b70f23b",
+    "source_start_seconds": 0.0,
+    "source_end_seconds": 3.0,
+    "created_at": "2026-11-21T09:52:35.895492+00:00"
+  },
+  "session": {
+    "scope_kind": "task",
+    "scope_id": "task_source_cb4a6f2303a523738b91a8127cc0f03cd20eeb2e833fb424c2159457940f60cf",
+    "conversation_id": "3d7417e8-1b6c-460d-9e7d-410a53fd33b8",
+    "title": "WCE 版本会话",
+    "selected_conversation_id": "3d7417e8-1b6c-460d-9e7d-410a53fd33b8",
+    "selected_at": "2026-11-21T09:54:35.598892+00:00"
+  },
+  "ui_readback": {
+    "current_work": "WCE 时间线恢复验收",
+    "session_scope_label": "当前作品会话",
+    "session_title": "WCE 版本会话",
+    "timeline_history_entry": "第 1 版 当前版本",
+    "after_api_restart": true
+  },
+  "api_restart_readback": {
+    "same_task_id": true,
+    "same_current_timeline_version_id": true,
+    "same_sequence": true,
+    "same_session_id": true
+  },
+  "tests": [
+    {
+      "command": "uv run pytest tests/test_source_task_api.py tests/test_source_task_use_case.py tests/test_task_edit_routes_metadata.py::test_task_edit_reads_and_pre_admission_refusals_never_claim_or_edit",
+      "result": "25 passed"
+    },
+    {
+      "command": "node scripts/material-import-test.js",
+      "result": "36 passed"
+    },
+    {
+      "command": "corepack pnpm exec vitest run src/components/__tests__/Wce3ConversationHeader.test.tsx src/components/__tests__/SourceTaskForm.test.tsx",
+      "result": "8 passed"
+    }
+  ],
+  "unverified": [
+    "full render and publish chain",
+    "automatic TimelineVersion creation for ordinary topic tasks before a montage plan exists",
+    "final exported media playback"
+  ],
+  "evidence_files": [
+    "/tmp/yaohe-wce3-timeline-proof.json",
+    "/tmp/yaohe-wce3-desktop-proof-20261121/logs/desktop-runtime.jsonl"
+  ]
+}
