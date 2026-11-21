@@ -2,9 +2,22 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from app.creation_execution import CreationExecutionActor
+from app.task_media_submission_use_case import TaskMediaSubmissionRejected
 
-def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, read_for, read_components_for, runtime_for, repository_for, receipt_for, observations_for, route_names) -> APIRouter:
+def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, read_for, read_components_for, runtime_for, repository_for, receipt_for, observations_for, submit_for=None, route_names) -> APIRouter:
     router = APIRouter()
+
+    @router.post('/api/creation-tasks/{task_id}/media-jobs')
+    def submit_task_media_job(task_id: str, request: Request, payload: dict):
+        actor = actor_for()(request, workspace_for()(request))
+        if submit_for is None:
+            raise HTTPException(status_code=404, detail='媒体提交入口不可用')
+        try:
+            job, runtime = submit_for()(task_id, actor, payload)
+            receipt = receipt_for()(runtime.registrations['creation_job'].owner.task_media, job, actor, runtime)
+            return JSONResponse(status_code=202, content=receipt)
+        except TaskMediaSubmissionRejected as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     @router.get('/api/creation-tasks/{task_id}/media-jobs')
     def list_task_media_jobs(task_id: str, request: Request, cursor: str | None=None, limit: int=20):
