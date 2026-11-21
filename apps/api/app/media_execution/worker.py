@@ -2,14 +2,29 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
+import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
+from functools import partial
 from pathlib import Path
 
 from .adapter import FfmpegAdapter
 from .capabilities import ToolDependency
-from .contracts import EditPlan, MediaExecutionError
+from .contracts import (
+    EditPlan,
+    MediaExecutionCancelled,
+    MediaExecutionError,
+    MediaProcessReleaseUnverified,
+)
+
+
+def _write_log(path: Path, identity: dict, event: str, **fields) -> None:
+    with path.open("a", encoding="utf-8") as log:
+        log.write(json.dumps({**identity, "event": event, "timestamp": time.time(), **fields},
+                             ensure_ascii=False) + "\n")
 
 
 class FfmpegWorker:
@@ -23,13 +38,16 @@ class FfmpegWorker:
         self.adapter = FfmpegAdapter(dependencies["ffmpeg"].path, dependencies["ffprobe"].path)
 
     def execute(self, plan: EditPlan, job_id: str, output_root: Path,
-                *, progress: Callable[[int], None] | None = None) -> dict[str, object]:
+                *, progress: Callable[[int], None] | None = None,
+                cancel_event: threading.Event | None = None) -> dict[str, object]:
         job_root = output_root / job_id
         job_root.mkdir(parents=True, exist_ok=True)
         log_path = job_root / f"request-{plan.request_id}.jsonl"
         current_outputs: list[dict[str, object]] = []
         total = len(plan.operations)
         for index, operation in enumerate(plan.operations, start=1):
+            if cancel_event is not None and cancel_event.is_set():
+                raise MediaExecutionCancelled()
             if operation.operation.lower() in {"caption", "subtitles"}:
                 available_filters = set(self.dependencies["ffmpeg"].features)
                 if not ({"subtitles", "drawtext"} & available_filters):
@@ -57,26 +75,25 @@ class FfmpegWorker:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             if output_path in inputs:
                 raise MediaExecutionError("source_overwrite_refused", "原始输入未被覆盖，媒体作业未发布。", "为输出指定不同于输入的目标文件。")
-            started = time.time()
-            with log_path.open("a", encoding="utf-8") as log:
-                log.write(json.dumps({"request_id": plan.request_id, "job_id": job_id, "event": "command_start",
-                                      "operation": operation.operation, "index": index, "timestamp": started,
-                                      "inputs": [str(item) for item in inputs], "output": str(output_path)}, ensure_ascii=False) + "\n")
+            log = partial(_write_log, log_path, {
+                "request_id": plan.request_id, "job_id": job_id,
+                "operation": operation.operation, "index": index,
+            })
+            log("command_start", inputs=[str(item) for item in inputs], output=str(output_path))
             prepared = self.adapter.concat(inputs, output_path, job_root / f"step-{index}.concat.txt") if operation.operation.lower() == "join" else self.adapter.prepare(
                 operation.__class__(operation=operation.operation, inputs=tuple(str(item) for item in inputs),
                                     output_name=operation.output_name, options=operation.options), output_path)
             try:
-                process_env = dict(os.environ)
-                process_env.pop("FFREPORT", None)
-                completed = subprocess.run(prepared.command, capture_output=True, text=True, timeout=self.timeout_seconds,
-                                           check=False, env=process_env)
-            except subprocess.TimeoutExpired as exc:
-                raise MediaExecutionError("media_command_timeout", "媒体命令超时，未发布新版本。", "检查输入规模或设备资源后沿原请求重试。") from exc
-            finished = time.time()
-            with log_path.open("a", encoding="utf-8") as log:
-                log.write(json.dumps({"request_id": plan.request_id, "job_id": job_id, "event": "command_end",
-                                      "operation": operation.operation, "index": index, "timestamp": finished,
-                                      "returncode": completed.returncode, "stderr": completed.stderr[-4000:]}, ensure_ascii=False) + "\n")
+                completed = self._run_process(prepared.command, cancel_event, log)
+            except MediaProcessReleaseUnverified as exc:
+                # A log write failure must not turn an unverified release into a retryable failure.
+                with suppress(OSError):
+                    log("command_release_unverified", reason=exc.reason)
+                raise
+            except MediaExecutionError as exc:
+                log("command_end", reason=exc.reason)
+                raise
+            log("command_end", returncode=completed.returncode, stderr=completed.stderr[-4000:])
             if completed.returncode != 0:
                 detail = (completed.stderr or completed.stdout or "ffmpeg 返回非零状态").strip()[-1000:]
                 raise MediaExecutionError("media_command_failed", f"媒体操作 {operation.operation} 执行失败。",
@@ -94,3 +111,64 @@ class FfmpegWorker:
             if progress is not None:
                 progress(int(index * 100 / total))
         return {"outputs": current_outputs, "log_path": str(log_path), "request_id": plan.request_id}
+
+    def _run_process(self, command: tuple[str, ...], cancel_event: threading.Event | None,
+                     log: Callable[..., None]) -> subprocess.CompletedProcess[str]:
+        if os.name != "posix":
+            raise MediaExecutionError(
+                "media_process_group_unsupported", "当前平台缺少媒体进程组管理，未启动媒体命令。",
+                "请使用支持进程组清理的媒体运行环境。",
+            )
+        if cancel_event is not None and cancel_event.is_set():
+            raise MediaExecutionCancelled()
+        process_env = dict(os.environ)
+        process_env.pop("FFREPORT", None)
+        process = subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", env=process_env, start_new_session=True,
+        )
+        deadline = time.monotonic() + self.timeout_seconds
+        try:
+            log("process_started", pid=process.pid, process_group_id=process.pid)
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise MediaExecutionCancelled()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise MediaExecutionError(
+                        "media_command_timeout", "媒体命令超时，未发布新版本。",
+                        "检查输入规模或设备资源后沿原请求重试。",
+                    )
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.1, remaining))
+                    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+                except subprocess.TimeoutExpired:
+                    continue
+        finally:
+            try:
+                self._release_process_group(process)
+            finally:
+                process.stdout.close()
+                process.stderr.close()
+
+    @staticmethod
+    def _release_process_group(process: subprocess.Popen[str]) -> None:
+        # The group may outlive the leader, even after communicate() returns.
+        try:
+            for sig, grace in ((signal.SIGTERM, 0.5), (signal.SIGKILL, 2.0)):
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, sig)
+                deadline = time.monotonic() + grace
+                while True:
+                    process.poll()
+                    try:
+                        os.killpg(process.pid, 0)
+                    except ProcessLookupError:
+                        process.wait(timeout=grace)
+                        return
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.02)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise MediaProcessReleaseUnverified() from exc
+        raise MediaProcessReleaseUnverified()
