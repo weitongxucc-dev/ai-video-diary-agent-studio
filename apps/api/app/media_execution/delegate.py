@@ -89,6 +89,11 @@ class TaskMediaExecutionDelegate:
         result = self.entrypoint.retry(job["id"], plan.workspace_id)
         return self._receipt(job, plan, result)
 
+    def cancel(self, job, event: Mapping[str, Any], actor_identity: Mapping[str, Any]) -> dict[str, Any]:
+        plan = self.plan_from_event(event, actor_identity, job=job)
+        result = self.entrypoint.cancel(job["id"], plan.workspace_id)
+        return self._receipt(job, plan, result)
+
     @staticmethod
     def _receipt(job, plan: EditPlan, result: Mapping[str, Any]) -> dict[str, Any]:
         status = str(result.get("status", "failed"))
