@@ -45,6 +45,28 @@ def _declared_resource_refusal(repo, media, runtime, job):
             observed_interval_seconds=0.1), utc_now())
 
 
+def test_media_submit_profile_blocker_exposes_existing_preparation_path(tmp_path, monkeypatch):
+    repo, actor, _state, _factory, _build, _media = case(tmp_path)
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(main, 'production_repo', repo)
+    monkeypatch.setattr(main, '_require_permit_actor', lambda *args: actor)
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request: 'local')
+
+    def unavailable_runtime():
+        raise HTTPException(503, '设备资源档尚未准备；请准备或更新该设备档')
+
+    monkeypatch.setattr(main, '_creation_runtime', unavailable_runtime)
+    response = TestClient(main.app).post('/api/creation-tasks/task/media-jobs', json={})
+
+    assert response.status_code == 503
+    detail = response.json()['detail']
+    assert detail['code'] == 'device_profile_unprepared'
+    assert detail['status_endpoint'] == '/api/device/resource-preparations'
+    assert detail['prepare_endpoint'] == '/api/device/resource-preparations'
+    assert 'DEVICE_RESOURCE_PROFILE_PATH' in detail['repair_action']
+
+
 def test_202_fixed_result_route_replay_success_and_cancel(tmp_path, monkeypatch):
     repo, actor, state, factory, build, media = case(tmp_path)
     runtime = build(media)

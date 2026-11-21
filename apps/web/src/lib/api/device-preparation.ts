@@ -8,6 +8,11 @@ export type DeviceResourceStatus = {
   profile_status: 'unprepared' | 'available' | 'invalid';
   revision: number | null;
   available_operations: string[];
+  media_execution_ready: boolean;
+  status_endpoint: string;
+  prepare_endpoint: string;
+  message: string;
+  repair_action: string | null;
   production_blocker?: string | null;
 };
 
@@ -68,6 +73,10 @@ export async function getDeviceResourceStatus(signal?: AbortSignal): Promise<Dev
   if (!/^[0-9a-f]{64}$/.test(value.actor_scope)
       || typeof value.cpu_preparation_supported !== 'boolean' || typeof value.preparation_configured !== 'boolean'
       || !['unprepared', 'available', 'invalid'].includes(value.profile_status)
+      || typeof value.media_execution_ready !== 'boolean'
+      || typeof value.status_endpoint !== 'string' || typeof value.prepare_endpoint !== 'string'
+      || typeof value.message !== 'string'
+      || (value.repair_action != null && typeof value.repair_action !== 'string')
       || (value.production_blocker != null && typeof value.production_blocker !== "string")
       || !Array.isArray(value.available_operations)) {
     throw new Error('设备状态回执不完整，尚不能确认当前身份或准备条件。');
