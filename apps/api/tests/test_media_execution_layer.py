@@ -311,6 +311,39 @@ def test_task_media_delegate_resume_and_retry_accept_persisted_jobrun():
     assert retried["failure_reason"] == "retry_failed"
     assert calls == [("resume", "outer-job", "local"), ("retry", "outer-job", "local")]
 
+
+def test_task_media_delegate_cancel_and_retry_keep_outer_input_version_and_request():
+    class EntryPoint:
+        def cancel(self, job_id, workspace_id):
+            return {"status": "cancelled", "job_id": job_id, "request_id": "req",
+                    "failure_reason": "media_cancelled", "impact": "未发布", "repair_action": "沿原请求重试",
+                    "log_path": "cancelled.jsonl"}
+
+        def retry(self, job_id, workspace_id):
+            return {"status": "succeeded", "job_id": "new-job", "request_id": "req",
+                    "timeline_version_id": "next", "output_refs": ["media/new/final.mp4"],
+                    "log_path": "retry.jsonl"}
+
+    event = {"workspace_id": "local", "task_id": "task", "arguments": {"edit_plan": {
+        "workspace_id": "local", "task_id": "task", "base_version_id": "base", "request_id": "req",
+        "operations": [{"operation": "export", "inputs": ["input.mp4"], "output_name": "final.mp4"}],
+    }}, "input_facts": {"base_version_id": "base"}}
+    delegate = TaskMediaExecutionDelegate(EntryPoint())
+
+    cancelled = delegate.cancel({"id": "outer-job"}, event, {})
+    retried = delegate.retry({"id": "outer-job"}, event, {})
+
+    assert cancelled == {
+        "status": "cancelled", "request_id": "req", "base_version_id": "base", "timeline_version_id": None,
+        "output_refs": [], "log_path": "cancelled.jsonl", "failure_reason": "media_cancelled",
+        "impact": "未发布", "repair_action": "沿原请求重试", "job_id": "outer-job",
+    }
+    assert retried["status"] == "succeeded"
+    assert retried["job_id"] == "new-job"
+    assert retried["base_version_id"] == "base"
+    assert retried["request_id"] == "req"
+
+
 def _wait_for_log(path: Path, event: str):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
