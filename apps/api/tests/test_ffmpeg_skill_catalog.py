@@ -29,6 +29,7 @@ def test_ffmpeg_skill_manifest_is_catalog_only_with_explicit_capability_states()
     assert by_id["caption"]["dependencies"]
     assert "字体" in by_id["caption"]["unavailable_reason"]
     assert by_id["scenes"]["status"] == "planned"
+    assert by_id["scenes"]["stability"] == "beta"
 
 
 def test_ffmpeg_skill_preflight_exposes_reasons_dependencies_and_capabilities():
