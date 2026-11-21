@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from app.task_media_routes import build_task_media_router
 from app.task_media_submission_use_case import (
     BoundMediaSubmission,
     TaskMediaSubmissionRejected,
@@ -68,4 +71,31 @@ def test_submission_builds_controlled_plan_and_reuses_same_request():
     assert operation == "ffmpeg_execution" and result_kind == "media_output"
     assert plan["operations"][0]["inputs"] == ["/controlled/clips/asset-1.mp4"]
     assert plan["operations"][0]["options"]["asset_id"] == "asset-1"
+
+
+def test_formal_post_route_returns_receipt_and_domain_error():
+    actor = SimpleNamespace(workspace_id="local", member_id="member-1", user_id=None)
+    runtime = SimpleNamespace(registrations={"creation_job": SimpleNamespace(owner=SimpleNamespace(task_media="media"))})
+    app = FastAPI()
+
+    def submit_for():
+        def submit(_task_id, _actor, payload):
+            BoundMediaSubmission.from_value(payload)
+            return SimpleNamespace(id="job-1"), runtime
+        return submit
+
+    app.include_router(build_task_media_router(
+        workspace_for=lambda: (lambda _request: "local"),
+        actor_for=lambda: (lambda _request, _workspace: actor),
+        task_for=lambda: None, list_for=lambda: None, read_for=lambda: None,
+        read_components_for=lambda: None, runtime_for=lambda: runtime, repository_for=lambda: None,
+        receipt_for=lambda: (lambda _media, job, _actor, _runtime: {"job_id": job.id}),
+        observations_for=lambda: None, submit_for=submit_for,
+        route_names=("submit_task_media_job",),
+    ))
+    client = TestClient(app)
+    response = client.post("/api/creation-tasks/task/media-jobs", json=_command())
+    assert response.status_code == 202 and response.json() == {"job_id": "job-1"}
+    rejected = client.post("/api/creation-tasks/task/media-jobs", json={**_command(), "source_path": "/tmp/x.mp4"})
+    assert rejected.status_code == 422 and "未支持" in rejected.json()["detail"]
 
