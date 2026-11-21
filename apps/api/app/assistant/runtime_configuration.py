@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from app.config import Settings
 from app.workspace_settings import workspace_pi_config_dir
 from app.assistant.failures import _fail, FAILURE_RUNTIME_MISSING
+from app.assistant.provider_catalog import provider_spec
 
 def _agent_root(settings: Settings, workspace_id: str) -> Path:
     parent = Path(settings.model_root_path).expanduser().parent
@@ -19,11 +20,18 @@ def _agent_root(settings: Settings, workspace_id: str) -> Path:
 
 def _configured_model(settings: Settings) -> tuple[str, str, str]:
     endpoint = urlsplit(settings.effective_llm_base_url)
-    if endpoint.scheme != "https" or not endpoint.hostname or endpoint.hostname in {"localhost", "127.0.0.1", "::1"}:
+    spec = provider_spec(settings.effective_llm_provider)
+    if spec.protocol != "openai_compatible":
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="当前 provider 目录已登记原生协议，但 Pi 运行桥尚未启用该协议；请先选择 OpenAI-compatible 接口。",
+                    repair_action="保留当前配置，待原生协议运行桥接入后再验证，不会自动改用其他服务。")
+    local_endpoint = endpoint.hostname in {"localhost", "127.0.0.1", "::1"}
+    if (not endpoint.hostname or endpoint.username or endpoint.password
+            or (endpoint.scheme != "https" and spec.id not in {"ollama", "lmstudio"})
+            or (local_endpoint and spec.id not in {"ollama", "lmstudio"})):
         raise _fail(FAILURE_RUNTIME_MISSING, explanation="对话须选择外部文字模型，请先在设置里选 MiniMax 或 DeepSeek。",
                     repair_action="在设置页连接 MiniMax，或主动选择 DeepSeek；不会自动切换服务。")
-    key = settings.effective_llm_api_key
-    if not key:
+    key = settings.effective_llm_api_key or ""
+    if spec.auth == "api_key" and not key:
         raise _fail(FAILURE_RUNTIME_MISSING, explanation="外部文字模型的 API Key 还没填，所以这一轮对话没有开始。",
                     repair_action="在设置页填写当前所选服务的 API Key 并保存后重试。")
     return settings.effective_llm_base_url, settings.effective_llm_model, key

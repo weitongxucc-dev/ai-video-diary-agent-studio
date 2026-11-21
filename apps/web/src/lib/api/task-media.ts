@@ -113,7 +113,7 @@ export function taskMediaJobLabel(job: TaskMediaJob): string {
         return reason ? `等待处理：${reason}` : "已安排，等待设备空闲";
     }
     if (job.status === "running")
-        return job.result_kind === "waveform" ? "正在读取波形…" : ["audio_source", "recording"].includes(job.result_kind) ? "正在处理音频…" : "正在生成预览…";
+        return job.result_kind === "waveform" ? "正在读取波形…" : job.result_kind === "media_output" ? "正在输出成片…" : ["audio_source", "recording"].includes(job.result_kind) ? "正在处理音频…" : "正在生成预览…";
     if (job.status === "interrupted")
         return "预览已中断，等待恢复";
     if (job.status === "cancelled")
@@ -196,6 +196,8 @@ export function taskMediaJobMatchesContext(job: TaskMediaJob, baseVersionId: str
     }
     if (job.result_kind === "graphic_source")
         return ["media_script_preview", "media_script_tool_preview"].includes(job.operation);
+    if (job.result_kind === "media_output")
+        return job.operation === "ffmpeg_execution";
     if (job.target_refs.length !== 0)
         return false;
     return (job.operation === "audio_import" && job.result_kind === "audio_source")

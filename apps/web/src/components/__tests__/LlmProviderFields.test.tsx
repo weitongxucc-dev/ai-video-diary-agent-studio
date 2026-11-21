@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, fireEvent, screen } from "@testing-library/react";
 import { LlmProviderFields } from "../LlmProviderFields";
+import { LLM_PROVIDER_PRESETS } from "@/lib/llm-providers";
 
 function renderFields(apiKeyConfigured: boolean) {
   return render(
@@ -54,5 +55,19 @@ describe("LlmProviderFields 删除密钥", () => {
     renderFields(false);
 
     expect(screen.queryByRole("button", { name: "移除密钥" })).toBeNull();
+  });
+
+  it("提供主流兼容接口预设，并允许切换到通义千问", () => {
+    renderFields(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "模型服务" }));
+    for (const preset of LLM_PROVIDER_PRESETS) {
+      expect(screen.getByRole("option", { name: preset.label })).toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByRole("option", { name: "通义千问 · DashScope" }));
+
+    expect(screen.getByLabelText("模型服务地址")).toHaveValue("https://dashscope.aliyuncs.com/compatible-mode/v1");
+    expect(screen.getByLabelText("模型")).toHaveValue("qwen3.5-plus");
+    expect(screen.getByText(/保存只记录连接配置/)).toBeInTheDocument();
   });
 });

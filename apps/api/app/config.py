@@ -21,6 +21,7 @@ from app.env_files import (
 )
 
 from app.local_runtime_status import observe_local_runtime_status, whisper_file_present
+from app.assistant.provider_catalog import provider_spec
 from app.service_status_projection import (
     LLM_SERVICE_AVAILABLE as LLM_SERVICE_AVAILABLE,
     LLM_SERVICE_FAILED as LLM_SERVICE_FAILED,
@@ -317,18 +318,18 @@ class Settings:
 
     @property
     def effective_llm_base_url(self) -> str:
-        default_url = (
-            "https://api.minimax.cn/v1"
-            if self.effective_llm_provider == "minimax"
-            else self.deepseek_base_url
-        )
+        default_url = provider_spec(self.effective_llm_provider).base_url
+        if self.effective_llm_provider == "deepseek" and self.deepseek_base_url:
+            default_url = self.deepseek_base_url
         return (self.llm_base_url or default_url).rstrip("/")
 
     @property
     def effective_llm_model(self) -> str:
-        return self.llm_model or (
-            "MiniMax-M3" if self.effective_llm_provider == "minimax" else self.deepseek_model
-        )
+        if self.llm_model:
+            return self.llm_model
+        if self.effective_llm_provider == "deepseek" and self.deepseek_model:
+            return self.deepseek_model
+        return provider_spec(self.effective_llm_provider).default_model
 
     @property
     def llm_configured(self) -> bool:

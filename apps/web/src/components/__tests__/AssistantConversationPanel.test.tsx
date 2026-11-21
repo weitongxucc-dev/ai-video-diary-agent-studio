@@ -144,9 +144,9 @@ async function selectSettingsRecord(saved: AssistantConversation) {
   expect(entry.closest("details")).not.toHaveAttribute("open");
   expect(api.getAssistantTurnTrace).not.toHaveBeenCalled();
   fireEvent.click(entry);
-  fireEvent.change(await screen.findByRole("combobox",{name:"对话",exact:true}), {target:{value:saved.id}});
+  fireEvent.change(await screen.findByRole("combobox",{name:"对话"}), {target:{value:saved.id}});
   expect(api.getAssistantTurnTrace).not.toHaveBeenCalled();
-  fireEvent.change(screen.getByRole("combobox",{name:"轮次",exact:true}), {target:{value:saved.turns[0].id}});
+  fireEvent.change(screen.getByRole("combobox",{name:"轮次"}), {target:{value:saved.turns[0].id}});
   return {view, record:screen.getByRole("region",{name:"轮次诊断详情"})};
 }
 
@@ -348,6 +348,8 @@ it("retries an unreadable execution record locally and exposes measured usage wi
       {type:"retry", status:"completed", label:"/Users/private/test.json"},
     ], next_before:null, provider_usage:{ input:3250, output:12, cacheRead:0 },
     usage_status:"known", usage_source:"provider", duration_ms:2350, retry_count:1,
+    usage_details:{provider:"qwen", model:"qwen-test", input_tokens:3250, output_tokens:12,
+      latency_ms:1800, estimated_cost:{amount:0.012, currency:"USD", status:"estimated", source:"sdk_catalog"}},
   });
   const send = vi.fn();
   render(<AssistantConversationPanel state={state({conversation:saved})} input="待保留的草稿" onInput={vi.fn()} onSend={send}
@@ -358,7 +360,11 @@ it("retries an unreadable execution record locally and exposes measured usage wi
   expect(usage).toHaveTextContent("供应商实测");
   expect(usage).toHaveTextContent("输入 3,250");
   expect(usage).toHaveTextContent("缓存读取 0");
+  expect(usage).toHaveTextContent("模型耗时");
+  expect(usage).toHaveTextContent("1.8 秒");
+  expect(usage).toHaveTextContent("整轮耗时");
   expect(usage).toHaveTextContent("2.35 秒");
+  expect(usage).toHaveTextContent("0.012 USD（估算）");
   expect(usage).toHaveTextContent("qwen-test");
   expect(within(record).getByText("内部重试 1 次")).toBeVisible();
   expect(record).not.toHaveTextContent(/private-fixture|private-reasoning-fixture|read_sources|\/Users\//);
@@ -557,9 +563,9 @@ describe("actual goal progress", () => {
     render(<AssistantConversationPanel state={state({conversation: saved})} input="" onInput={vi.fn()}
       onSend={vi.fn()} busy={false} configured scopeLabel="当前任务"/>);
     const activity = screen.getByLabelText("本轮操作");
-    expect(within(activity).getByText("未收到结果")).toBeVisible();
+    expect(within(activity).getByText("已取消")).toBeVisible();
+    expect(within(activity).getByText(/未取得这次工具调用的回执/)).toBeVisible();
     expect(within(activity).queryByText("进行中")).not.toBeInTheDocument();
-    expect(within(activity).getByText(/后台作业是否完成仍待核对/)).toBeVisible();
   });
 
   it("does not revive an older goal after a newer user instruction or trust another workspace's projection", () => {
@@ -1225,6 +1231,7 @@ describe("AssistantConversationPanel", () => {
       <AssistantConversationPanel state={controller} input="当前草稿" onInput={onInput} onSend={send}
         onConversationChange={changed} busy={false} configured scopeLabel="首页" legacyHistory={<details><summary>旧版只读历史</summary><p>任务原始旧回复</p></details>}/></section>);
     const slot = view.container.querySelector<HTMLElement>("[data-assistant-header-actions]")!;
+    expect(within(slot).getByLabelText("当前会话范围：工作区会话")).toHaveTextContent("工作区会话 · 新对话");
     expect(within(slot).getByRole("button", { name: "新对话" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "新对话" })).toHaveLength(1);
     expect(view.container.querySelector(".assistant-conversation-caption .assistant-header-actions")).toBeNull();
@@ -1234,6 +1241,7 @@ describe("AssistantConversationPanel", () => {
     expect(onInput).toHaveBeenLastCalledWith("");
     fireEvent.click(within(slot).getByRole("button", { name: "历史对话" }));
     const dialog = await screen.findByRole("dialog", { name: "历史对话" });
+    expect(within(dialog).getByText("同一作品可以有多段对话；切换对话不会新建视频任务，当前作品的媒体预览和成片结果按作品版本共享。")).toBeVisible();
     expect(within(dialog).getByText("旧版只读历史")).toBeInTheDocument();
     expect(within(dialog).getByText("任务原始旧回复")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: /旧对话/ }));
@@ -3071,13 +3079,13 @@ it("disambiguates identical saved conversations and rejects a trace from another
   render(<AssistantUsageSettings/>);
   expect(api.listAssistantConversations).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText("对话用量与诊断"));
-  const select = await screen.findByRole("combobox",{name:"对话",exact:true});
+  const select = await screen.findByRole("combobox",{name:"对话"});
   expect(within(select).getAllByRole("option",{name:/同名历史/}).map(option=>option.textContent)).toEqual([
     expect.stringContaining(a.id.slice(-8)), expect.stringContaining(b.id.slice(-8)),
   ]);
   fireEvent.change(select,{target:{value:a.id}});
   expect(api.getAssistantTurnTrace).not.toHaveBeenCalled();
-  fireEvent.change(screen.getByRole("combobox",{name:"轮次",exact:true}), {target:{value:a.turns[0].id}});
+  fireEvent.change(screen.getByRole("combobox",{name:"轮次"}), {target:{value:a.turns[0].id}});
   expect(await screen.findByRole("button",{name:"重试读取记录"})).toBeVisible();
   expect(screen.queryByText(/34,921/)).not.toBeInTheDocument();
   expect(screen.getAllByText(/用量与诊断/)).toHaveLength(1);
@@ -3097,12 +3105,12 @@ it("selects an authorized work scope and ignores out-of-scope conversations", as
   render(<AssistantUsageSettings/>);
   fireEvent.click(screen.getByText("对话用量与诊断"));
   fireEvent.change(await screen.findByRole("combobox",{name:"对话范围"}), {target:{value:"task"}});
-  const work = await screen.findByRole("combobox",{name:"作品",exact:true});
+  const work = await screen.findByRole("combobox",{name:"作品"});
   expect(within(work).getAllByRole("option",{name:/同名作品/}).map(option=>option.textContent)).toEqual([
     expect.stringContaining(works[0].id.slice(-8)), expect.stringContaining(works[1].id.slice(-8)),
   ]);
   fireEvent.change(work,{target:{value:saved.scope_id}});
-  const scoped = await screen.findByRole("combobox",{name:"对话",exact:true});
+  const scoped = await screen.findByRole("combobox",{name:"对话"});
   expect(api.listAssistantConversations).toHaveBeenLastCalledWith({scope_kind:"task",scope_id:saved.scope_id});
   expect(within(scoped).getByRole("option",{name:/当前作品对话/})).toBeInTheDocument();
   expect(within(scoped).queryByRole("option",{name:/其他作品|其他工作区/})).not.toBeInTheDocument();

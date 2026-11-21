@@ -1709,7 +1709,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     ? { label: "需要处理" }
     : task.stage_status === "waiting_for_user"
       ? { label: "等待确认" }
-      : { label: task.stage_status === "running" ? "正在处理" : "本地任务" };
+      : { label: task.stage_status === "running"
+        ? "正在处理"
+        : executionError?.code === "device_budget_unavailable"
+          ? "设备资源待处理"
+          : task.output_ready && workspace.montage?.status === "rendered" && workspace.montage.output_url
+            ? "成片已就绪"
+            : task.output_ready
+              ? "成片输出待核对"
+              : "尚未生成成片" };
 
   const [segmentsOpen, setSegmentsOpen] = useState(false);
   const isEditor = activeView === "montage";
@@ -1897,7 +1905,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
   const auxiliaryHidden = hasTimeline && !isEditor && (panel.resourceOpen || panel.inspectorOpen || panel.conversationFocused);
   return (
-    <AppShell editingPane={hasTimeline && !isEditor ? activeView : undefined} closeBlockedReason={recordingOpen ? "录音窗口仍打开，请先保存或结束录音，再关闭作品页签。" : undefined} assistantContext={taskAssistantProps} inspectorOpenKey={currentAudioResultFocus ? `audio-result:${currentAudioResultFocus.request}` : undefined} inspectorConfirmation={inspectorConfirmation} inspectorConfirmationKey={localConfirmation ? editPreview?.proposal.id : undefined} conversation={conversation} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={hasTimeline} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1></div>}
+    <AppShell editingPane={hasTimeline && !isEditor ? activeView : undefined} closeBlockedReason={recordingOpen ? "录音窗口仍打开，请先保存或结束录音，再关闭作品页签。" : undefined} assistantContext={taskAssistantProps} inspectorOpenKey={currentAudioResultFocus ? `audio-result:${currentAudioResultFocus.request}` : undefined} inspectorConfirmation={inspectorConfirmation} inspectorConfirmationKey={localConfirmation ? editPreview?.proposal.id : undefined} conversation={conversation} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={hasTimeline} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span aria-label="当前作品版本">{task.current_timeline_version_id ? `作品版本 #${task.timeline_sequence}` : "作品版本尚未建立"}</span></div>}
       toolbarActions={<><TaskSaveState busy={busy !== null} pending={Boolean(editPreview)} dirty={Boolean(editorDraft || quickInspector && clipDraftChanged)} saved={isEditor} /><TaskOutputActions shareOpen={sharingOpen} onShare={() => setSharingOpen(true)} onSave={isEditor ? () => { void saveVideo(); } : undefined} busy={busy !== null} canSave={Boolean(task.output_ready && workspace.montage?.output_url)} /></>} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
       <HomeCardDialog kind="config" open={sharingOpen} title="任务与方案共享" onClose={() => setSharingOpen(false)}>{sharingControls}</HomeCardDialog>
       <Tabs value={activeView} onValueChange={value => { const view = value as WorkspaceView; if (canOpenStage(view, workspace)) openEditingView(view); }} onChangeCapture={() => { navigationReadRevision.current += 1; }} data-editor-workspace="" data-active-view={activeView} className={[hasTimeline ? `${editorUi.workspace} ${styles.timelineWorkspace}` : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>

@@ -8,6 +8,11 @@ export type DeviceResourceStatus = {
   profile_status: 'unprepared' | 'available' | 'invalid';
   revision: number | null;
   available_operations: string[];
+  media_execution_ready: boolean;
+  status_endpoint: string;
+  prepare_endpoint: string;
+  message: string;
+  repair_action: string | null;
   production_blocker?: string | null;
 };
 
@@ -50,6 +55,7 @@ export type DevicePreparationReceipt = {
   plan_id: string;
   state: string;
   wait_reason: string | null;
+  failure_code?: string;
   failure_reason?: string;
   repair_action?: string;
 };
@@ -68,6 +74,10 @@ export async function getDeviceResourceStatus(signal?: AbortSignal): Promise<Dev
   if (!/^[0-9a-f]{64}$/.test(value.actor_scope)
       || typeof value.cpu_preparation_supported !== 'boolean' || typeof value.preparation_configured !== 'boolean'
       || !['unprepared', 'available', 'invalid'].includes(value.profile_status)
+      || typeof value.media_execution_ready !== 'boolean'
+      || typeof value.status_endpoint !== 'string' || typeof value.prepare_endpoint !== 'string'
+      || typeof value.message !== 'string'
+      || (value.repair_action != null && typeof value.repair_action !== 'string')
       || (value.production_blocker != null && typeof value.production_blocker !== "string")
       || !Array.isArray(value.available_operations)) {
     throw new Error('设备状态回执不完整，尚不能确认当前身份或准备条件。');
@@ -77,7 +87,11 @@ export async function getDeviceResourceStatus(signal?: AbortSignal): Promise<Dev
 
 function receipt(value: DevicePreparationReceipt, expected?: string): DevicePreparationReceipt {
   if (!value || typeof value.id !== 'string' || !value.id || typeof value.plan_id !== 'string'
-      || typeof value.state !== 'string' || expected !== undefined && value.id !== expected) {
+      || typeof value.state !== 'string' || (value.wait_reason != null && typeof value.wait_reason !== 'string')
+      || (value.failure_code != null && typeof value.failure_code !== 'string')
+      || (value.failure_reason != null && typeof value.failure_reason !== 'string')
+      || (value.repair_action != null && typeof value.repair_action !== 'string')
+      || expected !== undefined && value.id !== expected) {
     throw new Error('原设备准备回执身份无法核对，请保留原请求继续查询。');
   }
   return value;

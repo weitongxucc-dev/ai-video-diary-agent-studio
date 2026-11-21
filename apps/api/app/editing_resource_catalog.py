@@ -301,9 +301,12 @@ def _packaged_skill_resources() -> list[EditingResource]:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         _validate_packaged_skill_manifest(manifest, manifest_path)
         provenance = manifest["provenance"]
+        catalog_status = manifest.get("catalog_status", "connected")
+        status_reason = manifest.get("status_reason")
+        repair_action = manifest.get("repair_action")
         resources.append(EditingResource(
             id=f"skill:{manifest['name']}", category_id="skills", name=manifest["name"],
-            version=1, status="connected", resource_type="skill",
+            version=1, status=catalog_status, resource_type="skill",
             preview=ResourcePreview(kind="method_document"),
             provenance=[ResourceProvenance(
                 repository=provenance["repository"], revision=provenance["revision"],
@@ -313,12 +316,21 @@ def _packaged_skill_resources() -> list[EditingResource]:
             runtime_requirements={"manifest_schema_version": manifest["schema_version"],
                                   "manifest_version": manifest["version"], **manifest["runtime"],
                                   "adapter": manifest["entry"]["adapter"],
+                                  "dependencies": {"skills": manifest["dependencies"]["skills"],
+                                                    "tools": manifest["dependencies"]["tools"],
+                                                    "host": manifest.get("host_dependencies", [])},
                                   "capabilities": {"inputs": manifest["inputs"], "outputs": manifest["outputs"],
                                                     "permissions": manifest["permissions"], "dependencies": manifest["dependencies"]},
                                   "install_checks": manifest["install_checks"],
                                   "adoption": manifest["adoption"],
                                   "rollback": manifest["rollback"],
-                                  "evaluation": manifest["evaluation"]},
+                                  "evaluation": manifest["evaluation"],
+                                  **({"status_reason": status_reason} if status_reason else {}),
+                                  **({"repair_action": repair_action} if repair_action else {}),
+                                  **({"external_capabilities": manifest["capabilities"]}
+                                     if isinstance(manifest.get("capabilities"), list) else {}),
+                                  **({"adapter_contract": manifest["adapter_contract"]}
+                                     if isinstance(manifest.get("adapter_contract"), dict) else {})},
             entrypoints=["read_creation_skill"],
         ))
     return resources
@@ -372,6 +384,63 @@ def _validate_packaged_skill_manifest(manifest: object, path: Path) -> None:
     evaluation = manifest["evaluation"]
     if not isinstance(evaluation, dict) or not isinstance(evaluation.get("status"), str) or not isinstance(evaluation.get("evidence"), list):
         raise ValueError("Skill manifest 评测声明无效")
+    catalog_status = manifest.get("catalog_status", "connected")
+    if catalog_status not in {"connected", "catalog_only", "planned", "failed"}:
+        raise ValueError("Skill manifest catalog_status 无效")
+    if catalog_status != "connected" and not isinstance(manifest.get("status_reason"), str):
+        raise ValueError("非 connected Skill manifest 必须说明状态原因")
+    capabilities = manifest.get("capabilities")
+    if capabilities is not None:
+        if not isinstance(capabilities, list) or not capabilities:
+            raise ValueError("Skill manifest capabilities 无效")
+        for capability in capabilities:
+            if not isinstance(capability, dict) or not all(isinstance(capability.get(key), str) and capability[key].strip()
+                                                           for key in ("id", "status", "stability", "label")):
+                raise ValueError("Skill manifest capability 身份无效")
+            if capability["status"] not in {"connected", "catalog_only", "planned", "failed"}:
+                raise ValueError("Skill manifest capability status 无效")
+            if not isinstance(capability.get("inputs"), list) or not isinstance(capability.get("outputs"), list):
+                raise ValueError("Skill manifest capability 输入输出无效")
+            if not isinstance(capability.get("dependencies"), list) or not isinstance(capability.get("risk"), str):
+                raise ValueError("Skill manifest capability 依赖或风险无效")
+            if capability.get("runnable") is not False:
+                raise ValueError("Skill manifest capability 必须明确不可直接运行")
+            if capability["status"] != "connected" and not isinstance(capability.get("unavailable_reason"), str):
+                raise ValueError("非 connected capability 必须说明不可用原因")
+            runtime_requirements = capability.get("runtime_requirements")
+            if runtime_requirements is not None:
+                if (not isinstance(runtime_requirements, dict)
+                        or runtime_requirements.get("execution_mode") != "method-only"
+                        or runtime_requirements.get("runnable") is not False
+                        or not isinstance(runtime_requirements.get("host_dependencies"), list)
+                        or not isinstance(runtime_requirements.get("host_entrypoints"), list)):
+                    raise ValueError("Skill manifest capability runtime_requirements 无效")
+    adapter_contract = manifest.get("adapter_contract")
+    if adapter_contract is not None:
+        if (not isinstance(adapter_contract, dict)
+                or adapter_contract.get("status") not in {"connected", "catalog_only", "planned", "failed"}
+                or not isinstance(adapter_contract.get("version"), str)
+                or not isinstance(adapter_contract.get("runtime_requirements"), dict)
+                or adapter_contract["runtime_requirements"].get("execution_mode") != "method-only"
+                or adapter_contract["runtime_requirements"].get("runnable") is not False
+                or not isinstance(adapter_contract.get("operation_map"), dict)
+                or not isinstance(adapter_contract.get("lifecycle"), dict)):
+            raise ValueError("Skill manifest adapter_contract 无效")
+        for operation in adapter_contract["operation_map"].values():
+            if (not isinstance(operation, dict)
+                    or operation.get("status") not in {"connected", "catalog_only", "planned", "failed"}
+                    or operation.get("runnable") is not False
+                    or not isinstance(operation.get("missing"), list)
+                    or not isinstance(operation.get("runtime_requirements"), dict)
+                    or operation["runtime_requirements"].get("execution_mode") != "method-only"
+                    or operation["runtime_requirements"].get("runnable") is not False):
+                raise ValueError("Skill manifest adapter_contract operation_map 无效")
+        for lifecycle in adapter_contract["lifecycle"].values():
+            if (not isinstance(lifecycle, dict)
+                    or lifecycle.get("status") not in {"connected", "catalog_only", "planned", "failed"}
+                    or lifecycle.get("runnable") is not False
+                    or not isinstance(lifecycle.get("missing"), list)):
+                raise ValueError("Skill manifest adapter_contract lifecycle 无效")
 
 
 def editing_resource_catalog() -> EditingResourceCatalog:

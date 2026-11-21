@@ -2834,7 +2834,7 @@ class TaskMediaJobResponse(BaseModel):
     created_at: datetime
     job_id: str
     status: Literal["queued", "running", "interrupted", "succeeded", "failed", "cancelled", "stale"]
-    result_kind: Literal["edit_preview", "audio_source", "recording", "audio_listen", "waveform", "graphic_source", "observation"]
+    result_kind: Literal["edit_preview", "audio_source", "recording", "audio_listen", "waveform", "graphic_source", "observation", "media_output"]
     result_url: str
     device_request_id: str | None = None
     waiting_reason: str | None = None
