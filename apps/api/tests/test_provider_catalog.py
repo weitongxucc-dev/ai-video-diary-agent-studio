@@ -5,6 +5,7 @@ from app.assistant.provider_catalog import (
     provider_spec,
 )
 from app.assistant.runtime_configuration import _configured_model
+from app.assistant.failures import FAILURE_KEY_REJECTED, _classify_output
 from app.config import Settings
 
 
@@ -54,3 +55,7 @@ def test_every_provider_has_adapter_contract_for_errors_usage_and_redaction():
         assert isinstance(contract["recoverable_error"], str) and contract["recoverable_error"]
     assert provider_contract("anthropic")["recoverable_error"] == "missing_key_or_endpoint"
     assert provider_contract("ollama")["recoverable_error"] == "local_endpoint_unavailable"
+
+
+def test_anthropic_auth_failure_uses_existing_recoverable_error_class():
+    assert _classify_output('{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"401 authentication_error"}}') == FAILURE_KEY_REJECTED

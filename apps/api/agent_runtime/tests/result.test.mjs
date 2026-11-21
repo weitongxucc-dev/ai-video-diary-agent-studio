@@ -138,3 +138,17 @@ test("failure, cancellation and retry preserve receipts without inventing missin
   assert.deepEqual(aborted.value().usage_details, {provider:null, model:null, input_tokens:null,
     output_tokens:null, latency_ms:null, estimated_cost:null});
 });
+
+test("Anthropic Messages stream events use the same redacted usage receipt", () => {
+  const result = createSessionResult("anthropic-stream", "anthropic", "claude-sonnet-4-5");
+  result.observe({type:"message_start", timestamp:1000, message:{role:"assistant"}});
+  result.observe({type:"message_end", timestamp:1325, message:{role:"assistant", stopReason:"stop", content:[],
+    usage:{input:11, output:4, cacheRead:2, cacheWrite:0, totalTokens:17,
+      cost:{input:0, output:0, cacheRead:0, cacheWrite:0, total:0}}}});
+  const value = result.value();
+  assert.equal(value.provider, "anthropic");
+  assert.equal(value.model, "claude-sonnet-4-5");
+  assert.deepEqual(value.provider_usage, {input:11, output:4, cacheRead:2, cacheWrite:0, totalTokens:17});
+  assert.equal(value.usage_details.latency_ms, 325);
+  assert.equal(value.usage_details.estimated_cost, null);
+});
