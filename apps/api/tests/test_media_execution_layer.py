@@ -6,7 +6,10 @@ from pathlib import Path
 
 from app.creation.contracts import CreationTask, TimelineVersion
 from app.creation.plan_contracts import CreationPlan
-from app.media_execution import EditPlan, MediaExecutionLayer, MediaOperation, build_media_execution_entrypoint
+from app.media_execution import (
+    EditPlan, MediaExecutionLayer, MediaOperation, build_media_execution_entrypoint,
+    FFMPEG_OPERATION, TaskMediaExecutionDelegate,
+)
 from app.media_execution.contracts import MediaExecutionError
 from app.media_execution.adapter import FfmpegAdapter
 from app.production import ProductionRepository
@@ -152,3 +155,54 @@ def test_missing_caption_dependency_is_persisted_as_unavailable(tmp_path):
     if "subtitles" not in dependencies and "drawtext" not in dependencies:
         assert result["status"] == "failed"
         assert result["failure_reason"] == "caption_dependency_missing"
+
+
+def test_task_media_delegate_preserves_success_and_input_version(tmp_path):
+    class EntryPoint:
+        def submit(self, plan):
+            return {"status": "succeeded", "job_id": "media-job", "request_id": plan.request_id,
+                    "timeline_version_id": "next", "output_refs": ["media/job/final.mp4"], "log_path": "job.jsonl"}
+
+    event = {"workspace_id": "local", "task_id": "task", "arguments": {"edit_plan": {
+        "workspace_id": "local", "task_id": "task", "base_version_id": "base", "request_id": "req",
+        "member_id": "member", "operations": [{"operation": "export", "inputs": ["input.mp4"], "output_name": "final.mp4"}],
+    }}, "input_facts": {"base_version_id": "base"}}
+    delegate = TaskMediaExecutionDelegate(EntryPoint())
+    result = delegate.submit({"id": "outer-job"}, event, {"member_id": "member"})
+    assert result["status"] == "succeeded"
+    assert result["base_version_id"] == "base"
+    assert result["output_refs"] == ["media/job/final.mp4"]
+    assert delegate.handles(FFMPEG_OPERATION, event["arguments"])
+
+
+def test_task_media_delegate_persists_caption_dependency_failure_without_success_fields():
+    class EntryPoint:
+        def submit(self, plan):
+            return {"status": "failed", "request_id": plan.request_id, "failure_reason": "caption_dependency_missing",
+                    "impact": "字幕未生成", "repair_action": "安装字幕滤镜后重试", "log_path": "failed.jsonl"}
+
+    event = {"workspace_id": "local", "task_id": "task", "arguments": {"edit_plan": {
+        "workspace_id": "local", "task_id": "task", "base_version_id": "base", "request_id": "req-caption",
+        "operations": [{"operation": "caption", "inputs": ["input.mp4"], "output_name": "captioned.mp4",
+                         "options": {"subtitle_path": "captions.srt"}}],
+    }}, "input_facts": {"base_version_id": "base"}}
+    result = TaskMediaExecutionDelegate(EntryPoint()).submit({"id": "outer-job"}, event, {})
+    assert result["status"] == "failed"
+    assert result["failure_reason"] == "caption_dependency_missing"
+    assert result["timeline_version_id"] is None
+    assert result["output_refs"] == []
+
+
+def test_task_media_delegate_rejects_failure_without_reason_and_resume_keeps_base_version():
+    class EntryPoint:
+        def resume(self, job_id, workspace_id):
+            return {"status": "failed", "request_id": "req", "failure_reason": "timeline_version_conflict",
+                    "impact": "未发布", "repair_action": "重新读取版本"}
+
+    event = {"workspace_id": "local", "task_id": "task", "arguments": {"edit_plan": {
+        "workspace_id": "local", "task_id": "task", "base_version_id": "base", "request_id": "req",
+        "operations": [{"operation": "export", "inputs": ["input.mp4"], "output_name": "final.mp4"}],
+    }}, "input_facts": {"base_version_id": "base"}}
+    result = TaskMediaExecutionDelegate(EntryPoint()).resume({"id": "outer-job"}, event, {})
+    assert result["failure_reason"] == "timeline_version_conflict"
+    assert result["base_version_id"] == "base"
