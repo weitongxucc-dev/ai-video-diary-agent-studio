@@ -30,6 +30,14 @@ class FfmpegWorker:
         current_outputs: list[dict[str, object]] = []
         total = len(plan.operations)
         for index, operation in enumerate(plan.operations, start=1):
+            if operation.operation.lower() in {"caption", "subtitles"}:
+                available_filters = set(self.dependencies["ffmpeg"].features)
+                if not ({"subtitles", "drawtext"} & available_filters):
+                    raise MediaExecutionError(
+                        "caption_dependency_missing",
+                        "当前 FFmpeg 构建缺少字幕滤镜，未生成或发布字幕输出。",
+                        "安装带 subtitles 或 drawtext 滤镜的 FFmpeg 构建后沿原请求重试。",
+                    )
             is_probe = operation.operation.lower() == "probe" or (
                 operation.operation.lower() == "look" and operation.options.get("frame_time") is None)
             output_name = operation.output_name or (f"step-{index}.json" if is_probe else (

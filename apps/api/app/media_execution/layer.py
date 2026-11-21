@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 from uuid import uuid4
+from collections.abc import Callable
+import sqlite3
 
 from app.creation.contracts import ArtifactRecord, JobRun, TaskEvent, TimelineVersion
 from .capabilities import detect_dependencies, dependency_payload
@@ -14,8 +16,12 @@ from .worker import FfmpegWorker
 class MediaExecutionLayer:
     """Owns EditPlan -> MediaJob -> Worker -> TimelineVersion publication."""
 
-    def __init__(self, repository, output_root: str | Path, *, worker: FfmpegWorker | None = None) -> None:
+    def __init__(self, repository, output_root: str | Path, *, worker: FfmpegWorker | None = None,
+                 connection_factory: Callable[[], sqlite3.Connection] | None = None) -> None:
         self.repository = repository
+        self._connect = connection_factory
+        if self._connect is None:
+            raise ValueError("媒体执行入口需要显式注入 ProductionRepository 的连接工厂")
         self.output_root = Path(output_root).expanduser()
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.dependencies = detect_dependencies()
@@ -46,7 +52,7 @@ class MediaExecutionLayer:
         digest = hashlib.sha256(json.dumps(plan.as_dict(), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         job = JobRun(id=job_id, workspace_id=plan.workspace_id, task_id=plan.task_id,
                      kind="media_execution", idempotency_key=f"media:{plan.task_id}:{plan.request_id}{idempotency_suffix or ''}", input_digest=digest)
-        with self.repository._connect() as conn:
+        with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self.repository.job_records.create_job_run(job, connection=conn)
             self.repository.execution_records.append_task_event(TaskEvent(
@@ -74,7 +80,7 @@ class MediaExecutionLayer:
 
     def _run(self, job_id: str, plan: EditPlan) -> dict[str, object]:
         job = self.repository.job_records.get_job_run(plan.workspace_id, job_id)
-        with self.repository._connect() as conn:
+        with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self.repository.job_records.claim_job_run(plan.workspace_id, job_id, connection=conn)
         try:
@@ -88,7 +94,7 @@ class MediaExecutionLayer:
             return self._fail(job_id, plan, MediaExecutionError("media_execution_failed", str(exc) or type(exc).__name__, "修复首个失败原因后沿原请求重试。"))
 
     def _publish(self, job_id: str, plan: EditPlan, result: dict[str, object]) -> dict[str, object]:
-        with self.repository._connect() as conn:
+        with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             task = self.repository.task_records.get_creation_task(plan.workspace_id, plan.task_id, connection=conn)
             if task.current_timeline_version_id != plan.base_version_id:
@@ -122,7 +128,7 @@ class MediaExecutionLayer:
                 "timeline_version_id": version.id, "output_refs": refs, "log_path": result["log_path"]}
 
     def _fail(self, job_id: str, plan: EditPlan, error: MediaExecutionError) -> dict[str, object]:
-        with self.repository._connect() as conn:
+        with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             log_path = str(self.output_root / job_id / f"request-{plan.request_id}.jsonl")
             self.repository.execution_records.append_task_event(TaskEvent(

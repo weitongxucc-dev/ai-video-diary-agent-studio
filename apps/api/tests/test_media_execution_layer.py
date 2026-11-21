@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app.creation.contracts import CreationTask, TimelineVersion
 from app.creation.plan_contracts import CreationPlan
-from app.media_execution import EditPlan, MediaExecutionLayer, MediaOperation
+from app.media_execution import EditPlan, MediaExecutionLayer, MediaOperation, build_media_execution_entrypoint
 from app.media_execution.contracts import MediaExecutionError
 from app.media_execution.adapter import FfmpegAdapter
 from app.production import ProductionRepository
@@ -59,11 +59,11 @@ def test_real_media_chain_persists_job_artifacts_timeline_and_request_log(tmp_pa
             MediaOperation("export", ("$previous",), "final.mp4", {"width": 180, "height": 320}),
         ),
     )
-    result = MediaExecutionLayer(repo, tmp_path / "outputs").submit(plan)
+    result = MediaExecutionLayer(repo, tmp_path / "outputs", connection_factory=repo._connect).submit(plan)
     assert result["status"] == "succeeded"
     assert len(result["output_refs"]) == 7
     assert repo.job_records.get_job_run("local", result["job_id"]).status == "succeeded"
-    projection = MediaExecutionLayer(repo, tmp_path / "outputs").read("local", result["job_id"])
+    projection = MediaExecutionLayer(repo, tmp_path / "outputs", connection_factory=repo._connect).read("local", result["job_id"])
     assert projection.request_id == "req-real-chain"
     assert projection.timeline_version_id == result["timeline_version_id"]
     version = repo.timeline_records.get_timeline_version("local", result["timeline_version_id"])
@@ -79,7 +79,7 @@ def test_failure_is_persisted_and_retry_uses_original_request_id(tmp_path):
     repo, base = _case(tmp_path)
     missing = tmp_path / "missing.mp4"
     plan = EditPlan("local", "task", base.id, "req-failure", (MediaOperation("cut", (str(missing),), "out.mp4", {"duration": 1}),))
-    failed = MediaExecutionLayer(repo, tmp_path / "outputs").submit(plan)
+    failed = MediaExecutionLayer(repo, tmp_path / "outputs", connection_factory=repo._connect).submit(plan)
     assert failed["status"] == "failed"
     job = repo.job_records.get_job_run("local", failed["job_id"])
     assert job.failure_reason in {"media_command_failed", "media_output_missing"}
@@ -88,7 +88,7 @@ def test_failure_is_persisted_and_retry_uses_original_request_id(tmp_path):
 
 def test_capability_registry_keeps_unimplemented_external_tools_explicit(tmp_path):
     repo, _ = _case(tmp_path)
-    layer = MediaExecutionLayer(repo, tmp_path / "outputs")
+    layer = MediaExecutionLayer(repo, tmp_path / "outputs", connection_factory=repo._connect)
     values = {item["name"]: item for item in layer.capabilities()["capabilities"]}
     assert values["probe"]["implementation"] == "曜核媒体适配器"
     assert values["multicam"]["implementation"] == "registered_pending_adapter"
@@ -111,7 +111,7 @@ def test_retry_creates_a_new_job_but_keeps_the_original_request_id(tmp_path):
             return {"outputs": [{"path": str(path), "operation": "export", "output_name": "final.mp4", "summary": {"size_bytes": 5}}],
                     "log_path": str(path.with_suffix(".jsonl")), "request_id": plan.request_id}
 
-    layer = MediaExecutionLayer(repo, tmp_path / "outputs", worker=Worker())
+    layer = MediaExecutionLayer(repo, tmp_path / "outputs", worker=Worker(), connection_factory=repo._connect)
     plan = EditPlan("local", "task", base.id, "req-retry", (MediaOperation("export", ("input.mp4",), "final.mp4"),))
     failed = layer.submit(plan)
     retried = layer.retry(failed["job_id"])
@@ -130,3 +130,25 @@ def test_caption_adapter_is_business_level_and_keeps_ffmpeg_flags_internal(tmp_p
     )
     assert prepared.operation == "caption"
     assert "subtitles=" in " ".join(prepared.command)
+
+
+def test_entrypoint_requires_explicit_connection_boundary(tmp_path):
+    repo, _ = _case(tmp_path)
+    entrypoint = build_media_execution_entrypoint(
+        repository=repo, output_root=tmp_path / "outputs", connection_factory=repo._connect)
+    assert entrypoint.capabilities()["dependencies"]["ffmpeg"]["status"] == "available"
+
+
+def test_missing_caption_dependency_is_persisted_as_unavailable(tmp_path):
+    repo, base = _case(tmp_path)
+    layer = MediaExecutionLayer(repo, tmp_path / "outputs", connection_factory=repo._connect)
+    caption_file = tmp_path / "captions.srt"
+    caption_file.write_text("1\n00:00:00,000 --> 00:00:00,400\n你好\n", encoding="utf-8")
+    plan = EditPlan("local", "task", base.id, "req-caption-unavailable", (
+        MediaOperation("caption", (str(tmp_path / "input.mp4"),), "captioned.mp4", {"subtitle_path": str(caption_file)}),
+    ))
+    result = layer.submit(plan)
+    dependencies = layer.capabilities()["dependencies"]["ffmpeg"]["features"]
+    if "subtitles" not in dependencies and "drawtext" not in dependencies:
+        assert result["status"] == "failed"
+        assert result["failure_reason"] == "caption_dependency_missing"
