@@ -348,6 +348,8 @@ it("retries an unreadable execution record locally and exposes measured usage wi
       {type:"retry", status:"completed", label:"/Users/private/test.json"},
     ], next_before:null, provider_usage:{ input:3250, output:12, cacheRead:0 },
     usage_status:"known", usage_source:"provider", duration_ms:2350, retry_count:1,
+    usage_details:{provider:"qwen", model:"qwen-test", input_tokens:3250, output_tokens:12,
+      latency_ms:1800, estimated_cost:{amount:0.012, currency:"USD", status:"estimated", source:"sdk_catalog"}},
   });
   const send = vi.fn();
   render(<AssistantConversationPanel state={state({conversation:saved})} input="待保留的草稿" onInput={vi.fn()} onSend={send}
@@ -358,7 +360,11 @@ it("retries an unreadable execution record locally and exposes measured usage wi
   expect(usage).toHaveTextContent("供应商实测");
   expect(usage).toHaveTextContent("输入 3,250");
   expect(usage).toHaveTextContent("缓存读取 0");
+  expect(usage).toHaveTextContent("模型耗时");
+  expect(usage).toHaveTextContent("1.8 秒");
+  expect(usage).toHaveTextContent("整轮耗时");
   expect(usage).toHaveTextContent("2.35 秒");
+  expect(usage).toHaveTextContent("0.012 USD（估算）");
   expect(usage).toHaveTextContent("qwen-test");
   expect(within(record).getByText("内部重试 1 次")).toBeVisible();
   expect(record).not.toHaveTextContent(/private-fixture|private-reasoning-fixture|read_sources|\/Users\//);
