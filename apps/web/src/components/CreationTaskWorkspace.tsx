@@ -1709,7 +1709,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     ? { label: "需要处理" }
     : task.stage_status === "waiting_for_user"
       ? { label: "等待确认" }
-      : { label: task.stage_status === "running" ? "正在处理" : "本地任务" };
+      : { label: task.stage_status === "running"
+        ? "正在处理"
+        : executionError?.code === "device_budget_unavailable"
+          ? "设备资源待处理"
+          : task.output_ready && workspace.montage?.status === "rendered" && workspace.montage.output_url
+            ? "成片已就绪"
+            : task.output_ready
+              ? "成片输出待核对"
+              : "尚未生成成片" };
 
   const [segmentsOpen, setSegmentsOpen] = useState(false);
   const isEditor = activeView === "montage";
