@@ -6,7 +6,7 @@ from app.assistant.business_failure import _safe_business_failure
 from app.assistant.catalogue import SCRIPT_WINDOW_TOOL_OPERATIONS
 from app.assistant.script_window_receipts import project_script_window_request, script_window_message
 from app.assistant.failures import AssistantUnavailable, _fail, _classify_output, FAILURE_UNKNOWN, FAILURE_TOOL_FAILED
-from app.assistant.trace import safe_runtime_trace_events
+from app.assistant.trace import safe_runtime_trace_events, runtime_receipt_fields
 
 
 
@@ -624,7 +624,11 @@ def read_sdk_result(output: str, kind: str = "edit_preview") -> tuple[str, dict 
     measured = {key: value for key, value in (usage or {}).items()
                 if key in {"input", "output", "cacheRead", "cacheWrite", "totalTokens"}
                 and type(value) is int and value >= 0}
-    runtime = {}
+    runtime = runtime_receipt_fields(result)
+    runtime.pop("provider_usage", None)
+    runtime.pop("trace_events", None)
+    if "usage_status" in runtime:
+        runtime["usage_status"] = "unknown"
     if result.get("usage_status") == "known" and measured:
         runtime.update(provider_usage=measured, usage_status="known")
     if safe_trace := safe_runtime_trace_events(result.get("trace_events")):
