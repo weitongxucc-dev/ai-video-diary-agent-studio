@@ -275,7 +275,7 @@ export function AssistantConversationHeaderActions({ state, conversationScopeLab
     <Button variant="ghost" className="assistant-icon-action" type="button" aria-label="新对话" title="新对话，保留当前作品" disabled={disabled}
       onClick={() => { void state.createNew().then(next => { onConversationChange?.(); onInput(next.draft_text); }).catch(fail); }}><Plus size={15}/></Button>
     {children}
-    {historyOpen ? <HomeCardDialog title="历史对话" kind="detail" onClose={() => setHistoryOpen(false)}><p>同一作品可以有多段对话；切换对话不会新建视频任务。</p><div className="assistant-resume-list">
+    {historyOpen ? <HomeCardDialog title="历史对话" kind="detail" onClose={() => setHistoryOpen(false)}><p>同一作品可以有多段对话；切换对话不会新建视频任务，当前作品的媒体预览和成片结果按作品版本共享。</p><div className="assistant-resume-list">
       {state.conversations.map(item => <Button variant="ghost" type="button" key={item.id} aria-current={item.id === state.conversation?.id ? "true" : undefined}
         onClick={() => { void state.resume(item.id).then(next => { onConversationChange?.(); onInput(next.draft_text); setHistoryOpen(false); }).catch(fail); }}><strong>{item.title}</strong><small>{new Date(item.updated_at).toLocaleString()}</small></Button>)}
       {!state.conversations.length ? <p>还没有可恢复的对话。</p> : null}
