@@ -13,6 +13,8 @@ description: 受控登记 kajisho5/ffmpeg-skill 的 FFmpeg/FFprobe 能力范围�
 
 FFmpeg/FFprobe 的本地路径、版本、编码器、滤镜、字幕字体和具体构建许可证必须在运行前检查。命令成功、探测成功或抽帧成功都不能替代真实版本、视觉/音频观察和输出回读。
 
+`manifest.json.adapter_contract` 是本适配的审计入口：`operation_map` 逐项记录宿主入口、运行要求和缺口，`lifecycle` 记录提交、进度、日志、恢复、取消和未知结果的现有事实。它只描述与曜核现有 `JobRun`、`TaskEvent`、`ArtifactRecord`、`TransformRun` 及版本绑定的差距，不提供第二套媒体执行器；缺少外部回执、检查点或清理证据时保持 `catalog_only`、`planned` 或 `failed`。
+
 ## 受控验证顺序
 
 1. `probe` 读取输入媒体和时长、画幅、帧率、流及编码信息；输入源保持只读。

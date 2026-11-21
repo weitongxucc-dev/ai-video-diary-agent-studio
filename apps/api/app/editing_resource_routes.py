@@ -75,6 +75,7 @@ def build_editing_resource_router(catalog_for: Callable):
             "status_reason": requirements.get("status_reason"),
             "repair_action": requirements.get("repair_action"),
             "capabilities": requirements.get("external_capabilities", []),
+            "adapter_contract": requirements.get("adapter_contract", {}),
             "dependencies": requirements.get(
                 "dependencies",
                 requirements.get("capabilities", {}).get("dependencies", [])
