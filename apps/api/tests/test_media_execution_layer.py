@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import Event
 
 import pytest
+
 from app.creation.contracts import CreationTask, TimelineVersion
 from app.creation.plan_contracts import CreationPlan
 from app.media_execution import (
@@ -195,6 +196,7 @@ def test_task_media_delegate_preserves_success_and_input_version(tmp_path):
     assert result["status"] == "succeeded"
     assert result["base_version_id"] == "base"
     assert result["output_refs"] == ["media/job/final.mp4"]
+    assert result["media_job_id"] == "media-job"
     assert delegate.handles(FFMPEG_OPERATION, event["arguments"])
 
 
@@ -251,7 +253,7 @@ def test_task_media_delegate_cancel_and_retry_keep_outer_input_version_and_reque
     assert cancelled == {
         "status": "cancelled", "request_id": "req", "base_version_id": "base", "timeline_version_id": None,
         "output_refs": [], "log_path": "cancelled.jsonl", "failure_reason": "media_cancelled",
-        "impact": "未发布", "repair_action": "沿原请求重试", "job_id": "outer-job",
+        "impact": "未发布", "repair_action": "沿原请求重试", "job_id": "outer-job", "media_job_id": "outer-job",
     }
     assert retried["status"] == "succeeded"
     assert retried["job_id"] == "new-job"

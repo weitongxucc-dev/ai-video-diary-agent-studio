@@ -28,6 +28,7 @@ class DelegateReceipt:
     impact: str | None = None
     repair_action: str | None = None
     job_id: str | None = None
+    media_job_id: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -41,6 +42,7 @@ class DelegateReceipt:
             "impact": self.impact,
             "repair_action": self.repair_action,
             "job_id": self.job_id,
+            "media_job_id": self.media_job_id or self.job_id,
         }
 
 
@@ -108,6 +110,7 @@ class TaskMediaExecutionDelegate:
             impact=result.get("impact"),
             repair_action=result.get("repair_action"),
             job_id=result.get("job_id") or (job.get("id") if isinstance(job, Mapping) else None),
+            media_job_id=result.get("media_job_id") or result.get("job_id"),
         )
         if status == "failed" and not receipt.failure_reason:
             raise MediaExecutionError("delegate_failure_missing_reason", "媒体 delegate 没有返回可信失败原因。", "查询原媒体作业并补齐失败回执。")
