@@ -37,6 +37,11 @@ function resourceStateLabel(status: RemoteStatus) {
   return status === "connected" ? "可用" : status === "catalog_only" ? "目录中" : "计划中";
 }
 
+function resourceTags(resource: CatalogResource) {
+  const tags = resource.runtime_requirements?.tags;
+  return Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === "string") : [];
+}
+
 export function EditorResourceLibraryPanel({
   materials,
   initialCategory = "materials",
@@ -76,6 +81,20 @@ export function EditorResourceLibraryPanel({
     return () => { active = false; };
   }, [categoryId, catalogRetry]);
   const category = categories.find(item => item.id === categoryId) ?? categories[0];
+  useEffect(() => {
+    if (categoryId === "materials") return;
+    try {
+      const saved = sessionStorage.getItem(`editor-resource-panel:${categoryId}`);
+      if (!saved) return;
+      const state = JSON.parse(saved) as { query?: string; filter?: string };
+      if (typeof state.query === "string") setQuery(state.query);
+      if (typeof state.filter === "string") setFilter(state.filter);
+    } catch { /* Preserve the current in-memory filter when storage is unavailable. */ }
+  }, [categoryId]);
+  useEffect(() => {
+    if (categoryId === "materials") return;
+    sessionStorage.setItem(`editor-resource-panel:${categoryId}`, JSON.stringify({ query, filter }));
+  }, [categoryId, filter, query]);
 
   return <section className={styles.panel} aria-label="编辑器资源面板">
     <header className={styles.header}>
@@ -114,7 +133,7 @@ function CatalogResourceResults({ resources, renderResourceAction }: { resources
         && typeof resource.runtime_requirements.template_id === "string" && typeof resource.runtime_requirements.template_version === "number";
       return <article className={styles.catalogCard} key={key}>
         {preview && resource.preview.kind === "image" ? <img className={styles.stickerThumbnail} src={preview} alt={resource.name} width={64} height={64} /> : null}
-        <div><strong>{resource.name}</strong><span>{resourceStateLabel(resource.status)} · v{resource.version}</span></div>
+        <div><strong>{resource.name}</strong><span>{resourceStateLabel(resource.status)} · v{resource.version}</span></div>{resourceTags(resource).length ? <div className={styles.tagRow} aria-label="资源标签">{resourceTags(resource).map(tag => <span key={tag}>{tag}</span>)}</div> : null}
         <div className={styles.catalogActions}>
           <button type="button" aria-expanded={open} onClick={() => setPreviewId(open ? null : key)}>{open ? "收起预览" : "查看预览"}</button>
           {canAddAudio || canAddVisual ? renderResourceAction
@@ -130,7 +149,7 @@ function CatalogResourceResults({ resources, renderResourceAction }: { resources
           {resource.preview.duration_seconds != null ? <span>{resource.preview.duration_seconds} 秒</span> : null}
           <details><summary>来源、版本与回滚</summary>
             {typeof resource.runtime_requirements?.attribution === "string" ? <p>{resource.runtime_requirements.attribution}</p> : null}
-            {resource.provenance.map((source, index) => <p key={index}>{source.repository} · {source.path} · 修订 {source.revision} · {source.license}</p>)}
+            {resource.provenance.map((source, index) => <p key={index}>{source.repository} · {source.path} · 修订 {source.revision} · {source.license}</p>)}{resourceTags(resource).length ? <p>标签：{resourceTags(resource).join("、")}</p> : null}
             <p>固定版本 v{resource.version}。采用后可以从作品的版本历史撤销；浏览和试听不会修改作品。</p>
           </details>
         </div> : null}
