@@ -124,6 +124,29 @@ def test_project_turn_trace_exposes_structured_usage_without_inventing_cost_or_l
     })
     assert unknown["usage_status"] == "unknown"
     assert unknown["input_tokens"] is None and unknown["estimated_cost"] is None
+ 
+def test_stopped_turn_keeps_unknown_receipt_and_redacts_provider_secret():
+    trace = project_turn_trace({
+        "id": "turn-stopped", "conversation_id": "conversation-1", "status": "stopped", "sequence": 4,
+        "created_at": "2026-11-17T04:25:26Z", "updated_at": "2026-11-17T04:25:27Z",
+        "events": [], "result": {
+            "provider": "openai", "model": "gpt-5.4", "usage_status": "unknown",
+            "provider_usage": None, "usage_details": {
+                "provider": "openai", "model": "gpt-5.4", "input_tokens": None,
+                "output_tokens": None, "latency_ms": None, "estimated_cost": None,
+            },
+            "trace_events": [
+                {"type": "agent_end", "event_id": "event-1", "status": "cancelled",
+                 "references": {"request_id": "request-1"}},
+            ],
+            "provider_api_key": "sk-secret-must-not-appear",
+        },
+    })
+    assert trace["status"] == "stopped"
+    assert trace["usage_status"] == "unknown"
+    assert trace["provider_usage"] is None
+    assert trace.get("input_tokens") is None
+    assert "sk-secret-must-not-appear" not in str(trace)
 
 
 def test_project_turn_trace_paginates_older_events_without_changing_usage_or_associations():
