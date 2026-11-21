@@ -178,7 +178,7 @@ def test_repeated_submit_reuses_the_persisted_idempotent_job(tmp_path):
     class Worker:
         calls = 0
 
-        def execute(self, plan, job_id, output_root, *, progress=None):
+        def execute(self, plan, job_id, output_root, *, progress=None, cancel_event=None):
             self.calls += 1
             path = output_root / job_id / "final.mp4"
             path.parent.mkdir(parents=True, exist_ok=True)
