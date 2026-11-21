@@ -98,6 +98,21 @@ def test_project_turn_trace_marks_missing_provider_usage_unknown():
     assert trace["provider_usage"] is None
 
 
+def test_stopped_turn_keeps_unknown_usage_and_redacts_provider_secret():
+    trace = project_turn_trace({
+        "id": "turn-stopped", "conversation_id": "conversation-1", "status": "stopped", "sequence": 4,
+        "created_at": "2026-11-17T04:25:26Z", "updated_at": "2026-11-17T04:25:27Z", "events": [],
+        "result": {"provider": "openai", "model": "gpt-5.4", "usage_status": "unknown",
+            "provider_usage": None, "trace_events": [
+                {"type": "agent_end", "event_id": "event-1", "status": "cancelled",
+                 "references": {"request_id": "request-1"}},
+            ], "provider_api_key": "sk-secret-must-not-appear"},
+    })
+    assert trace["status"] == "stopped"
+    assert trace["usage_status"] == "unknown" and trace["provider_usage"] is None
+    assert "sk-secret-must-not-appear" not in str(trace)
+
+
 def test_project_turn_trace_exposes_structured_usage_without_inventing_cost_or_latency():
     trace = project_turn_trace({
         "id": "turn-details", "conversation_id": "conversation-1", "status": "failed", "sequence": 1,
