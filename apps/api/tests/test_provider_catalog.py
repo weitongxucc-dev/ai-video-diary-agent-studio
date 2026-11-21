@@ -5,6 +5,7 @@ from app.assistant.provider_catalog import (
     provider_spec,
 )
 from app.assistant.runtime_configuration import _configured_model
+from app.assistant.failures import FAILURE_KEY_REJECTED, _classify_output
 from app.config import Settings
 
 
@@ -39,13 +40,8 @@ def test_configured_model_requires_keys_only_for_keyed_providers():
 
 def test_native_protocol_is_catalogued_but_not_sent_through_openai_bridge():
     assert provider_spec("anthropic").protocol == "anthropic_messages"
-    try:
-        _configured_model(Settings(llm_provider="anthropic", llm_model="claude-sonnet-4-5",
-                                   llm_base_url="https://api.anthropic.com/v1", llm_api_key="fixture"))
-    except Exception as exc:
-        assert "原生协议" in str(exc)
-    else:
-        raise AssertionError("Anthropic must wait for a native runtime bridge")
+    assert _configured_model(Settings(llm_provider="anthropic", llm_model="claude-sonnet-4-5",
+                                     llm_base_url="https://api.anthropic.com/v1", llm_api_key="fixture"))[1] == "claude-sonnet-4-5"
 
 
 def test_every_provider_has_adapter_contract_for_errors_usage_and_redaction():
@@ -57,5 +53,9 @@ def test_every_provider_has_adapter_contract_for_errors_usage_and_redaction():
         assert fields.issubset(set(contract["usage_fields"]))
         assert contract["secret_redaction"] is True
         assert isinstance(contract["recoverable_error"], str) and contract["recoverable_error"]
-    assert provider_contract("anthropic")["recoverable_error"] == "native_protocol_deferred"
+    assert provider_contract("anthropic")["recoverable_error"] == "missing_key_or_endpoint"
     assert provider_contract("ollama")["recoverable_error"] == "local_endpoint_unavailable"
+
+
+def test_anthropic_auth_failure_uses_existing_recoverable_error_class():
+    assert _classify_output('{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"401 authentication_error"}}') == FAILURE_KEY_REJECTED

@@ -21,9 +21,6 @@ def _agent_root(settings: Settings, workspace_id: str) -> Path:
 def _configured_model(settings: Settings) -> tuple[str, str, str]:
     endpoint = urlsplit(settings.effective_llm_base_url)
     spec = provider_spec(settings.effective_llm_provider)
-    if spec.protocol != "openai_compatible":
-        raise _fail(FAILURE_RUNTIME_MISSING, explanation="当前 provider 目录已登记原生协议，但 Pi 运行桥尚未启用该协议；请先选择 OpenAI-compatible 接口。",
-                    repair_action="保留当前配置，待原生协议运行桥接入后再验证，不会自动改用其他服务。")
     local_endpoint = endpoint.hostname in {"localhost", "127.0.0.1", "::1"}
     if (not endpoint.hostname or endpoint.username or endpoint.password
             or (endpoint.scheme != "https" and spec.id not in {"ollama", "lmstudio"})

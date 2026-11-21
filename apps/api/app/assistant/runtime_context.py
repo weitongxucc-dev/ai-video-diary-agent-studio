@@ -22,10 +22,12 @@ def prepare_runtime(*, root: Path, pi_executable: str, base_url: str, model: str
         # M3 otherwise puts <think> in content. Pi keeps reasoning_content in
         # thinking blocks/history; only text blocks reach the user's answer.
         model_definition["samplingParams"] = {"reasoning_split": True}
+    runtime_provider = "anthropic" if provider == "anthropic" else "ai-video-diary"
+    runtime_api = "anthropic-messages" if provider == "anthropic" else "openai-completions"
     (runtime_root / "models.json").write_text(json.dumps({
-        "providers": {"ai-video-diary": {
+        "providers": {runtime_provider: {
             "baseUrl": base_url,
-            "api": "openai-completions",
+            "api": runtime_api,
             "apiKey": "$AI_VIDEO_DIARY_LLM_KEY",
             "models": [model_definition],
         }}
