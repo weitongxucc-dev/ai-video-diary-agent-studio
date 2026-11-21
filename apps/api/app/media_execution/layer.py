@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
-from collections.abc import Callable
-import sqlite3
 
 from app.creation.contracts import ArtifactRecord, JobRun, TaskEvent, TimelineVersion
-from .capabilities import detect_dependencies, dependency_payload
+
+from .capabilities import dependency_payload, detect_dependencies
 from .contracts import EditPlan, MediaExecutionError, MediaJob
 from .worker import FfmpegWorker
 
@@ -79,7 +80,7 @@ class MediaExecutionLayer:
         return self.submit(retry_plan, idempotency_suffix=f":retry:{uuid4().hex}")
 
     def _run(self, job_id: str, plan: EditPlan) -> dict[str, object]:
-        job = self.repository.job_records.get_job_run(plan.workspace_id, job_id)
+        self.repository.job_records.get_job_run(plan.workspace_id, job_id)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self.repository.job_records.claim_job_run(plan.workspace_id, job_id, connection=conn)
@@ -90,7 +91,7 @@ class MediaExecutionLayer:
             return self._publish(job_id, plan, result)
         except MediaExecutionError as exc:
             return self._fail(job_id, plan, exc)
-        except Exception as exc:
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError, sqlite3.Error) as exc:
             return self._fail(job_id, plan, MediaExecutionError("media_execution_failed", str(exc) or type(exc).__name__, "修复首个失败原因后沿原请求重试。"))
 
     def _publish(self, job_id: str, plan: EditPlan, result: dict[str, object]) -> dict[str, object]:
@@ -150,10 +151,10 @@ class MediaExecutionLayer:
         if workspace_id is not None:
             self.repository.job_records.get_job_run(workspace_id, job_id)
             return workspace_id
-        for workspace_id in ("local",):
+        for candidate_workspace_id in ("local",):
             try:
-                self.repository.job_records.get_job_run(workspace_id, job_id)
-                return workspace_id
+                self.repository.job_records.get_job_run(candidate_workspace_id, job_id)
+                return candidate_workspace_id
             except KeyError:
                 continue
         raise KeyError(job_id)

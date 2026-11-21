@@ -6,9 +6,9 @@ connection factory and output root explicit for the eventual owner binding.
 """
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from pathlib import Path
-import sqlite3
 
 from .contracts import EditPlan
 from .layer import MediaExecutionLayer

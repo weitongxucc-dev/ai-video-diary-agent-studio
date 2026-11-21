@@ -4,8 +4,8 @@ import json
 import os
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .adapter import FfmpegAdapter
 from .capabilities import ToolDependency
