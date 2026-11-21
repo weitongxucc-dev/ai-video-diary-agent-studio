@@ -254,8 +254,8 @@ function TurnContent({ turn, blocks = turnBlocks(turn), reading, latest, continu
   </>;
 }
 
-export function AssistantConversationHeaderActions({ state, busy, onConversationChange, onInput, children, legacyHistory }: {
-  state: Conversation; busy: boolean; onConversationChange?: () => void; onInput: (value: string) => void; children?: ReactNode; legacyHistory?: ReactNode;
+export function AssistantConversationHeaderActions({ state, conversationScopeLabel, materialScope, busy, onConversationChange, onInput, children, legacyHistory }: {
+  state: Conversation; conversationScopeLabel: string; materialScope?: boolean; busy: boolean; onConversationChange?: () => void; onInput: (value: string) => void; children?: ReactNode; legacyHistory?: ReactNode;
 }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const running = state.conversation?.turns.at(-1)?.status === "running";
@@ -263,7 +263,7 @@ export function AssistantConversationHeaderActions({ state, busy, onConversation
   const fail = (cause: unknown) => state.setError(cause instanceof Error ? cause.message : "对话操作没有完成，请重试。");
   const scopeLabel = state.conversation?.scope_kind === "task"
     ? "当前作品会话"
-    : state.conversation?.scope_kind === "material"
+    : materialScope || state.conversation?.scope_kind === "material" || /素材|片段/.test(conversationScopeLabel)
       ? "素材会话"
       : "工作区会话";
   return <div className="assistant-header-actions">
@@ -665,6 +665,8 @@ export function AssistantConversationPanel({
   const [referencePickerOpen, setReferencePickerOpen] = useState(false);
   const panelRef = useRef<HTMLElement>(null);
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+  const [headerTitleSlot, setHeaderTitleSlot] = useState<HTMLElement | null>(null);
+  const [materialScope, setMaterialScope] = useState(false);
   const historyRef = useRef<HTMLDivElement>(null);
   const restoredHistoryId = useRef<string | null>(null);
   const followBottom = useRef(true);
@@ -677,7 +679,10 @@ export function AssistantConversationPanel({
   const [stoppingTurn, setStoppingTurn] = useState<string | null>(null);
   const diagnosticsId = useId();
   useLayoutEffect(() => {
-    setHeaderSlot(panelRef.current?.closest("[data-conversation-pane]")?.querySelector<HTMLElement>("[data-assistant-header-actions]") ?? null);
+    const pane = panelRef.current?.closest("[data-conversation-pane]");
+    setHeaderSlot(pane?.querySelector<HTMLElement>("[data-assistant-header-actions]") ?? null);
+    setHeaderTitleSlot(pane?.querySelector<HTMLElement>("[data-assistant-header-title]") ?? null);
+    setMaterialScope(pane?.getAttribute("data-assistant-material-scope") === "true");
   }, []);
   const conversation = state.conversation;
   const conversationId = conversation?.id;
@@ -949,8 +954,11 @@ export function AssistantConversationPanel({
     <p className="assistant-conversation-loading" role="status">正在切换对话…</p>
   </section>;
 
-  const headerActions = <AssistantConversationHeaderActions state={state} busy={busy} onConversationChange={onConversationChange} onInput={onInput} legacyHistory={legacyHistory}>{capabilities ? <Button variant="ghost" className="assistant-icon-action" type="button" aria-expanded={diagnosticsExpanded} aria-controls={diagnosticsId} aria-label="技术能力状态（诊断）" title="技术能力状态（诊断）" onClick={() => setDiagnosticsExpanded(value => !value)}><MoreHorizontal size={15}/></Button> : null}</AssistantConversationHeaderActions>;
-  return <section ref={panelRef} className={`assistant-conversation-panel${compact ? " is-compact" : ""}`} aria-label={`助手对话：${conversation?.title ?? "新对话"}`}>
+  const sessionTitle = conversation?.title?.trim() || "新对话";
+  const headerTitle = <span className="assistant-header-title" aria-label={`当前会话标题：${sessionTitle}`} title={sessionTitle}>{sessionTitle}</span>;
+  const headerActions = <AssistantConversationHeaderActions state={state} conversationScopeLabel={scopeLabel} materialScope={materialScope} busy={busy} onConversationChange={onConversationChange} onInput={onInput} legacyHistory={legacyHistory}>{capabilities ? <Button variant="ghost" className="assistant-icon-action" type="button" aria-expanded={diagnosticsExpanded} aria-controls={diagnosticsId} aria-label="技术能力状态（诊断）" title="技术能力状态（诊断）" onClick={() => setDiagnosticsExpanded(value => !value)}><MoreHorizontal size={15}/></Button> : null}</AssistantConversationHeaderActions>;
+  return <section ref={panelRef} className={`assistant-conversation-panel${compact ? " is-compact" : ""}`} aria-label={`助手对话：${sessionTitle}`}>
+    {headerTitleSlot ? createPortal(headerTitle, headerTitleSlot) : null}
     {headerSlot ? createPortal(headerActions, headerSlot) : <div className="assistant-conversation-caption">{headerActions}</div>}
     <div className="assistant-message-scroller">
     <div ref={historyRef} className="assistant-conversation-history" role="region" tabIndex={0} aria-label="持久对话记录" data-conversation-id={conversation?.id}
