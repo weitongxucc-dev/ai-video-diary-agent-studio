@@ -38,10 +38,11 @@ test("manifest validator rejects ungoverned capability states", () => {
     provenance: {repository: "https://example.invalid/repo", revision: "abc", license: "MIT", license_spdx: "MIT"},
     evaluation: {status: "unknown", evidence: []},
   };
-  const capability = {id: "probe", label: "Probe", status: "catalog_only", stability: "stable", inputs: ["x"], outputs: ["y"], runnable: false};
+  const capability = {id: "probe", label: "Probe", status: "catalog_only", stability: "stable", inputs: ["x"], outputs: ["y"], dependencies: ["ffprobe"], risk: "unknown", unavailable_reason: "not wired", runnable: false};
   assert.equal(validateSkillManifest({...base, catalog_status: "catalog_only", status_reason: "not wired", capabilities: [capability]}).catalog_status, "catalog_only");
   assert.throws(() => validateSkillManifest({...base, capabilities: [{...capability, status: "unknown"}]}), /capability.status/);
   assert.throws(() => validateSkillManifest({...base, capabilities: [{...capability, runnable: true}]}), /不可直接运行/);
+  assert.throws(() => validateSkillManifest({...base, capabilities: [{...capability, unavailable_reason: undefined}]}), /unavailable_reason|不可用原因/);
 });
 
 test("manifest validator rejects an adapter contract that could run or omit lifecycle gaps", () => {
