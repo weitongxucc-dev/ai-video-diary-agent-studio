@@ -2053,11 +2053,25 @@ def _task_media_http_router(route_names):
         repository_for=lambda: production_repo,
         receipt_for=lambda: _media_result_receipt,
         observations_for=lambda: _output_observation_use_case,
+        submit_for=lambda: _submit_task_media_job,
         route_names=route_names,
     )
 
 
+def _submit_task_media_job(task_id, actor, payload):
+    runtime = _creation_runtime()
+    registration = runtime.registrations.get('creation_job')
+    if registration is None:
+        raise _device_runtime_unavailable(runtime.last_error)
+    from app.task_media_submission_use_case import TaskMediaSubmissionUseCase
+    media = registration.owner.task_media
+    use_case = TaskMediaSubmissionUseCase(
+        production_repo, task_media=media, task_authorizations=media.task_authorizations)
+    return use_case.submit(runtime, actor, task_id, payload), runtime
+
+
 app.include_router(_task_media_http_router(("list_task_media_jobs",)))
+app.include_router(_task_media_http_router(("submit_task_media_job",)))
 
 
 def _list_goal_media_jobs(task, actor, *, cursor=None, limit=20):
