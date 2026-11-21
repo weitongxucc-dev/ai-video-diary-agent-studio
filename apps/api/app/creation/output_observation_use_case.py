@@ -208,6 +208,29 @@ class OutputObservationUseCase:
             raise ValueError('观察媒体与真实登记摘要不一致')
 
     def published_outputs_current(self, job):
+        try:
+            start = self.repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start")
+        except KeyError:
+            start = None
+        if start is not None and start.payload.get("result_kind") == "media_output":
+            try:
+                result = self.repository.execution_records.get_task_event(
+                    job.workspace_id, f"event_{job.id}_result").payload["result"]
+                inner_job_id = result.get("job_id")
+                refs = set(result.get("output_refs", ()))
+                if result.get("status") != "succeeded" or not inner_job_id or not refs:
+                    return False
+                records = [item for item in self.repository.execution_records.list_artifact_records(job.workspace_id, job.task_id)
+                           if item.producer_job_id == inner_job_id]
+                if {item.logical_ref for item in records} != refs:
+                    return False
+                for item in records:
+                    path = self.artifact_store.resolve_file(item.logical_ref)
+                    if path.stat().st_size != item.size_bytes:
+                        return False
+            except (KeyError, FileNotFoundError, OSError, AttributeError, TypeError):
+                return False
+            return True
         records = [item for item in self.repository.execution_records.list_artifact_records(job.workspace_id, job.task_id) if item.producer_job_id == job.id]
         if not records:
             return True
