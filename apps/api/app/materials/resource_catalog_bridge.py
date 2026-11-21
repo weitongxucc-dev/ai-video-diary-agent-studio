@@ -6,15 +6,12 @@ version without introducing another persistence owner.
 """
 from __future__ import annotations
 
-from dataclasses import asdict
-
 from app.editing_resource_catalog import EditingResource
 from app.materials.resource_governance import (
     ResourceLicense,
     ResourceManifest,
     manifest_digest,
 )
-
 
 _KIND_BY_TYPE = {
     "media_library": "material",
