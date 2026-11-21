@@ -1,0 +1,211 @@
+{
+  "schema_version": 1,
+  "name": "ffmpeg-skill",
+  "version": "v3.12.1-adapter.1",
+  "catalog_status": "catalog_only",
+  "status_reason": "外部 ffmpeg-skill 仅完成能力、依赖和许可证登记；当前版本没有把其 Python/FFmpeg 执行器接入曜核媒体作业与版本事务。",
+  "repair_action": "先固定曜核自己的 FFmpeg/FFprobe 构建、编码器与字幕字体许可证，完成任务绑定、输出登记、取消/超时和技术/视觉/音频检查适配，再由主控验收后提升单项能力状态。",
+  "entry": {
+    "skill": "read_creation_skill:ffmpeg-skill",
+    "adapter": "catalog-only-capability-register"
+  },
+  "inputs": [
+    "当前 CreationTask 及冻结 TimelineVersion",
+    "工作区已授权的媒体输入和选区",
+    "当前任务编辑能力、资源目录和设备预检",
+    "用户明确的剪辑、音频、画幅、字幕或导出目标"
+  ],
+  "outputs": [
+    "带输入输出、依赖、稳定性和风险的能力登记",
+    "按 probe→编辑→check→verify 顺序形成的受控提案",
+    "技术检查、视觉/音频观察、许可证和未验证项说明"
+  ],
+  "permissions": [
+    "读取当前任务、时间线、媒体证据和输出观察",
+    "读取编辑资源目录、设备能力和版本化采用边界",
+    "按现有业务入口准备或提交用户明确授权的局部编辑",
+    "回读原请求、版本、失败状态和撤销入口"
+  ],
+  "dependencies": {
+    "skills": ["editing-videos", "local-edit"],
+    "tools": [
+      "read_current_task", "read_task_object", "read_task_edit_capabilities",
+      "read_material_evidence", "read_task_observations", "observe_task_output",
+      "read_editing_resource_catalog", "read_edit_history", "read_edit_control_context",
+      "read_timeline_restore_request", "preview_typed_edit", "apply_typed_edit"
+    ]
+  },
+  "runtime": {
+    "kind": "trusted-markdown",
+    "execution_mode": "method-only",
+    "runnable": false,
+    "network": false,
+    "arbitrary_code": false,
+    "shell": false
+  },
+  "host_dependencies": [
+    "FFmpeg 6.1+ 与 FFprobe；实际构建、编码器、滤镜和分发许可必须单独核对",
+    "Python 3.10+ 标准库（外部 Skill 的登记依据；未随曜核导入）",
+    "字幕需要已批准字体及 libass/drawtext 等实际滤镜能力",
+    "export 需要目标容器、编码器、音频采样率和平台规格"
+  ],
+  "install_checks": {
+    "mode": "package-time",
+    "network": false,
+    "shell": false,
+    "arbitrary_code": false,
+    "checks": [
+      "manifest schema and SKILL.md name match",
+    "repository release tag v3.12.1 and exact revision are fixed",
+      "each capability has explicit status, inputs, outputs, dependencies and risk",
+      "FFmpeg/FFprobe build, codec, filter and font licenses remain host preflight facts",
+      "external Python, FFmpeg commands, MCP transport and arbitrary runtime are excluded"
+    ]
+  },
+  "adoption": {
+    "entrypoint": "read_creation_skill",
+    "status": "installed",
+    "writes": false,
+    "requires_explicit_edit_authorization": true,
+    "write_boundary": "能力登记只读；任何真实修改只能沿现有 preview_typed_edit/apply_typed_edit 与 EditProposal/TimelineVersion，外部 ffmpeg-skill 不直接写入时间线。"
+  },
+  "rollback": {
+    "mode": "pinned-package-revert",
+    "pre_adoption": "移除能力登记并恢复上一份通过校验的固定 Skill manifest。",
+    "post_adoption": "若未来能力经现有编辑入口采用，沿原请求、read_edit_history 和 timeline undo 回读/撤销；未知结果先查原请求，不换 request_id 重放。",
+    "deletes_user_data": false
+  },
+  "provenance": {
+    "repository": "https://github.com/kajisho5/ffmpeg-skill",
+    "path": "README.md, tools/ and machine-readable contract",
+    "revision": "fe577168f39dd8effdf8c95b91ce16986a511f37",
+    "release_tag": "v3.12.1",
+    "license": "MIT License (repository and skill code)",
+    "license_spdx": "MIT",
+    "resource_notice": "仅登记外部方法和能力；FFmpeg 本体、具体构建、编码器、字体、Python、脚本、MCP 服务和第三方媒体未导入。"
+  },
+  "status_semantics": {
+    "connected": "已有曜核受控入口、依赖和回读证据，可在当前任务能力允许时使用。",
+    "catalog_only": "来源和能力已登记，但当前没有受控写入/执行适配器；不可运行。",
+    "planned": "已识别但尚未完成适配或本地依赖核验；不可运行。",
+    "failed": "曾尝试导入或适配但检查失败；保留失败原因，不提升为可用。"
+  },
+  "capabilities": [
+    {
+      "id": "probe", "label": "媒体探测", "status": "catalog_only", "stability": "stable",
+      "inputs": ["视频/音频输入引用"], "outputs": ["容器、流、时长、画幅、帧率、编码摘要"],
+      "dependencies": ["FFprobe 6.1+", "任务绑定输入"], "risk": "构建差异或损坏容器会使结果未知。",
+      "source_tool": "probe", "runnable": false,
+      "unavailable_reason": "没有 ffmpeg-skill probe 到曜核 MediaJob/版本回读的执行适配。"
+    },
+    {
+      "id": "extract_frames", "label": "抽帧与接触表", "status": "catalog_only", "stability": "stable",
+      "inputs": ["已探测媒体", "帧时间或抽样策略"], "outputs": ["指定帧 PNG 或接触表及时间索引"],
+      "dependencies": ["FFmpeg", "可写的临时产物登记", "视觉观察入口"], "risk": "抽帧只提供证据，不代表语义或审美验收。",
+      "source_tool": "look", "runnable": false,
+      "unavailable_reason": "当前仅有既有观察/预览路径，未接入外部 look.py 产物登记。"
+    },
+    {
+      "id": "cut", "label": "剪辑", "status": "catalog_only", "stability": "stable",
+      "inputs": ["媒体输入", "起止区间"], "outputs": ["不覆盖源文件的剪辑候选/输出"],
+      "dependencies": ["FFmpeg", "输入不覆盖策略", "TimelineVersion"], "risk": "关键帧、音画同步和边界需复核。",
+      "source_tool": "cut", "runnable": false,
+      "unavailable_reason": "未把外部 cut 适配到曜核局部编辑事务。"
+    },
+    {
+      "id": "join", "label": "拼接", "status": "planned", "stability": "beta",
+      "inputs": ["同规格媒体片段列表"], "outputs": ["拼接候选/输出及流摘要"],
+      "dependencies": ["FFmpeg concat 或等效滤镜", "统一编码与时间基", "输出登记"], "risk": "异构编码、时间基和音频布局可能导致失败或漂移。",
+      "source_tool": "join", "runnable": false,
+      "unavailable_reason": "未接入多输入拼接的版本、失败和回滚边界。"
+    },
+    {
+      "id": "audio", "label": "音频处理", "status": "catalog_only", "stability": "stable",
+      "inputs": ["音频/视频输入", "音量、混音或处理参数"], "outputs": ["受控音频候选/输出、响度和流摘要"],
+      "dependencies": ["FFmpeg 音频编解码器", "48kHz/双声道等任务预算", "音频观察"], "risk": "编码器、响度和源音轨保留需单独验证。",
+      "source_tool": "audio", "runnable": false,
+      "unavailable_reason": "曜核已有音频编辑路径，但没有外部 audio 工具的一对一适配和回执。"
+    },
+    {
+      "id": "fit", "label": "转画幅", "status": "catalog_only", "stability": "stable",
+      "inputs": ["媒体输入", "目标画幅和 fit/crop 策略"], "outputs": ["目标画幅候选/输出及安全区说明"],
+      "dependencies": ["FFmpeg scale/crop/pad", "目标平台规格", "视觉观察"], "risk": "裁切主体、边缘和安全区不能由技术成功代替。",
+      "source_tool": "fit", "runnable": false,
+      "unavailable_reason": "未将外部 fit 的预览、画幅参数和输出观察绑定到任务版本。"
+    },
+    {
+      "id": "export", "label": "导出", "status": "catalog_only", "stability": "stable",
+      "inputs": ["已确认时间线版本", "平台和编码规格"], "outputs": ["登记的导出产物、探测摘要和检查结果"],
+      "dependencies": ["FFmpeg 编码器/容器", "输出存储", "quality check 和 output observation"], "risk": "FFmpeg 构建许可、编码器、码率和设备播放必须实测。",
+      "source_tool": "export", "runnable": false,
+      "unavailable_reason": "当前导出由曜核既有 RenderJob/交付路径负责，未接入外部 export 工具。"
+    },
+    {
+      "id": "caption", "label": "字幕", "status": "catalog_only", "stability": "stable",
+      "inputs": ["字幕文本和时间区间", "已批准字体/样式"], "outputs": ["字幕候选/渲染输出及字体依赖记录"],
+      "dependencies": ["FFmpeg libass 或 drawtext", "已批准字体许可证", "字幕时间线和渲染检查"], "risk": "字体许可、字形回退、换行和烧录边界未核验。",
+      "source_tool": "caption", "runnable": false,
+      "unavailable_reason": "字幕依赖字体和 FFmpeg 构建尚未绑定到外部 caption 工具的受控适配。"
+    },
+    {
+      "id": "render", "label": "渲染编排", "status": "catalog_only", "stability": "stable",
+      "inputs": ["冻结时间线版本", "渲染预算"], "outputs": ["渲染产物和阶段回执"],
+      "dependencies": ["曜核 RenderJob", "FFmpeg/ffprobe", "输出观察"], "risk": "资源预算、取消、超时和回读必须保持单一事实源。",
+      "source_tool": "render", "runnable": false,
+      "unavailable_reason": "不接入外部 render 编排，避免形成第二套媒体作业。"
+    },
+    {
+      "id": "check", "label": "技术检查", "status": "catalog_only", "stability": "stable",
+      "inputs": ["候选或导出产物"], "outputs": ["解码、流、响度和文件身份检查"],
+      "dependencies": ["FFprobe/FFmpeg", "质量检查入口"], "risk": "技术检查不等于真实画面、声音或设备验收。",
+      "source_tool": "check", "runnable": false,
+      "unavailable_reason": "未将外部 check JSON 回执映射到曜核质量检查和观察对象。"
+    },
+    {
+      "id": "look", "label": "画面复核", "status": "catalog_only", "stability": "stable",
+      "inputs": ["媒体输入", "时间点或抽样策略"], "outputs": ["帧图/接触表复核材料"],
+      "dependencies": ["FFmpeg 抽帧", "视觉观察"], "risk": "图片生成不承担主体、构图和审美判断。",
+      "source_tool": "look", "runnable": false,
+      "unavailable_reason": "当前没有外部 look review page 到任务观察的适配。"
+    },
+    {
+      "id": "scenes", "label": "场景分析", "status": "planned", "stability": "stable",
+      "inputs": ["媒体输入"], "outputs": ["场景边界和时间区间"],
+      "dependencies": ["FFmpeg scene filter", "观察与人工复核"], "risk": "阈值和内容语义尚未核验。", "source_tool": "scenes", "runnable": false,
+      "unavailable_reason": "尚未完成场景边界到曜核素材证据的适配。"
+    },
+    {
+      "id": "graphics", "label": "图形叠加", "status": "planned", "stability": "stable",
+      "inputs": ["图形/文本定义", "时间区间"], "outputs": ["图形叠加候选"], "dependencies": ["FFmpeg overlay/drawtext", "资产和字体许可证"], "risk": "字体、透明边缘和画幅需视觉验收。", "source_tool": "graphics", "runnable": false,
+      "unavailable_reason": "现有图层路径不等同于外部 graphics 工具，尚未完成字段映射。"
+    },
+    {
+      "id": "silence", "label": "静音检测", "status": "planned", "stability": "stable",
+      "inputs": ["音频输入", "阈值和最小时长"], "outputs": ["静音区间候选"], "dependencies": ["FFmpeg silencedetect", "语音/字幕证据"], "risk": "误删停顿会改变叙事节奏。", "source_tool": "silence", "runnable": false,
+      "unavailable_reason": "已有局部静音路径未与外部 silence 合并为同一能力契约。"
+    },
+    {
+      "id": "loudness", "label": "响度检查", "status": "planned", "stability": "stable",
+      "inputs": ["音频或成片"], "outputs": ["响度、峰值和动态范围报告"], "dependencies": ["FFmpeg loudnorm/ebur128", "目标平台规格"], "risk": "测量结果不能替代人工听感。", "source_tool": "loudness", "runnable": false,
+      "unavailable_reason": "尚未把外部 loudness 报告登记为曜核输出观察。"
+    },
+    {
+      "id": "verify", "label": "输出验证", "status": "planned", "stability": "beta",
+      "inputs": ["导出产物", "目标规格"], "outputs": ["技术和视觉验证结果"], "dependencies": ["FFprobe", "抽帧", "设备播放"], "risk": "跨设备行为尚未建立证据。", "source_tool": "verify", "runnable": false,
+      "unavailable_reason": "尚未建立外部 verify 到曜核输出观察和设备验收的适配。"
+    }
+  ],
+  "evaluation": {
+    "status": "catalog-and-preflight-tested",
+    "evidence": [
+      "manifest validator rejects unknown status and malformed capability declarations",
+      "catalog projects catalog_status, capabilities, dependencies and status reasons",
+      "preflight reports non-runnable status without promoting catalog_only/planned capabilities"
+    ],
+    "unverified": [
+      "真实 ffmpeg-skill Python/FFmpeg 执行器、MCP transport 和 review page",
+      "具体 FFmpeg 构建、编码器、滤镜、字幕字体和分发许可证",
+      "真实媒体、Mac/Windows 设备、跨设备播放和最终视听质量"
+    ]
+  }
+}
