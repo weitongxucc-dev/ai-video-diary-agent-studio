@@ -31,10 +31,16 @@ def test_profile_status_reads_current_profile_without_exposing_host_paths(metada
     missing = state.client.get(url)
     assert missing.status_code == 200 and missing.json()['profile_status'] == 'unprepared'
     assert missing.json()['preparation_configured'] and missing.json()['available_operations'] == []
+    assert missing.json()['media_execution_ready'] is False
+    assert missing.json()['status_endpoint'] == url
+    assert missing.json()['prepare_endpoint'] == url
+    assert '提交设备准备请求' in missing.json()['repair_action']
     path.write_text(write_profile(tmp_path, profile_document()).read_text())
     available = state.client.get(url).json()
     assert available['profile_status'] == 'available' and available['revision'] == 3
     assert available['available_operations'] == ['cpu_render', 'narration']
+    assert available['media_execution_ready'] is True
+    assert available['message'] == '设备资源档已就绪，可以提交媒体任务。'
     assert str(tmp_path) not in str(available) and 'budget' not in available and 'backends' not in available
     path.write_text('{"format_version": 99}')
     invalid = state.client.get(url).json()

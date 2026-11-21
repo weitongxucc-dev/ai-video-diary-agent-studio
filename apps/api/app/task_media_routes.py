@@ -1,8 +1,11 @@
 """Task-media job HTTP adapters; persistence and scheduling remain with their original owners."""
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
+
 from app.creation_execution import CreationExecutionActor
+from app.device_resource_status import preparation_error_detail
 from app.task_media_submission_use_case import TaskMediaSubmissionRejected
+
 
 def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, read_for, read_components_for, runtime_for, repository_for, receipt_for, observations_for, submit_for=None, route_names) -> APIRouter:
     router = APIRouter()
@@ -18,6 +21,11 @@ def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, rea
             return JSONResponse(status_code=202, content=receipt)
         except TaskMediaSubmissionRejected as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except HTTPException as exc:
+            detail = preparation_error_detail(exc.detail) if exc.status_code == 503 else None
+            if detail is None:
+                raise
+            raise HTTPException(status_code=503, detail=detail) from exc
 
     @router.get('/api/creation-tasks/{task_id}/media-jobs')
     def list_task_media_jobs(task_id: str, request: Request, cursor: str | None=None, limit: int=20):
