@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {dirname, join} from "node:path";
 import {fileURLToPath} from "node:url";
-import {loadSkillManifests} from "../skills/manifest.mjs";
+import {loadSkillManifests, validateSkillManifest} from "../skills/manifest.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -20,4 +20,22 @@ test("ffmpeg-skill is discovered as a pinned, non-runnable capability catalog", 
   assert.equal(manifest.capabilities.find(item => item.id === "scenes").status, "planned");
   assert.match(manifest.capabilities.find(item => item.id === "caption").unavailable_reason, /字体/);
   assert.match(await (await import("node:fs/promises")).readFile(manifest.skillPath, "utf8"), /不可用行为/);
+});
+
+test("manifest validator rejects ungoverned capability states", () => {
+  const base = {
+    schema_version: 1, name: "test", version: "1", entry: {skill: "x", adapter: "y"},
+    inputs: ["input"], outputs: ["output"], permissions: ["read"],
+    dependencies: {skills: [], tools: ["read_current_task"]},
+    runtime: {kind: "trusted-markdown", execution_mode: "method-only", runnable: false, network: false, shell: false, arbitrary_code: false},
+    install_checks: {mode: "package-time", network: false, shell: false, arbitrary_code: false, checks: ["check"]},
+    adoption: {entrypoint: "read_creation_skill", status: "installed", writes: false, requires_explicit_edit_authorization: true},
+    rollback: {mode: "pinned-package-revert", pre_adoption: "remove", post_adoption: "query", deletes_user_data: false},
+    provenance: {repository: "https://example.invalid/repo", revision: "abc", license: "MIT", license_spdx: "MIT"},
+    evaluation: {status: "unknown", evidence: []},
+  };
+  const capability = {id: "probe", label: "Probe", status: "catalog_only", stability: "stable", inputs: ["x"], outputs: ["y"], runnable: false};
+  assert.equal(validateSkillManifest({...base, catalog_status: "catalog_only", status_reason: "not wired", capabilities: [capability]}).catalog_status, "catalog_only");
+  assert.throws(() => validateSkillManifest({...base, capabilities: [{...capability, status: "unknown"}]}), /capability.status/);
+  assert.throws(() => validateSkillManifest({...base, capabilities: [{...capability, runnable: true}]}), /不可直接运行/);
 });

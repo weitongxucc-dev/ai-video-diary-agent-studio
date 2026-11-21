@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 export const SKILL_MANIFEST_VERSION = 1;
+const RESOURCE_STATUSES = new Set(["connected", "catalog_only", "planned", "failed"]);
 
 // Imported skills are method documents. They may name product tools, but they
 // never gain a loader, network, shell, or arbitrary-code capability from a
@@ -86,6 +87,23 @@ export function validateSkillManifest(manifest, {skillName, skillPath} = {}) {
   if (!manifest.evaluation || typeof manifest.evaluation !== "object") invalid("缺少 evaluation");
   nonEmptyString(manifest.evaluation.status, "evaluation.status");
   stringList(manifest.evaluation.evidence, "evaluation.evidence");
+  if (manifest.catalog_status !== undefined && !RESOURCE_STATUSES.has(manifest.catalog_status)) {
+    invalid("catalog_status 无效");
+  }
+  if (manifest.catalog_status && manifest.catalog_status !== "connected") {
+    nonEmptyString(manifest.status_reason, "status_reason");
+  }
+  if (manifest.capabilities !== undefined) {
+    if (!Array.isArray(manifest.capabilities) || manifest.capabilities.length === 0) invalid("capabilities 无效");
+    for (const capability of manifest.capabilities) {
+      if (!capability || typeof capability !== "object" || Array.isArray(capability)) invalid("capability 必须是对象");
+      for (const field of ["id", "label", "stability"]) nonEmptyString(capability[field], `capability.${field}`);
+      if (!RESOURCE_STATUSES.has(capability.status)) invalid("capability.status 无效");
+      stringList(capability.inputs, "capability.inputs");
+      stringList(capability.outputs, "capability.outputs");
+      if (capability.runnable !== false) invalid("capability 必须明确不可直接运行");
+    }
+  }
   if (skillPath && typeof skillPath !== "string") invalid("skillPath 无效");
   return Object.freeze({...manifest, skillPath});
 }
