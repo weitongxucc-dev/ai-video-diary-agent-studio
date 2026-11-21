@@ -1495,7 +1495,8 @@ class TaskMediaJobs:
                 result_event = self.repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_result")
             except KeyError:
                 if direct_media_execution:
-                    result = self.media_execution_delegate.submit(job, event, actor.identity_payload())
+                    result = self.media_execution_delegate.submit(
+                        job, event, actor.identity_payload(), cancel_event=cancellation)
                 elif direct_command:
                     if self.command_preview is None:
                         raise ValueError('指令编辑执行负责人未组装')

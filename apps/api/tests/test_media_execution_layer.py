@@ -346,6 +346,30 @@ def test_task_media_delegate_cancel_and_retry_keep_outer_input_version_and_reque
     assert retried["request_id"] == "req"
 
 
+def test_task_media_delegate_forwards_outer_cancellation_event():
+    from threading import Event
+
+    class EntryPoint:
+        def __init__(self):
+            self.cancel_event = None
+
+        def submit(self, plan, *, cancel_event=None):
+            self.cancel_event = cancel_event
+            return {"status": "cancelled", "job_id": "inner", "request_id": plan.request_id,
+                    "failure_reason": "media_cancelled", "impact": "未发布", "repair_action": "沿原请求重试"}
+
+    event = {"workspace_id": "local", "task_id": "task", "arguments": {"edit_plan": {
+        "workspace_id": "local", "task_id": "task", "base_version_id": "base", "request_id": "req-cancel",
+        "operations": [{"operation": "export", "inputs": ["input.mp4"], "output_name": "final.mp4"}],
+    }}, "input_facts": {"base_version_id": "base"}}
+    entrypoint = EntryPoint()
+    cancel_event = Event()
+    result = TaskMediaExecutionDelegate(entrypoint).submit(
+        {"id": "outer"}, event, {}, cancel_event=cancel_event)
+    assert entrypoint.cancel_event is cancel_event
+    assert result["status"] == "cancelled"
+
+
 def _wait_for_log(path: Path, event: str):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:

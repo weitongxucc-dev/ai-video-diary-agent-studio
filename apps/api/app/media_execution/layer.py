@@ -62,7 +62,8 @@ class MediaExecutionLayer:
                         log_path=result.payload.get("log_path") if result else None,
                         failure_reason=job.failure_reason, impact=job.impact, repair_action=job.repair_action)
 
-    def submit(self, plan: EditPlan | dict, *, idempotency_suffix: str | None = None) -> dict[str, object]:
+    def submit(self, plan: EditPlan | dict, *, idempotency_suffix: str | None = None,
+               cancel_event: threading.Event | None = None) -> dict[str, object]:
         plan = plan if isinstance(plan, EditPlan) else EditPlan.from_value(plan)
         digest = hashlib.sha256(json.dumps(plan.as_dict(), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         idempotency_key = f"media:{plan.task_id}:{plan.request_id}{idempotency_suffix or ''}"
@@ -85,7 +86,7 @@ class MediaExecutionLayer:
                     "dependencies": dependency_payload(self.dependencies)}, created_at=job.created_at), connection=conn)
         if persisted.id != job_id:
             return self._existing_result(persisted, plan)
-        return self._run(job_id, plan)
+        return self._run(job_id, plan, cancel_event=cancel_event)
 
     def _existing_result(self, job: JobRun, plan: EditPlan) -> dict[str, object]:
         """Return the durable receipt for a repeated idempotent submission."""
@@ -140,9 +141,10 @@ class MediaExecutionLayer:
                               plan.operations, member_id=plan.member_id, metadata=plan.metadata)
         return self.submit(retry_plan, idempotency_suffix=f":retry:{uuid4().hex}")
 
-    def _run(self, job_id: str, plan: EditPlan) -> dict[str, object]:
+    def _run(self, job_id: str, plan: EditPlan,
+             cancel_event: threading.Event | None = None) -> dict[str, object]:
         key = (plan.workspace_id, job_id)
-        cancel_event = threading.Event()
+        cancel_event = cancel_event or threading.Event()
         with self._cancel_lock:
             if key in self._cancel_events:
                 raise ValueError("媒体作业已有执行者")
