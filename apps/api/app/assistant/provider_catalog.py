@@ -23,7 +23,7 @@ PROVIDER_CATALOG = {
     "openai": ProviderSpec("openai", "https://api.openai.com/v1", "gpt-5.4", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "openrouter": ProviderSpec("openrouter", "https://openrouter.ai/api/v1", "openai/gpt-5.4", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "gemini": ProviderSpec("gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3-flash-preview", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
-    "anthropic": ProviderSpec("anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-5", "api_key", "anthropic_messages", "provider_or_unknown", "sdk_estimate_or_unknown", "native_protocol_deferred"),
+    "anthropic": ProviderSpec("anthropic", "https://api.anthropic.com/v1", "claude-sonnet-4-5", "api_key", "anthropic_messages", "provider_or_unknown", "sdk_estimate_or_unknown", "missing_key_or_endpoint"),
     "moonshot": ProviderSpec("moonshot", "https://api.moonshot.cn/v1", "kimi-k2-0905-preview", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "qwen": ProviderSpec("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
     "zhipu": ProviderSpec("zhipu", "https://open.bigmodel.cn/api/paas/v4", "glm-4.5", "api_key", "openai_compatible", "provider_or_unknown", "sdk_estimate_or_unknown"),
