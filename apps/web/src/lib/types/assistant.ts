@@ -271,6 +271,8 @@ export type AssistantTurnTrace = {
     turn_id: string;
     conversation_id: string;
     session_id?: string | null;
+    provider?: string | null;
+    model?: string | null;
     status: string;
     sequence: number;
     created_at: string;
@@ -282,6 +284,18 @@ export type AssistantTurnTrace = {
     tool_counts: Record<string, number>;
     compaction_count: number;
     provider_usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number } | null;
+    usage_details?: {
+        provider?: string | null;
+        model?: string | null;
+        input_tokens?: number | null;
+        output_tokens?: number | null;
+        latency_ms?: number | null;
+        estimated_cost?: { amount: number; currency: string; status: "estimated"; source?: string } | null;
+    } | null;
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    latency_ms?: number | null;
+    estimated_cost?: { amount: number; currency: string; status: "estimated"; source?: string } | null;
     usage_status: "known" | "estimated" | "unknown";
     usage_source?: string | null;
     associations: { kind: string; ref: string }[];

@@ -380,17 +380,23 @@ function TraceEvent({ event }: { event: AssistantTraceEvent }) {
 
 function TurnUsage({ trace, model }: { trace: AssistantTurnTrace; model: string | null }) {
   const usage = trace.usage_status === "unknown" ? null : trace.provider_usage;
+  const details = trace.usage_status === "unknown" ? null : trace.usage_details;
+  const shownModel = details?.model ?? trace.model ?? model;
+  const modelLatency = details?.latency_ms ?? trace.latency_ms ?? null;
+  const cost = details?.estimated_cost ?? trace.estimated_cost ?? null;
   const source = trace.usage_source ? usageSources[trace.usage_source] : null;
   const counts = usage ? ([
     ["总计", usage.totalTokens], ["输入", usage.input], ["输出", usage.output],
     ["缓存读取", usage.cacheRead], ["缓存写入", usage.cacheWrite],
   ] as const).filter((entry): entry is readonly [typeof entry[0], number] => entry[1] != null) : [];
   return <dl className="assistant-trace-usage" aria-label="本轮用量">
-    {model ? <div><dt>模型</dt><dd>{model}</dd></div> : null}
+    {shownModel ? <div><dt>模型</dt><dd>{shownModel}</dd></div> : null}
     <div><dt>用量来源</dt><dd>{trace.usage_status === "unknown" ? "未提供" : source ?? (trace.usage_status === "estimated" ? "估算，来源未注明" : "来源未注明")}</dd></div>
     {counts.length ? <div><dt>Token</dt><dd>{counts.map(([label, value]) => <span key={label}>{label} {formatNumber.format(value)}</span>)}</dd></div> : null}
-    <div><dt>耗时</dt><dd>{elapsed(trace.duration_ms) ?? "未提供"}</dd></div>
-    <div><dt>费用</dt><dd>未提供</dd></div>
+    <div><dt>模型耗时</dt><dd>{elapsed(modelLatency) ?? "未提供"}</dd></div>
+    <div><dt>整轮耗时</dt><dd>{elapsed(trace.duration_ms) ?? "未提供"}</dd></div>
+    <div><dt>费用</dt><dd>{cost && cost.status === "estimated" && Number.isFinite(cost.amount)
+      ? `${cost.amount} ${cost.currency}（估算）` : "未提供"}</dd></div>
   </dl>;
 }
 
