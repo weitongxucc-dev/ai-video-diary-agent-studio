@@ -56,11 +56,11 @@ function main() {
     write(root, 'apps/web/.next/standalone-bundled/apps/web/.next/server/app/production/page_client-reference-manifest.js', 'references');
     write(root, 'apps/web/.next/standalone-bundled/apps/web/.next/server/app/production/page.js', 'page');
 
-    const pnpmElectronTarget = path.join(root, 'apps/desktop/.pnpm/electron@33/node_modules/electron');
+    const pnpmElectronTarget = path.join(root, 'apps/desktop/.pnpm/electron@45.4.1/node_modules/electron');
     fs.mkdirSync(pnpmElectronTarget, { recursive: true });
     fs.writeFileSync(path.join(pnpmElectronTarget, 'package.json'), '{"name":"electron"}');
     fs.mkdirSync(path.join(root, 'apps/desktop/node_modules'), { recursive: true });
-    fs.symlinkSync('../.pnpm/electron@33/node_modules/electron', path.join(root, 'apps/desktop/node_modules/electron'));
+    fs.symlinkSync('../.pnpm/electron@45.4.1/node_modules/electron', path.join(root, 'apps/desktop/node_modules/electron'));
 
     const first = generate(root);
     const firstMetadata = fs.readFileSync(path.join(root, 'apps/desktop/build-identity.generated.json'), 'utf8');
