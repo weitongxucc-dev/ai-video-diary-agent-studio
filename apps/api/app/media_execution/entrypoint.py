@@ -10,6 +10,7 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
+from app.artifact_store import ArtifactStore
 from .contracts import EditPlan
 from .layer import MediaExecutionLayer
 from .worker import FfmpegWorker
@@ -42,6 +43,7 @@ def build_media_execution_entrypoint(
     *, repository, output_root: str | Path,
     connection_factory: Callable[[], sqlite3.Connection],
     worker: FfmpegWorker | None = None,
+    artifact_store: ArtifactStore | None = None,
 ) -> MediaExecutionEntrypoint:
     """Build the independently testable owner without registering routes.
 
@@ -50,4 +52,5 @@ def build_media_execution_entrypoint(
     owner and schedules work through the existing creation-job device owner.
     """
     return MediaExecutionEntrypoint(MediaExecutionLayer(
-        repository, output_root, worker=worker, connection_factory=connection_factory))
+        repository, output_root, worker=worker, connection_factory=connection_factory,
+        artifact_store=artifact_store))

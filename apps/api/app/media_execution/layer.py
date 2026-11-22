@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
+from app.artifact_store import ArtifactStore
 from app.creation.contracts import (
     ArtifactRecord,
     DependencyEdge,
@@ -34,13 +35,15 @@ class MediaExecutionLayer:
     """Owns EditPlan -> MediaJob -> Worker -> TimelineVersion publication."""
 
     def __init__(self, repository, output_root: str | Path, *, worker: FfmpegWorker | None = None,
-                 connection_factory: Callable[[], sqlite3.Connection] | None = None) -> None:
+                 connection_factory: Callable[[], sqlite3.Connection] | None = None,
+                 artifact_store: ArtifactStore | None = None) -> None:
         self.repository = repository
         self._connect = connection_factory
         if self._connect is None:
             raise ValueError("媒体执行入口需要显式注入 ProductionRepository 的连接工厂")
         self.output_root = Path(output_root).expanduser()
         self.output_root.mkdir(parents=True, exist_ok=True)
+        self.artifact_store = artifact_store or ArtifactStore(self.output_root)
         self.dependencies = detect_dependencies()
         self.worker = worker
         self._cancel_lock = threading.Lock()
@@ -208,9 +211,10 @@ class MediaExecutionLayer:
                 path = Path(item["path"])
                 logical_ref = f"media/{job_id}/{index}-{path.name}"
                 refs.append(logical_ref)
+                published = self.artifact_store.publish_file(logical_ref, path)
                 artifact = ArtifactRecord(id=f"artifact_{job_id}_{index}", workspace_id=plan.workspace_id,
                     task_id=plan.task_id, kind="media_output", logical_ref=logical_ref,
-                    sha256=hashlib.sha256(path.read_bytes()).hexdigest(), size_bytes=path.stat().st_size,
+                    sha256=published.sha256, size_bytes=published.size_bytes,
                     producer_job_id=job_id, input_refs=input_refs)
                 self.repository.execution_records.create_artifact_record(artifact, connection=conn)
             transform = TransformRun(
