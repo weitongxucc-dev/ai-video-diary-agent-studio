@@ -240,7 +240,11 @@ class OutputObservationUseCase:
                     return False
                 for item in records:
                     path = self.artifact_store.resolve_file(item.logical_ref)
-                    if path.stat().st_size != item.size_bytes:
+                    digest = hashlib.sha256()
+                    with path.open('rb') as handle:
+                        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                            digest.update(chunk)
+                    if path.stat().st_size != item.size_bytes or digest.hexdigest() != item.sha256:
                         return False
             except (KeyError, FileNotFoundError, OSError, AttributeError, TypeError, ValueError):
                 return False
