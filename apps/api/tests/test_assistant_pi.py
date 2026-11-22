@@ -761,6 +761,13 @@ def test_business_event_turn_keeps_original_instruction_and_actual_task_tools(mo
     assert {"start_creation_execution", "read_task_observations", "observe_task_output", "read_task_observation_request"} <= set(calls[0]["tool_names"].split(","))
 
 
+def test_agent_first_prompts_choose_actions_without_fixed_creation_stages():
+    assert "不是用户必须依次完成的流程" in pi_module.SYSTEM_PROMPT
+    assert "不要把统一参数表单、预检清单或阶段完成状态当成默认入口" in pi_module.SYSTEM_PROMPT
+    assert "持续对话和作品上下文" in pi_module.PLAN_PROMPT
+    assert "查询、讨论、候选和局部修改不自动创建新的任务" in pi_module.PLAN_PROMPT
+
+
 def test_observation_job_is_an_actual_receipt_and_never_a_completed_visual_judgment():
     job = {"job_id": "check:one", "status": "queued", "result_kind": "observation"}
     output = "\n".join(json.dumps(item) for item in [
