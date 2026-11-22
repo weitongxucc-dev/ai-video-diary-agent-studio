@@ -163,6 +163,8 @@ def test_public_media_output_receipt_reads_inner_timeline_and_artifact_facts():
 
 
 def test_public_media_output_download_requires_registered_timeline_and_artifact(tmp_path):
+    import hashlib
+
     from app.creation.media_result_use_case import MediaResultRejected
 
     outer = SimpleNamespace(
@@ -198,7 +200,8 @@ def test_public_media_output_download_requires_registered_timeline_and_artifact(
             return SimpleNamespace(payload={'result': inner})
 
         def list_artifact_records(self, workspace_id, task_id):
-            return [SimpleNamespace(logical_ref=ref, producer_job_id='inner-job', kind='media_output', size_bytes=5)]
+            return [SimpleNamespace(logical_ref=ref, producer_job_id='inner-job', kind='media_output', size_bytes=5,
+                                    sha256=hashlib.sha256(b'video').hexdigest())]
 
     class Timeline:
         def get_timeline_version(self, workspace_id, version_id):
@@ -226,6 +229,10 @@ def test_public_media_output_download_requires_registered_timeline_and_artifact(
     use_case = MediaResultUseCase(Repository(), Outputs())
     actor = CreationExecutionActor('local', 'member-1')
     assert use_case.output_path(Media(), 'task-1', 'outer-job', 1, actor, Scheduler()) == output
+    output.write_bytes(b'other')
+    with pytest.raises(MediaResultRejected, match='登记摘要不一致') as changed:
+        use_case.output_path(Media(), 'task-1', 'outer-job', 1, actor, Scheduler())
+    assert changed.value.status_code == 409
 
     class MissingArtifacts(Events):
         def list_artifact_records(self, workspace_id, task_id):

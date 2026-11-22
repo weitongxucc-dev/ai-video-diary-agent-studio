@@ -9,7 +9,15 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
-from app.creation.contracts import ArtifactRecord, JobRun, TaskEvent, TimelineVersion
+from app.creation.contracts import (
+    ArtifactRecord,
+    DependencyEdge,
+    JobRun,
+    TaskEvent,
+    TimelineVersion,
+    TransformRun,
+)
+from app.models import utc_now
 
 from .capabilities import dependency_payload, detect_dependencies
 from .contracts import (
@@ -184,10 +192,17 @@ class MediaExecutionLayer:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             task = self.repository.task_records.get_creation_task(plan.workspace_id, plan.task_id, connection=conn)
+            job_record = self.repository.job_records.get_job_run(plan.workspace_id, job_id, connection=conn)
             if task.current_timeline_version_id != plan.base_version_id:
                 raise MediaExecutionError("timeline_version_conflict", "当前时间线已变化，媒体输出未发布。", "读取当前时间线后重新生成 EditPlan。")
             base = self.repository.timeline_records.get_timeline_version(plan.workspace_id, plan.base_version_id, connection=conn)
             outputs = result["outputs"]
+            input_refs = [f"timeline:{plan.base_version_id}"]
+            for key in ("source_references", "input_refs"):
+                values = plan.metadata.get(key, [])
+                if isinstance(values, (list, tuple)):
+                    input_refs.extend(item for item in values if isinstance(item, str) and item.strip())
+            input_refs = list(dict.fromkeys(input_refs))
             refs: list[str] = []
             for index, item in enumerate(outputs, start=1):
                 path = Path(item["path"])
@@ -196,8 +211,42 @@ class MediaExecutionLayer:
                 artifact = ArtifactRecord(id=f"artifact_{job_id}_{index}", workspace_id=plan.workspace_id,
                     task_id=plan.task_id, kind="media_output", logical_ref=logical_ref,
                     sha256=hashlib.sha256(path.read_bytes()).hexdigest(), size_bytes=path.stat().st_size,
-                    producer_job_id=job_id, input_refs=tuple(operation for operation in [plan.base_version_id]))
+                    producer_job_id=job_id, input_refs=input_refs)
                 self.repository.execution_records.create_artifact_record(artifact, connection=conn)
+            transform = TransformRun(
+                id=f"transform_{job_id}_media",
+                workspace_id=plan.workspace_id,
+                task_id=plan.task_id,
+                job_id=job_id,
+                transform_type="media_execution",
+                input_digest=job_record.input_digest,
+                input_refs=input_refs,
+                output_refs=refs,
+                engine="ffmpeg+ffprobe",
+                parameters={
+                    "request_id": plan.request_id,
+                    "operations": [operation.as_dict() for operation in plan.operations],
+                    "dependencies": dependency_payload(self.dependencies),
+                },
+                status="succeeded",
+                started_at=job_record.started_at or job_record.created_at,
+                finished_at=utc_now(),
+            )
+            self.repository.lineage_records.create_transform_run(transform, connection=conn)
+            for upstream_ref in input_refs:
+                for downstream_ref in refs:
+                    edge_digest = hashlib.sha256(f"{upstream_ref}\n{downstream_ref}".encode()).hexdigest()[:24]
+                    self.repository.lineage_records.create_dependency_edge(
+                        DependencyEdge(
+                            id=f"edge_{job_id}_{edge_digest}",
+                            workspace_id=plan.workspace_id,
+                            task_id=plan.task_id,
+                            upstream_ref=upstream_ref,
+                            downstream_ref=downstream_ref,
+                            created_by_transform_id=transform.id,
+                        ),
+                        connection=conn,
+                    )
             sequence = self.repository.timeline_records.next_timeline_sequence(plan.workspace_id, plan.task_id, connection=conn)
             snapshot = dict(base.snapshot)
             snapshot["media_execution"] = {"job_id": job_id, "request_id": plan.request_id,
