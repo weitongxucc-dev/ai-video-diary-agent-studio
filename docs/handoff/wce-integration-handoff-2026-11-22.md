@@ -10,11 +10,12 @@
 | --- | --- |
 | 集成工作树 | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/wce-integration-audit` |
 | 集成分支 | `codex/wce-integration-audit` |
-| 当前集成提交 | `4d089c4c` |
+| 集成代码基线 | `06fbdfe4` |
+| 交接文档提交 | `4d089c4c`、`70f01752` |
 | Pull Request | [PR #181](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/pull/181) |
 | PR 状态 | Draft / Open，目标分支 `main` |
 | 最近代码 CI | Run `45017079596`，8 个任务全部成功 |
-| 文档提交 CI | Run `45018813505`，文档提交后触发，当前运行中 |
+| 文档提交 CI | 文档提交会触发新的 CI，接手时按 PR head 查询最新结果 |
 | 主工作区 | `/Volumes/Dujiangyan-VM/AI视频日记/repositories/main`，存在大量用户已有 dirty/untracked，禁止 reset、restore、覆盖或清理 |
 | 任务看板 | Multica 负责任务状态和验收证据，当前以 PR、Git、CI 和线程回执为实现事实 |
 
@@ -280,7 +281,7 @@ corepack pnpm exec tsc --noEmit --pretty false
 
 接手者先确认：
 
-1. PR #181 的 CI 和 review 状态仍对应 `4d089c4c` 或后续新 head。
+1. PR #181 的 CI 和 review 状态以当前 PR head 为准。集成代码基线 `06fbdfe4` 的 Run `45017079596` 已 8/8 成功。
 2. 设备资源准备接口当前状态和 `production_blocker`。
 3. 是否已经拿到任一真实 Provider key。
 4. Multica 是否已经记录本交接文档和当前阻塞。
