@@ -18,3 +18,9 @@ it("does not substitute the latest template when the pinned version cannot be re
   render(await ProductionPage({ searchParams: Promise.resolve({ new: "1", draft_id: draftId, template_id: "fixed-template", template_version: "3" }) }));
   expect(screen.getByRole("alert")).toHaveTextContent("无法读取所选模板版本"); expect(mocks.form).not.toHaveBeenCalled();
 });
+
+it("opens the Agent-first empty workbench before the draft form for a plain new-video entry", async () => {
+  render(await ProductionPage({ searchParams: Promise.resolve({ new: "1", draft_id: draftId }) }));
+  expect(screen.getByRole("region", { name: "新建视频工作区" })).toHaveTextContent("先在左侧告诉曜核你想做什么");
+  expect(screen.queryByText("绑定表单")).not.toBeInTheDocument();
+});
