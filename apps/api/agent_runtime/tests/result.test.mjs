@@ -52,6 +52,20 @@ test("SDK result records bounded runtime events without prompt or argument paylo
   assert.ok(!JSON.stringify(events).includes("prompt"));
 });
 
+test("Pi model boundaries remain public trace facts around action selection", () => {
+  const result = createSessionResult("model-boundaries");
+  result.observe({type:"agent_start", timestamp:1000});
+  result.observe({type:"model_start", timestamp:1010});
+  result.observe({type:"tool_execution_start", timestamp:1020, toolCallId:"read-1", toolName:"read_current_task"});
+  result.observe({type:"model_end", timestamp:1030});
+  result.observe({type:"agent_end", timestamp:1040, willRetry:false});
+  assert.deepEqual(result.value().trace_events.map(event => event.type), [
+    "agent_start", "model_start", "tool_start", "model_end", "agent_end",
+  ]);
+  assert.equal(result.value().trace_events[1].status, "running");
+  assert.equal(result.value().trace_events[3].status, "completed");
+});
+
 test("pinned SDK round events have no timestamps, and reused sessions keep invocation events distinct", () => {
   const first = createSessionResult("same-session");
   const following = createSessionResult("same-session");

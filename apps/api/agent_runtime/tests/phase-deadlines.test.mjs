@@ -23,6 +23,14 @@ const usage = {input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{inp
 const message = content => ({role:"assistant", content, api:"openai-completions", provider:"ai-video-diary",
   model:"synthetic", stopReason:content[0].type === "toolCall" ? "toolUse" : "stop", timestamp:Date.now(), usage});
 
+test('action-selection prompt binds evidence, optional actions, recovery and public events', async () => {
+  const prompt = await readFile(join(dirname(dirname(fileURLToPath(import.meta.url))), "prompts/action-selection.md"), "utf8");
+  assert.match(prompt, /能力清单是可选动作集合，不是调用顺序/);
+  assert.match(prompt, /结果未知时只查询原请求/);
+  assert.match(prompt, /用户追加输入沿当前宿主输入身份/);
+  assert.match(prompt, /不展示思维链/);
+});
+
 async function fixture() {
   const cwd = await mkdtemp(join(tmpdir(), "diary-phase-"));
   await writeFile(join(cwd,"models.json"), JSON.stringify({providers:{"ai-video-diary":{

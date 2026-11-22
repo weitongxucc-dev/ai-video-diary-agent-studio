@@ -76,6 +76,10 @@ export function createSessionResult(sessionId, provider = null, model = null) {
       if (eventType === "agent_end") traceEvent(event, "agent_end", {
         ...(event.willRetry ? {status:"retrying"} : {}),
       });
+      if (eventType === "model_start") traceEvent(event, "model_start", {status:"running"});
+      if (eventType === "model_end") traceEvent(event, "model_end", {
+        status:event.errorMessage ? "failed" : "completed",
+      });
       // Pi can signal an automatic retry only through agent_end.willRetry.
       // Keep that decision in the bounded trace without exposing provider
       // error text or the private retry prompt to the conversation stream.
