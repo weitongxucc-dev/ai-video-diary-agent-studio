@@ -67,3 +67,35 @@ it('retains local diagnostic access without starting the formal login flow', asy
   const response = await middleware(new NextRequest('http://localhost:3000/api/runtime/health'));
   expect(response.status).toBe(200); expect(fetchMock).toHaveBeenCalledOnce(); expect(mocks.refreshSession).not.toHaveBeenCalled();
 });
+
+it('forwards a JSON body through the middleware proxy without losing the API response', async () => {
+  vi.stubEnv('NEXT_PUBLIC_AUTH_MODE', 'local');
+  const body = { scope_kind: 'home', scope_id: 'home' };
+  fetchMock.mockResolvedValueOnce(Response.json({ accepted: true }, { status: 201 }));
+
+  const response = await middleware(new NextRequest('http://localhost:3000/api/assistant/conversations/current', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }));
+
+  expect(response.status).toBe(201);
+  expect(await response.json()).toEqual({ accepted: true });
+  const [, init] = fetchMock.mock.calls[0];
+  expect(init?.method).toBe('POST');
+  expect(new TextDecoder().decode(init?.body as ArrayBuffer)).toBe(JSON.stringify(body));
+});
+
+it('keeps a non-2xx API response visible instead of converting it to a proxy failure', async () => {
+  vi.stubEnv('NEXT_PUBLIC_AUTH_MODE', 'local');
+  fetchMock.mockResolvedValueOnce(Response.json({ error: 'assistant_draft_conflict' }, { status: 409 }));
+
+  const response = await middleware(new NextRequest('http://localhost:3000/api/assistant/conversations/current', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ scope_kind: 'home', scope_id: 'home' }),
+  }));
+
+  expect(response.status).toBe(409);
+  expect(await response.json()).toEqual({ error: 'assistant_draft_conflict' });
+});
