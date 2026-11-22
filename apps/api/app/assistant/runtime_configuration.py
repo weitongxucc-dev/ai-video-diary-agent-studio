@@ -19,8 +19,16 @@ def _agent_root(settings: Settings, workspace_id: str) -> Path:
 
 
 def _configured_model(settings: Settings) -> tuple[str, str, str]:
+    provider = settings.effective_llm_provider.strip()
+    model = settings.effective_llm_model.strip()
+    if not provider:
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="还没有选择文字模型服务，所以这一轮对话没有开始。",
+                    repair_action="在设置页选择一个已保存的文字模型服务后重试。")
+    if (settings.llm_model is not None and not settings.llm_model.strip()) or not model:
+        raise _fail(FAILURE_RUNTIME_MISSING, explanation="当前文字模型没有填写模型名称，所以这一轮对话没有开始。",
+                    repair_action="在设置页填写当前服务支持的模型名称并保存后重试。")
     endpoint = urlsplit(settings.effective_llm_base_url)
-    spec = provider_spec(settings.effective_llm_provider)
+    spec = provider_spec(provider)
     local_endpoint = endpoint.hostname in {"localhost", "127.0.0.1", "::1"}
     if (not endpoint.hostname or endpoint.username or endpoint.password
             or (endpoint.scheme != "https" and spec.id not in {"ollama", "lmstudio"})
@@ -31,4 +39,4 @@ def _configured_model(settings: Settings) -> tuple[str, str, str]:
     if spec.auth == "api_key" and not key:
         raise _fail(FAILURE_RUNTIME_MISSING, explanation="外部文字模型的 API Key 还没填，所以这一轮对话没有开始。",
                     repair_action="在设置页填写当前所选服务的 API Key 并保存后重试。")
-    return settings.effective_llm_base_url, settings.effective_llm_model, key
+    return settings.effective_llm_base_url, model, key
