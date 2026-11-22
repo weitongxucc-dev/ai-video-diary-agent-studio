@@ -42,7 +42,11 @@ async function proxyApiRequest(
     }
 
     if (request.method !== "GET" && request.method !== "HEAD" && request.body) {
-      fetchOptions.body = await request.clone().arrayBuffer();
+      // Middleware owns the incoming request body. Cloning the NextRequest
+      // before reading it enters the packaged Edge runtime's body tee path,
+      // which can reject the request and turn an otherwise valid API call
+      // into a misleading 502. Read the body once and forward the bytes.
+      fetchOptions.body = await request.arrayBuffer();
     }
 
     const response = await fetch(apiUrl, fetchOptions);
