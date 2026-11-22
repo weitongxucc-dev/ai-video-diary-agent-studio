@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -99,7 +100,12 @@ def test_real_media_chain_persists_job_artifacts_timeline_and_request_log(tmp_pa
     log_path = Path(result["log_path"])
     assert log_path.exists()
     assert all(json.loads(line)["request_id"] == "req-real-chain" for line in log_path.read_text().splitlines())
-    assert repo.execution_records.list_artifact_records("local", "task")
+    artifacts = repo.execution_records.list_artifact_records("local", "task")
+    assert artifacts
+    published = tmp_path / "outputs" / result["output_refs"][0]
+    assert published.is_file()
+    assert published.stat().st_size == artifacts[0].size_bytes
+    assert hashlib.sha256(published.read_bytes()).hexdigest() == artifacts[0].sha256
     transforms = repo.lineage_records.list_transform_runs("local", "task")
     assert len(transforms) == 1
     assert transforms[0].job_id == result["job_id"]
