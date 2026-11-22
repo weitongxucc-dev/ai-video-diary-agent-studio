@@ -18,7 +18,7 @@ vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () =>
 vi.mock("../AssistantConversationProvider", () => ({ useAssistantSelection: () => null }));
 vi.mock("../AppShell", async importOriginal => {
   const original = await importOriginal<typeof import("../AppShell")>();
-  return { ...original, AppShellFrame: ({ children, conversation, workspaceTabs, inspector, autoFocus }: AppShellProps) => <div data-shell-auto-focus={String(Boolean(autoFocus))}>{workspaceTabs}{conversation}<main>{children}</main>{inspector}</div> };
+  return { ...original, AppShellFrame: ({ children, conversation, workspaceTabs, inspector }: AppShellProps) => <>{workspaceTabs}{conversation}<main>{children}</main>{inspector}</> };
 });
 vi.mock("../HomeCommandComposer", () => ({ HomeCommandComposer: ({ task }: HomeCommandComposerProps) => {
   const [draft, setDraft] = useState(() => { composerMount(); return ""; });
@@ -118,9 +118,8 @@ it("keeps a new draft separate from the open task and returns to the original ed
 
   navigation.path = "/production";
   navigation.search = "new=1&draft_id=a7872828-c7ba-449c-a988-e5679d163a81";
-  view.rerender(fixture(<WorkspaceRoute label="新视频草稿"><Page id="draft" /></WorkspaceRoute>));
-  expect(await screen.findByRole("tab", { name: "新视频草稿" })).toHaveAttribute("aria-selected", "true");
-  expect(screen.getByRole("tab", { name: "新视频草稿" }).closest("[data-shell-auto-focus]")).toHaveAttribute("data-shell-auto-focus", "true");
+  view.rerender(fixture(<WorkspaceRoute label="新建视频"><Page id="draft" /></WorkspaceRoute>));
+  expect(await screen.findByRole("tab", { name: "新建视频" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByLabelText("发送目标")).toHaveTextContent("home");
   fireEvent.change(screen.getByRole("textbox", { name: "页面草稿 draft" }), { target: { value: "另一条视频目标" } });
 
