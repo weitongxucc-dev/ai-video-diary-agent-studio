@@ -1279,6 +1279,14 @@ class ProductionRepository:
         """Persist one immutable resource version and its layered licenses."""
         return self.resource_governance.save_manifest(manifest)
 
+    def sync_resource_catalog(self, workspace_id: str, catalog=None):
+        """Explicitly materialize the read-only catalog into shared manifests."""
+        if catalog is None:
+            from app.editing_resource_catalog import editing_resource_catalog
+            catalog = editing_resource_catalog()
+        from app.materials.resource_catalog_bridge import persist_catalog
+        return persist_catalog(catalog, workspace_id=workspace_id, governance=self.resource_governance)
+
     def record_resource_usage(self, record):
         """Append a candidate/adoption/task/output provenance edge."""
         return self.resource_governance.record_usage(record)

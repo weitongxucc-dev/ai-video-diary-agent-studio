@@ -46,3 +46,14 @@ def test_catalog_manifest_workspace_isolation_and_version_lock(tmp_path):
     changed = resource.model_copy(update={"runtime_requirements": {**resource.runtime_requirements, "changed": True}})
     with pytest.raises(ResourceManifestConflict):
         persist_catalog_resource(changed, workspace_id="workspace-a", governance=repo.resource_governance)
+
+
+def test_repository_sync_materializes_the_catalog_without_cross_workspace_leakage(tmp_path):
+    repo = ProductionRepository(tmp_path / "production.sqlite", tmp_path / "library")
+    catalog = editing_resource_catalog()
+    saved = repo.sync_resource_catalog("workspace-a", catalog)
+    assert len(saved) == len(catalog.resources)
+    assert len(repo.resource_governance.list_manifests("workspace-a")) == len(catalog.resources)
+    assert repo.resource_governance.list_manifests("workspace-b") == []
+    again = repo.sync_resource_catalog("workspace-a", catalog)
+    assert [item.digest for item in again] == [item.digest for item in saved]

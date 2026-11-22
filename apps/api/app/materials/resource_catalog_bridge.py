@@ -91,3 +91,11 @@ def resource_manifest_from_catalog(resource: EditingResource, *, workspace_id: s
 def persist_catalog_resource(resource, *, workspace_id: str, governance):
     """Persist a catalog projection through the existing governance owner."""
     return governance.save_manifest(resource_manifest_from_catalog(resource, workspace_id=workspace_id))
+
+
+def persist_catalog(catalog, *, workspace_id: str, governance):
+    """Persist every catalog version for one workspace through one owner."""
+    if not workspace_id.strip():
+        raise ValueError("资源目录同步必须绑定工作区")
+    return [persist_catalog_resource(item, workspace_id=workspace_id, governance=governance)
+            for item in catalog.resources]
