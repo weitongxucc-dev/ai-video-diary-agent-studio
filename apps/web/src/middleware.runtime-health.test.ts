@@ -75,7 +75,7 @@ it('forwards a JSON body through the middleware proxy without losing the API res
 
   const response = await middleware(new NextRequest('http://localhost:3000/api/assistant/conversations/current', {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'content-length': '999' },
     body: JSON.stringify(body),
   }));
 
@@ -83,6 +83,7 @@ it('forwards a JSON body through the middleware proxy without losing the API res
   expect(await response.json()).toEqual({ accepted: true });
   const [, init] = fetchMock.mock.calls[0];
   expect(init?.method).toBe('POST');
+  expect(new Headers(init?.headers).has('content-length')).toBe(false);
   expect(new TextDecoder().decode(init?.body as ArrayBuffer)).toBe(JSON.stringify(body));
 });
 
