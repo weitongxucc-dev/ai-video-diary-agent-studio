@@ -34,3 +34,19 @@ Multica 是项目控制面，负责任务、依赖、评审、验收证据和阻
 ## 当前使用规则
 
 Multica 中的任务可以按 M0-M10 组织，但实施顺序以曜核活动合同和 GitHub Issue 为准。发现产品规则变化时先更新曜核权威文档，再更新 Issue 和 Multica 摘要，不能在 Multica 中另立一套产品规则。
+
+## 当前 Issue 映射
+
+| Multica 能力组 | GitHub Issue | 交付口径 |
+| --- | --- | --- |
+| M0 | [#183](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/183) | 权威文档、旧入口和默认表达收敛 |
+| M1 | [#184](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/184) | 新建进入持续对话和空作品台 |
+| M2–M3 | [#185](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/185) | 公开事件、引用、Skill 和动作选择闭环 |
+| M4 | [#190](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/190) | 真实媒体执行与 ffmpeg 能力按项接入 |
+| M5 | [#187](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/187) | 粗剪观察、局部精修、撤销和恢复 |
+| M6 | [#186](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/186)、[#189](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/189) | 证据选材与资源工作区共享来源/版本/授权 |
+| M7 | [#188](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/188) | 分支候选比较和采用 |
+| M8 | [#191](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/191) | Provider、模型、用量和诊断真实回读 |
+| M9–M10 | [#192](https://github.com/weitongxucc-dev/ai-video-diary-agent-studio/issues/192) | 发布反馈、跨端恢复和生产化独立验收 |
+
+该表只提供控制面到代码任务的索引。Issue 完成前，Multica 不得把计划、目录、回放、预览或局部测试提升为真实作品、设备、Provider 或平台通过。
