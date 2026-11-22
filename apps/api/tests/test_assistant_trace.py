@@ -1,4 +1,5 @@
 from app.assistant.trace import project_turn_trace, project_usage_ledger
+from app.conversation_repository import ConversationRepository
 
 
 def test_project_usage_ledger_keeps_measured_estimated_and_unknown_separate():
@@ -11,6 +12,62 @@ def test_project_usage_ledger_keeps_measured_estimated_and_unknown_separate():
         'usage_status_counts': {'known': 1, 'estimated': 1, 'unknown': 1},
         'measured_usage': {'input': 2, 'totalTokens': 3},
         'estimated_usage': {'input': 9, 'totalTokens': 9}}
+
+
+def test_persisted_success_failure_cancel_and_retry_receipts_are_read_back(tmp_path):
+    repo = ConversationRepository(tmp_path / 'usage.sqlite3')
+    chat = repo.create('w', 'm', 'home', 'home')
+    for index, status in enumerate(('completed', 'failed', 'stopped', 'completed'), 1):
+        draft = repo.save_draft(chat['id'], 'w', 'm', f'instruction-{index}', repo.get(chat['id'], 'w', 'm')['draft_version'])
+        turn, created = repo.create_turn_idempotent(chat['id'], 'w', 'm', f'instruction-{index}',
+            f'request-{index}', draft['draft_version'])
+        assert created
+        repo.finish_turn(turn['id'], status, result={
+            'provider': 'minimax', 'model': 'MiniMax-M3',
+            'usage_status': 'known' if index in {1, 2, 4} else 'unknown',
+            'provider_usage': {'input': index, 'output': 1, 'totalTokens': index + 1} if index in {1, 2, 4} else None,
+            'usage_details': {'provider': 'minimax', 'model': 'MiniMax-M3',
+                'input_tokens': index if index in {1, 2, 4} else None,
+                'output_tokens': 1 if index in {1, 2, 4} else None,
+                'latency_ms': 100 + index if index in {1, 2, 4} else None,
+                'estimated_cost': None},
+            'trace_events': ([{'type': 'retry', 'at_ms': 10}] if index == 4 else []),
+        })
+    restarted = ConversationRepository(tmp_path / 'usage.sqlite3')
+    saved = restarted.list_turns(chat['id'])
+    assert [project_turn_trace(turn)['status'] for turn in saved] == ['completed', 'failed', 'stopped', 'completed']
+    assert project_turn_trace(saved[1])['input_tokens'] == 2
+    assert project_turn_trace(saved[2])['status'] == 'stopped'
+    assert project_turn_trace(saved[3])['retry_count'] == 1
+    ledger = project_usage_ledger(saved)
+    assert ledger['usage_status_counts'] == {'known': 3, 'estimated': 0, 'unknown': 1}
+    assert ledger['measured_usage'] == {'input': 7, 'output': 3, 'totalTokens': 10}
+
+    # Read through the real adapter after reopening; it must enforce the
+    # existing owned-conversation seam and never rewrite receipts.
+    from app.assistant.conversation_routes import ConversationHTTPAdapter
+    from fastapi import FastAPI, Request, HTTPException
+    from fastapi.testclient import TestClient
+    def owned(request, conversation_id):
+        if request.headers.get('x-fixture-member') != 'm':
+            raise HTTPException(403)
+        return 'w', 'm', restarted.get(conversation_id, 'w', 'm')
+    adapter = ConversationHTTPAdapter(conversations_for=lambda: restarted,
+        owned_conversation=owned, **{key: None for key in ('workspace_for', 'member_for',
+        'validate_scope', 'clean_text', 'validate_reference', 'recover_request', 'require_actor',
+        'segment_for', 'restore_for', 'input_context', 'preflight', 'render_plan')})
+    app = FastAPI()
+    @app.get('/api/assistant/turns/{turn_id}/trace')
+    def trace(turn_id: str, request: Request):
+        return adapter.trace(turn_id, request)
+    client = TestClient(app)
+    for turn in saved:
+        response = client.get(f"/api/assistant/turns/{turn['id']}/trace", headers={'x-fixture-member': 'm'})
+        assert response.status_code == 200
+        assert response.json()['usage_details'] == project_turn_trace(turn)['usage_details']
+        assert response.json()['usage_ledger'] == ledger
+    assert client.get(f"/api/assistant/turns/{saved[0]['id']}/trace").status_code == 403
+    assert restarted.list_turns(chat['id']) == saved
 
 
 def test_project_turn_trace_redacts_text_and_aggregates_known_usage():
@@ -39,6 +96,57 @@ def test_project_turn_trace_marks_missing_provider_usage_unknown():
     })
     assert trace["usage_status"] == "unknown"
     assert trace["provider_usage"] is None
+
+
+def test_project_turn_trace_exposes_structured_usage_without_inventing_cost_or_latency():
+    trace = project_turn_trace({
+        "id": "turn-details", "conversation_id": "conversation-1", "status": "failed", "sequence": 1,
+        "created_at": "now", "updated_at": "now", "events": [], "result": {
+            "provider": "minimax", "model": "MiniMax-M3", "usage_status": "known",
+            "provider_usage": {"input": 7, "output": 3, "totalTokens": 10},
+            "usage_details": {"provider": "minimax", "model": "MiniMax-M3", "input_tokens": 7,
+                "output_tokens": 3, "latency_ms": 450, "estimated_cost": {"amount": 0.003, "currency": "USD", "source": "sdk_catalog", "status": "estimated"}},
+        },
+    })
+    assert trace["provider"] == "minimax"
+    assert trace["model"] == "MiniMax-M3"
+    assert trace["input_tokens"] == 7 and trace["output_tokens"] == 3
+    assert trace["latency_ms"] == 450
+    assert trace["estimated_cost"] == {"amount": 0.003, "currency": "USD", "source": "sdk_catalog", "status": "estimated"}
+
+    unknown = project_turn_trace({
+        "id": "turn-unknown-details", "conversation_id": "conversation-1", "status": "stopped", "sequence": 2,
+        "created_at": "now", "updated_at": "now", "events": [], "result": {
+            "provider": "minimax", "model": "MiniMax-M3", "usage_status": "unknown",
+            "usage_details": {"provider": "minimax", "model": "MiniMax-M3", "input_tokens": None,
+                "output_tokens": None, "latency_ms": None, "estimated_cost": None},
+        },
+    })
+    assert unknown["usage_status"] == "unknown"
+    assert unknown["input_tokens"] is None and unknown["estimated_cost"] is None
+ 
+def test_stopped_turn_keeps_unknown_receipt_and_redacts_provider_secret():
+    trace = project_turn_trace({
+        "id": "turn-stopped", "conversation_id": "conversation-1", "status": "stopped", "sequence": 4,
+        "created_at": "2026-11-17T04:25:26Z", "updated_at": "2026-11-17T04:25:27Z",
+        "events": [], "result": {
+            "provider": "openai", "model": "gpt-5.4", "usage_status": "unknown",
+            "provider_usage": None, "usage_details": {
+                "provider": "openai", "model": "gpt-5.4", "input_tokens": None,
+                "output_tokens": None, "latency_ms": None, "estimated_cost": None,
+            },
+            "trace_events": [
+                {"type": "agent_end", "event_id": "event-1", "status": "cancelled",
+                 "references": {"request_id": "request-1"}},
+            ],
+            "provider_api_key": "sk-secret-must-not-appear",
+        },
+    })
+    assert trace["status"] == "stopped"
+    assert trace["usage_status"] == "unknown"
+    assert trace["provider_usage"] is None
+    assert trace.get("input_tokens") is None
+    assert "sk-secret-must-not-appear" not in str(trace)
 
 
 def test_project_turn_trace_paginates_older_events_without_changing_usage_or_associations():
@@ -155,3 +263,38 @@ def test_chained_usage_requires_both_invocations_to_report_it():
     assert [event["step"] for event in result["trace_events"]] == [1, 2]
     result = append_runtime_receipt(first, {**following, "usage_status": "known", "provider_usage": {"totalTokens": 3}})
     assert result["provider_usage"] == {"totalTokens": 11}
+
+
+def test_usage_merge_and_invalid_cost_do_not_misattribute_or_leak():
+    from app.assistant.trace import append_runtime_receipt, project_usage_details
+    first = {'session_id': 's', 'provider': 'one', 'model': 'a', 'usage_status': 'known',
+        'provider_usage': {'input': 3, 'output': 1}, 'usage_details': {'latency_ms': 100,
+        'estimated_cost': {'amount': 0.01, 'currency': 'USD', 'source': 'sdk_catalog', 'status': 'estimated'}}}
+    following = {**first, 'provider': 'two', 'model': 'b', 'usage_details': {'latency_ms': 200}}
+    merged = append_runtime_receipt(first, following)
+    assert merged['provider'] is None and merged['model'] is None
+    assert merged['usage_details']['input_tokens'] == 6
+    assert merged['usage_details']['latency_ms'] == 300
+    assert merged['usage_details']['estimated_cost'] is None
+    assert project_usage_details({'usage_details': {'latency_ms': True, 'estimated_cost': {
+        'amount': float('nan'), 'private': 'secret'}}}) == {
+        'provider': None, 'model': None, 'input_tokens': None, 'output_tokens': None,
+        'latency_ms': None, 'estimated_cost': None}
+
+
+def test_sdk_usage_receipt_survives_business_projection_success_and_failure():
+    import json
+    import pytest
+    from app.assistant.result_projection import read_sdk_result
+    from app.assistant.failures import AssistantUnavailable
+    result = {'type': 'creation_session_result', 'protocol': 1, 'owner': 'pi-coding-agent-sdk',
+        'status': 'settled', 'answer': 'done', 'tool_results': [], 'provider': 'minimax', 'model': 'M3',
+        'usage_status': 'known', 'provider_usage': {'input': 2, 'output': 1},
+        'usage_details': {'latency_ms': 120, 'estimated_cost': None}}
+    answer, receipt = read_sdk_result(json.dumps(result))
+    assert answer == 'done' and receipt['usage_details']['latency_ms'] == 120
+    assert receipt['provider'] == 'minimax'
+    with pytest.raises(AssistantUnavailable) as caught:
+        read_sdk_result(json.dumps({**result, 'status': 'failed', 'answer': '', 'failure': 'synthetic error'}))
+    assert caught.value.runtime_receipt['usage_details'] == receipt['usage_details']
+    assert caught.value.runtime_receipt['provider_usage'] == {'input': 2, 'output': 1}

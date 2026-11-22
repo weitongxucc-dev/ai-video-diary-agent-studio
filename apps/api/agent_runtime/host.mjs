@@ -119,7 +119,7 @@ let rebindTools;
 const inputExtension = creationInputExtension({ ask, getSession: () => session, rebind: environment => rebindTools({ ...process.env, ...environment }) });
 ({ session, rebindTools } = await openCreationSession({ ...input, businessCall,
   nativeCall:input.nativeEnabled?callBusiness:undefined,extensionFactories: input.inputEnabled ? [inputExtension] : [] }));
-const result = createSessionResult(input.sessionId);
+const result = createSessionResult(input.sessionId, input.modelProvider, input.modelId);
 let authorizationRefusal = false;
 function finalResult() {
   const collected = result.value();

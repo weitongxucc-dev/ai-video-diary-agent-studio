@@ -109,6 +109,7 @@ from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_ME
 from app.creation.clip_preview import ClipPreviewCommand, ClipPreviewUseCase, ClipPreviewUnavailable, needs_full_visual_preview
 from app.media.clip_preview import ClipPreviewExecutor
 from app.media.picture_preview import PicturePreviewRenderer, PicturePreviewRejected
+from app.media_execution import FFMPEG_OPERATION, EditPlan, TaskMediaExecutionDelegate, build_media_execution_entrypoint
 from app.creation.visual_preview_use_case import VisualPreviewUseCase
 from app.creation.editing.clips import ClipPreviewConflict
 from app.creation.editing.audio_edit_use_case import AudioEditUseCase, AudioEditRejected
@@ -1840,6 +1841,24 @@ def _exact_preview_facts(workspace_id,task_id,arguments,actor):
 
 
 def _task_media_facts(workspace_id, task_id, operation, arguments, actor, *, task_authorizations=None):
+    if operation == FFMPEG_OPERATION:
+        plan = EditPlan.from_value(arguments.get("edit_plan", {}))
+        if (plan.workspace_id, plan.task_id) != (workspace_id, task_id) or plan.member_id not in {None, actor.member_id}:
+            raise PermissionError('媒体执行计划不属于当前工作区、任务或成员')
+        task = production_repo.task_records.get_creation_task(workspace_id, task_id)
+        if task.current_timeline_version_id != plan.base_version_id:
+            raise ValueError('媒体执行计划的基础时间线已变化，请重新生成计划')
+        budget = _device_operation_budget("cpu_render")
+        if budget is None:
+            raise ValueError('媒体执行 CPU 预算尚未标定，未启动媒体')
+        facts = {"base_version_id": plan.base_version_id,
+                 "request_id": plan.request_id,
+                 "plan_digest": media_digest(plan.as_dict())}
+        resources = {"kind": "media_execution", "execution_mode": "cpu_ffmpeg",
+                     "operation_count": len(plan.operations), "threads": budget.max_threads,
+                     "timeout_seconds": budget.max_timeout_seconds,
+                     "max_output_bytes": budget.max_output_bytes}
+        return facts, resources
     if operation == 'compound_selection_preview':
         return _compound_selection_facts(workspace_id, task_id, arguments, actor)
     if operation == 'visual_edit_preview' and '_clip_preview' not in arguments:
@@ -1937,6 +1956,15 @@ def _read_media_result(task_id, job_id, request):
     media, requests = _media_result_read_components()
     try:
         return _media_results().read(media, task_id, job_id, actor, requests)
+    except MediaResultRejected as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+
+
+def _media_result_output(task_id, job_id, output_index, request):
+    actor = _require_permit_actor(request, current_workspace_id(request))
+    media, requests = _media_result_read_components()
+    try:
+        return _media_results().output_path(media, task_id, job_id, output_index, actor, requests)
     except MediaResultRejected as exc:
         raise HTTPException(exc.status_code, exc.detail) from exc
 
@@ -2049,15 +2077,32 @@ def _task_media_http_router(route_names):
         list_for=lambda: _list_goal_media_jobs,
         read_for=lambda: _read_media_result,
         read_components_for=lambda: _media_result_read_components,
+        output_for=lambda: _media_result_output,
+        file_response_for=lambda: FileResponse,
         runtime_for=lambda: _creation_runtime,
         repository_for=lambda: production_repo,
         receipt_for=lambda: _media_result_receipt,
         observations_for=lambda: _output_observation_use_case,
+        submit_for=lambda: _submit_task_media_job,
         route_names=route_names,
     )
 
 
+def _submit_task_media_job(task_id, actor, payload):
+    runtime = _creation_runtime()
+    registration = runtime.registrations.get('creation_job')
+    if registration is None:
+        raise _device_runtime_unavailable(runtime.last_error)
+    from app.task_media_submission_use_case import TaskMediaSubmissionUseCase
+    media = registration.owner.task_media
+    use_case = TaskMediaSubmissionUseCase(
+        production_repo, task_media=media, task_authorizations=media.task_authorizations)
+    return use_case.submit(runtime, actor, task_id, payload), runtime
+
+
 app.include_router(_task_media_http_router(("list_task_media_jobs",)))
+app.include_router(_task_media_http_router(("submit_task_media_job",)))
+app.include_router(_task_media_http_router(("get_task_media_output",)))
 
 
 def _list_goal_media_jobs(task, actor, *, cursor=None, limit=20):
@@ -5905,6 +5950,12 @@ def _build_device_components(*, repository: ProductionRepository):
     from app.creation.task_authorization import TaskAuthorizationUseCase
     task_authorizations = TaskAuthorizationUseCase(repository, lambda identity: _verify_creation_identity(
         CreationExecutionActor.from_event(identity["workspace_id"], identity)))
+    media_execution_entrypoint = build_media_execution_entrypoint(
+        repository=repository,
+        output_root=settings.video_output_path,
+        connection_factory=repository.connection_factory,
+    )
+    media_execution_delegate = TaskMediaExecutionDelegate(media_execution_entrypoint)
     quality = _quality_inspection_use_case(repository, task_authorizations=task_authorizations, budget=budget.quality)
     cover = _cover_use_case(repository, budget=budget.cover)
     task_media = TaskMediaJobs(repository, facts=_task_media_facts,
@@ -5921,6 +5972,7 @@ def _build_device_components(*, repository: ProductionRepository):
         compound_selection=_compound_edit_use_case(repository),
         exact_preview=_exact_preview_use_case(repository),
         command_preview=_command_preview_use_case(repository),
+        media_execution_delegate=media_execution_delegate,
         clip_preview=ClipPreviewExecutor(_clip_preview_use_case(repository),
             TaskAudio(repository, artifact_store, settings.effective_temporary_root_path)))
     cover.task_authorizations = task_authorizations

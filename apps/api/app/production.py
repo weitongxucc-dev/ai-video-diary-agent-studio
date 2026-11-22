@@ -854,6 +854,17 @@ class ProductionRepository:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @property
+    def connection_factory(self) -> Callable[[], sqlite3.Connection]:
+        """Return the repository-owned connection factory for composed services.
+
+        Composed execution layers must use the same workspace database
+        boundary as the repository. Exposing the existing factory keeps the
+        connection setup in one place and avoids consumers reaching into the
+        private ``_connect`` method.
+        """
+        return self._connect
+
 
     def save_authorization(self, authorization: Authorization) -> Authorization:
         return self._media_authorizations.save_authorization(authorization)
@@ -1267,6 +1278,14 @@ class ProductionRepository:
     def save_resource_manifest(self, manifest):
         """Persist one immutable resource version and its layered licenses."""
         return self.resource_governance.save_manifest(manifest)
+
+    def sync_resource_catalog(self, workspace_id: str, catalog=None):
+        """Explicitly materialize the read-only catalog into shared manifests."""
+        if catalog is None:
+            from app.editing_resource_catalog import editing_resource_catalog
+            catalog = editing_resource_catalog()
+        from app.materials.resource_catalog_bridge import persist_catalog
+        return persist_catalog(catalog, workspace_id=workspace_id, governance=self.resource_governance)
 
     def record_resource_usage(self, record):
         """Append a candidate/adoption/task/output provenance edge."""

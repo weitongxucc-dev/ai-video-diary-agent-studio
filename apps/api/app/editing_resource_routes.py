@@ -72,6 +72,15 @@ def build_editing_resource_router(catalog_for: Callable):
             "install_checks": requirements.get("install_checks", {"mode": "not_declared", "checks": []}),
             "adoption": requirements.get("adoption", {"status": "not_declared"}),
             "rollback": requirements.get("rollback", {"mode": "not_declared"}),
+            "status_reason": requirements.get("status_reason"),
+            "repair_action": requirements.get("repair_action"),
+            "capabilities": requirements.get("external_capabilities", []),
+            "adapter_contract": requirements.get("adapter_contract", {}),
+            "dependencies": requirements.get(
+                "dependencies",
+                requirements.get("capabilities", {}).get("dependencies", [])
+                if isinstance(requirements.get("capabilities"), dict) else [],
+            ),
             "write_boundary": "资源导入/读取本身只读；编辑采用仍须经现有 EditProposal/TimelineVersion。",
         }
 

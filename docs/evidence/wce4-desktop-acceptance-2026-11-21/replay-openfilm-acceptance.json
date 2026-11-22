@@ -1,0 +1,103 @@
+{
+  "mode": "replay_only",
+  "fixture": "openfilm-first-run",
+  "event_order": [
+    "agent_start",
+    "assistant_text",
+    "tool_start",
+    "tool_end",
+    "assistant_text",
+    "tool_start",
+    "tool_end",
+    "tool_start",
+    "tool_end",
+    "tool_start",
+    "tool_end",
+    "tool_start",
+    "tool_end",
+    "tool_start",
+    "tool_end",
+    "tool_start",
+    "tool_end",
+    "tool_start",
+    "tool_end",
+    "tool_start",
+    "tool_start",
+    "tool_start",
+    "tool_start",
+    "tool_end",
+    "tool_end",
+    "tool_end",
+    "tool_end",
+    "tool_start",
+    "tool_start",
+    "tool_end",
+    "tool_end",
+    "assistant_text",
+    "agent_end"
+  ],
+  "checkpoint_facts": {
+    "C0": {
+      "observed_events": 1,
+      "active_tools_ms": {}
+    },
+    "C1": {
+      "observed_events": 1,
+      "active_tools_ms": {}
+    },
+    "C2": {
+      "observed_events": 5,
+      "active_tools_ms": {}
+    },
+    "C3": {
+      "observed_events": 12,
+      "active_tools_ms": {
+        "5": 1000.0
+      }
+    },
+    "C4": {
+      "observed_events": 13,
+      "active_tools_ms": {}
+    },
+    "C5": {
+      "observed_events": 18,
+      "active_tools_ms": {
+        "8": 0.0
+      }
+    },
+    "C6": {
+      "observed_events": 19,
+      "active_tools_ms": {}
+    },
+    "C6b": {
+      "observed_events": 27,
+      "active_tools_ms": {}
+    },
+    "C7": {
+      "observed_events": 29,
+      "active_tools_ms": {
+        "13": 3000.0,
+        "14": 3000.0
+      }
+    },
+    "C8": {
+      "observed_events": 33,
+      "active_tools_ms": {}
+    }
+  },
+  "persistence": {
+    "round_trip": true,
+    "event_count": 33,
+    "turn_status": "completed"
+  },
+  "stop_and_input": {
+    "stopped_turn": "stopped",
+    "stopped_tool_preserved": true,
+    "assistant_input": {
+      "accepted": "accepted",
+      "final": "completed",
+      "input_id": "input-1"
+    }
+  },
+  "provider_contacted": false
+}

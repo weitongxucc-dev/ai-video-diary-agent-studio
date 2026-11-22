@@ -30,6 +30,17 @@
 - 继续／恢复复杂或迁移任务：存在则先读[活动合同](.project-control/active-contract.md)，普通S0/S1任务不为此加载；额度中断／换工具读[接手入口](.project-control/takeover/README.md)。旧checkout、线程、合同和交接不延续新施工授权。
 - 文档治理：[文档入口](docs/README.md)和目标文档。仅登记的活动文档拥有当前权威，下层只链接、不复制上层规则；除明确历史追溯外，不读或引用 docs/archive/。
 
+### 对话栏专项基线
+
+任何涉及 AI 对话栏、聊天面板、消息渲染、工具调用展示、输入框或 Pi 事件映射的任务，先阅读：
+
+- `docs/reference/openfilm-chat/SPEC.md`
+- `docs/reference/openfilm-chat/frames/`
+- `docs/reference/openfilm-chat/replay-fixture.json`
+- `.project-control/1.5.2-execution-board.md` 的“OpenFilm 式 Agent 对话迁移波次”
+
+按事件驱动的 Agent 创作时间线验收，不把执行记录、token 或技术诊断当作主阅读流。允许重写不能表达该基线的旧消息渲染结构；任何无法由现有数据模型表达的规则，先提出数据契约变更并附回放证据。
+
 ## 3. 任务难度与并行
 
 简单或强依赖任务单线程完成；只有可独立交付、写入范围互斥且收益高于协调成本时才并行，避免重复读取、实现和验证。工具和执行方式服从当前授权与明确限制，不绑定固定工具名单，不因委派扩大权限或修改范围；只读授权不扩大为写权。

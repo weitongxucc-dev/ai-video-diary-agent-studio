@@ -576,9 +576,14 @@ class DeviceResourcePreparation:
     def status(self, *, database_path, request_id, actor):
         row, plan = self._request(database_path=database_path, request_id=request_id, actor=actor)
         result = {'id': row['id'], 'plan_id': plan['id'], 'state': row['state'], 'wait_reason': row['wait_reason']}
-        if row['state'] == 'failed' and row['wait_reason'] == 'device_preparation_sampling_incomplete':
-            result.update(failure_reason='本次准备未取得完整的资源采样，未启用新的资源档。',
-                repair_action='先核验并收束原准备，确认资源释放后重新准备相同规格。原失败记录保留。')
+        if row['state'] == 'failed':
+            result['failure_code'] = row['wait_reason'] or 'device_preparation_failed'
+            if row['wait_reason'] == 'device_preparation_sampling_incomplete':
+                result.update(failure_reason='本次准备未取得完整的资源采样，未启用新的资源档。',
+                    repair_action='先核验并收束原准备，确认资源释放后重新准备相同规格。原失败记录保留。')
+            else:
+                result.update(failure_reason='本次设备准备未完成，未启用新的资源档。',
+                    repair_action='读取并收束原准备请求，确认设备资源已释放后使用新的 request_id 重新准备。')
         return result
 
     def status_for_plan(self, *, database_path, plan_id, actor):

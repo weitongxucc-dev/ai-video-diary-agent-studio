@@ -1,10 +1,17 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EditorResourceLibraryPanel } from "../EditorResourceLibraryPanel";
 
+const readScope = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/preflight-draft", () => ({ readPreflightDraftScope: readScope }));
+
 beforeEach(() => {
+  sessionStorage.clear();
+  readScope.mockReset().mockResolvedValue({ workspaceId: "space-a", memberId: "member-a" });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ categories: [], resources: [] }) }));
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("EditorResourceLibraryPanel", () => {
   it("keeps planned resources explicit and never renders an adoption action", async () => {
@@ -100,4 +107,65 @@ it("shows the actual SVG sticker preview, attribution and its adoption entry", a
   expect(screen.getByText("Microsoft Fluent Emoji · MIT")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "添加到作品" }));
   expect(action).toHaveBeenCalledWith(resource);
+});
+
+it("restores separate category filters across A → B → A and a refresh, without sharing workspaces", async () => {
+  const panel = <EditorResourceLibraryPanel materials={null} initialCategory="stickers" />;
+  const search = (name: string) => screen.getByRole("searchbox", { name: `搜索${name}` });
+  const filter = () => screen.getByRole("combobox", { name: "资源类型筛选" });
+  const view = render(panel);
+  await waitFor(() => expect(search("贴纸")).toBeEnabled());
+  fireEvent.change(search("贴纸"), { target: { value: "爱心" } });
+  fireEvent.change(filter(), { target: { value: "image" } });
+  fireEvent.click(screen.getByRole("button", { name: /^特效/ }));
+  expect(search("特效")).toHaveValue("");
+  expect(filter()).toHaveValue("all");
+  fireEvent.change(search("特效"), { target: { value: "淡入" } });
+  fireEvent.change(filter(), { target: { value: "video" } });
+  fireEvent.click(screen.getByRole("button", { name: /^贴纸/ }));
+  expect(search("贴纸")).toHaveValue("爱心");
+  expect(filter()).toHaveValue("image");
+
+  view.unmount();
+  const refreshed = render(panel);
+  await waitFor(() => expect(search("贴纸")).toHaveValue("爱心"));
+  expect(filter()).toHaveValue("image");
+  fireEvent.click(screen.getByRole("button", { name: /^特效/ }));
+  expect(search("特效")).toHaveValue("淡入");
+  expect(filter()).toHaveValue("video");
+
+  refreshed.unmount();
+  readScope.mockResolvedValue({ workspaceId: "space-b", memberId: "member-a" });
+  render(panel);
+  await waitFor(() => expect(search("贴纸")).toBeEnabled());
+  expect(search("贴纸")).toHaveValue("");
+  expect(filter()).toHaveValue("all");
+});
+
+it("keeps category filters in memory when both storage reads and writes throw", async () => {
+  const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
+  const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
+  render(<EditorResourceLibraryPanel materials={null} initialCategory="stickers" />);
+  const search = () => screen.getByRole("searchbox", { name: "搜索贴纸" });
+  await waitFor(() => expect(search()).toBeEnabled());
+  fireEvent.change(search(), { target: { value: "爱心" } });
+  expect(read).toHaveBeenCalled();
+  expect(write).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /^特效/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^贴纸/ }));
+  expect(search()).toHaveValue("爱心");
+});
+
+it("shows failed catalog entries as failed and withholds the adoption action", async () => {
+  const resource = { id: "sfx:failed", category_id: "sfx", name: "损坏的音效", version: 1, status: "failed",
+    resource_type: "sound", preview: { kind: "audio" }, runtime_requirements: { engine: "EditAudioTimeline" },
+    provenance: [], entrypoints: ["apply_typed_edit"] };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+    categories: [{ id: "sfx", status: "failed" }], resources: [resource],
+  }) }));
+  render(<EditorResourceLibraryPanel materials={null} initialCategory="sfx" renderResourceAction={() => <p>采用表单</p>} />);
+  expect(await screen.findByText("失败 · v1")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "音效失败" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText("资源失败，暂不可采用")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "添加到作品" })).not.toBeInTheDocument();
 });

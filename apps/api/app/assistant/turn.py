@@ -206,6 +206,8 @@ def run_turn(
         runtime = exc.runtime_receipt
     else:
         runtime = runtime_receipt_fields(preview)
+        if runtime.get("usage_details") or runtime.get("provider_usage") or preview is None or (isinstance(preview, dict) and preview.get("kind") == "runtime_receipt"):
+            runtime = {"provider": settings.effective_llm_provider, "model": model, **runtime}
     if failure is not None:
         if runtime:
             failure.runtime_receipt = {**runtime, "session_id": str(session_id)}
@@ -214,4 +216,4 @@ def run_turn(
     # 走到这里说明这一轮真的连了服务、也真的拿到了回复。
     record_service(settings, ok=True, cause="verified", workspace_id=workspace_id)
     # The Python owner fixed this identity before starting the SDK process.
-    return answer, {**(preview or {"kind": "runtime_receipt"}), "session_id": str(session_id)}
+    return answer, {**(preview or {"kind": "runtime_receipt"}), **runtime, "session_id": str(session_id)}

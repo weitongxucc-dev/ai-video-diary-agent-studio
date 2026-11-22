@@ -208,6 +208,43 @@ class OutputObservationUseCase:
             raise ValueError('观察媒体与真实登记摘要不一致')
 
     def published_outputs_current(self, job):
+        try:
+            start = self.repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_start")
+        except KeyError:
+            start = None
+        if start is not None and start.payload.get("result_kind") == "media_output":
+            try:
+                result = self.repository.execution_records.get_task_event(
+                    job.workspace_id, f"event_{job.id}_result").payload["result"]
+                inner_job_id = result.get("job_id")
+                output_refs = result.get("output_refs")
+                if (result.get("status") != "succeeded" or not inner_job_id
+                        or not isinstance(output_refs, list) or not output_refs
+                        or any(not isinstance(item, str) or not item for item in output_refs)
+                        or len(set(output_refs)) != len(output_refs)):
+                    return False
+                refs = set(output_refs)
+                version_id = result.get("timeline_version_id")
+                if not isinstance(version_id, str) or not version_id:
+                    return False
+                version = self.repository.timeline_records.get_timeline_version(
+                    job.workspace_id, version_id)
+                media_snapshot = version.snapshot.get("media_execution") if isinstance(version.snapshot, dict) else None
+                if (version.task_id != job.task_id or not isinstance(media_snapshot, dict)
+                        or media_snapshot.get("job_id") != inner_job_id
+                        or media_snapshot.get("outputs") != output_refs):
+                    return False
+                records = [item for item in self.repository.execution_records.list_artifact_records(job.workspace_id, job.task_id)
+                           if item.producer_job_id == inner_job_id and item.kind == "media_output"]
+                if {item.logical_ref for item in records} != refs:
+                    return False
+                for item in records:
+                    path = self.artifact_store.resolve_file(item.logical_ref)
+                    if path.stat().st_size != item.size_bytes:
+                        return False
+            except (KeyError, FileNotFoundError, OSError, AttributeError, TypeError, ValueError):
+                return False
+            return True
         records = [item for item in self.repository.execution_records.list_artifact_records(job.workspace_id, job.task_id) if item.producer_job_id == job.id]
         if not records:
             return True

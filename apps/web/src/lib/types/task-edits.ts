@@ -212,6 +212,14 @@ export type TaskMediaResultMap = {
         peaks: number[];
         seconds_per_peak: number;
     };
+    media_output: {
+        media_job_id: string;
+        request_id: string;
+        base_version_id: string;
+        timeline_version_id: string;
+        output_refs: string[];
+        log_path: string | null;
+    };
 };
 export type ResourceAdmissionCheck = {
     actual: number | null;

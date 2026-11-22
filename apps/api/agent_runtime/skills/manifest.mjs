@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
 export const SKILL_MANIFEST_VERSION = 1;
+const RESOURCE_STATUSES = new Set(["connected", "catalog_only", "planned", "failed"]);
 
 // Imported skills are method documents. They may name product tools, but they
 // never gain a loader, network, shell, or arbitrary-code capability from a
@@ -86,6 +87,70 @@ export function validateSkillManifest(manifest, {skillName, skillPath} = {}) {
   if (!manifest.evaluation || typeof manifest.evaluation !== "object") invalid("缺少 evaluation");
   nonEmptyString(manifest.evaluation.status, "evaluation.status");
   stringList(manifest.evaluation.evidence, "evaluation.evidence");
+  if (manifest.catalog_status !== undefined && !RESOURCE_STATUSES.has(manifest.catalog_status)) {
+    invalid("catalog_status 无效");
+  }
+  if (manifest.catalog_status && manifest.catalog_status !== "connected") {
+    nonEmptyString(manifest.status_reason, "status_reason");
+  }
+  if (manifest.capabilities !== undefined) {
+    if (!Array.isArray(manifest.capabilities) || manifest.capabilities.length === 0) invalid("capabilities 无效");
+    for (const capability of manifest.capabilities) {
+      if (!capability || typeof capability !== "object" || Array.isArray(capability)) invalid("capability 必须是对象");
+      for (const field of ["id", "label", "stability"]) nonEmptyString(capability[field], `capability.${field}`);
+      if (!RESOURCE_STATUSES.has(capability.status)) invalid("capability.status 无效");
+      stringList(capability.inputs, "capability.inputs");
+      stringList(capability.outputs, "capability.outputs");
+      if (!Array.isArray(capability.dependencies) || capability.dependencies.some(item => typeof item !== "string" || !item.trim())) {
+        invalid("capability.dependencies 必须是字符串数组");
+      }
+      nonEmptyString(capability.risk, "capability.risk");
+      if (capability.runnable !== false) invalid("capability 必须明确不可直接运行");
+      if (capability.status !== "connected") nonEmptyString(capability.unavailable_reason, "capability.unavailable_reason");
+      if (capability.runtime_requirements !== undefined) {
+        const requirements = capability.runtime_requirements;
+        if (!requirements || typeof requirements !== "object"
+            || requirements.execution_mode !== "method-only"
+            || requirements.runnable !== false
+            || !Array.isArray(requirements.host_dependencies)
+            || !Array.isArray(requirements.host_entrypoints)) {
+          invalid("capability.runtime_requirements 无效");
+        }
+      }
+    }
+  }
+  if (manifest.adapter_contract !== undefined) {
+    const contract = manifest.adapter_contract;
+    if (!contract || typeof contract !== "object"
+        || !RESOURCE_STATUSES.has(contract.status)
+        || typeof contract.version !== "string" || !contract.version.trim()
+        || !contract.runtime_requirements || typeof contract.runtime_requirements !== "object"
+        || contract.runtime_requirements.execution_mode !== "method-only"
+        || contract.runtime_requirements.runnable !== false
+        || !contract.operation_map || typeof contract.operation_map !== "object"
+        || !contract.lifecycle || typeof contract.lifecycle !== "object") {
+      invalid("adapter_contract 无效");
+    }
+    for (const operation of Object.values(contract.operation_map)) {
+      if (!operation || typeof operation !== "object"
+          || !RESOURCE_STATUSES.has(operation.status)
+          || operation.runnable !== false
+          || !Array.isArray(operation.missing)
+          || !operation.runtime_requirements || typeof operation.runtime_requirements !== "object"
+          || operation.runtime_requirements.execution_mode !== "method-only"
+          || operation.runtime_requirements.runnable !== false) {
+        invalid("adapter_contract.operation_map 无效");
+      }
+    }
+    for (const lifecycle of Object.values(contract.lifecycle)) {
+      if (!lifecycle || typeof lifecycle !== "object"
+          || !RESOURCE_STATUSES.has(lifecycle.status)
+          || lifecycle.runnable !== false
+          || !Array.isArray(lifecycle.missing)) {
+        invalid("adapter_contract.lifecycle 无效");
+      }
+    }
+  }
   if (skillPath && typeof skillPath !== "string") invalid("skillPath 无效");
   return Object.freeze({...manifest, skillPath});
 }

@@ -55,6 +55,22 @@ test('selected model metadata preserves the OpenAI endpoint and output cap',asyn
   } finally {current?.session.dispose();await rm(options.cwd,{recursive:true,force:true});}
 });
 
+test('native Anthropic Messages models use the SDK native protocol without network access', async () => {
+  const options = await fixture();
+  let current;
+  try {
+    await writeFile(join(options.cwd, "models.json"), JSON.stringify({providers:{anthropic:{
+      baseUrl:"https://api.anthropic.com/v1", api:"anthropic-messages", apiKey:"synthetic-unused",
+      models:[{id:"claude-sonnet-4-5", maxTokens:4096}]}}}));
+    current = await openCreationSession({...options, modelId:"claude-sonnet-4-5", modelProvider:"anthropic", tools:[]});
+    assert.equal(current.session.model.provider, "anthropic");
+    assert.equal(current.session.model.api, "anthropic-messages");
+    assert.equal(current.session.model.baseUrl, "https://api.anthropic.com/v1");
+    current.session.dispose();
+    current = undefined;
+  } finally { current?.session.dispose(); await rm(options.cwd, {recursive:true, force:true}); }
+});
+
 test('a long-window model uses actual Pi threshold compaction before its full window',async()=>{
   const options=await fixture();let current;
   try {

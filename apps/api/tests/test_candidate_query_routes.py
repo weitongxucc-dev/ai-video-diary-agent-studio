@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from app.candidate_query_routes import build_candidate_query_router
 from app.assistant.candidate_reads import goal_candidate_scope, read_goal_candidates
-from app.assistant.task_business_errors import TaskBusinessRejected
+from app.assistant.task_business_errors import TaskBusinessRejected, TaskOperationRejected
 
 
 def test_route_reads_use_member_identity_and_never_accept_client_scope():
@@ -83,3 +83,47 @@ def test_selected_segment_discovery_and_readback_do_not_expand_to_whole_asset(tm
         version=asset.updated_at.isoformat(),user_id='member',scope=scope)
     assert [c['readback']['segment_id'] for c in found['domains']['material']['candidates']]==[original.id]
     assert [c['readback']['segment_id'] for c in read['candidates']]==[original.id]
+
+
+def test_authorized_whole_asset_scope_still_returns_all_matching_segments(tmp_path):
+    from dataclasses import replace
+    from tests.test_candidate_query import seed
+    from app.materials.candidate_query import CrossDomainCandidateQuery
+    repo, sources, task, asset, _, _ = seed(tmp_path)
+    first = asset.segments[0]
+    asset.segments.append(replace(first, id='second', description='camera second scene'))
+    asset = repo._save_asset(asset)
+    actor = SimpleNamespace(workspace_id='workspace_a', member_id='member', user_id=None)
+    authorizations = SimpleNamespace(material_asset_ids=lambda *args: {asset.id})
+    sealed = {'selected_references': [{'kind': 'material', 'selection': {
+        'asset_id': asset.id, 'scope': 'segment', 'segment_id': first.id,
+        'expected_updated_at': asset.updated_at.isoformat(),
+        'expected_segment_updated_at': first.updated_at.isoformat()}}]}
+    repo.task_authorization_records.get_task_authorization = lambda *args: SimpleNamespace(resource_scope={})
+    scope = goal_candidate_scope(repo, authorizations, actor, task, sealed)
+    case = CrossDomainCandidateQuery(repo, sources)
+    result = case.search(
+        'workspace_a', query='camera', user_id='member', scope=scope,
+    )
+    assert {item['readback']['segment_id'] for item in result['domains']['material']['candidates']} == {
+        first.id, 'second'}
+    read = case.read('workspace_a', domain='material', object_id=asset.id,
+        version=asset.updated_at.isoformat(), user_id='member', scope=scope)
+    assert {item['readback']['segment_id'] for item in read['candidates']} == {first.id, 'second'}
+
+
+@pytest.mark.parametrize('stale_field', ['expected_updated_at', 'expected_segment_updated_at'])
+def test_selected_segment_scope_rejects_stale_timestamp_before_query(tmp_path, stale_field):
+    from tests.test_candidate_query import seed
+    repo, _, task, asset, _, _ = seed(tmp_path)
+    selected = asset.segments[0]
+    sealed = {'selected_references': [{'kind': 'material', 'selection': {
+        'asset_id': asset.id, 'scope': 'segment', 'segment_id': selected.id,
+        'expected_updated_at': asset.updated_at.isoformat(),
+        'expected_segment_updated_at': selected.updated_at.isoformat()}}]}
+    sealed['selected_references'][0]['selection'][stale_field] = '2000-01-01T00:00:00+00:00'
+    actor = SimpleNamespace(workspace_id='workspace_a', member_id='member', user_id=None)
+    authorizations = SimpleNamespace(material_asset_ids=lambda *args: set())
+    repo.task_authorization_records.get_task_authorization = lambda *args: SimpleNamespace(resource_scope={})
+    with pytest.raises(TaskOperationRejected, match='变化|版本|conflict'):
+        goal_candidate_scope(repo, authorizations, actor, task, sealed)
