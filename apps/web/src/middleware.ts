@@ -47,6 +47,12 @@ async function proxyApiRequest(
       // which can reject the request and turn an otherwise valid API call
       // into a misleading 502. Read the body once and forward the bytes.
       fetchOptions.body = await request.arrayBuffer();
+      // The incoming content length describes the original request stream.
+      // Once middleware has materialized the body as an ArrayBuffer, keeping
+      // that header can disagree with the forwarded byte length and make the
+      // packaged fetch implementation reject the request before it reaches
+      // the API. Let fetch calculate the length for the new body.
+      (fetchOptions.headers as Headers).delete("content-length");
     }
 
     const response = await fetch(apiUrl, fetchOptions);
