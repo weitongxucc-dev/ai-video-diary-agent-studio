@@ -80,12 +80,12 @@
     }
   },
   "dependencies": {
-    "electron-updater": "^6.3.0",
+    "electron-updater": "6.8.11",
     "qrcode": "1.5.4",
     "selfsigned": "5.5.0"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0"
   }
 }
