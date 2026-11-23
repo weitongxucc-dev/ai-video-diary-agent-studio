@@ -74,6 +74,13 @@ def build_timeline_history_router(*, production_for, summary_type_for, history_e
 
     @router.get('/api/creation-tasks/{task_id}/timeline/versions/{version_id}/artifacts/{kind}')
     def get_creation_task_timeline_version_artifact(task_id: str, version_id: str, kind: Literal['video', 'subtitles', 'cover'], request: Request) -> FileResponse:
+        preview = kind == 'video' and request.query_params.get('preview') == 'true'
+        if preview:
+            # The legacy download keeps its local diagnostic behavior. New native
+            # playback must carry an identity; the same read gate verifies it.
+            principal = getattr(request.state, 'principal', None)
+            if not getattr(principal, 'user_id', None) and not request.headers.get('X-Local-Member-Token', '').strip():
+                raise http_error_for()(status_code=401, detail='预览历史成片需要确认当前成员身份。')
         workspace_id = workspace_for()(request)
         readable_for()(request, task_id)
         version = version_for()(workspace_id, task_id, version_id)
@@ -87,6 +94,9 @@ def build_timeline_history_router(*, production_for, summary_type_for, history_e
             media_type = 'image/jpeg' if path.suffix.lower() in {'.jpg', '.jpeg'} else 'image/png'
         else:
             media_type = media_types_for()[kind]
+        if preview:
+            return file_response_for()(path, media_type=media_type, filename=path.name,
+                                       content_disposition_type='inline', headers={'Cache-Control': 'no-store'})
         return file_response_for()(path, media_type=media_type, filename=path.name)
     router.routes = [route for route in router.routes if route.name in route_names]
     return router

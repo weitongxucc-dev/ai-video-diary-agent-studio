@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, computed_field, model_validator
 
 from app.creation.editing.audio_contracts import AudioTimelineEditRequest
 from app.creation.editing.range_contracts import TimelineRangeEdit
@@ -2260,7 +2260,7 @@ EXACT_EDIT_FIELDS = {
     "RemoveTimelineRanges": {"range_edit"},
     "EditAudioTimeline": {"audio_edit"},
     "AdjustVisualEffects": {"clip_ids", "effects"},
-    "ReplaceClip": {"clip_id", "asset_id", "segment_id", "source_start_seconds"},
+    "ReplaceClip": {"clip_id", "asset_id", "segment_id", "source_start_seconds", "expected_replacement_asset_updated_at"},
     "TrimClip": {"clip_id", "source_start_seconds"},
     "ChangeClipSpeed": {"clip_id", "playback_rate"},
     "ChangeCrop": {"clip_id", "fit_mode", "crop_x", "crop_y"},
@@ -2375,13 +2375,16 @@ class CreationTaskExactEditRequest(BaseModel):
     delivery_instruction: str | None = Field(default=None, min_length=1, max_length=120)
     asset_id: str | None = Field(default=None, min_length=1, max_length=120)
     segment_id: str | None = Field(default=None, min_length=1, max_length=120)
+    expected_replacement_asset_updated_at: AwareDatetime | None = Field(default=None,
+        description="助手 ReplaceClip 必须传实际读到的候选 asset_updated_at 或原片证据 updated_at，不得换绑更新版本。")
     source_start_seconds: float | None = Field(default=None, ge=0)
     position: int | None = Field(default=None, ge=0, le=99)
     locked: bool | None = None
 
     def action_values(self) -> dict[str, object]:
         """Validated execution values, separate from the explicit request digest."""
-        values = self.model_dump(mode="json", exclude_unset=True, exclude=EXACT_EDIT_ENVELOPE_FIELDS)
+        values = self.model_dump(mode="json", exclude_unset=True,
+            exclude=EXACT_EDIT_ENVELOPE_FIELDS | {"expected_replacement_asset_updated_at"})
         if self.operation_type == "EditGraphicOverlay" and self.graphic_overlay is not None:
             values["graphic_overlay"] = self.graphic_overlay.model_dump(mode="json")
         return values

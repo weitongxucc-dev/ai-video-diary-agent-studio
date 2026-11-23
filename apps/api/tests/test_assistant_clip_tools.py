@@ -22,7 +22,11 @@ const asset={id:'asset-a',updated_at:'2026-10-11T00:00:00Z',file_name:'test.mp4'
   user_tags:[],system_tags:['场景:室内'],description:'用户描述',transcript:'',review_status:'raw',
   usage_role:'b_roll',collection_ids:[],start_seconds:0,end_seconds:5}]};
 const candidate={...structuredClone(asset),id:'asset-b',analysis_status:'ready',file_name:'候选.mp4',
- segments:[{...structuredClone(asset.segments[0]),id:'segment-b',asset_id:'asset-b',user_tags:['空镜头']}]};
+ updated_at:'2026-10-11T00:00:02.123456Z',
+ segments:[{...structuredClone(asset.segments[0]),id:'segment-b',asset_id:'asset-b',user_tags:['空镜头'],
+  version:4,source_revision:{size_bytes:'1234',mtime_ns:'1791676802123456789'},start_seconds:12.25,end_seconds:17.25}]};
+const candidateList=[{asset_id:'asset-b',segment_id:'segment-b',file_name:'候选.mp4',
+ start_seconds:12.25,end_seconds:17.25,description:'产品空镜头，外形接近 ZX-410',reasons:['时长满足']}];
 const workspace={task:{id:'task-a',current_timeline_version_id:'timeline-a',timeline_sequence:1},
  montage:{clips:[{id:'clip-a',asset_id:'asset-a',segment_id:'segment-a',person_render_id:null}]}};
 const server=createServer(async(req,res)=>{
@@ -31,10 +35,20 @@ const server=createServer(async(req,res)=>{
  res.setHeader('content-type','application/json');
  let reply;
  if(req.url==='/api/creation-tasks/task-a') reply=workspace;
- else if(req.url.includes('/candidates?for_automation=true')) reply=[{asset_id:'asset-b',segment_id:'segment-b',file_name:'候选.mp4',
-  start_seconds:0,end_seconds:5,description:'产品空镜头',reasons:['时长满足']}];
+ else if(req.url.includes('/candidates?for_automation=true')) reply=candidateList;
  else if(req.url.endsWith('/edits/exact/preview')) reply={proposal:{id:'proposal-a',summary:'替换镜头',target_refs:['clip:clip-a'],
   operation:{operation_type:'ReplaceClip'},preview:{before:{detail:'原镜头'},after:{detail:'候选镜头'}},invalidated_refs:[],external_effects:[],status:'proposed'}};
+ else if(req.url.startsWith('/api/production/materials/asset-b/evidence?')) {
+  const query = new URL(req.url,'http://fixture').searchParams;
+  if(query.get('expected_updated_at')!==candidate.updated_at){
+   res.statusCode=409; reply={detail:'素材版本已变化'};
+  } else {
+   reply={asset_id:candidate.id,updated_at:candidate.updated_at,clock:'original_source',items:[
+    {id:'segment-b',start_seconds:12.25,end_seconds:17.25,
+     visual:{ocr_status:'ready',ocr_frames:[{timestamp_seconds:14,observations:[{text:'ZX-401'}]}]}}
+   ]};
+  }
+ }
  else if(req.url.includes('asset-b')) reply=candidate;
  else {
   if(req.method==='PUT'){
@@ -53,7 +67,11 @@ try{
  const results=[];
  for(const step of input.steps){
   if(step.changeVersion)workspace.task.timeline_sequence=2;
-  try{results.push(toolOutcome(await tools.get(step.tool).execute('call',step.params||{})));}
+  try{
+   const read = step.readCandidateEvidence
+    ? JSON.parse(results.at(-1).result.content[0].text).matches[0].evidence_read : null;
+   results.push(toolOutcome(await tools.get(read?.tool ?? step.tool).execute('call',read?.params ?? step.params ?? {})));
+  }
   catch(error){results.push({ok:false,error:error.message});}
  }
  console.log(JSON.stringify({results,calls,asset,tools:[...tools.keys()],preview_parameters:tools.get('preview_typed_edit').parameters}));
@@ -101,12 +119,14 @@ def test_task_change_after_read_prevents_material_write(tmp_path):
 
 
 def test_preview_exposes_choice_but_no_model_rewrite_of_host_instruction_or_selection(tmp_path):
-    params = {"operation_type":"ReplaceClip", "clip_id":"clip-a", "asset_id":"asset-b", "segment_id":"segment-b"}
+    params = {"operation_type":"ReplaceClip", "clip_id":"clip-a", "asset_id":"asset-b", "segment_id":"segment-b",
+              "expected_replacement_asset_updated_at":"2026-10-11T00:00:02.123456Z"}
     out = invoke(tmp_path, [{"tool":"read_clip_candidates", "params":{"clip_id":"clip-a"}},
                            {"tool":"preview_typed_edit", "params":params}], instruction="把当前镜头换成读到的候选，保持时长和旁白不变")
     assert all(item['ok'] for item in out['results'])
     candidate = out['results'][0]['result']['details']['matches'][0]
     assert candidate['asset_id'] == params['asset_id'] and candidate['segment_id'] == params['segment_id']
+    assert candidate["asset_updated_at"] == params["expected_replacement_asset_updated_at"]
     assert candidate['file_name'] == '候选.mp4' and candidate['user_tags'] == ['空镜头']
     assert any('/montage/clips/clip-a/candidates?' in call['path'] for call in out['calls'])
     submitted = next(call['body'] for call in out['calls'] if call['path'].endswith('/edits/exact/preview'))
@@ -118,6 +138,30 @@ def test_preview_exposes_choice_but_no_model_rewrite_of_host_instruction_or_sele
                 & out['preview_parameters']['properties'].keys())
     assert 'preview_edit' not in out['tools']
     assert not any(call['path'].endswith('/edits/preview') for call in out['calls'])
+
+
+def test_clip_candidate_replays_the_version_and_original_window_for_model_evidence(tmp_path):
+    out = invoke(tmp_path, [
+        {"tool": "read_clip_candidates", "params": {"clip_id": "clip-a"}},
+        {"readCandidateEvidence": True},
+    ], instruction="为当前镜头换同型号 ZX-410，先核对铭牌")
+    assert all(item["ok"] for item in out["results"]), out["results"]
+    match, = out["results"][0]["result"]["details"]["matches"]
+    assert match["asset_updated_at"] == "2026-10-11T00:00:02.123456Z"
+    assert match["segment_version"] == 4
+    assert match["source_revision"] == {"size_bytes": "1234", "mtime_ns": "1791676802123456789"}
+    assert match["evidence_read"] == {"tool": "read_material_evidence", "params": {
+        "asset_id": match["asset_id"], "expected_updated_at": match["asset_updated_at"],
+        "kind": "segments", "start_seconds": 12.25, "end_seconds": 17.25,
+    }}
+    evidence = out["results"][1]["result"]["details"]
+    assert (evidence["asset_id"], evidence["updated_at"], evidence["clock"]) == (
+        match["asset_id"], match["asset_updated_at"], "original_source")
+    segment, = evidence["items"]
+    assert (segment["id"], segment["start_seconds"], segment["end_seconds"]) == (
+        match["segment_id"], match["start_seconds"], match["end_seconds"])
+    assert "ZX-410" in match["description"] and segment["visual"]["ocr_frames"][0]["observations"][0]["text"] == "ZX-401"
+    assert all(call["method"] == "GET" and call["token"] == "fixture-member" for call in out["calls"])
 
 
 @pytest.mark.parametrize('field', ['raw_command','assistant_turn_id','selected_object_refs','expected_timeline_sequence'])

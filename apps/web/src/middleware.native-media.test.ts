@@ -96,6 +96,30 @@ describe("native local media identity forwarding", () => {
     expect(await response.text()).toBe("range-bytes");
   });
 
+  it("forwards local identity and Range only for the exact history video path", async () => {
+    const path = "/api/creation-tasks/task-1/timeline/versions/version-1/artifacts/video";
+    const request = new NextRequest(`http://localhost:3000${path}?preview=true`, {
+      headers: { cookie: localCookie, range: "bytes=20-30" },
+    });
+    const response = await middleware(request);
+    expect(forwardedUrl).toBe(`http://127.0.0.1:8000${path}?preview=true`);
+    expect(forwardedHeaders.get("x-local-member-token")).toBe(syntheticToken);
+    expect(forwardedHeaders.get("range")).toBe("bytes=20-30");
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 20-30/100");
+
+    expect(isLocalNativeMediaRequest("HEAD", path)).toBe(true);
+    for (const [method, url] of [
+      ["GET", path.replace(/video$/, "subtitles")],
+      ["GET", path.replace(/video$/, "cover")],
+      ["GET", path.replace("versions/version-1", "versions/version-1/extra")],
+      ["POST", path],
+    ]) {
+      await middleware(new NextRequest(`http://localhost:3000${url}`, { method, headers: { cookie: localCookie } }));
+      expect(forwardedHeaders.has("x-local-member-token"), `${method} ${url}`).toBe(false);
+    }
+  });
+
   it.each([
     "/api/creation-tasks/task-1/covers/cover-1/image",
     "/api/creation-tasks/task-1/output/selected-subtitles?expected_version_id=version-1&mode=zh&zh_track_id=track-1",

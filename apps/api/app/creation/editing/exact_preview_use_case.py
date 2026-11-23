@@ -273,7 +273,8 @@ class ExactPreviewUseCase:
         try:
             return self.repository.clip_sources.facts(task.workspace_id, task.id, clip_ids=ids, replacement=replacement,
                 user_id=identity['member_id'], local_diagnostic=identity['local_diagnostic'],
-                automatic_replacement=automatic_replacement)
+                automatic_replacement=automatic_replacement,
+                expected_replacement_version=payload.expected_replacement_asset_updated_at if payload.operation_type == 'ReplaceClip' else None)
         except PermissionError as exc:
             raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
         except EditConflict as exc:
@@ -589,9 +590,16 @@ class ExactPreviewUseCase:
 
     def _source(self, task, payload, identity, actor, origin, expected_input_id=None):
         from app.schemas import EXACT_EDIT_ENVELOPE_FIELDS
-        if not payload.model_fields_set & EXACT_EDIT_ENVELOPE_FIELDS:
+        replacement_version = payload.expected_replacement_asset_updated_at
+        if not payload.model_fields_set & EXACT_EDIT_ENVELOPE_FIELDS and replacement_version is None:
             return payload, None
         source, version = self.typed_source(task, payload, identity['member_id'])
+        # Original replay returns before _source; a fresh assistant replacement
+        # may not silently adopt a newer asset than the evidence it submitted.
+        if payload.operation_type == 'ReplaceClip' and payload.assistant_turn_id and replacement_version is None:
+            raise EditPreviewRejected(422, '助手换镜须提供已读的候选素材版本，请先回读原片证据')
+        if replacement_version is not None:
+            source['expected_replacement_asset_updated_at'] = replacement_version.isoformat()
         source['source_facts'] = self.source_facts(task, payload, identity, actor,
             automatic_replacement=bool(payload.assistant_turn_id))
         clean, source = self.complete_typed(task, payload, identity['member_id'], actor, source, version, origin=origin)

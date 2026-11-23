@@ -22,7 +22,7 @@ ASSISTANT_BUSINESS_TOOLS = {
     "script": ("read_current_task", "read_editing_resource_catalog", "read_agent_run_trace", "find_knowledge", "preview_script_draft",
                "start_creation_execution", "resume_creation_execution", "read_creation_execution"),
     "task_edit": ("record_input_understanding", "read_narration_segment_context", "read_narration_segment_sources", "revise_narration_segment", "read_narration_revision", "resume_narration_revision", "read_current_task", "find_knowledge", "find_materials", "read_material_candidate_bundle", "search_creation_candidates", "read_creation_candidate", "read_material_governance", "read_editing_resource_catalog", "read_agent_run_trace", "preview_script_draft",
-                  "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags",
+                  "read_clip_candidates", "read_material_evidence", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags",
                   "read_edit_control_context", "preview_edit_selection", "discard_edit_proposal", "undo_last_edit", "redo_last_edit",
                   "start_creation_execution", "resume_creation_execution", "cancel_creation_execution", "read_creation_execution", "read_segment_visual_decision", "regenerate_storyboard"),
 }
@@ -72,6 +72,7 @@ _PI_TOOL_LABELS = {
     "update_preference_memory": "保存或忘记创作偏好",
     "find_material_candidates": "查找候选片段",
     "read_clip_candidates": "读取替换候选",
+    "read_material_evidence": "读取素材时间证据",
     "preview_creation_plan": "检查新建方案",
     "create_source_task": "从原片创建作品",
     "read_source_task": "核对原片任务",

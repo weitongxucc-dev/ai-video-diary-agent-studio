@@ -3,6 +3,7 @@ from app.audio_timeline import AudioEditRequest, apply_audio_edit, effective_aud
 from app.creation.editing.picture import EditConflict
 from app.montage import creation_task_montage_plan_from_payload
 from dataclasses import asdict, replace
+from datetime import datetime
 import math
 import sqlite3
 import stat as file_stat
@@ -100,13 +101,15 @@ class EditClipSourceReader:
     def facts(self, workspace_id: str, task_id: str, *, clip_ids: list[str],
                                replacement: tuple[str, str] | None, user_id: str | None,
                                local_diagnostic: bool, automatic_replacement: bool = False,
+                               expected_replacement_version: datetime | None = None,
                                connection: sqlite3.Connection | None = None):
         """The current material/source authority shared by typed preview and direct commit."""
         if connection is None:
             with self._connection_factory() as conn:
                 return self.facts(workspace_id, task_id, clip_ids=clip_ids,
                     replacement=replacement, user_id=user_id, local_diagnostic=local_diagnostic,
-                    automatic_replacement=automatic_replacement, connection=conn)
+                    automatic_replacement=automatic_replacement,
+                    expected_replacement_version=expected_replacement_version, connection=conn)
         plan = self._read_montage(workspace_id, task_id, connection=connection)
         clips = [clip for clip in plan["clips"] if clip["id"] in clip_ids]
         if len(clips) != len(clip_ids):
@@ -137,10 +140,13 @@ class EditClipSourceReader:
             segment = next((item for item in asset.segments if item.id == segment_id), None)
             if segment is None:
                 raise ValueError("镜头来源或使用状态已失效")
-            if automatic_replacement and (asset_id, segment_id) == replacement:
-                eligibility = material_usage_eligibility(asset, segment, purpose="automatic")
-                if not eligibility.eligible:
-                    raise EditConflict(f"{eligibility.reason}；{eligibility.repair_action}")
+            if (asset_id, segment_id) == replacement:
+                if automatic_replacement:
+                    eligibility = material_usage_eligibility(asset, segment, purpose="automatic")
+                    if not eligibility.eligible:
+                        raise EditConflict(f"{eligibility.reason}；{eligibility.repair_action}")
+                if expected_replacement_version is not None and asset.updated_at != expected_replacement_version:
+                    raise EditConflict("候选素材已不再是读取时的版本，请重新查找并核对原片证据")
             reference = self._asset_reference(workspace_id, asset_id, connection=connection)
             path = self._resolve_reference(workspace_id, asset_id, reference, connection=connection)
             stat = path.stat()
@@ -177,10 +183,12 @@ class EditSourceVerifier:
         if not ids:
             return []
         replacement = (action['asset_id'], action['segment_id']) if action['operation_type'] in {'ReplaceClip','InsertClip'} and action.get('asset_id') is not None and action.get('segment_id') is not None else None
+        sealed_version = command.source.get('expected_replacement_asset_updated_at') if command.source else None
         return self.repository.clip_sources.facts(command.workspace_id, command.task_id, clip_ids=ids,
             replacement=replacement, user_id=self.identity['member_id'],
             local_diagnostic=self.identity['local_diagnostic'],
             automatic_replacement=bool(command.source and command.source.get('assistant_turn_id')),
+            expected_replacement_version=datetime.fromisoformat(sealed_version) if sealed_version is not None else None,
             connection=connection)
 
     def audio_facts(self, command, *graphs):
