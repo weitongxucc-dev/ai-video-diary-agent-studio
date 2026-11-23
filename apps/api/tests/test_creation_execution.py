@@ -2604,6 +2604,25 @@ def test_task_authorization_refreshes_workspace_material_scope_before_execution(
     assert service.material_asset_ids("local", task_id) == {asset.id}
 
 
+def test_task_authorization_keeps_scope_immutable_after_execution_starts(tmp_path):
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+
+    repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
+    actor = _local_task_actor(repo, task_id)
+    task = repo.task_records.get_creation_task("local", task_id)
+    service = TaskAuthorizationUseCase(repo, lambda _identity: "ready")
+
+    issued = service.ensure(task, actor)
+    register_synthetic_video_asset(
+        repo, workspace_id="local", member_id=actor.member_id,
+        path=tmp_path / "library" / "received-after-start.mp4", asset_id="received-after-start", seconds=3,
+    )
+    running_task = replace(task, stage_status="running")
+
+    assert service.ensure(running_task, actor) == issued
+    assert service.material_asset_ids("local", task_id) == set()
+
+
 def test_task_authorization_keeps_selected_assets_and_accepts_only_own_derived_output(tmp_path):
     from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.creation.contracts import ArtifactRecord, JobRun
