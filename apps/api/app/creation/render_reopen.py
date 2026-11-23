@@ -173,6 +173,22 @@ def rerender_current(execution, job, actor, scheduler, *, write_guard=None):
         raise RecoveryBlocked('原配音消耗尚未核实，不能重开输出')
     version_id = task.current_timeline_version_id
     if not version_id:
+        # Admission can fail before the first montage/timeline exists. That
+        # attempt belongs to the normal execution retry path, not a current
+        # timeline re-render. Keep the output-reopen guard for later failures
+        # that have a concrete timeline.
+        with repository.execution_inputs.creation_execution_read() as reader:
+            row = reader.execute(
+                "SELECT payload_json FROM task_events "
+                "WHERE workspace_id=? AND job_id=? AND event_type='creation_execution_stage' "
+                "ORDER BY rowid DESC LIMIT 1",
+                (job.workspace_id, job.id),
+            ).fetchone()
+        if row is None:
+            return False
+        payload = json.loads(row["payload_json"])
+        if payload.get("stage") == "admission" and payload.get("status") == "failed":
+            return False
         raise ValueError('当前作品尚不能仅重新输出；配音或剪辑仍未就绪')
     progressive = owner.picture_fragments is not None and not _plan.presenter_share_target
     if job.status == 'failed':

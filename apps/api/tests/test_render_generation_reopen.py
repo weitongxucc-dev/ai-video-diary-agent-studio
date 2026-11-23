@@ -1,5 +1,6 @@
 """Atomic current-timeline reopens and original failed-attempt boundaries, without media."""
 from dataclasses import replace
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -165,3 +166,36 @@ def test_start_after_an_earlier_retry_uses_latest_original_job(reopened, monkeyp
     assert result.id == latest.id and result.status == 'queued'
     assert submitted == [latest.id]
     assert len(case.execution.jobs('local', case.task.id)) == 2
+
+
+def test_admission_failure_without_timeline_uses_execution_retry(render_case):
+    """A pre-montage admission failure must not enter current-output reopen."""
+    case = render_case
+    with case.repo._connect() as conn:
+        row = conn.execute(
+            "SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?",
+            ('local', case.task.id),
+        ).fetchone()
+        payload = json.loads(row['payload'])
+        payload['current_timeline_version_id'] = None
+        conn.execute(
+            "UPDATE creation_tasks SET payload=? WHERE workspace_id=? AND id=?",
+            (json.dumps(payload), 'local', case.task.id),
+        )
+        conn.execute("UPDATE job_runs SET status='failed' WHERE workspace_id=? AND id=?", ('local', case.job.id))
+        case.repo.execution_records.append_task_event(TaskEvent(
+            id=f'event_{case.job.id}_admission_failed', workspace_id='local', task_id=case.task.id,
+            job_id=case.job.id, event_type='creation_execution_stage',
+            payload={'stage': 'admission', 'status': 'failed', 'reason': 'audio budget'},
+        ), connection=conn)
+    case.task = case.repo.task_records.get_creation_task('local', case.task.id)
+    case.job = case.repo.job_records.get_job_run('local', case.job.id)
+    case.scheduler = SimpleNamespace(owners=SimpleNamespace())
+
+    assert case.execution.rerender_current(case.job, case.actor, case.scheduler) is False
+    retried = case.execution.retry(
+        'local', case.task.id, member_id=case.actor.member_id,
+        admission_recheck=lambda _rejection: True,
+    )
+    assert retried.id != case.job.id
+    assert retried.input_digest == case.job.input_digest
