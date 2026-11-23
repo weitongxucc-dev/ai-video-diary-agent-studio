@@ -221,6 +221,8 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     segment = repo.narration_records.list_narration_segments("local", task_id)[0]
     assert (segment.source_kind, segment.source_section_id, segment.text) == (
         "recorded", "section_1", "真实待制作文案")
+    from app.creation.narration_stage_use_case import NarrationStageUseCase
+    assert segment.id == NarrationStageUseCase.segment_id(task.id, "script_recording", "section_1")
     assert segment.model_id is None and segment.voice_profile_id is None and segment.voice_version is None
     assert client.get(route).json()["items"][0]["applied"] is True
 

@@ -171,7 +171,13 @@ class AudioIngressUseCase:
             cache_seed = f"recorded:{task.id}:{script.id}:{section.id}:{source.logical_ref}:{source.sha256}"
             cache_key = f"recorded_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:48]}"
             narration_ref = self.repository.narration_artifacts.narration_artifact_reference(cache_key)
-            narration_id = f"narration_segment_{hashlib.sha256(cache_seed.encode('utf-8')).hexdigest()[:20]}"
+            # All narration execution paths address a segment by the canonical
+            # task/script/section identity.  The cache key remains content
+            # based, but a recording must use the same stable segment ID as a
+            # generated narration so continuation cannot classify it as an
+            # orphan segment.
+            from app.creation.narration_stage_use_case import NarrationStageUseCase
+            narration_id = NarrationStageUseCase.segment_id(task.id, script.id, section.id)
             language = {"zh-CN": "zh", "en-US": "en", "zh-CN/en-US": "zh-en"}[script.language]
             record = NarrationArtifactRecord(
                 id=cache_key,
