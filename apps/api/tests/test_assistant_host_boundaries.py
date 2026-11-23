@@ -200,6 +200,18 @@ def test_runtime_configuration_keeps_session_scope_and_secret_outside_model_file
     assert other[3] != session and other[0] != runtime
 
 
+@pytest.mark.parametrize("settings,needle", [
+    (Settings(llm_provider="custom", llm_base_url="https://example.com/v1", llm_model=""), "模型没有填写"),
+    (Settings(llm_provider="custom", llm_base_url="http://example.com/v1", llm_model="fixture"), "外部文字模型"),
+    (Settings(llm_provider="custom", llm_base_url="https://user:secret@example.com/v1", llm_model="fixture"), "外部文字模型"),
+])
+def test_runtime_configuration_rejects_missing_or_unsafe_provider_fields(tmp_path, settings, needle):
+    from app.assistant.runtime_configuration import _configured_model
+
+    with pytest.raises(host.AssistantUnavailable, match=needle):
+        _configured_model(settings)
+
+
 def test_public_turn_binds_real_preflight_before_process_and_preserves_selected_session(tmp_path, monkeypatch, loopback_tools):
     extension, env, calls = loopback_tools
     monkeypatch.setattr("app.assistant.runtime_context.sdk_module", lambda _: Path("/synthetic/index.js"))

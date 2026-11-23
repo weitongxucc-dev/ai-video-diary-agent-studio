@@ -147,7 +147,7 @@ function isActive(pathname: string, href: string, activePath?: string, search?: 
 }
 
 function currentRouteFor(pathname: string, searchParams?: Pick<URLSearchParams, "get">) {
-  if (isCreationDraftRoute(pathname, searchParams)) return { label: "新视频草稿" };
+  if (isCreationDraftRoute(pathname, searchParams)) return { label: "新建视频" };
   return routeLabels
     .filter((item) => isActive(pathname, item.href, item.activePath, searchParams))
     .sort((a, b) => b.href.length - a.href.length)[0] ?? routeLabels[0];

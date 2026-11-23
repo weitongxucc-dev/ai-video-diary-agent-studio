@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -99,7 +100,20 @@ def test_real_media_chain_persists_job_artifacts_timeline_and_request_log(tmp_pa
     log_path = Path(result["log_path"])
     assert log_path.exists()
     assert all(json.loads(line)["request_id"] == "req-real-chain" for line in log_path.read_text().splitlines())
-    assert repo.execution_records.list_artifact_records("local", "task")
+    artifacts = repo.execution_records.list_artifact_records("local", "task")
+    assert artifacts
+    published = tmp_path / "outputs" / result["output_refs"][0]
+    assert published.is_file()
+    assert published.stat().st_size == artifacts[0].size_bytes
+    assert hashlib.sha256(published.read_bytes()).hexdigest() == artifacts[0].sha256
+    transforms = repo.lineage_records.list_transform_runs("local", "task")
+    assert len(transforms) == 1
+    assert transforms[0].job_id == result["job_id"]
+    assert transforms[0].input_refs == [f"timeline:{base.id}"]
+    assert transforms[0].output_refs == result["output_refs"]
+    edges = repo.lineage_records.list_dependency_edges("local", "task")
+    assert {edge.downstream_ref for edge in edges} == set(result["output_refs"])
+    assert {edge.created_by_transform_id for edge in edges} == {transforms[0].id}
 
 
 def test_failure_is_persisted_and_retry_uses_original_request_id(tmp_path):
@@ -455,6 +469,8 @@ def test_running_ffmpeg_cancel_persists_and_retry_starts_fresh(tmp_path):
     assert event.payload["base_version_id"] == base.id
     assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == base.id
     assert not repo.execution_records.list_artifact_records("local", "task")
+    assert not repo.lineage_records.list_transform_runs("local", "task")
+    assert not repo.lineage_records.list_dependency_edges("local", "task")
 
     retried = reopened.retry(job_id, "local")
     assert retried["job_id"] != job_id and retried["request_id"] == plan.request_id

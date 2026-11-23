@@ -15,6 +15,7 @@ import {
 import { AppShell } from "@/components/AppShell";
 import draftStyles from "@/components/CreateProductionTaskForm.module.css";
 import { WorkbenchCreationDraftForm } from "@/components/workbench/WorkbenchCreationDraftForm";
+import { CreationWorkbenchEmptyState } from "@/components/workbench/CreationWorkbenchEmptyState";
 import { WorkspaceRoute } from "@/components/workbench/WorkspaceRoute";
 import { NEW_VIDEO_HREF } from "@/lib/preflight-draft-url";
 import { ScheduledTasksWorkspace } from "@/components/ScheduledTasksWorkspace";
@@ -124,21 +125,23 @@ export default async function ProductionPage({
     const replyOrigin = replyValues.every(isUuid) ? {
       conversation_id: params.reply_conversation_id!, turn_id: params.reply_turn_id!, request_id: params.reply_request_id!,
     } : null;
-    if (!isUuid(params.draft_id)) return <WorkspaceRoute label="新视频草稿"><AppShell><p role="alert">草稿地址无效。<Link href={NEW_VIDEO_HREF}>新建视频</Link></p></AppShell></WorkspaceRoute>;
-    if (hasReplyOrigin && !replyOrigin) return <WorkspaceRoute label="新视频草稿"><AppShell><section role="alert"><h1>回复来源无法识别</h1><p>请从已完成的首页回复重新选择。</p></section></AppShell></WorkspaceRoute>;
+    if (!isUuid(params.draft_id)) return <WorkspaceRoute label="新建视频"><AppShell><p role="alert">新建视频地址无效。<Link href={NEW_VIDEO_HREF}>新建视频</Link></p></AppShell></WorkspaceRoute>;
+    if (hasReplyOrigin && !replyOrigin) return <WorkspaceRoute label="新建视频"><AppShell><section role="alert"><h1>回复来源无法识别</h1><p>请从已完成的首页回复重新选择。</p></section></AppShell></WorkspaceRoute>;
     let template = null;
     if (params.template_id || params.template_version) {
       const templates = await listVideoTemplates().catch(() => null);
       template = templates?.items.find((item) => item.id === params.template_id && item.version === Number(params.template_version)) ?? null;
-      if (!template) return <WorkspaceRoute label="新视频草稿"><AppShell><section role="alert"><p>无法读取所选模板版本，请返回模板页重新选择。</p><Link href="/templates">返回视频模板</Link></section></AppShell></WorkspaceRoute>;
+      if (!template) return <WorkspaceRoute label="新建视频"><AppShell><section role="alert"><p>无法读取所选模板版本，请返回模板页重新选择。</p><Link href="/templates">返回视频模板</Link></section></AppShell></WorkspaceRoute>;
     }
+    const hasKnowledgePin = Boolean(params.knowledge_item_id && params.knowledge_version);
+    const agentFirst = !initialGoal && !template && !hasKnowledgePin && !replyOrigin;
     return (
-      <WorkspaceRoute label="新视频草稿">
+      <WorkspaceRoute label="新建视频">
         <AppShell creationTasks={creationTasks}>
-          <div className="modern-queue">
+          {agentFirst ? <CreationWorkbenchEmptyState /> : <div className="modern-queue">
             <section>
               <header className={draftStyles.draftHeader}>
-                <h1>新视频草稿</h1>
+                <h1>新建视频</h1>
                 <Link href="/production">返回任务列表</Link>
               </header>
               <WorkbenchCreationDraftForm
@@ -151,7 +154,7 @@ export default async function ProductionPage({
                 template={template}
               />
             </section>
-          </div>
+          </div>}
         </AppShell>
       </WorkspaceRoute>
     );

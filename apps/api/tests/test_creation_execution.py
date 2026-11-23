@@ -2581,6 +2581,48 @@ def test_task_authorization_survives_unknown_and_restart_but_not_expiry_or_revoc
     assert restarted.status("local", task_id) == "revoked"
 
 
+def test_task_authorization_refreshes_workspace_material_scope_before_execution(tmp_path):
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+
+    repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
+    actor = _local_task_actor(repo, task_id)
+    task = repo.task_records.get_creation_task("local", task_id)
+    service = TaskAuthorizationUseCase(repo, lambda _identity: "ready")
+
+    issued = service.ensure(task, actor)
+    assert issued.resource_scope["assets"] == []
+
+    asset, reference = register_synthetic_video_asset(
+        repo, workspace_id="local", member_id=actor.member_id,
+        path=tmp_path / "library" / "received-after-auth.mp4", asset_id="received-after-auth", seconds=3,
+    )
+    refreshed = service.ensure(task, actor)
+
+    assert refreshed.revision == issued.revision + 1
+    assert refreshed.resource_scope["assets"] == [asset.id]
+    assert refreshed.resource_scope["references"] == [reference]
+    assert service.material_asset_ids("local", task_id) == {asset.id}
+
+
+def test_task_authorization_keeps_scope_immutable_after_execution_starts(tmp_path):
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+
+    repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
+    actor = _local_task_actor(repo, task_id)
+    task = repo.task_records.get_creation_task("local", task_id)
+    service = TaskAuthorizationUseCase(repo, lambda _identity: "ready")
+
+    issued = service.ensure(task, actor)
+    register_synthetic_video_asset(
+        repo, workspace_id="local", member_id=actor.member_id,
+        path=tmp_path / "library" / "received-after-start.mp4", asset_id="received-after-start", seconds=3,
+    )
+    running_task = replace(task, stage_status="running")
+
+    assert service.ensure(running_task, actor) == issued
+    assert service.material_asset_ids("local", task_id) == set()
+
+
 def test_task_authorization_keeps_selected_assets_and_accepts_only_own_derived_output(tmp_path):
     from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.creation.contracts import ArtifactRecord, JobRun
@@ -7522,6 +7564,36 @@ def test_section_dependency_projection_borrows_transaction_and_preserves_cas(tmp
     _section_projection_next_version(case,case.snapshot,subtitle_change=True)
     with pytest.raises(ValueError,match='实际音画、字幕或来源依赖已变化'):
         repo.section_adoption.restore_script_section('local',case.task_id,**arguments)
+
+
+def test_segment_capture_local_accepts_recorded_narration_without_voice_profile(tmp_path):
+    """Recorded narration must not require a generated voice profile at preflight."""
+    from app.creation.contracts import TaskEvent
+
+    case = _section_context_projection_case(tmp_path)
+    repo = case.repo
+    prepared_id = case.segments.video_preparation_id(case.job, 'section_3')
+    repo.execution_records.append_task_event(TaskEvent(
+        prepared_id, 'local', case.task_id, case.job.id, 'segment_video_prepared',
+        {'montage': case.montage},
+    ))
+    task = repo.task_records.get_creation_task('local', case.task_id)
+    plan = repo.plan_records.get_creation_plan('local', task.plan_id)
+    plan.selected_voice = None
+    with repo._connect() as conn:
+        conn.execute(
+            'UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(plan), default=str), 'local', plan.id),
+        )
+
+    request = SimpleNamespace(
+        workspace_id='local', owner_id=case.job.id,
+        unit_key='segment_video:section_3:publication_3',
+    )
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        check = case.segments.capture_local(request, conn, case.owner)
+        assert check(conn) == 'ready'
 
 
 @pytest.mark.parametrize('conflict',['cue_order','overlap'])

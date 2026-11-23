@@ -11,7 +11,7 @@
 - 运行要求：`EditAudioTimeline`
 - 采用入口：`preview_typed_edit`、`apply_typed_edit`
 
-截图：[`resource-panel-glass-pulse-2026-11-15.png`](../../output/playwright/resource-panel-glass-pulse-2026-11-15.png)
+截图保存在本机验收目录，未作为仓库事实提交。
 
 资源目录仍是只读事实源；页面没有伪造“已经写入时间线”。实际采用、时间线持久化、真实 ffmpeg 输出和三帧观察见 [`resource-adoption-glass-pulse-2026-11-14.json`](resource-adoption-glass-pulse-2026-11-14.json)。
 

@@ -71,7 +71,8 @@
       { "from": "../api/model_workers", "to": "model-workers", "filter": ["**/*.py"] },
       { "from": "../api/agent_tools", "to": "agent-tools", "filter": ["**/*.ts"] },
       { "from": "../api/agent_runtime", "to": "agent_runtime", "filter": ["**/*.mjs", "**/*.md", "**/*.json", "!tests/**"] },
-      { "from": "../web/.next/standalone-bundled/apps/web", "to": "web", "filter": ["**/*"] }
+      { "from": "../web/.next/standalone-bundled/apps/web", "to": "web", "filter": ["**/*"] },
+      { "from": "../web/.next/standalone-bundled/apps/web/node_modules", "to": "web/node_modules", "filter": ["**/*"] }
     ],
     "publish": {
       "provider": "github",
@@ -80,12 +81,12 @@
     }
   },
   "dependencies": {
-    "electron-updater": "^6.3.0",
+    "electron-updater": "6.8.11",
     "qrcode": "1.5.4",
     "selfsigned": "5.5.0"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0"
   }
 }

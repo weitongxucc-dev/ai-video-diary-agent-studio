@@ -1,4 +1,5 @@
 """Read original task-media results without arranging or executing work."""
+import hashlib
 import re
 from pathlib import Path
 
@@ -70,8 +71,14 @@ class MediaResultUseCase:
             raise MediaResultRejected(409, '媒体输出尚未登记为可读取产物。')
         try:
             path = self.outputs.artifact_store.resolve_file(logical_ref)
-            if path.stat().st_size != artifact.size_bytes:
+            digest = hashlib.sha256()
+            with path.open('rb') as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+                    digest.update(chunk)
+            if path.stat().st_size != artifact.size_bytes or digest.hexdigest() != artifact.sha256:
                 raise MediaResultRejected(409, '媒体输出与登记摘要不一致。')
+        except MediaResultRejected:
+            raise
         except (FileNotFoundError, OSError, ValueError) as exc:
             raise MediaResultRejected(404, '媒体输出文件当前不可读取。') from exc
         return path
