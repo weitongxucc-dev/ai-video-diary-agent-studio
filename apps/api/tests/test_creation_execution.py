@@ -7524,6 +7524,36 @@ def test_section_dependency_projection_borrows_transaction_and_preserves_cas(tmp
         repo.section_adoption.restore_script_section('local',case.task_id,**arguments)
 
 
+def test_segment_capture_local_accepts_recorded_narration_without_voice_profile(tmp_path):
+    """Recorded narration must not require a generated voice profile at preflight."""
+    from app.creation.contracts import TaskEvent
+
+    case = _section_context_projection_case(tmp_path)
+    repo = case.repo
+    prepared_id = case.segments.video_preparation_id(case.job, 'section_3')
+    repo.execution_records.append_task_event(TaskEvent(
+        prepared_id, 'local', case.task_id, case.job.id, 'segment_video_prepared',
+        {'montage': case.montage},
+    ))
+    task = repo.task_records.get_creation_task('local', case.task_id)
+    plan = repo.plan_records.get_creation_plan('local', task.plan_id)
+    plan.selected_voice = None
+    with repo._connect() as conn:
+        conn.execute(
+            'UPDATE creation_plans SET payload=? WHERE workspace_id=? AND id=?',
+            (json.dumps(asdict(plan), default=str), 'local', plan.id),
+        )
+
+    request = SimpleNamespace(
+        workspace_id='local', owner_id=case.job.id,
+        unit_key='segment_video:section_3:publication_3',
+    )
+    with repo._connect() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        check = case.segments.capture_local(request, conn, case.owner)
+        assert check(conn) == 'ready'
+
+
 @pytest.mark.parametrize('conflict',['cue_order','overlap'])
 def test_section_dependency_projection_keeps_global_conflict_checks(tmp_path,conflict):
     case = _section_context_projection_case(tmp_path)
