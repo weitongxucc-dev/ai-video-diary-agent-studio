@@ -4,7 +4,7 @@ import sqlite3
 from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 29
+PRODUCTION_SCHEMA_VERSION = 30
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -1067,6 +1067,24 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
     # marker keeps the version ledger linear in tests and on partial databases.
     (28, ""),
     (29, ""),
+    (
+        30,
+        """
+        CREATE TABLE IF NOT EXISTS material_rebind_receipts (
+            operation_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            old_root TEXT NOT NULL,
+            new_root TEXT NOT NULL,
+            manifest_sha256 TEXT NOT NULL,
+            manifest_json TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('prepared', 'applied')),
+            created_at TEXT NOT NULL,
+            applied_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_material_rebind_receipts_workspace
+            ON material_rebind_receipts(workspace_id, created_at DESC);
+        """,
+    ),
 )
 
 def _migrate_resource_manifest_kinds(conn: sqlite3.Connection) -> None:

@@ -17,6 +17,8 @@ from fastapi.responses import FileResponse
 from app.schemas import (
     MaterialIntakeStatusResponse, MaterialIntakeBindRequest,
     MaterialCopyCompleteRequest, MaterialCopyCompleteResponse,
+    MaterialIntakeRebindPrepareRequest, MaterialIntakeRebindCommitRequest,
+    MaterialIntakeRebindReceiptResponse,
     MaterialLibraryResponse, MaterialAssetResponse,
     MaterialDiscoveryStartRequest, MaterialDiscoveryControlRequest,
     MaterialDiscoveryReceiveRequest,
@@ -79,7 +81,8 @@ class MaterialIntakeHTTPAdapter:
     def __init__(self, *, records_for: Callable[[], MaterialIntakeRecords],
                  discovery_for: Callable[..., MaterialDiscoveryActions],
                  workspace_for, reader_for, member_scope, ingestion_for,
-                 execution_mode, asset_response, discovery_exclusions, wake_received):
+                 execution_mode, asset_response, discovery_exclusions, wake_received,
+                 write_guard=None):
         self._records_for = records_for
         self._discovery_for = discovery_for
         self._workspace_for = workspace_for
@@ -90,6 +93,7 @@ class MaterialIntakeHTTPAdapter:
         self._asset_response = asset_response
         self._discovery_exclusions = discovery_exclusions
         self._wake_received = wake_received
+        self._write_guard = write_guard
 
 
     def get_material_intake_status(self, request: Request) -> MaterialIntakeStatusResponse:
@@ -108,6 +112,69 @@ class MaterialIntakeHTTPAdapter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         service.wake()
         return material_binding_status(workspace_id, repository)
+
+    def prepare_material_rebind(self, request: Request, payload: MaterialIntakeRebindPrepareRequest) -> MaterialIntakeRebindReceiptResponse:
+        workspace_id = self._workspace_for(request)
+        repository = self._records_for()
+        service = self._ingestion_for(repository)
+        self._reader_for(request, workspace_id)
+        if self._write_guard is not None:
+            denied = self._write_guard(request)
+            if denied is not None:
+                return denied
+        try:
+            manifest = service.prepare_material_rebind(
+                workspace_id,
+                old_directory=payload.old_directory,
+                new_directory=payload.new_directory,
+                operation_id=payload.operation_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return MaterialIntakeRebindReceiptResponse(
+            operation_id=str(manifest["operation_id"]), workspace_id=workspace_id,
+            old_root=str(manifest["old_root"]), new_root=str(manifest["new_root"]),
+            manifest_sha256=str(manifest["manifest_sha256"]), status="prepared",
+            entry_count=len(manifest["entries"]),
+        )
+
+    def commit_material_rebind(self, request: Request, payload: MaterialIntakeRebindCommitRequest) -> MaterialIntakeRebindReceiptResponse:
+        workspace_id = self._workspace_for(request)
+        repository = self._records_for()
+        service = self._ingestion_for(repository)
+        self._reader_for(request, workspace_id)
+        if self._write_guard is not None:
+            denied = self._write_guard(request)
+            if denied is not None:
+                return denied
+        try:
+            result = service.commit_material_rebind(
+                workspace_id, operation_id=payload.operation_id, manifest_sha256=payload.manifest_sha256,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return MaterialIntakeRebindReceiptResponse(
+            operation_id=str(result["operation_id"]), workspace_id=workspace_id,
+            old_root=str(result["old_root"]), new_root=str(result["new_root"]),
+            manifest_sha256=str(result["manifest_sha256"]), status="applied",
+            entry_count=int(result["entry_count"]), applied_at=str(result["applied_at"]),
+        )
+
+    def read_material_rebind(self, operation_id: str, request: Request) -> MaterialIntakeRebindReceiptResponse:
+        workspace_id = self._workspace_for(request)
+        repository = self._records_for()
+        self._reader_for(request, workspace_id)
+        try:
+            result = repository.material_source_files.material_rebind_receipt(workspace_id, operation_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="迁移回执不存在") from exc
+        return MaterialIntakeRebindReceiptResponse(
+            operation_id=str(result["operation_id"]), workspace_id=workspace_id,
+            old_root=str(result["old_root"]), new_root=str(result["new_root"]),
+            manifest_sha256=str(result["manifest_sha256"]), status=str(result["status"]),
+            entry_count=int(result.get("entry_count", len(result.get("entries", [])))),
+            applied_at=result.get("applied_at"),
+        )
 
     def confirm_material_copy_complete(self, request: Request, payload: MaterialCopyCompleteRequest) -> MaterialCopyCompleteResponse:
         workspace_id = self._workspace_for(request)
@@ -210,6 +277,18 @@ def build_material_intake_router(adapter_for, route_names: tuple[str, ...] | Non
     @router.post('/api/production/materials/intake/bind', response_model=MaterialIntakeStatusResponse)
     def bind_material_intake(request: Request, payload: MaterialIntakeBindRequest) -> MaterialIntakeStatusResponse:
         return adapter_for().bind_material_intake(request, payload)
+
+    @router.post('/api/production/materials/intake/rebind/prepare', response_model=MaterialIntakeRebindReceiptResponse)
+    def prepare_material_rebind(request: Request, payload: MaterialIntakeRebindPrepareRequest) -> MaterialIntakeRebindReceiptResponse:
+        return adapter_for().prepare_material_rebind(request, payload)
+
+    @router.post('/api/production/materials/intake/rebind/commit', response_model=MaterialIntakeRebindReceiptResponse)
+    def commit_material_rebind(request: Request, payload: MaterialIntakeRebindCommitRequest) -> MaterialIntakeRebindReceiptResponse:
+        return adapter_for().commit_material_rebind(request, payload)
+
+    @router.get('/api/production/materials/intake/rebind/{operation_id}', response_model=MaterialIntakeRebindReceiptResponse)
+    def read_material_rebind(operation_id: str, request: Request) -> MaterialIntakeRebindReceiptResponse:
+        return adapter_for().read_material_rebind(operation_id, request)
 
     @router.post('/api/production/materials/intake/copy-complete', response_model=MaterialCopyCompleteResponse)
     def confirm_material_copy_complete(request: Request, payload: MaterialCopyCompleteRequest) -> MaterialCopyCompleteResponse:

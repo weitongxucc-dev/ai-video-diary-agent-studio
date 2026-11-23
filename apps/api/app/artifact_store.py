@@ -4,6 +4,7 @@ import hashlib
 import os
 import stat
 import tempfile
+from uuid import uuid4
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -17,6 +18,40 @@ class PublishedArtifact:
     size_bytes: int
 
 
+@dataclass(frozen=True)
+class StorageRebindEntry:
+    """One logical artifact whose bytes must be present at the new root."""
+
+    logical_ref: str
+    sha256: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class StorageRebindPlan:
+    """Validated, still-uncommitted root rebind."""
+
+    source_root: Path
+    target_root: Path
+    source_identity: tuple[int, int]
+    target_identity: tuple[int, int]
+    entries: tuple[StorageRebindEntry, ...]
+
+
+@dataclass(frozen=True)
+class StorageRebindReceipt:
+    """The durable binding that the caller should expose in its audit receipt."""
+
+    previous_root: Path
+    active_root: Path
+    active_identity: tuple[int, int]
+    entries: tuple[StorageRebindEntry, ...]
+
+
+class StorageRebindError(ValueError):
+    """A root rebind was not safe to prepare or commit."""
+
+
 class ArtifactStore:
     """Publishes immutable files below one controlled storage root."""
 
@@ -25,6 +60,11 @@ class ArtifactStore:
         self._root.mkdir(parents=True, exist_ok=True)
         root_stat = self._root.stat()
         self._root_identity = (root_stat.st_dev, root_stat.st_ino)
+
+    @property
+    def storage_root(self) -> Path:
+        """Return the one root currently used for reads and writes."""
+        return self._root
 
     def publish_bytes(self, logical_ref: str, content: bytes) -> PublishedArtifact:
         return self.publish(logical_ref, lambda target: target.write(content))
@@ -216,6 +256,25 @@ class ArtifactStore:
         if not self._storage_root_matches():
             raise OSError("产物存储目录已断开或被替换，请恢复原存储位置后重试；更换磁盘后需重新启动应用。")
 
+    def _adopt_storage_root(
+        self, root: Path, *, expected_identity: tuple[int, int] | None = None,
+    ) -> None:
+        """Adopt a root after WorkspaceStorageRebind committed its binding.
+
+        Callers must not invoke this directly.  Keeping the root identity beside
+        the path makes every later publication/read continue to reject a removed
+        or replaced volume.
+        """
+        resolved = root.expanduser().resolve()
+        current = resolved.stat()
+        identity = (current.st_dev, current.st_ino)
+        if not stat.S_ISDIR(current.st_mode):
+            raise StorageRebindError("新的产物根目录不是目录")
+        if expected_identity is not None and identity != expected_identity:
+            raise StorageRebindError("新的产物根目录在提交期间被替换，未切换当前进程")
+        self._root = resolved
+        self._root_identity = identity
+
     @staticmethod
     def _describe(
         logical_ref: str, path: Path, check: Callable[[], None] | None = None,
@@ -242,3 +301,158 @@ class ArtifactStore:
             sha256=digest.hexdigest(),
             size_bytes=size,
         )
+
+
+class WorkspaceStorageRebind:
+    """Prepare and commit a verified ArtifactStore root rebind.
+
+    Files are staged by the caller before ``prepare``.  This class never copies
+    user data or deletes the previous root.  It validates both roots and every
+    logical artifact by byte digest and size, then lets the caller persist the
+    unique root setting before switching the live store.  A missing, replaced,
+    symlinked, or read-only root is rejected and the current store remains active.
+    """
+
+    def __init__(self, store: ArtifactStore) -> None:
+        self._store = store
+
+    @classmethod
+    def verify_persisted_binding(
+        cls, raw_root: str | Path, expected_identity: tuple[int, int],
+    ) -> Path:
+        """Reject a persisted path whose volume identity no longer matches."""
+        target = cls._require_target_root(raw_root)
+        if not cls._same_root_identity(target, expected_identity):
+            raise StorageRebindError("已保存的产物根目录身份已变化，拒绝启动")
+        return target
+
+    def prepare(
+        self,
+        target_root: str | Path,
+        entries: tuple[StorageRebindEntry, ...] | list[StorageRebindEntry],
+    ) -> StorageRebindPlan:
+        source_root = self._store.storage_root
+        try:
+            source_stat = source_root.stat()
+        except OSError as exc:
+            raise StorageRebindError("当前产物根目录不可用") from exc
+        source_identity = (source_stat.st_dev, source_stat.st_ino)
+        if not self._same_root_identity(source_root, source_identity):
+            raise StorageRebindError("当前产物根目录已断开或被替换")
+
+        requested_entries = tuple(entries)
+        if not requested_entries and any(path.is_file() for path in source_root.rglob("*")):
+            raise StorageRebindError("当前产物根目录仍有文件，迁移清单不能为空")
+        target = self._require_target_root(target_root)
+        target_stat = target.stat()
+        target_identity = (target_stat.st_dev, target_stat.st_ino)
+        checked = self._validate_entries(target, requested_entries)
+        return StorageRebindPlan(
+            source_root=source_root,
+            target_root=target,
+            source_identity=source_identity,
+            target_identity=target_identity,
+            entries=checked,
+        )
+
+    def commit(
+        self,
+        plan: StorageRebindPlan,
+        persist_binding: Callable[[Path, tuple[int, int]], None],
+    ) -> StorageRebindReceipt:
+        """Persist the new binding, then switch the live store once.
+
+        ``persist_binding`` must be an idempotent transaction owned by the
+        settings/repository layer.  It must persist the path and identity in one
+        binding record.  It runs only after the files are rechecked.  If it
+        raises, the old root remains active.  A process restart must reject a
+        persisted binding whose path no longer has the recorded identity.
+        """
+        if plan.source_root != self._store.storage_root:
+            raise StorageRebindError("迁移计划不属于当前产物根目录")
+        if not self._same_root_identity(plan.source_root, plan.source_identity):
+            raise StorageRebindError("原产物根目录已断开或被替换")
+        if not self._same_root_identity(plan.target_root, plan.target_identity):
+            raise StorageRebindError("新的产物根目录已被替换")
+        self._validate_entries(plan.target_root, plan.entries)
+        persist_binding(plan.target_root, plan.target_identity)
+        self._store._adopt_storage_root(plan.target_root, expected_identity=plan.target_identity)
+        return StorageRebindReceipt(
+            previous_root=plan.source_root,
+            active_root=plan.target_root,
+            active_identity=plan.target_identity,
+            entries=plan.entries,
+        )
+
+    def _validate_entries(
+        self,
+        target_root: Path,
+        entries: tuple[StorageRebindEntry, ...] | list[StorageRebindEntry],
+    ) -> tuple[StorageRebindEntry, ...]:
+        unique: dict[str, StorageRebindEntry] = {}
+        for entry in entries:
+            if not isinstance(entry, StorageRebindEntry):
+                raise StorageRebindError("迁移清单包含无效项")
+            if entry.logical_ref in unique:
+                raise StorageRebindError("迁移清单包含重复的逻辑引用")
+            if entry.size_bytes < 0 or not entry.sha256.strip():
+                raise StorageRebindError("迁移清单缺少有效的内容摘要")
+            source = self._store.resolve_file(entry.logical_ref)
+            target = self._target(target_root, entry.logical_ref)
+            self._verify_file(source, entry, "原产物")
+            self._verify_file(target, entry, "迁移后的产物")
+            unique[entry.logical_ref] = entry
+        return tuple(unique.values())
+
+    @staticmethod
+    def _target(root: Path, logical_ref: str) -> Path:
+        if not logical_ref or "\\" in logical_ref:
+            raise StorageRebindError("迁移清单中的逻辑引用无效")
+        relative = PurePosixPath(logical_ref)
+        if (relative.is_absolute() or relative.as_posix() != logical_ref
+                or any(part in {"", ".", ".."} for part in relative.parts)):
+            raise StorageRebindError("迁移清单中的逻辑引用必须是受控相对路径")
+        target = root.joinpath(*relative.parts)
+        if not target.resolve(strict=False).is_relative_to(root):
+            raise StorageRebindError("迁移清单中的逻辑引用越过受控目录")
+        current = root
+        for index, part in enumerate(relative.parts):
+            current = current / part
+            if current.is_symlink():
+                raise StorageRebindError("迁移产物路径不能包含符号链接")
+            if index < len(relative.parts) - 1 and current.exists() and not current.is_dir():
+                raise StorageRebindError("迁移产物路径的父级不是目录")
+        return target
+
+    @staticmethod
+    def _verify_file(path: Path, entry: StorageRebindEntry, label: str) -> None:
+        if path.is_symlink() or not path.is_file():
+            raise StorageRebindError(f"{label}不存在或不是普通文件：{entry.logical_ref}")
+        publication = ArtifactStore._describe(entry.logical_ref, path)
+        if (publication.sha256, publication.size_bytes) != (entry.sha256, entry.size_bytes):
+            raise StorageRebindError(f"{label}内容摘要或大小不匹配：{entry.logical_ref}")
+
+    @staticmethod
+    def _same_root_identity(root: Path, identity: tuple[int, int]) -> bool:
+        try:
+            current = root.stat()
+        except OSError:
+            return False
+        return stat.S_ISDIR(current.st_mode) and (current.st_dev, current.st_ino) == identity
+
+    @classmethod
+    def _require_target_root(cls, raw_root: str | Path) -> Path:
+        target = Path(raw_root).expanduser()
+        if not target.is_absolute() or target.is_symlink():
+            raise StorageRebindError("新的产物根目录必须是绝对且非符号链接目录")
+        target = target.resolve()
+        if not target.is_dir():
+            raise StorageRebindError("新的产物根目录不存在或不是目录")
+        probe = target / f".storage-rebind-{os.getpid()}-{uuid4().hex}"
+        try:
+            probe.touch(exist_ok=False)
+            probe.unlink()
+        except OSError as exc:
+            probe.unlink(missing_ok=True)
+            raise StorageRebindError("新的产物根目录不可写") from exc
+        return target

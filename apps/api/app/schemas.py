@@ -974,6 +974,30 @@ class MaterialIntakeBindRequest(BaseModel):
     expected_directory: str = Field(min_length=1)
 
 
+class MaterialIntakeRebindPrepareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    old_directory: str = Field(min_length=1)
+    new_directory: str = Field(min_length=1)
+    operation_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class MaterialIntakeRebindCommitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class MaterialIntakeRebindReceiptResponse(BaseModel):
+    operation_id: str
+    workspace_id: str
+    old_root: str
+    new_root: str
+    manifest_sha256: str
+    status: Literal["prepared", "applied"]
+    entry_count: int = Field(ge=0)
+    applied_at: str | None = None
+
+
 class MaterialFileRevision(BaseModel):
     model_config = ConfigDict(extra="forbid")
     size_bytes: str = Field(pattern=r"^[0-9]+$")

@@ -298,6 +298,19 @@ class MaterialIngestionService:
         )
         self.wake()
 
+    def prepare_material_rebind(self, workspace_id: str, *, old_directory: str, new_directory: str, operation_id: str) -> dict[str, object]:
+        """Serialize root maintenance with the scanner's current cycle."""
+        with self._scan_lock:
+            return self.repository.material_source_files.prepare_material_rebind(
+                workspace_id, old_directory=old_directory, new_directory=new_directory, operation_id=operation_id,
+            )
+
+    def commit_material_rebind(self, workspace_id: str, *, operation_id: str, manifest_sha256: str) -> dict[str, object]:
+        with self._scan_lock:
+            return self.repository.material_source_files.commit_material_rebind(
+                workspace_id, operation_id=operation_id, manifest_sha256=manifest_sha256,
+            )
+
     def scan_once(self) -> list[MaterialAsset]:
         """Run one bounded intake cycle; safe to call beside the background thread."""
         if self.execution_mode == "scheduled":

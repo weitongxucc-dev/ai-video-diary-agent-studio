@@ -6,10 +6,11 @@ from app.auth import OnboardingStateError
 from app.model_installer import ModelInstallError
 from app.repository import LEGACY_WORKSPACE_ID
 from app.runtime_settings import RuntimeSettingsSaveError
+from app.config import StorageConfigurationError
 from app.workspace_settings import WorkspaceSecretStoreError
 from app.schemas import OnboardingCompletionResponse, RuntimeHealthResponse, RuntimeSettingsResponse, RuntimeSettingsUpdateRequest, SetupPreflightResponse
 
-def build_runtime_settings_router(*, workspace_for, settings_for, auth_for, workspace_settings_for, health_for, setup_for, storage_preflight_for, local_host_for, device_values_for, env_updates_for, settings_type_for, catalog_builder_for, installer_for, reload_lock_for, reload_allowed_for, prepare_reload_for, quiesce_for, save_for, activate_for, env_path_for, route_names) -> APIRouter:
+def build_runtime_settings_router(*, workspace_for, settings_for, auth_for, workspace_settings_for, health_for, setup_for, storage_preflight_for, local_host_for, device_values_for, env_updates_for, settings_type_for, validate_storage_for, catalog_builder_for, installer_for, reload_lock_for, reload_allowed_for, prepare_reload_for, quiesce_for, save_for, activate_for, env_path_for, route_names) -> APIRouter:
     router = APIRouter()
 
     @router.get('/api/runtime/health', response_model=RuntimeHealthResponse)
@@ -61,6 +62,7 @@ def build_runtime_settings_router(*, workspace_for, settings_for, auth_for, work
                 reload_allowed_for()()
                 prospective_environment = {**os.environ, **env_updates_for()(device_values)}
                 prospective_settings = settings_type_for().from_env(prospective_environment)
+                validate_storage_for()(prospective_settings, submitted)
                 candidate_catalog = catalog_builder_for()(prospective_settings)
                 with installer_for().guard_catalog_update(candidate_catalog):
                     prepared = prepare_reload_for()(prospective_settings)
@@ -76,6 +78,8 @@ def build_runtime_settings_router(*, workspace_for, settings_for, auth_for, work
         except WorkspaceSecretStoreError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ModelInstallError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except StorageConfigurationError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return RuntimeSettingsResponse.model_validate(workspace_settings_for()(workspace_id).safe_runtime_settings(workspace_id))
 
