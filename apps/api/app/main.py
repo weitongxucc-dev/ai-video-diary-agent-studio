@@ -836,6 +836,15 @@ def _validate_assistant_scope(request: Request, kind: str, scope_id: str) -> Non
     workspace_id = current_workspace_id(request)
     if kind == "home" and scope_id == "home":
         return
+    if kind == "home" and scope_id.startswith("draft:"):
+        draft_id = scope_id.removeprefix("draft:")
+        try:
+            draft = UUID(draft_id)
+        except ValueError:
+            pass
+        else:
+            if str(draft) == draft_id and draft.version in range(1, 9):
+                return
     if kind == "task":
         task = _creation_task_or_404(workspace_id, scope_id)
         if not _content_identity_http_adapter().visible(request, workspace_id, task.visibility, task.owner_user_id):

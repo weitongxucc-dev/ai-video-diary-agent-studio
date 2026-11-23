@@ -147,6 +147,8 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
         ? availableVoices.find(item => item.profile_id === voice.profile_id && item.version === voice.version) : null;
     const voiceLabel = selectedVoice?.person_display_name || (preview?.requirements.selected_voice ? "已选择声音参考" : "尚未选择");
     const job = execution?.job;
+    const mediaQueue = execution?.media_queue;
+    const knownWaveformOperation = mediaQueue?.pending_operations.length === 1 && mediaQueue.pending_operations[0] === "audio_waveform";
     const hasInitialExecutionControls = !job || job.kind === "creation_task_execution";
     const failureReason = job && (job.status === "failed" || job.status === "interrupted" || job.status === "cancelled")
         ? job.failure_reason : null;
@@ -187,6 +189,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
       {!taskReason && failureReason ? <p>{creationTaskFailureReason(failureReason, taskStage)}</p> : null}
       <details className={styles.traceDetails}><summary>步骤与后台记录</summary>
         <ExecutionQueueStatus status={job.status} currentStage={execution?.current_stage ?? null} waitingReason={execution?.waiting_reason ?? null} statusUpdatedAt={execution?.status_updated_at ?? null}/>
+        {mediaQueue && mediaQueue.pending_count > 0 ? <p>后台记录：{mediaQueue.pending_count} 条待结清，{mediaQueue.pending_with_device_request_count} 条有设备请求，{mediaQueue.pending_without_device_request_count} 条未发现设备请求。{knownWaveformOperation ? "已识别的操作：音频波形。" : null}</p> : null}
         {failureReason ? <p>原始原因：{failureReason}</p> : null}{job.repair_action ? <p>后台处理原文：{job.repair_action}</p> : null}
         <ol>{execution?.stages.map((event, index) => <li key={`${event.at}-${index}`}>{stageLabels[event.stage] ?? event.stage}：{event.status === "running" ? "正在处理" : event.status === "completed" ? "已完成" : event.status === "reused" ? "沿用有效结果" : event.status === "failed" ? "失败" : "待完成"}{event.reason ? ` · ${event.reason}` : ""}</li>)}</ol>
       </details>

@@ -2404,6 +2404,56 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.queryByRole("button", {name:"查询声音采用结果"})).not.toBeInTheDocument();
   });
 
+  it("shows saved duration provenance only for the current review timeline", async () => {
+    const initial = workspaceWithCover();
+    initial.plan.duration_target_seconds = 162.733333;
+    initial.montage!.duration_seconds = 162.733333;
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.getExecution.mockResolvedValue({ ...queueStatus(null), video_ready: true, duration_consistency: {
+      status: "adjusted", original_target_seconds: 151, target_seconds: 162.733333, timeline_seconds: 162.733333,
+      difference_seconds: 0, tolerance_seconds: 1 / 30, timeline_version_id: initial.task.current_timeline_version_id,
+      target_adjusted: true, adjustment_event_id: "internal-duration-adoption",
+    } });
+    const measuredCheck = {
+      check_state: "done", result_status: "clean", stale: false,
+      timeline_version_id: initial.task.current_timeline_version_id, video_duration_seconds: 162.72,
+      findings: [], unavailable: [],
+    };
+    mocks.getQualityCheck.mockResolvedValue(measuredCheck);
+    const view = renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    const review = within(await screen.findByRole("tabpanel", { name: "成片检查" }));
+    expect(await review.findByText(/原目标：151 秒/)).toBeVisible();
+    expect(review.getByText(/当前目标：162\.733 秒/)).toBeVisible();
+    expect(review.getByText(/时间线时长：162\.733 秒/)).toBeVisible();
+    expect(review.getByText(/已按旁白时长调整目标/)).toBeVisible();
+    expect(await review.findByText(/成片视频时长：162\.72 秒/)).toBeVisible();
+    expect(review.queryByText(/internal-duration-adoption/)).not.toBeInTheDocument();
+    expect(mocks.getQualityCheck).toHaveBeenCalledExactlyOnceWith(initial.task.id);
+
+    mocks.checkQuality.mockResolvedValueOnce({ ...measuredCheck, stale: true }).mockResolvedValueOnce(measuredCheck);
+    fireEvent.click(review.getByRole("button", { name: "重新检查成片" }));
+    expect(await review.findByText("旧检查已失效，请检查当前成片")).toBeVisible();
+    expect(review.getByText(/成片视频时长未测量/)).toBeVisible();
+    expect(review.queryByText(/162\.72 秒/)).not.toBeInTheDocument();
+    fireEvent.click(review.getByRole("button", { name: "重新检查成片" }));
+    expect(await review.findByText(/成片视频时长：162\.72 秒/)).toBeVisible();
+
+    mocks.checkQuality.mockRejectedValueOnce(new Error("回执读取失败"));
+    fireEvent.click(review.getByRole("button", { name: "重新检查成片" }));
+    expect(await review.findByText("回执读取失败")).toBeVisible();
+    expect(review.getByText(/成片视频时长未测量/)).toBeVisible();
+
+    const newer = { ...initial, task: { ...initial.task, current_timeline_version_id: "timeline-version-7", timeline_sequence: 7 } };
+    mocks.getWorkspace.mockResolvedValue(newer);
+    await act(async () => {
+      view.rerender(<CreationTaskWorkspace key="newer-timeline" initialTasks={[]} initialTopics={null} initialWorkspace={newer} />);
+    });
+    fireEvent.click(getWorkspaceViewControl(/^检查与输出：/));
+    const updatedReview = within(await screen.findByRole("tabpanel", { name: "成片检查" }));
+    expect(updatedReview.getByText(/成片视频时长未测量/)).toBeVisible();
+    expect(updatedReview.queryByText(/151 秒|162\.733 秒|162\.72 秒|已按旁白时长调整目标/)).not.toBeInTheDocument();
+  });
+
   it("binds the displayed timeline version to the native save boundary", async () => {
     const task = { ...baseTask, stage: "review" as const, stage_status: "waiting_for_user" as const, status: "waiting_for_user" as const, progress: 90, output_ready: true, current_timeline_version_id: "timeline-version-save" };
     const initial = workspace(task, {

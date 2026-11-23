@@ -837,17 +837,22 @@ async function assertSingleInstanceLockCheckpoints() {
 }
 
 async function assertAsyncLifecycleLogGate() {
+  const shutdownEvents = ['desktop-shutdown-requested', 'desktop-shutdown-receipt', 'desktop-shutdown-result'];
   for (const outcome of ['delayed', 'failed', 'stalled', 'close-failed']) {
     const resources = createResources({ api: false, web: false, logProbe: true });
     const writes = [];
     const stages = [];
     let lockCalls = 0;
     let streamCount = 0;
+    let endCalls = 0;
+    let destroyCalls = 0;
+    let writesBeforeCloseFailure;
     let runtime;
     const stream = new EventEmitter();
     stream.writableFinished = false;
     stream.write = (line, callback) => { writes.push({ line, callback, completed: false }); return true; };
     stream.destroy = () => {
+      destroyCalls++;
       stream.destroyed = true;
       for (const write of writes) {
         if (!write.completed) { write.completed = true; write.callback(Object.assign(new Error('fixture destroyed'), { code: 'ERR_STREAM_DESTROYED' })); }
@@ -855,8 +860,11 @@ async function assertAsyncLifecycleLogGate() {
       setImmediate(() => stream.emit('close'));
     };
     stream.end = () => {
-      if (outcome === 'close-failed') stream.emit('error', Object.assign(new Error('fixture close failure'), { code: 'EIO' }));
-      else { stream.writableFinished = true; setImmediate(() => stream.emit('close')); }
+      endCalls++;
+      if (outcome === 'close-failed') {
+        writesBeforeCloseFailure = writes.map(write => write.line);
+        stream.emit('error', Object.assign(new Error('fixture close failure'), { code: 'EIO' }));
+      } else { stream.writableFinished = true; setImmediate(() => stream.emit('close')); }
     };
     const complete = index => { const write = writes[index]; write.completed = true; write.callback(); };
     const timers = [];
@@ -925,7 +933,14 @@ async function assertAsyncLifecycleLogGate() {
           await waitFor(() => runtime.app.exited, 'close failure ending the instance');
           assert.equal(runtime.app.exitCode, 1);
           assert.equal(runtime.dialogs.length, 1);
-          assert.equal(writes.length, 2, 'a close failure must not recursively enqueue a fault log');
+          assert.equal(runtime.dialogs[0].title, '日志写入失败');
+          assert.equal(endCalls, 1, 'the append stream is closed once');
+          assert.equal(destroyCalls, 1, 'the failed append stream is cleaned up once');
+          assert.deepEqual(writesBeforeCloseFailure.map(line => JSON.parse(line).event), [
+            'single-instance-lock-start', 'single-instance-lock-end', ...shutdownEvents,
+          ], 'normal shutdown checkpoints precede the close failure');
+          assert.deepEqual(writes.map(write => write.line), writesBeforeCloseFailure,
+            'a close failure must not recursively enqueue a fault log');
           assert.equal(stages.filter(stage => stage === 'lifecycle-log-failed').length, 1);
         }
       }
@@ -954,7 +969,10 @@ async function assertAsyncLifecycleLogGate() {
     await Promise.all([runtime.mainExports.recordLifecycle('fixture-one'), runtime.mainExports.recordLifecycle('fixture-two')]);
     runtime.app.quit(); await waitFor(() => runtime.app.exited, 'real log closed');
     const rows = fs.readFileSync(logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
-    assert.deepEqual(rows.map(row => row.event), ['existing-record', 'single-instance-lock-start', 'single-instance-lock-end', 'fixture-one', 'fixture-two']);
+    assert.deepEqual(rows.map(row => row.event), [
+      'existing-record', 'single-instance-lock-start', 'single-instance-lock-end', 'fixture-one', 'fixture-two',
+      ...shutdownEvents,
+    ]);
     assert.equal(runtime.children.length, 0); assert.equal(runtime.windows.length, 0);
     assert.equal(runtime.app.exitCode, 0);
     assert.equal(fs.existsSync(path.join(resources, 'user-data')), false);

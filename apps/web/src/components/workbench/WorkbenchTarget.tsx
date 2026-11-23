@@ -1,16 +1,33 @@
 "use client";
 
-import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
-import { usePathname } from "next/navigation";
+import { createContext, Suspense, useCallback, useContext, useState, type ReactNode } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { validDraftId } from "@/lib/preflight-draft";
+import { isCreationDraftRoute } from "./context";
 
-const WorkbenchTarget = createContext<{ targetId: string | null; clearTarget: () => void }>({ targetId: null, clearTarget: () => {} });
+type Target = { targetId: string | null; draftId: string | null };
+const homeTarget: Target = { targetId: null, draftId: null };
+const WorkbenchTarget = createContext<Target & { clearTarget: () => void }>({ ...homeTarget, clearTarget: () => {} });
 export function useWorkbenchTarget() { return useContext(WorkbenchTarget); }
 
 /** The explicit business target survives resource browsing; it also owns chat scope. */
-export function WorkbenchTargetProvider({ children }: { children: ReactNode }) {
+function RoutedWorkbenchTarget({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "/";
-  const [target, setTarget] = useState({ pathname, id: pathname.startsWith("/tasks/") ? pathname : null });
-  if (target.pathname !== pathname) setTarget({ pathname, id: pathname.startsWith("/tasks/") ? pathname : target.id });
-  const clearTarget = useCallback(() => setTarget(current => ({ ...current, id: null })), []);
-  return <WorkbenchTarget.Provider value={{ targetId: target.id, clearTarget }}>{children}</WorkbenchTarget.Provider>;
+  const params = useSearchParams();
+  const isDraftRoute = isCreationDraftRoute(pathname, params);
+  const rawDraftId = isDraftRoute ? params?.get("draft_id") : null;
+  const draftId = rawDraftId && validDraftId(rawDraftId) ? rawDraftId.toLowerCase() : null;
+  const targetId = pathname.startsWith("/tasks/") ? pathname : null;
+  const routeKey = isDraftRoute ? `draft:${draftId ?? ""}` : pathname;
+  const [selection, setSelection] = useState({ routeKey, target: { targetId, draftId } });
+  if (selection.routeKey !== routeKey) {
+    const explicitTarget = pathname === "/" || targetId !== null || isDraftRoute;
+    setSelection({ routeKey, target: explicitTarget ? { targetId, draftId } : selection.target });
+  }
+  const clearTarget = useCallback(() => setSelection(current => ({ ...current, target: homeTarget })), []);
+  return <WorkbenchTarget.Provider value={{ ...selection.target, clearTarget }}>{children}</WorkbenchTarget.Provider>;
+}
+
+export function WorkbenchTargetProvider({ children }: { children: ReactNode }) {
+  return <Suspense fallback={children}><RoutedWorkbenchTarget>{children}</RoutedWorkbenchTarget></Suspense>;
 }

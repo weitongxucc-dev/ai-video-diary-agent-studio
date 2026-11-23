@@ -262,7 +262,7 @@ class ExactPreviewUseCase:
         source['action'] = clean.action_values()
         return (clean, source)
 
-    def source_facts(self, task, payload, identity, actor):
+    def source_facts(self, task, payload, identity, actor, *, automatic_replacement=False):
         if payload.operation_type == 'EditAudioTimeline':
             graphs = self.audio_source_graph(task, payload)
             return self.audio_source_facts(task, graphs, actor)
@@ -271,9 +271,13 @@ class ExactPreviewUseCase:
             return []
         replacement = (payload.asset_id, payload.segment_id) if payload.asset_id is not None and payload.segment_id is not None else None
         try:
-            return self.repository.clip_sources.facts(task.workspace_id, task.id, clip_ids=ids, replacement=replacement, user_id=identity['member_id'], local_diagnostic=identity['local_diagnostic'])
+            return self.repository.clip_sources.facts(task.workspace_id, task.id, clip_ids=ids, replacement=replacement,
+                user_id=identity['member_id'], local_diagnostic=identity['local_diagnostic'],
+                automatic_replacement=automatic_replacement)
         except PermissionError as exc:
             raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
+        except EditConflict as exc:
+            raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
         except (KeyError, ValueError, OSError) as exc:
             status = 404 if isinstance(exc, KeyError) and exc.args[0] == '当前任务镜头不存在' else 409
             detail = '目标镜头不存在，请重新读取当前任务后选择实际镜头。' if status == 404 else '镜头来源或使用状态已失效'
@@ -588,7 +592,8 @@ class ExactPreviewUseCase:
         if not payload.model_fields_set & EXACT_EDIT_ENVELOPE_FIELDS:
             return payload, None
         source, version = self.typed_source(task, payload, identity['member_id'])
-        source['source_facts'] = self.source_facts(task, payload, identity, actor)
+        source['source_facts'] = self.source_facts(task, payload, identity, actor,
+            automatic_replacement=bool(payload.assistant_turn_id))
         clean, source = self.complete_typed(task, payload, identity['member_id'], actor, source, version, origin=origin)
         if origin is None and source.get('assistant_turn_id') and expected_input_id != source.get('input_id'):
             raise EditPreviewRejected(409, '助手输入已变化，旧请求不能归入新要求；请查询原请求回执')

@@ -29,6 +29,31 @@ function panel(compact: boolean, status: JobStatus, failureReason: string) {
     onCancel={vi.fn()} onOpenMontage={vi.fn()} />;
 }
 
+it("keeps the video ready while details distinguish pending background records from production", async () => {
+  const user = userEvent.setup();
+  const completed = {
+    ...execution("succeeded", ""), current_stage: null, video_ready: true,
+    media_queue: {
+      status: "pending" as const, pending_count: 2, pending_operations: ["audio_waveform"],
+      pending_with_device_request_count: 1, pending_without_device_request_count: 1,
+    },
+  };
+  render(<CreationExecutionPanel taskStage="review" taskReason={null} voice={null} availableVoices={[]}
+    preview={null} execution={completed} busy={false} compact onStart={vi.fn()} onResume={vi.fn()}
+    onCancel={vi.fn()} onOpenMontage={vi.fn()} />);
+
+  await user.click(screen.getByRole("button", { name: "查看制作详情" }));
+  const dialog = await screen.findByRole("dialog", { name: "制作文案与要求" });
+  const detail = within(dialog).getByText(/后台记录：2 条待结清，1 条有设备请求，1 条未发现设备请求/);
+  expect(detail).not.toBeVisible();
+  await user.click(within(dialog).getByText("步骤与后台记录"));
+  expect(detail).toBeVisible();
+  expect(detail).toHaveTextContent("已识别的操作：音频波形");
+  expect(within(dialog).getByText("成片已生成，等待检查")).toBeVisible();
+  expect(within(dialog).queryByText(/后台制作中|成片产物需要检查/)).not.toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: "停止制作" })).not.toBeInTheDocument();
+});
+
 it.each([true, false])("uses original-media requirements with no script or voice, can_continue=%s", async canContinue => {
   const onStart = vi.fn();
   const source = { asset_id: "source", asset_updated_at: "2026-11-09", source_ref: "workspace://source.mp4",

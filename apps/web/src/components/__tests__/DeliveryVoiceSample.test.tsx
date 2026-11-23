@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { DeliveryVoiceSample } from "../creation-task/DeliveryVoiceSample";
@@ -34,6 +34,12 @@ const receipt = { id: "work-id", plan_id: "plan-id", state: "waiting", wait_reas
 const done = { ...receipt, state: "done" };
 const activated = { ...done, profile_published: true, normal_work_started: false };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(complete => { resolve = complete; });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   localStorage.clear();
@@ -44,20 +50,30 @@ beforeEach(() => {
 });
 
 it("plays the chosen voice, language and submitted sentence from the exact completed attempt", async () => {
+  const resources = deferred<typeof configured>();
+  api.resources.mockReturnValue(resources.promise);
   const run = {id:"sample-en", identity:"voice-identity", preview_text:"Line seven.", status:"queued"};
+  const completed = {
+    items: [
+      {...run, id:"previous", status:"succeeded", output_url:"/old.wav"},
+      {...run, status:"succeeded", output_url:"/current.wav"},
+    ],
+  };
+  const attempts = deferred<typeof completed>();
   api.create.mockResolvedValue(run);
-  api.attempts.mockResolvedValue({items:[
-    {...run, id:"previous", status:"succeeded", output_url:"/old.wav"},
-    {...run, status:"succeeded", output_url:"/current.wav"},
-  ]});
+  api.attempts.mockReturnValue(attempts.promise);
   render(<DeliveryVoiceSample language="en" profileId="studio" version="v3" />);
   fireEvent.change(screen.getByLabelText("英文试听文字"), { target:{value:"Line seven."} });
   const audition = screen.getByRole("button",{name:"生成英文试听"});
-  await waitFor(() => expect(audition).toBeEnabled());
-  fireEvent.click(audition);
-  await screen.findByText("已排队，等待设备");
+  expect(audition).toBeDisabled();
+  await act(async () => resources.resolve(configured));
+  expect(audition).toBeEnabled();
+  await userEvent.setup().click(audition);
   expect(api.create).toHaveBeenCalledWith({voice_profile_id:"studio",voice_version:"v3",language:"en",preview_text:"Line seven.",retry:false});
-  await waitFor(() => expect(screen.getByLabelText("英文样句录音")).toHaveAttribute("src","/current.wav"), {timeout:4000});
+  expect(await screen.findByText("已排队，等待设备")).toBeVisible();
+  await waitFor(() => expect(api.attempts).toHaveBeenCalledWith("voice", run.identity), {timeout:4000});
+  await act(async () => attempts.resolve(completed));
+  expect(screen.getByLabelText("英文样句录音")).toHaveAttribute("src","/current.wav");
   expect(api.create).toHaveBeenCalledTimes(1);
 });
 

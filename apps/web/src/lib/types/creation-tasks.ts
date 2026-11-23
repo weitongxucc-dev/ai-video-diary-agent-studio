@@ -435,6 +435,7 @@ export type CreationTaskQualityCheck = {
     render_ref: string | null;
     checked_at: string | null;
     error: string | null;
+    video_duration_seconds?: number | null;
     findings: {
         kind: "black_frame" | "truncation" | "clipping" | "timestamp_offset" | "delivery_duration";
         start_seconds: number;
@@ -589,6 +590,21 @@ export type SegmentVisualDecisionAdoption = {
 export type CreationExecutionStatus = {
   visual_decisions?: SegmentVisualDecisionPage;
     task_id: string;
+    duration_consistency?: {
+        original_target_seconds: number | null;
+        target_seconds: number;
+        timeline_seconds: number | null;
+        timeline_version_id: string | null;
+        target_adjusted: boolean;
+        adjustment_event_id: string | null;
+    };
+    media_queue?: {
+        status: "pending" | "settled";
+        pending_count: number;
+        pending_operations: string[];
+        pending_with_device_request_count: number;
+        pending_without_device_request_count: number;
+    };
     job: {
         id: string;
         kind: string;

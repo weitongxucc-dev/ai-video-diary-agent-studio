@@ -2148,6 +2148,7 @@ class CreationTaskQualityCheckResponse(BaseModel):
     render_ref: str | None
     checked_at: str | None
     error: str | None
+    video_duration_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     findings: list[CreationTaskQualityFindingResponse]
     unavailable: list[CreationTaskQualityUnavailableResponse]
     clipping_summary: CreationTaskClippingSummaryResponse | None = None

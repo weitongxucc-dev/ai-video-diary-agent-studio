@@ -261,6 +261,40 @@ def test_persisted_clean_never_survives_output_changes(system, change):
     assert result["findings"] == result["unavailable"] == []
 
 
+def test_quality_readback_only_exposes_current_verified_video_duration(system):
+    client, _, store, checks, headers, _, _ = system
+    publication = seed_render(system)
+    _, _, source = client.quality_service.source_metadata("local", "task")
+    url = "/api/creation-tasks/task/quality-check"
+
+    def read():
+        response = client.get(url, headers=headers)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert read()["video_duration_seconds"] is None
+    for measurement, expected in (
+        ({}, None),
+        ({"video_duration_seconds": 0}, None),
+        ({"video_duration_seconds": True}, None),
+        ({"video_duration_seconds": 1.92}, 1.92),
+    ):
+        check_id = checks.begin("local", "task", "v1", "artifacts/video.mp4", publication.sha256)
+        checks.finish("local", "task", check_id, evidence={
+            "status": "clean", "findings": [], "unavailable": [], "duration_seconds": 2,
+            "_source_receipt": source_receipt(source, check_id), **measurement,
+        })
+        result = read()
+        assert result["check_state"] == "done" and result["stale"] is False
+        assert result["video_duration_seconds"] == expected
+
+    # Replacing the artifact bytes while retaining the same version must hide the old readout.
+    store.resolve_file("artifacts/video.mp4").write_bytes(b"changed render")
+    stale = read()
+    assert stale["timeline_version_id"] == "v1" and stale["stale"] is True
+    assert stale["video_duration_seconds"] is None
+
+
 def test_delivery_judgment_uses_video_not_container_duration_and_is_idempotent(system):
     from dataclasses import asdict
     client, repo, store, checks, headers, other_token, tmp_path = system

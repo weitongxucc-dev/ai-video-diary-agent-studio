@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { checkCreationTaskQuality, getCreationTaskQualityCheck, CreationPlanApiError } from "@/lib/api";
 import { continueCreationTaskQuality } from "@/lib/api/creation-tasks";
 import type { CreationTaskQualityCheck } from "@/lib/types";
@@ -13,6 +13,7 @@ const findingLabels: Record<CreationTaskQualityCheck["findings"][number]["kind"]
 };
 type Continuation = NonNullable<CreationTaskQualityCheck["continuation"]>;
 type PendingContinuation = { check_id: string; job_id: string; failed_request_id: string };
+type VerifiedVideoDuration = { taskId: string; versionId: string; outputUrl: string; seconds: number };
 const phaseLabels: Record<string, string> = { metadata: "媒体信息", black_frames: "黑帧检查", truncation: "尾部截断检查", clipping: "音频削波检查", finalize: "结果汇总" };
 const continuationReasons: Record<NonNullable<Continuation["reason_code"]>, string> = {
     actor_unavailable: "当前执行身份尚未核验", runtime_unavailable: "后台执行环境不可用",
@@ -20,15 +21,19 @@ const continuationReasons: Record<NonNullable<Continuation["reason_code"]>, stri
     policy_unavailable: "原资源策略不可用", algorithm_changed: "检查算法已变化，不能沿原阶段续检",
     request_in_flight: "原阶段仍在排队或执行", failed_request_unavailable: "原失败执行请求不可用，当前不能续检",
 };
-export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate, compact = false }: {
+export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate, compact = false, renderReview }: {
     compact?: boolean;
     taskId: string;
     versionId: string | null;
     outputUrl: string | null;
     onLocate: (finding: CreationTaskQualityCheck["findings"][number]) => void;
+    renderReview?: (duration: VerifiedVideoDuration | null) => ReactNode;
 }) {
     const [detailsOpen, setDetailsOpen] = useState(false);
-    const [result, setResult] = useState<CreationTaskQualityCheck | null>(null);
+    const sourceKey = JSON.stringify([taskId, versionId, outputUrl]);
+    const [reading, setReading] = useState<{ sourceKey: string; result: CreationTaskQualityCheck } | null>(null);
+    const result = reading?.sourceKey === sourceKey ? reading.result : null;
+    const setResult = useCallback((result: CreationTaskQualityCheck) => setReading({ sourceKey, result }), [sourceKey]);
     const [error, setError] = useState<string | null>(null);
     const [submitting, setSubmitting] = useState(false);
     const [continuing, setContinuing] = useState(false);
@@ -39,7 +44,7 @@ export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate,
     const revision = useRef(0);
     useEffect(() => {
         const current = ++revision.current;
-        setResult(null);
+        setReading(null);
         setError(null);
         setSubmitting(false);
         setContinuing(false);
@@ -53,7 +58,7 @@ export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate,
         }).catch(cause => { if (current === revision.current)
             setError(errorDetails(cause).message); });
         return () => { revision.current += 1; };
-    }, [taskId, versionId, outputUrl]);
+    }, [taskId, setResult]);
     useEffect(() => {
         if (result?.check_state !== "checking" || result.stale)
             return;
@@ -66,7 +71,7 @@ export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate,
                 setError(errorDetails(cause).message); });
         }, 1000);
         return () => window.clearTimeout(timer);
-    }, [result, taskId]);
+    }, [result, taskId, setResult]);
     async function check() {
         if (pendingContinuation || continuing) return;
         const current = revision.current;
@@ -137,6 +142,11 @@ export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate,
     const stale = result && (result.stale || result.timeline_version_id !== versionId
         || (result.check_state === "done" && !outputUrl));
     const current = !error && !stale ? result : null;
+    const seconds = current?.video_duration_seconds;
+    const verifiedDuration = versionId && outputUrl && current?.check_state === "done"
+        && !submitting && !continuing && !continuationError
+        && typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
+        ? { taskId, versionId, outputUrl, seconds } : null;
     const label = error ? "检查结果读取失败" : stale ? "旧检查已失效，请检查当前成片"
         : !current ? "正在读取检查结果" : current.check_state === "checking" ? "成片检查中"
             : current.check_state === "failed" ? "成片检查失败"
@@ -187,9 +197,9 @@ export function FinalVideoQualityCheck({ taskId, versionId, outputUrl, onLocate,
     {current?.unavailable.map((item, index) => <p key={`${item.kind}:${index}`}>
       检测不可用：{item.reason}</p>)}
   </section>;
-  return compact ? <section className={styles.compactQuality} aria-label="成片检查摘要">
+  return <>{renderReview?.(verifiedDuration)}{compact ? <section className={styles.compactQuality} aria-label="成片检查摘要">
     <Button variant="ghost" aria-haspopup="dialog" aria-expanded={detailsOpen} onClick={()=>setDetailsOpen(true)}>成片检查</Button>
     <span role={error || current?.check_state === "failed" ? "alert" : "status"}>{label}</span>
     <HomeCardDialog kind="detail" title="成片质量检查" open={detailsOpen} onClose={()=>setDetailsOpen(false)}>{content}</HomeCardDialog>
-  </section> : content;
+  </section> : content}</>;
 }

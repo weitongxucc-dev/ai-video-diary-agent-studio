@@ -8,6 +8,94 @@ import pytest
 from test_task_media_grants import _visual_scope_case
 
 
+def test_opening_candidate_changes_only_opening_and_undo_restores_it_after_reopen(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    import subprocess
+    from uuid import uuid4
+    from app.production import ProductionRepository
+
+    main, repo, actor, _media, runtime, client, before, subtitle_track, _store = _visual_scope_case(
+        tmp_path, monkeypatch, lock_first=False,
+    )
+    try:
+        asset = repo.get_asset("local", "asset")
+        path = repo.video_library_path / "red-opening.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=red:s=64x64:r=30:d=2",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(path)],
+            check=True, capture_output=True, timeout=5)
+        info = path.stat()
+        candidate_asset = replace(asset, id="red-opening", path=str(path), file_name=path.name,
+            size_bytes=info.st_size, modified_at=datetime.fromtimestamp(info.st_mtime, timezone.utc),
+            duration_seconds=2, segments=[replace(asset.segments[0], id="red-segment", asset_id="red-opening",
+                end_seconds=2, description="红色产品开场")])
+        repo._save_asset(candidate_asset)
+        base = "/api/creation-tasks/task"
+        opening, *rest = before["clips"]
+        assert opening["timeline_start_seconds"] == 0
+        result = client.get(f"{base}/montage/clips/{opening['id']}/candidates?for_automation=true")
+        assert result.status_code == 200, result.text
+        [candidate] = result.json()
+        assert candidate["description"] == "红色产品开场"
+
+        def forbidden(*_args, **_kwargs):
+            pytest.fail("保存或撤销单个镜头不需要重新制作视频")
+
+        monkeypatch.setattr(main, "_creation_runtime", forbidden)
+        jobs = repo.job_records.list_job_runs("local", "task")
+        saved = client.post(f"{base}/edits/exact", json={"operation_type": "ReplaceClip",
+            "clip_id": opening["id"], "asset_id": candidate["asset_id"], "segment_id": candidate["segment_id"],
+            "request_id": str(uuid4()), "expected_timeline_version_id": "timeline", "expected_timeline_sequence": 1})
+        assert saved.status_code == 200, saved.text
+
+        def read_reopened(expected_asset, *, expected_rest=rest, expected_opening=None):
+            reopened = ProductionRepository(repo.database_path, repo.video_library_path)
+            task = reopened.task_records.get_creation_task("local", "task")
+            current = reopened.get_creation_task_montage_plan("local", "task")
+            kept = ("audio_timeline", "narration_audio_path", "cues", "graphic_overlays", "duration_seconds")
+            assert {key: current[key] for key in kept} == {key: before[key] for key in kept}
+            assert current["clips"][1:] == expected_rest
+            clip = current["clips"][0]
+            assert clip["asset_id"] == expected_asset
+            assert (clip["id"], clip["timeline_start_seconds"], clip["timeline_end_seconds"]) == (
+                opening["id"], opening["timeline_start_seconds"], opening["timeline_end_seconds"])
+            if expected_opening is not None:
+                assert clip == expected_opening
+            [track] = reopened.subtitle_records.list_subtitle_tracks("local", "task",
+                timeline_version_id=task.current_timeline_version_id)
+            assert [asdict(cue) for cue in track.cues] == [asdict(cue) for cue in subtitle_track.cues]
+            assert reopened.job_records.list_job_runs("local", "task") == jobs
+            source = reopened.resolve_clip_media_reference("local", clip["asset_id"], clip["source_path"])
+            frame = subprocess.run(["ffmpeg", "-v", "error", "-i", str(source), "-frames:v", "1",
+                "-vf", "scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"],
+                check=True, capture_output=True, timeout=5).stdout
+            red, _green, blue = frame
+            return task.current_timeline_version_id, clip, red > blue
+
+        edited_version, edited_opening, is_red = read_reopened(candidate["asset_id"])
+        assert edited_version != "timeline" and is_red
+
+        # Make a real second edit on a distant shot. Undoing the opening
+        # must not restore the entire old timeline and erase this later edit.
+        tail = rest[-1]
+        assert tail["locked"] is False
+        locked = client.post(f"{base}/edits/exact", json={"operation_type": "SetClipLock",
+            "clip_id": tail["id"], "locked": True, "request_id": str(uuid4()),
+            "expected_timeline_version_id": edited_version, "expected_timeline_sequence": 2})
+        assert locked.status_code == 200, locked.text
+        locked_rest = [*rest[:-1], {**tail, "locked": True}]
+        locked_version, _, _ = read_reopened(candidate["asset_id"],
+            expected_rest=locked_rest, expected_opening=edited_opening)
+        undo = client.post(f"{base}/timeline/undo", json={"request_id": str(uuid4()),
+            "target_operation_id": saved.json()["operation"]["id"],
+            "expected_timeline_version_id": locked_version, "expected_timeline_sequence": 3})
+        assert undo.status_code == 200, undo.text
+        restored_version, _, is_red = read_reopened(opening["asset_id"],
+            expected_rest=locked_rest, expected_opening=opening)
+        assert restored_version not in {"timeline", edited_version, locked_version} and not is_red
+    finally:
+        runtime.stop(0)
+
+
 @pytest.mark.parametrize('operation', ['ReplaceClip', 'TrimClip', 'SplitClip', 'ReorderClip'])
 def test_direct_shot_edit_preserves_other_tracks_and_roundtrips_without_routes(tmp_path, monkeypatch, operation):
     main, repo, actor, media, runtime, client, original, track, store = _visual_scope_case(tmp_path, monkeypatch)

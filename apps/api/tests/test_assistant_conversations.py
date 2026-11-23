@@ -160,6 +160,47 @@ def test_conversation_resume_selects_persistent_current_for_trusted_member(tmp_p
     assert client.get(f"/api/assistant/conversations/{old_id}", headers=headers).status_code == 404
 
 
+def test_new_video_draft_conversations_keep_input_and_reply_with_their_own_draft(tmp_path, monkeypatch):
+    database = tmp_path / "assistant.sqlite3"
+    repo = ConversationRepository(database)
+    members = LocalMemberService(tmp_path / "members.sqlite3")
+    _, token = members.join(members.create_invite_code(), "成员甲")
+    _, other = members.join(members.create_invite_code(), "成员乙")
+    monkeypatch.setattr(main_module, "conversation_repo", repo)
+    monkeypatch.setattr(main_module, "local_members_service", members)
+    monkeypatch.setattr(main_module, "current_workspace_id", lambda _request: "workspace-one")
+    monkeypatch.setattr(main_module, "run_plan_turn", lambda _settings, *, message, **_: (f"读到：{message}", None))
+    headers = {"X-Local-Member-Token": token}
+    client = TestClient(main_module.app, headers=headers)
+    current = "/api/assistant/conversations/current"
+    home = {"scope_kind": "home", "scope_id": "home"}
+    draft_a = {**home, "scope_id": f"draft:{uuid4()}"}
+    draft_b = {**home, "scope_id": f"draft:{uuid4()}"}
+    assert client.post(current, json={**home, "scope_id": "draft:not-a-uuid"}).status_code == 422
+    home_result, a, b = [client.post(current, json=scope) for scope in (home, draft_a, draft_b)]
+    assert [result.status_code for result in (home_result, a, b)] == [200, 200, 200]
+    home_id, a_id, b_id = (result.json()["id"] for result in (home_result, a, b))
+    assert len({home_id, a_id, b_id}) == 3
+
+    message = "用已导入的素材做产品介绍"
+    saved = client.patch(f"/api/assistant/conversations/{a_id}",
+                         json={"draft_text": message, "expected_draft_version": a.json()["draft_version"]})
+    assert saved.status_code == 200, saved.text
+    response = client.post("/api/assistant/plan/turn", json={
+        "message": message, "conversation_id": a_id, "client_request_id": str(uuid4()),
+        "expected_draft_version": saved.json()["draft_version"],
+    })
+    assert response.status_code == 200, response.text
+    assert client.get(f"/api/assistant/conversations/{a_id}", headers={"X-Local-Member-Token": other}).status_code == 404
+
+    monkeypatch.setattr(main_module, "conversation_repo", ConversationRepository(database))
+    reopened = client.post(current, json=draft_a).json()
+    assert reopened["id"] == a_id
+    assert [(turn["user_message"], turn["assistant_text"]) for turn in reopened["turns"]] == [(message, f"读到：{message}")]
+    assert client.post(current, json=draft_b).json()["turns"] == []
+    assert client.post(current, json=home).json()["turns"] == []
+
+
 def test_unavailable_assistant_turn_retains_partial_reply_and_persisted_failure(tmp_path, monkeypatch):
     repo = ConversationRepository(tmp_path / "failed-assistant.sqlite3")
     members = LocalMemberService(tmp_path / "failed-members.sqlite3")

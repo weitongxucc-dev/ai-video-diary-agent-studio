@@ -100,25 +100,15 @@ def _duration_consistency(repository, task: CreationTask, plan: CreationPlan) ->
 
 def _media_queue_summary(repository, workspace_id: str, task_id: str) -> dict[str, object]:
     """Expose pending task-media records beside the parent execution state."""
-    pending = [
-        job for job in repository.job_records.list_job_runs(workspace_id, task_id)
-        if job.kind == TASK_MEDIA_KIND and job.status in {"queued", "running", "interrupted"}
-    ]
-    operations: set[str] = set()
-    for job in pending:
-        try:
-            event = repository.execution_records.get_task_event(
-                workspace_id, f"event_{job.id}_start"
-            )
-        except KeyError:
-            continue
-        operation = event.payload.get("operation")
-        if isinstance(operation, str) and operation:
-            operations.add(operation)
+    rows = repository.job_records.task_media_queue_counts(workspace_id, task_id, TASK_MEDIA_KIND)
+    pending = sum(row["pending_count"] for row in rows)
+    with_request = sum(row["with_device_request_count"] for row in rows)
     return {
         "status": "pending" if pending else "settled",
-        "pending_count": len(pending),
-        "pending_operations": sorted(operations),
+        "pending_count": pending,
+        "pending_operations": sorted(row["operation"] for row in rows if row["operation"]),
+        "pending_with_device_request_count": with_request,
+        "pending_without_device_request_count": pending - with_request,
     }
 
 

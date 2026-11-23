@@ -516,7 +516,7 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
     runtime.stop(0)
 
 
-def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
+def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0, lock_first=True):
     import json
     import subprocess
     from dataclasses import asdict
@@ -555,7 +555,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0):
     for index in range(21):
         length = 6 if index == 1 else 1
         clips.append(MontageClip(f'clip_{index}', f'cue_{index}', 'asset', 'asset-segment', references[0],
-            0, length, at, at+length, 1, [], False, locked=index == 0,
+            0, length, at, at+length, 1, [], False, locked=lock_first and index == 0,
             transition_in_seconds=.2 if index == 1 else 0,
             visual_effects={'fade_out_seconds':fade_out} if index == 1 else {}))
         at += length

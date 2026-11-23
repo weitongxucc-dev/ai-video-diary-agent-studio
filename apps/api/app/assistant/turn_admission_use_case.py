@@ -147,6 +147,9 @@ class TurnAdmissionUseCase:
               client_request_id, expected_draft_version, request_context,
               *, expected_reference_version=None, authorize_replay=None):
         workspace_id, member_id, conversation = yield ReadConversationOwner(conversation_id)
+        if (scope_kind != "home" and conversation["scope_kind"] == "home"
+                and conversation["scope_id"].startswith("draft:")):
+            raise TurnRejected(409, "这条对话属于新视频草稿，请在草稿里继续。")
         if (yield CleanText(message, workspace_id)) != message:
             raise TurnRejected(422, "请勿在对话中粘贴密钥或口令。")
         previous = self._conversations_for().request_context(
