@@ -128,7 +128,6 @@ def test_commit_rejects_target_replacement_after_binding_persist(tmp_path):
 
 
 def test_startup_verification_rejects_a_replaced_persisted_root(tmp_path):
-    source = ArtifactStore(tmp_path / "source")
     target_root = tmp_path / "target"
     target_root.mkdir()
     identity = (target_root.stat().st_dev, target_root.stat().st_ino)
