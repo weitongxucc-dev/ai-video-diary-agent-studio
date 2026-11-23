@@ -22,7 +22,8 @@ from test_linked_timeline_reorder import _build_linked_state
 def legacy_edit_reentry_metadata_guard(request, monkeypatch, tmp_path):
     targets = {'test_metadata_patch_routes_consume_use_case_without_route_reentry',
                'test_metadata_patch_preserves_no_change_and_missing_target_responses',
-               'test_metadata_http_save_replay_input_conflict_and_lost_receipt'}
+               'test_metadata_http_save_replay_input_conflict_and_lost_receipt',
+               'test_two_typed_proposals_persist_and_only_selected_proposal_advances_timeline'}
     if request.node.originalname not in targets:
         yield
         return
@@ -663,6 +664,68 @@ def test_metadata_http_save_replay_input_conflict_and_lost_receipt(metadata_http
     assert len(state.repo.edit_records.list_edit_operations('ws', state.task.id)) == 1
 
 
+def test_two_typed_proposals_persist_and_only_selected_proposal_advances_timeline(metadata_http_state, monkeypatch):
+    from app.production import ProductionRepository
+
+    state = metadata_http_state
+    ws, task_id, base_id = state.task.workspace_id, state.task.id, state.base.id
+    original_montage = state.repo.get_creation_task_montage_plan(ws, task_id)
+
+    proposals = []
+    for crop_x in (.2, .8):
+        response = state.client.post(state.url + "/edits/exact/preview?draft=true",
+            json={**metadata_payload(state), "fit_mode": "fill", "crop_x": crop_x})
+        assert response.status_code == 200, response.text
+        proposal = response.json()["proposal"]
+        assert proposal["status"] == "proposed"
+        assert proposal["operation"]["payload"]["crop_x"] == crop_x
+        proposals.append(state.url + f"/edits/{proposal['id']}")
+    candidate_a, candidate_b = proposals
+    assert candidate_a != candidate_b
+    controls = state.client.get(state.url + "/edit-controls")
+    assert controls.status_code == 200, controls.text
+    assert {item["id"] for item in controls.json()["proposals"]} == {url.rsplit("/", 1)[-1] for url in proposals}
+    assert state.repo.task_records.get_creation_task(ws, task_id).current_timeline_version_id == base_id
+    assert state.repo.get_creation_task_montage_plan(ws, task_id) == original_montage
+    assert [version.id for version in state.repo.timeline_records.list_timeline_versions(ws, task_id)] == [base_id]
+
+    reopened = ProductionRepository(state.repo.database_path, state.repo.video_library_path)
+    monkeypatch.setattr(main, "production_repo", reopened)
+    bindings = []
+    for url, crop_x in zip(proposals, (.2, .8), strict=True):
+        response = state.client.get(url)
+        assert response.status_code == 200, response.text
+        proposal = response.json()["proposal"]
+        assert proposal["status"] == "proposed" and proposal["operation"]["payload"]["crop_x"] == crop_x
+        result = state.client.get(url + "/result")
+        assert result.status_code == 200, result.text
+        binding = result.json()
+        assert binding["base_version_id"] == base_id and binding["result"] is None
+        bindings.append({"request_id": str(uuid4()), "expected_base_version_id": base_id,
+                         "expected_input_digest": binding["input_digest"]})
+    assert reopened.task_records.get_creation_task(ws, task_id).current_timeline_version_id == base_id
+
+    binding_a, binding_b = bindings
+    accepted = state.client.post(candidate_b + "/confirm", json=binding_b)
+    assert accepted.status_code == 200, accepted.text
+    operation = accepted.json()["operation"]
+    assert operation["base_version_id"] == base_id
+    assert operation["proposal_id"] == candidate_b.rsplit("/", 1)[-1]
+    replay = state.client.post(candidate_b + "/confirm", json=binding_b)
+    assert replay.status_code == 200 and replay.json()["operation"] == operation
+    stale = state.client.post(candidate_a + "/confirm", json=binding_a)
+    assert stale.status_code == 409, stale.text
+    unadopted = state.client.get(candidate_a + "/result")
+    assert unadopted.status_code == 200, unadopted.text
+    assert unadopted.json()["status"] == "proposed" and unadopted.json()["result"] is None
+    successor_id = operation["result_version_id"]
+    versions = reopened.timeline_records.list_timeline_versions(ws, task_id)
+    assert [version.id for version in versions] == [base_id, successor_id]
+    assert versions[-1].parent_version_id == base_id
+    assert reopened.task_records.get_creation_task(ws, task_id).current_timeline_version_id == successor_id
+    assert reopened.get_creation_task_montage_plan(ws, task_id)["clips"][0]["crop_x"] == .8
+
+
 def test_minimal_graphic_http_save_replay_and_undo_preserve_existing_metadata(tmp_path, monkeypatch):
     from test_timeline_restore_application import restore_http_state
     state = restore_http_state(tmp_path, monkeypatch)
@@ -838,6 +901,75 @@ def test_typed_replace_replay_lost_receipt_and_undo_keep_narration(material_edit
     assert state.client.post(url, json=apply).json()["operation"] == confirmed.json()["operation"]
     changed = {**payload, "source_start_seconds": 5}
     assert state.client.post(state.base_url + "/edits/exact/preview", json=changed).status_code == 409
+
+
+@pytest.mark.parametrize("route", ["/edits/exact", "/edits/exact/preview"])
+def test_assistant_cannot_auto_adopt_a_manual_only_replacement(material_edit_state, monkeypatch, route):
+    state = material_edit_state
+    state.production.update_asset_use_state(state.workspace_id, state.asset.id, "not_for_automation")
+    action = replace_action(state)
+    candidates = state.client.get(f"{state.base_url}/montage/clips/{state.clip.id}/candidates?for_automation=true")
+    assert candidates.status_code == 200, candidates.text
+    assert state.asset.id not in {item["asset_id"] for item in candidates.json()}
+
+    conversations = ConversationRepository(state.production.database_path)
+    conversations.initialize()
+    monkeypatch.setattr(main, "conversation_repo", conversations)
+    member = state.members.resolve_member(state.client.headers["X-Local-Member-Token"])
+    conversation = conversations.create(state.workspace_id, member.member_id, "task", state.task.id)
+    message = "帮我选择合适的片段替换所选镜头"
+    conversation = conversations.save_draft(conversation["id"], state.workspace_id, member.member_id,
+        message, conversation["draft_version"])
+    payload = bound(state, **action)
+    turn, _ = conversations.create_turn_idempotent(conversation["id"], state.workspace_id, member.member_id,
+        message, str(uuid4()), conversation["draft_version"], request_context={"kind": "task", "task_id": state.task.id,
+            "target_snapshot": {"timeline_version_id": payload["expected_timeline_version_id"],
+                                "timeline_sequence": payload["expected_timeline_sequence"]}})
+    saved = state.client.post(state.base_url + route, json={**payload, "assistant_turn_id": turn["id"]})
+    assert saved.status_code == 409, saved.text
+    assert "使用限制" in saved.text
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
+    assert task.current_timeline_version_id == payload["expected_timeline_version_id"]
+    assert state.production.edit_records.list_edit_operations(state.workspace_id, state.task.id) == []
+    manual = state.client.post(state.base_url + "/edits/exact", json=bound(state, **action))
+    assert manual.status_code == 200, manual.text
+
+
+def test_assistant_replacement_confirmation_rechecks_material_use_state(material_edit_state, monkeypatch):
+    state = material_edit_state
+    payload = bound(state, **replace_action(state))
+    original_plan = state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id)
+    conversations = ConversationRepository(state.production.database_path)
+    conversations.initialize()
+    monkeypatch.setattr(main, "conversation_repo", conversations)
+    member = state.members.resolve_member(state.client.headers["X-Local-Member-Token"])
+    conversation = conversations.create(state.workspace_id, member.member_id, "task", state.task.id)
+    message = "帮我选择合适的片段替换所选镜头"
+    conversation = conversations.save_draft(conversation["id"], state.workspace_id, member.member_id,
+        message, conversation["draft_version"])
+    turn, _ = conversations.create_turn_idempotent(conversation["id"], state.workspace_id, member.member_id,
+        message, str(uuid4()), conversation["draft_version"], request_context={"kind": "task", "task_id": state.task.id,
+            "target_snapshot": {"timeline_version_id": payload["expected_timeline_version_id"],
+                                "timeline_sequence": payload["expected_timeline_sequence"]}})
+
+    preview = state.client.post(state.base_url + "/edits/exact/preview", json={**payload, "assistant_turn_id": turn["id"]})
+    assert preview.status_code == 200, preview.text
+    proposal_id = preview.json()["proposal"]["id"]
+    binding = state.client.get(state.base_url + f"/edits/{proposal_id}/result")
+    assert binding.status_code == 200, binding.text
+
+    state.production.update_asset_use_state(state.workspace_id, state.asset.id, "not_for_automation")
+    result = state.client.post(state.base_url + f"/edits/{proposal_id}/confirm", json={
+        "request_id": str(uuid4()),
+        "expected_base_version_id": payload["expected_timeline_version_id"],
+        "expected_input_digest": binding.json()["input_digest"],
+    })
+    assert result.status_code == 409, result.text
+    assert "使用限制" in result.json()["detail"]
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
+    assert task.current_timeline_version_id == payload["expected_timeline_version_id"]
+    assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id) == original_plan
+    assert state.production.edit_records.list_edit_operations(state.workspace_id, state.task.id) == []
 
 
 @pytest.mark.parametrize("action", [

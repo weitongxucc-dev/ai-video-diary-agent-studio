@@ -101,6 +101,34 @@ def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundar
     assert transition_poster.headers["content-type"].startswith("image/jpeg")
 
 
+def test_glass_pulse_declares_task_import_before_effect_adoption():
+    resource_id = "openfilm:sound-glass-pulse"
+    resource_url = f"/api/editing-resources/{resource_id}"
+    detail = client.get(resource_url, params={"version": 1})
+    preflight = client.get(f"{resource_url}/preflight", params={"version": 1})
+    assert detail.status_code == preflight.status_code == 200
+    resource = detail.json()
+    readiness = preflight.json()
+    requirements = resource["runtime_requirements"]
+    assert requirements["preview_ref"] == resource["preview"]["thumbnail_ref"] == f"{resource_url}/preview"
+    assert "source_ref" not in requirements
+    assert readiness["status"] == resource["status"] == "connected"
+    assert readiness["ready"] and readiness["runnable"]
+
+    adoption = readiness["adoption"]
+    assert adoption == requirements["adoption"]
+    assert adoption["status"] == "requires_task_import"
+    assert adoption["requires_explicit_edit_authorization"] is True
+    assert adoption["import_payload"] == {"resource_id": resource["id"], "version": resource["version"]}
+    assert (resource["id"], resource["version"]) == (resource_id, 1)
+    assert "result.source_ref" in adoption["result"]
+    assert (adoption["operation_type"], adoption["action"], adoption["track_role"]) == ("EditAudioTimeline", "add", "effect")
+    assert adoption["import_endpoint"].format(task_id="fixture") == app.url_path_for(
+        "import_creation_task_audio_resource", task_id="fixture")
+    assert adoption["write_endpoint"].format(task_id="fixture") == app.url_path_for(
+        "apply_creation_task_exact_edit", task_id="fixture")
+
+
 def test_resource_detail_returns_404_for_unknown_version():
     response = client.get("/api/editing-resources/template:missing", params={"version": 2})
     assert response.status_code == 404

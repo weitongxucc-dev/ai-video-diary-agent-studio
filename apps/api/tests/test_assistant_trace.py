@@ -98,6 +98,30 @@ def test_project_turn_trace_marks_missing_provider_usage_unknown():
     assert trace["provider_usage"] is None
 
 
+def test_compaction_usage_is_only_a_nonzero_legacy_fallback():
+    empty = {"input": 0, "output": 0, "cacheWrite": 0, "totalTokens": 0}
+    measured = {"input": 10, "output": 3, "cacheRead": 0, "totalTokens": 13}
+    compaction = {"type": "context_compaction", "status": "completed", "trigger": "threshold"}
+    turn = {"id": "turn-compaction", "conversation_id": "conversation-1", "status": "completed",
+            "sequence": 1, "created_at": "now", "updated_at": "now"}
+
+    for result, usage_samples, expected in (
+        ({"usage_status": "unknown"}, [measured], ("unknown", None, None)),
+        ({"usage_status": "unknown"}, [empty], ("unknown", None, None)),
+        ({}, [empty], ("unknown", None, None)),
+        ({}, [empty, measured], ("known", "compaction", measured)),
+        ({"usage_status": "known", "provider_usage": empty}, [measured], ("known", "provider", empty)),
+        ({"usage_status": "estimated", "provider_usage": {"totalTokens": 5}}, [measured],
+         ("estimated", "local_estimate", {"totalTokens": 5})),
+    ):
+        trace = project_turn_trace({**turn, "result": result, "events": [
+            {**compaction, "provider_usage": usage} for usage in usage_samples]})
+        assert (trace["usage_status"], trace["usage_source"], trace["provider_usage"]) == expected
+        assert trace["estimated_cost"] is None
+        assert trace["compaction_count"] == len(usage_samples)
+        assert trace["events"] == [{**compaction, "failure_origin": None}] * len(usage_samples)
+
+
 def test_project_turn_trace_exposes_structured_usage_without_inventing_cost_or_latency():
     trace = project_turn_trace({
         "id": "turn-details", "conversation_id": "conversation-1", "status": "failed", "sequence": 1,

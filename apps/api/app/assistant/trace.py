@@ -311,9 +311,12 @@ def project_evidence_candidates(turn: dict) -> list[dict]:
 def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 200) -> dict:
     """Project one persisted turn into a redacted diagnostic trace."""
     events = turn.get('events') or []
+    result = turn.get('result') if isinstance(turn.get('result'), dict) else {}
+    requested_usage_status = result.get('usage_status')
     projected = []
     tool_counts = {}
     provider_usage = {}
+    usage_status = 'unknown'
     usage_source = None
     compactions = 0
     business_events = []
@@ -341,11 +344,16 @@ def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 20
             continue
         if event_type == 'context_compaction':
             compactions += 1
-            for key in ('input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'):
-                value = (event.get('provider_usage') or {}).get(key)
-                if type(value) is int and value >= 0:
-                    provider_usage[key] = provider_usage.get(key, 0) + value
-                    usage_source = usage_source or 'compaction'
+            # Compaction-only usage is a legacy fallback, not a measured
+            # receipt for a turn explicitly marked unknown. Ignore zero defaults.
+            if requested_usage_status is None and isinstance(event.get('provider_usage'), dict):
+                sample = {key: value for key, value in event['provider_usage'].items()
+                          if key in {'input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'}
+                          and type(value) is int and value >= 0}
+                if any(sample.values()):
+                    for key, value in sample.items():
+                        provider_usage[key] = provider_usage.get(key, 0) + value
+                    usage_status, usage_source = 'known', 'compaction'
             projected.append({
                 'type': event_type,
                 'status': event.get('status'),
@@ -370,7 +378,6 @@ def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 20
                 item['failure'] = {key: failure[key] for key in ('error', 'code', 'stage', 'submission_effect') if key in failure}
             tool_counts[label] = tool_counts.get(label, 0) + 1
         projected.append(item)
-    result = turn.get('result') if isinstance(turn.get('result'), dict) else {}
     runtime_events = safe_runtime_trace_events(result.get('trace_events'))
     runtime_projected, started_at, ended_at, runtime_duration, runtime_failure, retries, runtime_associations = _project_runtime_events(runtime_events, turn.get('id'))
     if runtime_projected:
@@ -383,16 +390,16 @@ def project_turn_trace(turn: dict, *, before: int | None = None, limit: int = 20
     associations.extend(_nested_references(result))
     result_usage = result.get('provider_usage') if isinstance(result.get('provider_usage'), dict) else None
     usage_details = project_usage_details(result)
-    requested_usage_status = result.get('usage_status')
     if requested_usage_status in {'known', 'estimated'} and result_usage:
         provider_usage = {key: value for key, value in result_usage.items()
                           if key in {'input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'}
                           and type(value) is int and value >= 0}
-        usage_source = 'provider' if requested_usage_status == 'known' else 'local_estimate'
+        if provider_usage:
+            usage_status = requested_usage_status
+            usage_source = 'provider' if usage_status == 'known' else 'local_estimate'
     deduped = list({(item['kind'], item['ref']): item for item in associations}.values())
     business = result.get('continuation') if isinstance(result.get('continuation'), dict) else {}
     business_status = business.get('status') if isinstance(business.get('status'), str) else None
-    usage_status = requested_usage_status if requested_usage_status in {'known', 'estimated'} and provider_usage else 'known' if provider_usage else 'unknown'
     total_event_count = len(projected)
     end = total_event_count if before is None else min(max(before, 0), total_event_count)
     start = max(0, end - limit)

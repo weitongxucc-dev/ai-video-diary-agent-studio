@@ -1413,6 +1413,7 @@ class TaskMediaJobs:
         from app.creation.audio_ingress_use_case import AUDIO_INGRESS_ACTIONS, AudioIngressRejected
         from app.creation.editing.audio_edit_use_case import AudioEditUseCase, AudioEditRejected
         from app.creation.output_observation_use_case import OutputObservationRejected
+        from app.media_execution.contracts import MediaExecutionError
         from app.media_script_jobs import MEDIA_SCRIPT_ACTIONS, MediaScriptPreviewRejected
         from app.media.picture_preview import PicturePreviewRejected
         from app.creation.editing.metadata_use_case import EditPreviewRejected
@@ -1530,7 +1531,6 @@ class TaskMediaJobs:
             else:
                 result = result_event.payload["result"]
             if direct_media_execution and result.get("status") == "failed":
-                from app.media_execution.contracts import MediaExecutionError
                 raise MediaExecutionError(
                     str(result.get("failure_reason") or "media_execution_failed"),
                     str(result.get("impact") or "媒体输出未发布。"),
@@ -1598,7 +1598,7 @@ class TaskMediaJobs:
             else:
                 known_rejection = (direct_audio and isinstance(exc,AudioIngressRejected) or direct_edit and isinstance(exc,AudioEditRejected) or direct_observation and isinstance(exc,OutputObservationRejected) or direct_script and isinstance(exc,MediaScriptPreviewRejected) or direct_visual and isinstance(exc,PicturePreviewRejected) or direct_compound and isinstance(exc,PicturePreviewRejected) or direct_exact and isinstance(exc,(EditPreviewRejected,PicturePreviewRejected)) or direct_command and isinstance(exc,(EditPreviewRejected,PicturePreviewRejected,CommandParseRejected)))
                 failure = None
-                failure_reason = type(exc).__name__
+                failure_reason = exc.reason if direct_media_execution and isinstance(exc, MediaExecutionError) else type(exc).__name__
                 if known_rejection:
                     # Resolve known credentials before the scheduler opens its writer.
                     secrets = self.known_failure_secrets_for(job.workspace_id) if self.known_failure_secrets_for else ()

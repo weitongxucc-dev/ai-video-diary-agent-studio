@@ -464,6 +464,18 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const enSubtitleVisible = workspace.subtitle_tracks.some(track => track.language === "en-US" && track.status === "valid" && track.style.enabled !== false);
   const subtitleSummary = zhSubtitleVisible ? enSubtitleVisible ? "中英双语轨已就绪" : "中文轨已就绪"
     : enSubtitleVisible ? "英文轨已就绪" : zhSubtitleValid || enSubtitleValid ? "当前成片已关闭字幕" : "当前没有有效字幕轨";
+  const durationReceipt = execution?.duration_consistency;
+  const duration = execution?.task_id === task.id && task.current_timeline_version_id
+    && durationReceipt?.timeline_version_id === task.current_timeline_version_id ? durationReceipt : null;
+  const originalDuration = duration?.target_adjusted && duration.adjustment_event_id ? duration.original_target_seconds : null;
+  const durationText = (seconds: number | null | undefined) => seconds == null ? "未知" : `${Number(seconds.toFixed(3))} 秒`;
+  const durationDetails = (videoSeconds: number | null) => [
+    ...(originalDuration != null ? [`原目标：${durationText(originalDuration)}`] : []),
+    `当前目标：${durationText(duration?.target_seconds)}`,
+    `时间线时长：${durationText(duration?.timeline_seconds)}`,
+    videoSeconds == null ? "成片视频时长未测量" : `成片视频时长：${durationText(videoSeconds)}`,
+    ...(originalDuration != null ? ["已按旁白时长调整目标"] : []),
+  ].join(" · ");
   const reviewChecks = [
     { title: "字幕", ready: zhSubtitleVisible || enSubtitleVisible, detail: subtitleSummary },
     { title: "讲解与音乐音量", ready: false, detail: "需人工试听确认，当前无自动音量校验" },
@@ -2035,8 +2047,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleWorkspace onSeekPreview={positionAudioListen} activeTrack={activeSubtitleTrack} busy={busy !== null || Boolean(pendingMetadataSave)} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} onRedo={() => void undoTimeline(true)} selectedCover={selectedCover} selectedCueId={selectedCueId} taskId={task.id} versionId={task.current_timeline_version_id} canUndo={task.can_undo} canRedo={task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} /> : null}
 
         <div className={activeView === "review" ? styles.reviewPane : styles.flowContents} role={activeView === "review" ? "tabpanel" : undefined} id={`review-panel-result-${task.id}`} aria-labelledby={activeView === "review" ? `review-result-${task.id}` : undefined} hidden={activeView === "review" && reviewPane !== "result"}>
-        {activeView === "review" && task.stage === "review" && workspace.montage?.output_url ? <ReviewOutputView subtitleSummary={subtitleSummary} coverValid={workspace.cover_asset?.status === "valid"} canEditSubtitle={Boolean(activeSubtitleTrack)} reviewChecks={reviewChecks} busy={busy} onEditMontage={() => openView("montage")} onRecord={() => setRecordingOpen(true)} onEditSubtitles={() => openView("subtitle_cover")} onSave={() => void saveVideo()} /> : null}
-        {(activeView === "review" || activeView === "montage") && workspace.montage ? <FinalVideoQualityCheck compact={isEditor} taskId={task.id} versionId={task.current_timeline_version_id} outputUrl={workspace.montage.output_url} onLocate={locateQualityFinding} /> : null}
+        {(activeView === "review" || activeView === "montage") && workspace.montage ? <FinalVideoQualityCheck
+          compact={isEditor} taskId={task.id} versionId={task.current_timeline_version_id} outputUrl={workspace.montage.output_url} onLocate={locateQualityFinding}
+          renderReview={activeView === "review" && task.stage === "review" && workspace.montage.output_url ? measurement => {
+            const videoSeconds = measurement?.taskId === task.id && measurement.versionId === task.current_timeline_version_id
+              && measurement.outputUrl === workspace.montage?.output_url ? measurement.seconds : null;
+            return <ReviewOutputView subtitleSummary={subtitleSummary} coverValid={coverValid} canEditSubtitle={Boolean(activeSubtitleTrack)}
+              reviewChecks={[...reviewChecks, { title: "时长", ready: false, detail: durationDetails(videoSeconds) }]}
+              busy={busy} onEditMontage={() => openView("montage")} onRecord={() => setRecordingOpen(true)} onEditSubtitles={() => openView("subtitle_cover")} onSave={() => void saveVideo()} />;
+          } : undefined} /> : null}
         {(activeView === "review" || activeView === "montage") && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}
         </div>
         {activeView === "prepare" ? <PrepareMaterialsView matches={workspace.plan.material_matches}

@@ -285,6 +285,17 @@ describe("HomeWorkspace v3.2 real facts and overview linkage", () => {
     expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
   });
 
+  it("opens a new workbench from the empty task board when the workspace already has materials", () => {
+    const withoutTasks = {
+      ...home,
+      counts: home.counts.map(item => ["tasks", "works"].includes(item.key) ? { ...item, value: 0 } : item),
+      entries: { ...home.entries, queue: [], todos: [], works: [] },
+    };
+    render(<HomeWorkspace foundation={null} tasks={[]} live={live(withoutTasks)} />);
+    const board = screen.getByRole("region", { name: "创作任务看板" });
+    expect(within(board).getByRole("link", { name: "新建视频" })).toHaveAttribute("href", "/production?new=1");
+  });
+
   it("keeps a failed read distinct from an empty workspace and hides raw diagnostics", () => {
     const state = { ...live(null), error: "HTTP 503 /private/path" };
     render(<HomeWorkspace foundation={null} tasks={[]} live={state} />);

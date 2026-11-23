@@ -6,7 +6,8 @@ import json
 import pytest
 
 from app.materials.candidate_query import CrossDomainCandidateQuery
-from app.materials.contracts import MaterialAsset, MaterialSegment
+from app.materials.contracts import MaterialAsset, MaterialSegment, material_usage_eligibility
+from app.media_observations import SegmentUnderstanding
 from app.source_repository import SourceRepository
 from app.source_types import KnowledgeItem
 from tests.test_profile_feedback import seed as profile_seed
@@ -101,6 +102,85 @@ def test_material_readback_and_goal_segment_scope_do_not_rebind_changed_versions
     repo._save_asset(changed)
     with pytest.raises(KeyError):
         query.read('workspace_a',domain='material',object_id='asset',version=asset.updated_at.isoformat(),user_id='member')
+
+
+def test_similar_product_candidates_preserve_original_nameplate_evidence(tmp_path, record_property):
+    repo, sources, _, template, _, _ = seed(tmp_path)
+    workspace = 'workspace_a'
+    query = CrossDomainCandidateQuery(repo, sources)
+    target_model = 'ZX-410'
+    assets = {}
+    evidence_ids = {}
+    for identity, model, version, frame_time in (
+        ('target', target_model, 3, 1.5), ('lookalike', 'ZX-401', 5, 2.5),
+        ('excluded', target_model, 7, 3.5),
+    ):
+        source = tmp_path / f'{identity}.mp4'
+        source.write_bytes(f'synthetic nameplate fixture: {identity}'.encode())
+        stat = source.stat()
+        revision = {'fixture': f'{identity}-revision'}
+        segment = MaterialSegment(f'{identity}-clip', identity, frame_time - 0.5, frame_time + 0.5,
+            description='Identical bench controller setup and panel demonstration',
+            version=version, source_revision=revision,
+            understanding=SegmentUnderstanding('ready', sample_times=[frame_time], ocr_status='ready',
+                ocr_frames=[{'id': f'{identity}-frame', 'timestamp_seconds': frame_time, 'width': 64, 'height': 64,
+                    'observations': [{'text': model, 'confidence': 1.0, 'box': [0, 0, 0.5, 0.5],
+                                        'retrieval_eligible': True}]}]))
+        asset = repo._save_asset(replace(template, id=identity, file_name=source.name, path=str(source),
+            size_bytes=stat.st_size, modified_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc), segments=[segment]))
+        assets[identity] = asset
+        evidence, _ = repo.material_data_governance.record_analysis_outputs(workspace, asset,
+            analysis_version='synthetic-ocr-v1', source_revision=revision, source_digest=None,
+            model_or_rule='synthetic-fixture', visual_index_status='ready', visual_index_version='fixture-v1',
+            visual_index_coverage={})
+        evidence_ids[identity] = next(item.id for item in evidence if item.segment_id == segment.id)
+
+    excluded = repo.update_asset_use_state(workspace, 'excluded', 'excluded')
+    result = query.search(workspace, query=f'{target_model} bench controller', user_id='member')
+    hits = {item['asset_ref']: item for item in result['domains']['material']['candidates']}
+    assert 'asset:target' in hits
+    assert 'asset:excluded' not in hits
+    record_property('discovery_matches', ', '.join(f"{ref} ({hit['details']['match_tier']})" for ref, hit in hits.items()))
+
+    for identity, original_model in (('target', target_model), ('lookalike', 'ZX-401')):
+        asset = assets[identity]
+        segment = asset.segments[0]
+        hit = hits.get(f'asset:{identity}')
+        locator = hit['readback'] if hit else {
+            'domain': 'material', 'object_id': asset.id, 'version': asset.updated_at.isoformat()}
+        fixed = query.read(workspace, domain=locator['domain'], object_id=locator['object_id'],
+            version=locator['version'], user_id='member')
+        assert len(fixed['candidates']) == 1
+        # The lexical search may recall a near match; its fixed candidate and evidence must stay its own.
+        for candidate in (fixed['candidates'][0], hit):
+            if candidate is None:
+                continue
+            assert candidate['status'] == 'candidate'
+            assert candidate['authorization']['purpose'] == 'manual'
+            assert candidate['asset_ref'] == f'asset:{identity}'
+            assert candidate['ref'] == f'segment:{segment.id}'
+            assert candidate['source_revision'] == segment.source_revision
+            assert set(candidate['evidence']['ref_ids']).intersection(evidence_ids.values()) == {evidence_ids[identity]}
+            locator = candidate['readback']
+            assert (locator['object_id'], locator['version'], locator['segment_id'], locator['segment_version']) == (
+                identity, asset.updated_at.isoformat(), segment.id, segment.version)
+            assert locator['source_revision'] == segment.source_revision
+        evidence = repo.material_assets.read_evidence(workspace, locator['object_id'], member_id='member',
+            expected_updated_at=locator['version'], start_seconds=segment.start_seconds, end_seconds=segment.end_seconds)
+        observation, = evidence['items']
+        assert evidence['clock'] == 'original_source'
+        assert (observation['id'], observation['start_seconds'], observation['end_seconds']) == (
+            segment.id, segment.start_seconds, segment.end_seconds)
+        frame, = observation['visual']['ocr_frames']
+        assert (frame['timestamp_seconds'], frame['observations'][0]['text']) == (segment.start_seconds + 0.5, original_model)
+
+    with pytest.raises(KeyError):
+        query.read(workspace, domain='material', object_id=excluded.id,
+            version=assets['excluded'].updated_at.isoformat(), user_id='member')
+    current = query.read(workspace, domain='material', object_id=excluded.id,
+        version=excluded.updated_at.isoformat(), user_id='member')
+    assert current['candidates'] == []
+    assert material_usage_eligibility(excluded, excluded.segments[0], purpose='automatic').status == 'restricted'
 
 
 @pytest.mark.parametrize('change', ['reference_only', 'excluded', 'segment_excluded', 'source_range'])

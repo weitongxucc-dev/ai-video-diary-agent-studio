@@ -113,6 +113,8 @@ def _local_provenance(*, path: str, license: str = "internal") -> ResourceProven
 
 
 def _builtin_resources() -> list[EditingResource]:
+    glass_pulse_id, glass_pulse_version = "openfilm:sound-glass-pulse", 1
+    glass_pulse_preview_ref = f"/api/editing-resources/{glass_pulse_id}/preview"
     resources = [
         EditingResource(
             id="library:materials", category_id="materials", name="工作区素材库", version=1,
@@ -179,10 +181,10 @@ def _builtin_resources() -> list[EditingResource]:
             entrypoints=["read_voice_profiles"],
         ),
         EditingResource(
-            id="openfilm:sound-glass-pulse", category_id="sfx", name="玻璃脉冲", version=1,
+            id=glass_pulse_id, category_id="sfx", name="玻璃脉冲", version=glass_pulse_version,
             status="connected", resource_type="sound_effect", preview=ResourcePreview(
                 kind="audio", duration_seconds=0.7,
-                thumbnail_ref="/api/editing-resources/openfilm:sound-glass-pulse/preview"),
+                thumbnail_ref=glass_pulse_preview_ref),
             provenance=[ResourceProvenance(
                 repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
                 path="sound/glass-pulse/item.json", license="CC0-1.0", license_spdx="CC0-1.0",
@@ -191,7 +193,18 @@ def _builtin_resources() -> list[EditingResource]:
                     repository="https://github.com/openfilm/library", revision="19b26b60c1286b412c01ad64971263ae0e2aef13",
                     path="sound/glass-pulse/sound.m4a", license="CC0-1.0", license_spdx="CC0-1.0",
                     source_sha256="c7f8f926893726ae02093ca5d64f5006c3e020b592b5de753bf6de9acaf71a38")],
-            runtime_requirements={"engine": "EditAudioTimeline", "source_ref": "/api/editing-resources/openfilm:sound-glass-pulse/preview", "manifest_path": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/item.json", "tags": ["chime", "glass", "cue", "short"]},
+            runtime_requirements={
+                "engine": "EditAudioTimeline", "preview_ref": glass_pulse_preview_ref,
+                "manifest_path": "apps/api/app/resource_assets/openfilm/sound/glass-pulse/item.json",
+                "tags": ["chime", "glass", "cue", "short"],
+                "adoption": {"status": "requires_task_import", "requires_explicit_edit_authorization": True,
+                    "import_endpoint": "/api/creation-tasks/{task_id}/audio/resources",
+                    "import_payload": {"resource_id": glass_pulse_id, "version": glass_pulse_version},
+                    "result": "读取导入 Job 原回执的 result.source_ref；预览 URL 不是可写入时间线的 source_ref。",
+                    "entrypoint": "apply_typed_edit", "operation_type": "EditAudioTimeline", "action": "add",
+                    "track_role": "effect", "write_endpoint": "/api/creation-tasks/{task_id}/edits/exact",
+                    "write_boundary": "沿当前任务授权与 expected_timeline_version_id/expected_timeline_sequence 校验采用。"},
+            },
             entrypoints=["preview_typed_edit", "apply_typed_edit"],
         ),
         EditingResource(

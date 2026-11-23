@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 import json
+import math
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -257,6 +258,7 @@ def final_quality_check_payload(record: dict | None, plan: CreationTaskMontagePl
         "check_state": "none", "result_status": None, "stale": False,
         "check_id": None, "timeline_version_id": timeline_version_id,
         "render_ref": None, "checked_at": None, "error": None,
+        "video_duration_seconds": None,
         "findings": [], "unavailable": [], "clipping_summary": None, "black_frame_summary": None,
         "validation_scope": "deterministic_media_errors_only",
     }
@@ -279,6 +281,9 @@ def final_quality_check_payload(record: dict | None, plan: CreationTaskMontagePl
     if stale or record["check_state"] != "done":
         return payload
     evidence = record["evidence"]
+    duration = evidence.get("video_duration_seconds")
+    if type(duration) in (int, float) and math.isfinite(duration) and duration > 0:
+        payload["video_duration_seconds"] = duration
     payload["result_status"] = record["result_status"]
     payload["findings"] = [
         {**finding, "clip_ids": [clip.id for clip in plan.clips

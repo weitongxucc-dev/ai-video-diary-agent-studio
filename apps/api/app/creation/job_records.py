@@ -159,6 +159,31 @@ class JobRunRecordStore:
             pending_media = conn.execute("SELECT * FROM job_runs WHERE kind=? AND status IN ('queued','interrupted','running','cancelled')", (kind,)).fetchall()
         return (self.job_run_from_row(row) for row in pending_media)
 
+    def task_media_queue_counts(self, workspace_id: str, task_id: str, kind: str):
+        """Group pending records by operation and count matching unsettled requests once per job."""
+        with self._connect() as conn:
+            return conn.execute(
+                """
+                SELECT CASE WHEN json_type(e.payload_json, '$.operation') = 'text'
+                            THEN json_extract(e.payload_json, '$.operation') END AS operation,
+                       COUNT(*) AS pending_count,
+                       SUM(EXISTS (
+                           SELECT 1 FROM device_work_requests r
+                           WHERE r.workspace_id = j.workspace_id
+                             AND r.owner_type = 'creation_job' AND r.owner_id = j.id
+                             AND r.input_digest = j.input_digest
+                             AND r.unit_key = 'task_media:' || j.input_digest
+                             AND r.state IN ('waiting', 'blocked', 'granted', 'yield_requested')
+                       )) AS with_device_request_count
+                FROM job_runs j
+                LEFT JOIN task_events e ON e.workspace_id = j.workspace_id AND e.id = 'event_' || j.id || '_start'
+                WHERE j.workspace_id = ? AND j.task_id = ? AND j.kind = ?
+                  AND j.status IN ('queued', 'running', 'interrupted')
+                GROUP BY operation
+                """,
+                (workspace_id, task_id, kind),
+            ).fetchall()
+
 
     def claim_job_run(self, workspace_id: str, job_id: str, *, connection: sqlite3.Connection | None = None) -> _JobRun:
         with (self._connect() if connection is None else nullcontext(connection)) as conn:

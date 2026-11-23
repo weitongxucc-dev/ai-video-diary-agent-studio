@@ -5,7 +5,7 @@ import type { AssistantConversation } from '@/lib/types';
 import type { WorkspaceSessionSnapshot } from '@/app/auth/workspace-session';
 
 const mocks = vi.hoisted(() => ({ path: '/signin', local: false, readSession: vi.fn(), authChange: null as null | ((event: string, session: { user: { id: string } } | null) => void), unsubscribe: vi.fn(), current: vi.fn(), list: vi.fn(), get: vi.fn(), update: vi.fn(), reference: vi.fn(), saveReference: vi.fn() }));
-vi.mock('next/navigation', () => ({ usePathname: () => mocks.path, useRouter: () => ({ push: vi.fn() }) }));
+vi.mock('next/navigation', () => ({ usePathname: () => mocks.path, useSearchParams: () => new URLSearchParams(), useRouter: () => ({ push: vi.fn() }) }));
 vi.mock('@/lib/auth/routing', async original => ({ ...await original<typeof import('@/lib/auth/routing')>(), isLocalAuthMode: () => mocks.local }));
 vi.mock('@/app/auth/workspace-session', () => ({ readWorkspaceSession: mocks.readSession }));
 vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({ auth: { onAuthStateChange: (callback: typeof mocks.authChange) => { mocks.authChange = callback; return { data: { subscription: { unsubscribe: mocks.unsubscribe } } }; } } }) }));

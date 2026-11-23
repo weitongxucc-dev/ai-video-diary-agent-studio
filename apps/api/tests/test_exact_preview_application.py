@@ -78,7 +78,7 @@ def test_source_facts_distinguishes_missing_target_from_source_failures(failure,
     assert rejected.value.status_code == status and rejected.value.detail == detail
     assert calls == [('workspace', 'task', {'clip_ids': ['missing-target'],
         'replacement': ('existing-asset', 'existing-segment'),
-        'user_id': 'member', 'local_diagnostic': False})]
+        'user_id': 'member', 'local_diagnostic': False, 'automatic_replacement': False})]
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None, reason='native media tools unavailable')

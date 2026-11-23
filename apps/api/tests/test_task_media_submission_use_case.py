@@ -286,6 +286,61 @@ def test_public_media_output_download_rejects_cancelled_job_and_cross_workspace(
     assert foreign.value.status_code == 404
 
 
+def test_media_timeout_preserves_original_public_receipt_without_output(tmp_path, monkeypatch):
+    from app import main
+    from app.creation.contracts import TimelineVersion
+    from app.media_execution import FFMPEG_OPERATION, EditPlan, MediaOperation, TaskMediaExecutionDelegate
+    from test_task_media_grants import case
+
+    repo, actor, _state, _factory, build, media = case(tmp_path)
+    base = repo.timeline_records.create_timeline_version(
+        TimelineVersion("timeline-1", "local", "task", None, 1, {}, None))
+    request_id = _command()["request_id"]
+    plan = EditPlan("local", "task", base.id, request_id,
+                    (MediaOperation("cut", ("unused-fixture-input.mp4",), "output.mp4"),),
+                    member_id=actor.member_id)
+
+    class TimeoutEntryPoint:
+        def submit(self, submitted_plan, *, cancel_event):
+            assert submitted_plan == plan
+            return {"status": "failed", "request_id": request_id, "failure_reason": "media_command_timeout",
+                    "impact": "未发布新版本。", "repair_action": "检查输入后沿原作业重试。"}
+
+    fixture_facts = media.facts
+
+    def bound_facts(*args):
+        facts, resources = fixture_facts(*args)
+        return {**facts, "base_version_id": base.id}, resources
+
+    media.facts = bound_facts
+    media.media_execution_delegate = TaskMediaExecutionDelegate(TimeoutEntryPoint())
+    runtime = build(media)
+    client = TestClient(main.app)  # In-process requests only; do not run application lifespan.
+    try:
+        monkeypatch.setattr(main, "production_repo", repo)
+        monkeypatch.setattr(main, "current_workspace_id", lambda _request: actor.workspace_id)
+        monkeypatch.setattr(main, "_require_permit_actor", lambda *_: actor)
+        monkeypatch.setattr(main, "_media_result_read_components", lambda: (media, runtime.scheduler))
+
+        job = media.submit(runtime, actor, "task", FFMPEG_OPERATION, {"edit_plan": plan.as_dict()}, "media_output")
+        result_url = main._media_result_receipt(media, job, actor, runtime)["result_url"]
+        assert runtime.run_once()
+
+        response = client.get(result_url)
+        assert response.status_code == 200, response.text
+        receipt = response.json()
+        assert receipt["job_id"] == job.id and receipt["result_url"] == result_url
+        assert receipt["base_version_id"] == base.id
+        assert receipt["status"] == "failed" and receipt["result"] is None
+        assert client.get(f"{result_url}/outputs/1").status_code == 409
+        assert not repo.execution_records.list_artifact_records("local", "task")
+        assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == base.id
+        assert receipt["failure_reason"] == "media_command_timeout"
+    finally:
+        client.close()
+        runtime.stop(0)
+
+
 def test_successful_media_output_stays_current_after_publishing_child_version():
     actor = CreationExecutionActor("local", "member-1")
     event = {

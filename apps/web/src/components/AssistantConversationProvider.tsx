@@ -10,8 +10,10 @@ import { useWorkbenchTarget } from "./workbench/WorkbenchTarget";
 import { ASSISTANT_SELECTION_EVENT, assistantReferenceItems, assistantReferenceKey, type SelectedAssistantReference, ASSISTANT_MATERIAL_REFERENCE_EVENT, ASSISTANT_PROFILE_REFERENCE_EVENT, ASSISTANT_KNOWLEDGE_REFERENCE_EVENT, type AssistantKnowledgeReference, type AssistantMaterialReference, type AssistantProfileReference } from "@/lib/assistant-reference";
 
 import { getAssistantConversationReference, saveAssistantConversationReference } from "@/lib/api";
-import type { AssistantSavedReference } from "@/lib/types";
+import { preflightReturnUrl, validDraftId } from "@/lib/preflight-draft";
+import type { AssistantConversationScope, AssistantSavedReference } from "@/lib/types";
 
+const draftScopePrefix = "draft:";
 const ReferenceStatusContext = createContext<{pending:boolean;reason:string|null;cancel?:()=>void}>({pending:false,reason:null});
 export function useAssistantReferenceStatus() { return useContext(ReferenceStatusContext); }
 
@@ -42,9 +44,22 @@ function MemberConversation({ children }: { children: ReactNode }) {
     window.addEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
     return () => window.removeEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
   }, [router]);
-  const { targetId } = useWorkbenchTarget();
-  const state = useScopedAssistantConversation(targetId ? { scope_kind: "task", scope_id: targetId.slice("/tasks/".length) } : { scope_kind: "home", scope_id: "home" });
-  const scopeKey = targetId ?? "home";
+  const { targetId, draftId } = useWorkbenchTarget();
+  const scope: AssistantConversationScope = targetId
+    ? { scope_kind: "task", scope_id: targetId.slice("/tasks/".length) }
+    : { scope_kind: "home", scope_id: draftId ? `${draftScopePrefix}${draftId}` : "home" };
+  const state = useScopedAssistantConversation(scope);
+  const scopeKey = `${scope.scope_kind}:${scope.scope_id}`;
+  const { resume: resumeInScope, isCurrentConversation } = state;
+  const resume = useCallback(async (id: string) => {
+    const resumed = await resumeInScope(id);
+    if (scopeKey === "home:home" && isCurrentConversation(resumed.id)
+        && resumed.scope_kind === "home" && resumed.scope_id.startsWith(draftScopePrefix)) {
+      const resumedDraftId = resumed.scope_id.slice(draftScopePrefix.length);
+      if (validDraftId(resumedDraftId)) router.push(preflightReturnUrl(resumedDraftId.toLowerCase(), null));
+    }
+    return resumed;
+  }, [resumeInScope, isCurrentConversation, scopeKey, router]);
   const conversationId = state.conversation?.id ?? null;
   const [selection, setSelection] = useState<ReferenceSelection>({
     conversationId: null, scopeKey, value: null, pending: true, reason: null,
@@ -174,7 +189,7 @@ function MemberConversation({ children }: { children: ReactNode }) {
     window.addEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, receive);
     return () => window.removeEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, receive);
   }, [selectMaterial]);
-  return <AssistantConversationContext.Provider value={state}><ReferenceStatusContext.Provider value={{pending:reference.pending,reason:reference.reason,cancel:()=>selectReference(null)}}>
+  return <AssistantConversationContext.Provider value={{...state,resume}}><ReferenceStatusContext.Provider value={{pending:reference.pending,reason:reference.reason,cancel:()=>selectReference(null)}}>
     <SelectionContext.Provider value={{items,version:conversationId ? versions.current.get(conversationId) : undefined,select:selectItems,remove:removeItem}}><MaterialReferenceContext.Provider value={{reference:materialReference,setReference:selectMaterial}}>
       <ProfileReferenceContext.Provider value={{reference:profileReference,setReference:selectProfile}}>
         <KnowledgeReferenceContext.Provider value={{reference:knowledgeReference,setReference:selectKnowledge}}>{children}</KnowledgeReferenceContext.Provider>
