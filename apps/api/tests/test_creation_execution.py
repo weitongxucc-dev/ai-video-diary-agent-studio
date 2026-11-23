@@ -2581,6 +2581,29 @@ def test_task_authorization_survives_unknown_and_restart_but_not_expiry_or_revoc
     assert restarted.status("local", task_id) == "revoked"
 
 
+def test_task_authorization_refreshes_workspace_material_scope_before_execution(tmp_path):
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+
+    repo, task_id, _, _ = _seed(tmp_path, workspace_id="local", voice=False)
+    actor = _local_task_actor(repo, task_id)
+    task = repo.task_records.get_creation_task("local", task_id)
+    service = TaskAuthorizationUseCase(repo, lambda _identity: "ready")
+
+    issued = service.ensure(task, actor)
+    assert issued.resource_scope["assets"] == []
+
+    asset, reference = register_synthetic_video_asset(
+        repo, workspace_id="local", member_id=actor.member_id,
+        path=tmp_path / "library" / "received-after-auth.mp4", asset_id="received-after-auth", seconds=3,
+    )
+    refreshed = service.ensure(task, actor)
+
+    assert refreshed.revision == issued.revision + 1
+    assert refreshed.resource_scope["assets"] == [asset.id]
+    assert refreshed.resource_scope["references"] == [reference]
+    assert service.material_asset_ids("local", task_id) == {asset.id}
+
+
 def test_task_authorization_keeps_selected_assets_and_accepts_only_own_derived_output(tmp_path):
     from app.creation.task_authorization import TaskAuthorizationUseCase
     from app.creation.contracts import ArtifactRecord, JobRun

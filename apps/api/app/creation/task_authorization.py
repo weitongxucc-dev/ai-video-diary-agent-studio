@@ -170,6 +170,24 @@ class TaskAuthorizationUseCase:
             if current.revoked_at is not None:
                 raise TaskAuthorizationDenied("原任务授权已明确撤销")
             if current.goal_revision == goal and self.status(task.workspace_id, task.id, identity=identity) == "valid":
+                # A workspace-library goal can receive newly confirmed material
+                # after the interactive task grant was issued. Refresh that
+                # finite scope before execution starts, while the task still
+                # has no adopted montage or open execution job. Once production
+                # has begun, the original scope remains immutable.
+                if self._can_refresh_material_scope(task):
+                    refreshed_scope = self._scope(identity, task.id)
+                    if refreshed_scope != current.resource_scope:
+                        try:
+                            return self.repository.task_authorization_records.save_task_authorization(
+                                replace(current, resource_scope=refreshed_scope,
+                                    revision=current.revision + 1, last_checked_at=self.clock(),
+                                    last_verdict="ready"),
+                                expected_revision=current.revision,
+                            )
+                        except TaskAuthorizationConflict:
+                            return self.repository.task_authorization_records.get_task_authorization(
+                                task.workspace_id, task.id)
                 return current
             if not interactive:
                 self._wake.set()
@@ -200,6 +218,19 @@ class TaskAuthorizationUseCase:
         if refusal is not None:
             raise refusal
         return result
+
+    def _can_refresh_material_scope(self, task) -> bool:
+        """Allow workspace-library scope refresh only before production starts."""
+        material_scope = self.repository.task_authorization_records.task_authorization_material_scope(
+            task.workspace_id, task.id)
+        if material_scope is not None and material_scope.get("kind") != "workspace_library":
+            return False
+        if (getattr(task, "stage_status", None) != "not_started"
+                or getattr(task, "montage_plan_id", None) is not None
+                or getattr(task, "current_timeline_version_id", None) is not None):
+            return False
+        with self.repository._connect() as connection:
+            return not self.repository.job_records.has_open_task_job(connection, task.workspace_id, task.id)
 
     def prepare_voice_selection(self, task, actor, voice_profile_id, voice_version):
         """Verify one fixed replacement before the caller opens its writer transaction."""
