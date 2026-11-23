@@ -38,6 +38,90 @@ def task_execution_requirements(task: CreationTask, plan: CreationPlan) -> dict[
     }
 
 
+def _duration_consistency(repository, task: CreationTask, plan: CreationPlan) -> dict[str, object]:
+    """Project the persisted target against the current timeline metadata.
+
+    This is a read-only consistency signal. It deliberately does not probe the
+    rendered file, so an unknown file measurement remains unknown instead of
+    being inferred from the timeline.
+    """
+    target = float(plan.duration_target_seconds)
+    original_target = None
+    adjustment_event_id = None
+    duration_events = [
+        event for event in repository.execution_records.list_task_events(
+            task.workspace_id, task.id
+        )
+        if event.event_type == "creation_narration_duration_adopted"
+    ]
+    if duration_events:
+        event = duration_events[-1]
+        previous = duration_events[0].payload.get("previous_target_seconds")
+        if isinstance(previous, (int, float)):
+            original_target = float(previous)
+            adjustment_event_id = event.id
+    target_adjusted = original_target is not None and abs(original_target - target) > 1e-9
+    version = None
+    if task.current_timeline_version_id:
+        try:
+            version = repository.timeline_records.get_timeline_version(
+                task.workspace_id, task.current_timeline_version_id
+            )
+        except KeyError:
+            version = None
+    montage = (version.snapshot or {}).get("montage") if version else None
+    timeline = montage.get("duration_seconds") if isinstance(montage, dict) else None
+    if not isinstance(timeline, (int, float)):
+        return {
+            "status": "adjusted" if target_adjusted else "unknown",
+            "original_target_seconds": original_target,
+            "target_seconds": target,
+            "timeline_seconds": None,
+            "difference_seconds": None,
+            "tolerance_seconds": 1 / 30,
+            "timeline_version_id": version.id if version else task.current_timeline_version_id,
+            "target_adjusted": target_adjusted,
+            "adjustment_event_id": adjustment_event_id,
+        }
+    difference = round(float(timeline) - target, 6)
+    aligned = abs(difference) <= 1 / 30
+    return {
+        "status": "adjusted" if target_adjusted and aligned else ("aligned" if aligned else "mismatch"),
+        "original_target_seconds": original_target,
+        "target_seconds": target,
+        "timeline_seconds": round(float(timeline), 6),
+        "difference_seconds": difference,
+        "tolerance_seconds": 1 / 30,
+        "timeline_version_id": version.id,
+        "target_adjusted": target_adjusted,
+        "adjustment_event_id": adjustment_event_id,
+    }
+
+
+def _media_queue_summary(repository, workspace_id: str, task_id: str) -> dict[str, object]:
+    """Expose pending task-media records beside the parent execution state."""
+    pending = [
+        job for job in repository.job_records.list_job_runs(workspace_id, task_id)
+        if job.kind == TASK_MEDIA_KIND and job.status in {"queued", "running", "interrupted"}
+    ]
+    operations: set[str] = set()
+    for job in pending:
+        try:
+            event = repository.execution_records.get_task_event(
+                workspace_id, f"event_{job.id}_start"
+            )
+        except KeyError:
+            continue
+        operation = event.payload.get("operation")
+        if isinstance(operation, str) and operation:
+            operations.add(operation)
+    return {
+        "status": "pending" if pending else "settled",
+        "pending_count": len(pending),
+        "pending_operations": sorted(operations),
+    }
+
+
 class DesktopShutdownUseCase:
     """One save/pause request consumes one common desktop exit budget."""
     def __init__(self, *, runtime, automation, ingestion, assistant, stop_assistant,
@@ -203,6 +287,7 @@ class CreationExecutionControl:
 
     def _status_summary(self, task, *, actor, job_id):
         workspace_id, task_id = task.workspace_id, task.id
+        plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
         job = self.execution.latest(workspace_id, task_id) if job_id is None else self.repository.job_records.get_job_run(workspace_id,job_id)
         if actor is not None and job_id is None and task.owner_user_id==(actor.user_id or actor.member_id):
             with self.repository._connect() as conn:
@@ -253,7 +338,9 @@ class CreationExecutionControl:
         return {
             "task_id": task_id,
             "task_execution": task_execution_requirements(task,
-                self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)),
+                plan),
+            "duration_consistency": _duration_consistency(self.repository, task, plan),
+            "media_queue": _media_queue_summary(self.repository, workspace_id, task_id),
             "job": asdict(job) if job else None,
             "stages": events,
             "current_stage": current_stage,
