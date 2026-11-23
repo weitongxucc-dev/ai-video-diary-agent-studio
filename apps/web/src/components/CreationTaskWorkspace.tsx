@@ -2053,7 +2053,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
             const videoSeconds = measurement?.taskId === task.id && measurement.versionId === task.current_timeline_version_id
               && measurement.outputUrl === workspace.montage?.output_url ? measurement.seconds : null;
             return <ReviewOutputView subtitleSummary={subtitleSummary} coverValid={coverValid} canEditSubtitle={Boolean(activeSubtitleTrack)}
-              reviewChecks={[...reviewChecks, { title: "时长", ready: false, detail: durationDetails(videoSeconds) }]}
+              durationDetail={durationDetails(videoSeconds)} reviewChecks={reviewChecks}
               busy={busy} onEditMontage={() => openView("montage")} onRecord={() => setRecordingOpen(true)} onEditSubtitles={() => openView("subtitle_cover")} onSave={() => void saveVideo()} />;
           } : undefined} /> : null}
         {(activeView === "review" || activeView === "montage") && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}
