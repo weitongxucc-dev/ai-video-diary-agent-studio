@@ -220,6 +220,29 @@ def narration_reference_facts(repository, task, plan, prepared=None, *, connecti
     def asset_digest(identity):
         return (hashlib.sha256(json.dumps(json_value(repository.get_asset(task.workspace_id, identity, connection=connection)),
             sort_keys=True).encode()).hexdigest() if identity else None)
+    if plan.selected_voice is None:
+        # A recorded narration is already the adopted source for this task.
+        # It has no generated voice profile or profile-reference media to
+        # qualify. Keep its registered source facts available to callers that
+        # prepare the next execution unit, while preserving generated voice
+        # validation below.
+        recorded = (repository.narration_artifacts.get_narration_artifact(
+            task.workspace_id, task.narration_cache_key, connection=connection)
+            if task.narration_cache_key else None)
+        if (recorded is None or recorded.source_kind != 'recorded'
+                or recorded.task_id != task.id or recorded.script_id != task.confirmed_script_id):
+            from app.materials.contracts import MediaAuthorityError
+            raise MediaAuthorityError(reason='voice_identity_missing',
+                impact='当前任务没有可用的生成声音或已采用录音来源。',
+                repair_action='重新采用当前任务的录音，或选择已授权的声音版本。')
+        qualified = {
+            'source_kind': 'recorded',
+            'source_artifact_ref': recorded.source_artifact_ref,
+            'source_sha256': recorded.source_sha256,
+            'source_path': recorded.audio_path,
+            'duration_seconds': recorded.duration_seconds,
+        }
+        return None, None, qualified
     if prepared is None:
         inputs=repository.profile_inputs.resolve_creation_task_narration_inputs(workspace_id=task.workspace_id,task_id=task.id,
             voice_profile_id=plan.selected_voice.profile_id,voice_version=plan.selected_voice.version, connection=connection)

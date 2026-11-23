@@ -33,13 +33,13 @@ from app.creation.contracts import (
 )
 
 
-def wav_bytes(seconds: float = 1) -> bytes:
+def wav_bytes(seconds: float = 1, *, sample_rate: int = 16_000) -> bytes:
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as audio:
         audio.setnchannels(1)
         audio.setsampwidth(2)
-        audio.setframerate(16_000)
-        audio.writeframes(b"\x00\x00" * round(16_000 * seconds))
+        audio.setframerate(sample_rate)
+        audio.writeframes(b"\x00\x00" * round(sample_rate * seconds))
     return buffer.getvalue()
 
 
@@ -191,7 +191,7 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     assert generated_preview.json()["narration_source"]["source_kind"] == "generated"
     _prepare_first_recording_adoption(repo, task_id)
     route = f"/api/creation-tasks/{task_id}/audio/recordings"
-    saved_response = client.post(route, files={"audio": ("voice.wav", wav_bytes(), "audio/wav")})
+    saved_response = client.post(route, files={"audio": ("voice.wav", wav_bytes(sample_rate=24_000), "audio/wav")})
     assert saved_response.status_code == 200, saved_response.text
     saved = saved_response.json()
     assert saved["applied"] is False
@@ -274,6 +274,14 @@ def test_initial_recording_requires_explicit_adoption_then_persists_narration_fo
     start_event = restarted.execution_records.get_task_event("local", f"event_{job.id}_start")
     assert start_event.payload["script_id"] == current_script.id
     owner = CreationJobOwnerVerifier(restarted)
+    pcm_preparation = owner.prepare_pcm_sources(job)
+    assert pcm_preparation["_narration_reference"] == {
+        "source_kind": "recorded",
+        "source_artifact_ref": saved_artifact.source_artifact_ref,
+        "source_sha256": saved_artifact.source_sha256,
+        "source_path": saved_artifact.audio_path,
+        "duration_seconds": saved_artifact.duration_seconds,
+    }
     scheduler = SimpleNamespace(owners=owner)
     intent = next_creation_intent(restarted, scheduler, job)
     assert intent.unit_key == "montage_plan"
