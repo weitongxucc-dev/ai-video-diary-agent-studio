@@ -174,6 +174,7 @@ from app.config import (
     configure_process_temporary_directory,
     prepare_process_temporary_directory,
     publish_process_temporary_directory,
+    validate_storage_configuration,
     record_llm_service_verification,
     runtime_env_file_path,
 )
@@ -553,6 +554,7 @@ def _current_database_owners() -> DatabaseOwners:
 
 def _initialize_runtime_dependencies() -> ModelInstaller:
     initial_settings = Settings.from_env()
+    validate_storage_configuration(initial_settings)
     configure_process_temporary_directory(initial_settings)
     _publish_runtime_dependencies(prepare_runtime_dependencies(initial_settings))
     return ModelInstaller(model_catalog, on_complete=lambda: _reload_runtime_dependencies())
@@ -5024,6 +5026,7 @@ def _runtime_settings_http_router(route_names):
         device_values_for=lambda: device_runtime_settings_values,
         env_updates_for=lambda: runtime_settings_updates,
         settings_type_for=lambda: Settings,
+        validate_storage_for=lambda: validate_storage_configuration,
         catalog_builder_for=lambda: model_catalog_from_settings,
         installer_for=lambda: model_installer,
         reload_lock_for=lambda: _runtime_reload_lock,
@@ -5124,6 +5127,7 @@ def _prepare_runtime_reload(prospective_settings: Settings) -> PreparedRuntimeRe
     _assert_runtime_reload_allowed()
     if _assistant_stream_workers:
         raise HTTPException(status_code=503, detail="对话仍在运行，请等待当前结果返回后重载设置。")
+    validate_storage_configuration(prospective_settings)
     temporary_root = prepare_process_temporary_directory(prospective_settings)
     dependencies = prepare_runtime_dependencies(prospective_settings, current_database=_current_database_owners())
     routes = _prepare_runtime_routes(dependencies.database, dependencies.auth)

@@ -3,6 +3,7 @@ import pytest
 
 import app.main as main_module
 from app import env_files
+from app.config import StorageConfigurationError, validate_storage_configuration
 from app.runtime_settings import runtime_settings_updates
 
 
@@ -131,6 +132,43 @@ def test_temp_setup_rejects_unmounted_volume_even_when_parent_directory_exists(m
     assert tempfile.tempdir == before_tempdir
 
 
+def test_external_storage_validation_fails_closed_without_mount_or_directory_creation(tmp_path, monkeypatch):
+    import app.config as config
+
+    volume = tmp_path / "external"
+    configured = volume / "video-output"
+    monkeypatch.setattr(config, "_external_volume", lambda path: volume if str(path).startswith(str(volume)) else None)
+    monkeypatch.setattr(config.os.path, "ismount", lambda _path: False)
+
+    with pytest.raises(StorageConfigurationError, match="外接存储未挂载"):
+        validate_storage_configuration(
+            config.Settings(video_output_path=str(configured)),
+            {"video_output_path": str(configured)},
+        )
+    assert not configured.exists()
+
+
+def test_external_storage_validation_checks_writable_and_free_space(tmp_path, monkeypatch):
+    import shutil
+    import app.config as config
+
+    volume = tmp_path / "external"
+    output = volume / "video-output"
+    output.mkdir(parents=True)
+    monkeypatch.setattr(config, "_external_volume", lambda path: volume if str(path).startswith(str(volume)) else None)
+    monkeypatch.setattr(config.os.path, "ismount", lambda _path: True)
+    monkeypatch.setattr(config, "_storage_write_probe", lambda _path: (_ for _ in ()).throw(
+        StorageConfigurationError("存储目录不可写")
+    ))
+    with pytest.raises(StorageConfigurationError, match="不可写"):
+        validate_storage_configuration(config.Settings(video_output_path=str(output)))
+
+    monkeypatch.setattr(config, "_storage_write_probe", lambda _path: None)
+    monkeypatch.setattr(shutil, "disk_usage", lambda _path: shutil._ntuple_diskusage(10, 10, 0))
+    with pytest.raises(StorageConfigurationError, match="空间不足"):
+        validate_storage_configuration(config.Settings(video_output_path=str(output)))
+
+
 def test_runtime_settings_updates_omits_empty_topic_source_urls():
     updates = runtime_settings_updates(
         {
@@ -165,6 +203,28 @@ def test_runtime_settings_endpoint_rejects_non_local_clients(tmp_path, monkeypat
     assert response.status_code == 403
     assert not env_path.exists()
     assert reloaded is False
+
+
+def test_runtime_settings_endpoint_rejects_external_storage_before_persistence(tmp_path, monkeypatch):
+    env_path = tmp_path / ".env"
+    env_path.write_text("VIDEO_OUTPUT_PATH=/existing/output\n")
+    monkeypatch.setattr(main_module, "runtime_env_path", env_path)
+    monkeypatch.setattr(
+        main_module,
+        "validate_storage_configuration",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            StorageConfigurationError("外接存储未挂载")
+        ),
+    )
+
+    response = TestClient(main_module.app, client=("127.0.0.1", 50000)).post(
+        "/api/settings/runtime",
+        json={"video_output_path": "/Volumes/Missing/AI视频日记/output"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "外接存储未挂载"
+    assert env_path.read_text() == "VIDEO_OUTPUT_PATH=/existing/output\n"
 
 
 def test_runtime_settings_updates_maps_draft_background_music_path():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import tempfile
 import threading
 from collections.abc import Mapping
@@ -30,6 +31,106 @@ from app.service_status_projection import (
     project_service_status,
     service_state,
 )
+
+
+class StorageConfigurationError(ValueError):
+    """A configured storage location cannot be used without falling back."""
+
+
+_STORAGE_PATH_FIELDS = {
+    "database_path": "database",
+    "video_inbox_path": "directory",
+    "video_output_path": "directory",
+    "draft_output_path": "directory",
+    "temporary_root_path": "directory",
+    "model_root_path": "model",
+}
+
+
+def _external_volume(path: Path) -> Path | None:
+    parts = path.expanduser().parts
+    if len(parts) >= 3 and parts[0] == "/" and parts[1] == "Volumes":
+        return Path("/Volumes") / parts[2]
+    return None
+
+
+def _nearest_existing_directory(path: Path) -> Path:
+    current = path.expanduser()
+    while not current.exists() and current != current.parent:
+        current = current.parent
+    if not current.is_dir():
+        raise StorageConfigurationError(f"存储位置不可用：{path}")
+    return current
+
+
+def _storage_write_probe(directory: Path) -> None:
+    probe = directory / f".yaohe-storage-probe-{os.getpid()}-{threading.get_ident()}"
+    try:
+        probe.touch(exist_ok=False)
+        probe.unlink()
+    except OSError as exc:
+        raise StorageConfigurationError(f"存储目录不可写：{directory}") from exc
+
+
+def _validate_storage_location(path: str | Path, kind: str, *, strict: bool) -> None:
+    target = Path(path).expanduser()
+    if not target.is_absolute():
+        if strict:
+            raise StorageConfigurationError(f"存储位置必须是绝对路径：{target}")
+        return
+    volume = _external_volume(target)
+    if volume is None:
+        if not strict:
+            return
+        existing = target.parent if kind == "database" else target
+    else:
+        if not os.path.ismount(volume):
+            raise StorageConfigurationError(f"外接存储未挂载：{volume}。请连接原数据盘后重试。")
+        existing = target.parent if kind == "database" else target
+        if kind in {"directory", "database"} and not existing.exists():
+            raise StorageConfigurationError(f"外接存储目录不存在：{existing}。不会创建内置盘回退目录。")
+
+    if kind == "database":
+        existing = _nearest_existing_directory(existing)
+    elif kind == "model":
+        existing = _nearest_existing_directory(existing)
+    elif not existing.is_dir():
+        raise StorageConfigurationError(f"存储目录不可用：{existing}")
+
+    _storage_write_probe(existing)
+    try:
+        usage = shutil.disk_usage(existing)
+    except OSError as exc:
+        raise StorageConfigurationError(f"无法读取存储剩余空间：{existing}") from exc
+    if usage.free <= 0:
+        raise StorageConfigurationError(f"存储空间不足：{existing}")
+
+
+def validate_storage_configuration(settings: Settings, submitted: Mapping[str, object] | None = None) -> None:
+    """Validate selected external paths before startup or settings activation.
+
+    Defaults keep their existing first-run behavior. Any submitted or persisted
+    /Volumes path is checked immediately and again on startup/reload. No
+    replacement path is selected.
+    """
+    submitted = submitted or {}
+    for field, kind in _STORAGE_PATH_FIELDS.items():
+        value = getattr(settings, field, None)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        target = Path(value).expanduser()
+        # Existing local/relative paths keep their established behavior. A
+        # /Volumes path is always strict, including when it arrives through a
+        # settings save, because a missing mount must never become an internal
+        # directory with the same name.
+        strict = _external_volume(target) is not None
+        if strict:
+            _validate_storage_location(target, kind, strict=True)
+    # When TEMPORARY_ROOT_PATH is omitted, it is derived beside MODEL_ROOT_PATH.
+    # Validate that derived location's existing parent before the temp setup is
+    # allowed to create it.
+    if not settings.temporary_root_path and _external_volume(settings.effective_temporary_root_path) is not None:
+        _validate_storage_location(settings.effective_temporary_root_path, "model", strict=True)
 
 
 def structured_completion_options(model_id: str, *, forced_tools: bool = False) -> dict[str, object]:
