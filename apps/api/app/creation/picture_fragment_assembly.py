@@ -193,7 +193,15 @@ class PictureFragmentAssembly:
         return None
 
     def _basis(self, job, window, layers, recipe, *, connection):
-        asset = self.repository.get_asset(job.workspace_id, window.clip.asset_id, connection=connection)
+        clip = window.clip
+        # Only optional evidence for registered library media. Presenter and
+        # derived sources keep their own production/authorization paths.
+        if clip.person_render_id or clip.asset_id.startswith('person:') or not clip.source_path.startswith('workspace://'):
+            return None
+        try:
+            asset = self.repository.get_asset(job.workspace_id, clip.asset_id, connection=connection)
+        except KeyError:
+            return None
         return picture_basis(window, layers, recipe, asset, threads=self.budget.max_threads,
             backend_identity=self.packet.budget.backend_identity if self.packet.budget is not None else None)
 

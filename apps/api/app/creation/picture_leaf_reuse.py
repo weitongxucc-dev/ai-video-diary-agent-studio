@@ -33,8 +33,18 @@ def picture_basis(window, layers, recipe, asset, *, threads, backend_identity):
     from PIL import Image, ImageDraw, ImageFont, features
     from app import montage
     from app.materials.source_files import material_segment_eligible
-    if backend_identity is None or any(layer.kind != 'subtitle' or not layer.value.subtitle_style.get('font_family') for layer in layers):
+    if backend_identity is None:
         return None
+    families = set()
+    for layer in layers:
+        if layer.kind != 'subtitle':
+            return None
+        family = layer.value.subtitle_style.get('font_family')
+        # Match the worker's explicit-family rules without claiming its
+        # fallback font or changing when invalid styles fail production.
+        if not isinstance(family, str) or not family.strip():
+            return None
+        families.add(family.strip())
     ffmpeg, ffprobe = shutil.which('ffmpeg'), shutil.which('ffprobe')
     if not ffmpeg or not ffprobe:
         return None
@@ -46,11 +56,9 @@ def picture_basis(window, layers, recipe, asset, *, threads, backend_identity):
             return None
     fonts = {}
     try:
-        for layer in layers:
-            family = layer.value.subtitle_style['font_family'].strip()
-            if family not in fonts:
-                path, face = montage._resolve_subtitle_font(family)
-                fonts[family] = {'file': _installed(path), 'face': face}
+        for family in sorted(families):
+            path, face = montage._resolve_subtitle_font(family)
+            fonts[family] = {'file': _installed(path), 'face': face}
         runtime = {'ffmpeg': _installed(ffmpeg), 'ffprobe': _installed(ffprobe),
             'renderer': _implementation(montage),
             'os': list(os.uname()) if hasattr(os, 'uname') else None,
