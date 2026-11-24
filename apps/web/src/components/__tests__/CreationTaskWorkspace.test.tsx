@@ -5147,6 +5147,7 @@ it("switches review and production preparation without replacing the saved playe
 it("opens existing history from production preparation when the current version has no output", async () => {
   const initial = workspaceWithCover();
   initial.montage = { ...initial.montage!, status: "ready", output_url: null };
+  initial.task.stage = "montage";
   initial.task.output_ready = false;
   mocks.listTimelineVersions.mockResolvedValue({
     task_id: initial.task.id, current_version_id: initial.task.current_timeline_version_id,
@@ -5157,6 +5158,10 @@ it("opens existing history from production preparation when the current version 
     }],
   });
   renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+  const review = getWorkspaceViewControl(/^检查与输出：/);
+  expect(review).not.toHaveAttribute("aria-disabled", "true");
+  expect(screen.getByRole("menuitem", { name: /^发布与数据：/ })).toHaveAttribute("aria-disabled", "true");
+  fireEvent.click(review);
   expect(screen.getByRole("tab", { name: "制作准备" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("tab", { name: "成片检查" })).toBeDisabled();
   expect(mocks.listTimelineVersions).not.toHaveBeenCalled();
@@ -5182,6 +5187,7 @@ it("opens existing history from production preparation when the current version 
 it("previews only the selected historical output on demand and clears it on switch or close", async () => {
   const initial = workspaceWithCover();
   initial.montage = { ...initial.montage!, status: "ready", output_url: null };
+  initial.task.stage = "montage";
   initial.task.output_ready = false;
   initial.task.current_timeline_version_id = "tv-3";
   initial.task.timeline_sequence = 3;
@@ -5200,7 +5206,10 @@ it("previews only the selected historical output on demand and clears it on swit
       url: versionId === "tv-1" ? oldVideo : "https://outside.invalid/historical.mp4", reason: null }],
   }));
   renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-  const trigger = within(screen.getByRole("tabpanel", { name: "制作准备" })).getByRole("button", { name: "查看历史版本" });
+  const tray = within(screen.getByRole("region", { name: "制作与检查" })).getByRole("button", { name: /制作与检查$/ });
+  expect(tray).toHaveAttribute("aria-expanded", "false");
+  const trigger = within(screen.getByRole("group", { name: "时间线编辑工具" })).getByRole("button", { name: "历史时间线版本" });
+  trigger.focus();
   fireEvent.click(trigger);
   const dialog = await screen.findByRole("dialog", { name: "历史时间线版本" });
   const panel = within(dialog);
@@ -5228,6 +5237,8 @@ it("previews only the selected historical output on demand and clears it on swit
   const reopenedPlayer = panel.getByLabelText("第 1 版历史成片");
   fireEvent.click(panel.getByRole("button", { name: "收起历史版本" }));
   expect(reopenedPlayer).not.toBeInTheDocument();
+  await waitFor(() => expect(trigger).toHaveFocus());
+  expect(tray).toHaveAttribute("aria-expanded", "false");
   fireEvent.click(trigger);
   expect(await panel.findByRole("button", { name: "预览第 1 版" })).toBeVisible();
   expect(panel.queryByLabelText("第 1 版历史成片")).not.toBeInTheDocument();
