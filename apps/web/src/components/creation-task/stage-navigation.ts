@@ -26,6 +26,11 @@ export function defaultWorkspaceView(workspace: WorkspaceState): WorkspaceView {
     if (workspace.montage) return "montage";
     return workspace.task.stage;
 }
+
+export function hasSavedTimeline(workspace: WorkspaceState): boolean {
+    return Boolean(workspace.montage && workspace.task.current_timeline_version_id);
+}
+
 export type ProductStageState = "done" | "skipped" | "current" | "upcoming";
 // 人物与口型按 PRD 9.1 判断：露脸目标 0% 是明确跳过而不是完成；目标未记录不能当作 0%。
 export function personStageFacts(workspace: WorkspaceState): {
@@ -123,6 +128,8 @@ export function productStageState(stageId: typeof productStages[number]["id"], w
             return { state: "upcoming", detail: "未开始" };
         return { state: "current", detail: workspace.cover_asset?.status === "valid" ? "待补字幕" : "待补封面" };
     }
+    if (!rendered && hasSavedTimeline(workspace))
+        return { state: "upcoming", detail: "可查看历史版本" };
     if (!subtitleCoverComplete)
         return { state: "upcoming", detail: "待上一步" };
     if (task.stage === "review")
@@ -148,5 +155,7 @@ export function canOpenStage(view: WorkspaceView | null, state: WorkspaceState):
         return Boolean(state.montage);
     if (view === "subtitle_cover")
         return Boolean(state.montage && state.subtitle_tracks.length);
-    return (view === "review" || view === "publish") && Boolean(state.montage?.output_url);
+    if (view === "review")
+        return hasSavedTimeline(state) || Boolean(state.montage?.output_url);
+    return view === "publish" && Boolean(state.montage?.output_url);
 }
