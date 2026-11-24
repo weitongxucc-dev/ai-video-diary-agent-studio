@@ -1,5 +1,4 @@
 """Finite, durable H264 picture windows with the original approved burn-in layers."""
-from contextlib import nullcontext
 from dataclasses import asdict, replace
 from fractions import Fraction
 import hashlib
@@ -12,21 +11,14 @@ from app.canvas import canvas_size
 from app.creation.assembly_manifest import PictureAssemblyWindow, iter_picture_windows
 from app.creation.contracts import ArtifactRecord, DependencyEdge, TaskEvent, TransformRun
 from app.creation.picture_fragment_layers import PictureFrameLayer, picture_fragment_recipe, picture_window_layers
+from app.creation.picture_leaf_reuse import file_identity as _identity, picture_basis, picture_history, read_leaf
 from app.graphic_overlays import validate_overlays
 from app.graphic_sources import graphic_source_facts
 from app.models import utc_now
 from app.montage import creation_task_montage_plan_from_payload, render_granted_picture_fragment
 from app.subtitle_schedule import TimedCaption, narration_schedule, subtitle_schedule, schedule_srt
 from app.task_audio import media_digest
-from app.creation.render_generation import current_render_generation, render_namespace, render_generation_fields, stored_render_scope
-
-
-def _identity(path):
-    value = Path(path).lstat()
-    if not stat.S_ISREG(value.st_mode):
-        raise ValueError('画面窗口来源不是普通文件')
-    return {'device': value.st_dev, 'inode': value.st_ino, 'size_bytes': value.st_size,
-        'mtime_ns': value.st_mtime_ns, 'ctime_ns': value.st_ctime_ns}
+from app.creation.render_generation import current_render_generation, latest_adopted_render, render_namespace, render_generation_fields, stored_render_scope
 
 
 class PictureFragmentAssembly:
@@ -81,7 +73,15 @@ class PictureFragmentAssembly:
             montage.duration_seconds) if tracks is not None else captions)
         return task, montage, captions, graphics, sources, image_facts, files, schedule_srt(sidecar)
 
-    def prepare(self, job, *, actor, write_guard, connection=None):
+    def prepare(self, job, *, actor, write_guard, connection=None, independent_sidecar=False):
+        if connection is None:
+            with self.repository._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                return self.prepare(job, actor=actor, write_guard=write_guard, connection=conn,
+                    independent_sidecar=independent_sidecar)
+        existing = self.manifest(job, actor=actor, connection=connection)
+        if existing is not None:
+            return existing
         if self.budget is None:
             raise ValueError('画面窗口缺少本机CPU编码预算')
         scope = render_generation_fields(current_render_generation(self.repository, job, connection=connection))
@@ -92,6 +92,8 @@ class PictureFragmentAssembly:
         if max_frames <= 0:
             raise ValueError('当前CPU编码档不能容纳一帧目标画幅')
         units = []
+        previous = self._previous(job, connection=connection) if independent_sidecar and scope else None
+        previous_units = {unit['recipe']['digest']: unit for unit in previous[1]['units']} if previous else {}
         for window in iter_picture_windows(montage, source_identities=sources, max_frames_per_unit=max_frames):
             layers = picture_window_layers(window, captions=captions, graphic_overlays=graphics)
             recipe = picture_fragment_recipe(window, layers)
@@ -126,48 +128,93 @@ class PictureFragmentAssembly:
                 'window': asdict(window), 'layers': [asdict(layer) for layer in layers], 'recipe': recipe,
                 'source': source, 'decode_seconds': decode_seconds, 'input_bytes': input_bytes,
                 'overlay_count': overlay_count, 'template_count': template_count, 'graphics': graphics_count, 'captions': caption_count}
+            if independent_sidecar:
+                unit['source_ref'] = window.clip.source_path
+                unit['reuse_basis'] = self._basis(job, window, layers, recipe, connection=connection)
+            if unit.get('reuse_basis') is not None and (old := previous_units.get(recipe['digest'])) is not None:
+                candidate = old.get('reuse') or {'origin_version_id': previous[0], 'unit_id': old['id'],
+                    'artifact_id': old['artifact_id']}
+                try:
+                    reference, _ = read_leaf(self.repository, self.store, job, candidate, unit['reuse_basis'],
+                        source, connection=connection, selecting=old.get('reuse') is None)
+                except (KeyError, ValueError, FileNotFoundError):
+                    pass  # No frozen binding yet: the current window can be produced normally.
+                else:
+                    unit['reuse'] = reference
             units.append(unit)
         if not units:
             raise ValueError('画面窗口没有完整输出单元')
         sidecar_bytes = len(subtitle_text.encode('utf-8'))
         if sidecar_bytes >= self.budget.max_output_bytes:
             raise ValueError('原字幕sidecar单元超过本次总发布分配，不能抬高作品或单元上限')
-        last = units[-1]
-        last['subtitle_sha256'] = hashlib.sha256(subtitle_text.encode('utf-8')).hexdigest()
-        last['subtitle_bytes'] = sidecar_bytes
-        last['id'] = media_digest([last['id'], last['subtitle_sha256'], 'subtitle-sidecar/v1'])
-        last['artifact_id'] = f'artifact_picture_fragment_{last["id"]}'
-        payload = {'version': 'picture-fragment-assembly/v2', **scope, 'subtitle_text': subtitle_text, 'job_id': job.id, 'input_digest': job.input_digest,
+        subtitle_sha = hashlib.sha256(subtitle_text.encode('utf-8')).hexdigest()
+        sidecar = {'sha256': subtitle_sha, 'size_bytes': sidecar_bytes,
+            'id': media_digest([job.workspace_id, job.task_id, job.id, task.current_timeline_version_id,
+                scope, subtitle_sha, 'subtitle-sidecar/v2'])}
+        if not independent_sidecar:
+            last = units[-1]
+            last.update(subtitle_bytes=sidecar_bytes, subtitle_sha256=subtitle_sha)
+            last['id'] = media_digest([last['id'], subtitle_sha, 'subtitle-sidecar/v1'])
+            last['artifact_id'] = f'artifact_picture_fragment_{last["id"]}'
+        payload = {'version': 'picture-fragment-assembly/v3' if independent_sidecar else 'picture-fragment-assembly/v2',
+            **scope, 'subtitle_text': subtitle_text, 'job_id': job.id, 'input_digest': job.input_digest,
             'task_id': task.id, 'head': task.current_timeline_version_id, 'subtitles': [asdict(cue) for cue in captions],
             'picture_recipe': self.packet.recipe(job, connection=connection), 'sources': sources, 'images': images,
             'qualified_files': files, 'units': units}
+        if independent_sidecar:
+            payload['sidecar'] = sidecar
         payload = json.loads(json.dumps(payload, default=str))
         payload['digest'] = media_digest(payload)
-        existing = self.manifest(job, actor=actor, connection=connection)
-        if existing is not None:
-            if payload != existing:
-                raise ValueError('原画面窗口manifest已经绑定其他层内容或来源')
-            return existing
-        with self.repository._connect() if connection is None else nullcontext(connection) as conn:
-            if connection is None:
-                conn.execute('BEGIN IMMEDIATE')
-            write_guard(conn)
-            from app.creation_execution import CreationExecutionActor
-            event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn)
-            if actor != CreationExecutionActor.from_event(job.workspace_id, event.payload):
-                raise PermissionError('画面窗口原Job身份不匹配')
-            for source in sources.values():
-                if _identity(source['path']) != source['file_identity']:
-                    raise ValueError('画面来源在封存期间已变化')
-            current = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=conn)
-            if (current.current_timeline_version_id != payload['head']
-                    or self.packet.recipe(job, connection=conn) != payload['picture_recipe']):
-                raise ValueError('原任务画面配方在manifest封存期间已变化')
-            self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job, connection=conn), job.workspace_id, job.task_id,
-                job.id, 'picture_fragment_manifest', payload), connection=conn)
+        write_guard(connection)
+        from app.creation_execution import CreationExecutionActor
+        event = self.repository.execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=connection)
+        if actor != CreationExecutionActor.from_event(job.workspace_id, event.payload):
+            raise PermissionError('画面窗口原Job身份不匹配')
+        for source in sources.values():
+            if _identity(source['path']) != source['file_identity']:
+                raise ValueError('画面来源在封存期间已变化')
+        current = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=connection)
+        if (current.current_timeline_version_id != payload['head']
+                or self.packet.recipe(job, connection=connection) != payload['picture_recipe']):
+            raise ValueError('原任务画面配方在manifest封存期间已变化')
+        self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job, connection=connection),
+            job.workspace_id, job.task_id, job.id, 'picture_fragment_manifest', payload), connection=connection)
         return payload
 
+    def _previous(self, job, *, connection):
+        try:
+            previous = latest_adopted_render(self.repository, job, connection=connection)
+            if previous is not None:
+                manifest = picture_history(self.repository, job, previous, connection=connection)
+                if manifest is not None:
+                    return previous[0].id, manifest
+        except (KeyError, ValueError, FileNotFoundError):
+            pass  # Missing or incompatible old proof is not a reusable input.
+        return None
+
+    def _basis(self, job, window, layers, recipe, *, connection):
+        clip = window.clip
+        # Only optional evidence for registered library media. Presenter and
+        # derived sources keep their own production/authorization paths.
+        if clip.person_render_id or clip.asset_id.startswith('person:') or not clip.source_path.startswith('workspace://'):
+            return None
+        try:
+            asset = self.repository.get_asset(job.workspace_id, clip.asset_id, connection=connection)
+        except KeyError:
+            return None
+        return picture_basis(window, layers, recipe, asset, threads=self.budget.max_threads,
+            backend_identity=self.packet.budget.backend_identity if self.packet.budget is not None else None)
+
+    @staticmethod
+    def _window_and_layers(unit):
+        return PictureAssemblyWindow(**unit['window']), [
+            PictureFrameLayer(item['kind'], TimedCaption(**item['value']) if item['kind'] == 'subtitle' else item['value'],
+                item['first_frame'], item['last_frame']) for item in unit['layers']]
+
     def manifest(self, job, *, actor, connection=None):
+        if connection is None:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
+                return self.manifest(job, actor=actor, connection=conn)
         try:
             event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job, connection=connection), connection=connection)
         except KeyError:
@@ -183,13 +230,21 @@ class PictureFragmentAssembly:
                 or payload.get('subtitle_text', subtitle_text) != subtitle_text
                 or payload['picture_recipe'] != self.packet.recipe(job, connection=connection)):
             raise ValueError('原画面窗口身份、授权来源或实际字幕已变化')
+        for unit in payload['units']:
+            if unit.get('reuse') is not None:
+                self._reused(job, unit, connection=connection)
         return payload
 
     def next_unit(self, job, *, actor, request=None, connection=None):
+        if connection is None:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
+                return self.next_unit(job, actor=actor, request=request, connection=conn)
         manifest = self.manifest(job, actor=actor, connection=connection)
         if manifest is None:
             return None
         for unit in manifest['units']:
+            if unit.get('reuse') is not None:
+                continue
             current = request is not None and request.resources.get('picture_fragment_unit') == unit['id'] and request.state in {'granted', 'yield_requested'}
             if not current:
                 try:
@@ -220,6 +275,18 @@ class PictureFragmentAssembly:
             return f'render:picture-fragment:v1:{unit["id"]}', resources
         return None
 
+    def _reused(self, job, unit, *, connection):
+        window, layers = self._window_and_layers(unit)
+        basis = self._basis(job, window, layers, unit['recipe'], connection=connection)
+        if basis != unit['reuse_basis']:
+            raise ValueError('已封存复用叶片的当前源版本或渲染条件已变化')
+        read_leaf(self.repository, self.store, job, unit['reuse'], basis, unit['source'], connection=connection)
+
+    def packet_bindings(self, job, *, actor, connection):
+        manifest = self.manifest(job, actor=actor, connection=connection)
+        return {unit['reuse']['artifact_id']: {'reference': unit['reuse'], 'basis': unit['reuse_basis'],
+            'source': unit['source']} for unit in manifest['units'] if unit.get('reuse') is not None}
+
     def _layout(self, job, unit):
         directory = self.root/job.workspace_id/job.task_id/job.id/unit['id']
         logical = f'workspaces/{job.workspace_id}/tasks/{job.task_id}/picture-fragments/{job.id}/{unit["id"]}.mp4'
@@ -231,9 +298,9 @@ class PictureFragmentAssembly:
         if self.next_unit(job, actor=actor, request=request) != (request.unit_key, request.resources):
             raise ValueError('画面窗口实际层配方与原许可不一致')
         unit = next(item for item in manifest['units'] if item['id'] == request.resources['picture_fragment_unit'])
-        window = PictureAssemblyWindow(**unit['window'])
-        layers = [PictureFrameLayer(item['kind'], TimedCaption(**item['value']) if item['kind'] == 'subtitle' else item['value'],
-            item['first_frame'], item['last_frame']) for item in unit['layers']]
+        window, layers = self._window_and_layers(unit)
+        if unit.get('reuse_basis') is not None and self._basis(job, window, layers, unit['recipe'], connection=None) != unit['reuse_basis']:
+            raise ValueError('叶片原执行后端、字体或素材版本已变化')
         logical, directory, publication_file = self._layout(job, unit)
         if directory.exists() or publication_file.exists():
             raise ValueError('原画面窗口留有执行文件，须按原回执恢复，不能覆盖')
@@ -311,6 +378,9 @@ class PictureFragmentAssembly:
                 conn.execute('BEGIN IMMEDIATE')
                 publication_guard(conn)
                 self.manifest(job, actor=actor, connection=conn)
+                if unit.get('reuse_basis') is not None and self._basis(job, window, layers,
+                        unit['recipe'], connection=conn) != unit['reuse_basis']:
+                    raise ValueError('叶片生产期间原后端、字体或素材版本已变化')
                 self.repository.execution_records.create_artifact_record(record, connection=conn)
                 self.repository.lineage_records.create_transform_run(transform, connection=conn)
                 if published_subtitles is not None:
@@ -370,11 +440,18 @@ class PictureFragmentAssembly:
         manifest = self.manifest(job, actor=actor, connection=connection)
         if manifest is None or self.next_unit(job, actor=actor, connection=connection) is not None:
             return None
-        return [unit['artifact_id'] for unit in manifest['units']]
+        return [unit['reuse']['artifact_id'] if unit.get('reuse') is not None else unit['artifact_id']
+            for unit in manifest['units']]
 
 
     def subtitle_artifact(self, job, *, actor, connection=None):
+        if connection is None:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
+                return self.subtitle_artifact(job, actor=actor, connection=conn)
         manifest = self.manifest(job, actor=actor, connection=connection)
+        if manifest is not None and manifest['version'] == 'picture-fragment-assembly/v3':
+            from app.creation.subtitle_delivery_sidecar import completed_sidecar
+            return completed_sidecar(self.repository, self.store, job, manifest, connection=connection)
         if manifest is None or 'subtitle_bytes' not in manifest['units'][-1]:
             raise ValueError('原画面检查点没有真实字幕sidecar，不能冒用文本输出')
         unit = manifest['units'][-1]

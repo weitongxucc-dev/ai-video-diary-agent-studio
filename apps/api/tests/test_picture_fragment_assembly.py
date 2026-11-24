@@ -1,9 +1,13 @@
 from pathlib import Path
+from dataclasses import replace
 from datetime import datetime, timezone
 import subprocess
 import sys
 
+import pytest
+
 from app.artifact_store import ArtifactStore
+from app.creation.assembly_manifest import iter_picture_windows
 from app.creation.contracts import TimelineVersion
 from app.creation.editing.metadata_use_case import MetadataEditUseCase
 from app.creation.packet_copy_assembly import PacketCopyAssembly
@@ -115,3 +119,66 @@ def test_real_leaf_consumer_binds_captions_source_permissions_and_publication(tm
     assert copy_manifest['units'][-1]['packet_count'] == 60
     assert len(ids) == 2
     case.scheduler.close()
+
+
+def test_optional_reuse_proof_does_not_treat_presenter_or_unproven_sources_as_material(tmp_path, monkeypatch):
+    case, service, _packet, _store, _metadata, _renderer, _budget, montage = _leaf_case(tmp_path, monkeypatch)
+    job = case.repo.job_records.get_job_run('local', case.job.id)
+
+    def basis_for(clip):
+        picture = replace(montage, clips=[clip])
+        window = next(iter_picture_windows(picture, source_identities={clip.source_path: {}}, max_frames_per_unit=30))
+        return service._basis(job, window, [], {}, connection=None)
+
+    clip = montage.clips[0]
+    try:
+        # The real presenter DTO has a controlled source but no MaterialAsset.
+        presenter = replace(clip, asset_id='person:approved-render', segment_id=None,
+            source_path='person-render://approved-render', person_render_id='approved-render')
+        assert basis_for(presenter) is None
+        with monkeypatch.context() as unproven:
+            def no_material_lookup(*args, **kwargs):
+                pytest.fail('derived references must never query the material registry for a reuse proof')
+            unproven.setattr(case.repo, 'get_asset', no_material_lookup)
+            assert basis_for(replace(clip, source_path='artifacts/task/derived.mp4')) is None
+        assert basis_for(replace(clip, asset_id='no-comparable-material')) is None
+    finally:
+        case.scheduler.close()
+
+
+def test_optional_font_proof_does_not_change_original_render_font_rules(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.creation.picture_fragment_layers import PictureFrameLayer, picture_fragment_recipe
+    from app.montage import _subtitle_font
+    from app.subtitle_schedule import TimedCaption, subtitle_schedule
+
+    case, service, _packet, _store, _metadata, _renderer, _budget, montage = _leaf_case(tmp_path, monkeypatch)
+    job = case.repo.job_records.get_job_run('local', case.job.id)
+    clip = montage.clips[0]
+    window = next(iter_picture_windows(montage, source_identities={clip.source_path: {}}, max_frames_per_unit=30))
+    try:
+        for family in (None, '', ' ', 42, 'Missing fixture subtitle font'):
+            layers = [PictureFrameLayer('subtitle', TimedCaption(0, 1, 'Caption', {'font_family': family}), 0, 30)]
+            recipe = picture_fragment_recipe(window, layers)
+            assert service._basis(job, window, layers, recipe, connection=None) is None
+            if family is None:
+                assert _subtitle_font(40, family=family) is not None
+            else:
+                with pytest.raises(OSError):
+                    _subtitle_font(40, family=family)
+        disabled = SimpleNamespace(status='valid', style={'enabled': False, 'font_family': 'Missing fixture subtitle font'},
+            cues=[SimpleNamespace(start_seconds=0, end_seconds=1)])
+        assert subtitle_schedule([disabled], 2) == []
+
+        # No explicit family is legal: the unchanged worker chooses its normal
+        # fallback and the v3 assembly still schedules ordinary production.
+        montage.cues[0].subtitle_style = {}
+        montage.graphic_overlays = []
+        case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', case.task_id, montage.id,
+            creation_task_montage_plan_to_payload(montage))
+        manifest = service.prepare(job, actor=case.actor, write_guard=lambda _conn: None, independent_sidecar=True)
+        assert all(unit['reuse_basis'] is None and 'reuse' not in unit for unit in manifest['units'])
+        key, resources = service.next_unit(job, actor=case.actor)
+        assert key.startswith('render:picture-fragment:v1:') and resources['picture_fragment_recipe']['layers']
+    finally:
+        case.scheduler.close()

@@ -16,6 +16,7 @@ from app.device_runtime import OwnerRegistration, OwnerRouter
 from app.montage import NarrationCue, creation_task_montage_plan_to_payload
 from app.quality_inspection import QualityCheckRepository
 from app.task_audio import TaskAudio
+from test_final_delivery_adoption import _sidecar_process_limits
 from test_picture_fragment_assembly import _leaf_case
 from test_quality_resource_owner import fixture_budget, MetadataAccess
 
@@ -52,6 +53,10 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
     delivery = AudioDeliveryAssembly(case.repo, store, tmp_path/'work', audio=audio, packet_copy_assembly=packet,
         audio_budget=AudioEncodeBudget('b'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30),
         mux_budget=FinalMuxBudget('c'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30), reserve_bytes=1024)
+    # The subtitle sidecar is an independent delivery unit: its original
+    # /bin/cp needs the real probe for purpose validation. Other units keep
+    # their ordinary fixture behavior.
+    _sidecar_process_limits(case, delivery, render_budget, tmp_path)
     for name, port in [('picture_fragments', leaf), ('packet_copy_assembly', packet), ('audio_assembly', audio), ('audio_delivery', delivery)]:
         setattr(case.owner, name, port)
         setattr(case.executor, name, port)
@@ -124,7 +129,8 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
         assert case.scheduler._get(grant.request_id).state == 'done', case.repo.job_records.get_job_run('local', job.id).failure_reason
         if case.repo.job_records.get_job_run('local', job.id).status == 'succeeded':
             break
-    assert counts == {'picture-fragment': 22, 'packet-copy': 21, 'audio-assembly': 2, 'audio-encode': 1, 'final-mux': 1}
+    assert counts == {'picture-fragment': 22, 'subtitle-sidecar': 1, 'packet-copy': 21,
+        'audio-assembly': 2, 'audio-encode': 1, 'final-mux': 1}
     assert len(callback_receipts) == 1
     assert case.generated == original_tts
     assert render.valid('local', case.task_id, verify_media=False)
@@ -135,9 +141,9 @@ def test_twenty_two_short_cuts_finish_original_job_and_reach_download_and_qc(tmp
     with case.repo._connect() as reader:
         receipts = [json.loads(row[0]) for row in reader.execute("SELECT payload_json FROM task_events WHERE job_id=? AND event_type='task_execution_unit_settled'", (job.id,))]
         leaf_count = reader.execute("SELECT count(*) FROM artifact_records WHERE producer_job_id=? AND kind='picture_fragment'", (job.id,)).fetchone()[0]
-    assert leaf_count == 22 and len(receipts) == 47
+    assert leaf_count == 22 and len(receipts) == 48
     assert usage['generated_bytes']-baseline['generated_bytes'] == sum(row['output_bytes'] for row in receipts)
-    assert usage['unit_count']-baseline['unit_count'] == 47
+    assert usage['unit_count']-baseline['unit_count'] == 48
     assert usage['reserved_bytes'] == 0 and usage['unknown_unit_count'] == 0
     # The original QC request is accepted; this representative deliberately does
     # not run the independent QC worker or claim a native quality conclusion.

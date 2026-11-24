@@ -19,9 +19,11 @@ FINAL_MUX_POLICY = 'picture-audio-mux-first-use/v1'
 AUDIO_ENCODE_UNIT_PREFIX = 'render:audio-encode:v1:'
 FINAL_MUX_UNIT_PREFIX = 'render:final-mux:v1:'
 DELIVERY_ADOPTION_UNIT_PREFIX = 'render:delivery-adopt:v1:'
+SUBTITLE_SIDECAR_UNIT_PREFIX = 'render:subtitle-sidecar:v1:'
 DELIVERY_KINDS = {'creation_audio_encode': ('audio_encode', AUDIO_ENCODE_UNIT_PREFIX),
                   'creation_final_mux': ('final_mux', FINAL_MUX_UNIT_PREFIX),
-                  'creation_delivery_adoption': ('final_mux', DELIVERY_ADOPTION_UNIT_PREFIX)}
+                  'creation_delivery_adoption': ('final_mux', DELIVERY_ADOPTION_UNIT_PREFIX),
+                  'creation_subtitle_sidecar': ('final_mux', SUBTITLE_SIDECAR_UNIT_PREFIX)}
 
 
 @dataclass(frozen=True)
@@ -270,7 +272,30 @@ def delivery_adoption_resources(*, budget, manifest_digest, unit_id, predecessor
             'database_reservation_basis': 'serialized_adoption_write_set'}}
 
 
-def audio_delivery_refusal(resources, budget):
+def subtitle_sidecar_resources(*, budget, manifest_digest, unit_id, subtitle_sha256, subtitle_bytes,
+                               write_paths, write_files, published_target, render_output_limit, render_scope=None):
+    if (type(budget) is not FinalMuxBudget or not _sha(subtitle_sha256)
+            or not _positive(render_output_limit) or not _positive(subtitle_bytes) or subtitle_bytes >= render_output_limit
+            or not _sha(manifest_digest) or not _sha(unit_id)):
+        raise ValueError('Subtitle publication needs exact bounded sidecar bytes')
+    paths, files, volumes = _locations(write_paths, write_files, 'copy')
+    target = publication_target_fields(paths, files, volumes, published_target)
+    if not target:
+        raise ValueError('Subtitle publication needs its exact final path')
+    return {'kind': 'creation_subtitle_sidecar', 'execution_mode': 'bounded_subtitle_copy',
+        'role': 'timeline_subtitle_sidecar', 'read_mode': 'stream', 'manifest_digest': manifest_digest,
+        'unit_id': unit_id, 'source_bytes': subtitle_bytes, 'input_count': 1, 'max_output_bytes': subtitle_bytes,
+        'manifest_bytes': subtitle_bytes,
+        'subtitle_sha256': subtitle_sha256, 'subtitle_sidecar_bytes': subtitle_bytes,
+        'budget_digest': budget.digest, 'backend_identity': budget.backend_identity, 'threads': 1,
+        'max_stdout_bytes': budget.max_stdout_bytes, 'max_stderr_bytes': budget.max_stderr_bytes,
+        'timeout_seconds': budget.preparation_timeout_seconds, 'publication_mode': 'copy',
+        'write_paths': paths, 'write_files': files, 'write_volume_ids': volumes,
+        'write_allocations': {role: subtitle_bytes for role in files},
+        **target, **render_resource_scope(render_scope)}
+
+
+def audio_delivery_refusal(resources, budget, *, sidecar_output_limit=None):
     if budget is None:
         return 'audio_delivery_policy_unavailable'
     if resources.get('budget_digest') != budget.digest or resources.get('backend_identity') != budget.backend_identity:
@@ -281,6 +306,12 @@ def audio_delivery_refusal(resources, budget):
         if resources.get('kind') == 'creation_delivery_adoption':
             expected = delivery_adoption_resources(budget=budget, **{key: resources[key] for key in (
                 'manifest_digest', 'unit_id', 'predecessor', 'video', 'subtitle', 'database_path', 'metadata_bytes')}, render_scope=scope)
+        elif resources.get('kind') == 'creation_subtitle_sidecar':
+            expected = subtitle_sidecar_resources(budget=budget, **{key: resources[key] for key in (
+                'manifest_digest', 'unit_id', 'subtitle_sha256', 'write_paths', 'write_files')},
+                subtitle_bytes=resources['subtitle_sidecar_bytes'],
+                published_target=resources['publication_target']['path'], render_output_limit=sidecar_output_limit,
+                render_scope=scope)
         else:
             common = {key: resources[key] for key in ('manifest_digest', 'unit_id', 'write_paths', 'write_files',
                 'manifest_bytes', 'publication_mode')}

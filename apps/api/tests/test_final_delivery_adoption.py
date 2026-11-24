@@ -2,10 +2,11 @@ import pytest
 import json
 from types import SimpleNamespace
 
-from app.audio_delivery_policy import AudioEncodeBudget, FinalMuxBudget
+from app.audio_delivery_policy import AudioEncodeBudget, FinalMuxBudget, audio_delivery_refusal
 from app.creation.audio_delivery_assembly import AudioDeliveryAssembly
 from app.creation.render_stage_use_case import RenderStageUseCase
 from app.creation_execution import CpuRenderLimits, next_creation_intent
+from app.host_resource_probes import HostBudget, HostResourceDecision, HostResourceProbe
 from app.task_audio import TaskAudio
 from test_picture_fragment_assembly import _leaf_case
 
@@ -25,6 +26,7 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
     delivery = AudioDeliveryAssembly(case.repo, store, tmp_path/'work', audio=audio, packet_copy_assembly=packet,
         audio_budget=AudioEncodeBudget('b'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30),
         mux_budget=FinalMuxBudget('c'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30), reserve_bytes=1024)
+    _sidecar_process_limits(case, delivery, budget, tmp_path)
     for port, value in [('picture_fragments', leaf), ('packet_copy_assembly', packet), ('audio_assembly', audio), ('audio_delivery', delivery)]:
         setattr(case.owner, port, value)
         setattr(case.executor, port, value)
@@ -48,6 +50,10 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
                 raise ValueError('controlled failure after transactional subtitle child insert')
             return result
         monkeypatch.setattr(case.repo.subtitle_records, 'create_subtitle_track', fail_after_child_write)
+    else:
+        # Simulate an original pre-upgrade run with its immutable v2 picture
+        # manifest already sealed. It must finish without rewriting the parent.
+        leaf.prepare(job, actor=case.actor, write_guard=lambda _conn: None)
     intent = next_creation_intent(case.repo, case.scheduler, job)
     assert intent.unit_key.startswith('render:picture-fragment:v1:')
     case.scheduler.submit(intent, case.actor)
@@ -80,7 +86,9 @@ def test_automatic_original_job_leaf_to_srt_aac_mux_and_timeline(tmp_path, monke
             return
         assert case.scheduler._get(grant.request_id).state == 'done', case.repo.job_records.get_job_run('local', job.id).failure_reason
         if request.resources.get('subtitle_sidecar_bytes', 0):
-            measured = case.repo.execution_records.get_task_event('local', leaf.measured_event_id(grant))
+            event_id = (delivery.measured_event_id(grant) if request.resources['kind'] == 'creation_subtitle_sidecar'
+                else leaf.measured_event_id(grant))
+            measured = case.repo.execution_records.get_task_event('local', event_id)
             sidecar_measurement = (request.resources, measured.payload)
     final_job = case.repo.job_records.get_job_run('local', job.id)
     assert final_job.status == 'succeeded', final_job.failure_reason
@@ -186,17 +194,279 @@ def _rerender_edited_timeline(case, metadata, render, store, original_version, m
         assert case.scheduler._get(grant.request_id).state == 'done', case.repo.job_records.get_job_run('local', case.job.id).failure_reason
     completed = case.repo.job_records.get_job_run('local', case.job.id)
     assert completed.status == 'succeeded' and len(case.execution.jobs('local', case.task_id)) == 1
-    assert families == ['picture-fragment', 'picture-fragment', 'packet-copy', 'audio-encode', 'final-mux']
+    assert families == ['picture-fragment', 'picture-fragment', 'subtitle-sidecar', 'packet-copy', 'final-mux']
     assert case.generated == original_tts
     assert hashlib.sha256(store.resolve_file(original_ref).read_bytes()).hexdigest() == original_sha
     current = case.repo.task_records.get_creation_task('local', case.task_id)
     version = case.repo.timeline_records.get_timeline_version('local', current.current_timeline_version_id)
     assert version.id != original_version.id and version.parent_version_id == edited.task.current_timeline_version_id
+    leaf_manifest = case.repo.execution_records.get_task_event('local',
+        version.snapshot['audio_delivery']['picture_fragment_manifest_event_id']).payload
+    assert leaf_manifest['version'] == 'picture-fragment-assembly/v3'
+    assert not any(unit.get('reuse') for unit in leaf_manifest['units'])
     assert version.snapshot['audio_delivery']['job_id'] == case.job.id
     assert version.snapshot['montage']['output_path'] != original_ref
     assert render.valid('local', case.task_id, verify_media=False)
     assert render.valid('local', case.task_id, timeline_version=original_version, verify_media=False)
     return version
+
+
+def _sidecar_process_limits(case, delivery, budget, root):
+    # Keep deterministic ambient CPU/disk observations for this fixture, but use
+    # the real sidecar envelope/purpose validation and durable child broker.
+    class Limits(HostResourceProbe):
+        def admit(self, request):
+            reason = (audio_delivery_refusal(request.resources, delivery.mux_budget,
+                sidecar_output_limit=budget.max_output_bytes)
+                if request.resources['kind'] == 'creation_subtitle_sidecar' else None)
+            return HostResourceDecision(reason is None, dict(request.resources), {}, reason)
+        def continue_unit(self, grant):
+            if grant.unit_key.startswith('render:subtitle-sidecar:'):
+                from app.packet_copy_policy import packet_copy_remaining_allocations
+                declared = self._grant_resources(grant)
+                assert declared is not None
+                packet_copy_remaining_allocations(declared, running=True)
+            return True
+        def released(self, _):
+            return True
+        def scene_runtime_limits(self, grant, *, purpose=None):
+            if grant.unit_key.startswith('render:subtitle-sidecar:'):
+                return super().scene_runtime_limits(grant, purpose=purpose)
+            return None
+    from test_creation_execution import _synthetic_memory_monitor
+    case.scheduler.resources = Limits(case.repo.database_path, disk_paths=(root,),
+        budget=HostBudget(99, 1, 0, 1, 0, 1, sample_seconds=.1, cpu_render=budget, final_mux=delivery.mux_budget),
+        memory_monitor=_synthetic_memory_monitor())
+
+
+@pytest.mark.parametrize('single', [False, True], ids=['two-edits', 'all-picture-reused'])
+def test_progressive_output_reuses_only_proven_inputs(tmp_path, monkeypatch, single):
+    from dataclasses import replace
+    from datetime import datetime, timezone
+    from pathlib import Path
+    import hashlib
+    import subprocess
+    from types import SimpleNamespace
+    from app.creation.contracts import SubtitleCue, SubtitleTrack, TimelineVersion
+    from app.creation.editing.metadata_use_case import default_subtitle_style, execution_subtitle_track, metadata_edit_command
+    from app.creation.execution_control import CreationExecutionControl
+    from app.montage import creation_task_montage_plan_to_payload
+
+    case, leaf, packet, store, metadata, renderer, budget, montage = _leaf_case(tmp_path, monkeypatch)
+    if single:
+        leaf.budget = budget = replace(budget, max_duration_seconds=2, max_pixel_seconds=2*1920*1080)
+    else:
+        first = replace(montage.clips[0], id='opening', timeline_end_seconds=1)
+        montage.clips = [first, replace(first, id='following', timeline_start_seconds=1, timeline_end_seconds=2)]
+    montage.graphic_overlays = []
+    source = case.repo.get_asset('local', 'source')
+    alternate = tmp_path/'library'/'alternate.mp4'
+    if not single:
+        subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'color=red:s=64x64:r=30:d=1',
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(alternate)], check=True, timeout=10)
+        case.repo._save_asset(replace(source, id='alternate', path=str(alternate), file_name=alternate.name,
+            size_bytes=alternate.stat().st_size, modified_at=datetime.fromtimestamp(alternate.stat().st_mtime, timezone.utc),
+            segments=[replace(source.segments[0], id='seg-alternate', asset_id='alternate')]))
+        with case.repo._connect() as conn:
+            case.repo._claim_workspace_media_reference(conn, workspace_id='local',
+                reference=case.repo.workspace_media_reference_for_asset('local', 'alternate', connection=conn))
+    case.repo.montage_plan_adoption.save_creation_task_montage_plan('local', case.task_id, montage.id,
+        creation_task_montage_plan_to_payload(montage))
+    task = case.repo.task_records.get_creation_task('local', case.task_id)
+    case.repo.timeline_records.create_timeline_version(TimelineVersion(id='two-cue-base', workspace_id='local',
+        task_id=case.task_id, parent_version_id=task.current_timeline_version_id, sequence=2, created_by_operation_id=None,
+        snapshot={'montage':creation_task_montage_plan_to_payload(montage), 'subtitle_track_ids':['baseline-track']}))
+    task = case.repo.task_records.get_creation_task('local', case.task_id)
+    style = {**default_subtitle_style(), **montage.cues[0].subtitle_style, 'enabled': not single}
+    from app.subtitle_tracks import render_srt
+    track = SubtitleTrack('baseline-track', 'local', case.task_id, task.current_timeline_version_id, 'zh-CN', None,
+        style, [SubtitleCue('start-cue', None, '原开头字幕', 0, 1), SubtitleCue('tail-cue', None, '不变字幕', 1, 2)],
+        'timeline', None, None, None, 'unavailable')
+    ref, transform = metadata.publish_subtitle_text(workspace_id='local', task_id=case.task_id, proposal_id='baseline-track',
+        kind='subtitle_cue_update', input_refs=[f'timeline:{task.current_timeline_version_id}'],
+        content=render_srt(execution_subtitle_track(track)), engine='subtitle-srt/v1', parameters={})
+    case.repo.subtitle_records.create_subtitle_track(replace(track, artifact_ref=ref, transform_id=transform, status='valid'))
+    with case.repo._connect() as conn:
+        for request_id, in conn.execute("SELECT id FROM device_work_requests WHERE owner_id=? AND state='waiting'", (case.job.id,)):
+            case.scheduler.cancel(request_id, case.actor)
+    audio = TaskAudio(case.repo, store, tmp_path/'audio')
+    delivery = AudioDeliveryAssembly(case.repo, store, tmp_path/'work', audio=audio, packet_copy_assembly=packet,
+        audio_budget=AudioEncodeBudget('b'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30),
+        mux_budget=FinalMuxBudget('c'*64, 1024**3, 1024**3, 32, 1, .1, 24576, 49152, 65536, 30), reserve_bytes=1024)
+    _sidecar_process_limits(case, delivery, budget, tmp_path)
+    for port, value in [('picture_fragments', leaf), ('packet_copy_assembly', packet), ('audio_assembly', audio), ('audio_delivery', delivery)]:
+        setattr(case.owner, port, value)
+        setattr(case.executor, port, value)
+    case.owner.cpu_render_limits = CpuRenderLimits(budget.max_output_bytes, 1, 30)
+    render = RenderStageUseCase(case.repo, metadata, None, None, SimpleNamespace())
+    monkeypatch.setattr(case.execution, 'render_is_valid', lambda ws, tid: render.valid(ws, tid, verify_media=False))
+    runtime = SimpleNamespace(scheduler=case.scheduler, registrations={
+        'creation_job':SimpleNamespace(owner=case.owner, executor=case.executor)}, wake=lambda:None)
+    control = CreationExecutionControl(case.repo, case.execution, render, lambda _:'ready')
+
+    def current_version():
+        task = case.repo.task_records.get_creation_task('local', case.task_id)
+        return case.repo.timeline_records.get_timeline_version('local', task.current_timeline_version_id)
+
+    def requests():
+        with case.repo._connect() as conn:
+            return {x['id']: dict(x) for x in conn.execute('SELECT id,unit_key,state,resources_json FROM device_work_requests '
+                "WHERE workspace_id='local' AND owner_id=? ORDER BY created_at,rowid", (case.job.id,))}
+
+    def finish(*, before_mux=False):
+        for _ in range(12):
+            if before_mux and any(r['unit_key'].startswith('render:final-mux:') and r['state']=='waiting'
+                    for r in requests().values()):
+                return
+            grant = case.scheduler.pick_and_grant()
+            if grant is None:
+                break
+            case.executor.execute(grant, case.scheduler)
+            assert case.scheduler._get(grant.request_id).state == 'done', (
+                grant.unit_key, case.repo.job_records.get_job_run('local', case.job.id).failure_reason)
+        assert case.repo.job_records.get_job_run('local', case.job.id).status == 'succeeded'
+        return current_version()
+
+    job = case.repo.job_records.get_job_run('local', case.job.id)
+    case.scheduler.submit(next_creation_intent(case.repo, case.scheduler, job), case.actor)
+    before = finish()
+    prior_requests = requests()
+    prior = before.snapshot['audio_delivery']
+    task = case.repo.task_records.get_creation_task('local', case.task_id)
+    identity = {'member_id':case.actor.member_id, 'local_diagnostic':False}
+    if not single:
+        command = metadata_edit_command(task, identity, 'ReplaceClip',
+            {'base_version_id':before.id,'clip_id':'opening','asset_id':'alternate','segment_id':'seg-alternate'})
+        metadata.save(task, command)
+        task = case.repo.task_records.get_creation_task('local', case.task_id)
+    track = metadata.current_subtitle_tracks('local', task)[0]
+    assert track.cues[0].text == '原开头字幕'
+    metadata.save(task, metadata_edit_command(task, identity, 'UpdateSubtitleCue',
+        {'base_version_id':task.current_timeline_version_id,'cue_id':track.cues[0].id,'text':'新版开头字幕'}))
+    head = current_version()
+    assert control.resume('local', case.task_id, case.actor, runtime, verify_media=False)['job']['id'] == job.id
+    pending = requests()
+    assert control.resume('local', case.task_id, case.actor, runtime, verify_media=False)['job']['id'] == job.id
+    assert requests() == pending
+    if not single:
+        from app.device_scheduler import DeviceScheduler
+        from app.creation.picture_leaf_reuse import read_leaf
+
+        job = case.repo.job_records.get_job_run('local', job.id)
+        frozen = leaf.manifest(job, actor=case.actor)
+        reused = frozen['units'][-1]
+        binding = reused['reuse']
+        with case.repo.execution_inputs.creation_execution_read() as conn:
+            with pytest.raises((KeyError, ValueError)):
+                read_leaf(case.repo, store, replace(job, workspace_id='foreign'), binding, reused['reuse_basis'],
+                    reused['source'], connection=conn)
+            with pytest.raises((KeyError, ValueError)):
+                read_leaf(case.repo, store, job, {**binding, 'origin_version_id':head.id}, reused['reuse_basis'],
+                    reused['source'], connection=conn)
+        producer_id = binding['producer_request_id']
+        with case.repo._connect() as conn:
+            conn.execute("UPDATE device_work_requests SET state='failed' WHERE id=?", (producer_id,))
+        with pytest.raises(ValueError, match='明确完成'):
+            leaf.manifest(job, actor=case.actor)
+        with case.repo._connect() as conn:
+            conn.execute("UPDATE device_work_requests SET state='done' WHERE id=?", (producer_id,))
+        original = case.repo.execution_records.get_artifact_record('local', binding['artifact_id'])
+        original_path = store.resolve_file(original.logical_ref)
+        replacement = tmp_path/'untrusted-identical-copy.mp4'
+        replacement.write_bytes(original_path.read_bytes())
+        resolve = store.resolve_file
+        with monkeypatch.context() as tamper:
+            tamper.setattr(store, 'resolve_file', lambda ref: replacement if ref == original.logical_ref else resolve(ref))
+            with pytest.raises(ValueError, match='替换或失效'):
+                leaf.manifest(job, actor=case.actor)
+        allowed_asset = case.repo.get_asset('local', 'source')
+        with case.repo._connect() as conn:
+            # Controlled permission-state fault; restore exact original revision to
+            # continue the same sealed run rather than selecting a new parent.
+            payload = conn.execute("SELECT payload FROM material_assets WHERE id='source' AND workspace_id='local'").fetchone()[0]
+            conn.execute("UPDATE material_assets SET payload=json_set(payload,'$.use_state','excluded') WHERE id='source' AND workspace_id='local'")
+        with pytest.raises(ValueError, match='素材使用状态'):
+            leaf.manifest(job, actor=case.actor)
+        with case.repo._connect() as conn:
+            conn.execute("UPDATE material_assets SET payload=? WHERE id='source' AND workspace_id='local'", (payload,))
+        assert case.repo.get_asset('local', 'source') == allowed_asset
+        with case.repo._connect() as conn:
+            conn.execute("UPDATE creation_tasks SET payload=json_set(payload,'$.current_timeline_version_id',?) WHERE id=?",
+                (before.id, case.task_id))
+        with pytest.raises(ValueError, match='时间线、原身份或范围'):
+            leaf.manifest(job, actor=case.actor)
+        with case.repo._connect() as conn:
+            conn.execute("UPDATE creation_tasks SET payload=json_set(payload,'$.current_timeline_version_id',?) WHERE id=?",
+                (head.id, case.task_id))
+        assert requests() == pending
+        resources, processes = case.scheduler.resources, case.scheduler.processes
+        case.scheduler.close()
+        case.scheduler = runtime.scheduler = DeviceScheduler(case.repo.database_path, tmp_path/'units.lock',
+            owners=case.owner, resources=resources, processes=processes)
+        assert leaf.manifest(job, actor=case.actor) == frozen
+        assert control.resume('local', case.task_id, case.actor, runtime, verify_media=False)['job']['id'] == job.id
+        assert requests() == pending
+        finish(before_mux=True)
+        prepared = delivery.manifest(job, actor=case.actor)
+        aac_request = prepared['reused_aac']['parent']['parent']['binding']['producer_request_id']
+        with case.repo._connect() as conn:
+            receipt_id, receipt = conn.execute("SELECT id,payload_json FROM task_events "
+                "WHERE job_id=? AND event_type='task_execution_unit_settled' AND json_extract(payload_json,'$.request_id')=?",
+                (job.id, aac_request)).fetchone()
+            conn.execute("UPDATE task_events SET payload_json=json_set(payload_json,'$.output_bytes',NULL) WHERE id=?", (receipt_id,))
+        with pytest.raises(ValueError, match='真实计量'):
+            delivery.manifest(job, actor=case.actor)
+        with case.repo._connect() as conn:
+            conn.execute("UPDATE task_events SET payload_json=? WHERE id=?", (receipt, receipt_id))
+        assert delivery.manifest(job, actor=case.actor) == prepared
+    after = finish()
+    new = after.snapshot['audio_delivery']
+    assert new['job_id'] == prior['job_id'] == job.id and after.parent_version_id == head.id
+    new_requests = [r for k, r in requests().items() if k not in prior_requests]
+    expected = ['subtitle-sidecar','final-mux'] if single else ['picture-fragment','subtitle-sidecar','packet-copy','final-mux']
+    assert [row['unit_key'].split(':')[1] for row in new_requests] == expected
+    assert all(row['state'] == 'done' for row in new_requests)
+    manifests = [case.repo.execution_records.get_task_event('local', data['manifest_event_id']).payload for data in (prior,new)]
+    assert manifests[0]['master'] == manifests[1]['master']
+    borrowed = manifests[1]['reused_aac']
+    assert borrowed['origin_version_id'] == before.id
+    assert borrowed['parent']['parent']['binding']['producer_request_id'] in prior_requests
+    picture = case.repo.execution_records.get_task_event('local', new['picture_fragment_manifest_event_id']).payload
+    assert picture['units'][-1]['reuse']['origin_version_id'] == before.id
+    assert picture['units'][-1]['reuse']['producer_request_id'] in prior_requests
+    if not single:
+        assert 'reuse' not in picture['units'][0]
+    def ff(path, *args):
+        return subprocess.check_output(['ffmpeg','-nostdin','-v','error','-i',str(path),*args,'pipe:1'], timeout=30)
+    paths = [store.resolve_file(v.snapshot['output_refs'][0]) for v in (before,after)]
+    def hashes(path):
+        return [line.rsplit(b',', 1)[-1] for line in ff(path, '-map','0:v:0','-f','framemd5').splitlines()
+            if not line.startswith(b'#')]
+    frames = list(map(hashes, paths))
+    assert len(frames[0]) == len(frames[1]) == 60
+    assert frames[0][30:] == frames[1][30:]
+    assert (frames[0][:30] == frames[1][:30]) == single
+    assert ff(paths[0], '-map','0:a:0','-f','s16le') == ff(paths[1], '-map','0:a:0','-f','s16le')
+    before_srt, after_srt = [store.resolve_file(v.snapshot['output_refs'][1]).read_text() for v in (before,after)]
+    assert before_srt.replace('原开头字幕','新版开头字幕') == after_srt
+    sidecar = next(json.loads(row['resources_json']) for row in new_requests if ':subtitle-sidecar:' in row['unit_key'])
+    assert sidecar['source_bytes'] == len(after_srt.encode()) == sidecar['max_output_bytes']
+    assert set(sidecar['write_allocations'].values()) == {sidecar['max_output_bytes']}
+    assert render.valid('local', case.task_id) and render.valid('local', case.task_id, timeline_version=before)
+    if single:
+        # A later consumer may read the latest adopted manifest, but follows
+        # the frozen reference directly to the original real producer.
+        with case.repo.execution_inputs.creation_execution_read() as conn:
+            original_version_id, latest = leaf._previous(job, connection=conn)
+            assert original_version_id == after.id
+            assert latest['units'][0]['reuse'] == picture['units'][0]['reuse']
+            assert delivery._previous_aac(job, manifests[1], connection=conn) == borrowed
+    print(json.dumps({'job':job.id,'versions':[before.id, after.id],'new_requests':[
+        {'id':r['id'], 'unit_key':r['unit_key']} for r in new_requests],
+        'leaf':picture['units'][-1]['reuse'], 'aac':borrowed['parent']['parent']['binding'],
+        'outputs':[{'path':str(p), 'sha256':hashlib.sha256(Path(p).read_bytes()).hexdigest()} for p in paths]},
+        ensure_ascii=False))
+    case.scheduler.close()
 
 
 def _resume_only_adoption(case, delivery, render, store, monkeypatch, create_track, original_grant, before):
