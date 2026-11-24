@@ -15,7 +15,8 @@ from app.creation.contracts import ArtifactRecord, DependencyEdge, TaskEvent, Tr
 from app.models import utc_now
 from app.packet_copy_policy import packet_copy_output_allocation
 from app.task_audio import media_digest
-from app.creation.render_generation import current_render_generation, render_namespace, render_generation_fields, stored_render_scope
+from app.creation.render_generation import (adopted_manifest, adopted_render, current_render_generation,
+    latest_adopted_render, render_namespace, render_generation_fields, settled_render_producer, stored_render_scope)
 
 AUDIO_RECIPE = {'codec': 'aac', 'sample_rate': 48000, 'channels': 2,
     'parameters_digest': media_digest({'encoder': 'ffmpeg:aac', 'bitrate': '192k',
@@ -100,8 +101,15 @@ class AudioDeliveryAssembly:
         self.picture = packet_copy_assembly
         self.root = Path(temporary_root).expanduser().resolve() / 'audio-delivery'
         self.audio_budget, self.mux_budget, self.reserve_bytes = audio_budget, mux_budget, reserve_bytes
+        from app.creation.subtitle_delivery_sidecar import SubtitleDeliverySidecar
+        self.sidecars = SubtitleDeliverySidecar(repository, artifact_store, self.root.parent/'subtitle-delivery', mux_budget)
         from app.creation.delivery_adoption_recovery import DeliveryAdoptionRecovery
         self.adoption_recovery = DeliveryAdoptionRecovery(self)
+
+    def next_sidecar(self, job, picture_fragments, *, actor, request, connection):
+        manifest = picture_fragments.manifest(job, actor=actor, connection=connection)
+        return self.sidecars.next_unit(job, manifest, request=request, connection=connection,
+            render_output_limit=picture_fragments.budget.max_output_bytes)
 
     def manifest_id(self, job, *, connection=None):
         return render_namespace(f'event_{job.id}_audio_delivery_manifest',
@@ -118,7 +126,7 @@ class AudioDeliveryAssembly:
         if record is None:
             raise ValueError('最终音画封装缺少已完成原picture master')
         manifest = self.picture.manifest(job, connection=connection)
-        record, path, facts = self.picture._parent(job, record.id, manifest['recipe_digest'], connection=connection)
+        record, path, facts = self.picture.resolve_parent(job, record.id, manifest, connection=connection)
         if facts['first_frame'] != 0:
             raise ValueError('最终picture master没有覆盖完整原时钟')
         transform = self.repository.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=connection)
@@ -139,26 +147,33 @@ class AudioDeliveryAssembly:
         return samples.numerator
 
     def prepare(self, job, *, actor, connection=None):
+        if connection is None:
+            with self.repository._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                return self.prepare(job, actor=actor, connection=conn)
+        existing = self.manifest(job, actor=actor, connection=connection)
+        if existing is not None:
+            return existing
         master, picture = self._master(job, actor, connection=connection), self._picture(job, connection=connection)
         pcm, video = master['parent']['clock'], picture['parent']['clock']
         if Fraction(pcm['sample_count'], pcm['sample_rate']) != Fraction(video['last_end_pts'], video['time_base_den']):
             raise ValueError('音频master与画面master时钟不一致，不能截短或填充后伪装完整交付')
-        payload = {'version': 'audio-video-delivery/v1',
-            **render_generation_fields(current_render_generation(self.repository, job, connection=connection)),
+        scope = render_generation_fields(current_render_generation(self.repository, job, connection=connection))
+        payload = {'version': 'audio-video-delivery/v1', **scope,
             'workspace_id': job.workspace_id, 'task_id': job.task_id,
             'job_id': job.id, 'input_digest': job.input_digest, 'picture_recipe': self.picture.recipe(job, connection=connection),
             'master': master, 'picture': picture, 'audio_recipe': AUDIO_RECIPE, 'mux_recipe': MUX_RECIPE}
+        if scope and (reused := self._previous_aac(job, payload, connection=connection)) is not None:
+            payload['reused_aac'] = reused
         payload['digest'] = media_digest(payload)
-        existing = self.manifest(job, actor=actor, connection=connection)
-        if existing is not None:
-            if existing != payload:
-                raise ValueError('原音画交付manifest已绑定其他来源、时钟或配方')
-            return existing
         self.repository.execution_records.append_task_event(TaskEvent(self.manifest_id(job, connection=connection), job.workspace_id, job.task_id, job.id,
             'audio_delivery_manifest', payload), connection=connection)
         return payload
 
     def manifest(self, job, *, actor, connection=None):
+        if connection is None:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
+                return self.manifest(job, actor=actor, connection=conn)
         try:
             event = self.repository.execution_records.get_task_event(job.workspace_id, self.manifest_id(job, connection=connection), connection=connection)
         except KeyError:
@@ -173,7 +188,76 @@ class AudioDeliveryAssembly:
                 or payload['master'] != self._master(job, actor, connection=connection)
                 or payload['picture'] != self._picture(job, connection=connection)):
             raise ValueError('原音画交付来源、权限、时钟或配方已变化')
+        if 'reused_aac' in payload:
+            self._read_aac_reuse(job, payload, payload['reused_aac'], connection=connection)
         return payload
+
+    def _adopted_delivery(self, job, adoption, *, connection):
+        old = adopted_manifest(self.repository, job, adoption, field='manifest_event_id',
+            suffix='audio_delivery_manifest', event_type='audio_delivery_manifest', connection=connection)
+        if old['digest'] != adoption[1]['manifest_digest']:
+            raise ValueError('历史交付清单未绑定于原采用摘要')
+        return old
+
+    def _previous_aac(self, job, manifest, *, connection):
+        try:
+            adoption = latest_adopted_render(self.repository, job, connection=connection)
+            if adoption is None:
+                return None
+            old = self._adopted_delivery(job, adoption, connection=connection)
+            candidate = old.get('reused_aac') or {'origin_version_id': adoption[0].id}
+            bound, _ = self._read_aac_reuse(job, manifest, candidate, connection=connection)
+        except (KeyError, ValueError, FileNotFoundError):
+            return None
+        return bound
+
+    def _read_aac_reuse(self, job, manifest, reference, *, connection):
+        repo = self.repository
+        adoption = adopted_render(repo, job, reference['origin_version_id'], connection=connection)
+        old = self._adopted_delivery(job, adoption, connection=connection)
+        if (old.get('reused_aac') is not None or old['master'] != manifest['master']
+                or old['audio_recipe'] != manifest['audio_recipe'] or self.audio_budget is None):
+            raise ValueError('已采用旧AAC没有同一原PCM、采样时钟或配方')
+        unit = self._unit(old, 'audio_encode')
+        record = repo.execution_records.get_artifact_record(job.workspace_id, f'artifact_audio_encode_{unit}', connection=connection)
+        transform = repo.lineage_records.get_transform_run(job.workspace_id, f'transform_{record.id}', connection=connection)
+        params = transform.parameters
+        resources = settled_render_producer(repo, job, transform=transform, scope=adoption[2], kind='creation_audio_encode',
+            unit_key=f'render:audio-encode:v1:{unit}', measured_suffix='delivery_output', connection=connection)
+        clock = params['clock']
+        pcm = manifest['master']['parent']['clock']
+        if ((record.task_id, record.producer_job_id, record.kind) != (job.task_id, job.id, 'audio_encode')
+                or (transform.task_id, transform.job_id, transform.status, transform.transform_type, transform.engine)
+                    != (job.task_id, job.id, 'succeeded', 'audio_encode', 'ffmpeg-audio-delivery/v1')
+                or transform.input_digest != unit or transform.output_refs != [record.logical_ref]
+                or transform.input_refs != record.input_refs or record.input_refs != [old['master']['logical_ref']]
+                or params['phase'] != 'audio_encode' or params['manifest_digest'] != old['digest']
+                or resources['unit_id'] != unit or resources['manifest_digest'] != old['digest']
+                or resources['parents'] != [old['master']['parent']]
+                or resources['audio_recipe'] != manifest['audio_recipe']
+                or resources['backend_identity'] != self.audio_budget.backend_identity
+                or resources['threads'] != self.audio_budget.threads
+                or any(clock[k] != pcm[k] for k in ('sample_count', 'sample_rate', 'channels'))
+                or (clock['time_base_num'], clock['time_base_den'], clock['last_end_pts']) != (1, pcm['sample_rate'], pcm['sample_count'])
+                or type(clock['packet_count']) is not int or clock['packet_count'] <= 0
+                or not {'first_pts', 'initial_skip_samples', 'trailing_padding_samples'} <= clock.keys()):
+            raise ValueError('历史AAC原设备许可、包时钟或实际生产配方不一致')
+        path = self.store.resolve_file(record.logical_ref)
+        if _identity(path) != params['file_identity'] or path.stat().st_size != record.size_bytes:
+            raise ValueError('历史AAC文件已替换或失效')
+        parent = self._parent_facts(record, transform, path)
+        checked = {'origin_version_id': adoption[0].id, 'origin_manifest_digest': old['digest'], 'parent': parent}
+        if any(checked[key] != value for key, value in reference.items()):
+            raise ValueError('历史AAC引用与原产物不一致')
+        return checked, parent
+
+    def _aac_parent(self, job, manifest, *, connection=None):
+        if 'reused_aac' not in manifest:
+            return self._artifact(job, manifest, 'audio_encode', connection=connection)
+        if connection is None:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
+                return self._aac_parent(job, manifest, connection=conn)
+        return self._read_aac_reuse(job, manifest, manifest['reused_aac'], connection=connection)[1]
 
     def _unit(self, manifest, phase):
         return media_digest([manifest['digest'], phase])
@@ -211,6 +295,11 @@ class AudioDeliveryAssembly:
         path = self.store.resolve_file(record.logical_ref)
         if _identity(path) != facts['file_identity'] or path.stat().st_size != record.size_bytes:
             raise ValueError('音画产物stat已变化')
+        return self._parent_facts(record, transform, path)
+
+    @staticmethod
+    def _parent_facts(record, transform, path):
+        facts = transform.parameters
         return {'parent': {'binding': {'artifact_id': record.id, 'sha256': record.sha256,
             'size_bytes': record.size_bytes, 'producer_request_id': facts['producer_request_id'],
             'producer_generation': facts['producer_generation'], 'transform_id': transform.id,
@@ -232,12 +321,15 @@ class AudioDeliveryAssembly:
             identity = self._unit(manifest, phase)
             current = (request is not None and request.resources.get('unit_id') == identity
                 and request.state in {'granted', 'yield_requested'})
-            if not current and self._artifact(job, manifest, phase, connection=connection) is not None:
-                continue
+            if not current:
+                completed = (self._aac_parent(job, manifest, connection=connection) if phase == 'audio_encode'
+                    else self._artifact(job, manifest, phase, connection=connection))
+                if completed is not None:
+                    continue
             if budget is None:
                 raise ValueError(f'本机缺少{phase}的有限过程预算')
             parents = [manifest['master']] if phase == 'audio_encode' else [manifest['picture'],
-                self._artifact(job, manifest, 'audio_encode', connection=connection)]
+                self._aac_parent(job, manifest, connection=connection)]
             if any(parent is None for parent in parents):
                 raise ValueError('音画交付下一单元缺少完成父检查点')
             logical, files = self._layout(job, manifest, phase)
@@ -298,7 +390,7 @@ class AudioDeliveryAssembly:
         phase = 'audio_encode' if request.resources['kind'] == 'creation_audio_encode' else 'final_mux'
         if self.next_unit(job, actor=actor, request=request) != (request.unit_key, request.resources):
             raise ValueError('音画执行单元与原许可不一致')
-        parents = [manifest['master']] if phase == 'audio_encode' else [manifest['picture'], self._artifact(job, manifest, 'audio_encode')]
+        parents = [manifest['master']] if phase == 'audio_encode' else [manifest['picture'], self._aac_parent(job, manifest)]
         logical, files = self._layout(job, manifest, phase)
         for raw in files.values():
             if Path(raw).exists():

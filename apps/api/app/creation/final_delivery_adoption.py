@@ -85,6 +85,7 @@ def compile_delivery_adoption(delivery, conn, job, *, actor, grant, record, pict
                 **render_generation_fields(generation), 'origin_timeline_version_id':version_id,
                 'manifest_digest': manifest['digest'], 'manifest_event_id': delivery.manifest_id(job, connection=conn),
                 'picture_fragment_manifest_event_id': picture_fragments.manifest_id(job, connection=conn),
+                'picture_fragment_manifest_digest': leaf_manifest['digest'],
                 'job_id': job.id, 'request_id': grant.request_id, 'permit_generation': grant.generation,
                 'video_artifact_id': record.id, 'subtitle_artifact_id': subtitle.id if subtitle is not None else None,
                 'render_input': input_payload, 'render_input_digest': render_input_digest_for(input_payload),
@@ -310,6 +311,14 @@ def valid_delivery(repository, store, task, version, plan, *, metadata, render_c
             or leaf['digest'] != media_digest({key: value for key, value in leaf.items() if key != 'digest'})
             or leaf['input_digest'] != job.input_digest or stored_render_scope(leaf) != scope):
         return False
+    if leaf['version'] == 'picture-fragment-assembly/v3':
+        from app.creation.subtitle_delivery_sidecar import completed_sidecar
+        if leaf['digest'] != saved.get('picture_fragment_manifest_digest') or leaf['head'] != origin.parent_version_id:
+            return False
+        with repository.execution_inputs.creation_execution_read() as conn:
+            sidecar = completed_sidecar(repository, store, job, leaf, connection=conn)
+        if (sidecar.id if sidecar is not None else None) != saved['subtitle_artifact_id']:
+            return False
     original = CreationExecutionActor.from_event(task.workspace_id,
         repository.execution_records.get_task_event(task.workspace_id, f'event_{job.id}_start').payload)
     actual_plan = creation_task_montage_plan_from_payload(plan)

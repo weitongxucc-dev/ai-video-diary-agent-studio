@@ -1091,13 +1091,21 @@ class CreationJobOwnerVerifier:
                     if (self._check_facts(latest, target, event, script, current_plan, 'render', actor.member_id) != 'ready'
                             or self.authorization_verdict(target, actor, 'render', connection=current) != 'ready'):
                         raise PermissionError('画面窗口原输入或授权已变化')
-                self.picture_fragments.prepare(job, actor=actor, write_guard=guard, connection=conn)
+                self.picture_fragments.prepare(job, actor=actor, write_guard=guard, connection=conn,
+                    independent_sidecar=self.audio_delivery is not None)
             pending = self.picture_fragments.next_unit(job, actor=actor, request=request, connection=conn)
             if pending is not None:
                 return pending
+            if self.audio_delivery is not None:
+                pending = self.audio_delivery.next_sidecar(job, self.picture_fragments, actor=actor,
+                    request=request, connection=conn)
+                if pending is not None:
+                    return pending
             if prepare_assembly and self.packet_copy_assembly.manifest(job, connection=conn) is None:
                 identities = self.picture_fragments.completed_artifact_ids(job, actor=actor, connection=conn)
-                self.packet_copy_assembly.prepare(job, identities, actor=actor, write_guard=guard, connection=conn)
+                bindings = self.picture_fragments.packet_bindings(job, actor=actor, connection=conn)
+                self.packet_copy_assembly.prepare(job, identities, actor=actor, write_guard=guard,
+                    connection=conn, reused_leaves=bindings)
         if self.packet_copy_assembly is not None and job is not None:
             pending = self.packet_copy_assembly.next_unit(job, request=request, connection=conn, prepare=prepare_assembly)
             if pending is not None:
@@ -3480,7 +3488,8 @@ class CreationJobUnitExecutor:
         from app.creation.execution_budget_scope import ExecutionBudgetScopes
         from app.granted_subprocess import GrantedCommandCancelled
         packet_copy = grant.unit_key.startswith('render:packet-copy:v1:')
-        delivery = grant.unit_key.startswith(('render:audio-encode:v1:', 'render:final-mux:v1:'))
+        sidecar = grant.unit_key.startswith('render:subtitle-sidecar:v1:')
+        delivery = sidecar or grant.unit_key.startswith(('render:audio-encode:v1:', 'render:final-mux:v1:'))
         adoption = grant.unit_key.startswith('render:delivery-adopt:v1:')
         picture_leaf = grant.unit_key.startswith('render:picture-fragment:v1:')
         assembly = (self.audio_delivery.adoption_recovery if adoption and self.audio_delivery is not None else
@@ -3511,14 +3520,15 @@ class CreationJobUnitExecutor:
             if (packet_copy or delivery or picture_leaf or adoption) and owner.check_current(scheduler._get(grant.request_id), conn) != 'ready':
                 raise PermissionError('画面归约在启动前已撤权或父事实变化')
             job = self.repository.job_records.claim_job_run(job.workspace_id, job.id, connection=conn)
-            family = 'delivery_adoption' if adoption else 'picture_fragment' if picture_leaf else 'audio_delivery' if delivery else 'picture_packet' if packet_copy else 'audio_assembly'
+            family = ('delivery_adoption' if adoption else 'subtitle_sidecar' if sidecar else
+                'picture_fragment' if picture_leaf else 'audio_delivery' if delivery else 'picture_packet' if packet_copy else 'audio_assembly')
             started_id = f'event_{job.id}_{family}_started_{grant.generation}'
             receipt_id = (f'event_{job.id}_{family}_usage_{grant.generation}' if packet_copy or delivery or picture_leaf or adoption else
                 f'event_{job.id}_audio_assembly_settled_{grant.generation}')
             self.repository.execution_records.append_task_event(TaskEvent(started_id, job.workspace_id, job.task_id, job.id,
                 'task_execution_unit_started', {'usage_id': f'{grant.request_id}:{grant.generation}',
                     'request_id': grant.request_id, 'permit_generation': grant.generation,
-                    'unit_key': grant.unit_key, 'phase': family if picture_leaf or adoption else 'audio_delivery' if delivery else 'picture_packet_copy' if packet_copy else 'audio_assembly'}), connection=conn)
+                    'unit_key': grant.unit_key, 'phase': 'picture_packet_copy' if packet_copy else family}), connection=conn)
             scopes = ExecutionBudgetScopes(self.repository)
             try:
                 binding = scopes.binding(conn, job.workspace_id, job.id)
@@ -3563,7 +3573,7 @@ class CreationJobUnitExecutor:
                 'task_execution_unit_settled', {'usage_id': f'{current.request_id}:{current.generation}',
                     'request_id': current.request_id, 'permit_generation': current.generation, 'unit_key': current.unit_key,
                     'elapsed_seconds': max(0, time.monotonic() - started), 'output_bytes': generated,
-                    'usage_source': ('read_only_delivery_adoption' if adoption else 'picture_fragment_worker_output_measurement' if picture_leaf else 'audio_delivery_worker_output_measurement' if delivery else
+                'usage_source': ('read_only_delivery_adoption' if adoption else 'picture_fragment_worker_output_measurement' if picture_leaf else 'subtitle_sidecar_worker_output_measurement' if sidecar else 'audio_delivery_worker_output_measurement' if delivery else
                                      'picture_packet_worker_output_measurement' if packet_copy else
                                      'audio_assembly_worker_output_measurement')}), connection=conn)
             if binding is not None:
@@ -3573,7 +3583,7 @@ class CreationJobUnitExecutor:
             latest = self.repository.job_records.get_job_run(job.workspace_id, job.id, connection=conn)
             if latest.status == 'succeeded':
                 return None
-            if picture_leaf:
+            if picture_leaf or sidecar:
                 intent = next_creation_intent(self.repository, scheduler, latest, connection=conn)
                 return (intent, owner.verify_submission(intent, actor, connection=conn)) if intent is not None else None
             if packet_copy or delivery:
@@ -3602,7 +3612,9 @@ class CreationJobUnitExecutor:
                     if owner.check_current(current, conn) != 'ready':
                         raise PermissionError('画面归约原许可、来源或授权在发布前已变化')
                 rendering[0] = True
-                record = assembly.execute(job, actor=actor, context=context, publication_guard=publication_guard)
+                record = (assembly.sidecars.execute(job, actor=actor, context=context,
+                    publication_guard=publication_guard, picture_fragments=self.picture_fragments) if sidecar else
+                    assembly.execute(job, actor=actor, context=context, publication_guard=publication_guard))
             else:
                 montage = creation_task_montage_plan_from_payload(self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id))
                 manifest = assembly.render_assembly(job, montage, actor=actor, budget=owner.narration_audio_budget)
@@ -3664,7 +3676,7 @@ class CreationJobUnitExecutor:
     def _execute(self, grant: Grant, scheduler: DeviceScheduler) -> None:
         if grant.unit_key.startswith(('render:audio-assembly:', 'render:packet-copy:v1:',
                                       'render:audio-encode:v1:', 'render:final-mux:v1:', 'render:picture-fragment:v1:',
-                                      'render:delivery-adopt:v1:')):
+                                      'render:delivery-adopt:v1:', 'render:subtitle-sidecar:v1:')):
             return self._execute_media_assembly(grant, scheduler)
         if grant.owner_type == DEVICE_OWNER_TYPE and grant.unit_key.startswith(('narration:segment:v1:', 'narration:merge:v1:')):
             return self._execute_narration_unit(grant, scheduler)

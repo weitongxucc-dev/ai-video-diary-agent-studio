@@ -10,6 +10,7 @@ from app.creation.contracts import ArtifactRecord, DependencyEdge, TaskEvent, Tr
 from app.models import utc_now
 from app.packet_copy_policy import packet_copy_output_allocation, packet_copy_resources
 from app.creation.render_generation import current_render_generation, render_namespace, render_generation_fields, stored_render_scope
+from app.creation.picture_leaf_reuse import read_leaf
 
 
 def _digest(value):
@@ -104,9 +105,38 @@ class PacketCopyAssembly:
             raise ValueError('画面父产物帧区间无效')
         return record, path, facts
 
-    def prepare(self, job, artifact_ids, *, actor, write_guard, connection=None):
+    def resolve_parent(self, job, artifact_id, manifest, *, connection=None):
+        binding = manifest.get('reused_leaves', {}).get(artifact_id)
+        if binding is None:
+            return self._parent(job, artifact_id, manifest['recipe_digest'], connection=connection)
+        if artifact_id not in manifest['leaf_artifact_ids'] or stored_render_scope(manifest) is None:
+            raise ValueError('仅本代封存的真实叶片可跨代作为画面输入')
+        if connection is None:
+            with self.repository.execution_inputs.creation_execution_read() as conn:
+                return self.resolve_parent(job, artifact_id, manifest, connection=conn)
+        _, parent = read_leaf(self.repository, self.store, job, binding['reference'], binding['basis'],
+            binding['source'], connection=connection)
+        if parent[0].id != artifact_id or _file_identity(parent[1].stat()) != manifest['leaf_file_identities'][artifact_id]:
+            raise ValueError('本代归约固定的旧叶片已变化')
+        return parent
+
+    def prepare(self, job, artifact_ids, *, actor, write_guard, connection=None, reused_leaves=None):
+        if connection is None:
+            with self.repository._connect() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                return self.prepare(job, artifact_ids, actor=actor, write_guard=write_guard,
+                    connection=conn, reused_leaves=reused_leaves)
         recipe = self.recipe(job, connection=connection)
-        parents = [self._parent(job, identity, recipe, connection=connection) for identity in artifact_ids]
+        scope = render_generation_fields(current_render_generation(self.repository, job, connection=connection))
+        bindings = reused_leaves or {}
+        if bindings and (not scope or set(bindings) - set(artifact_ids)):
+            raise ValueError('画面读取未绑定本代真实叶片列表')
+        parents = [read_leaf(self.repository, self.store, job, bindings[identity]['reference'],
+            bindings[identity]['basis'], bindings[identity]['source'], connection=connection)[1]
+            if identity in bindings else self._parent(job, identity, recipe, connection=connection)
+            for identity in artifact_ids]
+        if [record.id for record, _, _ in parents] != list(artifact_ids):
+            raise ValueError('画面父节点与原封存身份不一致')
         expected, level = 0, []
         for record, _path, facts in parents:
             if facts['first_frame'] != expected:
@@ -119,11 +149,13 @@ class PacketCopyAssembly:
         plan = self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id, connection=connection)
         if expected != round(Fraction(str(plan['duration_seconds'])) * 30):
             raise ValueError('画面父产物未覆盖完整目标帧时钟')
-        instance = {'version': 1, **render_generation_fields(current_render_generation(self.repository, job, connection=connection)),
+        instance = {'version': 1, **scope,
             'workspace_id': job.workspace_id, 'task_id': job.task_id,
             'producer_job_id': job.id, 'input_digest': job.input_digest, 'recipe_digest': recipe,
             'leaf_artifact_ids': list(artifact_ids),
             'leaf_file_identities': {record.id: _file_identity(path.stat()) for record, path, _facts in parents}}
+        if bindings:
+            instance['reused_leaves'] = bindings
         units = []
         while len(level) > 1:
             following = []
@@ -197,7 +229,7 @@ class PacketCopyAssembly:
                 continue
             if self.budget is None:
                 raise ValueError('本机尚无匹配的packet-copy过程预算')
-            parents = [self._parent(job, identity, manifest['recipe_digest'], connection=connection) for identity in unit['parents']]
+            parents = [self.resolve_parent(job, identity, manifest, connection=connection) for identity in unit['parents']]
             logical, files = self._layout(job, unit)
             lines = ['ffconcat version 1.0']
             for _record, path, _facts in parents:
@@ -257,7 +289,7 @@ class PacketCopyAssembly:
             return None
         if any(self._completed(job, unit, manifest, connection=connection) is None for unit in manifest['units']):
             return None
-        return self._parent(job, manifest['master_artifact_id'], manifest['recipe_digest'], connection=connection)[0]
+        return self.resolve_parent(job, manifest['master_artifact_id'], manifest, connection=connection)[0]
 
     def measured_bytes(self, resources, *, published_ref=None):
         total = 0
@@ -315,7 +347,7 @@ class PacketCopyAssembly:
             if Path(raw).exists():
                 raise ValueError('原归约单元留有文件；不能覆盖，须先核实原消耗与回执')
             Path(raw).parent.mkdir(parents=True, exist_ok=True)
-        parents = [self._parent(job, identity, manifest['recipe_digest']) for identity in unit['parents']]
+        parents = [self.resolve_parent(job, identity, manifest) for identity in unit['parents']]
         plan = self.repository.get_creation_task_montage_plan(job.workspace_id, job.task_id)
         copy_entered, publication_started, published = False, False, None
         try:
@@ -352,7 +384,7 @@ class PacketCopyAssembly:
                 conn.execute('BEGIN IMMEDIATE')
                 publication_guard(conn)
                 for identity in unit['parents']:
-                    self._parent(job, identity, manifest['recipe_digest'], connection=conn)
+                    self.resolve_parent(job, identity, manifest, connection=conn)
                 self.repository.execution_records.create_artifact_record(record, connection=conn)
                 self.repository.lineage_records.create_transform_run(transform, connection=conn)
                 for reference in record.input_refs:

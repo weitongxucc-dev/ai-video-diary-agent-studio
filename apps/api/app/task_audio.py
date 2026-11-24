@@ -132,11 +132,16 @@ class TaskAudio:
             montage.duration_seconds, montage.narration_linkage_created_audio_timeline])
         return f'event_{job.id}_audio_assembly_{digest}'
 
-    def _assembly_plan_id(self, job, montage, *, connection=None):
+    def _assembly_plan_id(self, job, montage, *, actor=None, connection=None):
         from app.creation.editing.metadata_use_case import effective_audio_timeline
         generation = current_render_generation(self.repository, job, connection=connection)
         if generation is None:
             return self._legacy_assembly_plan_id(job, montage)
+        if actor is None:
+            from app.creation_execution import CreationExecutionActor
+            start = self.repository.execution_records.get_task_event(job.workspace_id,
+                generation['start_event_id'], connection=connection)
+            actor = CreationExecutionActor.from_event(job.workspace_id, start.payload)
         binding = self.repository.execution_records.get_task_event(job.workspace_id,
             render_namespace(f'event_{job.id}_render_audio_binding', generation), connection=connection)
         if (binding.task_id != job.task_id or binding.job_id != job.id
@@ -147,7 +152,10 @@ class TaskAudio:
         if binding.payload['graph_digest'] != graph_digest:
             raise ValueError('本次重新输出的音轨或逻辑时钟已变化')
         for source in binding.payload['sources']:
-            observed = Path(source['path']).stat()
+            path = self.source(job.workspace_id, job.task_id, source['reference'], actor=actor, connection=connection).resolve()
+            if str(path) != source['path']:
+                raise ValueError('本次重新输出的原音频引用已变化')
+            observed = path.stat()
             if any(source[field] != getattr(observed, attr) for field, attr in (
                     ('size_bytes','st_size'),('mtime_ns','st_mtime_ns'),('ctime_ns','st_ctime_ns'),
                     ('inode','st_ino'),('device','st_dev'))):
@@ -168,7 +176,7 @@ class TaskAudio:
         except KeyError:
             pass
         else:
-            return self._assembly_plan_id(job, montage, connection=connection)
+            return self._assembly_plan_id(job, montage, actor=actor, connection=connection)
         if type(output_sample_count) is not int or output_sample_count <= 0:
             raise ValueError('本次重新输出尚未封存实际画面采样时钟')
         sources = self._mix_sources(job.workspace_id, job.task_id, montage.audio_timeline,
@@ -201,7 +209,8 @@ class TaskAudio:
             if manifest.sample_count != output_sample_count or expected.recipe_digest != manifest.recipe_digest:
                 continue
             try:
-                self.prepared_master_facts(job, montage, actor=actor, connection=connection, manifest_event_id=event_id)
+                self.prepared_master_facts(job, montage, actor=actor, connection=connection, manifest_event_id=event_id,
+                    require_done=True)
             except (KeyError, ValueError) as exc:
                 raise RecoveryBlocked('原相同音频master尚无完整成功回执，仅可回读原请求') from exc
             selected = previous
@@ -227,7 +236,8 @@ class TaskAudio:
         if montage.audio_timeline is None:
             if not force_master and output_sample_count is None:
                 try:
-                    self.repository.execution_records.get_task_event(job.workspace_id, self._assembly_plan_id(job, montage, connection=connection), connection=connection)
+                    self.repository.execution_records.get_task_event(job.workspace_id,
+                        self._assembly_plan_id(job, montage, actor=actor, connection=connection), connection=connection)
                 except KeyError:
                     return None
             from dataclasses import replace
@@ -240,7 +250,7 @@ class TaskAudio:
         generation = current_render_generation(self.repository, job, connection=connection)
         event_id = (self._prepare_generation_audio(job, montage, generation, actor=actor, budget=budget,
             output_sample_count=output_sample_count, connection=connection) if generation is not None and prepare
-            else self._assembly_plan_id(job, montage, connection=connection))
+            else self._assembly_plan_id(job, montage, actor=actor, connection=connection))
         try:
             event = self.repository.execution_records.get_task_event(job.workspace_id, event_id, connection=connection)
         except KeyError:
@@ -310,14 +320,14 @@ class TaskAudio:
             raise ValueError('原音轨输入已变化，不能重用旧master')
         return manifest, record
 
-    def prepared_master_facts(self, job, montage, *, actor, connection=None, manifest_event_id=None):
+    def prepared_master_facts(self, job, montage, *, actor, connection=None, manifest_event_id=None, require_done=False):
         """Read the sealed master and its original producer receipt, without mixing or media probes."""
         from dataclasses import asdict
         from app.creation.assembly_manifest import AudioAssemblyManifest
         import stat
         with self.repository._connect() if connection is None else nullcontext(connection) as conn:
             event = self.repository.execution_records.get_task_event(job.workspace_id,
-                manifest_event_id or self._assembly_plan_id(job, montage, connection=conn), connection=conn)
+                manifest_event_id or self._assembly_plan_id(job, montage, actor=actor, connection=conn), connection=conn)
             if (event.job_id != job.id or event.task_id != job.task_id
                     or event.payload['input_digest'] != job.input_digest):
                 raise PermissionError('唯一音频master不属于原Job输入')
@@ -343,8 +353,10 @@ class TaskAudio:
                 "WHERE r.workspace_id=? AND r.owner_type='creation_job' AND r.owner_id=? AND r.input_digest=? "
                 "AND (r.state='done' OR (r.state='granted' AND ?)) AND json_extract(r.resources_json,'$.assembly_unit_id')=? "
                 "AND json_extract(r.resources_json,'$.assembly_manifest_digest')=? "
+                "AND (NOT ? OR (e.task_id=? AND r.checkpoint_ref IS NOT NULL AND json_extract(e.payload_json,'$.output_bytes')>0)) "
                 "ORDER BY r.updated_at DESC,r.id DESC LIMIT 1",
-                (job.workspace_id, job.id, job.input_digest, int(connection is not None and conn.in_transaction), unit.id, manifest.digest)).fetchone()
+                (job.workspace_id, job.id, job.input_digest, int(not require_done and connection is not None and conn.in_transaction),
+                 unit.id, manifest.digest, int(require_done), job.task_id)).fetchone()
             if producer is None:
                 raise ValueError('唯一音频master没有原请求与原generation的完成消耗回执')
             self.validate_source_access(job.workspace_id, job.task_id, record.logical_ref, actor, connection=conn)
