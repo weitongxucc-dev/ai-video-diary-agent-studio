@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, LoaderCircle } from "lucide-react";
 
 import styles from "./TimelineVersionHistory.module.css";
+import editorUi from "./VideoEditor.module.css";
 import { Button } from './ui/button';
+import { WorkspaceVideo } from "./workbench/WorkspaceMedia";
 import {
   CreationPlanApiError,
   getCreationTaskTimelineVersion,
@@ -64,14 +66,19 @@ export function TimelineVersionHistory({ taskId, open, currentVersionId, restore
   const [detailError, setDetailError] = useState<string | null>(null);
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
   const detailRequest = useRef(0);
   const currentTask=useRef(taskId);currentTask.current=taskId;
   const [pages,setPages]=useState<(number|undefined)[]>([undefined]);
   const beforeSequence=pages.at(-1);
-  useEffect(()=>{detailRequest.current++;setSelectedId(null);setDetail(null);setPages([undefined]);},[taskId]);
+  useEffect(()=>{detailRequest.current++;setSelectedId(null);setDetail(null);setPages([undefined]);setPreviewOpen(false);},[taskId]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setPreviewOpen(false);
+      return;
+    }
     let cancelled = false;
     setLoadingList(true);
     (beforeSequence===undefined?listCreationTaskTimelineVersions(taskId):listCreationTaskTimelineVersions(taskId,beforeSequence))
@@ -97,6 +104,7 @@ export function TimelineVersionHistory({ taskId, open, currentVersionId, restore
     // 每次选择自增一次令牌：响应只允许作用于仍是最新选择的那一次，否则快速点 A 再 B 时 A 会覆盖 B
     const request = detailRequest.current + 1;
     detailRequest.current = request;
+    setPreviewOpen(false);
     setSelectedId(versionId);
     setDetail(null);
     setLoadingDetail(true);
@@ -118,6 +126,11 @@ export function TimelineVersionHistory({ taskId, open, currentVersionId, restore
         setLoadingDetail(false);
       });
   }, [taskId]);
+
+  const videoPath = detail && detail.task_id === taskId
+    ? `/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/versions/${encodeURIComponent(detail.version.id)}/artifacts/video`
+    : null;
+  const isHistorical = detail && !detail.version.is_current && detail.version.id !== currentVersionId;
 
   return <section className={styles.history} aria-label="历史时间线版本">
     <p className={styles.note}>查看历史不会改变当前作品。指定撤销或重做作用于原修改，是否可执行由实际依赖判断。</p>
@@ -193,8 +206,25 @@ export function TimelineVersionHistory({ taskId, open, currentVersionId, restore
         {detail.artifacts.map((artifact) => (
           <li key={artifact.kind} className={styles.artifact}>
             <span className={styles.artifactLabel}>{artifactLabels[artifact.kind]}</span>
-            {artifact.status === "available" && artifact.url
-              ? <a className={styles.artifactLink} href={artifact.url} target="_blank" rel="noreferrer">查看这一版的{artifactLabels[artifact.kind]}</a>
+            {artifact.status === "available" && artifact.url && (artifact.kind !== "video" || artifact.url === videoPath)
+              ? <div>
+                <a className={styles.artifactLink} href={artifact.url} target="_blank" rel="noreferrer">
+                  {artifact.kind === "video" ? "下载这一版的成片" : `查看这一版的${artifactLabels[artifact.kind]}`}
+                </a>
+                {artifact.kind === "video" && videoPath && isHistorical ? <>
+                  <Button type="button" variant="ghost" aria-expanded={open && previewOpen}
+                    onClick={() => { setPreviewFailed(false); setPreviewOpen(!previewOpen); }}>
+                    {previewOpen ? "收起预览" : `预览第 ${detail.version.sequence} 版`}
+                  </Button>
+                  {open && previewOpen ? <>
+                    <p className={styles.note}>历史成片 · 第 {detail.version.sequence} 版 · 非当前版本</p>
+                    <WorkspaceVideo key={videoPath} className={editorUi.effectPreview} controls playsInline preload="metadata"
+                      src={`${videoPath}?preview=true`} aria-label={`第 ${detail.version.sequence} 版历史成片`}
+                      onError={() => setPreviewFailed(true)} />
+                    {previewFailed ? <p className={styles.error} role="alert">无法预览此版本的成片，请检查成员身份或文件是否仍可用。</p> : null}
+                  </> : null}
+                </> : null}
+              </div>
               : <span className={styles.artifactReason}>{artifact.reason ?? "这一版没有可查看的产物。"}</span>}
           </li>
         ))}

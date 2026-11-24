@@ -40,7 +40,7 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
   pi.registerTool({
     name: "read_clip_candidates",
     label: "查找替换镜头",
-    description: "为当前任务事实中的clip_id读取候选；未指定时才用真实界面选择，不修改selected_refs：使用范围、当前文件修订及时间槽由服务端校验，自动选择排除不要自动选用的素材。用户让助手决定时可按任务内容与已存标签选择一个候选，在API直接能力和明确授权内保存替换，必要提案才用preview_typed_edit；不需要用户先手选素材。候选不是画质评分或已修改结果。无可用候选须明确说明实际条件，不把零候选说成空库。",
+    description: "为当前任务事实中的clip_id读取候选；未指定时才用真实界面选择，不修改selected_refs：使用范围、当前文件修订及时间槽由服务端校验，自动选择排除不要自动选用的素材。描述和标签只供筛选；涉及型号等具体事实时，按候选的evidence_read回查原片依据，缺证据就明确未知，不凭相似内容认定同款。用户已委托且实际依据满足时，在API能力和明确授权内保存替换，必要提案才用preview_typed_edit，不需要用户先手选素材。候选不代表画质评分或已修改结果；无可用候选不等于空库。",
     parameters: {type: "object", properties: getEditCapabilities() ? {clip_id: structuredClone(getEditCapabilities().schema.properties.clip_id)} : {}, additionalProperties: false},
     execute: async (_id: string, params: {clip_id?: string} = {}) => {
       if (!taskId || !isTaskRead()) throw new Error("请先读取当前任务镜头");
@@ -61,14 +61,22 @@ export function registerWorkspaceTools(pi: ToolRegistrar, {request, taskId, stag
         if (asset.use_state === "not_for_automation" || asset.use_state === "excluded") continue;
         const segment = asset.segments.find((item: { id: string }) => item.id === candidate.segment_id);
         if (!segment) throw new Error("候选来源已变化，请重新查找；未生成替换提案");
+        const assetUpdatedAt = asset.updated_at || null;
+        const sameSourceWindow = segment.start_seconds === candidate.start_seconds && segment.end_seconds === candidate.end_seconds;
         matches.push({ asset_id: candidate.asset_id, segment_id: candidate.segment_id,
+          asset_updated_at: assetUpdatedAt, segment_version: segment.version ?? null,
+          source_revision: segment.source_revision && Object.keys(segment.source_revision).length ? segment.source_revision : null,
+          evidence_read: assetUpdatedAt && sameSourceWindow ? { tool: "read_material_evidence", params: {
+            asset_id: candidate.asset_id, expected_updated_at: assetUpdatedAt, kind: "segments",
+            start_seconds: candidate.start_seconds, end_seconds: candidate.end_seconds,
+          } } : null,
           file_name: String(candidate.file_name).split(/[\\/]/).at(-1),
           description: candidate.description, start_seconds: candidate.start_seconds, end_seconds: candidate.end_seconds,
           user_tags: [...asset.user_tags, ...segment.user_tags], system_tags: segment.system_tags,
           reasons: candidate.reasons });
       }
       return { content: [{ type: "text", text: JSON.stringify({ matches, candidate_count: candidates.length, truncated: candidates.length > 24,
-        instruction: "这是其他可用片段的有限候选，尚未替换；依据当前任务表达与标签选择后，按API直接能力保存或准备必要提案。不要向用户展示编号、字段名或把匹配分数当画质概率。" }) }], details: { matches, candidate_count: candidates.length, truncated: candidates.length > 24 } };
+        instruction: "候选尚未替换。型号等具体事实要用 evidence_read.params 回读原片证据，核对返回的片段标识和源区间；描述、标签和匹配度不是型号证明。ReplaceClip 须把选中候选已读的 asset_updated_at 或该片段原证据的 updated_at 原样传给 expected_replacement_asset_updated_at。回查未接通或未找到该片段的证据时，明确未知；版本或源区间变化时重新查找，不能换绑新版本重试旧请求。不要向用户展示内部编号或字段名。" }) }], details: { matches, candidate_count: candidates.length, truncated: candidates.length > 24 } };
     },
   });
   pi.registerTool({

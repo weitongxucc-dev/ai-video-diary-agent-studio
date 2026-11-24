@@ -4767,13 +4767,13 @@ describe("CreationTaskWorkspace", () => {
     expect(within(panel).getAllByText(/2 个镜头/)).toHaveLength(2);
     expect(within(panel).getByText(/1 条字幕轨/)).toBeInTheDocument();
 
-    fireEvent.click(within(panel).getByRole("button", { name: /第 1 版/ }));
+    fireEvent.click(within(panel).getByRole("button", { name: /^第 1 版/ }));
     await waitFor(() => expect(mocks.getTimelineVersion).toHaveBeenCalledWith("task-1", "tv-1"));
 
     // 旧版本按自己的快照显示，缺失产物说明原因而不是留空
     expect(await within(panel).findByText("旧版本第一句")).toBeInTheDocument();
     expect(within(panel).getByText("旧镜头描述")).toBeInTheDocument();
-    expect(within(panel).getByRole("link", { name: "查看这一版的成片" })).toHaveAttribute(
+    expect(within(panel).getByRole("link", { name: "下载这一版的成片" })).toHaveAttribute(
       "href", "/api/creation-tasks/task-1/timeline/versions/tv-1/artifacts/video");
     expect(within(panel).getByText("该版本没有生成封面。")).toBeInTheDocument();
     expect(within(panel).queryByRole("button", { name: /回滚|恢复|应用/ })).not.toBeInTheDocument();
@@ -4797,11 +4797,11 @@ describe("CreationTaskWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "历史时间线版本" }));
     expect(screen.getByRole("dialog", { name: "历史时间线版本" })).toBe(panel);
     expect(body.scrollTop).toBe(120);
-    expect(within(panel).getByRole("button", { name: /第 1 版/ })).toHaveAttribute("aria-current", "true");
+    expect(within(panel).getByRole("button", { name: /^第 1 版/ })).toHaveAttribute("aria-current", "true");
     expect(within(panel).getByText("旧版本第一句")).toBeInTheDocument();
-    expect(await within(panel).findByRole("button", { name: /第 3 版/ })).toHaveTextContent("当前版本");
-    expect(within(panel).getByRole("button", { name: /第 2 版/ })).not.toHaveTextContent("当前版本");
-    expect(within(panel).getByRole("button", { name: /第 1 版/ })).toHaveAttribute("aria-current", "true");
+    expect(await within(panel).findByRole("button", { name: /^第 3 版/ })).toHaveTextContent("当前版本");
+    expect(within(panel).getByRole("button", { name: /^第 2 版/ })).not.toHaveTextContent("当前版本");
+    expect(within(panel).getByRole("button", { name: /^第 1 版/ })).toHaveAttribute("aria-current", "true");
     expect(mocks.listTimelineVersions).toHaveBeenCalledTimes(2);
     expect(mocks.getTimelineVersion).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(document, { key: "Escape" });
@@ -4857,10 +4857,10 @@ describe("CreationTaskWorkspace", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "历史时间线版本" }));
     const panel = await screen.findByRole("dialog", { name: "历史时间线版本" });
-    await waitFor(() => expect(within(panel).getByRole("button", { name: /第 2 版/ })).toBeInTheDocument());
+    await waitFor(() => expect(within(panel).getByRole("button", { name: /^第 2 版/ })).toBeInTheDocument());
 
-    const firstButton = within(panel).getByRole("button", { name: /第 1 版/ });
-    const secondButton = within(panel).getByRole("button", { name: /第 2 版/ });
+    const firstButton = within(panel).getByRole("button", { name: /^第 1 版/ });
+    const secondButton = within(panel).getByRole("button", { name: /^第 2 版/ });
 
     fireEvent.click(secondButton);
     await settle("tv-2", currentDetail);
@@ -5144,14 +5144,96 @@ it("switches review and production preparation without replacing the saved playe
   expect(mocks.renderMontage).not.toHaveBeenCalled();
 });
 
-it("opens production preparation when the reviewed output no longer matches the current version", async () => {
+it("opens existing history from production preparation when the current version has no output", async () => {
   const initial = workspaceWithCover();
   initial.montage = { ...initial.montage!, status: "ready", output_url: null };
   initial.task.output_ready = false;
+  mocks.listTimelineVersions.mockResolvedValue({
+    task_id: initial.task.id, current_version_id: initial.task.current_timeline_version_id,
+    total_count: 1, items: [{
+      id: initial.task.current_timeline_version_id, sequence: initial.task.timeline_sequence,
+      parent_version_id: null, created_at: initial.task.updated_at, is_current: true,
+      shot_count: 1, subtitle_track_count: 1, narration_segment_count: 1,
+    }],
+  });
   renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
   expect(screen.getByRole("tab", { name: "制作准备" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "成片检查" })).toBeDisabled();
+  expect(mocks.listTimelineVersions).not.toHaveBeenCalled();
+
+  const prepare = screen.getByRole("tabpanel", { name: "制作准备" });
+  const history = within(prepare).getByRole("button", { name: "查看历史版本" });
+  history.focus();
+  fireEvent.click(history);
+  const dialog = await screen.findByRole("dialog", { name: "历史时间线版本" });
+  expect(await within(dialog).findByText("当前版本")).toBeVisible();
+  expect(mocks.listTimelineVersions).toHaveBeenCalledWith(initial.task.id);
+  expect(mocks.getTimelineVersion).not.toHaveBeenCalled();
+  fireEvent.click(within(dialog).getByRole("button", { name: "收起历史版本" }));
+  await waitFor(() => expect(history).toHaveFocus());
+
   expect(screen.queryByRole("button", { name: "保存到本地" })).not.toBeInTheDocument();
   expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
+  expect(mocks.startExecution).not.toHaveBeenCalled();
+  expect(mocks.resumeExecution).not.toHaveBeenCalled();
+  expect(mocks.renderMontage).not.toHaveBeenCalled();
+});
+
+it("previews only the selected historical output on demand and clears it on switch or close", async () => {
+  const initial = workspaceWithCover();
+  initial.montage = { ...initial.montage!, status: "ready", output_url: null };
+  initial.task.output_ready = false;
+  initial.task.current_timeline_version_id = "tv-3";
+  initial.task.timeline_sequence = 3;
+  const taskId = initial.task.id;
+  const oldVideo = `/api/creation-tasks/${taskId}/timeline/versions/tv-1/artifacts/video`;
+  const versions = [3, 2, 1].map(sequence => ({
+    id: `tv-${sequence}`, sequence, is_current: sequence === 3, created_at: initial.task.updated_at,
+    parent_version_id: sequence > 1 ? `tv-${sequence - 1}` : null,
+    shot_count: 1, subtitle_track_count: 0, narration_segment_count: 0,
+  }));
+  mocks.listTimelineVersions.mockResolvedValue({ task_id: taskId, current_version_id: "tv-3", items: versions, total_count: 3 });
+  mocks.getTimelineVersion.mockImplementation(async (_task, versionId) => ({
+    task_id: taskId, version: versions.find(item => item.id === versionId),
+    shots: [], narration_segments: [], subtitle_tracks: [], cover_asset: null,
+    artifacts: versionId === "tv-3" ? [] : [{ kind: "video", status: "available",
+      url: versionId === "tv-1" ? oldVideo : "https://outside.invalid/historical.mp4", reason: null }],
+  }));
+  renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+  const trigger = within(screen.getByRole("tabpanel", { name: "制作准备" })).getByRole("button", { name: "查看历史版本" });
+  fireEvent.click(trigger);
+  const dialog = await screen.findByRole("dialog", { name: "历史时间线版本" });
+  const panel = within(dialog);
+  const first = await panel.findByRole("button", { name: /^第 1 版/ });
+  fireEvent.click(first);
+  const preview = await panel.findByRole("button", { name: "预览第 1 版" });
+  expect(panel.queryByLabelText("第 1 版历史成片")).not.toBeInTheDocument();
+  expect(panel.getByRole("link", { name: "下载这一版的成片" })).toHaveAttribute("href", oldVideo);
+  fireEvent.click(preview);
+  const player = panel.getByLabelText("第 1 版历史成片");
+  expect(player).toHaveAttribute("src", `${oldVideo}?preview=true`);
+  expect(player).toHaveAttribute("controls");
+  expect(player).not.toHaveAttribute("autoplay");
+  expect(panel.getByText(/历史成片.*非当前版本/)).toBeVisible();
+  expect(panel.getByRole("button", { name: /^第 3 版/ })).toHaveTextContent("当前版本");
+
+  fireEvent.click(panel.getByRole("button", { name: /^第 2 版/ }));
+  await panel.findByRole("heading", { name: /第 2 版/ });
+  expect(player).not.toBeInTheDocument();
+  expect(panel.queryByRole("button", { name: "预览第 2 版" })).not.toBeInTheDocument();
+  expect(panel.queryByRole("link", { name: "下载这一版的成片" })).not.toBeInTheDocument();
+
+  fireEvent.click(first);
+  fireEvent.click(await panel.findByRole("button", { name: "预览第 1 版" }));
+  const reopenedPlayer = panel.getByLabelText("第 1 版历史成片");
+  fireEvent.click(panel.getByRole("button", { name: "收起历史版本" }));
+  expect(reopenedPlayer).not.toBeInTheDocument();
+  fireEvent.click(trigger);
+  expect(await panel.findByRole("button", { name: "预览第 1 版" })).toBeVisible();
+  expect(panel.queryByLabelText("第 1 版历史成片")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("剪辑成片预览")).not.toBeInTheDocument();
+  expect(mocks.startExecution).not.toHaveBeenCalled();
+  expect(mocks.resumeExecution).not.toHaveBeenCalled();
   expect(mocks.renderMontage).not.toHaveBeenCalled();
 });
 
@@ -5591,7 +5673,7 @@ it('history pagination selects the original operation rather than the later edit
   mocks.getTimelineVersion.mockResolvedValue({task_id:'task',version:original,shots:[],narration_segments:[],subtitle_tracks:[],cover_asset:null,artifacts:[]});
   render(<TimelineVersionHistory taskId="task" open currentVersionId="newer" onRestore={onRestore}/>);
   fireEvent.click(await screen.findByRole('button',{name:'更早版本'}));
-  fireEvent.click(await screen.findByRole('button',{name:/第 1 版/}));
+  fireEvent.click(await screen.findByRole('button',{name:/^第 1 版/}));
   fireEvent.click(await screen.findByRole('button',{name:'撤销这项修改'}));
   expect(onRestore).toHaveBeenCalledWith('original-operation',false);
   expect(mocks.listTimelineVersions).toHaveBeenLastCalledWith('task',2);

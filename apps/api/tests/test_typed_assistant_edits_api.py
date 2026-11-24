@@ -222,6 +222,10 @@ def task_capability_metadata_guard(request, monkeypatch, tmp_path):
 @pytest.fixture(autouse=True)
 def typed_settings(request, monkeypatch):
     if "material_edit_state" in request.fixturenames:
+        if request.node.originalname == "test_assistant_replacement_rejects_old_evidence_after_metadata_only_edit":
+            # This path reads registered source facts but never decodes or renders media.
+            for owner in ("test_montage_pipeline", "test_material_edit_qualification"):
+                monkeypatch.setattr(f"{owner}.write_synthetic_video", lambda path: path.write_bytes(b"fixture source"))
         material_edit_state = request.getfixturevalue("material_edit_state")
         monkeypatch.setattr(main, "settings", replace(main.settings,
             video_inbox_path=str(material_edit_state.production.video_library_path)))
@@ -237,6 +241,15 @@ def bound(state, **action):
 def replace_action(state):
     return {"operation_type": "ReplaceClip", "clip_id": state.clip.id,
             "asset_id": state.asset.id, "segment_id": state.asset.segments[0].id}
+
+
+def replacement_evidence_version(state, member_id):
+    segment = state.asset.segments[0]
+    receipt = state.production.material_assets.read_evidence(
+        state.workspace_id, state.asset.id, member_id=member_id,
+        start_seconds=segment.start_seconds, end_seconds=segment.end_seconds)
+    assert any(item["id"] == segment.id for item in receipt["items"])
+    return receipt["updated_at"]
 
 
 @pytest.fixture
@@ -925,7 +938,8 @@ def test_assistant_cannot_auto_adopt_a_manual_only_replacement(material_edit_sta
         message, str(uuid4()), conversation["draft_version"], request_context={"kind": "task", "task_id": state.task.id,
             "target_snapshot": {"timeline_version_id": payload["expected_timeline_version_id"],
                                 "timeline_sequence": payload["expected_timeline_sequence"]}})
-    saved = state.client.post(state.base_url + route, json={**payload, "assistant_turn_id": turn["id"]})
+    saved = state.client.post(state.base_url + route, json={**payload, "assistant_turn_id": turn["id"],
+        "expected_replacement_asset_updated_at": replacement_evidence_version(state, member.member_id)})
     assert saved.status_code == 409, saved.text
     assert "使用限制" in saved.text
     task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
@@ -952,7 +966,8 @@ def test_assistant_replacement_confirmation_rechecks_material_use_state(material
             "target_snapshot": {"timeline_version_id": payload["expected_timeline_version_id"],
                                 "timeline_sequence": payload["expected_timeline_sequence"]}})
 
-    preview = state.client.post(state.base_url + "/edits/exact/preview", json={**payload, "assistant_turn_id": turn["id"]})
+    preview = state.client.post(state.base_url + "/edits/exact/preview", json={**payload, "assistant_turn_id": turn["id"],
+        "expected_replacement_asset_updated_at": replacement_evidence_version(state, member.member_id)})
     assert preview.status_code == 200, preview.text
     proposal_id = preview.json()["proposal"]["id"]
     binding = state.client.get(state.base_url + f"/edits/{proposal_id}/result")
@@ -970,6 +985,85 @@ def test_assistant_replacement_confirmation_rechecks_material_use_state(material
     assert task.current_timeline_version_id == payload["expected_timeline_version_id"]
     assert state.production.get_creation_task_montage_plan(state.workspace_id, state.task.id) == original_plan
     assert state.production.edit_records.list_edit_operations(state.workspace_id, state.task.id) == []
+
+
+@pytest.mark.parametrize("phase", ["preview", "apply", "confirm"])
+def test_assistant_replacement_rejects_old_evidence_after_metadata_only_edit(material_edit_state, monkeypatch, phase):
+    from pathlib import Path
+
+    state = material_edit_state
+    workspace_id, task_id = state.workspace_id, state.task.id
+    action = replace_action(state)
+    original_plan = state.production.get_creation_task_montage_plan(workspace_id, task_id)
+    conversations = ConversationRepository(state.production.database_path)
+    conversations.initialize()
+    monkeypatch.setattr(main, "conversation_repo", conversations)
+    member = state.members.resolve_member(state.client.headers["X-Local-Member-Token"])
+    chat = conversations.create(workspace_id, member.member_id, "task", task_id)
+    message = "核对片段证据后换镜头，保留旁白"
+    draft = conversations.save_draft(chat["id"], workspace_id, member.member_id, message, chat["draft_version"])
+    payload = bound(state, **action)
+    turn, _ = conversations.create_turn_idempotent(chat["id"], workspace_id, member.member_id,
+        message, str(uuid4()), draft["draft_version"], request_context={"kind": "task", "task_id": task_id,
+            "target_snapshot": {"timeline_version_id": payload["expected_timeline_version_id"],
+                                "timeline_sequence": payload["expected_timeline_sequence"]}})
+    old_version = replacement_evidence_version(state, member.member_id)
+    old_request = {**payload, "assistant_turn_id": turn["id"], "expected_replacement_asset_updated_at": old_version}
+    preview_url, apply_url = state.base_url + "/edits/exact/preview", state.base_url + "/edits/exact"
+
+    if phase == "confirm":
+        preview = state.client.post(preview_url, json=old_request)
+        assert preview.status_code == 200, preview.text
+        proposal = preview.json()["proposal"]
+        assert "expected_replacement_asset_updated_at" not in proposal["operation"]["payload"]
+        url = state.base_url + f"/edits/{proposal['id']}"
+        binding = state.client.get(url + "/result").json()
+        confirm_request = {"request_id": str(uuid4()), "expected_base_version_id": binding["base_version_id"],
+                           "expected_input_digest": binding["input_digest"]}
+
+    before = state.production.get_asset(workspace_id, state.asset.id)
+    path = Path(before.path)
+    file_stat = path.stat()
+    updated = state.production.material_assets.update_segment(
+        workspace_id, before.id, action["segment_id"], transcript="人工纠正后的铭牌型号")
+    before_segment, after_segment = before.segments[0], updated.segments[0]
+    assert updated.id == before.id and updated.use_state == before.use_state
+    assert (after_segment.id, after_segment.start_seconds, after_segment.end_seconds, after_segment.usage_role,
+            after_segment.review_status) == (before_segment.id, before_segment.start_seconds, before_segment.end_seconds,
+                                             before_segment.usage_role, before_segment.review_status)
+    assert path.stat() == file_stat
+    new_version = replacement_evidence_version(state, member.member_id)
+    assert new_version != old_version and after_segment.transcript != before_segment.transcript
+
+    if phase == "confirm":
+        refused = state.client.post(url + "/confirm", json=confirm_request)
+    else:
+        endpoint = preview_url if phase == "preview" else apply_url
+        refused = state.client.post(endpoint, json=old_request)
+    assert refused.status_code == 409, refused.text
+    assert "已不再是读取时的版本" in refused.text
+    assert state.production.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id == payload["expected_timeline_version_id"]
+    assert state.production.get_creation_task_montage_plan(workspace_id, task_id) == original_plan
+    assert state.production.edit_records.list_edit_operations(workspace_id, task_id) == []
+
+    if phase != "confirm":
+        receipt_url = state.base_url + f"/assistant/edit-requests/{old_request['request_id']}?phase={phase}"
+        receipt = state.client.get(receipt_url).json()
+        assert receipt["result_status_code"] == 409
+        assert receipt["submitted_input"]["expected_replacement_asset_updated_at"] == old_version.replace("+00:00", "Z")
+        assert state.client.post(endpoint, json={**old_request, "expected_replacement_asset_updated_at": new_version}).status_code == 409
+    if phase == "apply":
+        unbound = state.client.post(apply_url, json={**payload, "request_id": str(uuid4()), "assistant_turn_id": turn["id"]})
+        assert unbound.status_code == 422 and "须提供已读的候选素材版本" in unbound.text
+
+    fresh = {**old_request, "request_id": str(uuid4()), "expected_replacement_asset_updated_at": new_version}
+    saved = state.client.post(apply_url, json=fresh)
+    assert saved.status_code == 200, saved.text
+    operation = saved.json()["operation"]
+    assert "expected_replacement_asset_updated_at" not in operation["payload"]
+    state.production.material_assets.update_segment(
+        workspace_id, before.id, action["segment_id"], transcript="采用后另一条抄录纠正")
+    assert state.client.post(apply_url, json=fresh).json()["operation"] == operation
 
 
 @pytest.mark.parametrize("action", [
@@ -1023,6 +1117,7 @@ def test_assistant_typed_source_is_host_bound_and_not_parsed_again(material_edit
         raw, str(uuid4()), conversation["draft_version"], request_context={"kind": "task", "task_id": state.task.id,
         "target_snapshot": {"timeline_version_id": payload["expected_timeline_version_id"], "timeline_sequence": payload["expected_timeline_sequence"]}})
     payload["assistant_turn_id"] = turn["id"]
+    payload["expected_replacement_asset_updated_at"] = replacement_evidence_version(state, member.member_id)
     response = state.client.post(state.base_url + "/edits/exact/preview", json=payload)
     assert response.status_code == 200, response.text
     assert response.json()["intent"]["raw_command"] == raw

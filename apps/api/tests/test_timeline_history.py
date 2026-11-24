@@ -90,7 +90,8 @@ def persist_task(repo: ProductionRepository, task: CreationTask, script_id: str,
 def history_task(tmp_path, monkeypatch, request):
     from test_production_foundation import edit_adoption_no_execution
     edit_adoption_no_execution(monkeypatch)
-    metadata_only = request.node.name in {
+    authenticated_preview = request.node.name == "test_history_video_preview_preserves_download_and_requires_readable_version"
+    metadata_only = authenticated_preview or request.node.name in {
         "test_version_list_shows_sequence_time_and_current_marker",
         "test_old_version_detail_reads_its_own_snapshot_without_touching_current",
         "test_history_rejects_another_task_version_and_unknown_version",
@@ -125,7 +126,8 @@ def history_task(tmp_path, monkeypatch, request):
     plan = make_plan("plan_history", "历史版本测试")
     task = CreationTask(id="task_history", workspace_id=WORKSPACE_ID, plan_id=plan.id,
                         name="历史版本测试", scenario="knowledge_explanation")
-    repo.plan_confirmation.confirm_creation_plan(plan, task)
+    owner_id = main_module.local_members_service.whoami(None)[0].member_id if authenticated_preview else None
+    repo.plan_confirmation.confirm_creation_plan(plan, task, verified_owner_user_id=owner_id)
     task = repo.task_records.get_creation_task(WORKSPACE_ID, task.id)
     task.confirmed_script_id = "script_history"
     task.montage_plan_id = "montage_history"
@@ -192,6 +194,10 @@ def history_task(tmp_path, monkeypatch, request):
         video_output_path=str(tmp_path / 'outputs'), temporary_root_path=str(tmp_path / 'temp')))
     monkeypatch.setattr(main_module, "creation_execution_mode", "legacy")
     client = TestClient(main_module.app)  # No lifespan; anonymous local diagnostic policy.
+    if authenticated_preview:
+        members = main_module.local_members_service
+        _, other_token = members.join(members.create_invite_code(), "另一位本地成员")
+        client.history_tokens = (members.whoami(None)[1], other_token)
     if metadata_only:
         def database_facts():
             with repo._connect() as connection:
@@ -303,6 +309,42 @@ def test_history_rejects_another_task_version_and_unknown_version(history_task):
         f"/api/creation-tasks/{task_id}/timeline/versions/timeline_history_v2/artifacts/video")
     assert missing_video.status_code == 404
     assert missing_video.json()["detail"] == "该版本记录的成片已不在受控产物目录内。"
+
+
+def test_history_video_preview_preserves_download_and_requires_readable_version(history_task):
+    repo, task_id, client = history_task
+    owner_token, other_token = client.history_tokens
+    base = f"/api/creation-tasks/{task_id}/timeline/versions"
+    video = f"{base}/timeline_history_v1/artifacts/video"
+    owner = {"X-Local-Member-Token": owner_token}
+    content = b"old-version-video-bytes"
+
+    for suffix in ("", "?preview=1"):
+        download = client.get(video + suffix)
+        assert download.status_code == 200 and download.content == content
+        assert download.headers["content-disposition"].startswith("attachment;")
+    subtitles = client.get(f"{base}/timeline_history_v1/artifacts/subtitles?preview=true")
+    assert subtitles.status_code == 200 and subtitles.headers["content-disposition"].startswith("attachment;")
+
+    partial = client.get(video + "?preview=true", headers={**owner, "Range": "bytes=0-2"})
+    assert partial.status_code == 206 and partial.content == content[:3]
+    assert partial.headers["content-type"] == "video/mp4"
+    assert partial.headers["content-disposition"].startswith("inline;")
+    assert partial.headers["cache-control"] == "no-store"
+    assert partial.headers["accept-ranges"] == "bytes"
+    assert partial.headers["content-range"] == f"bytes 0-2/{len(content)}"
+
+    for headers, expected in (
+        ({}, 401),
+        ({"X-Local-Member-Token": " "}, 401),
+        ({"X-Local-Member-Token": "invalid-fixture-token"}, 401),
+        ({"X-Local-Member-Token": other_token}, 404),
+    ):
+        denied = client.get(video + "?preview=true", headers={**headers, "Range": "bytes=0-2"})
+        assert denied.status_code == expected and not denied.headers["content-type"].startswith("video/")
+    for version_id in ("timeline_other_v1", "timeline_history_v2"):
+        assert client.get(f"{base}/{version_id}/artifacts/video?preview=true", headers=owner).status_code == 404
+    assert repo.task_records.get_creation_task(WORKSPACE_ID, task_id).current_timeline_version_id == "timeline_history_v2"
 
 
 def test_history_detail_preserves_original_operation_from_list(history_task):

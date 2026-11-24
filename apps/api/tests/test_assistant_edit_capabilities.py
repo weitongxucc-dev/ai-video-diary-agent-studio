@@ -88,9 +88,15 @@ def test_one_conversation_refreshes_material_task_capabilities_and_trusted_objec
         contexts.append(current)
     assert contexts[0]["scope_kind"] == "home" and contexts[0]["task_id"] is None
     assert "preview_edit" not in contexts[0]["tool_names"]
+    assert "read_material_evidence" not in contexts[0]["tool_names"]
     assert contexts[1]["scope_kind"] == "task" and contexts[1]["task_id"] == "task-current"
     assert "preview_edit" not in contexts[1]["tool_names"]
-    assert {"preview_typed_edit", "read_clip_candidates", "read_selected_material", "suggest_selected_material_tags", "update_selected_material_tags"} <= set(contexts[1]["tool_names"])
+    assert {"preview_typed_edit", "read_clip_candidates", "read_material_evidence", "read_selected_material",
+            "suggest_selected_material_tags", "update_selected_material_tags"} <= set(contexts[1]["tool_names"])
+    step = pi._PiStreamProjector().project(json.dumps({
+        "type": "tool_execution_start", "toolName": "read_material_evidence", "toolCallId": "call-material-evidence",
+    }))
+    assert step["label"] == "读取素材时间证据"
     assert "不自行重新生成或用同名图替换" in json.loads(calls[1]["message"])["systemPrompt"]
     prompt = json.loads(calls[1]["message"])["systemPrompt"]
     assert "不对这些对象JSON.parse；CLI stdout才是JSON文本" in prompt
@@ -102,6 +108,7 @@ def test_one_conversation_refreshes_material_task_capabilities_and_trusted_objec
     assert contexts[2]["material_selection"] is None
     assert "read_selected_material" not in contexts[2]["tool_names"]
     assert "read_clip_candidates" not in contexts[2]["tool_names"]
+    assert "read_material_evidence" not in contexts[2]["tool_names"]
     assert json.loads(calls[1]["env"]["AI_VIDEO_DIARY_AGENT_MATERIAL_SELECTION"]) == TOOL_SELECTION
     assert calls[1]["env"]["AI_VIDEO_DIARY_AGENT_USER_INSTRUCTION"] == original
     task_input = json.loads(json.loads(calls[1]["message"])["message"].split("本轮输入（JSON）：\n", 1)[1])
@@ -132,7 +139,8 @@ def test_topic_and_script_keep_stage_context_and_shared_capabilities(captured_ru
     assert context["context_stage"] == stage and context["task_id"] == "task-current"
     assert expected in tools and shared in tools
     assert "preview_edit" not in tools
-    assert {"read_clip_candidates", "read_task_edit_capabilities", "preview_typed_edit", "read_task_object"} <= set(tools)
+    assert {"read_clip_candidates", "read_material_evidence", "read_task_edit_capabilities",
+            "preview_typed_edit", "read_task_object"} <= set(tools)
     prompt = json.loads(calls[0]["message"])["systemPrompt"]
     assert "parameters是API parameters参数对象" in prompt
     assert "inputs[name]按input_refs的name" in prompt and "Image.open(inputs[name])" in prompt
