@@ -91,17 +91,26 @@
   --border-1: #dddde3;
   --border-2: #dddde3;
   --rule: #ebebef;
-  /* 主要提交动作使用墨色实底，把彩色留给媒体和业务状态。 */
-  --accent: #27282a;
+  /* 蓝橙配色用蓝色标示提交动作，实底与浅色悬停、按下状态都容纳白色文字。 */
+  --accent: #263b98;
   --accent-contrast: #ffffff;
+  /* 发送和追加使用同一个蓝色识别点，与两套原型一致。 */
+  --send-action: #4263d8;
+  --send-action-hover: #3453bd;
+  --send-action-contrast: #ffffff;
+  /* 品牌橙用于哈力斯徽记，待决定保留易辨的琥珀色及文字。 */
+  --agent-brand: #b65324;
   --success: #246b3e;
   --warning: #815400;
   --danger: #a33a3a;
-  /* 编辑区用单色焦点线定位键盘操作，避免与轨道类别混淆。 */
-  --focus: #535961;
-  --focus-text: #424850;
-  --selection-line: #7d8193;
-  --running: var(--focus);
+  /* 焦点和播放位置沿用定位色，选中态保留独立的中性边线和底色。 */
+  --focus: #4263d8;
+  --focus-text: #314db2;
+  --selection-line: #6e7385;
+  /* 输入控件的轮廓要在工作面可见，面板分隔线仍可保持低对比。 */
+  --control-boundary: #84848d;
+  /* 运行文字和进度条用深一阶的定位色保证小字可读。 */
+  --running: var(--focus-text);
   /* 浮层用短阴影与内容分开；常驻分栏使用细分隔线。 */
   --shadow-float: 0 2px 5px rgb(0 0 0 / 6%), 0 8px 24px rgb(0 0 0 / 9%);
   /* 高频桌面按钮的边角与较大的面板表面有别。 */
@@ -142,16 +151,37 @@
   --border-1: #45454f;
   --border-2: #45454f;
   --rule: #3a3a43;
-  --accent: #e5e5e7;
+  /* 深色工作面保留蓝色提交和定位，用深色文字配高亮实底。 */
+  --accent: #a0b5fc;
   --accent-contrast: #202024;
+  --send-action: #a0b5fc;
+  --send-action-hover: #bac9ff;
+  --send-action-contrast: #202024;
+  --agent-brand: #f1a36c;
   --success: #77c59b;
   --warning: #dfae62;
   --danger: #ed9898;
-  --focus: #d0d3d7;
-  --focus-text: #d0d3d7;
+  --focus: #92a8ef;
+  --focus-text: #a0b5fc;
   --selection-line: #9999aa;
-  --running: var(--focus);
+  --control-boundary: #858590;
   --shadow-float: 0 18px 48px rgb(0 0 0 / 32%), 0 2px 8px rgb(0 0 0 / 24%);
+}
+
+:root[data-palette="warm-orange"]:not([data-theme="dark"]) {
+  /* 暖橙的提交底色加深以容纳白字，定位与品牌、待决定保持各自用途。 */
+  --accent: #79310d;
+  --focus: #a9461f;
+  --focus-text: #88370f;
+  --agent-brand: #bf5025;
+}
+
+:root[data-palette="warm-orange"][data-theme="dark"] {
+  /* 深色沿用原型的亮暖橙，键盘和播放位置与品牌色区分明度。 */
+  --accent: #f1a36c;
+  --focus: #ffc19a;
+  --focus-text: #ffc19a;
+  --agent-brand: #f08955;
 }
 
 html,

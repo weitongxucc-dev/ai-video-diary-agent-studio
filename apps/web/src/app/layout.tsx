@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { WorkspaceSessionBoundary } from "@/components/WorkspaceSessionBoundary";
 import { ToastProvider } from "@/components/PixelToast";
+import { APPEARANCE_PALETTE_KEY, DEFAULT_PALETTE, WARM_PALETTE } from "@/lib/appearance-preferences";
 import "./globals.css";
 import "./modern-overrides.css";
 
@@ -18,7 +19,21 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var m=localStorage.getItem('ai-video-diary-theme')||'system';var d=m==='system'?(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):m;document.documentElement.dataset.theme=d;document.documentElement.dataset.themeMode=m}catch(e){}})()`,
+            __html: `(function(){
+              var mode = 'system';
+              var palette = '${DEFAULT_PALETTE}';
+              try {
+                var savedMode = localStorage.getItem('ai-video-diary-theme');
+                if (savedMode === 'light' || savedMode === 'dark') mode = savedMode;
+                if (localStorage.getItem('${APPEARANCE_PALETTE_KEY}') === '${WARM_PALETTE}') palette = '${WARM_PALETTE}';
+              } catch {}
+              var appearance = document.documentElement.dataset;
+              appearance.theme = mode === 'system'
+                ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+                : mode;
+              appearance.themeMode = mode;
+              appearance.palette = palette;
+            })()`,
           }}
         />
       </head>
