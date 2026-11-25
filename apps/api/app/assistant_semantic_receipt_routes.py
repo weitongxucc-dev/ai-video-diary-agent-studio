@@ -23,8 +23,8 @@ def build_assistant_semantic_receipt_router(*, origin_for, conversations_for, pr
             if (current.get('input_id') or origin['assistant_turn_id']) != origin['input_id']:
                 raise ValueError('原输入已变化，不能登记旧语义比较')
         try:
-            def capture(refs, *, for_adoption):
-                return segment_case_for()().capture_revision_evidence(actor, refs, for_adoption=for_adoption)
+            def capture(refs):
+                return segment_case_for()().capture_revision_evidence(actor, refs)
             return record_narration_semantic_review(production_for(), task, origin,
                 {key: value for key, value in payload.items() if key != 'assistant_turn_id'}, write_guard=guard,
                 capture_evidence=capture if segment_case_for is not None else None)

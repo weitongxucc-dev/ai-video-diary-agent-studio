@@ -47,7 +47,7 @@ def record_narration_semantic_review(production, task, origin, payload, *, write
     identity=hashlib.sha256(json.dumps([task.workspace_id,task.id,source,payload['request_id']],
         sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     event_id = 'narration_semantic_review_' + identity
-    from app.assistant.section_revision_evidence import allows_linked_adoption, selected_knowledge_pages
+    from app.assistant.section_revision_evidence import selected_knowledge_pages
     context = origin.get('context') or {}
     page_refs = selected_knowledge_pages(context)
     guarded_write = write_guard
@@ -61,16 +61,15 @@ def record_narration_semantic_review(production, task, origin, payload, *, write
                 raise ValueError('资料修订须绑定此输入所见的作品版本。')
             if capture_evidence is None:
                 raise ValueError('固定资料读面尚未就绪。')
-            evidence = capture_evidence(page_refs, for_adoption=False)
-            payload.update(knowledge_evidence=evidence, knowledge_evidence_apply_allowed=allows_linked_adoption(origin))
+            evidence = capture_evidence(page_refs)
+            payload['knowledge_evidence'] = evidence
 
             def guarded_write(conn):
                 write_guard(conn)
-                if capture_evidence(page_refs, for_adoption=False) != evidence:
+                if capture_evidence(page_refs) != evidence:
                     raise ValueError('修订引用的固定资料页已变化，请重新核对原文。')
         elif 'knowledge_evidence' in previous.payload:
-            for key in ('knowledge_evidence', 'knowledge_evidence_apply_allowed'):
-                payload[key] = previous.payload[key]
+            payload['knowledge_evidence'] = previous.payload['knowledge_evidence']
     event=TaskEvent(id=event_id,workspace_id=task.workspace_id,task_id=task.id,
         job_id=None,event_type='narration_semantic_review',payload={**payload,'source':source,
         'evidence_kind':'pi_semantic_comparison'})
@@ -669,8 +668,7 @@ class TaskBusiness:
             return record_narration_semantic_review(self.production,task,
                 {**origin,'assistant_turn_id':goal['current_turn_id']},
                 {k:v for k,v in args['payload'].items() if k not in {'assistant_turn_id','input_id'}},write_guard=guard,
-                capture_evidence=(lambda refs, *, for_adoption:
-                    self.segments.capture_revision_evidence(actor, refs, for_adoption=for_adoption))
+                capture_evidence=(lambda refs: self.segments.capture_revision_evidence(actor, refs))
                     if self.segments is not None else None)
         if operation=='read_task_workspace':
             facts = dict(self.workspace_facts(ws,task))

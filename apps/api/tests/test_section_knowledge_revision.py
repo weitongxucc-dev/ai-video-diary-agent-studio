@@ -1,4 +1,4 @@
-"""Same-work section adoption through the shipped routes and controlled execution ports."""
+"""Same-work section candidates through the shipped routes and controlled execution ports."""
 from dataclasses import replace
 import hashlib
 import subprocess
@@ -21,7 +21,7 @@ from app.source_types import KnowledgeItem
 from test_creation_execution import _segment_units_case
 
 
-def test_fixed_manual_page_revises_one_section_on_existing_timeline(tmp_path, monkeypatch):
+def test_fixed_manual_page_saves_candidates_without_adopting_on_existing_timeline(tmp_path, monkeypatch):
     def forbidden(*_args, **_kwargs):
         pytest.fail("This revision test may not start a model, FFmpeg or a device process")
 
@@ -49,8 +49,10 @@ def test_fixed_manual_page_revises_one_section_on_existing_timeline(tmp_path, mo
     runtime = SimpleNamespace(scheduler=case.scheduler, wake=lambda: None)
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, 'conversation_repo', conversations)
+    monkeypatch.setattr(main, 'source_repository', sources)
     monkeypatch.setattr(main, 'current_workspace_id', lambda _: 'local')
-    monkeypatch.setattr(main, '_content_identity_http_adapter', lambda: SimpleNamespace(reader=lambda *_: (member, False)))
+    monkeypatch.setattr(main, '_content_identity_http_adapter', lambda: SimpleNamespace(
+        reader=lambda *_: (member, False), assistant_member=lambda *_: member))
     monkeypatch.setattr(main, '_require_permit_actor', lambda *_: actor)
     monkeypatch.setattr(main, '_require_automation_task_open', lambda *_: None)
     monkeypatch.setattr(main, '_segment_production_use_case', lambda: case.segments)
@@ -58,7 +60,7 @@ def test_fixed_manual_page_revises_one_section_on_existing_timeline(tmp_path, mo
     api = FastAPI()
     api.routes.extend(route for route in main.app.routes if route.name in {
         'creation_task_input_understanding', 'creation_task_narration_semantic_review', 'revise_creation_task_segment',
-        'creation_task_segment_request', 'creation_task_segment_sources'})
+        'creation_task_segment_request', 'creation_task_segment_video', 'assistant_knowledge_reference'})
     client = TestClient(api)
     submit_creation_stage(case.execution, case.scheduler, case.job, actor)
     for _ in range(5):
@@ -126,14 +128,22 @@ def test_fixed_manual_page_revises_one_section_on_existing_timeline(tmp_path, mo
     try:
         before = repo.job_records.list_job_runs('local', task_id)
         for message in (
-            '先给我看按这页修订第一段的方案，不要采用。',
+            '请不要改写第1段，仅解释这页说明书的影响。',
+            '只解释这页说明书的影响。',
+            '采用前先让我确认第 1 段。',
             '请采用说明书第 3 页，但先让我确认。',
             '请采用说明书第 3 页，等待我授权。',
-            '请采用说明书第 3 页，前提是我审核通过。',
-            '请采用说明书第 3 页可以吗',
+            '如果审核通过，再采用说明书第 3 页。',
+            '同事说「请根据这页说明书修改第1段并保存。」我想了解他的意思。',
+            'Should we apply the change from this manual?',
             'Please apply page 3 after I approve.',
         ):
             turn, fields = start_turn(message)
+            interpretation = client.post(task_root + '/assistant/input-understanding', json={
+                'assistant_turn_id': turn, 'input_id': fields['input_id'],
+                'kind': 'adoption', 'summary': 'QA 模拟误判为采用',
+                'target_refs': ['section:section_1']})
+            assert interpretation.status_code == 200, interpretation.text
             reviewed = review(fields)
             assert reviewed.status_code == 200, reviewed.text
             assert submit(fields, reviewed.json(), 'apply').status_code == 403, message
@@ -141,25 +151,8 @@ def test_fixed_manual_page_revises_one_section_on_existing_timeline(tmp_path, mo
             assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == base.id
             conversations.finish_turn(turn, 'completed')
 
-        pending_turn, pending = start_turn('采用前先让我确认第 1 段。')
-        interpretation = client.post(task_root + '/assistant/input-understanding', json={
-            'assistant_turn_id': pending_turn, 'input_id': pending['input_id'],
-            'kind': 'adoption', 'summary': 'QA 模拟把要求先确认误判为采用',
-            'target_refs': ['section:section_1']})
-        assert interpretation.status_code == 200, interpretation.text
-        proposed = review(pending)
-        assert proposed.status_code == 200, proposed.text
-        assert submit(pending, proposed.json(), 'apply').status_code == 403
-        assert repo.job_records.list_job_runs('local', task_id) == before
         assert base.sequence == 3
-        assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == base.id
-        candidate = settle_queued(submit(pending, proposed.json(), 'candidate'))
-        assert candidate['adoption']['status'] == 'candidate'
-        assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == base.id
-        assert case.segments.context('local', task_id, 'section_1', actor) == original_section
-        conversations.finish_turn(pending_turn, 'completed')
-
-        _, command = start_turn('请采用说明书第 3 页的型号，只修订第 1 段。')
+        turn, command = start_turn('请根据这页说明书修改第1段并保存。')
         assert review({**command, 'base_version_id': 'stale-version'}).status_code == 409
         assert review({**command, 'knowledge_evidence': [{'locator': '第4页'}]}).status_code == 409
         saved = review(command)
@@ -168,40 +161,63 @@ def test_fixed_manual_page_revises_one_section_on_existing_timeline(tmp_path, mo
         attached, = reviewed['knowledge_evidence']
         assert (attached['object_id'], attached['version_or_identity'], attached['locator']) == ('manual-zx', '1', '第3页')
         assert 'ZX-401' not in saved.text and 'qa-only.pdf' not in saved.text
-        assert submit({**command, 'request_id': str(uuid4())}, reviewed, 'apply').status_code == 409
-        sources.set_knowledge_item_use_state(manual_workspace, 'manual-zx', 'reference_only')
-        assert submit(command, reviewed, 'apply').status_code == 409
+        assert submit(command, reviewed, 'apply').status_code == 403
+        assert submit({**command, 'request_id': str(uuid4())}, reviewed, 'candidate').status_code == 409
         sources.set_knowledge_item_use_state(manual_workspace, 'manual-zx', 'excluded')
         assert review(command).json() == reviewed
-        assert submit(command, reviewed, 'apply').status_code == 409
-        assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == base.id
+        assert submit(command, reviewed, 'candidate').status_code == 409
+        assert repo.job_records.list_job_runs('local', task_id) == before
         sources.set_knowledge_item_use_state(manual_workspace, 'manual-zx', 'available')
 
-        receipt = settle_queued(submit(command, reviewed, 'apply'))
-        final = repo.timeline_records.get_timeline_version('local', receipt['adoption']['current_timeline_version_id'])
-        assert receipt['adoption']['status'] == 'current'
+        receipt = settle_queued(submit(command, reviewed, 'candidate'))
+        assert receipt['adoption']['status'] == 'candidate'
+        assert receipt['section_id'] == 'section_1'
+        assert receipt['result']['text'] == replacement
         assert receipt['knowledge_evidence'] == receipt['result']['knowledge_evidence'] == [attached]
-        assert final.parent_version_id == base.id and final.sequence == base.sequence + 1
+        assert client.get(receipt['result']['video']['url']).status_code == 200
+        jobs = repo.job_records.list_job_runs('local', task_id)
+        assert submit(command, reviewed, 'candidate').json() == receipt
+        assert submit(command, reviewed, 'apply').status_code == 409
+        assert repo.job_records.list_job_runs('local', task_id) == jobs
+        conversations.finish_turn(turn, 'completed')
+
+        turn, english = start_turn('Please revise section 1 using this manual page and save the change.')
+        english_review = review(english).json()
+        assert submit(english, english_review, 'apply').status_code == 403
+        second = settle_queued(submit(english, english_review, 'candidate'))
+        assert second['adoption']['status'] == 'candidate' and second['job_id'] != receipt['job_id']
+        assert second['result']['knowledge_evidence'] == [attached]
+        conversations.finish_turn(turn, 'completed')
+
+        assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == base.id
         assert repo.timeline_records.get_timeline_version('local', base.id) == base
         assert repo.plan_records.get_creation_plan('local', task.plan_id) == original_plan
         assert repo.script_records.get_creation_task_script('local', case.script_id) == original_script
-        target, other = final.snapshot['montage']['cues']
-        assert target['text'] == replacement and other['text'] == base.snapshot['montage']['cues'][1]['text']
-        assert case.segments.context('local', task_id, 'section_2', actor)['audio'] == original_other['audio']
-        operations = repo.edit_records.list_edit_operations('local', task_id)
-        operation, = operations
-        assert (operation.operation_type, operation.result_version_id) == ('ReviseScriptSection', final.id)
-        assert operation.payload['after_publication'] == receipt['result']['segment_version']
+        assert case.segments.context('local', task_id, 'section_1', actor) == original_section
+        assert case.segments.context('local', task_id, 'section_2', actor) == original_other
+        assert repo.edit_records.list_edit_operations('local', task_id) == []
 
-        sources_url = task_root + '/segments/section_1/sources'
-        page, = [item for item in client.get(sources_url).json()['items'] if item['binding'].get('locator')]
-        assert page['binding'] == attached and page['text'] == '型号 ZX-410，仅适用于干燥环境。'
-        assert submit(command, reviewed, 'apply').json() == receipt
+        sources_url = '/api/assistant/knowledge-references/' + attached['object_id']
+        params = {'version': attached['version_or_identity'], 'locator': attached['locator']}
+        source_read = client.get(sources_url, params=params)
+        assert source_read.status_code == 200, source_read.text
+        page, = source_read.json()['sections']
+        assert page['locator'] == '第3页' and page['text'] == '型号 ZX-410，仅适用于干燥环境。'
+
+        _, pending = start_turn('按该页准备第 1 段的修订候选。')
+        pending_review = review(pending).json()
+        jobs = repo.job_records.list_job_runs('local', task_id)
         sources.revoke_knowledge_grant(manual_workspace, 'manual-zx', grant.id, user_id=member)
-        assert submit(command, reviewed, 'apply').json() == receipt
-        withheld, = [item for item in client.get(sources_url).json()['items'] if item['binding'].get('locator')]
-        assert withheld['status'] == 'unavailable' and 'text' not in withheld
-        assert repo.edit_records.list_edit_operations('local', task_id) == operations
+        assert client.get(sources_url, params=params).status_code == 404
+        assert submit(pending, pending_review, 'candidate').status_code == 409
+        assert review(pending).json() == pending_review
+        assert client.get(task_root + '/segment-requests/' + receipt['request_id']).json() == receipt
+        sources.grant_knowledge_item(manual_workspace, 'manual-zx', 'local', user_id=member)
+        advanced = replace(base, id='newer_timeline', parent_version_id=base.id, sequence=base.sequence + 1)
+        repo.timeline_records.create_timeline_version(advanced, expected_current_version_id=base.id)
+        expired = submit(pending, pending_review, 'candidate')
+        assert expired.status_code == 409 and '基础版本已变化' in expired.json()['detail']
+        assert repo.job_records.list_job_runs('local', task_id) == jobs
     finally:
         client.close()
         case.scheduler.close()
