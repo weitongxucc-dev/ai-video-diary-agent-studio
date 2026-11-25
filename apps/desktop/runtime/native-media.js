@@ -2,77 +2,14 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { downloadCreationTaskOutput: defaultDownloadOutput, downloadSelectedSubtitles: defaultDownloadSubtitles, SUBTITLE_RESPONSE_TIMEOUT_MS } = require('./media-downloads');
+const { createTrustedWindowContext } = require('./trusted-window-context');
 
 function createNativeMedia({ showSaveDialog, getWindow, webOrigin, getMediaDirectory, getApiEndpoint, importMaterials, pickMaterialSources, recordLifecycle, downloadCreationTaskOutput = defaultDownloadOutput, downloadSelectedSubtitles = defaultDownloadSubtitles }) {
   const saveSourceError = '保存来源已失效，请返回当前应用窗口后重试。';
-
-  function trustedFrameIdentity(frame) {
-    // Electron frames can detach between native property reads during navigation.
-    try {
-      if (!frame || frame.isDestroyed() || frame.detached
-          || frame.origin !== webOrigin || new URL(frame.url).origin !== webOrigin) return null;
-      const identity = { processId: frame.processId, routingId: frame.routingId, frameTreeNodeId: frame.frameTreeNodeId };
-      return Object.values(identity).every(Number.isInteger) ? identity : null;
-    } catch {
-      return null;
-    }
-  }
-
-  function sameFrame(left, right) {
-    return left.processId === right.processId && left.routingId === right.routingId
-      && left.frameTreeNodeId === right.frameTreeNodeId;
-  }
-
-  function currentSaveWindow() {
-    const window = getWindow();
-    if (!window || window.isDestroyed()) return null;
-    const contents = window.webContents;
-    if (contents.isDestroyed()) return null;
-    const frame = trustedFrameIdentity(contents.mainFrame);
-    return frame ? { window, contents, frame } : null;
-  }
-
-  function checkSaveSender(event) {
-    if (!event) return false;
-    const current = currentSaveWindow();
-    const senderFrame = trustedFrameIdentity(event.senderFrame);
-    return Boolean(current && senderFrame && event.sender === current.contents
-      && sameFrame(senderFrame, current.frame));
-  }
+  const trustedWindow = createTrustedWindowContext({ getWindow, webOrigin, getApiEndpoint });
 
   function captureSaveContext() {
-    const initial = currentSaveWindow();
-    if (!initial) return null;
-    const session = initial.contents.session;
-    let navigated = false;
-    const onNavigation = (details) => {
-      if (details.isMainFrame && !details.isSameDocument) navigated = true;
-    };
-    initial.contents.on('did-start-navigation', onNavigation);
-    function assertCurrent() {
-      const current = currentSaveWindow();
-      if (navigated || !current || current.window !== initial.window
-          || current.contents !== initial.contents || !sameFrame(current.frame, initial.frame)) {
-        throw new Error(saveSourceError);
-      }
-    }
-    return {
-      assertCurrent,
-      fetchPath(requestPath, { accept, signal }) {
-        assertCurrent();
-        const { port, state } = getApiEndpoint();
-        if (!Number.isInteger(port) || port <= 0 || state !== 'ready') {
-          throw new Error('本地视频服务尚未就绪，请等待服务恢复后重试。');
-        }
-        const url = new URL(requestPath, webOrigin);
-        if (url.origin !== webOrigin) throw new Error(saveSourceError);
-        return session.fetch(url.href, {
-          method: 'GET', credentials: 'include', redirect: 'error', cache: 'no-store',
-          headers: { Accept: accept }, ...(signal ? { signal } : {}),
-        });
-      },
-      dispose() { initial.contents.removeListener('did-start-navigation', onNavigation); },
-    };
+    return trustedWindow.capture({ errorMessage: saveSourceError });
   }
 
   async function saveRenderedVideo(taskId, expectedVersionId) {
@@ -214,7 +151,7 @@ function createNativeMedia({ showSaveDialog, getWindow, webOrigin, getMediaDirec
     }
   }
 
-  return { saveRenderedVideo, saveCoverImage, saveSubtitleFile, checkSaveSender, importSelectedMaterials };
+  return { saveRenderedVideo, saveCoverImage, saveSubtitleFile, checkSaveSender: trustedWindow.checkSender, importSelectedMaterials };
 }
 
 module.exports = { createNativeMedia };

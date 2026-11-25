@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveRenderedVideo: (taskId, expectedVersionId) => ipcRenderer.invoke('save-rendered-video', taskId, expectedVersionId),
   saveCoverImage: (taskId, coverId) => ipcRenderer.invoke('save-cover-image', taskId, coverId),
   saveSubtitleFile: (selection) => ipcRenderer.invoke('save-subtitle-file', selection),
+  confirmSectionCandidate: (taskId, proposalId) => ipcRenderer.invoke('confirm-section-candidate', taskId, proposalId),
+  querySectionCandidateConfirmation: (taskId, proposalId) => ipcRenderer.invoke('query-section-candidate-confirmation', taskId, proposalId),
 
   // Help
   onOpenHelp: (callback) => ipcRenderer.on('open-help', callback),

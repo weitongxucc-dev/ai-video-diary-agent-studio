@@ -1,5 +1,5 @@
 // Public renderer channels remain stable; native modules own validation and I/O.
-function registerDesktopIpc({ ipcMain, services, files, media, buildIdentity, getVersion, quit, checkForUpdates, companion, getWindow, webOrigin }) {
+function registerDesktopIpc({ ipcMain, services, files, media, sectionCandidateConfirmation, buildIdentity, getVersion, quit, checkForUpdates, companion, getWindow, webOrigin }) {
   if (companion) {
     for (const [channel, action] of Object.entries({
       'companion-status': () => companion.status(),
@@ -31,6 +31,10 @@ function registerDesktopIpc({ ipcMain, services, files, media, buildIdentity, ge
     if (!media.checkSaveSender(event)) return rejectedSave();
     return media.saveSubtitleFile(selection);
   });
+  if (sectionCandidateConfirmation) {
+    ipcMain.handle('confirm-section-candidate', (event, ...location) => sectionCandidateConfirmation.confirm(event, ...location));
+    ipcMain.handle('query-section-candidate-confirmation', (event, ...location) => sectionCandidateConfirmation.query(event, ...location));
+  }
   // The identity is forwarded; renderer paths never choose import source/destination.
   ipcMain.handle('import-materials', (_event, identity = {}) => media.importSelectedMaterials(identity));
   ipcMain.handle('open-path', (_event, filePath) => files.openPath(filePath));

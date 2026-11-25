@@ -2360,7 +2360,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           onPreviewImage={artifact=>void previewExactEdit({operation_type:'EditGraphicOverlay',overlay_action:'add',graphic_overlay:{kind:'image',
             id:`native-${crypto.randomUUID()}`,source_ref:artifact.source_ref,name:'工作图片',start_seconds:0,
             end_seconds:Math.min(3,workspace.montage?.duration_seconds ?? 0),x:0.5,y:0.5,width:0.4,opacity:1}})}/>
-        {task.confirmed_script_id && ["narration", "montage", "review"].includes(activeView) ? <><Button variant="ghost" aria-haspopup="dialog" aria-expanded={segmentsOpen} onClick={()=>setSegmentsOpen(true)}>分段产物与修改</Button><HomeCardDialog kind="detail" title="分段产物与修改" open={segmentsOpen} onClose={()=>setSegmentsOpen(false)}><SegmentProductionPanel key={task.id} taskId={task.id}/></HomeCardDialog></> : null}
+        {task.confirmed_script_id && ["narration", "montage", "review"].includes(activeView) ? <><Button variant="ghost" aria-haspopup="dialog" aria-expanded={segmentsOpen} onClick={()=>setSegmentsOpen(true)}>分段产物与修改</Button><HomeCardDialog kind="detail" title="分段产物与修改" open={segmentsOpen} onClose={()=>setSegmentsOpen(false)}><SegmentProductionPanel key={task.id} taskId={task.id}
+          onAdopted={()=>refresh(true,next=>currentTaskId.current===task.id && next.task.id===task.id)}/></HomeCardDialog></> : null}
         {activeView === "review" ? <div className={styles.reviewTabs} role="tablist" aria-label="成片工作区">
           {([ ["prepare", "制作准备"], ["result", "成片检查"] ] as const).map(([pane, label]) => <button key={pane} id={`review-${pane}-${task.id}`} role="tab" disabled={pane === "result" && !hasReviewOutput} aria-selected={reviewPane === pane} aria-controls={`review-panel-${pane}-${task.id}`} tabIndex={reviewPane === pane ? 0 : -1} onKeyDown={reviewTabKey} onClick={() => setReviewChoice({ taskId: task.id, pane })} type="button">{label}</button>)}
         </div> : null}

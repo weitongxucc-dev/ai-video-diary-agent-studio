@@ -41,6 +41,11 @@ export function isLocalNativeMediaRequest(method: string, pathname: string): boo
     && NATIVE_MEDIA_PATHS.some((pattern) => pattern.test(pathname));
 }
 
+export function isSectionCandidateConfirmationRead(method: string, pathname: string): boolean {
+  return method === "GET"
+    && /^\/api\/creation-tasks\/task_[a-zA-Z0-9_-]{1,80}\/edits\/proposal_[a-zA-Z0-9_-]{1,120}\/section-candidate-confirmation$/.test(pathname);
+}
+
 export function localNativeMediaHeaders(
   headers: Headers,
   cookieToken: string | null | undefined,
@@ -48,7 +53,8 @@ export function localNativeMediaHeaders(
   pathname: string,
 ): Headers {
   const forwarded = new Headers(headers);
-  if (!isLocalNativeMediaRequest(method, pathname) || forwarded.has(LOCAL_MEMBER_TOKEN_HEADER)) {
+  if (forwarded.has(LOCAL_MEMBER_TOKEN_HEADER)
+    || !(isLocalNativeMediaRequest(method, pathname) || isSectionCandidateConfirmationRead(method, pathname))) {
     return forwarded;
   }
   const token = cookieToken?.trim();
