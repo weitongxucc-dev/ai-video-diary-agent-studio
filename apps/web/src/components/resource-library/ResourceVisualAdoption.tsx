@@ -12,7 +12,11 @@ import styles from "../EditorResourceLibraryPanel.module.css";
 async function readResourceTemplate(resource: CatalogResource) {
   const { template_id, template_version } = resource.runtime_requirements ?? {};
   if (typeof template_id !== "string" || typeof template_version !== "number") throw new Error("资源缺少固定模板版本");
-  return readVideoTemplateVersion(template_id, template_version);
+  const template = await readVideoTemplateVersion(template_id, template_version);
+  if (template.id !== template_id || template.version !== template_version || !template.settings.visual) {
+    throw new Error("无法读取此资源的固定动画版本，请重新打开资源目录。");
+  }
+  return template;
 }
 
 export function ResourceVisualPreview({ resource }: { resource: CatalogResource }) {
@@ -34,11 +38,12 @@ export function ResourceVisualAdoption({ taskId, resource, playheadMs, onTaskUpd
 }) {
   const isSticker = resource.resource_type === "svg_sticker";
   const defaults = resource.runtime_requirements ?? {};
+  const isFullFrameTransition = defaults.adapter === "original-css-overlay";
   const [workspace, setWorkspace] = useState<CreationTaskWorkspace | null>(null);
   const [template, setTemplate] = useState<VideoTemplate | null>(null);
   const [start, setStart] = useState(Math.max(0, playheadMs / 1000));
   const [stickerDuration, setStickerDuration] = useState(resource.preview.duration_seconds ?? 3);
-  const [width, setWidth] = useState(typeof defaults.width === "number" ? defaults.width : 1);
+  const [width, setWidth] = useState(typeof defaults.width === "number" ? defaults.width : isFullFrameTransition ? 1 : .8);
   const [x, setX] = useState(typeof defaults.x === "number" ? defaults.x : .5);
   const [y, setY] = useState(typeof defaults.y === "number" ? defaults.y : .5);
   const [preview, setPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
@@ -71,12 +76,16 @@ export function ResourceVisualAdoption({ taskId, resource, playheadMs, onTaskUpd
         setWorkspace(latest);
         throw new Error("作品已更新，请核对位置后重新准备。");
       }
-      const [w, h] = (workspace.montage?.aspect_ratio ?? workspace.plan.aspect_ratio).split(":").map(Number);
+      let overlayDefinition = definition;
+      if (isFullFrameTransition) {
+        const [w, h] = (workspace.montage?.aspect_ratio ?? workspace.plan.aspect_ratio).split(":").map(Number);
+        overlayDefinition = { ...definition, width: 384, height: Math.round(384 * h / w) };
+      }
       const response = await previewCreationTaskExactEdit(taskId, {
         operation_type: "EditGraphicOverlay", overlay_action: "add", graphic_overlay: {
           kind: "template", id: crypto.randomUUID(), name: `${resource.name} · v${resource.version}`,
           template_id: template.id, template_version: template.version,
-          definition: isSticker ? definition : { ...definition, width: 384, height: Math.round(384 * h / w) },
+          definition: overlayDefinition,
           start_seconds: start, end_seconds: start + span, x, y, width,
           opacity: 1, keyframes: [], z_index: 1000, animation_offset_seconds: 0,
         },
@@ -133,7 +142,9 @@ export function ResourceVisualAdoption({ taskId, resource, playheadMs, onTaskUpd
         <label>水平位置（%）<input type="number" min={0} max={100} value={Number((x * 100).toFixed(2))} onChange={event => setX(event.target.valueAsNumber / 100)} /></label>
         <label>垂直位置（%）<input type="number" min={0} max={100} value={Number((y * 100).toFixed(2))} onChange={event => setY(event.target.valueAsNumber / 100)} /></label>
         <p>贴纸保持原比例。位置表示贴纸中心，从画面左侧、顶部开始计算；采用后仍可在图文与动画中调整。</p>
-      </> : <p>原始信号故障动画持续 {span || "0.6"} 秒，覆盖画面；放在切点附近，原镜头与声音保留。</p>}
+      </> : isFullFrameTransition
+        ? <p>原始信号故障动画持续 {span || "0.6"} 秒，覆盖画面；放在切点附近，原镜头与声音保留。</p>
+        : definition ? <p>动画持续 {span} 秒，保持原比例。加入后可在图文与动画中调整位置与大小。</p> : null}
       {!valid && definition ? <p>{isSticker ? "请检查贴纸时长、位置和宽度，显示区间不能超出作品。" : `请选取能完整放下 ${span} 秒动画的位置。`}</p> : null}
       <button type="button" disabled={!valid} onClick={() => void prepare()}>{busy ? "正在准备…" : "准备采用"}</button>
     </fieldset> : null}

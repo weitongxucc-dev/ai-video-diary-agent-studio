@@ -1,3 +1,5 @@
+from hashlib import sha256
+
 from fastapi.testclient import TestClient
 
 from app.editing_resource_catalog import editing_resource_catalog, search_editing_resources
@@ -42,6 +44,23 @@ def test_template_items_expose_real_preview_and_provenance():
     assert all(item.preview.duration_seconds for item in templates)
     assert all(item.provenance and item.provenance[0].revision for item in templates)
     assert all(item.runtime_requirements["engine"] == "openfilm-html-v1" for item in templates)
+    assert all(item.runtime_requirements["operation_type"] == "EditGraphicOverlay" for item in templates)
+
+    card = next(item for item in templates if item.id == "template:lower-corporate")
+    template_id = card.runtime_requirements["template_id"]
+    version = card.runtime_requirements["template_version"]
+    assert (template_id, version) == ("builtin_visual_lower-corporate", 1)
+    response = client.get(f"/api/video-templates/{template_id}", params={"version": version})
+    assert response.status_code == 200
+    template = response.json()
+    assert (template["id"], template["version"], template["name"]) == (template_id, version, card.name)
+    visual = template["settings"]["visual"]
+    assert (visual["width"], visual["height"], visual["duration_seconds"]) == (
+        card.preview.width, card.preview.height, card.preview.duration_seconds,
+    ) == (1200, 300, 4)
+    source = card.provenance[0]
+    assert visual["provenance"][0]["path"] == source.path
+    assert sha256(visual["source"].encode()).hexdigest() == source.source_sha256
 
 
 def test_resource_catalog_route_supports_filtering_and_reports_read_only_boundary():

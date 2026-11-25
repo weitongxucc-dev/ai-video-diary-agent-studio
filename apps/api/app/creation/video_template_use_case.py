@@ -36,7 +36,8 @@ class VideoTemplateUseCase:
     def __init__(self, production: ProductionRepository):
         self.production = production
 
-    def builtin_templates(self, workspace_id: str) -> list[VideoTemplate]:
+    @staticmethod
+    def builtin_templates(workspace_id: str) -> list[VideoTemplate]:
         structures = [VideoTemplate(
             id=f"builtin_{item.template_id}", workspace_id=workspace_id, version=1,
             name=item.name, origin="built_in",

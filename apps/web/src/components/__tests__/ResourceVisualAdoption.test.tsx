@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
-import { ResourceVisualAdoption } from "../resource-library/ResourceVisualAdoption";
+import { ResourceVisualAdoption, ResourceVisualPreview } from "../resource-library/ResourceVisualAdoption";
 import type { CatalogResource } from "../EditorResourceLibraryPanel";
 
 const api = vi.hoisted(() => ({ read: vi.fn(), template: vi.fn(), preview: vi.fn(), resolve: vi.fn(), confirm: vi.fn(), undo: vi.fn() }));
@@ -8,9 +8,15 @@ vi.mock("@/lib/api/creation-tasks", () => ({ getCreationTaskWorkspace: api.read,
 vi.mock("@/lib/api/task-media", () => ({ resolveCreationTaskMediaResponse: api.resolve }));
 vi.mock("@/lib/video-template-api", () => ({ readVideoTemplateVersion: api.template }));
 vi.mock("../VisualTemplatePreview", () => ({ VisualTemplatePreview: () => null }));
-const resource: CatalogResource = { id: "openfilm:transition-glitch", category_id: "transitions", version: 2, name: "信号故障", status: "connected", resource_type: "css_transition", preview: { kind: "html" }, provenance: [], entrypoints: [], runtime_requirements: { engine: "openfilm-html-v1", template_id: "builtin_visual_openfilm-transition-glitch", template_version: 1 } };
+const resource: CatalogResource = { id: "openfilm:transition-glitch", category_id: "transitions", version: 2, name: "信号故障", status: "connected", resource_type: "css_transition", preview: { kind: "html" }, provenance: [], entrypoints: [], runtime_requirements: { engine: "openfilm-html-v1", adapter: "original-css-overlay", template_id: "builtin_visual_openfilm-transition-glitch", template_version: 1 } };
 const visual = { engine: "openfilm-html-v1", category: "reaction", width: 384, height: 216, duration_seconds: .6, source: "original-css-host", values: {}, bindings: [], dependencies: [], provenance: [{ path: "transition/glitch/overlay.css", source_sha256: "original-digest" }] };
 const workspace = { task: { current_timeline_version_id: "v1", timeline_sequence: 1 }, montage: { duration_seconds: 4, aspect_ratio: "9:16" } };
+const nameCard: CatalogResource = {
+  ...resource, id: "template:lower-corporate", category_id: "templates", version: 1, name: "人物名片·商务",
+  resource_type: "visual_template",
+  runtime_requirements: { engine: "openfilm-html-v1", template_id: "builtin_visual_lower-corporate", template_version: 1 },
+};
+const nameCardVisual = { ...visual, width: 1200, height: 300, duration_seconds: 4, source: "original-name-card" };
 beforeEach(() => {
   vi.resetAllMocks();
   api.read.mockResolvedValue(workspace);
@@ -56,6 +62,45 @@ it("requires a new preparation after the task head changes", async () => {
   api.read.mockResolvedValue({ ...workspace, task: { current_timeline_version_id: "v2", timeline_sequence: 2 } });
   fireEvent.click(screen.getByRole("button", { name: "准备采用" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("作品已更新");
+  expect(api.preview).not.toHaveBeenCalled();
+});
+
+it.each(["9:16", "16:9"])("uses the original name card dimensions and fixed template version on a %s timeline", async aspectRatio => {
+  api.read.mockResolvedValue({ ...workspace, montage: { ...workspace.montage, aspect_ratio: aspectRatio } });
+  api.template.mockResolvedValue({ id: "builtin_visual_lower-corporate", version: 1, settings: { visual: nameCardVisual } });
+  render(<ResourceVisualAdoption taskId="task" resource={nameCard} playheadMs={0} />);
+  const prepare = screen.getByRole("button", { name: "准备采用" });
+  await waitFor(() => expect(prepare).toBeEnabled());
+  expect(api.template).toHaveBeenCalledWith("builtin_visual_lower-corporate", 1);
+  expect(screen.getByText(/保持原比例/)).toBeInTheDocument();
+  fireEvent.click(prepare);
+  const confirm = await screen.findByRole("button", { name: "确认加入动画" });
+  expect(api.preview).toHaveBeenCalledWith("task", expect.objectContaining({
+    operation_type: "EditGraphicOverlay", overlay_action: "add",
+    graphic_overlay: expect.objectContaining({
+      template_id: "builtin_visual_lower-corporate", template_version: 1, definition: nameCardVisual,
+      start_seconds: 0, end_seconds: 4, width: .8,
+    }),
+  }), { draftOnly: true });
+  expect(api.confirm).not.toHaveBeenCalled();
+  fireEvent.click(confirm);
+  expect(await screen.findByRole("status")).toHaveTextContent("已加入动画图层");
+  expect(api.confirm).toHaveBeenCalledWith("task", "p1");
+});
+
+it("reports a missing fixed version in the catalog preview", async () => {
+  api.template.mockRejectedValue(new Error("模板版本不存在"));
+  render(<ResourceVisualPreview resource={nameCard} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("模板版本不存在");
+  expect(api.read).not.toHaveBeenCalled();
+});
+
+it("does not offer adoption when the read returns another template version", async () => {
+  api.template.mockResolvedValue({ id: "builtin_visual_lower-corporate", version: 2, settings: { visual: nameCardVisual } });
+  render(<ResourceVisualAdoption taskId="task" resource={nameCard} playheadMs={0} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("无法读取此资源的固定动画版本");
+  expect(screen.getByRole("button", { name: "准备采用" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "确认加入动画" })).not.toBeInTheDocument();
   expect(api.preview).not.toHaveBeenCalled();
 });
 
