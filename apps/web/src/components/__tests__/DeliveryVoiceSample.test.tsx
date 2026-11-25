@@ -107,13 +107,20 @@ it.each([true, false])("auditions the saved text after editing the manuscript lo
 });
 
 it("asks for a new selection when the chosen version becomes unavailable", async () => {
-  api.profiles.mockResolvedValueOnce({items:[{id:"studio", version:"v3", language:"zh-en", runnable:true, display_name:"演示声音"}]}).mockResolvedValue({items:[]});
+  const initial = {items:[{id:"studio", version:"v3", language:"zh-en", runnable:true, display_name:"演示声音"}]};
+  const catalog = deferred<typeof initial>();
+  api.profiles.mockReturnValueOnce(catalog.promise).mockResolvedValue({items:[]});
   const user = userEvent.setup();
   const prepare = vi.fn();
   render(<BilingualDeliveryControls pending={false} onPrepare={prepare}/>);
   await user.click(screen.getByText("分别指定中英文声音"));
-  await user.click(await screen.findByRole("combobox",{name:"英文版声音"}));
-  await user.click(screen.getByRole("option",{name:"演示声音 · v3"}));
+  await screen.findByText("正在读取声音…");
+  const voice = screen.getByRole("combobox",{name:"英文版声音"});
+  expect(voice).toBeDisabled();
+  await act(async () => catalog.resolve(initial));
+  expect(voice).toBeEnabled();
+  await user.click(voice);
+  await user.click(await screen.findByRole("option",{name:"演示声音 · v3"}));
   await user.click(screen.getByRole("button",{name:"刷新声音列表"}));
   expect(await screen.findByText("英文版声音已不可用，请重新选择声音。")).toBeVisible();
   expect(screen.getByRole("button",{name:"准备中文版和英文版"})).toBeDisabled();

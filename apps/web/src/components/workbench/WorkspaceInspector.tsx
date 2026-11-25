@@ -23,8 +23,13 @@ export function WorkspaceInspector({ title, open, onClose, children, manageHref,
     }
     const target = returnFocus.current;
     returnFocus.current = null;
-    if (!target) return;
+    if (!target?.isConnected) return;
+    if (!target.closest("[hidden]")) {
+      target.focus({ preventScroll: true });
+      return;
+    }
     // The resource list portal finishes unhiding in its own layout effect.
+    if (!opener) return;
     const frame = requestAnimationFrame(() => {
       if (target.isConnected && !target.closest("[hidden]")) target.focus({ preventScroll: true });
     });

@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { StrictMode } from "react";
+import { StrictMode, useLayoutEffect, useRef, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import { WorkspacePageContext, type WorkspacePageSlot } from "../workbench/context";
 import { useWorkspaceViewState } from "../workbench/context";
@@ -85,4 +86,28 @@ it("closes the dock without losing drafts, releases hidden media and returns key
   expect(pause).toHaveBeenCalled();expect(media).not.toHaveAttribute("src");expect(trigger).toHaveFocus();
   view.rerender(content(true));
   expect(screen.getByLabelText("未保存说明")).toHaveValue("保留的草稿");
+});
+
+it("returns focus to the resource row once its portal list becomes visible", async () => {
+  function ResourceList({ hidden, opener }: { hidden: boolean; opener: RefObject<HTMLButtonElement | null> }) {
+    const region = useRef<HTMLDivElement>(null);
+    useLayoutEffect(() => { region.current!.hidden = hidden; }, [hidden]);
+    return createPortal(<div ref={region}><button ref={opener}>声音档案</button></div>, document.body);
+  }
+  function ResourceDock({ open }: { open: boolean }) {
+    const opener = useRef<HTMLButtonElement>(null);
+    return <>
+      <WorkspaceInspector title="声音详情" open={open} onClose={vi.fn()} opener={opener}>声音 v1</WorkspaceInspector>
+      <ResourceList hidden={open} opener={opener} />
+    </>;
+  }
+  const view = render(<ResourceDock open={false} />);
+  const row = screen.getByRole("button", { name: "声音档案" });
+  row.focus();
+  view.rerender(<ResourceDock open />);
+  const heading = screen.getByRole("heading", { name: "声音详情" });
+  expect(heading).toHaveFocus();
+  view.rerender(<ResourceDock open={false} />);
+  expect(row).toBeVisible();
+  await waitFor(() => expect(row).toHaveFocus());
 });
