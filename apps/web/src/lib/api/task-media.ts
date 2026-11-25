@@ -85,6 +85,63 @@ export async function readCreationTaskGraphicSource(taskId: string, artifactId: 
 export function getCreationTaskMediaJob(taskId: string, jobId: string, signal?: AbortSignal): Promise<TaskMediaJob> {
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/media-jobs/${encodeURIComponent(jobId)}`, { signal });
 }
+export type SourceClipCutInput = {
+    request_id: string;
+    base_version_id: string;
+    asset_id: string;
+    start_seconds: number;
+    end_seconds: number;
+    preparation_request_id: string;
+};
+export type SourceClipCutResult = TaskMediaResultMap["media_output"] & { output_urls: string[] };
+
+function taskMediaPath(taskId: string, jobId?: string) {
+    const collection = `/api/creation-tasks/${encodeURIComponent(taskId)}/media-jobs`;
+    return jobId === undefined ? collection : `${collection}/${encodeURIComponent(jobId)}`;
+}
+
+export function requireSourceClipCutJob(taskId: string, job: TaskMediaJob, baseVersionId: string, jobId = job.job_id) {
+    if (!jobId || job.job_id !== jobId || job.result_url !== taskMediaPath(taskId, jobId)
+        || job.operation !== "ffmpeg_execution" || job.result_kind !== "media_output"
+        || job.base_version_id !== baseVersionId) {
+        throw new Error("截取作业回执与原作品或版本不一致。");
+    }
+}
+
+export async function submitSourceClipCut(taskId: string, input: SourceClipCutInput): Promise<TaskMediaJob> {
+    if (!/^[0-9a-f]{32}$/.test(input.preparation_request_id)) throw new Error("请选择已核对的截取准备回执。");
+    const job = await creationPlanRequest<TaskMediaJob>(taskMediaPath(taskId), {
+        method: "POST", body: JSON.stringify(input),
+    });
+    requireSourceClipCutJob(taskId, job, input.base_version_id);
+    return job;
+}
+
+export function retryCreationTaskMediaJob(taskId: string, jobId: string): Promise<TaskMediaJob> {
+    return creationPlanRequest(`${taskMediaPath(taskId, jobId)}/retry`, { method: "POST" });
+}
+
+export function requireSourceClipCutResult(taskId: string, jobId: string, input: SourceClipCutInput,
+    result: TaskMediaResultMap["media_output"]): SourceClipCutResult {
+    const saved = result as SourceClipCutResult;
+    if (saved.request_id !== input.request_id || saved.base_version_id !== input.base_version_id
+        || !saved.timeline_version_id || saved.timeline_version_id === input.base_version_id
+        || !Array.isArray(saved.output_refs) || saved.output_refs.length !== 1 || !saved.output_refs[0]
+        || !Array.isArray(saved.output_urls) || saved.output_urls.length !== 1
+        || saved.output_urls[0] !== `${taskMediaPath(taskId, jobId)}/outputs/1`) {
+        throw new Error("截取回执缺少与原请求匹配的版本或 MP4 产物。");
+    }
+    return saved;
+}
+
+export async function readSourceClipCutOutput(taskId: string, jobId: string, signal: AbortSignal) {
+    const response = await authorizedFetch(`${API_BASE}${taskMediaPath(taskId, jobId)}/outputs/1`, {
+        signal, cache: "no-store",
+    });
+    if (!response.ok) throw new CreationPlanApiError(response.status, null, "原截取文件无法读取，请核对作业和作品版本。");
+    return response.blob();
+}
+
 export function cancelCreationTaskMediaJob(taskId: string, jobId: string): Promise<TaskMediaJob> {
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/media-jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST", body: JSON.stringify({}) });
 }
@@ -113,7 +170,7 @@ export function taskMediaJobLabel(job: TaskMediaJob): string {
         return reason ? `等待处理：${reason}` : "已安排，等待设备空闲";
     }
     if (job.status === "running")
-        return job.result_kind === "waveform" ? "正在读取波形…" : job.result_kind === "media_output" ? "正在输出成片…" : ["audio_source", "recording"].includes(job.result_kind) ? "正在处理音频…" : "正在生成预览…";
+        return job.result_kind === "waveform" ? "正在读取波形…" : job.result_kind === "media_output" ? "正在处理媒体输出…" : ["audio_source", "recording"].includes(job.result_kind) ? "正在处理音频…" : "正在生成预览…";
     if (job.status === "interrupted")
         return "预览已中断，等待恢复";
     if (job.status === "cancelled")
@@ -187,6 +244,10 @@ export function listCreationTaskMediaJobs(taskId: string, cursor: string | null 
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/media-jobs?${query}`, { signal });
 }
 export function taskMediaJobMatchesContext(job: TaskMediaJob, baseVersionId: string | null, selectedRefs: string[]): boolean {
+    if (job.operation === "ffmpeg_execution" && job.result_kind === "media_output" && job.status === "succeeded" && job.result) {
+        // Publication advances the formal head to this job's recorded child.
+        return (job.result as TaskMediaResultMap["media_output"]).timeline_version_id === baseVersionId;
+    }
     if (job.base_version_id !== baseVersionId || !["queued", "running", "interrupted", "succeeded"].includes(job.status))
         return false;
     if (job.result_kind === "edit_preview") {

@@ -1,0 +1,48 @@
+.form,
+.form label,
+.fields {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.form label {
+  gap: var(--space-xs);
+}
+
+.form p {
+  margin: 0;
+}
+
+.fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form input {
+  min-inline-size: 0;
+  inline-size: 100%;
+  min-block-size: var(--control-height);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-sm);
+  color: var(--text-1);
+  background: var(--surface-1);
+  font: inherit;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.video {
+  inline-size: 100%;
+  block-size: auto;
+  max-block-size: 45dvh;
+  object-fit: contain;
+  background: var(--surface-2);
+}
+
+.error {
+  color: var(--danger);
+}
