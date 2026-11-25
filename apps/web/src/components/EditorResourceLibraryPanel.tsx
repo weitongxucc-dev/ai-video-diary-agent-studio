@@ -5,6 +5,7 @@ import { AudioLines, Film, Grid2X2, Music2, SlidersHorizontal, Sparkles, Sticker
 import styles from "./EditorResourceLibraryPanel.module.css";
 import { readPreflightDraftScope } from "@/lib/preflight-draft";
 import { ResourceVisualPreview } from "./resource-library/ResourceVisualAdoption";
+import { SkillCatalogCard } from "./resource-library/SkillCatalogCard";
 
 export type EditorResourceCategory = "materials" | "skills" | "stickers" | "filters" | "effects" | "transitions" | "templates" | "subtitles" | "text" | "voice" | "music" | "sfx";
 
@@ -14,7 +15,7 @@ type Category = { id: EditorResourceCategory; label: string; description: string
 
 export const editorResourceCategories: Category[] = [
   { id: "materials", label: "素材", description: "工作区已接入的图片、视频和音频", state: "available", nextStep: "导入素材后即可预览和采用", icon: Film },
-  { id: "skills", label: "技能", description: "已审核并随当前版本发布的创作技能", state: "available", nextStep: "通过曜核助手读取技能，并按当前任务工具边界执行", icon: Sparkles },
+  { id: "skills", label: "技能", description: "查看创作方法、来源和接入状态", state: "available", nextStep: "当前目录没有技能记录。", icon: Sparkles },
   { id: "stickers", label: "贴纸", description: "叠加到画面的贴纸资源", state: "available", nextStep: "通过当前任务的编辑提案采用", icon: Sticker },
   { id: "filters", label: "滤镜", description: "颜色与画面风格预设", state: "planned", nextStep: "滤镜应用能力计划中，当前不能采用", icon: SlidersHorizontal },
   { id: "effects", label: "特效", description: "画面动效与遮罩效果", state: "available", nextStep: "通过当前任务的编辑提案采用", icon: Sparkles },
@@ -140,9 +141,9 @@ export function EditorResourceLibraryPanel({
         {categoryId === "materials" ? materials : <>
         <div className={styles.toolbar}>
           <label className={styles.search}><span>搜索{category.label}</span><input aria-label={`搜索${category.label}`} type="search" placeholder={`搜索${category.label}`} value={query} disabled={scope === undefined} onChange={event => changeFilters({ query: event.target.value, filter })} /></label>
-          <select aria-label="资源类型筛选" value={filter} disabled={scope === undefined} onChange={event => changeFilters({ query, filter: event.target.value })}><option value="all">全部类型</option><option value="video">视频</option><option value="image">图片</option><option value="audio">音频</option></select>
+          {categoryId !== "skills" ? <select aria-label="资源类型筛选" value={filter} disabled={scope === undefined} onChange={event => changeFilters({ query, filter: event.target.value })}><option value="all">全部类型</option><option value="video">视频</option><option value="image">图片</option><option value="audio">音频</option></select> : null}
         </div>
-        {catalogError ? <div className={styles.catalogError} role="alert"><p>{catalogError}</p><button type="button" onClick={() => setCatalogRetry(value => value + 1)}>重新读取资源目录</button></div> : catalogLoading ? <p>正在读取资源目录…</p> : catalogResources.length ? <CatalogResourceResults key={categoryId} resources={catalogResources.filter(resource => (!query.trim() || resource.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && (filter === "all" || resource.preview.kind === filter))} renderResourceAction={renderResourceAction} /> : <UnavailableCategory category={category} />}
+        {catalogError ? <div className={styles.catalogError} role="alert"><p>{catalogError}</p><button type="button" onClick={() => setCatalogRetry(value => value + 1)}>重新读取资源目录</button></div> : catalogLoading ? <p>正在读取资源目录…</p> : catalogResources.length ? <CatalogResourceResults key={categoryId} resources={catalogResources.filter(resource => (!query.trim() || resource.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && (categoryId === "skills" || filter === "all" || resource.preview.kind === filter))} renderResourceAction={renderResourceAction} /> : <UnavailableCategory category={category} />}
         </>}
       </div>
     </div>
@@ -156,6 +157,7 @@ function CatalogResourceResults({ resources, renderResourceAction }: { resources
     {!resources.length ? <p>没有匹配的资源，请调整搜索或类型筛选。</p> : null}
     {resources.map(resource => {
       const key = `${resource.id}:${resource.version}`;
+      if (resource.resource_type === "skill") return <SkillCatalogCard key={key} resource={resource} />;
       const open = previewId === key;
       const preview = resource.preview.thumbnail_ref;
       const canAddAudio = resource.status === "connected" && resource.preview.kind === "audio" && resource.runtime_requirements?.engine === "EditAudioTimeline";
@@ -169,7 +171,7 @@ function CatalogResourceResults({ resources, renderResourceAction }: { resources
           {canAddAudio || canAddVisual ? renderResourceAction
             ? <button type="button" aria-expanded={adoptingId === key} onClick={() => setAdoptingId(adoptingId === key ? null : key)}>添加到作品</button>
             : <span>{canAddVisual ? "打开一个作品后可添加到画面" : "打开一个作品后可添加到音轨"}</span>
-            : <span>{resource.status === "catalog_only" ? "可浏览，采用能力尚未接通" : resource.status === "planned" ? "计划中，暂不可采用" : resource.status === "failed" ? "资源失败，暂不可采用" : resource.resource_type === "skill" ? "由助手读取并按当前任务使用" : "在作品对应的编辑工具中使用"}</span>}
+            : <span>{resource.status === "catalog_only" ? "可浏览，采用能力尚未接通" : resource.status === "planned" ? "计划中，暂不可采用" : resource.status === "failed" ? "资源失败，暂不可采用" : "在作品对应的编辑工具中使用"}</span>}
         </div>
         {open ? <div className={styles.catalogPreview} role="region" aria-label={`${resource.name}资源预览`}>
           {canAddVisual && resource.preview.kind === "html" ? <ResourceVisualPreview resource={resource} /> : null}
