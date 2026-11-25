@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Workbench } from "../workbench/Workbench";
+import DeviceStatusPage from "@/app/device-status/page";
 import { WorkbenchTargetProvider } from "../workbench/WorkbenchTarget";
 import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import { useWorkspacePage, useWorkspaceViewState, WorkspacePanelContext } from "../workbench/context";
@@ -11,10 +12,12 @@ import { AppShell, type AppShellProps } from "../AppShell";
 import type { HomeCommandComposerProps } from "../HomeCommandComposer";
 import type { CreationTask } from "@/lib/types";
 
-const navigation = vi.hoisted(() => ({ path: "/tasks/a", search: "", push: vi.fn() }));
+const navigation = vi.hoisted(() => ({ path: "/tasks/a", search: "", push: vi.fn(), replace: vi.fn() }));
+const readSavedProfile = vi.hoisted(() => vi.fn());
 const composerMount = vi.hoisted(() => vi.fn());
 const workDetailsOpened = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ usePathname: () => navigation.path, useSearchParams: () => new URLSearchParams(navigation.search), useRouter: () => ({ push: navigation.push }) }));
+vi.mock("next/navigation", () => ({ usePathname: () => navigation.path, useSearchParams: () => new URLSearchParams(navigation.search), useRouter: () => ({ push: navigation.push, replace: navigation.replace }) }));
+vi.mock("@/lib/api/device-preparation", () => ({ getSavedDeviceProfileSummary: readSavedProfile }));
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ token: "member-epoch" }) }));
 vi.mock("../AssistantConversationProvider", () => ({ useAssistantSelection: () => null }));
 vi.mock("../AppShell", async importOriginal => {
@@ -145,6 +148,39 @@ it("opens the home overview beside the same work and retains the work when openi
   expect(within(work).getByLabelText("预览 /tasks/a")).toBe(player);
   expect(player.currentTime).toBe(12);
   expect(composerMount).toHaveBeenCalledTimes(1);
+});
+
+it("reads the saved device profile beside the same work and links to explicit settings", async () => {
+  readSavedProfile.mockResolvedValueOnce({ status: "saved", revision: 3 });
+  const view = render(fixture(route()));
+  const work = await screen.findByRole("region", { name: "作品 a" });
+  const player = within(work).getByLabelText("预览 /tasks/a") as HTMLVideoElement;
+  const draft = screen.getByRole("textbox", { name: "持续对话草稿" });
+  fireEvent.change(draft, { target: { value: "未发送的作品要求" } });
+  player.currentTime = 12;
+  fireEvent.play(player);
+  expect(readSavedProfile).not.toHaveBeenCalled();
+
+  navigation.path = "/device-status"; navigation.search = "mode=panel";
+  view.rerender(fixture(<DeviceStatusPage />));
+  const pane = screen.getByRole("complementary", { name: "作品资源" });
+  expect(await within(pane).findByText("已保存设备资源档 · 版本 3")).toBeVisible();
+  expect(within(pane).getByText("当前是否可用请到设置检查。")).toBeVisible();
+  expect(within(pane).getByRole("link", { name: "运行情况" })).toHaveAttribute("href", "/settings?section=runtime");
+  expect(within(pane).queryByRole("button", { name: /检查|准备|标定/ })).not.toBeInTheDocument();
+  expect(draft).toHaveValue("未发送的作品要求");
+  expect(screen.getByLabelText("发送目标")).toHaveTextContent("a");
+  expect(work).toBeVisible();
+  expect(within(work).getByLabelText("预览 /tasks/a")).toBe(player);
+  expect(player.currentTime).toBe(12);
+  expect(vi.mocked(HTMLMediaElement.prototype.pause).mock.contexts).not.toContain(player);
+});
+
+it("opens the existing settings route without reading a summary when there is no active work", async () => {
+  navigation.path = "/device-status"; navigation.search = "mode=panel";
+  render(fixture(<DeviceStatusPage />));
+  await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/settings?section=runtime"));
+  expect(readSavedProfile).not.toHaveBeenCalled();
 });
 
 it.each(["/profiles", "/templates"])("opens %s as a full workspace without an active work, including a panel URL", async path => {

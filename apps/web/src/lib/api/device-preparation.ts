@@ -16,6 +16,10 @@ export type DeviceResourceStatus = {
   production_blocker?: string | null;
 };
 
+export type SavedDeviceProfileSummary =
+  | { status: 'saved'; revision: number }
+  | { status: 'missing' | 'device_unbound' | 'device_mismatch' | 'unreadable'; revision: null };
+
 export type CpuPreparationShape = {
   width_px: number;
   height_px: number;
@@ -68,6 +72,10 @@ export type DevicePreparationFinalization = DevicePreparationReceipt & {
 
 const root = '/api/device/resource-preparations';
 const scopeHeaders = (scope: string) => ({ 'X-Device-Preparation-Scope': scope });
+
+export function getSavedDeviceProfileSummary(signal: AbortSignal): Promise<SavedDeviceProfileSummary> {
+  return request(`${root}/profile/summary`, { signal });
+}
 
 export async function getDeviceResourceStatus(signal?: AbortSignal): Promise<DeviceResourceStatus> {
   const value = await request<DeviceResourceStatus>(root, signal && { signal });

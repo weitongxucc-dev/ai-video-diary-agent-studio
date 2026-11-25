@@ -16,6 +16,7 @@ import {
   CalendarClock,
   LoaderCircle,
   Clapperboard,
+  Cpu,
   FileStack,
   Home,
   Library,
@@ -46,7 +47,7 @@ import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components
 import { Button } from "./ui/button";
 import { IconButton } from "./ui/icon-button";
 import { Tooltip } from "./ui/tooltip";
-import { WorkbenchAssistantTargetContext, WorkspacePanelContext, isCreationDraftRoute, useWorkspacePage, workspaceNavigationHref } from "./workbench/context";
+import { DEVICE_SETTINGS_HREF, DEVICE_STATUS_PATH, WorkbenchAssistantTargetContext, WorkspacePanelContext, isCreationDraftRoute, useWorkspacePage, workspaceNavigationHref } from "./workbench/context";
 import { useConversationVisibility } from "./workbench/useConversationVisibility";
 import { useWorkbenchTarget } from "./workbench/WorkbenchTarget";
 import { ConversationTarget } from "./workbench/ConversationTarget";
@@ -66,7 +67,7 @@ import editorShell from "./EditorShell.module.css";
 import shellUi from "./AppShellCompact.module.css";
 
 type Icon = ComponentType<{ size?: number; strokeWidth?: number }>;
-type NavItem = { href: string; label: string; icon: Icon; activePath?: string };
+type NavItem = { href: string; label: string; icon: Icon; activePath?: string; workOnly?: boolean };
 export type ThemeMode = "system" | "light" | "dark";
 
 function displayTaskName(name?: string) {
@@ -83,6 +84,7 @@ const primaryNav: NavItem[] = [
   { href: "/templates?mode=manage", label: "视频模板", icon: FileStack },
   { href: "/history", label: "发布与数据", icon: Activity },
   { href: "/production?view=automations", label: "定时任务", icon: CalendarClock },
+  { href: DEVICE_STATUS_PATH, label: "设备状态", icon: Cpu, workOnly: true },
 ];
 
 const routeLabels: Array<Pick<NavItem, "href" | "label" | "activePath">> = [
@@ -164,7 +166,7 @@ function NavigationRowsContent({ pathname, searchParams, showMembers = true, has
   pathname: string; searchParams?: Pick<URLSearchParams, "get">; showMembers?: boolean; hasActiveWork?: boolean;
 }) {
   return <>
-    {primaryNav.filter((item) => showMembers || item.href !== "/members").map((item) => {
+    {primaryNav.filter((item) => (showMembers || item.href !== "/members") && (!item.workOnly || hasActiveWork)).map((item) => {
       const ItemIcon = item.icon;
       const active = isActive(pathname === "/sources" ? "/knowledge" : pathname, item.href, item.activePath, searchParams);
       return (
@@ -468,7 +470,7 @@ export function AppShellFrame({
 
   const commandItems = useMemo<CommandPaletteItem[]>(() => [
     { id: "new-production", label: "新建视频", description: "说说想法", href: NEW_VIDEO_HREF, icon: Plus },
-    ...primaryNav.filter((item) => showMembersNav || item.href !== "/members").map((item) => ({
+    ...primaryNav.filter((item) => (showMembersNav || item.href !== "/members") && (!item.workOnly || hasActiveWork)).map((item) => ({
       id: `nav-${item.href}`,
       label: item.label,
       description: item.label === "首页" ? "查看任务、阻断和通知" : item.label === "定时任务" ? "安排到期时间，查看待确认步骤与执行记录" : `打开${item.label}`,
@@ -483,7 +485,7 @@ export function AppShellFrame({
       icon: Clapperboard,
     })),
     ...(showMembersNav ? [{ id: "members", label: "成员与空间", description: "管理成员与共享空间", href: "/settings?section=creators", icon: Users }] : []),
-    { id: "health", label: "运行情况", description: "检查模型、本地服务和任务阻断", href: "/settings?section=runtime", icon: Activity },
+    { id: "health", label: "运行情况", description: "检查模型、本地服务和任务阻断", href: DEVICE_SETTINGS_HREF, icon: Activity },
     { id: "settings", label: "设置", description: "配置模型、目录和外部连接", href: "/settings", icon: Settings },
   ], [hasActiveWork, recentTasks, showMembersNav]);
 
