@@ -40,6 +40,9 @@ class GoalReadinessUseCase:
         original = goal["request_context"]["target_snapshot"].get("selected_references", [])
         timeline_kinds = {"shot", "narration", "audio", "subtitle", "effect"}
         if not any(item["kind"] in timeline_kinds for item in original):
+            if ((goal.get("creation_adoption") or {}).get("kind") == "source_task"
+                    and any(item["kind"] == "knowledge" for item in original)):
+                return {"selected_references": [sealed_goal_reference(scope, item) for item in original]}, None
             return {}, None
         chain = self.projection_for().selection_version_chain(goal, version)
         if chain is None:

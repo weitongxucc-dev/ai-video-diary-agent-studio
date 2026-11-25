@@ -233,7 +233,7 @@ def _execution(repo, actions=None, render_ready=lambda _w, _t: True):
     )
 
 
-def _render_version_fixture(tmp_path):
+def _render_version_fixture(tmp_path, *, source_seconds=36):
     """Persisted render inputs are real synthetic media with an owned profile."""
     from app.member_permits import MemberDeviceAccess
 
@@ -263,12 +263,12 @@ def _render_version_fixture(tmp_path):
             (json.dumps(asdict(task), default=str), "local", task.id))
     audio, video = tmp_path / "library/audio.wav", tmp_path / "library/source.mp4"
     audio.write_bytes(synthetic_wav_bytes())
-    write_synthetic_video(video, seconds=36)
+    write_synthetic_video(video, seconds=source_seconds)
     repo._save_asset(MaterialAsset(
         id="asset_1", workspace_id="local", file_name=video.name, path=str(video),
         size_bytes=video.stat().st_size,
         modified_at=datetime.fromtimestamp(video.stat().st_mtime, timezone.utc),
-        duration_seconds=36, usage_role="b_roll", review_status="approved", analysis_status="ready",
+        duration_seconds=source_seconds, usage_role="b_roll", review_status="approved", analysis_status="ready",
         media_type="video", owner_user_id=member.member_id,
         segments=[MaterialSegment(id="segment_1", asset_id="asset_1", start_seconds=0,
                                   end_seconds=1, description="synthetic fixture", review_status="approved")],

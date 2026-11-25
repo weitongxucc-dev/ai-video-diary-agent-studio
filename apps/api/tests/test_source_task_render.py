@@ -1,5 +1,7 @@
 """Source video uses real FFmpeg, the same queue and verified output publication."""
 from array import array
+from datetime import datetime, timezone
+import hashlib
 from types import SimpleNamespace
 from uuid import uuid4
 import json
@@ -10,9 +12,12 @@ import pytest
 
 import app.main as main
 from app.artifact_store import ArtifactStore
+from app.creation.render_result_provenance import rendered_version_provenance
 from app.creation.source_task_use_case import SourceTaskCommand, SourceTaskUseCase
 from app.creation_execution import CreationJobUnitExecutor, submit_creation_stage
 from app.host_resource_probes import CpuAudioBudget, CpuRenderBudget, HostBudget, HostResourceProbe
+from app.materials.contracts import MaterialAsset, MaterialSegment
+from app.schemas import CreationTaskExactEditRequest
 from app.task_audio import TaskAudio
 from app.video_jobs import VideoJobRunner
 from tests.host_memory_boundary import IsolatedMemoryMonitor
@@ -20,13 +25,13 @@ from test_creation_execution import _render_version_fixture
 from test_host_resource_probes import _render_budget
 
 
-@pytest.mark.parametrize('ripple_cut,preserve_audio', [(False, True), (True, True), (False, False)])
-def test_source_video_renders_requested_sound_without_script_or_narration(tmp_path, monkeypatch, ripple_cut, preserve_audio):
-    repo, _, _, _, actor, execution, owner, scheduler, _, members = _render_version_fixture(tmp_path)
+@pytest.mark.parametrize('edit,preserve_audio', [('', True), ('ripple', True), ('', False), ('replace', True)])
+def test_source_video_renders_requested_sound_without_script_or_narration(tmp_path, monkeypatch, edit, preserve_audio):
+    repo, _, _, _, actor, execution, owner, scheduler, _, members = _render_version_fixture(tmp_path, source_seconds=4)
     store = ArtifactStore(tmp_path / 'source-artifacts')
     settings = SimpleNamespace(video_output_path=str(tmp_path/'source-output'),
         video_inbox_path=str(tmp_path/'library'), effective_temporary_root_path=tmp_path/'source-temp',
-        native_portrait_worker_path=None)
+        native_portrait_worker_path=None, native_ocr_worker_path=None)
     monkeypatch.setattr(main, 'production_repo', repo)
     monkeypatch.setattr(main, 'artifact_store', store)
     monkeypatch.setattr(main, 'video_job_runner', VideoJobRunner(repo.job_records))
@@ -37,7 +42,8 @@ def test_source_video_renders_requested_sound_without_script_or_narration(tmp_pa
         SourceTaskCommand(str(uuid4()), asset.id, asset.updated_at, 0, 2, '原片真实音轨', '16:9', preserve_audio), actor)
     task_id = receipt['task_id']
     expected_duration = 2
-    if ripple_cut:
+    replacement = None
+    if edit == 'ripple':
         from app.creation.contracts import EditCommand
         task = repo.task_records.get_creation_task('local', task_id)
         outcome = main._linked_timeline_use_case().apply(EditCommand('local', task_id,
@@ -47,6 +53,33 @@ def test_source_video_renders_requested_sound_without_script_or_narration(tmp_pa
         expected_duration = 1.5
         assert outcome.montage.duration_seconds == expected_duration
         assert repo.plan_records.get_creation_plan('local', task.plan_id).duration_target_seconds == 2
+    elif edit == 'replace':
+        path = tmp_path / 'library' / 'replacement.mp4'
+        subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=red:size=160x90:rate=30',
+            '-t', '4', '-pix_fmt', 'yuv420p', str(path)], check=True, capture_output=True)
+        info = path.stat()
+        replacement = repo._save_asset(MaterialAsset('replacement', 'local', path.name, str(path),
+            info.st_size, datetime.fromtimestamp(info.st_mtime, timezone.utc), duration_seconds=4,
+            analysis_status='ready', review_status='approved', usage_role='b_roll', owner_user_id=actor.member_id,
+            segments=[MaterialSegment('replacement-range', 'replacement', .5, 3.5,
+                description='QA 红色替换镜头', review_status='approved', usage_role='b_roll')]))
+        replacement_ref = repo.workspace_media_reference_for_asset('local', replacement.id)
+        with repo._connect() as conn:
+            repo._claim_workspace_media_reference(conn, workspace_id='local', reference=replacement_ref)
+        identity = {'member_id': actor.member_id, 'local_diagnostic': False}
+        task = repo.task_records.get_creation_task('local', task_id)
+        main._task_authorizations_for_goal().ensure(task, actor, interactive=True)
+        command = CreationTaskExactEditRequest(operation_type='ReplaceClip', request_id=uuid4(),
+            clip_id='clip-source', asset_id=replacement.id, segment_id='replacement-range',
+            source_start_seconds=1, expected_replacement_asset_updated_at=replacement.updated_at,
+            expected_timeline_version_id=receipt['timeline_version_id'], expected_timeline_sequence=1)
+        case = main._exact_preview_use_case()
+        result = case.apply(task, actor, command, identity=identity)
+        assert result.status_code == 200, result.value
+        assert case.apply(task, actor, command, identity=identity).value == result.value
+        applied, = repo.edit_records.list_edit_operations('local', task_id)
+        assert applied.operation_type == 'ReplaceClip' and applied.base_version_id == receipt['timeline_version_id']
+        assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == applied.result_version_id
     audio = TaskAudio(repo, store, settings.effective_temporary_root_path)
     cap = CpuAudioBudget(3, 8_000_000, 60, 10, 48000, 2, 4_000_000, 1, 60,
         512*1024**2, 16, .05, 1024**3, 1_000_000)
@@ -79,8 +112,33 @@ def test_source_video_renders_requested_sound_without_script_or_narration(tmp_pa
         task = repo.task_records.get_creation_task('local', task_id)
         assert task.confirmed_script_id is None and task.narration_cache_key is None and task.output_ready
         montage = repo.get_creation_task_montage_plan('local', task_id)
-        assert montage['script_id'] is None and montage['cues'] == [] and montage['clips'][0]['segment_id'] is None
+        assert montage['script_id'] is None and montage['cues'] == []
+        if replacement is None:
+            assert all(clip['segment_id'] is None for clip in montage['clips'])
+        else:
+            clip, = montage['clips']
+            assert (clip['asset_id'], clip['segment_id']) == (replacement.id, 'replacement-range')
+            assert (clip['source_start_seconds'], clip['source_end_seconds']) == (1, 3)
         output = store.resolve_file(montage['output_path'])
+        if replacement is not None:
+            rendered = repo.timeline_records.get_timeline_version('local', task.current_timeline_version_id)
+            assert rendered.parent_version_id == applied.result_version_id
+            assert rendered_version_provenance(repo, rendered)['job_id'] == job.id
+            record, = [item for item in repo.execution_records.list_artifact_records('local', task_id)
+                if item.kind == 'rendered_video']
+            transform = repo.lineage_records.get_transform_run('local', rendered.snapshot['transform_run_id'])
+            inner_job = repo.job_records.get_job_run('local', record.producer_job_id)
+            assert inner_job.kind == 'creation_task_montage_render' and inner_job.status == 'succeeded'
+            assert inner_job.id == transform.job_id and inner_job.task_id == task_id
+            assert record.logical_ref == montage['output_path'] and record.logical_ref in transform.output_refs
+            assert main._creation_task_output_path('local', task_id, subtitle=False) == output
+            assert record.sha256 == hashlib.sha256(output.read_bytes()).hexdigest()
+            pixels = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output),
+                '-vf', 'scale=1:1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'],
+                check=True, capture_output=True).stdout
+            assert len(pixels) >= 3 and len(pixels) % 3 == 0
+            assert all(red > 180 and max(green, blue) < 60
+                       for red, green, blue in zip(pixels[::3], pixels[1::3], pixels[2::3]))
         probe = json.loads(subprocess.run(['ffprobe', '-v', 'error', '-show_streams', '-of', 'json', str(output)],
             check=True, capture_output=True, text=True).stdout)
         assert {stream['codec_type'] for stream in probe['streams']} >= {'video','audio'}

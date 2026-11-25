@@ -2627,26 +2627,14 @@ app.include_router(_assistant_reference_http_router(("assistant_profile_referenc
 
 
 def _assistant_knowledge_snapshot(request: Request, knowledge_item_id: str, version: str, locator: str | None = None, *, include_content: bool = False) -> dict:
+    from app.assistant.knowledge_reference import KnowledgeReferenceUnavailable, read_knowledge_reference
     workspace_id = current_workspace_id(request)
     user_id, diagnostic = _content_identity_http_adapter().reader(request, workspace_id)
     try:
-        item = source_repository.get_knowledge_reference_readable_by(
-            workspace_id, knowledge_item_id, version, user_id=user_id, local_diagnostic=diagnostic,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="所引用知识版本不存在或当前不可访问。") from exc
-    sections = [section for section in item.sections if locator is None or section.locator == locator]
-    parameters = [parameter for parameter in item.parameters if locator is None or parameter.locator == locator]
-    if locator is not None and not sections and not parameters:
-        raise HTTPException(status_code=404, detail="所引用定位不在这个知识版本中，请重新查看该版正文。")
-    facts = {"knowledge_item_id": item.id, "version": item.version, "locator": locator,
-             "title": item.title, "content_hash": item.content_hash, "use_state": item.use_state,
-             "instruction": "固定版本知识事实，只读引用；不授权编辑、用于任务或发布。"}
-    if include_content:
-        facts.update(body=item.body if locator is None else None,
-                     sections=[{"locator": section.locator, "title": section.title, "text": section.text} for section in sections],
-                     parameters=[{"locator": parameter.locator, "key": parameter.key, "value": parameter.value, "unit": parameter.unit} for parameter in parameters])
-    return facts
+        return read_knowledge_reference(source_repository, workspace_id, knowledge_item_id, version, locator,
+            user_id=user_id, local_diagnostic=diagnostic, include_content=include_content)
+    except KnowledgeReferenceUnavailable as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 app.include_router(_assistant_reference_http_router(("assistant_knowledge_reference",)))
@@ -6268,6 +6256,7 @@ def _creator_memory_facts(workspace_id, member_id):
 
 
 def _task_business(*, generation_case=None):
+    from app.assistant.knowledge_reference import read_knowledge_reference
     return TaskBusiness(production_repo,conversation_repo,_task_authorizations_for_goal(),runtime=_creation_runtime,
         execution=None if generation_case is not None else _creation_execution_control(),workspace_facts=_task_workspace_response_adapter().response,
         script_context=lambda ws, task_id, reader_id: _script_context_use_case().read_context(
@@ -6289,6 +6278,7 @@ def _task_business(*, generation_case=None):
         edit_controls=None if generation_case is not None else _edit_control_use_case(),
         resource_audio_for=None if generation_case is not None else _resource_audio_use_case,
         candidate_query=_candidate_query(),
+        read_knowledge_reference=lambda *args, **kwargs: read_knowledge_reference(source_repository, *args, **kwargs),
         media_jobs_list=_list_goal_media_jobs,execution_capabilities=_task_execution_capability_facts,
         device_preparation=_dispatch_device_preparation, quality=_quality_application(),
         generation_case=generation_case, creator_memory=_creator_memory_facts,
