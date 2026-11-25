@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { ASSISTANT_LOCATE_REFERENCE_EVENT, assistantReferenceHref } from "@/lib/assistant-reference";
+import { workspaceNavigationHref } from "./workbench/context";
 import { AssistantConversationContext } from "./AssistantConversationContext";
 import { useScopedAssistantConversation } from "./useAssistantConversation";
 import { useLocalMemberIdentity } from "@/hooks/useLocalMemberIdentity";
@@ -39,12 +40,25 @@ type ReferenceSelection = {
 
 function MemberConversation({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const { targetId, draftId } = useWorkbenchTarget();
   useEffect(() => {
-    const locate = (event: Event) => router.push(assistantReferenceHref((event as CustomEvent<SelectedAssistantReference>).detail));
+    const locate = (event: Event) => {
+      const item = (event as CustomEvent<SelectedAssistantReference>).detail;
+      // Give the mounted workbench a chance to handle an in-place location.
+      queueMicrotask(() => {
+        if (event.defaultPrevented) return;
+        const href = assistantReferenceHref(item);
+        if (targetId && (item.kind === "material" || item.kind === "knowledge")) {
+          const [pathname, query] = href.split("?");
+          router.push(`${workspaceNavigationHref(pathname, true)}&${query}`);
+        } else {
+          router.push(href);
+        }
+      });
+    };
     window.addEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
     return () => window.removeEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
-  }, [router]);
-  const { targetId, draftId } = useWorkbenchTarget();
+  }, [router, targetId]);
   const scope: AssistantConversationScope = targetId
     ? { scope_kind: "task", scope_id: targetId.slice("/tasks/".length) }
     : { scope_kind: "home", scope_id: draftId ? `${draftScopePrefix}${draftId}` : "home" };

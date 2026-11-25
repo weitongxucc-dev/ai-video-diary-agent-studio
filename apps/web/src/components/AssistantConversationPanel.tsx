@@ -22,7 +22,7 @@ import Link from "next/link";
 import { getAssistantCapabilities, taskMediaJobLabel, taskMediaResourceCheckLabel } from "@/lib/api";
 import type { AssistantConversationTurn, AssistantScriptToolReceipt, ResourceAdmissionReceipt } from "@/lib/types";
 import type { AssistantInputReceipt, AssistantStoryboardRegeneration, AssistantScriptWindowRequest, AssistantResultStage, OpenAssistantResult } from "@/lib/types/assistant";
-import { savedAssistantResultLocation } from "./creation-task/assistant-result-location";
+import { savedAssistantResultLocation, timelineEditTargetLabel } from "./creation-task/assistant-result-location";
 import { completedAudioReplyMatchesReceipt } from "./creation-task/assistant-result-audio";
 import type { useAssistantConversation } from "@/components/useAssistantConversation";
 import { assistantTaskTurnResult, assistantTurnNeedsResultRefresh, assistantTurnHasUnknownRequest, assistantConversationGoal, assistantTurnScriptWindowRequest, assistantScriptWindowReadKey, assistantTurnGoalRefreshState } from "./useAssistantConversation";
@@ -353,9 +353,9 @@ const resultStageLabels: Record<AssistantResultStage, string> = {
   script: "查看当前文案", narration: "查看当前配音", montage: "查看当前剪辑",
 };
 
-function savedResultStage(turn: AssistantConversationTurn, taskId: string): AssistantResultStage | null {
+function savedResultLocation(turn: AssistantConversationTurn, taskId: string) {
   if (canOpenTurnProposal(turn) || assistantTurnHasUnknownRequest(turn, taskId)) return null;
-  return savedAssistantResultLocation(turn, taskId)?.stage ?? null;
+  return savedAssistantResultLocation(turn, taskId);
 }
 
 function storyboardRegenerationSummary(outcome: AssistantStoryboardRegeneration | null | undefined) {
@@ -532,8 +532,10 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
   const repeatedTimelineSave = continuation?.status === "confirmed" && Boolean(continuation.result_version_id)
     && /(?:已保存|已落到当前时间线)/.test(turn.assistant_text) && !resultNeedsAttention;
   const showResultSummary = !resultSummaryRepeated && !repeatedTimelineSave;
-  const savedStage = taskScopeId && !windowInputMismatch ? savedResultStage(turn, taskScopeId) : null;
+  const location = taskScopeId && !windowInputMismatch ? savedResultLocation(turn, taskScopeId) : null;
+  const savedStage = location?.stage ?? null;
   const resultStage = onOpenResultStage ? savedStage : null;
+  const resultTarget = location?.stage === "montage" ? location.target : undefined;
   // The saved reply can include both the host's timeline receipt and its
   // standardized closing paragraph. Keep the former in the reading flow.
   const savedReply = turn.assistant_text.trimEnd();
@@ -599,7 +601,7 @@ function TurnView({ latest = false, turn, reading, onTransferReply, onCreatePlan
       <summary>制作条件</summary><div className="assistant-result-details"><p>{readinessMessage}</p></div>
     </ReadingDetails> : null}
     <div className={onOpenEditProposal && canOpenTurnProposal(turn) ? "assistant-result-actions assistant-confirmation" : "assistant-result-actions"}>
-      {resultStage ? <Button variant="ghost" className="assistant-text-action" type="button" onClick={() => setLocationNotice(onOpenResultStage?.(resultStage, turn) ?? null)}>{resultStageLabels[resultStage]}</Button> : null}
+      {resultStage ? <Button variant="ghost" className="assistant-text-action" type="button" onClick={() => setLocationNotice(onOpenResultStage?.(resultStage, turn) ?? null)}>{resultTarget ? timelineEditTargetLabel(resultTarget) : resultStageLabels[resultStage]}</Button> : null}
       {onOpenEditProposal && canOpenTurnProposal(turn) ? <Button variant="ghost" type="button" disabled={Boolean(continueReason) || readingResult} onClick={() => onReadResult(turn, true)}>{readingResult ? "正在查询…" : "查看修改方案"}</Button> : null}
       {recoveryToolId === undefined ? queryResult ?? continueEditing : null}
     </div>
@@ -653,6 +655,8 @@ export function AssistantConversationPanel({
 }) {
   const referenceStatus = useAssistantReferenceStatus();
   const selection = useAssistantSelection();
+  const staleTimelineReference = materialUsage && selection?.items.some(item =>
+    "task_id" in item && item.task_id === materialUsage.taskId && item.version !== materialUsage.versionId);
   const [inputMode,setInputMode]=useState<"steer"|"follow_up">("steer");
   const [sendingInput,setSendingInput]=useState(false);
   const [capabilities, setCapabilities] = useState<Awaited<ReturnType<typeof getAssistantCapabilities>> | null>(null);
@@ -765,10 +769,11 @@ export function AssistantConversationPanel({
   const isLocalCommand = input.trim().startsWith("/");
   const commandDisabled = state.loading || !conversation || busy || currentRunning || composing;
   const sendLabel = acceptsQueuedInput && !isLocalCommand ? inputMode === "follow_up" ? "排入后续" : "追加要求" : busy && !isLocalCommand ? "正在处理" : "发送";
-  const sendDisabled = (isLocalCommand ? commandDisabled : state.loading || !conversation || composing || sendingInput || (acceptsQueuedInput && selection !== null && selection.version === undefined) || (busy && !acceptsQueuedInput)) || !input.trim() || (!isLocalCommand && (referenceStatus.pending || Boolean(referenceStatus.reason) || !configured));
+  const sendDisabled = (isLocalCommand ? commandDisabled : state.loading || !conversation || composing || sendingInput || (acceptsQueuedInput && selection !== null && selection.version === undefined) || (busy && !acceptsQueuedInput)) || !input.trim() || (!isLocalCommand && (referenceStatus.pending || Boolean(referenceStatus.reason) || staleTimelineReference || !configured));
   const sendReason = state.loading || !conversation ? "正在恢复对话"
     : composing ? "中文组合输入中，请先完成输入"
     : !input.trim() ? "先填写对话要求"
+      : !isLocalCommand && staleTimelineReference ? "引用来自较早的作品版本，请移除或重新引用"
       : acceptsQueuedInput ? "要求将持久保存，等待 Agent 处理；已提交动作不会追改"
         : busy ? "本轮正在处理，请稍后再发送"
           : isLocalCommand ? "Enter 执行本地会话操作；无效命令不会发送给模型"
@@ -912,7 +917,7 @@ export function AssistantConversationPanel({
       focus?.focus();
       return;
     }
-    if (referenceStatus.pending || referenceStatus.reason) {
+    if (referenceStatus.pending || referenceStatus.reason || staleTimelineReference) {
       setError(sendReason);
       return;
     }
@@ -1008,6 +1013,7 @@ export function AssistantConversationPanel({
     {showJumpToLatest && turns.length ? <Button variant="ghost" className="assistant-jump-latest" type="button" aria-label="回到最新回复" title="回到最新回复" onClick={() => { const node = historyRef.current; if (!node || !conversation) return; node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight); followBottom.current = true; state.historyFollowBottom?.current.set(conversation.id, true); state.historyScrollPositions?.current.set(conversation.id, node.scrollTop); setShowJumpToLatest(false); node.focus({preventScroll:true}); }}><ArrowDown size={16} aria-hidden="true"/></Button> : null}
     </div>
     {referenceStatus.reason ? <div role="alert"><p>引用核验未通过。固定版本保持原值，请重新查看或取消引用后发送。</p><Button variant="ghost" type="button" onClick={referenceStatus.cancel}>清除不可用引用</Button><details><summary>引用诊断</summary><p>{referenceStatus.reason}</p></details></div> : null}
+    {staleTimelineReference ? <p className="assistant-stream-status" role="status">引用来自较早的作品版本。请移除或重新引用后发送。</p> : null}
     {pendingInputs.length ? <section className="assistant-pending-inputs" aria-label="待处理追加要求">{pendingInputs.map(({ item }) => <InputReceipt key={item.input_id} item={item} reading={reading} onWithdraw={id => void state.withdrawInput(id).catch(cause => setError(cause.message))}/>)}</section> : null}
     <form ref={entryRef} className="assistant-conversation-entry" onSubmit={(event) => void submit(event)}><InputGroup data-composer aria-label="对话输入">
       {selection ? <ReferenceChips usage={materialUsage} items={selection.items} onRemove={item => { selection.remove(item); if (selection.items.length === 1) focus?.focus(); }}/> : null}

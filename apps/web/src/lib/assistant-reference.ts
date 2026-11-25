@@ -17,7 +17,7 @@ export function referenceAssistantSelection(items: SelectedAssistantReference[],
   window.dispatchEvent(new CustomEvent(ASSISTANT_SELECTION_EVENT, { detail: { items, additive } }));
 }
 export function locateAssistantReference(reference: SelectedAssistantReference) {
-  window.dispatchEvent(new CustomEvent(ASSISTANT_LOCATE_REFERENCE_EVENT, { detail: reference }));
+  window.dispatchEvent(new CustomEvent(ASSISTANT_LOCATE_REFERENCE_EVENT, { detail: reference, cancelable: true }));
 }
 export function assistantReferenceHref(reference: SelectedAssistantReference): string {
   const base = reference.kind === "material" ? "/library"

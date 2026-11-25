@@ -222,6 +222,28 @@ describe("source and output playback identity", () => {
     expect(ruler).toHaveAttribute("aria-valuetext", "00:00.0");
   });
 
+  it("keeps user-started playback across a playable swap and only keeps position across a draft", () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    const view = render(stage(workspace(clip, "/output.mp4")));
+    const player = () => screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+    fireEvent.click(screen.getByRole("button", { name: "播放成片" }));
+    fireEvent.play(player());
+    player().currentTime = 1.7;
+    fireEvent.timeUpdate(player());
+
+    view.rerender(stage(workspace(clip, "/output.mp4", "timeline-2")));
+    fireEvent.loadedMetadata(player());
+    expect(player().currentTime).toBe(1.7);
+    expect(play).toHaveBeenCalledTimes(2);
+
+    view.rerender(stage(workspace(clip, null, "timeline-3")));
+    expect(screen.getByRole("slider", { name: "时间线播放位置" })).toHaveAttribute("aria-valuetext", "00:01.7");
+    view.rerender(stage(workspace(clip, "/output.mp4", "timeline-4")));
+    fireEvent.loadedMetadata(player());
+    expect(player().currentTime).toBe(1.7);
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
   it("repositions the same source after a trim and separates person render identity", () => {
     const view = render(stage());
     const oldVideo = screen.getByLabelText("源素材预览");

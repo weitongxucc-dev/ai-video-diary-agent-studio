@@ -409,6 +409,26 @@ describe("HomeCommandComposer", () => {
     expect(await screen.findByText("会话或引用已切换；本轮没有发送，原要求已保留为草稿。",{exact:false})).toBeVisible();
   });
 
+  it("sends the pinned shot range even when the active view and playhead have moved", async () => {
+    configuredModel();
+    const task = { id: "task-1", stage: "montage", name: "当前作品",
+      current_timeline_version_id: "v1", timeline_sequence: 1 } as CreationTask;
+    mocks.selection = { version: 7, items: [{ kind: "shot", task_id: task.id, object_id: "clip-1",
+      version: "v1", label: "镜头 1", start_ms: 1250, end_ms: 3400 }], select: vi.fn(), remove: vi.fn() };
+    mocks.editAsk.mockResolvedValue({ reply: "已核对镜头。", provider: "minimax", model: "MiniMax-M3" });
+    const getPlayheadMs = vi.fn(() => 7300);
+    render(<HomeCommandComposer task={task} taskContext={{
+      stage: "subtitle_cover", selectedObjectRefs: ["cue:another-cue"], getPlayheadMs,
+    }}/>);
+    fireEvent.change(await readyInput("任务对话要求"), { target: { value: "核对引用的镜头" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(mocks.sendTaskTurn).toHaveBeenCalledWith(task.id, expect.objectContaining({
+      context_stage: "montage", expected_reference_version: 7, selected_object_refs: [], playhead_ms: 1250,
+    }), expect.any(Function)));
+    expect(getPlayheadMs).not.toHaveBeenCalled();
+  });
+
   it("allows library status questions without a selected object and does not write back", async () => {
     configuredModel();
     const onResult = vi.fn();
