@@ -1980,6 +1980,13 @@ describe("CreationTaskWorkspace", () => {
       const title = { kind: "text" as const, id: "title-1", text: "数智分会",
         start_seconds: 2, end_seconds: 4, x: .5, y: .15, width: .8, font_size: 64, font_family: "PingFang SC", color: "#FFFFFF" };
       initial.montage!.graphic_overlays = [title];
+      if (scenario === "workbench explicit") {
+        initial.montage!.audio_timeline = { format_version: 1, tracks: [{ id: "narration-track", name: "配音", role: "narration",
+          gain_db: 0, muted: false, locked: false, duck_under_voice: false,
+          clips: [{ id: "narration-1", name: "目标配音段", source_ref: "narration://test",
+            source_start_ms: 0, source_end_ms: 2000, timeline_start_ms: 6000, gain_db: 0, fade_in_ms: 0, fade_out_ms: 0,
+            muted: false, locked: false, denoise_db: 0, gain_points: [], envelope_offset_ms: 0, envelope_duration_ms: null }] }] };
+      }
       if (scenario === "workbench source playback") {
         initial.montage!.clips = [{ id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
           source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 12,
@@ -2265,6 +2272,19 @@ describe("CreationTaskWorkspace", () => {
           expect(draft).toHaveValue("正在精调的草稿");
           expect(play).not.toHaveBeenCalled();
           fireEvent.click(screen.getByRole("button", { name: "定位修改的标题" }));
+          let finishReplay: ((value: unknown) => void) | undefined;
+          mocks.askAssistant.mockImplementationOnce(() => new Promise(resolve => { finishReplay = resolve; }));
+          fireEvent.change(await readyInput("任务对话要求"), { target: { value: requestReplay } });
+          await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+          fireEvent.click(screen.getByRole("button", { name: "发送" }));
+          await waitFor(() => expect(finishReplay).toBeTypeOf("function"));
+          const audio = screen.getByRole("button", { name: "选择音频：目标配音段" });
+          fireEvent.click(audio);
+          expect(rendered.currentTime).toBe(6);
+          await act(async () => finishReplay!({ reply: "已收到片段回放请求。", provider: "local", model: "本地回放" }));
+          expect(audio).toHaveAttribute("aria-pressed", "true");
+          expect(play).not.toHaveBeenCalled();
+          expect(rendered.currentTime).toBe(6);
         } else {
           fireEvent.change(await readyInput("任务对话要求"), { target: { value: "标题提前半秒，改完后回放" } });
           expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();

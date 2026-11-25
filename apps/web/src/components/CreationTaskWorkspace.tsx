@@ -638,11 +638,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   function markReplayEditorInteraction() {
     interruptTitleReplay();
-    replayEditorRevision.current += 1;
     invalidateEditPreview();
   }
 
   const interruptTitleReplay = useCallback((message = "自动回放已取消。成片就绪后可手动回放。") => {
+    replayEditorRevision.current += 1;
     if (waitingTitleReplay) {
       setWaitingTitleReplay(null);
       setTitleReplayNotice({ editVersionId: waitingTitleReplay.editVersionId, message });
