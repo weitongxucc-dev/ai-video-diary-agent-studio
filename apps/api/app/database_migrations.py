@@ -4,7 +4,7 @@ import sqlite3
 from app.materials.discovery_store import DISCOVERY_SCHEMA
 
 
-PRODUCTION_SCHEMA_VERSION = 30
+PRODUCTION_SCHEMA_VERSION = 31
 
 
 # The local_members schema is also self-provisioned by app.local_members so a
@@ -1085,7 +1085,72 @@ _MIGRATIONS: tuple[tuple[int, str], ...] = (
             ON material_rebind_receipts(workspace_id, created_at DESC);
         """,
     ),
+    (31, ""),
 )
+
+
+def _migrate_timeline_candidates(conn: sqlite3.Connection) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if conn.execute("SELECT 1 FROM production_schema_migrations WHERE version=31").fetchone():
+            conn.commit()
+            return
+        # The original uniqueness constraint covers every version in a task.
+        # Keep the formal sequence and introduce a separately ordered candidate scope.
+        conn.execute("""
+            CREATE TABLE timeline_versions_scoped (
+                id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                parent_version_id TEXT,
+                sequence INTEGER NOT NULL CHECK (sequence >= 1),
+                snapshot_json TEXT NOT NULL,
+                created_by_operation_id TEXT,
+                created_at TEXT NOT NULL,
+                candidate_id TEXT
+            )
+        """)
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeline_versions'").fetchone():
+            conn.execute("""
+                INSERT INTO timeline_versions_scoped
+                    (id, workspace_id, task_id, parent_version_id, sequence, snapshot_json,
+                     created_by_operation_id, created_at)
+                SELECT id, workspace_id, task_id, parent_version_id, sequence, snapshot_json,
+                       created_by_operation_id, created_at
+                FROM timeline_versions
+            """)
+            conn.execute("DROP TABLE timeline_versions")
+        conn.execute("ALTER TABLE timeline_versions_scoped RENAME TO timeline_versions")
+        conn.execute("""
+            CREATE UNIQUE INDEX idx_timeline_versions_task
+            ON timeline_versions(workspace_id, task_id, sequence) WHERE candidate_id IS NULL
+        """)
+        conn.execute("""
+            CREATE UNIQUE INDEX idx_timeline_versions_candidate
+            ON timeline_versions(workspace_id, task_id, candidate_id, sequence) WHERE candidate_id IS NOT NULL
+        """)
+        conn.execute("""
+            CREATE TRIGGER timeline_versions_no_update BEFORE UPDATE ON timeline_versions
+            BEGIN
+                SELECT RAISE(ABORT, 'timeline_versions are immutable');
+            END
+        """)
+        conn.execute("""
+            CREATE TABLE timeline_candidates (
+                workspace_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                base_version_id TEXT NOT NULL,
+                head_version_id TEXT NOT NULL,
+                PRIMARY KEY (workspace_id, task_id, id)
+            )
+        """)
+        conn.execute("INSERT INTO production_schema_migrations(version) VALUES (31)")
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+
 
 def _migrate_resource_manifest_kinds(conn: sqlite3.Connection) -> None:
     """Expand resource manifests without losing existing usage or licenses.
@@ -1379,6 +1444,9 @@ def apply_production_migrations(conn: sqlite3.Connection) -> None:
             continue
         if version == 29:
             _migrate_clip_reference_migration_status(conn)
+            continue
+        if version == 31:
+            _migrate_timeline_candidates(conn)
             continue
         # Older assembled databases can have migration markers for 1..14 but
         # lack the narration table originally created by migration 4. Restore

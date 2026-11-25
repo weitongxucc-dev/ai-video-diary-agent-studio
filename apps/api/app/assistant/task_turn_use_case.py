@@ -460,6 +460,14 @@ class TaskAssistantTurnUseCase:
             replay_settings = (yield ReadSettings(workspace_id))
             return (yield ReplayTurn(turn_id, provider=replay_settings.effective_llm_provider, model=replay_settings.effective_llm_model, draft_version=payload.expected_draft_version + 1))
         frozen_context = self._conversations_for().consumed_turn_request_context(turn_id, str(payload.conversation_id), workspace_id, member_id)
+        if message.rstrip('。！!') == '回放刚才修改的片段':
+            reply = '已收到片段回放请求。可在右侧播放器核对当前版本的回放状态。'
+            response = (yield BuildTaskResponse({'reply': reply, 'provider': 'local', 'model': '本地回放',
+                'turn_id': turn_id, 'draft_version': payload.expected_draft_version + 1}))
+            yield ForgetControl(turn_id)
+            self._conversations_for().finish_turn(turn_id, 'completed', reply,
+                {'kind': 'task_turn', 'response': (yield SerializeView(response, 'json'))})
+            return response
         trusted_refs = frozen_context.get('selected_object_refs', trusted_refs)
         material_selection = (frozen_context.get('target_snapshot') or {}).get('material_selection')
         if blocker := clip_tail_blocker(message):

@@ -90,7 +90,8 @@ class ResourceClosedLoopReader:
                 raise KeyError(task_id)
             # Bound every task history explicitly; incomplete reads never claim closure.
             def rows(table, order):
-                return conn.execute(f'SELECT * FROM {table} WHERE workspace_id=? AND task_id=? ORDER BY {order} LIMIT 2001',
+                scope = ' AND candidate_id IS NULL' if table == 'timeline_versions' else ''
+                return conn.execute(f'SELECT * FROM {table} WHERE workspace_id=? AND task_id=?{scope} ORDER BY {order} LIMIT 2001',
                     (workspace_id, task_id)).fetchall()
             events = rows('task_events', 'created_at,id')
             jobs = rows('job_runs', 'created_at,id')

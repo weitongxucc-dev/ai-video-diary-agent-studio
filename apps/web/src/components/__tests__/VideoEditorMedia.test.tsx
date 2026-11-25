@@ -44,8 +44,9 @@ function workspace(selected = clip, output: string | null = null, version = "tim
     montage: { clips: [selected], cues: [], duration_seconds: 3, aspect_ratio: ratio, output_url: output, low_confidence_clip_count: 0 },
     subtitle_tracks: [] } as unknown as CreationTaskWorkspace;
 }
-function stage(data = workspace(), ref = createRef<HTMLVideoElement>(), titleReplay?: ComponentProps<typeof VideoEditingStage>["titleReplay"]) {
-  return <VideoEditingStage taskId={data.task.id} versionId={data.task.current_timeline_version_id} narrationCacheKey={data.task.narration_cache_key} montage={data.montage!} planAspectRatio={data.plan.aspect_ratio} subtitleTracks={data.subtitle_tracks} selectedId={clip.id} onSelect={vi.fn()} onPosition={vi.fn()} videoRef={ref} initialTime={0} renderAction={null} titleReplay={titleReplay} />;
+function stage(data = workspace(), ref = createRef<HTMLVideoElement>(), titleReplay?: ComponentProps<typeof VideoEditingStage>["titleReplay"],
+  replayRequest?: ComponentProps<typeof VideoEditingStage>["replayRequest"]) {
+  return <VideoEditingStage taskId={data.task.id} versionId={data.task.current_timeline_version_id} narrationCacheKey={data.task.narration_cache_key} montage={data.montage!} planAspectRatio={data.plan.aspect_ratio} subtitleTracks={data.subtitle_tracks} selectedId={clip.id} onSelect={vi.fn()} onPosition={vi.fn()} videoRef={ref} initialTime={0} renderAction={null} titleReplay={titleReplay} replayRequest={replayRequest} />;
 }
 
 it("uses the saved plan ratio when an older montage has no canvas ratio",()=>{
@@ -262,7 +263,7 @@ describe("source and output playback identity", () => {
     const player = ref.current!;
     fireEvent.loadedMetadata(player);
     expect(player.currentTime).toBe(2.3);
-    expect(player).toHaveAttribute("src", expect.stringContaining("version=timeline-4"));
+    expect(player).toHaveAttribute("src", expect.stringContaining("expected_version_id=timeline-4"));
     expect(screen.getByRole("button", { name })).toBeDisabled();
     fireEvent.canPlay(player);
     expect(play).not.toHaveBeenCalled();
@@ -283,6 +284,32 @@ describe("source and output playback identity", () => {
     rerender(stage(workspace(clip, "/output.mp4", "timeline-5"), ref));
     fireEvent.loadedMetadata(ref.current!);
     expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it("consumes a replay input once and keeps manual replay when the browser requires a click", async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play")
+      .mockRejectedValueOnce(new DOMException("User activation required", "NotAllowedError")).mockResolvedValue();
+    const data = workspace(clip, "/output.mp4", "timeline-4");
+    const ref = createRef<HTMLVideoElement>();
+    const range = { startSeconds: .5, endSeconds: 2.7, mediaReady: true };
+    const request = { turnId: "replay-turn", versionId: "timeline-4", isCurrent: () => true };
+    const view = render(stage(data, ref, range));
+    const player = ref.current!;
+    fireEvent.canPlay(player);
+    player.currentTime = 2.3;
+    fireEvent.timeUpdate(player);
+    view.rerender(stage(data, ref, range, request));
+    expect(await screen.findByText("浏览器需要你点击回放按钮。")).toBeVisible();
+    expect(player.currentTime).toBe(2.3);
+
+    view.rerender(stage(data, ref, range, { ...request }));
+    expect(play).toHaveBeenCalledOnce();
+    view.rerender(stage(data, ref, range, { ...request, turnId: "stale", versionId: "timeline-3" }));
+    view.rerender(stage(data, ref, range, request));
+    expect(play).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "回放刚才的修改" }));
+    expect(player.currentTime).toBe(.5);
     expect(play).toHaveBeenCalledTimes(2);
   });
 
@@ -311,7 +338,7 @@ describe("source and output playback identity", () => {
     view.rerender(stage(workspace(clip, "/output.mp4", "timeline-2", "1:1")));
     const newVideo = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
     expect(newVideo).not.toBe(oldVideo);
-    expect(newVideo.getAttribute("src")).toContain("version=timeline-2");
+    expect(newVideo.getAttribute("src")).toContain("expected_version_id=timeline-2");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     fireEvent.error(oldVideo);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
