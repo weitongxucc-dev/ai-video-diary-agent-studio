@@ -516,7 +516,7 @@ def test_picture_preview_uses_parent_grant_and_real_media_renderer(tmp_path, mon
     runtime.stop(0)
 
 
-def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0, lock_first=True):
+def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0, lock_first=True, source_filter="color=blue:s=64x64:r=30:d=6"):
     import json
     import subprocess
     from dataclasses import asdict
@@ -534,7 +534,7 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0, lock_first=True):
     repo, actor, _state, _factory, build, media = case(tmp_path)
     repo.video_library_path.mkdir(exist_ok=True)
     source = repo.video_library_path/'source.mp4'
-    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=blue:s=64x64:r=30:d=6',
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', source_filter,
         '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', str(source)],
         check=True, capture_output=True, timeout=5)
     voice = repo.video_library_path/'voice.wav'
@@ -616,6 +616,153 @@ def _visual_scope_case(tmp_path, monkeypatch, *, fade_out=0, lock_first=True):
     monkeypatch.setattr(main, '_creation_runtime', lambda:runtime)
     monkeypatch.setattr(main, 'device_runtime', runtime)
     return main, repo, actor, media, runtime, TestClient(main.app), payload, track, store
+
+
+def test_candidate_clip_preview_uses_separate_granted_outputs_and_rejects_public_jobs(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    from uuid import uuid4
+
+    main, repo, actor, media, runtime, client, original, _track, store = _visual_scope_case(
+        tmp_path, monkeypatch, source_filter="testsrc2=s=96x64:r=30:d=6")
+    task_url = "/api/creation-tasks/task"
+    root = task_url + "/timeline/candidates"
+    clip_id = "clip_1"
+
+    def binding(version):
+        return dict(expected_timeline_version_id=version["id"], expected_timeline_sequence=version["sequence"])
+
+    def ok(response, status=200):
+        assert response.status_code == status, response.text
+        return response.json()
+
+    def edit(candidate, version, x):
+        return ok(client.post(f"{root}/{candidate}/edits/exact", json={
+            **binding(version), "request_id": str(uuid4()), "operation_type": "ChangeCrop",
+            "clip_id": clip_id, "fit_mode": "fill", "crop_x": x, "crop_y": .5,
+        }))["version"]
+
+    def submit(candidate, version, request_id=None):
+        return ok(client.post(f"{root}/{candidate}/previews", json={
+            **binding(version), "request_id": request_id or str(uuid4()), "clip_id": clip_id,
+        }), 202)
+
+    def read(result):
+        return ok(client.get(result["result_url"]))
+
+    try:
+        a, b = str(uuid4()), str(uuid4())
+        for candidate in (a, b):
+            ok(client.post(root, json={"candidate_id": candidate, **binding({"id": "timeline", "sequence": 1})}))
+        a_version = edit(a, {"id": "timeline", "sequence": 1}, .35)
+        b_version = edit(b, {"id": "timeline", "sequence": 1}, .8)
+        request_id = str(uuid4())
+        pending = submit(a, a_version, request_id)
+        assert pending["status"] == "queued" and pending["video_url"] is None
+        assert submit(a, a_version, request_id)["job_id"] == pending["job_id"]
+        public_job = f"{task_url}/media-jobs/{pending['job_id']}"
+        before = repo.job_records.list_creation_job_request_states("local", pending["job_id"])
+        with monkeypatch.context() as isolated:
+            def unexpected_runtime():
+                pytest.fail("public candidate job request acquired the runtime")
+            isolated.setattr(main, "_creation_runtime", unexpected_runtime)
+            assert client.get(public_job).status_code == 404
+            assert client.get(public_job + "/outputs/1").status_code == 404
+            assert client.post(public_job + "/cancel").status_code == 404
+            assert client.post(public_job + "/retry").status_code == 404
+            assert ok(client.get(f"{task_url}/media-jobs"))["items"] == []
+            assert client.get(f"{task_url}/media-jobs", params={"cursor": pending["job_id"]}).status_code == 404
+        assert repo.job_records.list_creation_job_request_states("local", pending["job_id"]) == before
+        assert runtime.run_once()
+        compare = submit(b, b_version)
+        assert runtime.run_once()
+        first_frames = []
+        for result, version in ((pending, a_version), (compare, b_version)):
+            done = read(result)
+            assert done["status"] == "succeeded", done
+            assert done["version_id"] == version["id"]
+            assert done["silent"] and (done["timeline_start_seconds"], done["timeline_end_seconds"]) == (1, 6)
+            assert (done["source_start_seconds"], done["source_end_seconds"]) == (0, 5)
+            job, event = media.read("local", done["job_id"])
+            resources = event["resources"]
+            assert (resources["kind"], resources["clip_count"], resources["output_count"]) == ("task_clip_preview", 1, 2)
+            assert resources["silent"] and resources["duration_seconds"] == 5
+            assert resources["overlay_count"] == 0 and "audio_mix" not in resources
+            result_event = repo.execution_records.get_task_event("local", f"event_{job.id}_result")
+            record = repo.execution_records.get_artifact_record("local", result_event.payload["result"]["candidate_artifact_id"])
+            path = store.resolve_file(record.logical_ref)
+            video = client.get(done["video_url"])
+            assert video.status_code == 200 and video.content == path.read_bytes()
+            assert client.get(f"{task_url}/visual/artifacts/{record.id}").status_code == 404
+            metadata = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries",
+                "format=duration:stream=codec_type", "-of", "json", str(path)]))
+            assert float(metadata["format"]["duration"]) == pytest.approx(5, abs=.05)
+            assert [stream["codec_type"] for stream in metadata["streams"]] == ["video"]
+            frame = subprocess.check_output(["ffmpeg", "-v", "error", "-i", str(path),
+                "-frames:v", "1", "-f", "framemd5", "-"]).splitlines()[-1]
+            first_frames.append(frame.split(b",")[-1].strip())
+        assert first_frames[0] != first_frames[1]
+        assert client.get(compare["result_url"].replace(b, a)).status_code == 404
+        assert client.get(compare["result_url"].replace(b_version["id"], a_version["id"])).status_code == 404
+        plan = repo.plan_records.get_creation_plan("local", "plan")
+        sibling = CreationTask("sibling", "local", "sibling-plan", "other work", "knowledge_explanation",
+            owner_user_id=actor.member_id)
+        repo.plan_confirmation.confirm_creation_plan(replace(plan, id=sibling.plan_id), sibling,
+            verified_owner_user_id=actor.member_id)
+        assert client.get(compare["result_url"].replace("/task/", "/sibling/")).status_code == 404
+        members = LocalMemberService(repo.database_path)
+        member, _token = members.join(members.create_invite_code(), "reader")
+        with monkeypatch.context() as isolated:
+            isolated.setattr(main, "_require_permit_actor", lambda *args: CreationExecutionActor("local", member.member_id))
+            assert client.get(compare["result_url"]).status_code == 404
+        with monkeypatch.context() as isolated:
+            isolated.setattr(media, "verify_identity", lambda actor: "unauthorized")
+            assert client.get(compare["result_url"] + "/video").status_code == 404
+
+        to_cancel = submit(b, b_version)
+        cancelled = ok(client.post(to_cancel["result_url"] + "/cancel"))
+        assert cancelled["status"] == "cancelled" and cancelled["video_url"] is None
+        assert read(compare)["status"] == "succeeded"
+
+        in_flight = submit(a, a_version)
+        complete = runtime.scheduler.complete_unit
+        saved = None
+
+        def complete_after_edit(grant, **kwargs):
+            nonlocal saved
+            observe = runtime.scheduler._observe_grant
+
+            def edit_after_observation(grant):
+                nonlocal saved
+                observation = observe(grant)
+                # Only the scheduler's local commit check sees this new head.
+                assert grant.owner_id == in_flight["job_id"]
+                assert observation[2] == "ready"
+                saved = edit(a, a_version, .4)
+                return observation
+
+            with monkeypatch.context() as isolated:
+                isolated.setattr(runtime.scheduler, "_observe_grant", edit_after_observation)
+                return complete(grant, **kwargs)
+
+        monkeypatch.setattr(runtime.scheduler, "complete_unit", complete_after_edit)
+        assert runtime.run_once()
+        assert saved is not None
+        assert ok(client.get(f"{root}/{a}"))["head_version_id"] == saved["id"]
+        job, _event = media.read("local", in_flight["job_id"])
+        assert job.status == "failed" and job.failure_reason == "stale_candidate_preview"
+        assert job.output_refs == []
+        with pytest.raises(KeyError):
+            repo.execution_records.get_task_event("local", f"event_{job.id}_verified")
+        assert read(in_flight)["status"] == read(pending)["status"] == "stale"
+        assert client.get(pending["result_url"] + "/video").status_code == 409
+        assert read(compare)["status"] == "succeeded"
+        assert repo.get_creation_task_montage_plan("local", "task") == original
+        assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == "timeline"
+        assert not repo.edit_records.list_edit_proposals("local", "task")
+        assert not repo.edit_records.list_edit_operations("local", "task")
+    finally:
+        runtime.stop(0)
 
 
 @pytest.mark.parametrize('route', ['visual', 'exact'])

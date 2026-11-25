@@ -106,7 +106,11 @@ from app.bootstrap import DatabaseOwners, RuntimeDependencies, prepare_runtime_d
 from app.creation.audio_ingress_use_case import AudioIngressUseCase, AudioIngressRejected, AUDIO_INGRESS_ACTIONS
 from app.audio_timeline import AudioEditRequest, narration_audio_timeline as narration_audio_timeline
 from app.task_audio import TaskAudio, TaskMediaJobs, TASK_MEDIA_CONTEXT, TASK_MEDIA_KIND, TaskMediaRequired, media_digest
-from app.creation.clip_preview import ClipPreviewCommand, ClipPreviewUseCase, ClipPreviewUnavailable, needs_full_visual_preview
+from app.creation.clip_preview import (
+    CANDIDATE_CLIP_PREVIEW, CandidateClipPreviewCommand, ClipPreviewCommand,
+    ClipPreviewUseCase, ClipPreviewUnavailable, needs_full_visual_preview,
+)
+from app.creation.editing.timeline_candidate_previews import TimelineCandidatePreviewUseCase
 from app.media.clip_preview import ClipPreviewExecutor
 from app.media.picture_preview import PicturePreviewRenderer, PicturePreviewRejected
 from app.media_execution import FFMPEG_OPERATION, EditPlan, TaskMediaExecutionDelegate, build_media_execution_entrypoint
@@ -1853,6 +1857,10 @@ def _exact_preview_facts(workspace_id,task_id,arguments,actor):
 
 
 def _task_media_facts(workspace_id, task_id, operation, arguments, actor, *, task_authorizations=None):
+    if operation == CANDIDATE_CLIP_PREVIEW:
+        if actor.workspace_id != workspace_id:
+            raise PermissionError("候选短预览不属于当前工作区")
+        return _clip_preview_use_case().seal_candidate(actor, task_id, CandidateClipPreviewCommand(**arguments["candidate"]))
     if operation == FFMPEG_OPERATION:
         plan = EditPlan.from_value(arguments.get("edit_plan", {}))
         if (plan.workspace_id, plan.task_id) != (workspace_id, task_id) or plan.member_id not in {None, actor.member_id}:
@@ -1963,9 +1971,20 @@ def _media_result_read_components():
 
 
 
-def _read_media_result(task_id, job_id, request):
+def _public_media_result_components(task_id, job_id, request):
     actor = _require_permit_actor(request, current_workspace_id(request))
     media, requests = _media_result_read_components()
+    try:
+        job, _event = media.read_public(actor.workspace_id, job_id)
+    except KeyError as exc:
+        raise HTTPException(404, "任务媒体作业不存在") from exc
+    if job.task_id != task_id:
+        raise HTTPException(404, "任务媒体作业不存在")
+    return actor, media, requests
+
+
+def _read_media_result(task_id, job_id, request):
+    actor, media, requests = _public_media_result_components(task_id, job_id, request)
     try:
         return _media_results().read(media, task_id, job_id, actor, requests)
     except MediaResultRejected as exc:
@@ -1973,8 +1992,7 @@ def _read_media_result(task_id, job_id, request):
 
 
 def _media_result_output(task_id, job_id, output_index, request):
-    actor = _require_permit_actor(request, current_workspace_id(request))
-    media, requests = _media_result_read_components()
+    actor, media, requests = _public_media_result_components(task_id, job_id, request)
     try:
         return _media_results().output_path(media, task_id, job_id, output_index, actor, requests)
     except MediaResultRejected as exc:
@@ -4331,6 +4349,9 @@ app.include_router(_task_edit_http_router(('preview_creation_task_exact_edit',))
 app.include_router(_task_edit_http_router(('apply_creation_task_exact_edit',)))
 app.include_router(build_task_timeline_candidate_router(
     repository_for=lambda: production_repo, access_for=lambda: _exact_edit_access,
+    preview_for=lambda: TimelineCandidatePreviewUseCase(production_repo, artifact_store, _clip_preview_use_case()),
+    actor_for=lambda: _require_permit_actor, media_for=lambda: _media_result_read_components()[0],
+    runtime_for=lambda: _creation_runtime,
 ))
 
 
