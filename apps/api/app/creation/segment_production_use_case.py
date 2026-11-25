@@ -11,6 +11,7 @@ from pathlib import Path
 from app.creation.duration_requirement import DurationConflict, SectionWindow
 from app.creation.editing.narration_preview_use_case import inspect_narration_revision
 from app.creation.reference_picture_order import FRAME_RATE, ReferencePictureOrder
+from app.creation.section_revision_evidence import fixed_page
 from app.device_scheduler import SchedulePolicy, SubmissionIntent, VerifiedWork, RecoveryBlocked
 from app.models import utc_now
 
@@ -183,6 +184,12 @@ class SegmentProductionUseCase:
                 'truncated': offset+len(values)<script.sections_total_count, 'revision_requests': receipts,
                 'available_video_count': sum(item['video'] is not None for item in values), 'segments': values}
 
+    def capture_revision_evidence(self, actor, references):
+        if self.source_repository is None:
+            raise ValueError("固定资料读面尚未就绪。")
+        return [fixed_page(self.source_repository, actor.workspace_id, actor.user_id or actor.member_id,
+                           ref) for ref in references]
+
     def verify_revision(self, workspace_id, task_id, actor, command, *, connection=None):
         current = self.context(workspace_id, task_id, command.section_id, actor, connection=connection)
         if (current['script_id'] != command.script_id or current['segment_version'] != command.expected_segment_version
@@ -215,6 +222,15 @@ class SegmentProductionUseCase:
             raise ValueError('Pi复核未覆盖明确规则，或对照原句没有绑定实际正文')
         if current['locked_body_digest'] and command.section_id not in payload.get('authorized_locked_section_ids', []):
             raise PermissionError('原正文已锁定，本次回执没有明确的局部解锁授权')
+        if evidence := payload.get('knowledge_evidence'):
+            if payload['request_id'] != command.request_id:
+                raise ValueError('资料复核不属于该段修订的原请求。')
+            if command.adoption_mode == 'apply':
+                raise PermissionError('固定资料支持保存段落候选，当前入口尚不能正式采用该候选。')
+            if current['base_version_id'] != command.base_version_id:
+                raise ValueError('资料候选的作品基础版本已变化，请重新读取当前作品。')
+            if self.capture_revision_evidence(actor, evidence) != evidence:
+                raise ValueError('修订引用的固定资料页已变化，请重新核对原文。')
         return current, rules
 
     def submit_revision(self, workspace_id, task_id, actor, command, *, runtime, write_guard=None):
@@ -226,6 +242,7 @@ class SegmentProductionUseCase:
                 raise ValueError('同一修改请求身份已绑定其他内容')
             return self.read_request(workspace_id, task_id, command.request_id, actor)
         _current, rules = self.verify_revision(workspace_id, task_id, actor, command)
+        review = self.repository.execution_records.get_task_event(workspace_id, command.semantic_review_ref)
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         def submit_guard(conn):
             if write_guard is not None:
@@ -238,7 +255,8 @@ class SegmentProductionUseCase:
         plan = self.repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
         with prepare_narration_source(self.repository, task, plan, actor) as prepared:
             job = self.repository.segment_revisions.create_segment_revision_job(
-                task, actor, encoded, rules, prepared, write_guard=submit_guard, budget_policy=policy)
+                task, actor, encoded, rules, prepared, write_guard=submit_guard, budget_policy=policy,
+                knowledge_evidence=review.payload.get('knowledge_evidence', []))
         runtime.scheduler.submit(SubmissionIntent(workspace_id, 'creation_job', job.id, job.input_digest,
             self.revision_key(job), SchedulePolicy()), actor)
         runtime.wake()
@@ -266,6 +284,7 @@ class SegmentProductionUseCase:
             'section_id': event.payload['command']['section_id'], 'job_id': job.id, 'status': job.status,
             'device_requests': [dict(item) for item in requests], 'result': result,
             'rules_check': event.payload['rules_check'], 'semantic_review_ref': event.payload['command']['semantic_review_ref'],
+            **({'knowledge_evidence': event.payload['knowledge_evidence']} if 'knowledge_evidence' in event.payload else {}),
             'queue_state': requests[-1]['state'] if requests else 'submission_pending',
             'waiting_reason': job.failure_reason or (requests[-1]['wait_reason'] or requests[-1]['last_failure_reason']
                 if requests else 'queue_submission_pending'),
@@ -872,6 +891,10 @@ class SegmentProductionUseCase:
         operation = 'narration_edit' if job.kind == SEGMENT_REVISION_KIND else 'render'
         if owner.authorization_verdict(task, actor, operation, connection=connection,check_scope=connection is None) != 'ready':
             raise PermissionError('段落执行的原任务授权不可用')
+        if event.get('knowledge_evidence') and intent.unit_key.startswith('segment_video:'):
+            from app.schemas import NarrationRevisionRequest
+            self.verify_revision(task.workspace_id, task.id, actor,
+                NarrationRevisionRequest.model_validate(event['command']), connection=connection)
         if intent.unit_key.startswith('segment_revision:'):
             if self.visual_decision(job,event['command']['section_id'],connection=connection) is not None:
                 raise ValueError('原段落已有音频检查点，不能重新配音')
@@ -1269,7 +1292,8 @@ class SegmentProductionUseCase:
                     'narration_duration_seconds':audio.duration_seconds,'montage':plan_payload,
                     'request_id':command.request_id if command else grant.request_id,'adopted':adopted,
                     'segment_version':f'event_{job.id}_segment_{digest(grant.unit_key)[:24]}',
-                    'input_id':command.input_id if command else None})
+                    'input_id':command.input_id if command else None,
+                    **({'knowledge_evidence': event['knowledge_evidence']} if event.get('knowledge_evidence') else {})})
             publication.payload['video'] = {'kind':'video','artifact_ref':video_ref,'sha256':published_video.sha256,
                 'url':f'/api/creation-tasks/{task.id}/segments/{section_id}/versions/{publication.id}/video',
                 'segment_version':publication.id,'duration_seconds':plan.duration_seconds,
