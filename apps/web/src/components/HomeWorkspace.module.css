@@ -4,6 +4,16 @@
 .home a { color:var(--accent); text-decoration:none; }
 .home a:hover { text-decoration:underline; }
 .home [hidden] { display:none; }
+.workOverview { container: home-overview / inline-size; padding:12px; color:var(--text-1); font-size:13px; }
+.workOverview p { margin-block:0 8px; overflow-wrap:anywhere; }
+.workOverviewCounts { display:grid; gap:8px; margin:0; }
+.workOverviewCounts > div { display:flex; justify-content:space-between; align-items:baseline; gap:8px; min-width:0; padding:8px; border-bottom:1px solid var(--border-1); }
+.workOverviewCounts dt { color:var(--text-2); overflow-wrap:anywhere; }
+.workOverviewCounts dd { margin:0; font-variant-numeric:tabular-nums; font-weight:500; }
+@container home-overview (min-width: 320px) {
+ .workOverviewCounts { grid-template-columns:repeat(3,minmax(0,1fr)); }
+ .workOverviewCounts > div { flex-direction:column; gap:4px; }
+}
 .toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; flex:0 0 auto; padding:16px 24px; border-bottom:1px solid var(--rule); background:var(--surface-1); }
 .toolbar [data-app-select-trigger] { min-width:0; max-width:142px; height:32px; padding:0 22px 0 8px; border:1px solid var(--border-1); border-radius:7px; color:var(--text-1); background:var(--surface-1); }
 .viewButton { display:grid; flex:0 0 32px; width:32px; height:32px; place-items:center; padding:0; margin-left:auto; border:0; border-radius:7px; color:var(--text-2); background:transparent; }

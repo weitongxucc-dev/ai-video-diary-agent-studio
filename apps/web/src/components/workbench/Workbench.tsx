@@ -13,7 +13,7 @@ import { Button } from "../ui/button";
 import { ConversationTarget } from "./ConversationTarget";
 import { MediaVisibility } from "../ui/media-visibility";
 import { ScrollArea } from "../ui/scroll-area";
-import { WorkbenchAssistantTargetContext, WorkbenchRegistry, WorkspacePanelContext, WorkspacePageContext, workspacePageId, workspaceResourcePaths, isCreationDraftPage, isWorkbenchManagedPath, isWorkResourcePanel, shouldDockWorkspaceResource, type WorkspacePage } from "./context";
+import { HOME_OVERVIEW_HREF, WorkbenchAssistantTargetContext, WorkbenchRegistry, WorkspacePanelContext, WorkspacePageContext, workspacePageId, workspaceResourcePageIds, workspaceResourceManageHref, isCreationDraftPage, isWorkbenchManagedPath, isWorkResourcePanel, shouldDockWorkspaceResource, type WorkspacePage } from "./context";
 import { EditorDockProvider } from "./EditorDock";
 import { EditorResourcePane } from "./EditorResourcePane";
 import styles from "./Workbench.module.css";
@@ -99,11 +99,11 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
   const updateShell = useCallback((id: string, props: AppShellProps) => setShells(current => current[id] === props ? current : { ...current, [id]: props }), []);
   const newVideo = isCreationDraftPage(activeId);
   const activePage = pages.find(page => page.id === activeId && page.open);
-  const resourceIds = workspaceResourcePaths;
+  const resourceIds = workspaceResourcePageIds;
   const managed = isWorkbenchManagedPath(pathname, params);
-  const dockedTask = shouldDockWorkspaceResource(activeId, params) && targetId ? pages.find(page => page.id === targetId && page.open) : undefined;
+  const dockedTask = shouldDockWorkspaceResource(pathname, params) && targetId ? pages.find(page => page.id === targetId && page.open) : undefined;
   const dockedHref = dockedTask?.href;
-  const leftResourceOpen = Boolean(dockedTask && isWorkResourcePanel(activeId, params));
+  const leftResourceOpen = Boolean(dockedTask && isWorkResourcePanel(pathname, params));
   const releaseResourcePane = useCallback(() => { if (dockedHref) router.push(dockedHref); }, [dockedHref, router]);
   const shell = shells[dockedTask?.id ?? activeId] ?? {};
   const resourceShell = shells[activeId] ?? {};
@@ -175,7 +175,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
             inspectorTitle: resourceShell.inspectorTitle,
             inspectorOpenKey: resourceShell.inspectorOpenKey,
             onInspectorClose: resourceShell.onResourceInspectorClose,
-            manageHref: `${activeId}?mode=manage`,
+            manageHref: workspaceResourceManageHref(activeId),
           } : undefined}
           onReleaseResourcePane={releaseResourcePane}
           inspectorDismissKey={leftResourceOpen ? dockedTask?.id : activeId}
@@ -190,7 +190,10 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
             {pages.filter(page => page.open && page.content !== null).map(page => {
               const auxiliary = Boolean(dockedTask && page.id === activeId);
               const view = <PageMount key={page.id} page={page} active={managed && (page.id === activeId || page.id === dockedTask?.id)} auxiliary={auxiliary} leftResource={auxiliary && leftResourceOpen} updateShell={updateShell} />;
-              return resourceIds.includes(page.id) ? <EditorResourcePane key={page.id} title={page.label} active={managed && page.id === activeId} docked={auxiliary} leftDock={auxiliary && leftResourceOpen ? { host: resourceHost, manageHref: `${page.id}?mode=manage` } : undefined} showDrawerLink={page.id === "/library" || page.id === "/knowledge"} onClose={() => { if (dockedTask) activate(dockedTask.id); }}>{view}</EditorResourcePane> : view;
+              return resourceIds.includes(page.id) ? <EditorResourcePane key={page.id} title={page.label} active={managed && page.id === activeId} docked={auxiliary} leftDock={auxiliary && leftResourceOpen ? {
+                host: resourceHost, manageHref: workspaceResourceManageHref(page.id),
+                manageLabel: page.id === HOME_OVERVIEW_HREF ? "打开完整首页" : undefined,
+              } : undefined} showDrawerLink={page.id === "/library" || page.id === "/knowledge"} onClose={() => { if (dockedTask) activate(dockedTask.id); }}>{view}</EditorResourcePane> : view;
             })}
           </div>
           {closeError ? <div role="alert" className={styles.closeError}>{closeError}<Button variant="ghost" onClick={() => setCloseError(null)}>知道了</Button></div> : null}

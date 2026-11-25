@@ -21,8 +21,12 @@ export const WorkbenchRegistry = createContext<{ register: (page: Omit<Workspace
 export const WorkspacePageContext = createContext<WorkspacePageSlot | null>(null);
 export const WorkbenchAssistantTargetContext = createContext<AppShellProps["assistantContext"]>(undefined);
 
-export const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates", "/history"];
+export const HOME_OVERVIEW_HREF = "/?mode=panel";
+export const FULL_HOME_HREF = "/?mode=manage";
+const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates", "/history"];
+export const workspaceResourcePageIds = [...workspaceResourcePaths, HOME_OVERVIEW_HREF];
 const workResourcePanels = new Map([
+  ["/", HOME_OVERVIEW_HREF],
   ["/library", "/library?mode=panel&resource=materials"],
   ["/knowledge", "/knowledge?mode=panel"],
   ["/profiles", "/profiles?mode=panel"],
@@ -32,6 +36,10 @@ const workResourcePanels = new Map([
 
 export function workspaceNavigationHref(href: string, hasActiveWork: boolean) {
   return hasActiveWork ? workResourcePanels.get(href.split("?")[0]) ?? href : href;
+}
+
+export function workspaceResourceManageHref(pageId: string) {
+  return pageId === HOME_OVERVIEW_HREF ? FULL_HOME_HREF : `${pageId}?mode=manage`;
 }
 
 export function isWorkResourcePanel(pathname: string, search?: Pick<URLSearchParams, "get"> | null) {
@@ -88,6 +96,7 @@ export function useWorkspaceSearchParams() {
 }
 export function workspacePageId(pathname: string, search: Pick<URLSearchParams, "get">) {
   if (pathname.startsWith("/tasks/")) return pathname;
+  if (pathname === "/" && search.get("mode") === "panel") return HOME_OVERVIEW_HREF;
   if (isCreationDraftRoute(pathname, search)) {
     const id = search.get("draft_id");
     const requestId = search.get("request_id");

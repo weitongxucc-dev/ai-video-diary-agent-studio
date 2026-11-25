@@ -824,6 +824,7 @@ describe("hidden workspace media", () => {
       <div aria-label="当前时间线">作品 a</div>
     </AppShellFrame>);
     const nav = screen.getByRole("navigation", { name: "主要导航" });
+    expect(within(nav).getByRole("link", { name: "首页" })).toHaveAttribute("href", "/?mode=panel");
     expect(within(nav).getByRole("link", { name: "素材库" })).toHaveAttribute("href", "/library?mode=panel&resource=materials");
     expect(within(nav).getByRole("link", { name: "知识库" })).toHaveAttribute("href", "/knowledge?mode=panel");
     expect(within(nav).getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles?mode=panel");

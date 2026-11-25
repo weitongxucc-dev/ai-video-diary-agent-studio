@@ -30,7 +30,7 @@ describe("saved scheduled definition preview shortcut", () => {
     expect(mocks.push).toHaveBeenCalledExactlyOnceWith(`/${route}?mode=manage`);
   });
 
-  it.each([["2", "/library?mode=panel&resource=materials"], ["3", "/knowledge?mode=panel"]])("opens the in-work resource panel with shortcut %s", (key, href) => {
+  it.each([["1", "/?mode=panel"], ["2", "/library?mode=panel&resource=materials"], ["3", "/knowledge?mode=panel"]])("opens the in-work resource panel with shortcut %s", (key, href) => {
     render(<KeyboardShortcuts hasActiveWork onOpenSearch={vi.fn()} />);
     fireEvent.keyDown(window, { key, metaKey: true });
     expect(mocks.push).toHaveBeenCalledExactlyOnceWith(href);

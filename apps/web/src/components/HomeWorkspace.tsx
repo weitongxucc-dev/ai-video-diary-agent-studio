@@ -1,11 +1,12 @@
 "use client";
 import { NEW_VIDEO_HREF } from "@/lib/preflight-draft-url";
 import { WorkspaceVideo, WorkspaceAudio } from "./workbench/WorkspaceMedia";
+import { useWorkspacePage } from "./workbench/context";
 
 import Link from "next/link";
 import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { ArrowRight, ChevronRight, Columns3, Info, List, LoaderCircle, Plus, Search, Volume2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { creationTaskFailureReason, creationTaskRepairAction, creationTaskShortStatus, creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import { CreationTaskStageIcon } from "@/components/CreationTaskStageIcon";
@@ -378,6 +379,9 @@ function formatBytes(value: number | null) {
  * 切换成员（localStorage 令牌变化）后自动重新读取。
  */
 export function HomeDashboardLive() {
+  const page = useWorkspacePage();
+  const active = page?.active ?? true;
+  const overview = page?.auxiliary === true;
   const [data, setData] = useState<HomeAggregation | null>(null);
   const [tasks, setTasks] = useState<CreationTask[]>([]);
   const [foundation, setFoundation] = useState<ProductionFoundation | null>(null);
@@ -399,17 +403,17 @@ export function HomeDashboardLive() {
   const daysRef = useRef(days);
   daysRef.current = days;
 
-  async function load(targetDays: 7 | 30, onlyTrend = false) {
+  const load = useCallback(async (targetDays: 7 | 30, onlyTrend = false) => {
     const request = ++requestRef.current;
     setLoading(true); setError(null);
-    if (onlyTrend) {
+    if (onlyTrend || overview) {
       try {
         const dashboard = await getHomeDashboard(targetDays);
         if (request !== requestRef.current) return;
         setData(dashboard);
       } catch (cause) {
         if (request !== requestRef.current) return;
-        setError(cause instanceof Error ? cause.message : "接收趋势读取失败。");
+        setError(cause instanceof Error ? cause.message : overview ? "首页概览读取失败。" : "接收趋势读取失败。");
       }
       if (request === requestRef.current) setLoading(false);
       return;
@@ -431,7 +435,7 @@ export function HomeDashboardLive() {
       setMaterialsError(materialsResult.reason instanceof Error ? materialsResult.reason.message : "最近素材读取失败。");
     }
     setLoading(false);
-  }
+  }, [overview]);
 
   // 跨标签页写入或切回窗口：只有本地成员令牌真的变了才算换身份。
   // 普通切回窗口令牌不变，不能把首页清空后再也不恢复。
@@ -466,18 +470,29 @@ export function HomeDashboardLive() {
 
   // 身份收敛前不发请求：首帧匿名请求会把不该给这一身份的私有内容取回来。
   useEffect(() => {
-    if (!identity.ready) return;
+    if (!identity.ready || !active) return;
     void load(daysRef.current);
     return () => { requestRef.current += 1; };
-  }, [identityKey, identity.ready]);
+  }, [active, identityKey, identity.ready, load]);
 
   useEffect(() => {
-    if (!identity.ready) return;
+    if (!identity.ready || !active) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void load(daysRef.current);
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [identityKey, identity.ready]);
+  }, [active, identityKey, identity.ready, load]);
+
+  if (overview) {
+    const counts = data?.counts.filter(fact => ["visible_assets", "tasks", "works"].includes(fact.key)) ?? [];
+    return <section className={styles.workOverview} aria-label="当前成员概览">
+      {error ? <div role="alert"><p>首页概览读取失败。{error}</p><button type="button" onClick={() => void load(daysRef.current)}>重新读取</button></div>
+        : loading && !data ? <p role="status">正在读取首页概览…</p>
+        : counts.length ? <dl className={styles.workOverviewCounts}>
+          {counts.map(fact => <div key={fact.key}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
+        </dl> : <p>当前没有可显示的概览数据。</p>}
+    </section>;
+  }
 
   const live: HomeLiveState = {
     data, loading, error, days,

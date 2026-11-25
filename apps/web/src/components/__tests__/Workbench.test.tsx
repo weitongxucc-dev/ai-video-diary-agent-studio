@@ -43,7 +43,7 @@ function Page({ id }: { id: string }) {
 const resourceLabels: Record<string, string> = { "/library": "素材库", "/knowledge": "知识库", "/profiles": "人物与声音", "/templates": "视频模板", "/history": "发布与数据" };
 function route() {
   const path = navigation.path;
-  const label = resourceLabels[path] ?? `作品 ${path.at(-1)}`;
+  const label = path === "/" ? navigation.search === "mode=panel" ? "首页概览" : "首页" : resourceLabels[path] ?? `作品 ${path.at(-1)}`;
   return <WorkspaceRoute label={label}><Page id={path} /></WorkspaceRoute>;
 }
 function fixture(children: ReactNode) { return <WorkbenchTargetProvider><Workbench>{children}</Workbench></WorkbenchTargetProvider>; }
@@ -109,6 +109,42 @@ it("shows resource routes in the left panel without remounting the active work o
   navigation.search = "";
   view.rerender(fixture(route()));
   expect(workDraft).toBeVisible();
+});
+
+it("opens the home overview beside the same work and retains the work when opening the full home", async () => {
+  const view = render(fixture(route()));
+  const work = await screen.findByRole("region", { name: "作品 a" });
+  const player = within(work).getByLabelText("预览 /tasks/a") as HTMLVideoElement;
+  const draft = screen.getByRole("textbox", { name: "持续对话草稿" });
+  fireEvent.change(draft, { target: { value: "未发送的作品要求" } });
+  player.currentTime = 12;
+  fireEvent.timeUpdate(player);
+  fireEvent.play(player);
+
+  navigation.path = "/"; navigation.search = "mode=panel";
+  view.rerender(fixture(route()));
+  const overview = await screen.findByRole("region", { name: "首页概览" });
+  const pane = screen.getByRole("complementary", { name: "作品资源" });
+  expect(pane).toContainElement(overview);
+  expect(within(pane).getByRole("link", { name: "打开完整首页" })).toHaveAttribute("href", "/?mode=manage");
+  expect(work).toBeVisible();
+  expect(player.currentTime).toBe(12);
+  expect(screen.getByLabelText("发送目标")).toHaveTextContent("a");
+  expect(vi.mocked(HTMLMediaElement.prototype.pause).mock.contexts).not.toContain(player);
+
+  navigation.search = "mode=manage";
+  view.rerender(fixture(route()));
+  expect(await screen.findByRole("region", { name: "首页" })).toBeVisible();
+  expect(screen.queryByRole("complementary", { name: "作品资源" })).not.toBeInTheDocument();
+  expect(screen.getByLabelText("发送目标")).toHaveTextContent("a");
+  expect(draft).toHaveValue("未发送的作品要求");
+
+  navigation.path = "/tasks/a"; navigation.search = "";
+  view.rerender(fixture(route()));
+  expect(screen.getByRole("region", { name: "作品 a" })).toBe(work);
+  expect(within(work).getByLabelText("预览 /tasks/a")).toBe(player);
+  expect(player.currentTime).toBe(12);
+  expect(composerMount).toHaveBeenCalledTimes(1);
 });
 
 it.each(["/profiles", "/templates"])("opens %s as a full workspace without an active work, including a panel URL", async path => {

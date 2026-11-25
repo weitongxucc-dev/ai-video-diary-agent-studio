@@ -18,10 +18,12 @@ function RoutedWorkbenchTarget({ children }: { children: ReactNode }) {
   const rawDraftId = isDraftRoute ? params?.get("draft_id") : null;
   const draftId = rawDraftId && validDraftId(rawDraftId) ? rawDraftId.toLowerCase() : null;
   const targetId = pathname.startsWith("/tasks/") ? pathname : null;
-  const routeKey = isDraftRoute ? `draft:${draftId ?? ""}` : pathname;
+  const mode = params?.get("mode");
+  const browsingHome = pathname === "/" && (mode === "panel" || mode === "manage");
+  const routeKey = isDraftRoute ? `draft:${draftId ?? ""}` : browsingHome ? `home:${mode}` : pathname;
   const [selection, setSelection] = useState({ routeKey, target: { targetId, draftId } });
   if (selection.routeKey !== routeKey) {
-    const explicitTarget = pathname === "/" || targetId !== null || isDraftRoute;
+    const explicitTarget = (pathname === "/" && !browsingHome) || targetId !== null || isDraftRoute;
     setSelection({ routeKey, target: explicitTarget ? { targetId, draftId } : selection.target });
   }
   const clearTarget = useCallback(() => setSelection(current => ({ ...current, target: homeTarget })), []);
