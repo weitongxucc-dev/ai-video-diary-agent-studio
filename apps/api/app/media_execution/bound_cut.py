@@ -14,6 +14,7 @@ from app.quality_worker_runtime import budget_identity
 
 from .adapter import FfmpegAdapter, is_bound_video_cut
 from .contracts import MediaExecutionError
+from .cut_disk import CutDiskProgress
 from .cut_measurement import Mp4CutLimits, copy_verified_cut_output, measure_mp4_cut
 
 
@@ -199,7 +200,9 @@ class BoundMp4CutUseCase:
         limits = context.scheduler.resources.scene_runtime_limits(grant)
         if limits is None or limits.cpu_policy is None or asdict(limits.cpu_policy) != facts["cpu_policy"]:
             raise ValueError("获许可的 CPU 运行策略与截取准备回执不一致。")
-        return GrantedMp4Cut(facts, Mp4CutLimits(**facts["limits"]), Path(resources["output_root"]), context, recheck)
+        progress = context.scheduler.resources.track_cut_disk(grant)
+        return GrantedMp4Cut(facts, Mp4CutLimits(**facts["limits"]), Path(resources["output_root"]),
+                             context, recheck, progress)
 
 
 @dataclass(frozen=True)
@@ -209,6 +212,7 @@ class GrantedMp4Cut:
     output_root: Path
     context: object
     recheck: Callable[[], None]
+    disk_progress: CutDiskProgress
 
     def execute(self, operation, source: Path, output: Path):
         if not output.resolve().is_relative_to(self.output_root):
@@ -217,15 +221,27 @@ class GrantedMp4Cut:
         def run(argv, paths, *, env):
             return self.context.run(argv, env=env, output_paths=paths, output_bytes=self.limits.max_work_bytes)
         binding = self.facts["source"]
-        return measure_mp4_cut(adapter, source, output.parent, source_sha256=binding["sha256"],
+        measured = measure_mp4_cut(adapter, source, output.parent, source_sha256=binding["sha256"],
             source_bytes=binding["size_bytes"], start=operation.options["start"],
             duration=operation.options["duration"], limits=self.limits, run=run, check=self.context.check,
-            staged_output=output)
+            staged_output=output, disk_progress=self.disk_progress)
+        self.disk_progress.verified(output, measured["output"]["bytes"])
+        return measured
 
     def publish(self, store, logical_ref, path, summary):
         if store.storage_root != self.output_root:
             raise ValueError("截取发布路径与获许可的产物卷不一致。")
-        check = self.context.check_execution_limits
-        return store.publish(logical_ref, lambda target: copy_verified_cut_output(
-            path, target, expected_bytes=summary["bytes"], expected_sha256=summary["sha256"], check=check),
-            check=check)
+        temporary = path.with_name(f".{path.name}.publish")
+
+        def check():
+            self.context.check_execution_limits()
+            self.context.scheduler.resources.check_cut_publication_disk(self.context.grant)
+
+        def write(target):
+            self.disk_progress.bind("publication", temporary, target)
+            copy_verified_cut_output(path, target, expected_bytes=summary["bytes"],
+                                     expected_sha256=summary["sha256"], check=check)
+
+        published = store.publish(logical_ref, write, temporary_path=temporary, check=check)
+        self.disk_progress.published()
+        return published

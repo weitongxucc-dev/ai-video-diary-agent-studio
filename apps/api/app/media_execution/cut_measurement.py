@@ -137,7 +137,7 @@ def _read_probe(payload: dict, limits: Mp4CutLimits, *, source: bool) -> tuple[d
 
 def measure_mp4_cut(adapter: FfmpegAdapter, source: Path, work_root: Path, *,
                     source_sha256: str, source_bytes: int, start: float, duration: float,
-                    limits: Mp4CutLimits, run, check, staged_output: Path | None = None) -> dict:
+                    limits: Mp4CutLimits, run, check, staged_output: Path | None = None, disk_progress=None) -> dict:
     """Run the bounded cut with a caller-owned grant and shared deadline.
 
     ``run(argv, paths, env=...)`` is the existing preparation command port. It
@@ -164,6 +164,8 @@ def measure_mp4_cut(adapter: FfmpegAdapter, source: Path, work_root: Path, *,
     with TemporaryDirectory(prefix="mp4-cut-", dir=work_root) as work:
         snapshot, output = Path(work) / "source.mp4", Path(work) / "cut.mp4"
         with snapshot.open("xb") as destination:
+            if disk_progress is not None:
+                disk_progress.bind("source", snapshot, destination)
             if _digest(source, source_bytes, check, copy_to=destination) != source_sha256:
                 raise _refused("media_cut_source_changed", "整源 SHA-256 与本次测量绑定不符。")
         snapshot.chmod(0o400)
@@ -208,6 +210,9 @@ def measure_mp4_cut(adapter: FfmpegAdapter, source: Path, work_root: Path, *,
             raise _refused("media_cut_range_limit", "整源或截取区间超出已核验的时长范围。")
         prepared = adapter.video_cut("cut", snapshot, output, cut, threads=1,
                                      input_limits=(*input_limits, *short_analysis, "-filter_complex_threads", "1", "-xerror"))
+        if disk_progress is not None:
+            with output.open("xb") as destination:
+                disk_progress.bind("staging", output, destination)
         run_stage("encode", prepared.command)
         output_info = output.lstat()
         output_bytes = output_info.st_size

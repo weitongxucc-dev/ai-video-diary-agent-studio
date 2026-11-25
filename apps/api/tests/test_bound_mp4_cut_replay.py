@@ -26,12 +26,28 @@ from app.local_members import LocalMemberService
 from app.material_ingestion import MaterialIngestionService
 from app.media_execution import TaskMediaExecutionDelegate, build_media_execution_entrypoint
 from app.media_execution.bound_cut import BOUND_CUT_FACT, BOUND_CUT_KIND, BoundMp4CutUseCase
+from app.media_execution.cut_disk import CutDiskProgress
 from app.media_execution.cut_measurement import copy_verified_cut_output
 from app.production import MaterialSegment
 from app.quality_worker_runtime import budget_identity
 from test_host_resource_probes import _render_budget
 from test_material_ingestion import hash_scheduler
 from test_task_media_grants import case
+
+
+def test_cut_disk_progress_rejects_a_replacement_at_its_owned_path(tmp_path):
+    progress = CutDiskProgress(tmp_path, source_bytes=8192, output_bytes=16384)
+    snapshot = tmp_path / "source.mp4"
+    with snapshot.open("xb") as target:
+        progress.bind("source", snapshot, target)
+        target.write(b"x" * 4096)
+    allocated = min(8192, snapshot.stat().st_blocks * 512)
+    assert allocated > 0 and progress.remaining_bytes() == 40960 - allocated
+
+    snapshot.rename(tmp_path / "original.mp4")
+    snapshot.write_bytes(b"y" * 4096)
+    with pytest.raises(ValueError, match="文件身份"):
+        progress.remaining_bytes()
 
 
 def test_cut_admission_cannot_use_unselected_or_changed_preparation(tmp_path, monkeypatch):
@@ -115,7 +131,7 @@ def _ingest(repo, actor, path, tmp_path):
 
 @pytest.mark.parametrize("outcome", [
     "published", "missing_receipt", "changed_tools", "changed_source", "no_access",
-    "no_selection", "recorded_budget", "low_disk", "changed_output",
+    "no_selection", "recorded_budget", "low_disk", "changed_output", "boundary_disk", "external_disk",
 ])
 def test_cut_replays_an_existing_completed_preparation(tmp_path, monkeypatch, retained_preparation, outcome):
     preparation_root, prep_request, existing_source = retained_preparation
@@ -187,6 +203,7 @@ def test_cut_replays_an_existing_completed_preparation(tmp_path, monkeypatch, re
     request = {"request_id": str(uuid4()), "base_version_id": base.id, "asset_id": asset.id,
                "start_seconds": .25, "end_seconds": 1.25, "preparation_request_id": prep_request}
     url = "/api/creation-tasks/task/media-jobs"
+    disk_samples = []
     try:
         if outcome == "missing_receipt":
             (preparation.root / "receipts" / f"{prep_request}-{witness['generation']}.json").unlink()
@@ -204,6 +221,25 @@ def test_cut_replays_an_existing_completed_preparation(tmp_path, monkeypatch, re
             # Fit staging alone but fail its publication-copy reservation.
             free = host_budget.min_free_disk_bytes + asset.size_bytes + render.max_output_bytes
             monkeypatch.setattr(psutil, "disk_usage", lambda _: SimpleNamespace(free=free))
+        elif outcome in {"boundary_disk", "external_disk"}:
+            initial = host_budget.min_free_disk_bytes + asset.size_bytes + 2 * render.max_output_bytes
+            external = store.storage_root / "other-job.mp4"
+
+            def bounded_disk_usage(_):
+                live = list(store.storage_root.glob("media_*/mp4-cut-*/*.mp4"))
+                live += list(store.storage_root.glob("media_*/*.mp4"))
+                live += list(store.storage_root.glob("media_*/.media-output.mp4.publish"))
+                live += list(store.storage_root.glob("media/media_*/*.mp4"))
+                if outcome == "external_disk" and not external.exists() and any(path.stat().st_size for path in live):
+                    external.write_bytes(b"x" * 65536)
+                if external.exists():
+                    live.append(external)
+                # Model the cut's byte budgets and all live media allocations.
+                consumed = sum(path.stat().st_size for path in live)
+                disk_samples.append((initial - consumed, tuple(path.name for path in live)))
+                return SimpleNamespace(free=initial - consumed)
+
+            monkeypatch.setattr(psutil, "disk_usage", bounded_disk_usage)
         elif outcome == "changed_output":
             def change_before_publish(path, target, **options):
                 with path.open("r+b") as handle:
@@ -240,15 +276,24 @@ def test_cut_replays_an_existing_completed_preparation(tmp_path, monkeypatch, re
             assert runtime.scheduler.shutdown_released()
             return
         assert executed
-        if outcome == "changed_output":
+        if outcome in {"changed_output", "external_disk"}:
             assert result["status"] == "failed"
-            assert result["failure_reason"] == "media_cut_output_changed"
-            assert len(registered) == 3 and runtime.scheduler.shutdown_released()
+            if outcome == "changed_output":
+                assert result["failure_reason"] == "media_cut_output_changed"
+                assert len(registered) == 3
+            else:
+                assert result["failure_reason"] == "media_cut_resource_refused"
+                assert "other-job.mp4" in disk_samples[-1][1] and not registered
+            assert runtime.scheduler.shutdown_released()
             assert not repo.execution_records.list_artifact_records("local", "task")
             assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == base.id
             assert not list((store.storage_root / "media").rglob("*.mp4"))
             return
         assert result["status"] == "succeeded", result
+        if outcome == "boundary_disk":
+            assert disk_samples[0][0] == initial
+            assert any(free < initial and "source.mp4" in files for free, files in disk_samples)
+            assert any(".media-output.mp4.publish" in files and "source.mp4" not in files for _, files in disk_samples)
         assert client.post(url, json=request).json() == result
         assert client.post(url, json={**request, "preparation_request_id": uuid4().hex}).status_code == 409
         assert len(registered) == 3 and all(grant == registered[0][0] for grant, _ in registered)
@@ -267,6 +312,6 @@ def test_cut_replays_an_existing_completed_preparation(tmp_path, monkeypatch, re
         (tmp_path / "evidence.json").write_text(json.dumps({"preparation": facts["preparation"],
             "source": facts["source"], "request": request["request_id"], "outer_job": result["job_id"],
             "artifact": artifact.id, "artifact_sha256": artifact.sha256, "version": version.id,
-            "registered_children": [child.pid for _, child in registered]}, indent=2))
+            "registered_children": [child.pid for _, child in registered], "disk_samples": disk_samples}, indent=2))
     finally:
         assert runtime.stop(2)

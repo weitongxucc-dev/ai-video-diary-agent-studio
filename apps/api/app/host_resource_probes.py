@@ -1143,6 +1143,7 @@ class HostResourceProbe:
         self._running_io_unavailable: str | None = None
         self._running_cpu_key = None
         self._running_cpu = None
+        self._cut_disk_progress = {}
         self._io_lock = threading.RLock()
         self._observer_lock = threading.Lock()
         self._observer_stop = threading.Event()
@@ -1839,15 +1840,9 @@ class HostResourceProbe:
                     reserve_bytes=self.budget.min_free_disk_bytes)
                 disk_passed = all(item['passed'] for item in checks['write_volumes'].values())
             elif kind == "task_video_cut":
-                from app.device_resource_volumes import sample_write_volumes
                 sampling = "cut_output_volume"
-                # The cut worker stages on the output volume. Reserve the
-                # source snapshot, staged output and publication copy together.
-                allocations = {"database": 0, "temporary": 0,
-                               "output": resources["work_bytes"] + resources["max_output_bytes"]}
-                disks = sample_write_volumes(self.disk_roles, allocations, reserve_bytes=self.budget.min_free_disk_bytes)
-                for role, facts in disks.items():
-                    checks[f"disk_free_bytes:{self.disk_roles[role]}"] = facts
+                disks = self._cut_disk_checks(resources, cpu_grant)
+                checks.update(disks)
                 disk_passed = all(item["passed"] for item in disks.values())
             elif self.disk_roles is not None and (kind in {
                     "creation_render", "creation_presenter_render", "task_clip_preview", "task_audio"}
@@ -1898,6 +1893,39 @@ class HostResourceProbe:
         if resources["input_bytes"] > self.budget.max_unit_input_bytes:
             return "declared_resources_exceed_budget"
         return None
+
+    def track_cut_disk(self, grant: Grant):
+        from app.media_execution.cut_disk import CutDiskProgress
+
+        resources = self._grant_resources(grant)
+        if (resources is None or resources.get("kind") != "task_video_cut"
+                or self._cut_refusal(resources) is not None or grant in self._cut_disk_progress):
+            raise ValueError("截取磁盘进度缺少唯一且有效的原许可")
+        progress = CutDiskProgress(self.disk_roles["output"], source_bytes=resources["input_bytes"],
+                                   output_bytes=resources["max_output_bytes"])
+        self._cut_disk_progress[grant] = progress
+        return progress
+
+    def _cut_disk_checks(self, resources, grant):
+        from app.device_resource_volumes import sample_write_volumes
+
+        progress = self._cut_disk_progress.get(grant)
+        # Terms are additional writes. With no trusted live progress, including
+        # at admission, reserve the full snapshot, staging and copy.
+        output = (resources["work_bytes"] + resources["max_output_bytes"]
+                  if progress is None else progress.remaining_bytes())
+        disks = sample_write_volumes(self.disk_roles, {"database": 0, "temporary": 0, "output": output},
+                                     reserve_bytes=self.budget.min_free_disk_bytes)
+        return {f"disk_free_bytes:{self.disk_roles[role]}": facts for role, facts in disks.items()}
+
+    def check_cut_publication_disk(self, grant: Grant):
+        resources = self._grant_resources(grant)
+        if (resources is None or resources.get("kind") != "task_video_cut"
+                or self._cut_refusal(resources) is not None or grant not in self._cut_disk_progress):
+            raise ValueError("截取发布磁盘进度无法绑定到原许可")
+        checks = self._cut_disk_checks(resources, grant)
+        if not all(item["passed"] for item in checks.values()):
+            raise HostResourceRefusal(HostResourceDecision(False, resources, checks, "cut_output_volume_insufficient"))
 
     @staticmethod
     def _cut_owner_matches(work) -> bool:
@@ -2165,7 +2193,10 @@ class HostResourceProbe:
             return True  # Resident model allocations live only in the proven-exited child group.
         if resources.get("kind") == "creation_montage_plan" and resources.get("execution_mode") == "metadata_only":
             return True
-        if (resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview", "task_video_cut"}
+        if resources.get("kind") == "task_video_cut" and resources.get("execution_mode") == "cpu_ffmpeg":
+            self._cut_disk_progress.pop(grant, None)
+            return True  # Scheduler has already proved all registered child groups exited.
+        if (resources.get("kind") in {"creation_render", "creation_presenter_render", "task_clip_preview"}
                 and resources.get("execution_mode") == "cpu_ffmpeg"):
             return True
         if resources.get("kind") == "task_audio" and resources.get("execution_mode") in {"cpu_ffmpeg", PCM_ASSEMBLY_MODE}:
