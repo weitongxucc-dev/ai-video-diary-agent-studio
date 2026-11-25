@@ -806,6 +806,32 @@ describe("hidden workspace media", () => {
     expect(pause).toHaveBeenCalledTimes(2);
   });
 
+  it("routes resource links into the active work and keeps narrow chat visible while showing resource details", () => {
+    pathname = "/library";
+    search = "mode=panel";
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(node: Element) { if (node.hasAttribute("data-editor-toolbar-parent")) this.callback([{ target:node, contentRect:{width:720} } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      unobserve() {} disconnect() {}
+    });
+    function OpenResourceDetails() {
+      const { openResourceInspector } = useContext(WorkspacePanelContext);
+      return <button onClick={openResourceInspector}>查看片段</button>;
+    }
+    render(<AppShellFrame activeCreationTaskId="a" editorLayout resourceOpen
+      conversation={<input aria-label="未发送要求" defaultValue="请改这处字幕" />}
+      resourcePanel={{ content: <OpenResourceDetails />, inspector:<p>原片 12 秒</p>, inspectorTitle:"素材详情" }}>
+      <div aria-label="当前时间线">作品 a</div>
+    </AppShellFrame>);
+    const nav = screen.getByRole("navigation", { name: "主要导航" });
+    expect(within(nav).getByRole("link", { name: "素材库" })).toHaveAttribute("href", "/library?mode=panel&resource=materials");
+    expect(within(nav).getByRole("link", { name: "知识库" })).toHaveAttribute("href", "/knowledge?mode=panel");
+    fireEvent.click(screen.getByRole("button", { name: "查看片段" }));
+    expect(within(screen.getByRole("complementary", { name: "作品资源" })).getByText("原片 12 秒")).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "未发送要求" })).toBeVisible();
+    expect(screen.getByLabelText("当前时间线")).toBeVisible();
+  });
+
   it("pauses the collapsed work area and blocks late native playback without resetting its media", () => {
     render(<AppShell editorLayout conversation={<p>对话</p>}><video aria-label="剪辑成片" controls src="/output.mp4"/></AppShell>);
     const video=screen.getByLabelText("剪辑成片") as HTMLVideoElement;

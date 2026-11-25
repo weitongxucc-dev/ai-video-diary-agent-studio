@@ -13,7 +13,7 @@ import { Button } from "../ui/button";
 import { ConversationTarget } from "./ConversationTarget";
 import { MediaVisibility } from "../ui/media-visibility";
 import { ScrollArea } from "../ui/scroll-area";
-import { WorkbenchAssistantTargetContext, WorkbenchRegistry, WorkspacePanelContext, WorkspacePageContext, workspacePageId, workspaceResourcePaths, isCreationDraftPage, isWorkbenchManagedPath, type WorkspacePage } from "./context";
+import { WorkbenchAssistantTargetContext, WorkbenchRegistry, WorkspacePanelContext, WorkspacePageContext, workspacePageId, workspaceResourcePaths, isCreationDraftPage, isWorkbenchManagedPath, isWorkResourcePanel, type WorkspacePage } from "./context";
 import { EditorDockProvider } from "./EditorDock";
 import { EditorResourcePane } from "./EditorResourcePane";
 import styles from "./Workbench.module.css";
@@ -22,11 +22,11 @@ const WorkbenchViewStates = createContext(new Map<string, Map<string, unknown>>(
 
 // This cache owns only view lifetime. Business objects, task progress, versions,
 // conversation drafts and receipts keep their existing API/repository owners.
-const PageMount = memo(function PageMount({ page, active, auxiliary, updateShell }: {
-  page: WorkspacePage; active: boolean; auxiliary: boolean; updateShell: (id: string, props: AppShellProps) => void;
+const PageMount = memo(function PageMount({ page, active, auxiliary, leftResource, updateShell }: {
+  page: WorkspacePage; active: boolean; auxiliary: boolean; leftResource: boolean; updateShell: (id: string, props: AppShellProps) => void;
 }) {
   const panel = useContext(WorkspacePanelContext);
-  const visible = active && !(auxiliary && panel.inspectorOpen);
+  const visible = active && !(auxiliary && (leftResource ? panel.resourceInspectorOpen : panel.inspectorOpen));
   const node = useRef<HTMLDivElement>(null);
   const viewStates = useContext(WorkbenchViewStates);
   const viewState = viewStates.get(page.id) ?? new Map<string, unknown>();
@@ -74,6 +74,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
   const [shells, setShells] = useState<Record<string, AppShellProps>>({});
   const { targetId, draftId, clearTarget } = useWorkbenchTarget();
   const [closeError, setCloseError] = useState<string | null>(null);
+  const [resourceHost, setResourceHost] = useState<HTMLDivElement | null>(null);
   const playingMedia = useRef<HTMLMediaElement | null>(null);
   const releasePlaying = (event: SyntheticEvent) => {
     if (playingMedia.current === event.target) playingMedia.current = null;
@@ -102,6 +103,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
   const managed = isWorkbenchManagedPath(pathname, params);
   const dockedTask = resourceIds.includes(activeId) && params?.get("mode") !== "manage" && targetId ? pages.find(page => page.id === targetId && page.open) : undefined;
   const dockedHref = dockedTask?.href;
+  const leftResourceOpen = Boolean(dockedTask && isWorkResourcePanel(activeId, params));
   const releaseResourcePane = useCallback(() => { if (dockedHref) router.push(dockedHref); }, [dockedHref, router]);
   const shell = shells[dockedTask?.id ?? activeId] ?? {};
   const resourceShell = shells[activeId] ?? {};
@@ -112,6 +114,10 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
   const scopedShell: AppShellProps = { ...shell, children: null, inspector: shell.inspector && scoped(shell.inspector),
     inspectorConfirmation: shell.inspectorConfirmation && scoped(shell.inspectorConfirmation), toolbar: shell.toolbar && scoped(shell.toolbar),
     toolbarActions: shell.toolbarActions && scoped(shell.toolbarActions), quickInspector: shell.quickInspector ? openDetails => scoped(shell.quickInspector?.(openDetails)) : undefined };
+  const dockedInspector = dockedTask && activePage && resourceShell.inspector ?
+    <WorkspacePageContext.Provider value={{ id: activePage.id, href: activePage.href, active: managed, auxiliary: true, updateShell, viewState: viewStates.current.get(activePage.id)! }}>
+      {resourceShell.inspector}
+    </WorkspacePageContext.Provider> : undefined;
   const target = !newVideo && targetId ? shells[targetId]?.assistantContext : undefined;
   const resource = resourceShell.assistantContext;
   const tabs = pages.filter(page => page.open && (!resourceIds.includes(page.id) || page.id === activeId && !dockedTask));
@@ -136,7 +142,7 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
     }
     setShells(current => ({ ...current, [id]: closed }));
     setPages(current => current.map(page => page.id === id ? { ...page, content: null, open: false } : page));
-    if (activeId === id) {
+    if (activeId === id || dockedTask?.id === id) {
       const index = tabs.findIndex(page => page.id === id);
       const next = tabs[index - 1] ?? tabs[index + 1];
       router.push(next?.href ?? "/");
@@ -158,14 +164,31 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
       playingMedia.current = event.target;
     }} onPauseCapture={releasePlaying} onEndedCapture={releasePlaying}>
       <Tabs value={dockedTask?.id ?? activePage?.id ?? null} onValueChange={value => { if (typeof value === "string") activate(value); }} className={styles.root}>
-        <AppShellFrame {...scopedShell} autoFocus={scopedShell.autoFocus || newVideo} active={managed} activeCreationTaskId={shellPage?.id.startsWith("/tasks/") ? shellPage.id.slice("/tasks/".length) : undefined} resourceOpen={Boolean(dockedTask)} onReleaseResourcePane={releaseResourcePane} inspectorDismissKey={activeId} inspector={dockedTask && activePage ? <WorkspacePageContext.Provider value={{ id: activePage.id, href: activePage.href, active: managed, auxiliary: true, updateShell, viewState: viewStates.current.get(activePage.id)! }}>{resourceShell.inspector}</WorkspacePageContext.Provider> : scopedShell.inspector} inspectorTitle={dockedTask ? resourceShell.inspectorTitle : scopedShell.inspectorTitle} workspaceTabs={tabstrip} conversationActions={target?.task ? <ConversationTarget name={target.task.name} onReturn={() => targetId && activate(targetId)} onClear={clearTarget} /> : <span className="conversation-workspace-target">{newVideo ? "新视频构思" : "工作区对话"}</span>} conversation={<>
+        <AppShellFrame {...scopedShell}
+          autoFocus={scopedShell.autoFocus || newVideo}
+          active={managed}
+          activeCreationTaskId={shellPage?.id.startsWith("/tasks/") ? shellPage.id.slice("/tasks/".length) : undefined}
+          resourceOpen={Boolean(dockedTask)}
+          resourcePanel={leftResourceOpen ? {
+            content: <div className={styles.leftResourceHost} ref={setResourceHost} />,
+            inspector: dockedInspector,
+            inspectorTitle: resourceShell.inspectorTitle,
+            inspectorOpenKey: resourceShell.inspectorOpenKey,
+          } : undefined}
+          onReleaseResourcePane={releaseResourcePane}
+          inspectorDismissKey={leftResourceOpen ? dockedTask?.id : activeId}
+          inspector={dockedTask && !leftResourceOpen ? dockedInspector : scopedShell.inspector}
+          inspectorTitle={dockedTask && !leftResourceOpen ? resourceShell.inspectorTitle : scopedShell.inspectorTitle}
+          workspaceTabs={tabstrip}
+          conversationActions={target?.task ? <ConversationTarget name={target.task.name} onReturn={() => targetId && activate(targetId)} onClear={clearTarget} /> : <span className="conversation-workspace-target">{newVideo ? "新视频构思" : "工作区对话"}</span>}
+          conversation={<>
           <HomeCommandComposer key={draftId} {...resource} {...target} pageContext={undefined} assignLocation={href => router.push(href)} />
         </>}>
-          <div data-workbench-pages className={`${styles.pages}${dockedTask ? ` ${styles.withResource}` : ""}`}>
+          <div data-workbench-pages className={`${styles.pages}${dockedTask && !leftResourceOpen ? ` ${styles.withResource}` : ""}`}>
             {pages.filter(page => page.open && page.content !== null).map(page => {
               const auxiliary = Boolean(dockedTask && page.id === activeId);
-              const view = <PageMount key={page.id} page={page} active={managed && (page.id === activeId || page.id === dockedTask?.id)} auxiliary={auxiliary} updateShell={updateShell} />;
-              return resourceIds.includes(page.id) ? <EditorResourcePane key={page.id} title={page.label} active={managed && page.id === activeId} docked={auxiliary} onClose={() => { if (dockedTask) activate(dockedTask.id); }}>{view}</EditorResourcePane> : view;
+              const view = <PageMount key={page.id} page={page} active={managed && (page.id === activeId || page.id === dockedTask?.id)} auxiliary={auxiliary} leftResource={auxiliary && leftResourceOpen} updateShell={updateShell} />;
+              return resourceIds.includes(page.id) ? <EditorResourcePane key={page.id} title={page.label} active={managed && page.id === activeId} docked={auxiliary} leftDock={auxiliary && leftResourceOpen ? { host: resourceHost, manageHref: `${page.id}?mode=manage` } : undefined} onClose={() => { if (dockedTask) activate(dockedTask.id); }}>{view}</EditorResourcePane> : view;
             })}
           </div>
           {closeError ? <div role="alert" className={styles.closeError}>{closeError}<Button variant="ghost" onClick={() => setCloseError(null)}>知道了</Button></div> : null}

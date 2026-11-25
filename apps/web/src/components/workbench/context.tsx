@@ -13,6 +13,8 @@ export type WorkspacePageSlot = {
 };
 export const WorkspacePanelContext = createContext<{
   inspectorOpen: boolean; resourceOpen: boolean; conversationFocused: boolean; revealTaskPanel: () => void;
+  resourceInspectorOpen?: boolean;
+  openResourceInspector?: () => void;
   openQuickInspector?: () => void;
 }>({ inspectorOpen: false, resourceOpen: false, conversationFocused: false, revealTaskPanel: () => {} });
 export const WorkbenchRegistry = createContext<{ register: (page: Omit<WorkspacePage, "open">) => void; forget: (id: string) => void } | null>(null);
@@ -20,6 +22,19 @@ export const WorkspacePageContext = createContext<WorkspacePageSlot | null>(null
 export const WorkbenchAssistantTargetContext = createContext<AppShellProps["assistantContext"]>(undefined);
 
 export const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates"];
+const workResourcePanels = new Map([
+  ["/library", "/library?mode=panel&resource=materials"],
+  ["/knowledge", "/knowledge?mode=panel"],
+]);
+
+export function workspaceNavigationHref(href: string, hasActiveWork: boolean) {
+  return hasActiveWork ? workResourcePanels.get(href.split("?")[0]) ?? href : href;
+}
+
+export function isWorkResourcePanel(pathname: string, search?: Pick<URLSearchParams, "get"> | null) {
+  return search?.get("mode") === "panel" && workResourcePanels.has(pathname);
+}
+
 export function isCreationDraftRoute(pathname: string, search?: Pick<URLSearchParams, "get"> | null) {
   return pathname === "/production" && search?.get("new") === "1" && search.get("view") !== "automations";
 }
