@@ -18,11 +18,15 @@ CANDIDATE_CLIP_PREVIEW = "candidate_clip_preview"
 
 
 @dataclass(frozen=True)
-class CandidateClipPreviewCommand:
+class CandidateClipPreviewTarget:
     candidate_id: str
     version_id: str
     sequence: int
     clip_id: str
+
+
+@dataclass(frozen=True)
+class CandidateClipPreviewCommand(CandidateClipPreviewTarget):
     request_id: str
 
 

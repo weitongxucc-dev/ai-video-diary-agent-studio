@@ -650,6 +650,10 @@ def test_candidate_clip_preview_uses_separate_granted_outputs_and_rejects_public
     def read(result):
         return ok(client.get(result["result_url"]))
 
+    def latest(candidate, version):
+        path = f"{root}/{candidate}/versions/{version['id']}/previews"
+        return client.get(path, params={"sequence": version["sequence"], "clip_id": clip_id})
+
     try:
         a, b = str(uuid4()), str(uuid4())
         for candidate in (a, b):
@@ -676,6 +680,8 @@ def test_candidate_clip_preview_uses_separate_granted_outputs_and_rejects_public
         assert runtime.run_once()
         compare = submit(b, b_version)
         assert runtime.run_once()
+        assert ok(latest(a, a_version))["preview"] == read(pending)
+        assert ok(latest(b, b_version))["preview"] == read(compare)
         first_frames = []
         for result, version in ((pending, a_version), (compare, b_version)):
             done = read(result)
@@ -724,6 +730,17 @@ def test_candidate_clip_preview_uses_separate_granted_outputs_and_rejects_public
         assert cancelled["status"] == "cancelled" and cancelled["video_url"] is None
         assert read(compare)["status"] == "succeeded"
 
+        over_budget = submit(b, b_version)
+        probe = runtime.scheduler.resources
+        with monkeypatch.context() as isolated:
+            isolated.setattr(probe, "budget", replace(probe.budget,
+                clip_preview=replace(probe.budget.clip_preview, max_input_bytes=1)))
+            assert not runtime.run_once()
+            refused = read(over_budget)
+            assert refused["waiting_reason"] == "declared_resources_exceed_budget"
+            assert refused["status"] == "queued" and refused["video_url"] is None
+        assert ok(client.post(over_budget["result_url"] + "/cancel"))["status"] == "cancelled"
+
         in_flight = submit(a, a_version)
         complete = runtime.scheduler.complete_unit
         saved = None
@@ -755,6 +772,8 @@ def test_candidate_clip_preview_uses_separate_granted_outputs_and_rejects_public
         with pytest.raises(KeyError):
             repo.execution_records.get_task_event("local", f"event_{job.id}_verified")
         assert read(in_flight)["status"] == read(pending)["status"] == "stale"
+        assert latest(a, a_version).status_code == 409
+        assert ok(latest(a, saved))["preview"] is None
         assert client.get(pending["result_url"] + "/video").status_code == 409
         assert read(compare)["status"] == "succeeded"
         assert repo.get_creation_task_montage_plan("local", "task") == original

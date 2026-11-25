@@ -80,6 +80,7 @@ describe("candidate version requests", () => {
     const pending: TimelineCandidatePreview = {
       task_id: "work", candidate_id: "A", version_id: "a13", clip_id: "clip", job_id: "job-a",
       status: "queued", result_url: path, video_url: null, silent: true,
+      width_px: 480, height_px: 480,
       timeline_start_seconds: 1, timeline_end_seconds: 6, source_start_seconds: 0, source_end_seconds: 5,
       waiting_reason: null, failure_reason: null,
     };

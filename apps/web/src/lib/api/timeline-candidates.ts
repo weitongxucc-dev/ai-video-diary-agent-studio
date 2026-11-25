@@ -1,5 +1,6 @@
 import type { CreationTaskExactEditInput } from "../types/task-edits";
-import { creationPlanRequest } from "./creation-transport";
+import { CreationPlanApiError, creationPlanRequest } from "./creation-transport";
+import { API_BASE, authorizedFetch } from "./transport";
 
 type CropEdit = Extract<CreationTaskExactEditInput, { operation_type: "ChangeCrop" }>;
 
@@ -24,6 +25,8 @@ export type TimelineCandidateDetail = {
   version: TimelineCandidateVersion;
 };
 
+export type TimelineCandidateSummary = Omit<TimelineCandidateDetail, "version">;
+
 export type TimelineCandidatePreview = {
   task_id: string;
   candidate_id: string;
@@ -34,6 +37,8 @@ export type TimelineCandidatePreview = {
   result_url: string;
   video_url: string | null;
   silent: true;
+  width_px: number;
+  height_px: number;
   timeline_start_seconds: number;
   timeline_end_seconds: number;
   source_start_seconds: number;
@@ -42,8 +47,12 @@ export type TimelineCandidatePreview = {
   failure_reason: string | null;
 };
 
+function candidateCollectionPath(taskId: string) {
+  return `/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/candidates`;
+}
+
 function candidatePath({ taskId, candidateId }: TimelineCandidateTarget) {
-  return `/api/creation-tasks/${encodeURIComponent(taskId)}/timeline/candidates/${encodeURIComponent(candidateId)}`;
+  return `${candidateCollectionPath(taskId)}/${encodeURIComponent(candidateId)}`;
 }
 
 function requireTarget(target: TimelineCandidateTarget, candidate: TimelineCandidateDetail) {
@@ -74,6 +83,41 @@ export async function readTimelineCandidate(target: TimelineCandidateTarget, sig
   requireTarget(target, candidate);
   if (candidate.version.id !== candidate.head_version_id) {
     throw new Error("候选当前版本暂不可核对，请重新读取。");
+  }
+  return candidate;
+}
+
+export async function listTimelineCandidates(taskId: string, signal?: AbortSignal) {
+  const items: TimelineCandidateSummary[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: { items: TimelineCandidateSummary[]; next_after_id: string | null } = await creationPlanRequest(
+      `${candidateCollectionPath(taskId)}?limit=50${cursor ? `&after_id=${encodeURIComponent(cursor)}` : ""}`,
+      { signal },
+    );
+    if (page.items.some((item) => item.task_id !== taskId) || page.next_after_id && page.next_after_id === cursor) {
+      throw new Error("候选列表与当前作品不一致。");
+    }
+    items.push(...page.items);
+    cursor = page.next_after_id;
+  } while (cursor);
+  return items;
+}
+
+export async function forkTimelineCandidate(
+  target: TimelineCandidateTarget, base: Pick<TimelineCandidateVersion, "id" | "sequence">,
+) {
+  const candidate = await creationPlanRequest<TimelineCandidateDetail>(candidateCollectionPath(target.taskId), {
+    method: "POST",
+    body: JSON.stringify({
+      candidate_id: target.candidateId,
+      expected_timeline_version_id: base.id,
+      expected_timeline_sequence: base.sequence,
+    }),
+  });
+  requireTarget(target, candidate);
+  if (candidate.base_version_id !== base.id || candidate.version.id !== candidate.head_version_id) {
+    throw new Error("新候选与所选基线不一致。");
   }
   return candidate;
 }
@@ -137,4 +181,37 @@ export async function readTimelineCandidatePreview(
   );
   requirePreview(target, original.version_id, original.clip_id, preview, original.job_id);
   return preview;
+}
+
+export async function readLatestTimelineCandidatePreview(
+  target: TimelineCandidateTarget, version: TimelineCandidateVersion, clipId: string, signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({ sequence: String(version.sequence), clip_id: clipId });
+  const { preview } = await creationPlanRequest<{ preview: TimelineCandidatePreview | null }>(
+    `${candidatePath(target)}/versions/${encodeURIComponent(version.id)}/previews?${query}`, { signal },
+  );
+  if (preview) requirePreview(target, version.id, clipId, preview, preview.job_id);
+  return preview;
+}
+
+export async function cancelTimelineCandidatePreview(target: TimelineCandidateTarget, original: TimelineCandidatePreview) {
+  requirePreview(target, original.version_id, original.clip_id, original, original.job_id);
+  const preview = await creationPlanRequest<TimelineCandidatePreview>(`${original.result_url}/cancel`, { method: "POST" });
+  requirePreview(target, original.version_id, original.clip_id, preview, original.job_id);
+  return preview;
+}
+
+export async function readTimelineCandidatePreviewVideo(
+  target: TimelineCandidateTarget, preview: TimelineCandidatePreview, signal?: AbortSignal,
+) {
+  requirePreview(target, preview.version_id, preview.clip_id, preview, preview.job_id);
+  if (!preview.video_url) throw new Error("候选还没有可读取的画面。");
+  const response = await authorizedFetch(`${API_BASE}${preview.video_url}`, { signal });
+  if (!response.ok) {
+    const message = response.status === 409 ? "候选画面已过期或文件不可用，请重新读取候选。"
+      : response.status === 404 || response.status === 403 ? "当前成员或版本无法读取此候选画面。"
+        : "候选画面暂时不可读取。";
+    throw new CreationPlanApiError(response.status, null, message);
+  }
+  return response.blob();
 }

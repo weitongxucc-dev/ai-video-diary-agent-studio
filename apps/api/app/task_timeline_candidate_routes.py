@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import FileResponse, JSONResponse
 
-from app.creation.clip_preview import CandidateClipPreviewCommand, ClipPreviewUnavailable
+from app.creation.clip_preview import CandidateClipPreviewCommand, CandidateClipPreviewTarget, ClipPreviewUnavailable
 from app.creation.editing.timeline_candidates import TimelineCandidateUseCase
 from app.montage import creation_task_montage_plan_from_payload
 
@@ -114,6 +114,15 @@ def build_task_timeline_candidate_router(*, repository_for, access_for, preview_
         with _candidate_errors():
             result = preview_for().submit(actor, task_id, command, runtime_for())
         return JSONResponse(status_code=202, content=result)
+
+    @router.get("/{candidate_id}/versions/{version_id}/previews")
+    def latest_timeline_candidate_preview(task_id: str, candidate_id: UUID, version_id: str, request: Request,
+                                          sequence: int = Query(ge=1), clip_id: str = Query(min_length=1, max_length=120)):
+        task, _member_id = access_for()(task_id, request)
+        actor = actor_for()(request, task.workspace_id)
+        target = CandidateClipPreviewTarget(str(candidate_id), version_id, sequence, clip_id)
+        with _candidate_errors():
+            return {"preview": preview_for().latest(media_for(), actor, task_id, target)}
 
     @router.get("/{candidate_id}/versions/{version_id}/previews/{job_id}")
     def read_timeline_candidate_preview(task_id: str, candidate_id: UUID, version_id: str, job_id: str,

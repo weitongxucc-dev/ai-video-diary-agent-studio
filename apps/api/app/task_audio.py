@@ -1165,7 +1165,9 @@ class TaskMediaJobs:
             repair_action="请结合当前作业状态查询原请求；检查记录不会重新提交或启动媒体。")
         self.repository.execution_records.append_task_event(TaskEvent(id=event_id, workspace_id=job.workspace_id,
             task_id=job.task_id, job_id=job.id, event_type="task_media_resource_admission",
-            payload={**binding, **receipt.model_dump(mode="json")}, created_at=timestamp), connection=conn)
+            payload={**binding, **receipt.model_dump(mode="json"),
+                **({"admission_reason": decision.reason} if start.get("operation") == CANDIDATE_CLIP_PREVIEW else {})},
+            created_at=timestamp), connection=conn)
 
     def resource_admission_receipt(self, job, start, actor, request, projected_status):
         if request is None or self._read_access(job, start, actor) != "ready":

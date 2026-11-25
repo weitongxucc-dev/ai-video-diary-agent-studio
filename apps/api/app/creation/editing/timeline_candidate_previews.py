@@ -83,6 +83,26 @@ class TimelineCandidatePreviewUseCase:
             except (KeyError, FileNotFoundError) as exc:
                 raise ClipPreviewConflict("候选短预览的原产物当前不可读取") from exc
 
+    def latest(self, media, actor, task_id, target):
+        with closing(self.repository.connection_factory()) as conn:
+            conn.execute("BEGIN")
+            self.clip_preview.require_candidate_head(actor, task_id, target, connection=conn)
+            row = conn.execute(
+                """SELECT j.id FROM job_runs j JOIN task_events e
+                   ON e.workspace_id=j.workspace_id AND e.id='event_' || j.id || '_start'
+                   WHERE j.workspace_id=? AND j.task_id=?
+                     AND e.event_type='task_media_submitted'
+                     AND json_extract(e.payload_json,'$.operation')=?
+                     AND json_extract(e.payload_json,'$.member_id')=?
+                     AND json_extract(e.payload_json,'$.arguments.candidate.candidate_id')=?
+                     AND json_extract(e.payload_json,'$.arguments.candidate.version_id')=?
+                     AND json_extract(e.payload_json,'$.arguments.candidate.clip_id')=?
+                   ORDER BY j.created_at DESC, j.id DESC LIMIT 1""",
+                (actor.workspace_id, task_id, CANDIDATE_CLIP_PREVIEW, actor.member_id,
+                 target.candidate_id, target.version_id, target.clip_id),
+            ).fetchone()
+        return None if row is None else self.read(media, actor, task_id, target.candidate_id, target.version_id, row["id"])
+
     def read(self, media, actor, task_id, candidate_id, version_id, job_id):
         job, event, target = self._bound_job(media, actor, task_id, candidate_id, version_id, job_id)
         verdict = media.check(job, event, actor)
@@ -101,14 +121,25 @@ class TimelineCandidatePreviewUseCase:
                     failure_reason = "result_invalid"
             else:
                 video_url = f"{url}/video"
-        waiting = self.repository.job_records.creation_execution_wait_row(
-            job.workspace_id, actor.member_id, job.id, job.input_digest) if status in {"queued", "interrupted"} else None
+        waiting_reason = None
+        if status in {"queued", "interrupted"}:
+            requests = self.repository.job_records.list_creation_job_request_states(job.workspace_id, job.id)
+            waiting = next((row for row in requests if row["unit_key"] == f"task_media:{job.input_digest}"
+                            and row["state"] in {"waiting", "blocked", "granted", "yield_requested"}), None)
+            if waiting is not None:
+                waiting_reason = waiting["wait_reason"]
+                if waiting_reason == "resource_busy":
+                    admission = self.repository.execution_records.latest_task_resource_admission(
+                        job.workspace_id, job.task_id, job.id, waiting["id"])
+                    if admission is not None and admission.payload.get("admission_reason") == "declared_resources_exceed_budget":
+                        waiting_reason = "declared_resources_exceed_budget"
         clip = MontageClip(**event["input_facts"]["candidates"][0])
         duration = event["resources"]["duration_seconds"]
         rate = clip_playback_rate(clip)
         return {"job_id": job.id, "task_id": task_id, "candidate_id": candidate_id, "version_id": version_id,
             "clip_id": clip.id, "status": status, "result_url": url, "video_url": video_url, "silent": True,
-            "waiting_reason": waiting["wait_reason"] if waiting else None, "failure_reason": failure_reason,
+            "waiting_reason": waiting_reason, "failure_reason": failure_reason,
+            "width_px": event["resources"]["width_px"], "height_px": event["resources"]["height_px"],
             "timeline_start_seconds": clip.timeline_start_seconds,
             "timeline_end_seconds": clip.timeline_start_seconds + duration,
             "source_start_seconds": clip.source_start_seconds,
