@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import signal
 import subprocess
@@ -14,7 +13,7 @@ from pathlib import Path
 
 from app.granted_subprocess import GrantedCommandTimeout, run_granted_command
 
-from .adapter import FfmpegAdapter, VideoCut, is_bound_video_cut, video_frame_intervals
+from .adapter import FfmpegAdapter, VideoCut, is_bound_video_cut, verify_video_cut
 from .capabilities import ToolDependency
 from .contracts import (
     EditPlan,
@@ -162,23 +161,7 @@ class FfmpegWorker:
 
     def _validate_video_cut(self, path: Path, cut: VideoCut, cancel_event, log, grant_context) -> dict:
         media = self._probe_video_cut(path, cancel_event, log, grant_context)
-        actual = [(begin, end) for _, begin, end in video_frame_intervals(media)]
-        try:
-            actual_duration = float(media["format"]["duration"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise MediaExecutionError("media_cut_duration_unverified", "截取文件缺少可核验的容器时长，未发布。",
-                                      "检查源片时间戳后查询原截取作业。") from exc
-        # Allow two output ticks for the filter and muxer's timestamp rounding.
-        same_intervals = len(actual) == len(cut.intervals) and all(
-            abs(actual_start - start) <= 2 / 90000 and abs(actual_end - end) <= 2 / 90000
-            for (actual_start, actual_end), (start, end) in zip(actual, cut.intervals)
-        )
-        if (not same_intervals or media["streams"][0].get("codec_name") != "h264"
-                or not math.isclose(actual_duration, float(cut.source_end - cut.source_start), rel_tol=0, abs_tol=0.01)):
-            raise MediaExecutionError("media_cut_range_mismatch", "截取文件的画面或时长与请求区间不一致，未发布。",
-                                      "检查源片时间戳和截取范围后查询原作业。")
-        facts = {"video_frames": len(actual), "duration_seconds": actual_duration,
-                 "video_start_seconds": float(actual[0][0]), "video_end_seconds": float(actual[-1][1])}
+        facts = verify_video_cut(media, cut)
         log("video_cut_verified", **facts)
         return facts
 
