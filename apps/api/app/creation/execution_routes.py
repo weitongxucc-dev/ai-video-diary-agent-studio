@@ -31,7 +31,7 @@ def build_creation_execution_router(
     require_task_open: Callable[[Request, str, str], None],
     runtime_for_execution: Callable[[], object],
     current_runtime: Callable[[], object | None],
-    list_job_runs: Callable[[str, str], list[JobRun]],
+    list_job_progress_runs: Callable[[str, str], tuple[list[JobRun], set[str]]],
     assistant_source: Callable[
         [str, Request, UUID | None, str, str | None],
         tuple[dict[str, object] | None, dict[str, object] | None],
@@ -125,10 +125,11 @@ def build_creation_execution_router(
         workspace_id = workspace_for(request)
         readable_task(request, task_id)
         try:
-            runs = list_job_runs(workspace_id, task_id)
+            runs, missing_request_job_ids = list_job_progress_runs(workspace_id, task_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="creation task not found") from exc
-        items, current = summarize_job_progress(runs, now=datetime.now(UTC))
+        items, current = summarize_job_progress(runs, now=datetime.now(UTC),
+                                                missing_request_job_ids=missing_request_job_ids)
         return TaskJobProgressResponse(
             task_id=task_id,
             current=JobProgressResponse.model_validate(current, from_attributes=True)

@@ -4894,6 +4894,23 @@ describe("CreationTaskWorkspace", () => {
 });
 
 describe("作业进度读数", () => {
+  it("keeps a media record with no device request in history", async () => {
+    const unmatched = { id: "waveform-history", kind: "creation_task_media", status: "queued" as const,
+      progress: 0, attempt: 0, started_at: null, finished_at: null, updated_at: "2026-10-04T08:00:00Z",
+      elapsed_seconds: null, failure_reason: null, impact: null, repair_action: null,
+      wait_estimate_seconds: null, processing_estimate_seconds: null, estimate_basis: null,
+      missing_device_request: true };
+    mocks.getJobProgress.mockResolvedValue({ task_id: "task-1", total_count: 1, current: null, items: [unmatched] });
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={subtitleCoverWorkspace()} />);
+    const progress = await screen.findByRole("region", { name: "作业进度" });
+    fireEvent.click(within(progress).getByRole("button", { name: "运行详情" }));
+    const panel = await screen.findByRole("dialog", { name: "运行详情" });
+    expect(within(panel).getByText("当前没有可追踪的后台作业。")).toBeVisible();
+    fireEvent.click(within(panel).getByText("查看历史作业（1 条）"));
+    expect(within(panel).getByText(/媒体预览与处理 · 未找到设备请求/)).toBeVisible();
+    expect(within(panel).queryByText(/已安排，等待设备/)).not.toBeInTheDocument();
+  });
+
   it("shows known estimates as facts and keeps historical failures out of the current warning state", async () => {
     mocks.getJobProgress.mockResolvedValue({
       task_id: "task-1", total_count: 2,

@@ -41,6 +41,7 @@ class JobProgressView:
     wait_estimate_seconds: float | None = None
     processing_estimate_seconds: float | None = None
     estimate_basis: str | None = None
+    missing_device_request: bool = False
 
 
 def _elapsed(run: JobRun, now: datetime) -> float | None:
@@ -54,7 +55,7 @@ def _elapsed(run: JobRun, now: datetime) -> float | None:
     return max(0.0, (end - run.started_at).total_seconds())
 
 
-def job_progress_view(run: JobRun, *, now: datetime) -> JobProgressView:
+def job_progress_view(run: JobRun, *, now: datetime, missing_device_request: bool = False) -> JobProgressView:
     """把一条 JobRun 投影成任务页读数，并显式说明哪些估时未知。"""
     return JobProgressView(
         id=run.id,
@@ -75,14 +76,16 @@ def job_progress_view(run: JobRun, *, now: datetime) -> JobProgressView:
         wait_estimate_seconds=None,
         processing_estimate_seconds=None,
         estimate_basis=None,
+        missing_device_request=missing_device_request,
     )
 
 
 def summarize_job_progress(
-    runs: list[JobRun], *, now: datetime
+    runs: list[JobRun], *, now: datetime, missing_request_job_ids: set[str]
 ) -> tuple[list[JobProgressView], JobProgressView | None]:
-    """返回（全部作业读数，当前作业读数）；当前作业取最新一条活跃作业。"""
-    views = [job_progress_view(run, now=now) for run in runs]
-    active = [view for view, run in zip(views, runs) if run.status in _ACTIVE_STATUSES]
-    current = active[-1] if active else (views[-1] if views else None)
+    """Preserve all records and select the latest active job with a valid binding."""
+    views = [job_progress_view(run, now=now, missing_device_request=run.id in missing_request_job_ids) for run in runs]
+    trackable = [view for view in views if not view.missing_device_request]
+    active = [view for view in trackable if view.status in _ACTIVE_STATUSES]
+    current = active[-1] if active else (trackable[-1] if trackable else None)
     return views, current

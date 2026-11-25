@@ -11,6 +11,18 @@ from app.creation.contracts import JobRun as _JobRun, validate_logical_reference
 from app.models import utc_now
 
 
+_ACTIVE_TASK_MEDIA_REQUEST = """
+    EXISTS (
+        SELECT 1 FROM device_work_requests r
+        WHERE r.workspace_id = j.workspace_id
+          AND r.owner_type = 'creation_job' AND r.owner_id = j.id
+          AND r.input_digest = j.input_digest
+          AND r.unit_key = 'task_media:' || j.input_digest
+          AND r.state IN ('waiting', 'blocked', 'granted', 'yield_requested')
+    )
+"""
+
+
 def _job_run_values(run: _JobRun) -> tuple[object, ...]:
     return (
         run.id,
@@ -153,6 +165,24 @@ class JobRunRecordStore:
             ).fetchall()
         return [self.job_run_from_row(row) for row in rows]
 
+    def list_task_job_progress_runs(self, workspace_id: str, task_id: str, media_kind: str):
+        """Read job history and its device request bindings from a single snapshot."""
+        with self._connect() as conn:
+            self._require_creation_task(conn, workspace_id, task_id)
+            rows = conn.execute(
+                f"""
+                SELECT j.*, CASE WHEN j.kind = ? AND j.status IN ('queued', 'running', 'interrupted')
+                                 THEN NOT {_ACTIVE_TASK_MEDIA_REQUEST}
+                                 ELSE 0 END AS missing_device_request
+                FROM job_runs j
+                WHERE j.workspace_id = ? AND j.task_id = ?
+                ORDER BY j.created_at ASC, j.id ASC
+                """,
+                (media_kind, workspace_id, task_id),
+            ).fetchall()
+        return ([self.job_run_from_row(row) for row in rows],
+                {row["id"] for row in rows if row["missing_device_request"]})
+
 
     def list_pending_task_media_jobs(self, kind: str):
         with self._connect() as conn:
@@ -163,18 +193,11 @@ class JobRunRecordStore:
         """Group pending records by operation and count matching unsettled requests once per job."""
         with self._connect() as conn:
             return conn.execute(
-                """
+                f"""
                 SELECT CASE WHEN json_type(e.payload_json, '$.operation') = 'text'
                             THEN json_extract(e.payload_json, '$.operation') END AS operation,
                        COUNT(*) AS pending_count,
-                       SUM(EXISTS (
-                           SELECT 1 FROM device_work_requests r
-                           WHERE r.workspace_id = j.workspace_id
-                             AND r.owner_type = 'creation_job' AND r.owner_id = j.id
-                             AND r.input_digest = j.input_digest
-                             AND r.unit_key = 'task_media:' || j.input_digest
-                             AND r.state IN ('waiting', 'blocked', 'granted', 'yield_requested')
-                       )) AS with_device_request_count
+                       SUM({_ACTIVE_TASK_MEDIA_REQUEST}) AS with_device_request_count
                 FROM job_runs j
                 LEFT JOIN task_events e ON e.workspace_id = j.workspace_id AND e.id = 'event_' || j.id || '_start'
                 WHERE j.workspace_id = ? AND j.task_id = ? AND j.kind = ?

@@ -4413,6 +4413,7 @@ class JobProgressResponse(BaseModel):
     wait_estimate_seconds: float | None
     processing_estimate_seconds: float | None
     estimate_basis: str | None
+    missing_device_request: bool
 
 
 class TaskJobProgressResponse(BaseModel):

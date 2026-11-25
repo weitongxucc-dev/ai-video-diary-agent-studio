@@ -106,6 +106,76 @@ def test_202_fixed_result_route_replay_success_and_cancel(tmp_path, monkeypatch)
     runtime.stop(0)
 
 
+def test_waveform_admission_rejection_does_not_leave_a_pending_job(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from app.creation.audio_ingress_use_case import AudioIngressUseCase
+    from app.creation.task_authorization import TaskAuthorizationUseCase
+
+    repo, actor, state, _, build, media = case(tmp_path)
+    authorization = TaskAuthorizationUseCase(repo, lambda _: 'ready')
+    media.task_authorizations = authorization
+    task = repo.task_records.get_creation_task('local', 'task')
+    monkeypatch.setattr(authorization, '_can_refresh_material_scope', lambda _: False)
+    original = authorization.ensure(task, actor)
+    source = 'narration://artifact/selected'
+    authorization_row = replace(original, revision=original.revision + 1,
+        resource_scope={**original.resource_scope, 'references': [source]})
+    repo.task_authorization_records.save_task_authorization(authorization_row, expected_revision=original.revision)
+
+    runtime = build(media)
+    monkeypatch.setattr(main, 'production_repo', repo)
+    monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
+    monkeypatch.setattr(main, '_require_permit_actor', lambda *args: actor)
+    monkeypatch.setattr(main, 'current_workspace_id', lambda request: 'local')
+    monkeypatch.setattr(main, '_audio_ingress_use_case', lambda: ingress)
+    ingress = AudioIngressUseCase(repo, SimpleNamespace(repository=repo), tmp_path)
+    monkeypatch.setattr(ingress, 'check_public_input', lambda *args: None)
+    fixture_facts = media.facts
+
+    def facts(*args):
+        current, resources = fixture_facts(*args)
+        return {**current, 'files': [[state.get('source', source), 20, 1, 1]],
+                'montage': {'clips': [{'asset_id': 'unrelated-picture'}]}}, resources
+
+    def changed_after_first_read(*args):
+        result = facts(*args)
+        state['revision'] = 2
+        return result
+
+    client = TestClient(main.app)
+    path = '/api/creation-tasks/task/audio/waveform/clip'
+    try:
+        monkeypatch.setattr(media, 'facts', changed_after_first_read)
+        response = client.get(path)
+        assert response.status_code == 403, response.text
+
+        monkeypatch.setattr(media, 'facts', facts)
+        state['source'] = 'narration://artifact/outside-scope'
+        refused = client.get(path)
+        assert refused.status_code == 403, refused.text
+        with repo.connection_factory() as conn:
+            assert conn.execute('SELECT count(*) FROM job_runs').fetchone()[0] == 0
+            assert conn.execute("SELECT count(*) FROM task_events WHERE event_type='task_media_submitted'").fetchone()[0] == 0
+            assert conn.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 0
+
+        del state['source']
+        state['revision'] = 1
+        accepted = client.get(path)
+        assert accepted.status_code == 202, accepted.text
+        replay = client.get(path)
+        assert replay.status_code == 202, replay.text
+        assert replay.json()['job_id'] == accepted.json()['job_id']
+        assert replay.json()['device_request_id'] == accepted.json()['device_request_id']
+        assert accepted.json()['device_request_id']
+        with repo.connection_factory() as conn:
+            assert conn.execute('SELECT count(*) FROM job_runs').fetchone()[0] == 1
+            assert conn.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 1
+    finally:
+        runtime.stop(0)
+
+
 def test_result_read_cannot_cross_member_task_or_changed_input(tmp_path, monkeypatch):
     from dataclasses import replace
     _result_read_guards(monkeypatch)

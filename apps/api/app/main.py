@@ -5788,7 +5788,8 @@ app.include_router(build_creation_execution_router(
     require_task_open=lambda request, workspace_id, task_id: _require_automation_task_open(request, workspace_id, task_id),
     runtime_for_execution=lambda: _creation_runtime(),
     current_runtime=lambda: device_runtime,
-    list_job_runs=lambda workspace_id, task_id: production_repo.job_records.list_job_runs(workspace_id, task_id),
+    list_job_progress_runs=lambda workspace_id, task_id: production_repo.job_records.list_task_job_progress_runs(
+        workspace_id, task_id, TASK_MEDIA_KIND),
     assistant_source=lambda task_id, request, turn_id, action, digest: _assistant_execution_source(
         task_id, request, turn_id, action, digest),
     bind_assistant_result=lambda task_id, request, turn_id, result, *, source: _bind_assistant_execution_result(

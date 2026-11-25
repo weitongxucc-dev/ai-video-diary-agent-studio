@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 
 from app.creation.contracts import JobRun as _JobRun, TaskEvent as _TaskEvent
 from app.creation.task_input_reads import require_creation_task
@@ -47,10 +48,12 @@ class TaskMediaSubmissionTransactions:
                 created_at=job.created_at), connection=conn)
         return job
 
-    def create_clip_preview_job(self, run: _JobRun, payload: dict, *, expected_version_id: str) -> _JobRun:
+    def create_clip_preview_job(self, run: _JobRun, payload: dict, *, expected_version_id: str,
+                                connection=None) -> _JobRun:
         """Compare the caller's original version and save the job/input together."""
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            if connection is None:
+                conn.execute("BEGIN IMMEDIATE")
             task = require_creation_task(conn, run.workspace_id, run.task_id)
             if task.current_timeline_version_id != expected_version_id:
                 raise self.version_conflict("提交预览前时间线发生变化，请重新预览")

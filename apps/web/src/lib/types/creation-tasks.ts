@@ -644,6 +644,7 @@ export type JobProgress = {
     wait_estimate_seconds: number | null;
     processing_estimate_seconds: number | null;
     estimate_basis: string | null;
+    missing_device_request?: boolean;
 };
 export type TaskJobProgress = {
     task_id: string;

@@ -48,7 +48,8 @@ class RuntimeUnavailable(RuntimeError):
 class BusinessOwner(Protocol):
     """One owner type's business facts and permissions, supplied by its writer."""
 
-    def verify_submission(self, intent: SubmissionIntent, actor: object) -> VerifiedWork: ...
+    def verify_submission(self, intent: SubmissionIntent, actor: object, *,
+                          connection: sqlite3.Connection | None = None) -> VerifiedWork: ...
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection) -> Verdict: ...
     def capture_local(self, request: WorkRequest, conn: sqlite3.Connection) -> LocalCheck: ...
     def check_local(self, request: WorkRequest, conn: sqlite3.Connection, observed: LocalCheck) -> Verdict: ...
@@ -105,11 +106,15 @@ class OwnerRouter(OwnerReadRouter, OwnerVerifier):
         registration = self.registrations.get(owner_type)
         return registration.owner if registration is not None else None
 
-    def verify_submission(self, intent: SubmissionIntent, actor: object) -> VerifiedWork:
+    def verify_submission(self, intent: SubmissionIntent, actor: object, *,
+                          connection: sqlite3.Connection | None = None) -> VerifiedWork:
         registration = self.registrations.get(intent.owner_type)
         if registration is None:
             raise RuntimeUnavailable("执行对象没有已注册的验证者和执行器")
-        trusted = registration.owner.verify_submission(intent, actor)
+        if connection is None:
+            trusted = registration.owner.verify_submission(intent, actor)
+        else:
+            trusted = registration.owner.verify_submission(intent, actor, connection=connection)
         if trusted.owner_type != intent.owner_type:
             raise PermissionError("执行对象类型与注册验证者不匹配")
         return trusted
