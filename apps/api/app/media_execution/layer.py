@@ -208,7 +208,7 @@ class MediaExecutionLayer:
                     raise MediaExecutionCancelled()
                 if grant_context is not None:
                     grant_context.check()
-                return self._publish(job_id, plan, result, check_publication=check_publication)
+                return self._publish(job_id, plan, result, check_publication=check_publication, bounded_cut=bounded_cut)
         except (MediaExecutionCancelled, GrantedCommandCancelled):
             with self._cancel_lock:
                 return self._cancelled(job_id, plan)
@@ -236,7 +236,7 @@ class MediaExecutionLayer:
                 del self._cancel_events[key]
 
     def _publish(self, job_id: str, plan: EditPlan, result: dict[str, object], *,
-                 check_publication: Callable[[], None] | None = None) -> dict[str, object]:
+                 check_publication: Callable[[], None] | None = None, bounded_cut=None) -> dict[str, object]:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if check_publication is not None:
@@ -258,11 +258,10 @@ class MediaExecutionLayer:
                 path = Path(item["path"])
                 logical_ref = f"media/{job_id}/{index}-{path.name}"
                 refs.append(logical_ref)
-                published = self.artifact_store.publish_file(logical_ref, path)
-                if BOUND_CUT_FACT in plan.metadata and (
-                        published.sha256, published.size_bytes) != (item["summary"]["sha256"], item["summary"]["bytes"]):
-                    raise MediaExecutionError("media_cut_output_changed", "登记时的截取文件已变化，未发布。",
-                                              "查询原截取作业和输出核验记录。")
+                if bounded_cut is not None:
+                    published = bounded_cut.publish(self.artifact_store, logical_ref, path, item["summary"])
+                else:
+                    published = self.artifact_store.publish_file(logical_ref, path)
                 artifact = ArtifactRecord(id=f"artifact_{job_id}_{index}", workspace_id=plan.workspace_id,
                     task_id=plan.task_id, kind="media_output", logical_ref=logical_ref,
                     sha256=published.sha256, size_bytes=published.size_bytes,

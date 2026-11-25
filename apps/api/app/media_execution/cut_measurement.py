@@ -45,13 +45,13 @@ def _identity(info: os.stat_result) -> tuple[int, ...]:
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
-def _digest(path: Path, expected_bytes: int, check, *, copy_to=None) -> str:
+def _digest(path: Path, expected_bytes: int, check, *, copy_to=None, changed="media_cut_source_changed") -> str:
     digest = hashlib.sha256()
     check()
     with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), "rb") as source:
         info = os.fstat(source.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_size != expected_bytes:
-            raise _refused("media_cut_source_changed", "文件大小或类型与本次测量绑定不符。")
+            raise _refused(changed, "文件大小或类型与本次测量绑定不符。")
         remaining = expected_bytes
         while remaining:
             check()
@@ -65,8 +65,13 @@ def _digest(path: Path, expected_bytes: int, check, *, copy_to=None) -> str:
         check()
         if (remaining or source.read(1) or _identity(os.fstat(source.fileno())) != _identity(info)
                 or _identity(path.lstat()) != _identity(info)):
-            raise _refused("media_cut_source_changed", "读取期间文件发生变化。")
+            raise _refused(changed, "读取期间文件发生变化。")
     return digest.hexdigest()
+
+
+def copy_verified_cut_output(source: Path, target, *, expected_bytes: int, expected_sha256: str, check):
+    if _digest(source, expected_bytes, check, copy_to=target, changed="media_cut_output_changed") != expected_sha256:
+        raise _refused("media_cut_output_changed", "登记时的截取文件摘要已变化，未发布。")
 
 
 _PROBE_ENTRIES = (
@@ -132,7 +137,7 @@ def _read_probe(payload: dict, limits: Mp4CutLimits, *, source: bool) -> tuple[d
 
 def measure_mp4_cut(adapter: FfmpegAdapter, source: Path, work_root: Path, *,
                     source_sha256: str, source_bytes: int, start: float, duration: float,
-                    limits: Mp4CutLimits, run, check, staged_output: Path | None = None) -> dict:
+                    limits: Mp4CutLimits, run, check, staged_output: Path | None = None, disk_progress=None) -> dict:
     """Run the bounded cut with a caller-owned grant and shared deadline.
 
     ``run(argv, paths, env=...)`` is the existing preparation command port. It
@@ -159,6 +164,8 @@ def measure_mp4_cut(adapter: FfmpegAdapter, source: Path, work_root: Path, *,
     with TemporaryDirectory(prefix="mp4-cut-", dir=work_root) as work:
         snapshot, output = Path(work) / "source.mp4", Path(work) / "cut.mp4"
         with snapshot.open("xb") as destination:
+            if disk_progress is not None:
+                disk_progress.bind("source", snapshot, destination)
             if _digest(source, source_bytes, check, copy_to=destination) != source_sha256:
                 raise _refused("media_cut_source_changed", "整源 SHA-256 与本次测量绑定不符。")
         snapshot.chmod(0o400)
@@ -203,6 +210,9 @@ def measure_mp4_cut(adapter: FfmpegAdapter, source: Path, work_root: Path, *,
             raise _refused("media_cut_range_limit", "整源或截取区间超出已核验的时长范围。")
         prepared = adapter.video_cut("cut", snapshot, output, cut, threads=1,
                                      input_limits=(*input_limits, *short_analysis, "-filter_complex_threads", "1", "-xerror"))
+        if disk_progress is not None:
+            with output.open("xb") as destination:
+                disk_progress.bind("staging", output, destination)
         run_stage("encode", prepared.command)
         output_info = output.lstat()
         output_bytes = output_info.st_size
@@ -210,7 +220,7 @@ def measure_mp4_cut(adapter: FfmpegAdapter, source: Path, work_root: Path, *,
             raise _refused("media_cut_output_limit", "截取成片超出有限磁盘用量或为空。")
         output_media, output_facts = probe("output_probe", output, source=False)
         output_facts.update(verify_video_cut(output_media, cut))
-        output_facts.update(bytes=output_bytes, sha256=_digest(output, output_bytes, check))
+        output_facts.update(bytes=output_bytes, sha256=_digest(output, output_bytes, check, changed="media_cut_output_changed"))
         if _identity(output.lstat()) != _identity(output_info):
             raise _refused("media_cut_output_changed", "截取成片在核验期间已变更。")
         check()

@@ -1874,6 +1874,12 @@ def _task_media_facts(workspace_id, task_id, operation, arguments, actor, *, tas
         facts = {"base_version_id": plan.base_version_id,
                  "request_id": plan.request_id,
                  "plan_digest": media_digest(plan.as_dict())}
+        if "preparation_request_id" in arguments:
+            from app.media_execution.bound_cut import BOUND_CUT_FACT, BoundMp4CutUseCase
+            authorizations = task_authorizations or _task_authorizations_for_goal()
+            cut = BoundMp4CutUseCase(production_repo, _device_preparation_service, authorizations)
+            binding, resources = cut.seal(plan, actor, arguments["preparation_request_id"], budget=budget)
+            return {**facts, BOUND_CUT_FACT: binding}, resources
         resources = {"kind": "media_execution", "execution_mode": "cpu_ffmpeg",
                      "operation_count": len(plan.operations), "threads": budget.max_threads,
                      "timeout_seconds": budget.max_timeout_seconds,
@@ -5994,7 +6000,9 @@ def _build_device_components(*, repository: ProductionRepository):
         output_root=settings.video_output_path,
         connection_factory=repository.connection_factory,
     )
-    media_execution_delegate = TaskMediaExecutionDelegate(media_execution_entrypoint)
+    from app.media_execution.bound_cut import BoundMp4CutUseCase
+    media_execution_delegate = TaskMediaExecutionDelegate(media_execution_entrypoint,
+        bounded_cut=BoundMp4CutUseCase(repository, _device_preparation_service, task_authorizations))
     quality = _quality_inspection_use_case(repository, task_authorizations=task_authorizations, budget=budget.quality)
     cover = _cover_use_case(repository, budget=budget.cover)
     task_media = TaskMediaJobs(repository, facts=_task_media_facts,
