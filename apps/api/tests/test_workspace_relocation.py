@@ -283,7 +283,6 @@ def test_relocation_copies_verifies_rebinds_and_updates_configuration(tmp_path, 
 
     database = workspace.target["database"]
     new_revision = _revision(workspace.target_media.stat())
-    new_revision_json = json.dumps(new_revision, sort_keys=True)
     binding = _row(database, "SELECT library_path FROM material_ingestion_binding WHERE id=1")
     assert binding[0] == str(workspace.target["materials"].resolve())
     asset = _row(database, "SELECT file_path,payload FROM material_assets WHERE id='asset-198'")
