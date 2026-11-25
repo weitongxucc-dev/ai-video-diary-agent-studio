@@ -15,6 +15,7 @@ import os
 import re
 import sqlite3
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
@@ -274,7 +275,8 @@ class OwnerVerifier(Protocol):
     with unknown creator is rejected.
     """
 
-    def verify_submission(self, intent: SubmissionIntent, actor: object) -> VerifiedWork: ...
+    def verify_submission(self, intent: SubmissionIntent, actor: object, *,
+                          connection: sqlite3.Connection | None = None) -> VerifiedWork: ...
     def check_current(self, request: WorkRequest, conn: sqlite3.Connection) -> Verdict: ...
     def capture_local(self, request: WorkRequest, conn: sqlite3.Connection) -> LocalCheck: ...
     def check_local(self, request: WorkRequest, conn: sqlite3.Connection, observed: LocalCheck) -> Verdict: ...
@@ -487,8 +489,15 @@ class DeviceScheduler(DeviceRequestReadAccess):
                     trusted.unit_key.rsplit(":", 1)[0], trusted.stage_input_digest)):
             raise ValueError("素材阶段单元键必须包含完整阶段输入摘要")
 
-    def submit(self, intent: SubmissionIntent, actor: object) -> WorkRequest:
-        trusted = self.owners.verify_submission(intent, actor)
+    def submit(self, intent: SubmissionIntent, actor: object, *,
+               connection: sqlite3.Connection | None = None) -> WorkRequest:
+        """Join the owner's write transaction when it also persists the submitted job."""
+        if connection is None:
+            trusted = self.owners.verify_submission(intent, actor)
+        else:
+            if not connection.in_transaction:
+                raise ValueError("设备请求必须在业务写入事务内提交")
+            trusted = self.owners.verify_submission(intent, actor, connection=connection)
         actual = (trusted.workspace_id, trusted.owner_type, trusted.owner_id, trusted.input_digest, trusted.unit_key)
         supplied = (intent.workspace_id, intent.owner_type, intent.owner_id, intent.input_digest, intent.unit_key)
         if actual != supplied or any(not value for value in actual):
@@ -505,8 +514,9 @@ class DeviceScheduler(DeviceRequestReadAccess):
         now = _stamp(self._now())
         request_id = uuid.uuid4().hex
         window = vars(intent.policy.window) if intent.policy.window else None
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+        with (self._connect() if connection is None else nullcontext(connection)) as conn:
+            if connection is None:
+                conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """INSERT OR IGNORE INTO device_work_requests
                 (id, workspace_id, member_id, owner_type, owner_id, input_digest, unit_key, source_refs_json,
@@ -527,7 +537,8 @@ class DeviceScheduler(DeviceRequestReadAccess):
             if (row["member_id"] != trusted.member_id or row["work_class"] != trusted.work_class
                     or row["source_refs_json"] != json.dumps([vars(ref) for ref in trusted.source_refs], sort_keys=True)):
                 raise PermissionError("既有执行单元的可信归属已变化")
-            conn.commit()
+            if connection is None:
+                conn.commit()
         return self._request(row)
 
     def replace_unexecuted_request(

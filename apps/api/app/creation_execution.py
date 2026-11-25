@@ -1657,7 +1657,7 @@ class CreationJobOwnerVerifier:
         if intent.unit_key.startswith("cover:") and self.cover is not None:
             return self.cover.verify_submission(intent, actor)
         if intent.unit_key.startswith("task_media:") and self.task_media is not None:
-            return self.task_media.verify_submission(intent, actor)
+            return self.task_media.verify_submission(intent, actor, connection=connection)
         if (not isinstance(actor, CreationExecutionActor) or not actor.member_id
                 or actor.workspace_id != intent.workspace_id or intent.owner_type != DEVICE_OWNER_TYPE):
             raise PermissionError("制作执行身份未知或工作区不匹配")

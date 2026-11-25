@@ -366,7 +366,7 @@ def test_successful_media_output_stays_current_after_publishing_child_version():
 
     repository = SimpleNamespace(
         execution_records=Events(),
-        task_records=SimpleNamespace(get_creation_task=lambda *_args: task),
+        task_records=SimpleNamespace(get_creation_task=lambda *_args, **_kwargs: task),
     )
     media = TaskMediaJobs(repository, facts=lambda *_args: ({}, {}),
                           verify_identity=lambda _actor: "ready")

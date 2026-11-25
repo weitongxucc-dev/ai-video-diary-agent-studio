@@ -4,6 +4,8 @@ from app.creation.contracts import CreationTask, JobRun, TaskEvent, TimelineVers
 from app.creation.execution_control import CreationExecutionControl, _duration_consistency
 from app.creation.plan_contracts import CreationPlan
 from app.creation_execution import CreationExecution
+from app.job_progress import summarize_job_progress
+from app.models import utc_now
 from app.production import ProductionRepository
 from app.task_audio import TASK_MEDIA_KIND
 
@@ -140,5 +142,16 @@ def test_media_queue_summary_keeps_pending_waveforms_visible_with_execution_succ
         "pending_with_device_request_count": 1,
         "pending_without_device_request_count": 1,
     }
+    runs, missing = repo.job_records.list_task_job_progress_runs(workspace, task_id, TASK_MEDIA_KIND)
+    items, current = summarize_job_progress(runs, now=utc_now(), missing_request_job_ids=missing)
+    assert current.id == "current-waveform"
+    assert [(item.id, item.status) for item in items if item.missing_device_request] == [
+        ("history-waveform", "queued"),
+    ]
     with repo._connect() as conn:
         assert list(conn.iterdump()) == before
+        conn.execute("UPDATE device_work_requests SET state='done' WHERE id='valid'")
+    runs, missing = repo.job_records.list_task_job_progress_runs(workspace, task_id, TASK_MEDIA_KIND)
+    items, current = summarize_job_progress(runs, now=utc_now(), missing_request_job_ids=missing)
+    assert current.id == settled
+    assert {item.id for item in items if item.missing_device_request} == {"history-waveform", "current-waveform"}

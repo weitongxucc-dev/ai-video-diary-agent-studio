@@ -87,7 +87,7 @@ def test_task_media_local_check_fences_its_sources_and_leaves_unrelated_assets_o
     actor = CreationExecutionActor("workspace_a", "member")
     media = TaskMediaJobs(repo, facts=lambda *args: ({"source": source.path}, {"kind": "fixture"}),
                           verify_identity=lambda actor: "ready")
-    runtime = SimpleNamespace(scheduler=SimpleNamespace(submit=lambda *args: None), wake=lambda: None)
+    runtime = SimpleNamespace(scheduler=SimpleNamespace(submit=lambda *args, **kwargs: None), wake=lambda: None)
     job = media.submit(runtime, actor, task_id, "audio_waveform", {}, "waveform")
     work = media.verify_submission(SubmissionIntent(job.workspace_id, "creation_job", job.id,
         job.input_digest, f"task_media:{job.input_digest}", SchedulePolicy()), actor)

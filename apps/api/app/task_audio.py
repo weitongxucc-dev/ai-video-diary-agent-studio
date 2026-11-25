@@ -1014,7 +1014,10 @@ class TaskMediaJobs:
                 references.add(value)
         if check_scope:
             collect(event.get("arguments", {}))
-            collect(event.get("input_facts", {}))
+            facts = event.get("input_facts", {})
+            # Waveform decoding reads only the sealed audio source. The full
+            # montage remains a freshness check, including for saved requests.
+            collect(facts["files"] if event["operation"] == "audio_waveform" and "files" in facts else facts)
         return self.task_authorizations.verdict(actor, job.task_id, "task_media", references=references, connection=connection, check_scope=check_scope)
 
     def read(self, workspace_id, job_id, conn=None):
@@ -1029,17 +1032,17 @@ class TaskMediaJobs:
             raise KeyError(job_id)
         return self.repository.job_records.job_run_from_row(row), json.loads(event["payload_json"])
 
-    def _read_access(self, job, event, actor, *, check_scope=True):
+    def _read_access(self, job, event, actor, *, check_scope=True, connection=None):
         from app.creation_execution import CreationExecutionActor
         if media_digest({key: value for key, value in event.items() if key != "input_digest"}) != job.input_digest:
             return "stale"
         if actor != CreationExecutionActor.from_event(job.workspace_id, event):
             return "unauthorized"
-        identity = self.authorization_verdict(job, event, actor, check_scope=check_scope)
+        identity = self.authorization_verdict(job, event, actor, check_scope=check_scope, connection=connection)
         if identity != "ready":
             return identity
         try:
-            task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id)
+            task = self.repository.task_records.get_creation_task(job.workspace_id, job.task_id, connection=connection)
         except KeyError:
             return "stale"
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
@@ -1162,8 +1165,8 @@ class TaskMediaJobs:
         values["context"] = "pending_request" if pending else "history"
         return ResourceAdmissionReceipt.model_validate(values).model_dump(mode="json")
 
-    def check(self, job, event, actor, *, check_scope=True):
-        access = self._read_access(job, event, actor, check_scope=check_scope)
+    def check(self, job, event, actor, *, check_scope=True, connection=None):
+        access = self._read_access(job, event, actor, check_scope=check_scope, connection=connection)
         if access != "ready":
             return access
         # A successful FFmpeg execution deliberately advances the task head to
@@ -1232,33 +1235,35 @@ class TaskMediaJobs:
     def submit_prepared(self, runtime, actor, run, payload, *, write_guard=None):
         from app.device_scheduler import SchedulePolicy, SubmissionIntent
         task_id, arguments = run.task_id, payload['arguments']
-        if "_clip_preview" in arguments:
-            job = self.repository.task_media_submissions.create_clip_preview_job(run, payload,
-                expected_version_id=arguments["_clip_preview"]["base_version_id"])
-        else:
-            with self.repository._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                if write_guard is not None:
-                    write_guard(conn)
+        with self.repository._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if write_guard is not None:
+                write_guard(conn)
+            if "_clip_preview" in arguments:
+                job = self.repository.task_media_submissions.create_clip_preview_job(run, payload,
+                    expected_version_id=arguments["_clip_preview"]["base_version_id"], connection=conn)
+            else:
                 job = self.repository.job_records.create_job_run(run, connection=conn)
                 self.repository.execution_records.append_task_event(TaskEvent(
                     id=f"event_{job.id}_start", workspace_id=job.workspace_id, task_id=task_id, job_id=job.id,
                     event_type="task_media_submitted", payload=payload, created_at=job.created_at), connection=conn)
-        if job.status in {"queued", "interrupted"}:
-            runtime.scheduler.submit(SubmissionIntent(job.workspace_id, "creation_job", job.id,
-                job.input_digest, f"task_media:{job.input_digest}", SchedulePolicy()), actor)
+            queued = job.status in {"queued", "interrupted"}
+            if queued:
+                runtime.scheduler.submit(SubmissionIntent(job.workspace_id, "creation_job", job.id,
+                    job.input_digest, f"task_media:{job.input_digest}", SchedulePolicy()), actor, connection=conn)
+        if queued:
             runtime.wake()
         return job
 
-    def verify_submission(self, intent, actor):
+    def verify_submission(self, intent, actor, *, connection=None):
         from app.device_scheduler import VerifiedWork
-        job, event = self.read(intent.workspace_id, intent.owner_id)
-        if self.task_authorizations is not None:
+        job, event = self.read(intent.workspace_id, intent.owner_id, connection)
+        if self.task_authorizations is not None and connection is None:
             self.task_authorizations.ensure(self.repository.task_records.get_creation_task(job.workspace_id, job.task_id), actor)
         if (intent.owner_type != "creation_job" or intent.input_digest != job.input_digest
                 or intent.unit_key != f"task_media:{job.input_digest}"
                 or job.status not in {"queued", "interrupted", "running"}
-                or self.check(job, event, actor) != "ready"):
+                or self.check(job, event, actor, connection=connection) != "ready"):
             raise PermissionError("任务媒体输入或身份已失效")
         return VerifiedWork(job.workspace_id, "creation_job", job.id, job.input_digest,
                             intent.unit_key, actor.member_id, "preview_dependency", event["resources"])
