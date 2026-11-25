@@ -21,6 +21,7 @@ from app.env_files import (
     write_dotenv_values as write_dotenv_values,
 )
 
+from app import volume_identity
 from app.local_runtime_status import observe_local_runtime_status, whisper_file_present
 from app.assistant.provider_catalog import provider_spec
 from app.service_status_projection import (
@@ -106,6 +107,24 @@ def _validate_storage_location(path: str | Path, kind: str, *, strict: bool) -> 
         raise StorageConfigurationError(f"存储空间不足：{existing}")
 
 
+def _configured_external_volumes(settings: Settings) -> list[Path]:
+    """Every distinct /Volumes mount this configuration would read or write."""
+    volumes: list[Path] = []
+
+    def collect(value: str | None) -> None:
+        if not isinstance(value, str) or not value.strip():
+            return
+        volume = _external_volume(Path(value))
+        if volume is not None and volume not in volumes:
+            volumes.append(volume)
+
+    for field in _STORAGE_PATH_FIELDS:
+        collect(getattr(settings, field, None))
+    if not settings.temporary_root_path:
+        collect(str(settings.effective_temporary_root_path))
+    return volumes
+
+
 def validate_storage_configuration(settings: Settings, submitted: Mapping[str, object] | None = None) -> None:
     """Validate selected external paths before startup or settings activation.
 
@@ -131,6 +150,17 @@ def validate_storage_configuration(settings: Settings, submitted: Mapping[str, o
     # allowed to create it.
     if not settings.temporary_root_path and _external_volume(settings.effective_temporary_root_path) is not None:
         _validate_storage_location(settings.effective_temporary_root_path, "model", strict=True)
+    # A mounted /Volumes name is not proof of the original data disk: a different
+    # disk can be mounted under the same name.  Once the relocation command has
+    # recorded a volume identity, every startup and settings activation must
+    # match it or fail closed.
+    try:
+        volume_identity.verify_recorded_volumes(
+            _configured_external_volumes(settings),
+            record_path=volume_identity.record_path_for_env(runtime_env_file_path()),
+        )
+    except volume_identity.VolumeIdentityError as exc:
+        raise StorageConfigurationError(str(exc)) from exc
 
 
 def structured_completion_options(model_id: str, *, forced_tools: bool = False) -> dict[str, object]:

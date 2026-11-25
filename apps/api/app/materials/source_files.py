@@ -223,6 +223,183 @@ class MaterialSourceFileAccess:
             )
             return {"operation_id": operation_id, "manifest_sha256": digest, **manifest, "status": "prepared"}
 
+    _REVISION_KEYS = ("size_bytes", "mtime_ns", "ctime_ns", "inode")
+    # Current material-analysis records are keyed by the source revision of the
+    # asset.  A verified byte-identical copy changes only the file identity, so
+    # these records follow the asset to its new path instead of being stranded
+    # on the old inode and silently treated as stale.  Immutable execution
+    # history (JobRun resources) is deliberately not part of this list.
+    _DERIVED_REVISION_TABLES = (
+        "material_index_records",
+        "material_index_rebuild_jobs",
+        "material_quality_profiles",
+        "material_segment_lineage",
+        "material_clip_reference_migrations",
+    )
+    _REVISION_UNIQUE_TABLES = {"material_index_rebuild_jobs", "material_quality_profiles"}
+
+    @classmethod
+    def _revision_strings(cls, revision: dict[str, int]) -> dict[str, str]:
+        return {key: str(revision[key]) for key in cls._REVISION_KEYS}
+
+    @classmethod
+    def _is_same_revision(cls, value: object, expected: dict[str, int]) -> bool:
+        return isinstance(value, dict) and all(
+            key in value and str(value[key]) == str(expected[key])
+            for key in cls._REVISION_KEYS
+        )
+
+    @classmethod
+    def _rewrite_segment_revisions(
+        cls, payload: dict[str, object], old_revision: dict[str, int], new_revision: dict[str, str],
+    ) -> None:
+        segments = payload.get("segments")
+        if not isinstance(segments, list):
+            return
+        for segment in segments:
+            if isinstance(segment, dict) and cls._is_same_revision(
+                segment.get("source_revision"), old_revision,
+            ):
+                segment["source_revision"] = dict(new_revision)
+
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
+        return conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+        ).fetchone() is not None
+
+    def _replacement_revision_exists(
+        self, conn: sqlite3.Connection, table: str, workspace_id: str, asset_id: str,
+        new_revision_json: str, row: sqlite3.Row,
+    ) -> bool:
+        """A record already analyzed under the new identity stays authoritative."""
+        if table == "material_quality_profiles":
+            return conn.execute(
+                "SELECT 1 FROM material_quality_profiles WHERE workspace_id=? AND asset_id=? "
+                "AND source_revision_json=? AND profile_version=? AND rowid<>?",
+                (workspace_id, asset_id, new_revision_json, str(row["profile_version"]), row["rowid"]),
+            ).fetchone() is not None
+        if table == "material_index_rebuild_jobs":
+            return conn.execute(
+                "SELECT 1 FROM material_index_rebuild_jobs WHERE workspace_id=? AND asset_id=? "
+                "AND source_revision_json=? AND index_type=? AND index_version=? AND rowid<>?",
+                (workspace_id, asset_id, new_revision_json, str(row["index_type"]),
+                 str(row["index_version"]), row["rowid"]),
+            ).fetchone() is not None
+        return False
+
+    def _rebind_derived_material_records(
+        self, conn: sqlite3.Connection, workspace_id: str, entries: list[dict[str, object]],
+    ) -> None:
+        for item in entries:
+            asset_ids = [str(value) for value in item.get("asset_ids", [])]
+            if not asset_ids:
+                continue
+            old_revision = item["old_revision"]
+            new_revision = self._revision_strings(item["new_revision"])
+            old_path, new_path = str(item["old_path"]), str(item["new_path"])
+            path_map = {old_path: (new_path, old_revision, item["new_revision"])}
+            revision_json = json.dumps(new_revision, ensure_ascii=False, sort_keys=True)
+            for asset_id in asset_ids:
+                for table in self._DERIVED_REVISION_TABLES:
+                    if not self._table_exists(conn, table):
+                        continue
+                    columns = "rowid, source_revision_json"
+                    if table in self._REVISION_UNIQUE_TABLES:
+                        columns = (
+                            "rowid, source_revision_json, profile_version"
+                            if table == "material_quality_profiles"
+                            else "rowid, source_revision_json, index_type, index_version"
+                        )
+                    rows = conn.execute(
+                        f"SELECT {columns} FROM {table} WHERE workspace_id=? AND asset_id=?",
+                        (workspace_id, asset_id),
+                    ).fetchall()
+                    for row in rows:
+                        stored = json.loads(str(row["source_revision_json"]))
+                        if not self._is_same_revision(stored, old_revision):
+                            continue
+                        if table in self._REVISION_UNIQUE_TABLES and self._replacement_revision_exists(
+                            conn, table, workspace_id, asset_id, revision_json, row,
+                        ):
+                            continue
+                        conn.execute(
+                            f"UPDATE {table} SET source_revision_json=? WHERE rowid=?",
+                            (revision_json, row["rowid"]),
+                        )
+
+                if self._table_exists(conn, "material_evidence_refs"):
+                    rows = conn.execute(
+                        "SELECT rowid, source_ref, locator_json, source_revision_json "
+                        "FROM material_evidence_refs WHERE workspace_id=? AND asset_id=?",
+                        (workspace_id, asset_id),
+                    ).fetchall()
+                    for row in rows:
+                        if str(row["source_ref"]) != old_path:
+                            continue
+                        stored = json.loads(str(row["source_revision_json"]))
+                        if not self._is_same_revision(stored, old_revision):
+                            continue
+                        locator = json.loads(str(row["locator_json"]))
+                        conn.execute(
+                            "UPDATE material_evidence_refs SET source_ref=?, locator_json=?, "
+                            "source_revision_json=? WHERE rowid=?",
+                            (new_path, json.dumps(
+                                self._rewrite_payload(locator, path_map, {}),
+                                ensure_ascii=False, sort_keys=True,
+                            ), revision_json, row["rowid"]),
+                        )
+
+                if self._table_exists(conn, "material_analysis_runs"):
+                    rows = conn.execute(
+                        "SELECT id, source_revision, payload FROM material_analysis_runs "
+                        "WHERE workspace_id=? AND asset_id=?",
+                        (workspace_id, asset_id),
+                    ).fetchall()
+                    for row in rows:
+                        try:
+                            stored = json.loads(str(row["source_revision"]))
+                        except ValueError:
+                            continue
+                        if not self._is_same_revision(stored, old_revision):
+                            continue
+                        payload = json.loads(str(row["payload"]))
+                        if not isinstance(payload, dict) or not self._is_same_revision(
+                            payload.get("source_revision"), old_revision,
+                        ):
+                            raise ValueError("素材分析运行记录的源修订不一致，无法安全重绑")
+                        payload["source_revision"] = dict(new_revision)
+                        conn.execute(
+                            "UPDATE material_analysis_runs SET source_revision=?, payload=? WHERE id=?",
+                            (revision_json, json.dumps(payload, ensure_ascii=False), row["id"]),
+                        )
+
+                if self._table_exists(conn, "reference_video_studies"):
+                    rows = conn.execute(
+                        "SELECT id, source_revision_json, payload FROM reference_video_studies "
+                        "WHERE workspace_id=? AND asset_id=?",
+                        (workspace_id, asset_id),
+                    ).fetchall()
+                    for row in rows:
+                        stored = json.loads(str(row["source_revision_json"]))
+                        if not self._is_same_revision(stored, old_revision):
+                            continue
+                        payload = json.loads(str(row["payload"]))
+                        if isinstance(payload, dict) and self._is_same_revision(
+                            payload.get("source_revision"), old_revision,
+                        ):
+                            payload["source_revision"] = dict(new_revision)
+                            conn.execute(
+                                "UPDATE reference_video_studies SET source_revision_json=?, payload=? "
+                                "WHERE id=?",
+                                (revision_json, json.dumps(payload, ensure_ascii=False), row["id"]),
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE reference_video_studies SET source_revision_json=? WHERE id=?",
+                                (revision_json, row["id"]),
+                            )
+
     @staticmethod
     def _rewrite_payload(value: object, path_map: dict[str, tuple[str, dict[str, int], dict[str, int]]], asset_map: dict[str, tuple[dict[str, int], dict[str, int]]]) -> object:
         if isinstance(value, dict):
@@ -298,6 +475,9 @@ class MaterialSourceFileAccess:
                     payload = self._rewrite_payload(payload, {old_path: (new_path, item["old_revision"], item["new_revision"])}, {
                         str(row["id"]): (item["old_revision"], item["new_revision"]),
                     })
+                    self._rewrite_segment_revisions(
+                        payload, item["old_revision"], self._revision_strings(item["new_revision"]),
+                    )
                     payload["path"] = new_path
                     payload["modified_at"] = datetime.fromtimestamp(item["new_revision"]["mtime_ns"] / 1e9, tz=timezone.utc).isoformat()
                     conn.execute(
@@ -333,6 +513,11 @@ class MaterialSourceFileAccess:
                     rewritten = self._rewrite_payload(payload, path_map, asset_map)
                     if json.dumps(rewritten, ensure_ascii=False, sort_keys=True) != before_payload:
                         conn.execute(f"UPDATE {table} SET payload=? WHERE rowid=?", (json.dumps(rewritten, ensure_ascii=False), row["rowid"]))
+
+            # Material analysis facts are keyed by the source revision they were
+            # produced from.  Follow the verified, byte-identical file to its new
+            # identity so current evidence, quality and index state stay attached.
+            self._rebind_derived_material_records(conn, workspace_id, current_manifest["entries"])
 
             binding_update = conn.execute(
                 "UPDATE material_ingestion_binding SET library_path=? WHERE id=1 AND workspace_id=? AND library_path=?",
