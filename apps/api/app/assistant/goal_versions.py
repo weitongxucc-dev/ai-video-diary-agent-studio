@@ -115,7 +115,7 @@ def effective_goal_version(production, conversations, goal, expected, task, *, c
     version = production.timeline_records.get_timeline_version(task.workspace_id,
         task.current_timeline_version_id, connection=connection) if task.current_timeline_version_id else None
     current = {'timeline_version_id': task.current_timeline_version_id, 'timeline_sequence': version.sequence if version else 0}
-    if expected is not None and expected != current:
+    if expected is not None and {key: expected.get(key) for key in current} != current:
         transition = owned_version_transition(production, conversations, goal, expected, task, connection=connection)
         if transition is None:
             raise TaskBusinessRejected('原目标的预期作品版本已变化', kind='conflict')

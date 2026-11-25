@@ -8,6 +8,7 @@ import hashlib
 
 from app.creation.editing.metadata_use_case import EditPreviewRejected
 from app.assistant.task_business_errors import TaskBusinessRejected, TaskOperationRejected, TaskInvocation
+from app.assistant.knowledge_reference import KnowledgeReferenceUnavailable
 from app.assistant.script_generation_policy import SCRIPT_GENERATION_OPERATIONS, is_script_generation
 from app.creation.intent_use_case import CreationIntentUseCase
 from app.assistant.material_reads import MATERIAL_READ_OPERATIONS, read_goal_materials
@@ -57,7 +58,7 @@ class TaskBusiness:
     def __init__(self, production, conversations, authorizations, *, runtime, execution,
                  workspace_facts, script_context, script_case, script_facts, generate_topics, topic_facts,
                  edit_capabilities, script_capabilities, tool_capabilities, material_facts,
-                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None,edit_controls=None,resource_audio_for=None,candidate_query=None):
+                 observation_facts, observe_output, request_result, media_result, record_adoption, segments=None,native_case=None,timeline_restores=None,exact_case_for=None,media_jobs_list=None,execution_capabilities=None,read_script_sections=None,device_preparation=None,generation_case=None,creator_memory=None,execution_status=None,quality=None,media_binding=None,edit_controls=None,resource_audio_for=None,candidate_query=None,read_knowledge_reference=None):
         self.production,self.conversations,self.authorizations=production,conversations,authorizations
         self.runtime,self.execution=runtime,execution
         self.workspace_facts,self.script_context,self.script_case=workspace_facts,script_context,script_case
@@ -83,6 +84,7 @@ class TaskBusiness:
         self.edit_controls=edit_controls
         self.resource_audio_for=resource_audio_for
         self.candidate_query=candidate_query
+        self.read_knowledge_reference = read_knowledge_reference
 
     def invoke_native(self, operation, arguments, *, call_id,tool_call_id,source_binding,cancel_event,deadline_monotonic, invocation: TaskInvocation):
         """Same task authorization, with the native owner as sole execution writer."""
@@ -740,6 +742,21 @@ class TaskBusiness:
                 raise TaskBusinessRejected('创作候选读面尚未装配', kind='unavailable')
             return read_goal_candidates(self.candidate_query, self.production, self.authorizations,
                 actor, task_id, sealed, operation, args)
+        if operation == 'read_selected_knowledge':
+            identity = (args['knowledge_item_id'], args['version'], args.get('locator'))
+            references = [item for item in sealed.get('selected_references', []) if item['kind'] == 'knowledge']
+            if sealed.get('knowledge_reference'):
+                references.append(sealed['knowledge_reference'])
+            if not any(identity == (ref['knowledge_item_id'], ref['version'], ref.get('locator'))
+                       for ref in references):
+                raise TaskBusinessRejected('所引用知识版本不存在或当前不可访问。', kind='not_found')
+            if self.read_knowledge_reference is None:
+                raise TaskBusinessRejected('原目标资料读面尚未装配', kind='unavailable')
+            try:
+                return self.read_knowledge_reference(ws, *identity, user_id=actor.user_id or actor.member_id,
+                    include_content=True)
+            except KnowledgeReferenceUnavailable as exc:
+                raise TaskBusinessRejected(str(exc), kind='not_found') from exc
         if operation in MATERIAL_READ_OPERATIONS:
             return read_goal_materials(self.production, self.authorizations, actor, task_id,
                 operation, args, material_facts=self.material_facts, sealed=sealed,

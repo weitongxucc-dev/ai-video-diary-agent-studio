@@ -2,21 +2,28 @@
 import copy
 from dataclasses import asdict, replace
 import json
+from threading import Event
+from time import monotonic
 from uuid import uuid4
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
+import app.main as main
 from app.assistant import home_plan_turn_use_case as home_plan
 from app.assistant.failures import AssistantUnavailable
 from app.assistant.home_plan_http_adapter import HomePlanTurnHTTPAdapter
 from app.assistant.source_task_binding import SourceTaskBinding
+from app.assistant.task_business_adapter import TaskBusinessAdapter
 from app.assistant_goal_continuation import GoalContinuationService
 from app.conversation_repository import ConversationRepository
 from app.creation.task_authorization import TaskAuthorizationUseCase
 from app.creation_execution import CreationExecutionActor
+from app.knowledge_files import KnowledgeSection
 from app.schemas import WorkspaceAssistantPlanTurnRequest
+from app.source_repository import SourceRepository
+from app.source_types import KnowledgeItem
 from test_source_task_use_case import source_case as source_case  # noqa: F401
 
 
@@ -75,6 +82,72 @@ def test_source_adoption_keeps_only_consumed_material_references(goal_case):
     sealed = case.repo.execution_records.get_task_event('local', case.authorizations.business_context_id(goal)).payload
     assert sealed['selected_references'] == materials
     assert 'referenced-b-roll' not in case.authorizations.material_asset_ids('local', case.task.id)
+
+
+def test_adopted_source_turn_reopens_only_the_consumed_manual_page(goal_case, monkeypatch):
+    case = goal_case
+    member_id = case.actor.member_id
+    sources = SourceRepository(case.repo.database_path)
+    for item_id in ('manual', 'other-manual'):
+        sources.create_knowledge_item_owned(KnowledgeItem(id=item_id, workspace_id='local',
+            content_type='file', title='固定版本说明书', body='测试说明书',
+            file_reference='/internal/source.pdf', authorization='user-provided', ownership='user-owned',
+            source_item_id=None, version='1', sections=(KnowledgeSection('第3页', '型号', 'ZX-410'),
+                KnowledgeSection('第4页', '适用条件', '相似型号 ZX-401'))), verified_user_id=member_id)
+    sources.edit_knowledge_item('local', 'manual', expected_version='1', title='新版说明书',
+        body='新版本正文', verified_user_id=member_id)
+    locator = {'knowledge_item_id': 'manual', 'version': '1', 'locator': '第3页'}
+    reference = {'kind': 'knowledge', 'label': '说明书第3页', **locator}
+    case.home_context = {'kind': 'home', 'knowledge_reference': locator,
+        'target_snapshot': {'selected_references': [reference]}}
+    adopt_steered_source(case)
+    case.conversations.finish_turn(case.turn['id'], 'failed')
+    roots = register(case)
+    assert len(roots) == 1 and register(case) == roots
+    goal = case.conversations.get_task_goal(roots[0])
+    assert goal['request_context']['knowledge_reference'] == locator
+    assert goal['target_snapshot']['selected_references'] == [reference]
+
+    monkeypatch.setattr(main, 'production_repo', case.repo)
+    monkeypatch.setattr(main, 'conversation_repo', case.conversations)
+    monkeypatch.setattr(main, 'source_repository', sources)
+    monkeypatch.setattr(main, '_task_authorizations_for_goal', lambda repository=None: case.authorizations)
+    monkeypatch.setattr(main, '_require_permit_actor', lambda *_: case.actor)
+    monkeypatch.setattr(main, 'current_workspace_id', lambda _: 'local')
+    monkeypatch.setattr(main, '_content_identity_http_adapter', lambda: SimpleNamespace(
+        reader=lambda *_: (member_id, False)))
+    main._bind_goal_business_scope(None, goal)
+    business = main._task_business()
+    _, _, sealed = business.original(goal)
+    assert sealed['selected_references'] == [reference]
+    readiness = main._goal_readiness_use_case()
+    task_version, _ = readiness.selection_context(goal, case.task, None, sealed, [])
+    assert task_version == {'selected_references': [reference]}
+    candidate, = case.conversations.goal_event_candidates()
+    claim = case.conversations.claim_goal_event(candidate, {**goal['target_snapshot'], **task_version}, max_rounds=8)
+    binding = {'workspace_id': 'local', 'member_id': member_id, 'task_id': case.task.id,
+        'conversation_id': case.chat['id'], 'turn_id': claim['turn_id'], 'goal_revision': '0',
+        'task_version': claim['request_context']['target_snapshot']}
+
+    def call(args):
+        return TaskBusinessAdapter(business)('read_selected_knowledge', args, call_id='read-manual',
+            tool_call_id=None, source_binding=binding, cancel_event=Event(), deadline_monotonic=monotonic() + 2)
+
+    result = call(locator)
+    assert result['ok'], result
+    assert result['value']['locator'] == '第3页' and result['value']['version'] == '1'
+    assert result['value']['body'] is None
+    assert result['value']['sections'] == [{'locator': '第3页', 'title': '型号', 'text': 'ZX-410'}]
+    assert 'file_reference' not in result['value']
+    for change in ({'version': '2'}, {'locator': None}, {'locator': '第4页'}, {'knowledge_item_id': 'other-manual'}):
+        assert call({**locator, **change})['failure']['status_code'] == 404
+    broad_read = TaskBusinessAdapter(business)('read_creation_candidate',
+        {'domain': 'knowledge', 'object_id': 'manual', 'version': '1'},
+        call_id='read-whole-manual', tool_call_id=None, source_binding=binding,
+        cancel_event=Event(), deadline_monotonic=monotonic() + 2)
+    assert not broad_read['ok']
+    sources.set_knowledge_item_use_state('local', 'manual', 'excluded')
+    assert call(locator)['failure']['status_code'] == 404
 
 
 def register(case):

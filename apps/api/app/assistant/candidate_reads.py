@@ -37,7 +37,9 @@ def goal_candidate_scope(production, authorizations, actor, task_id, sealed):
             item = {'profile_id': ref['profile_id'], 'version': ref['version']}
             if item not in scope[ref['kind']]:
                 scope[ref['kind']].append(item)
-        elif ref.get('kind') == 'knowledge':
+        # A page citation can be opened through the selected-reference reader.
+        # Candidate search reads the entire version and is a different scope.
+        elif ref.get('kind') == 'knowledge' and ref.get('locator') is None:
             item = {'knowledge_item_id': ref['knowledge_item_id'], 'knowledge_version': ref['version']}
             if item not in scope['knowledge']:
                 scope['knowledge'].append(item)

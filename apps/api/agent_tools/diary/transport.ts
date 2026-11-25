@@ -168,6 +168,10 @@ function hostOperation(path: string, method: string, payload: any): {operation: 
   const only = (...keys: string[]) => [...query.keys()].every(key => keys.includes(key) && query.getAll(key).length === 1);
   const result = (operation: string, args: Record<string, any> = {}) => ({operation, arguments: args});
   if (method === 'GET') {
+    const knowledge = pathname.match(/^\/api\/assistant\/knowledge-references\/([^/]+)$/);
+    if (knowledge && only('version', 'locator') && query.get('version'))
+      return result('read_selected_knowledge', {knowledge_item_id: decodeURIComponent(knowledge[1]),
+        version: query.get('version'), locator: query.get('locator')});
     if (pathname === '/api/creation-candidates/search' && only('q', 'limit_per_domain', 'task_id'))
       return result('search_creation_candidates', {query: query.get('q') || '',
         limit_per_domain: Number(query.get('limit_per_domain') || 5),

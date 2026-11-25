@@ -298,7 +298,8 @@ class TaskTurnHTTPAdapter:
                 business_handler=host, native_handler=native, source_binding=stage.binding,
                 input_handler=business.input_delivery(stage.binding), profile_reference=stage.facts.get('profile_reference'),
                 knowledge_reference=stage.facts.get('knowledge_reference'), task_version=stage.task_version,
-                material_selection=None, selected_references=[], continuation_context=jsonable_encoder(stage.continuation_context))
+                material_selection=None, selected_references=stage.task_version.get('selected_references', []),
+                continuation_context=jsonable_encoder(stage.continuation_context))
         if isinstance(stage, task.ReadSettings):
             return self._settings_for(stage.workspace_id)
         if isinstance(stage, task.SafeText):

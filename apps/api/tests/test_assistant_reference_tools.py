@@ -74,3 +74,32 @@ def test_knowledge_tool_without_reference_does_not_read(tmp_path):
     result = run_tool(tmp_path, "knowledge", selected=False)
     assert not result["ok"] and "请先明确引用" in result["error"]
     assert result["calls"] == []
+
+
+def test_background_tool_routes_fixed_knowledge_to_host_without_http(tmp_path):
+    script = r"""
+const {createDiaryExtension}=await import(process.argv[1]);
+const reference={kind:'knowledge',knowledge_item_id:'manual',version:'v1',locator:'第3页'};
+const tools=new Map(), calls=[];
+globalThis.fetch=async()=>{ throw new Error('background task may not make an HTTP request'); };
+const {extension}=createDiaryExtension({
+  AI_VIDEO_DIARY_AGENT_TASK_ID:'adopted-source-task',
+  AI_VIDEO_DIARY_AGENT_KNOWLEDGE_REFERENCE:JSON.stringify(reference),
+  AI_VIDEO_DIARY_AGENT_SELECTED_REFERENCES:JSON.stringify([reference]),
+}, async (operation,args)=>{
+  calls.push({operation,args});
+  return {ok:true,value:{sections:[{locator:'第3页',text:'ZX-410'}]}};
+});
+await extension({registerTool:tool=>tools.set(tool.name,tool)});
+const singular=await tools.get('read_selected_knowledge').execute('single',{});
+const indexed=await tools.get('read_selected_reference').execute('indexed',{reference_index:1});
+console.log(JSON.stringify({calls,singular:singular.details,indexed:indexed.details}));
+"""
+    env = {key: os.environ[key] for key in ("PATH", "HOME", "TMPDIR") if key in os.environ}
+    completed = subprocess.run([os.environ.get("MATERIAL_TOOLS_TEST_NODE", "node"),
+        "--experimental-strip-types", "--input-type=module", "-e", script, MODULE.as_uri()],
+        text=True, capture_output=True, check=True, cwd=tmp_path, env=env, timeout=10)
+    result = json.loads(completed.stdout.splitlines()[-1])
+    assert result["calls"] == [{"operation": "read_selected_knowledge",
+        "args": {"knowledge_item_id": "manual", "version": "v1", "locator": "第3页"}}] * 2
+    assert result["singular"]["sections"] == result["indexed"]["sections"] == [{"locator": "第3页", "text": "ZX-410"}]
