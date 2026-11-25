@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
+import { getCreationTaskTimelineVersion } from "@/lib/api/creation-tasks";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
 import { getDevicePreparation, getDeviceResourceStatus } from "@/lib/api/device-preparation";
 import {
   cancelCreationTaskMediaJob, getCreationTaskMediaJob, readSourceClipCutOutput, requireSourceClipCutJob,
-  requireSourceClipCutResult, resolveCreationTaskMediaResponse, retryCreationTaskMediaJob, submitSourceClipCut,
+  requireSourceClipCutResult, resolveCreationTaskMediaResponse, retryCreationTaskMediaJob, sourceClipCutPublishedVersion, submitSourceClipCut,
   taskMediaJobLabel, taskMediaResourceCheckLabel, TaskMediaJobError, type SourceClipCutInput,
 } from "@/lib/api/task-media";
 import { ApiRequestError } from "@/lib/api/transport";
@@ -132,6 +133,8 @@ export function SourceClipCut({ target, currentVersionId, onJob, onPublished }: 
   const warningId = useId();
   const interaction = useRef(false);
   const lifetime = useRef<AbortSignal | null>(null);
+  const latestVersionId = useRef(currentVersionId);
+  latestVersionId.current = currentVersionId;
   const callbacks = useRef({ onJob, onPublished });
   callbacks.current = { onJob, onPublished };
 
@@ -157,23 +160,46 @@ export function SourceClipCut({ target, currentVersionId, onJob, onPublished }: 
     const read = async () => {
       try {
         const response = await getCreationTaskMediaJob(taskId, jobId, signal);
-        const result = await resolveCreationTaskMediaResponse(taskId, response, "media_output", {
+        const publication = await resolveCreationTaskMediaResponse(taskId, response, "media_output", {
           signal, baseVersionId: originalInput.base_version_id,
           onUpdate: value => {
             requireSourceClipCutJob(taskId, value, originalInput.base_version_id, jobId);
             setJob(value);
             callbacks.current.onJob(value);
           },
+        }).then(result => ({
+          versionId: requireSourceClipCutResult(taskId, jobId, originalInput, result).timeline_version_id,
+          hasCurrentResult: true,
+        }), cause => {
+          if (!(cause instanceof TaskMediaJobError) || cause.job.status !== "stale") throw cause;
+          return { versionId: sourceClipCutPublishedVersion(cause.job, originalInput), hasCurrentResult: false };
         });
-        const output = requireSourceClipCutResult(taskId, jobId, originalInput, result);
+        const { versionId, hasCurrentResult } = publication;
+        if (!versionId) return;
         const current = await getDeviceResourceStatus(signal);
         if (signal.aborted) return;
         if (current.actor_scope !== scope) throw new Error("当前设备或成员已变化，请关闭后重新打开截取。");
-        const sequence = await callbacks.current.onPublished(output.timeline_version_id, signal);
+        const sequence = hasCurrentResult ? await callbacks.current.onPublished(versionId, signal) : null;
         if (signal.aborted) return;
-        if (sequence === null || sequence <= originalSequence) throw new Error("截取回执已返回，当前作品版本与登记结果不一致。");
-        const observedPublication = { id: output.timeline_version_id, sequence };
-        setSavedVersion(observedPublication);
+        let observedPublication: PublishedCut;
+        if (sequence !== null && Number.isSafeInteger(sequence) && sequence > originalSequence) {
+          observedPublication = { id: versionId, sequence };
+          setSavedVersion(observedPublication);
+        } else if (sequence === null && latestVersionId.current === baseVersionId && target.baseSequence > originalSequence) {
+          const detail = await getCreationTaskTimelineVersion(taskId, versionId);
+          if (signal.aborted) return;
+          const historical = detail.version;
+          if (detail.task_id !== taskId || historical.id !== versionId
+              || historical.parent_version_id !== originalInput.base_version_id || historical.is_current !== false
+              || historical.id === latestVersionId.current || latestVersionId.current !== baseVersionId
+              || !Number.isSafeInteger(historical.sequence) || historical.sequence <= originalSequence
+              || historical.sequence >= target.baseSequence) {
+            throw new Error("截取回执与作品历史版本不一致，原截取请求已保留。");
+          }
+          observedPublication = { id: historical.id, sequence: historical.sequence };
+        } else {
+          throw new Error("截取回执已返回，当前作品版本与登记结果不一致。");
+        }
         // Retain the observed terminal result for dismissing an old receipt.
         // Opening bytes still requires today's authorized result and version.
         const key = storageKey(scope, taskId);
@@ -188,7 +214,7 @@ export function SourceClipCut({ target, currentVersionId, onJob, onPublished }: 
     };
     void read();
     return () => controller.abort();
-  }, [originalInput, originalSequence, jobId, taskId, scope, readRevision]);
+  }, [originalInput, originalSequence, jobId, taskId, baseVersionId, target.baseSequence, scope, readRevision]);
 
   async function run(action: (scope: string, signal: AbortSignal) => Promise<void>) {
     const signal = lifetime.current;

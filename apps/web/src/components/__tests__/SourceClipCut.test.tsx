@@ -181,6 +181,66 @@ it("keeps an unverified original receipt when its job is stale", async () => {
   expect(media.mock.calls.filter(([path]) => path === mediaPath)).toHaveLength(1);
 });
 
+it.each([
+  { name: "verified history", parent: "base", recovery: true },
+  { name: "a success receipt racing with a head change", parent: "base", currentResult: true, recovery: true },
+  { name: "wrong parent", parent: "unrelated", error: "截取回执与作品历史版本不一致" },
+  { name: "unavailable history", error: "无法读取历史版本" },
+  { name: "wrong request", parent: "base", wrongRequest: true, error: "截取发布记录与原请求不一致" },
+])("checks a first observation of a completed cut with $name", async ({ parent, currentResult, recovery, wrongRequest, error }) => {
+  let requestId: string | undefined;
+  let completed = false;
+  const detailPath = `/api/creation-tasks/work/timeline/versions/${version.id}`;
+  const media = vi.fn((path: string, init?: RequestInit) => {
+    if (path === mediaPath && init?.method === "POST") {
+      requestId = JSON.parse(init.body as string).request_id;
+      return json(audioCutJob, 202);
+    }
+    if (path === jobPath) {
+      if (!completed) return json(audioCutJob);
+      const publication = { request_id: wrongRequest ? "other-request" : requestId, base_version_id: "base", timeline_version_id: version.id };
+      if (currentResult) return json({ ...audioCutJob, status: "succeeded", result: {
+        ...publication, output_refs: ["artifact:mp4"], output_urls: [`${jobPath}/outputs/1`],
+      } });
+      return json({ ...audioCutJob, status: "stale", published_version: publication });
+    }
+    if (path === detailPath) return parent
+      ? json({ task_id: "work", version: { ...version, parent_version_id: parent, is_current: false } })
+      : json({ detail: "无法读取历史版本" }, 409);
+    throw new Error(`Unexpected request ${path}`);
+  });
+  mockRequests(media);
+  const first = renderCut();
+  await verifyPreparation();
+  await screen.findByText(/已核对这份准备回执/);
+  fireEvent.click(screen.getByRole("button", { name: "截取并保存" }));
+  await screen.findByRole("button", { name: "取消截取" });
+  first.unmount();
+  const key = `yaohe:source-clip-cut:v1:${actorScope}:work`;
+  const pending = localStorage.getItem(key);
+  expect(JSON.parse(pending!)).toMatchObject({ jobId: audioCutJob.job_id });
+  expect(JSON.parse(pending!)).not.toHaveProperty("observedPublication");
+
+  completed = true;
+  const advanced = { ...target, baseVersionId: "advanced", baseSequence: 14, clipNumber: 3, sourceName: "next.mp4" };
+  const onPublished = vi.fn().mockResolvedValue(null);
+  renderCut(advanced.baseVersionId, onPublished, advanced);
+  if (recovery) {
+    expect(await screen.findByText(/原截取已登记于第 13 版，当前作品版本已变化/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "截取另一段" }));
+    expect(await screen.findByText("镜头 3 · next.mp4 · 作品第 14 版")).toBeInTheDocument();
+  } else {
+    expect(await screen.findByRole("alert")).toHaveTextContent(error!);
+    expect(screen.queryByRole("button", { name: "截取另一段" })).not.toBeInTheDocument();
+    expect(localStorage.getItem(key)).toBe(pending);
+  }
+  expect(onPublished).toHaveBeenCalledTimes(currentResult ? 1 : 0);
+  expect(screen.queryByRole("button", { name: "打开截取文件" })).not.toBeInTheDocument();
+  expect(media.mock.calls.filter(([path]) => path === detailPath)).toHaveLength(wrongRequest ? 0 : 1);
+  expect(media.mock.calls.filter(([path]) => path === mediaPath)).toHaveLength(1);
+  expect(media.mock.calls.some(([path]) => path.includes("/outputs/"))).toBe(false);
+});
+
 it("offers explicit recovery on a failed job with the original identity", async () => {
   const media = vi.fn((path: string, init?: RequestInit) => {
     if (path === mediaPath && init?.method === "POST") return json(audioCutJob, 202);

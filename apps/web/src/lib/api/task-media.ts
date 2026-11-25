@@ -134,6 +134,18 @@ export function requireSourceClipCutResult(taskId: string, jobId: string, input:
     return saved;
 }
 
+export function sourceClipCutPublishedVersion(job: TaskMediaJob, input: SourceClipCutInput): string | null {
+    if (job.status !== "stale" || !("published_version" in job) || job.published_version == null) return null;
+    const publication = job.published_version;
+    if (typeof publication !== "object" || !("request_id" in publication) || publication.request_id !== input.request_id
+        || !("base_version_id" in publication) || publication.base_version_id !== input.base_version_id
+        || !("timeline_version_id" in publication) || typeof publication.timeline_version_id !== "string"
+        || !publication.timeline_version_id || publication.timeline_version_id === input.base_version_id) {
+        throw new Error("截取发布记录与原请求不一致，原截取请求已保留。");
+    }
+    return publication.timeline_version_id;
+}
+
 export async function readSourceClipCutOutput(taskId: string, jobId: string, signal: AbortSignal) {
     const response = await authorizedFetch(`${API_BASE}${taskMediaPath(taskId, jobId)}/outputs/1`, {
         signal, cache: "no-store",
