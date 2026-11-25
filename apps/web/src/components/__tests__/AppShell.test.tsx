@@ -828,6 +828,7 @@ describe("hidden workspace media", () => {
     expect(within(nav).getByRole("link", { name: "知识库" })).toHaveAttribute("href", "/knowledge?mode=panel");
     expect(within(nav).getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles?mode=panel");
     expect(within(nav).getByRole("link", { name: "视频模板" })).toHaveAttribute("href", "/templates?mode=panel");
+    expect(within(nav).getByRole("link", { name: "发布与数据" })).toHaveAttribute("href", "/history?mode=panel");
     const detailTrigger = screen.getByRole("button", { name: "查看片段" });
     fireEvent.click(detailTrigger);
     expect(within(screen.getByRole("complementary", { name: "作品资源" })).getByText("原片 12 秒")).toBeVisible();

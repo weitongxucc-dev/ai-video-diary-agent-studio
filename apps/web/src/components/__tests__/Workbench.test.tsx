@@ -40,7 +40,7 @@ function Page({ id }: { id: string }) {
   const task = id.startsWith("/tasks/") ? { id: id.split("/").at(-1), name: `作品 ${id.at(-1)}` } as CreationTask : null;
   return <AppShell inspector={<Inspector />} assistantContext={task ? { task } : undefined}><input aria-label={`页面草稿 ${id}`} value={draft} onChange={event => setDraft(event.target.value)} /><WorkspaceVideo aria-label={`预览 ${id}`} src={`${id}/preview.mp4`} />{!task ? <button data-open-details>查看资源详情</button> : null}</AppShell>;
 }
-const resourceLabels: Record<string, string> = { "/library": "素材库", "/knowledge": "知识库", "/profiles": "人物与声音", "/templates": "视频模板" };
+const resourceLabels: Record<string, string> = { "/library": "素材库", "/knowledge": "知识库", "/profiles": "人物与声音", "/templates": "视频模板", "/history": "发布与数据" };
 function route() {
   const path = navigation.path;
   const label = resourceLabels[path] ?? `作品 ${path.at(-1)}`;
@@ -75,7 +75,7 @@ it("opens full resource management without losing the work target, drafts, or re
   expect(composerMount).toHaveBeenCalledTimes(1);
 });
 
-it("shows the four resource routes in the left panel without remounting the active work or conversation", async () => {
+it("shows resource routes in the left panel without remounting the active work or conversation", async () => {
   const view = render(fixture(route()));
   const workDraft = await screen.findByRole("textbox", { name: "页面草稿 /tasks/a" });
   const chatDraft = screen.getByRole("textbox", { name: "持续对话草稿" });

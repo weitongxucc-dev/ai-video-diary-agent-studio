@@ -21,12 +21,13 @@ export const WorkbenchRegistry = createContext<{ register: (page: Omit<Workspace
 export const WorkspacePageContext = createContext<WorkspacePageSlot | null>(null);
 export const WorkbenchAssistantTargetContext = createContext<AppShellProps["assistantContext"]>(undefined);
 
-export const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates"];
+export const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates", "/history"];
 const workResourcePanels = new Map([
   ["/library", "/library?mode=panel&resource=materials"],
   ["/knowledge", "/knowledge?mode=panel"],
   ["/profiles", "/profiles?mode=panel"],
   ["/templates", "/templates?mode=panel"],
+  ["/history", "/history?mode=panel"],
 ]);
 
 export function workspaceNavigationHref(href: string, hasActiveWork: boolean) {
