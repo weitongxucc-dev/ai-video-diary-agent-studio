@@ -205,8 +205,8 @@ export function JobProgressPanel({ graphicEditor, task, taskId, refreshToken, pe
         {mediaReadError ? <p role="alert">预览记录未读取：{mediaReadError}<button type="button" onClick={() => setMediaRetry(value => value + 1)}>重读预览记录</button></p> : null}
         {!mediaLoading && !mediaReadError && mediaPage ? <>
           {recoveryCandidates.length ? <ol>{recoveryCandidates.map(item => <li key={item.job_id}>
-            <span>{({ edit_preview: "修改预览", audio_listen: "音频试听", waveform: "音频波形", recording: "本机录音", audio_source: "导入音频", graphic_source: "图片来源", observation: "输出检查", media_output: "成片输出" })[item.result_kind]} · <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString("zh-CN")}</time> · {taskMediaJobLabel(mediaJob?.job_id === item.job_id ? mediaJob : item)}</span>
-            <button type="button" disabled={restoreBusy} onClick={() => onRestoreMedia(item)}>恢复这次预览</button>
+            <span>{({ edit_preview: "修改预览", audio_listen: "音频试听", waveform: "音频波形", recording: "本机录音", audio_source: "导入音频", graphic_source: "图片来源", observation: "输出检查", media_output: "媒体输出" })[item.result_kind]} · <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString("zh-CN")}</time> · {taskMediaJobLabel(mediaJob?.job_id === item.job_id ? mediaJob : item)}</span>
+            <button type="button" disabled={restoreBusy} onClick={() => onRestoreMedia(item)}>{item.result_kind === "media_output" ? "读取这次输出" : "恢复这次预览"}</button>
           </li>)}</ol> : <p>这一页没有符合当前版本与选择的预览记录。</p>}
           {mediaPage.next_cursor ? <button type="button" onClick={() => setMediaCursor(mediaPage.next_cursor)}>查看更多预览记录</button> : null}
           {mediaCursor ? <button type="button" onClick={() => setMediaCursor(null)}>回到最新预览记录</button> : null}
@@ -253,7 +253,7 @@ export function RecoveredMediaResult({ taskId, graphicEditor, job, result }: {
     }
     if (job.result_kind === "media_output") {
         const output = result as TaskMediaResultMap["media_output"];
-        return <p role="status">成片输出已登记：{output.output_refs.length} 个产物；时间线版本 {output.timeline_version_id}。</p>;
+        return <p role="status">媒体输出已登记：{output.output_refs.length} 个产物；时间线版本 {output.timeline_version_id}。</p>;
     }
     return null;
 }

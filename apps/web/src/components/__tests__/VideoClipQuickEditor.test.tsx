@@ -14,12 +14,16 @@ const clip = {
 it("keeps a clip draft across categories and applies valid changes on completion", () => {
   const onPreview = vi.fn();
   const onOpenDetails = vi.fn();
+  const onCutSource = vi.fn();
   const onDraftChange = vi.fn();
   function Harness() {
     const [draft, setDraft] = useState(createVideoClipDraft(clip));
-    return <VideoClipQuickEditor clip={clip} index={0} busy={false} draft={draft} onDraftStateChange={setDraft} onDraftChange={onDraftChange} onPreview={onPreview} onOpenDetails={onOpenDetails} />;
+    return <VideoClipQuickEditor clip={clip} index={0} busy={false} draft={draft} onDraftStateChange={setDraft} onDraftChange={onDraftChange} onPreview={onPreview} onOpenDetails={onOpenDetails} onCutSource={onCutSource} />;
   }
   render(<Harness />);
+  fireEvent.click(screen.getByRole("button", { name: "截取并保存" }));
+  expect(onCutSource).toHaveBeenCalledOnce();
+  expect(onPreview).not.toHaveBeenCalled();
   const trimStart = screen.getByRole("spinbutton", { name:"镜头 1 快速裁剪起点" });
   fireEvent.change(trimStart, { target:{ value:"" } });
   fireEvent.blur(trimStart);
