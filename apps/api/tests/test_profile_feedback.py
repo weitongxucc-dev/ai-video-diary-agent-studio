@@ -66,7 +66,9 @@ def production_facts(repo, task, script):
                 (1,'v1',None,{'clips':[{'person_render_id':'person-ready'}]},[]),
                 (2,'v2','v1',{'clips':[{'person_render_id':'person-ready'}]},['artifacts/output.mp4']),
                 (3,'v3','v2',{'clips':[]},[])]:
-            conn.execute('INSERT INTO timeline_versions VALUES (?,?,?,?,?,?,?,?)',
+            conn.execute('INSERT INTO timeline_versions '
+                '(id,workspace_id,task_id,parent_version_id,sequence,snapshot_json,created_by_operation_id,created_at) '
+                'VALUES (?,?,?,?,?,?,?,?)',
                 (identity,ws,task,parent,seq,json.dumps({'montage':montage,'output_refs':outputs}),None,identity))
         result={'result':{'observation_id':'observe','timeline_version_id':'v2','output':{'artifact_id':'output'}}}
         conn.execute('INSERT INTO task_events VALUES (?,?,?,?,?,?,?)',
@@ -147,7 +149,9 @@ def test_frozen_voice_snapshot_survives_mutable_segment_revision_without_borrowi
         conn.execute("UPDATE narration_segments SET voice_version='v2' WHERE id='segment'")
         snapshot={'narration_segments':[{'id':'segment','voice_profile_id':'voice_1','voice_version':'v1',
             'audio_reference':'narration://artifact/old-audio','status':'ready'}]}
-        conn.execute('INSERT INTO timeline_versions VALUES (?,?,?,?,?,?,?,?)',
+        conn.execute('INSERT INTO timeline_versions '
+            '(id,workspace_id,task_id,parent_version_id,sequence,snapshot_json,created_by_operation_id,created_at) '
+            'VALUES (?,?,?,?,?,?,?,?)',
             ('historical', 'workspace_a',task,'v3',4,json.dumps(snapshot),None,'time'))
         conn.execute('INSERT INTO task_events VALUES (?,?,?,?,?,?,?)',
             ('old-job-segment','workspace_a',task,'unrelated','stage_failed',
@@ -211,7 +215,9 @@ def test_inherited_unrelated_output_and_foreign_observation_version_cannot_suppl
              'unrelated','[]','time'))
         # A copied output ref alone cannot prove this profile produced the output.
         snapshot={'montage':{'clips':[{'person_render_id':'person-ready'}]},'output_refs':['artifacts/unrelated.mp4']}
-        conn.execute('INSERT INTO timeline_versions VALUES (?,?,?,?,?,?,?,?)',
+        conn.execute('INSERT INTO timeline_versions '
+            '(id,workspace_id,task_id,parent_version_id,sequence,snapshot_json,created_by_operation_id,created_at) '
+            'VALUES (?,?,?,?,?,?,?,?)',
             ('copy','workspace_a',task,'v3',4,json.dumps(snapshot),None,'time'))
         for identity,version,artifact in [('inherited','copy','unrelated-output'),('foreign','foreign-version','output')]:
             result={'result':{'observation_id':identity,'timeline_version_id':version,'output':{'artifact_id':artifact}}}

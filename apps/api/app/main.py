@@ -313,6 +313,7 @@ from app.editing_resource_catalog import editing_resource_catalog, resource_prev
 from app.editing_resource_routes import build_editing_resource_router
 from app.creation.source_inputs_use_case import CreationSourceInputs
 from app.task_edit_routes import CoverConfirmationHttpAdapter, TaskEditReceiptHttpAdapter, build_task_edit_router
+from app.task_timeline_candidate_routes import build_task_timeline_candidate_router
 from app.task_observation_routes import TaskObservationResponseAdapter, build_task_observation_router
 from app.task_media_script_routes import (
     MediaScriptSubmissionHttpAdapter, build_task_media_script_router,
@@ -4328,6 +4329,9 @@ app.include_router(_task_edit_http_router(('preview_creation_task_exact_edit',))
 
 
 app.include_router(_task_edit_http_router(('apply_creation_task_exact_edit',)))
+app.include_router(build_task_timeline_candidate_router(
+    repository_for=lambda: production_repo, access_for=lambda: _exact_edit_access,
+))
 
 
 app.include_router(_task_edit_http_router(('preview_compound_selection',)))

@@ -1557,7 +1557,7 @@ class ProductionRepository:
 
     def timeline_sequence(self, workspace_id, version_id, *, connection=None):
         with nullcontext(connection) if connection is not None else self._connect() as conn:
-            row = conn.execute('SELECT sequence FROM timeline_versions WHERE workspace_id=? AND id=?',
+            row = conn.execute('SELECT sequence FROM timeline_versions WHERE workspace_id=? AND id=? AND candidate_id IS NULL',
                 (workspace_id, version_id)).fetchone()
             if row is None:
                 raise KeyError(version_id)

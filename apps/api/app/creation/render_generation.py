@@ -46,7 +46,7 @@ def read_render_generation(conn, job, execution_records, *, require_current_head
         event = execution_records.get_task_event(job.workspace_id, row['id'], connection=conn)
         start = execution_records.get_task_event(job.workspace_id, f'event_{job.id}_start', connection=conn)
         task = require_creation_task(conn, job.workspace_id, job.task_id)
-        version = conn.execute('SELECT task_id FROM timeline_versions WHERE workspace_id=? AND id=?',
+        version = conn.execute('SELECT task_id FROM timeline_versions WHERE workspace_id=? AND id=? AND candidate_id IS NULL',
             (job.workspace_id, event.payload['input_timeline_version_id'])).fetchone()
         if version is None or version['task_id'] != job.task_id:
             raise ValueError('重新输出的原时间线不属于当前任务')

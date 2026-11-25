@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EditorResourceLibraryPanel } from "../EditorResourceLibraryPanel";
 
@@ -35,16 +35,41 @@ describe("EditorResourceLibraryPanel", () => {
     expect(screen.queryByRole("button", { name: "添加到作品" })).not.toBeInTheDocument();
   });
 
-  it("shows an imported skill as a connected, provenance-backed resource", async () => {
+  it("distinguishes usable methods, external references, and planned skills without offering execution", async () => {
+    const method = { id: "skill:cut-as-code-video-cut", category_id: "skills", name: "cut-as-code-video-cut", version: 1,
+      status: "connected", resource_type: "skill", preview: { kind: "method_document" },
+      provenance: [{ repository: "https://github.com/WhiteTowerAI/cut-as-code", revision: "a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4", path: "skills/video-cut/SKILL.md", license: "MIT License" }],
+      entrypoints: ["read_creation_skill"], runtime_requirements: {
+        execution_mode: "method-only", runnable: false, manifest_version: "2026.11.13-adapter.1",
+        capabilities: { inputs: ["授权的镜头"], outputs: ["编辑候选"], permissions: ["读取当前任务和授权对象"] },
+      },
+    };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
       categories: [{ id: "skills", status: "connected" }],
-      resources: [{ id: "skill:cut-as-code-video-cut", category_id: "skills", name: "cut-as-code-video-cut", version: 1, status: "connected", resource_type: "skill", preview: { kind: "method_document" }, provenance: [{ repository: "https://github.com/WhiteTowerAI/cut-as-code", revision: "a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4", path: "skills/video-cut/SKILL.md", license: "MIT License (repository and documentation)" }], entrypoints: ["read_creation_skill"] }],
+      resources: [method,
+        { ...method, id: "skill:ffmpeg-skill", name: "ffmpeg-skill", status: "catalog_only",
+          runtime_requirements: { ...method.runtime_requirements, status_reason: "当前版本没有接入外部执行器" } },
+        { ...method, id: "skill:future", name: "未来技能", status: "planned", runtime_requirements: {} },
+      ],
     }) }));
-    render(<EditorResourceLibraryPanel materials={null} initialCategory="skills" />);
-    expect(await screen.findByText("cut-as-code-video-cut")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "查看预览" }));
-    expect(screen.getByText(/a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4/)).toBeInTheDocument();
-    expect(screen.getByText(/MIT License/)).toBeInTheDocument();
+    const resourceAction = vi.fn();
+    render(<EditorResourceLibraryPanel materials={null} initialCategory="skills" renderResourceAction={resourceAction} />);
+    const available = within(await screen.findByRole("article", { name: method.name }));
+    expect(available.getByText("可用方法")).toBeVisible();
+    expect(available.getByText("授权的镜头")).not.toBeVisible();
+    fireEvent.click(available.getByText("查看详情"));
+    expect(available.getByText("版本 2026.11.13-adapter.1")).toBeVisible();
+    expect(available.getByText("授权的镜头")).toBeVisible();
+    expect(available.getByText("编辑候选")).toBeVisible();
+    expect(available.getByText("读取当前任务和授权对象")).toBeVisible();
+    expect(available.getByText(/a96c13e6eaa72e6882e78df08ee4c04fa7be3bc4.*MIT License/)).toBeVisible();
+    const reference = within(screen.getByRole("article", { name: "ffmpeg-skill" }));
+    expect(reference.getByText("仅供参考")).toBeVisible();
+    fireEvent.click(reference.getByText("查看详情"));
+    expect(reference.getByText("当前版本没有接入外部执行器")).toBeVisible();
+    expect(within(screen.getByRole("article", { name: "未来技能" })).getByText("计划中")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /运行|执行|添加到作品/ })).not.toBeInTheDocument();
+    expect(resourceAction).not.toHaveBeenCalled();
   });
 
   it("shows a retryable error instead of treating a catalog failure as empty", async () => {

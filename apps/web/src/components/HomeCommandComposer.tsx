@@ -15,10 +15,10 @@ import { CreationRequestPanel } from "@/components/CreationRequestPanel";
 import { PresenterShareSlider, type PresenterShare } from "@/components/PresenterShareSlider";
 import { LipSyncQualitySelect, type LipSyncQuality } from "@/components/LipSyncQualitySelect";
 import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
-import { assistantTaskTurnResult, assistantTurnScriptWindowRequest, useAssistantConversation } from "@/components/useAssistantConversation";
+import { assistantConversationGoal, assistantTaskTurnResult, assistantTurnScriptWindowRequest, useAssistantConversation } from "@/components/useAssistantConversation";
 import { AssistantConversationPanel, AssistantFailureMessage } from "@/components/AssistantConversationPanel";
 import { editExecutionReadinessMessage } from './creation-task/stage-labels';
-import { assistantSavedEdit } from "./creation-task/assistant-result-location";
+import { assistantSavedEdit, persistedTitleReplayInput, titleReplayIntent, type TitleReplayInput, type TitleReplayIntent } from "./creation-task/assistant-result-location";
 import { CREATION_TASKS_CHANGED_EVENT } from './creation-task/task-list-facts';
 
 import type { MaterialUsageContext } from "./ui/material-usage";
@@ -27,7 +27,7 @@ export type HomeCommandComposerProps = {
   assignLocation?: (url: string) => void;
   autoFocus?: boolean;
   task?: CreationTask | null;
-  onTaskUpdated?: () => void;
+  onTaskUpdated?: () => void | Promise<void>;
   legacyHistory?: ReactNode;
   pageContext?: { pathname: string };
   taskContext?: {
@@ -42,7 +42,10 @@ export type HomeCommandComposerProps = {
     onOpenResultStage?: OpenAssistantResult;
     onOpenEditProposal?: (turn: AssistantConversationTurn) => void;
     onPreviewPinnedEdit?: () => void;
-    onTaskEditSaved?: (result: CreationTaskEditConfirmResponse) => void;
+    onTaskEditSaved?: (result: CreationTaskEditConfirmResponse, conversationId: string) => void;
+    prepareTitleReplay?: (intent: TitleReplayIntent) => (
+      input: TitleReplayInput, isCurrent: () => boolean
+    ) => Promise<string | undefined>;
   };
   materialContext?: {
     selection: MaterialAssistantSelection | null;
@@ -166,6 +169,8 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   const restoredPlanKey = useRef<string | null>(null);
   const replyPlanRequests = useRef(new Map<string, string>());
   const appliedTaskReads = useRef(new Set<string>());
+  const consumedReplayInputs = useRef(new Set<string>());
+  const sendRevision = useRef(0);
   useEffect(() => { setPending(null); setTaskActionStatus(null); }, [scopeKind, scopeId, assistant.conversation?.id]);
   useEffect(() => {
     scopeRevision.current += 1;
@@ -227,6 +232,9 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     const timelineReferences = selectionState?.items.filter(item => "task_id" in item) ?? [];
     const pinned = timelineReferences.length === 1 ? timelineReferences[0] : null;
     const revision = scopeRevision.current;
+    const requestRevision = ++sendRevision.current;
+    const replayIntent = task ? titleReplayIntent(command) : undefined;
+    const completeReplay = replayIntent && taskContext?.prepareTitleReplay?.(replayIntent);
     setPending("chat");
     setError(null);
     setTaskVersionConflict(null);
@@ -269,16 +277,29 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
           playhead_ms: timelineReferences.length ? pinned?.kind === "shot" ? pinned.start_ms ?? null : null : taskContext?.getPlayheadMs() ?? null,
         }, onStreamEvent);
         const fresh = assistant.isCurrentConversation(turn.conversationId) ? await assistant.refresh() : null;
-        if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
+        const isCurrent = () => revision === scopeRevision.current && assistant.isCurrentConversation(turn.conversationId);
+        if (!isCurrent()) return;
         setTaskPreview(result.edit_preview ? { conversationId: turn.conversationId, preview: result.edit_preview } : null);
         setTaskPreviewOpen(Boolean(result.edit_preview));
         const savedEdit = assistantSavedEdit(task.id, result);
-        if (savedEdit) taskContext?.onTaskEditSaved?.(savedEdit);
+        if (savedEdit) taskContext?.onTaskEditSaved?.(savedEdit, turn.conversationId);
+        const replay = completeReplay && replayIntent && persistedTitleReplayInput(fresh, task, turn.conversationId, command, result, replayIntent);
+        const replayKey = replay ? `${turn.conversationId}:${replay.turnId}` : null;
         const receiptKeys = fresh ? appliedTaskReceiptKeys(fresh, task.id) : [];
+        let updated: void | Promise<void> = undefined;
         if (onTaskUpdated && (savedEdit || result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration || result.segment_revision || result.timeline_restore
           || receiptKeys.some(key => !appliedTaskReads.current.has(key)))) {
           for (const key of receiptKeys) appliedTaskReads.current.add(key);
-          onTaskUpdated();
+          updated = onTaskUpdated();
+        }
+        if (replay && replayKey && completeReplay && !consumedReplayInputs.current.has(replayKey)) {
+          consumedReplayInputs.current.add(replayKey);
+          if ("saved" in replay) await updated;
+          const replayScopeCurrent = () => isCurrent() && requestRevision === sendRevision.current
+            && latestSelectionSnapshot.current === referenceSnapshot;
+          if (!replayScopeCurrent()) return;
+          const status = await completeReplay(replay, replayScopeCurrent);
+          if (replayScopeCurrent() && status) setTaskActionStatus(status);
         }
       } else {
         const result = (materialContext
@@ -318,18 +339,19 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
   }
 
   async function confirmTaskPreview() {
-    if (!task || !taskPreview || pending) return;
+    const conversationId = assistant.conversation?.id;
+    if (!task || !taskPreview || !conversationId || pending) return;
     const revision = scopeRevision.current;
     setPending("confirm");
     setError(null);
     try {
       const result = await confirmCreationTaskEdit(task.id, taskPreview.proposal.id);
-      if (revision !== scopeRevision.current || latestTaskFacts.current?.id !== task.id) return;
+      if (revision !== scopeRevision.current || latestTaskFacts.current?.id !== task.id || !assistant.isCurrentConversation(conversationId)) return;
       setTaskPreview(null);
       setTaskPreviewOpen(false);
       const queued = "status" in result;
       if (!queued) {
-        taskContext?.onTaskEditSaved?.(result);
+        taskContext?.onTaskEditSaved?.(result, conversationId);
         setTaskAwaitingRead(latestTaskFacts.current);
       }
       setTaskActionStatus(queued ? `修改已排队，作业 ID：${result.job_id}。队列回执不代表制作完成，当前版本保持不变。` : '修改已保存，可撤销。'+(editExecutionReadinessMessage(result.execution_readiness) ?? ''));
@@ -499,6 +521,11 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
 
   const pathname = pageContext?.pathname ?? "/";
   const requestScopeKey = requestBinding ? `${scopeKind}:${scopeId}:${requestBinding.conversationId}:${requestBinding.revision}:${requestBinding.id}` : "";
+  const localReplayDraft = Boolean(task && taskContext?.prepareTitleReplay && persistedConversation
+    && titleReplayIntent(assistant.draftText) === "last-title-edit"
+    && persistedConversation.turns.at(-1)?.status !== "running"
+    && !["running", "waiting_result", "waiting_adoption", "waiting_identity", "waiting_unknown"]
+      .includes(assistantConversationGoal(persistedConversation)?.goal.status ?? ""));
 
   return (
     <div className="home-composer">
@@ -511,7 +538,7 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         legacyHistory={legacyHistory}
         materialUsage={taskContext?.materialUsage}
         busy={pending !== null || awaitingVersionRead}
-        configured={modelConfigured}
+        configured={modelConfigured || localReplayDraft}
         composerActions={<>
           {taskContext?.onPreviewPinnedEdit ? <Button variant="ghost" type="button"
             disabled={pending !== null || awaitingVersionRead || !assistant.draftText.trim()}
