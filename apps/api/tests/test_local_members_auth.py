@@ -350,7 +350,19 @@ def test_migration_13_applies_twice_without_error(tmp_path):
         narration_columns = {
             str(row[1]) for row in conn.execute("PRAGMA table_info(narration_segments)")
         }
+        timeline_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(timeline_versions)")
+        }
+        timeline_indexes = {
+            row[1] for row in conn.execute("PRAGMA index_list(timeline_versions)")
+            if row[2] and row[4]  # unique and partial
+        }
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='timeline_versions_no_update'"
+        ).fetchone()
     assert {"source_kind", "source_artifact_ref", "source_sha256"} <= narration_columns
+    assert "candidate_id" in timeline_columns
+    assert {"idx_timeline_versions_task", "idx_timeline_versions_candidate"} <= timeline_indexes
     # Migration 13 is a version-only marker: it bumps the schema version without
     # touching creation_tasks/material_assets, so it stays safe on the bare
     # standalone chain (test_device_runtime). The visibility columns are added

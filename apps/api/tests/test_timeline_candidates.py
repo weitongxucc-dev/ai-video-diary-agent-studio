@@ -126,3 +126,41 @@ def test_candidate_routes_reject_cross_task_workspace_and_member(metadata_http_s
     assert state.client.post(f"{url}/{candidate_id}/edits/exact", headers=reader, json=crop).status_code == 403
     assert state.client.post(f"{url}/{candidate_id}/edits/exact", json={**crop, "operation_type": "TrimClip"}).status_code == 422
     assert _ok(state.client.get(f"{url}/{candidate_id}"))["head_version_id"] == base.id
+
+
+@pytest.mark.parametrize("restriction", ["excluded_segment", "reference_only_asset"])
+def test_candidate_rechecks_restricted_source_without_rewriting_saved_receipts(metadata_http_state, restriction):
+    state = metadata_http_state
+    ws, task_id, base = state.task.workspace_id, state.task.id, state.base
+    url = state.url + "/timeline/candidates"
+    candidate_id = str(uuid4())
+    branch = f"{url}/{candidate_id}"
+    _ok(state.client.post(url, json={"candidate_id": candidate_id, **_binding(base.id, base.sequence)}))
+    request = _crop(base.id, base.sequence, .2)
+    saved = _ok(state.client.post(branch + "/edits/exact", json=request))
+    source = f"/api/production/materials/{state.asset.id}"
+    if restriction == "excluded_segment":
+        asset = _ok(state.client.get(source))
+        segment = asset["segments"][0]
+        _ok(state.client.patch(f"{source}/segments/{segment['id']}/usage-role", json={
+            "usage_role": "exclude", "expected_asset_updated_at": asset["updated_at"],
+            "expected_segment_updated_at": segment["updated_at"],
+        }))
+    else:
+        _ok(state.client.put(source + "/use-state", json={"use_state": "reference_only"}))
+
+    def saved_rows():
+        with state.repo.connection_factory() as conn:
+            versions = conn.execute("SELECT id FROM timeline_versions WHERE task_id=? ORDER BY id", (task_id,)).fetchall()
+            requests = conn.execute("SELECT id FROM task_events WHERE task_id=? AND event_type='timeline_candidate_edit_saved' "
+                                    "ORDER BY id", (task_id,)).fetchall()
+        return versions, requests
+
+    before = saved_rows()
+    version = saved["version"]
+    refused = state.client.post(branch + "/edits/exact", json=_crop(version["id"], version["sequence"], .4))
+    assert refused.status_code == 409, refused.text
+    assert _ok(state.client.post(branch + "/edits/exact", json=request)) == saved
+    assert _ok(state.client.get(branch)) == saved
+    assert saved_rows() == before
+    assert state.repo.task_records.get_creation_task(ws, task_id).current_timeline_version_id == base.id

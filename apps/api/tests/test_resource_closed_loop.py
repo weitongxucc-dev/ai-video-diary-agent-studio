@@ -35,7 +35,9 @@ def replay(tmp_path):
         for seq, identity, parent, graph, outputs, op in [(1,'v1',None,source,[],None),
                 (2,'v2','v1',source,[output],None), (3,'v3','v2',None,[],'undo')]:
             snapshot = {'montage': {'audio_timeline': {'tracks':[{'clips':[{'source_ref':graph}]}] if graph else []}}, 'output_refs':outputs}
-            c.execute('INSERT INTO timeline_versions VALUES (?,?,?,?,?,?,?,?)',
+            c.execute('INSERT INTO timeline_versions '
+                '(id,workspace_id,task_id,parent_version_id,sequence,snapshot_json,created_by_operation_id,created_at) '
+                'VALUES (?,?,?,?,?,?,?,?)',
                 (identity,ws,task,parent,seq,json.dumps(snapshot),op,identity))
         c.execute('INSERT INTO edit_operations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
             ('undo',ws,task,'undo-proposal','UndoTimelineVersion','{}','v2','v3','applied',None,'time','time'))

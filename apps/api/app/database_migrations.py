@@ -1110,15 +1110,16 @@ def _migrate_timeline_candidates(conn: sqlite3.Connection) -> None:
                 candidate_id TEXT
             )
         """)
-        conn.execute("""
-            INSERT INTO timeline_versions_scoped
-                (id, workspace_id, task_id, parent_version_id, sequence, snapshot_json,
-                 created_by_operation_id, created_at)
-            SELECT id, workspace_id, task_id, parent_version_id, sequence, snapshot_json,
-                   created_by_operation_id, created_at
-            FROM timeline_versions
-        """)
-        conn.execute("DROP TABLE timeline_versions")
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='timeline_versions'").fetchone():
+            conn.execute("""
+                INSERT INTO timeline_versions_scoped
+                    (id, workspace_id, task_id, parent_version_id, sequence, snapshot_json,
+                     created_by_operation_id, created_at)
+                SELECT id, workspace_id, task_id, parent_version_id, sequence, snapshot_json,
+                       created_by_operation_id, created_at
+                FROM timeline_versions
+            """)
+            conn.execute("DROP TABLE timeline_versions")
         conn.execute("ALTER TABLE timeline_versions_scoped RENAME TO timeline_versions")
         conn.execute("""
             CREATE UNIQUE INDEX idx_timeline_versions_task
