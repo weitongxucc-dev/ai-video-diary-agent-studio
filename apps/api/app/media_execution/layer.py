@@ -32,6 +32,7 @@ from .contracts import (
     MediaProcessReleaseUnverified,
 )
 from .worker import FfmpegWorker
+from .bound_cut import BOUND_CUT_FACT
 
 
 class MediaExecutionLayer:
@@ -77,8 +78,9 @@ class MediaExecutionLayer:
                         failure_reason=job.failure_reason, impact=job.impact, repair_action=job.repair_action)
 
     def submit(self, plan: EditPlan | dict, *, idempotency_suffix: str | None = None,
-               cancel_event: threading.Event | None = None, grant_context=None) -> dict[str, object]:
+               cancel_event: threading.Event | None = None, grant_context=None, bounded_cut=None) -> dict[str, object]:
         plan = plan if isinstance(plan, EditPlan) else EditPlan.from_value(plan)
+        self._assert_bound_cut(plan, grant_context, bounded_cut)
         digest = hashlib.sha256(json.dumps(plan.as_dict(), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         idempotency_key = f"media:{plan.task_id}:{plan.request_id}{idempotency_suffix or ''}"
         existing = self.repository.job_records.get_job_run_by_idempotency_key(plan.workspace_id, idempotency_key)
@@ -100,7 +102,16 @@ class MediaExecutionLayer:
                     "dependencies": dependency_payload(self.dependencies)}, created_at=job.created_at), connection=conn)
         if persisted.id != job_id:
             return self._existing_result(persisted, plan)
-        return self._run(job_id, plan, cancel_event=cancel_event, grant_context=grant_context)
+        return self._run(job_id, plan, cancel_event=cancel_event, grant_context=grant_context, bounded_cut=bounded_cut)
+
+    @staticmethod
+    def _assert_bound_cut(plan, grant_context, bounded_cut):
+        if bounded_cut is None and BOUND_CUT_FACT not in plan.metadata:
+            return
+        if (bounded_cut is None or grant_context is not bounded_cut.context
+                or plan.metadata.get(BOUND_CUT_FACT) != bounded_cut.facts):
+            raise MediaExecutionError("media_cut_permit_required", "有界截取必须持有原任务媒体许可。",
+                                      "沿原设备作业查询或处理截取结果。")
 
     def _existing_result(self, job: JobRun, plan: EditPlan) -> dict[str, object]:
         """Return the durable receipt for a repeated idempotent submission."""
@@ -156,7 +167,8 @@ class MediaExecutionLayer:
         return self.submit(retry_plan, idempotency_suffix=f":retry:{uuid4().hex}")
 
     def _run(self, job_id: str, plan: EditPlan,
-             cancel_event: threading.Event | None = None, *, grant_context=None) -> dict[str, object]:
+             cancel_event: threading.Event | None = None, *, grant_context=None, bounded_cut=None) -> dict[str, object]:
+        self._assert_bound_cut(plan, grant_context, bounded_cut)
         key = (plan.workspace_id, job_id)
         cancel_event = cancel_event or threading.Event()
         with self._cancel_lock:
@@ -173,6 +185,8 @@ class MediaExecutionLayer:
         try:
             check_publication = None
             execution = {}
+            if bounded_cut is not None:
+                execution["bounded_cut"] = bounded_cut
             if grant_context is not None:
                 execution["grant_context"] = grant_context
                 check_dependencies = grant_context.scheduler.capture_dependency_check(grant_context.grant)
@@ -180,6 +194,8 @@ class MediaExecutionLayer:
                 def check_publication():
                     grant_context.check_execution_limits()
                     check_dependencies()
+                    if bounded_cut is not None:
+                        bounded_cut.recheck()
 
             worker = self.worker or FfmpegWorker(self.dependencies)
             result = worker.execute(
@@ -243,6 +259,10 @@ class MediaExecutionLayer:
                 logical_ref = f"media/{job_id}/{index}-{path.name}"
                 refs.append(logical_ref)
                 published = self.artifact_store.publish_file(logical_ref, path)
+                if BOUND_CUT_FACT in plan.metadata and (
+                        published.sha256, published.size_bytes) != (item["summary"]["sha256"], item["summary"]["bytes"]):
+                    raise MediaExecutionError("media_cut_output_changed", "登记时的截取文件已变化，未发布。",
+                                              "查询原截取作业和输出核验记录。")
                 artifact = ArtifactRecord(id=f"artifact_{job_id}_{index}", workspace_id=plan.workspace_id,
                     task_id=plan.task_id, kind="media_output", logical_ref=logical_ref,
                     sha256=published.sha256, size_bytes=published.size_bytes,

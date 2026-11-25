@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .adapter import is_bound_video_cut
+from .bound_cut import BOUND_CUT_FACT, BOUND_CUT_KIND
 from .contracts import EditPlan, MediaExecutionError
 
 FFMPEG_OPERATION = "ffmpeg_execution"
@@ -44,8 +45,9 @@ class DelegateReceipt:
 class TaskMediaExecutionDelegate:
     """Adapt one sealed TaskMediaJobs event to MediaExecutionEntrypoint."""
 
-    def __init__(self, entrypoint) -> None:
+    def __init__(self, entrypoint, *, bounded_cut=None) -> None:
         self.entrypoint = entrypoint
+        self.bounded_cut = bounded_cut
 
     @staticmethod
     def handles(operation: str, arguments: Mapping[str, Any]) -> bool:
@@ -77,6 +79,17 @@ class TaskMediaExecutionDelegate:
         execution = {"cancel_event": cancel_event} if cancel_event is not None else {}
         if grant_context is not None and len(plan.operations) == 1 and is_bound_video_cut(plan.operations[0]):
             execution["grant_context"] = grant_context
+        kind = event.get("resources", {}).get("kind")
+        if kind == BOUND_CUT_KIND or BOUND_CUT_FACT in event["input_facts"]:
+            if (kind != BOUND_CUT_KIND or BOUND_CUT_FACT not in event["input_facts"]
+                    or self.bounded_cut is None or grant_context is None):
+                raise MediaExecutionError("media_cut_permit_required", "有界截取缺少专属许可或封存输入。",
+                                          "查询原截取请求的设备许可。")
+            from app.creation_execution import CreationExecutionActor
+            actor = CreationExecutionActor.from_event(plan.workspace_id, actor_identity)
+            bound = self.bounded_cut.bind_grant(plan, actor, job, event, grant_context)
+            plan = replace(plan, metadata={**plan.metadata, BOUND_CUT_FACT: bound.facts})
+            execution["bounded_cut"] = bound
         result = self.entrypoint.submit(plan, **execution)
         return self._receipt(job, plan, result)
 

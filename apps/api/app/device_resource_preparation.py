@@ -704,7 +704,7 @@ class DeviceResourcePreparation:
                 'AND owner_type=? AND owner_id=?', (actor.workspace_id, OWNER_TYPE, plan_id)).fetchone()
         return None if row is None else self.status(database_path=database_path, request_id=row[0], actor=actor)
 
-    def finalize(self, *, database_path, request_id, actor):
+    def _completed_receipt(self, *, database_path, request_id, actor):
         row, plan = self._request(database_path=database_path, request_id=request_id, actor=actor)
         if row['state'] != 'done':
             raise DeviceProfileUnavailable('设备准备尚未取得完成回执；请读取原请求，不重复启动。')
@@ -723,6 +723,30 @@ class DeviceResourcePreparation:
         identities = {name: backend_identity(name, None, settings=self.settings) for name in plan['backends']}
         if identities != plan['backends']:
             raise DeviceProfileUnavailable('媒体工具已变化；需要重新准备对应能力，原记录保持。')
+        return plan, receipt, identities, row['checkpoint_ref']
+
+    def read_mp4_cut_measurement(self, *, database_path, request_id, actor):
+        plan, receipt, _, checkpoint = self._completed_receipt(
+            database_path=database_path, request_id=request_id, actor=actor)
+        spec = plan.get('mp4_cut_probe', {})
+        cut = receipt.get('mp4_cut_probe', {})
+        stages = cut.get('stages', {})
+        if (plan['shape'].get('measure_mp4_cut') is not True
+                or spec.get('contract') != MP4_CUT_PROBE or cut.get('contract') != MP4_CUT_PROBE
+                or spec.get('pipe_limit_bytes') != PREPARATION_PIPE_BYTES
+                or cut.get('plan_digest') != _digest(spec)
+                or any(cut.get(key) != spec.get(key) for key in ('tools', 'limits', 'cpu_policy', 'pipe_limit_bytes'))
+                or set(stages) != {'source_probe', 'encode', 'output_probe'}
+                or any(stage.get('group_released') is not True for stage in stages.values())):
+            raise DeviceProfileUnavailable('指定准备回执没有完整的三阶段 MP4 截取测量。')
+        if any(_hash_file(tool['path']) != tool['sha256'] for tool in spec['tools'].values()):
+            raise DeviceProfileUnavailable('截取测量绑定的 FFmpeg/FFprobe 已变化。')
+        return {'request_id': request_id, 'generation': receipt['generation'], 'checkpoint': checkpoint,
+                'measurement': cut, 'frame_rate': spec['frame_rate']}
+
+    def finalize(self, *, database_path, request_id, actor):
+        plan, receipt, identities, _ = self._completed_receipt(
+            database_path=database_path, request_id=request_id, actor=actor)
         return self._publish(plan, receipt, identities)
 
     def _publish(self, plan, receipt, identities):

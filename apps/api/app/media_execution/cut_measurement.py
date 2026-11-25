@@ -132,14 +132,17 @@ def _read_probe(payload: dict, limits: Mp4CutLimits, *, source: bool) -> tuple[d
 
 def measure_mp4_cut(adapter: FfmpegAdapter, source: Path, work_root: Path, *,
                     source_sha256: str, source_bytes: int, start: float, duration: float,
-                    limits: Mp4CutLimits, run, check) -> dict:
-    """Run one measurement with a caller-owned grant and shared deadline.
+                    limits: Mp4CutLimits, run, check, staged_output: Path | None = None) -> dict:
+    """Run the bounded cut with a caller-owned grant and shared deadline.
 
     ``run(argv, paths, env=...)`` is the existing preparation command port. It
     must bound both pipes, total bytes at ``paths`` (to ``max_work_bytes`` or
     less), the deadline and child resources. ``check`` checks that same grant
-    and deadline during local file I/O. The caller owns the private scratch root.
+    and deadline during local file I/O. The caller owns the private scratch root
+    and may retain the verified output there for its own publication transaction.
     """
+    if staged_output is not None and staged_output.parent != work_root:
+        raise ValueError("verified cut output must remain in the private work root")
     if (type(source_bytes) is not int or not 0 < source_bytes <= limits.max_source_bytes
             or not re.fullmatch(r"[0-9a-f]{64}", source_sha256)):
         raise _refused("media_cut_input_limit", "截取源缺少有效摘要或整源大小超出测量上限。")
@@ -211,6 +214,8 @@ def measure_mp4_cut(adapter: FfmpegAdapter, source: Path, work_root: Path, *,
         if _identity(output.lstat()) != _identity(output_info):
             raise _refused("media_cut_output_changed", "截取成片在核验期间已变更。")
         check()
+        if staged_output is not None:
+            output.replace(staged_output)
         return {
             "limits": asdict(limits),
             "source": {**source_facts, "bytes": source_bytes, "sha256": source_sha256,

@@ -41,7 +41,7 @@ class FfmpegWorker:
 
     def execute(self, plan: EditPlan, job_id: str, output_root: Path,
                 *, progress: Callable[[int], None] | None = None,
-                cancel_event: threading.Event | None = None, grant_context=None) -> dict[str, object]:
+                cancel_event: threading.Event | None = None, grant_context=None, bounded_cut=None) -> dict[str, object]:
         job_root = output_root / job_id
         job_root.mkdir(parents=True, exist_ok=True)
         log_path = job_root / f"request-{plan.request_id}.jsonl"
@@ -82,6 +82,14 @@ class FfmpegWorker:
                 "operation": operation.operation, "index": index,
             })
             log("command_start", inputs=[str(item) for item in inputs], output=str(output_path))
+            if bounded_cut is not None:
+                measured = bounded_cut.execute(operation, inputs[0], output_path)
+                log("bounded_video_cut_verified", preparation=bounded_cut.facts["preparation"], **measured)
+                current_outputs.append({"path": str(output_path), "operation": operation.operation,
+                                        "output_name": output_name, "summary": measured["output"]})
+                if progress is not None:
+                    progress(100)
+                break
             cut = None
             name = operation.operation.lower()
             if is_bound_video_cut(operation):
