@@ -1,5 +1,6 @@
 """Prepare and seal picture-only edits without executing media or changing drafts."""
-from dataclasses import asdict
+from contextlib import closing, nullcontext
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +12,22 @@ from app.source_policy import knowledge_item_readable as content_readable
 from app.production import material_allows_footage, material_segment_eligible, effective_segment_usage_role
 from app.creation.contracts import (EditIntent, EditProposal, EditCommand)
 from app.visual_effects import VisualEffects
+
+
+CANDIDATE_CLIP_PREVIEW = "candidate_clip_preview"
+
+
+@dataclass(frozen=True)
+class CandidateClipPreviewTarget:
+    candidate_id: str
+    version_id: str
+    sequence: int
+    clip_id: str
+
+
+@dataclass(frozen=True)
+class CandidateClipPreviewCommand(CandidateClipPreviewTarget):
+    request_id: str
 
 
 class ClipPreviewUnavailable(ValueError):
@@ -91,11 +108,61 @@ class ClipPreviewUseCase:
         task, version, plan, before, after = self.prepare(actor, command)
         if command.operation_type == "AdjustVisualEffects" and needs_full_visual_preview(before[0], after[0]):
             raise ValueError("结尾淡出需要完整镜头预览，不能封存为开头静音窗口")
+        facts, resources = self._seal_pair(actor, task, version, plan, before, after)
+        if command.operation_type == "AdjustVisualEffects":
+            clip = before[0]
+            facts["visual_preview"] = {"representative_clip_id":clip.id,
+                "selected_clip_ids":[item.id for item in before], "start_seconds":clip.timeline_start_seconds,
+                "end_seconds":clip.timeline_end_seconds, "scope":"independent_clip", "adjacent_transitions_included":False}
+        return facts, resources
+
+    def require_candidate_head(self, actor, task_id, command, *, connection):
+        task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id, connection=connection)
+        if task.owner_user_id != (actor.user_id or actor.member_id):
+            raise PermissionError("只有作品所有者可预览剪辑候选")
+        timelines = self.repository.timeline_records
+        candidate = timelines.get_candidate(actor.workspace_id, task_id, command.candidate_id, connection=connection)
+        if candidate.head_version_id != command.version_id:
+            raise ClipPreviewConflict("候选时间线已变化，请重新读取候选")
+        version = timelines.get_candidate_version(candidate, command.version_id, connection=connection)
+        if version.sequence != command.sequence:
+            raise ClipPreviewConflict("预览未绑定当前候选版本序号")
+        return task, candidate, version
+
+    def seal_candidate(self, actor, task_id, command, *, connection=None):
+        with (closing(self.repository.connection_factory()) if connection is None else nullcontext(connection)) as conn:
+            if connection is None:
+                conn.execute("BEGIN")
+            task, candidate, version = self.require_candidate_head(actor, task_id, command, connection=conn)
+            baseline = self.repository.timeline_records.get_candidate_version(candidate, candidate.base_version_id, connection=conn)
+            montage = version.snapshot["montage"]
+            plan = creation_task_montage_plan_from_payload(montage)
+            original = creation_task_montage_plan_from_payload(baseline.snapshot["montage"])
+            clip = next((item for item in plan.clips if item.id == command.clip_id), None)
+            before = next((item for item in original.clips if item.id == command.clip_id), None)
+            if clip is None or before is None:
+                raise ClipPreviewConflict("候选或正式基线缺少所选镜头")
+            if clip.person_render_id or before.person_render_id:
+                raise ClipPreviewConflict("候选短预览目前支持素材镜头")
+            if (original.aspect_ratio != plan.aspect_ratio or
+                    replace(clip, fit_mode=before.fit_mode, crop_x=before.crop_x, crop_y=before.crop_y) != before):
+                raise ClipPreviewConflict("候选短预览目前仅支持同一镜头范围的画面裁切")
+            source_facts = self.repository.clip_sources.facts(actor.workspace_id, task_id,
+                clip_ids=[clip.id], replacement=None, user_id=actor.user_id or actor.member_id,
+                local_diagnostic=False, montage=montage, connection=conn)
+            source = self.repository.resolve_clip_media_reference(
+                actor.workspace_id, clip.asset_id, clip.source_path, connection=conn)
+            facts, resources = self._seal_pair(actor, task, version, plan, [before], [clip], source=source)
+        facts.update(candidate_id=candidate.id, formal_base_version_id=baseline.id, source_facts=source_facts)
+        return facts, resources
+
+    def _seal_pair(self, actor, task, version, plan, before, after, *, source=None):
         if any(VisualEffects.model_validate(clip.visual_effects).beauty_strength or
                VisualEffects.model_validate(clip.visual_effects).skin_exposure for clip in after):
             raise ValueError("本机人像效果尚无受许可执行路径，请先移除该效果")
         clip = before[0]
-        source, _asset = self.authorized_source(actor, task, clip)
+        if source is None:
+            source, _asset = self.authorized_source(actor, task, clip)
         budget = self.budget()
         if source is None:
             raise ValueError("当前镜头媒体不可用")
@@ -110,10 +177,6 @@ class ClipPreviewUseCase:
             "source":[clip.source_path, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns],
             "source_path":str(source), "source_inode":stat.st_ino, "source_device":stat.st_dev,
             "selected_clips":[asdict(item) for item in before], "candidates":[asdict(item) for item in after]}
-        if command.operation_type == "AdjustVisualEffects":
-            facts["visual_preview"] = {"representative_clip_id":clip.id,
-                "selected_clip_ids":[item.id for item in before], "start_seconds":clip.timeline_start_seconds,
-                "end_seconds":clip.timeline_end_seconds, "scope":"independent_clip", "adjacent_transitions_included":False}
         resources = {"kind":"task_clip_preview", "execution_mode":"cpu_ffmpeg", "duration_seconds":duration,
             "width_px":width, "height_px":height, "input_bytes":stat.st_size, "clip_count":1, "overlay_count":0,
             "max_output_bytes":budget.max_output_bytes, "threads":budget.max_threads, "timeout_seconds":budget.max_timeout_seconds,

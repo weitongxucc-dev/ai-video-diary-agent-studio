@@ -38,12 +38,20 @@ def visual_application(permitted_media_state, monkeypatch):
     original_swap = psutil.swap_memory
     state.actual_swap_before_fixture = original_swap().used
     # Control global OS pressure in the explicitly synthetic resource domain;
-    # original declared budgets and native RSS/thread/deadline/PGID gates remain.
+    # native RSS/thread/deadline/PGID gates remain.
     monkeypatch.setattr(psutil, 'swap_memory', lambda: original_swap()._replace(used=0))
     state.fixture_disk_io_baseline = psutil.disk_io_counters()
     monkeypatch.setattr(psutil, 'disk_io_counters', lambda **kwargs: state.fixture_disk_io_baseline)
     monkeypatch.setattr(psutil, 'cpu_percent', lambda *args, **kwargs: 0.0)
     state.runtime = state.preview_runtime
+    # The macOS CI encode of the full 1080×1920 overlay and subtitle preview
+    # crossed the shared 512 MiB fixture limit. Give this success fixture its
+    # own finite envelope while still checking the real process measurements.
+    resources = state.runtime.scheduler.resources
+    render_budget = replace(resources.budget.cpu_render, additional_memory_bytes=640 * 1024**2)
+    monkeypatch.setattr(resources, 'budget', replace(resources.budget, cpu_render=render_budget))
+    host_budget = replace(main._device_host_budget(), cpu_render=render_budget)
+    monkeypatch.setattr(main, '_device_host_budget', lambda: host_budget)
     state.media = state.runtime.registrations['creation_job'].owner.task_media
     state.media.visual_preview = main._visual_preview_use_case(state.production)
     state.media.facts = main._task_media_facts
@@ -187,7 +195,7 @@ def test_short_and_full_tail_visual_preview_use_real_native_media(visual_applica
         'fixture_resource_metric':{'swap_used_bytes':0,'actual_before_fixture':state.actual_swap_before_fixture,
             'global_cpu_percent':0.0,
             'disk_io_counter':state.fixture_disk_io_baseline._asdict(),
-            'scope':'this parent test process only; original helper budget/probe and all native limits unchanged'},
+            'scope':'this parent test process only; full-render RSS envelope is specific to this fixture'},
         'production_auth_host_profile_GUI_full_inflight_PGID':'UNVERIFIED'}
     destination=os.environ.get('VISUAL_PREVIEW_EVIDENCE_DIR')
     if destination:

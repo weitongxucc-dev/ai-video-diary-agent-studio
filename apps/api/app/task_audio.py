@@ -16,6 +16,7 @@ import time
 from collections import Counter
 from app.creation.render_generation import current_render_generation, render_namespace, render_generation_fields, stored_render_scope
 from app.creation.audio_source_limits import validate_audio_source_specs
+from app.creation.clip_preview import CANDIDATE_CLIP_PREVIEW, CandidateClipPreviewCommand
 
 
 def audio_mix_resources(inputs, timelines, duration_seconds, *, normalize_voice_sources, budget, apply_master=True,
@@ -973,10 +974,10 @@ class TaskMediaJobs:
         if not 1 <= limit <= 40:
             raise ValueError('媒体作业分页大小须为 1–40')
         self.repository.task_records.get_creation_task(workspace_id, task_id)
-        parameters = [workspace_id, task_id, TASK_MEDIA_KIND, actor.member_id]
+        parameters = [workspace_id, task_id, TASK_MEDIA_KIND, actor.member_id, CANDIDATE_CLIP_PREVIEW]
         before = ''
         if cursor is not None:
-            saved, event = self.read(workspace_id, cursor)
+            saved, event = self.read_public(workspace_id, cursor)
             if saved.task_id != task_id or CreationExecutionActor.from_event(workspace_id, event) != actor:
                 raise KeyError('媒体作业分页位置不存在')
             before = ' AND (j.created_at < ? OR (j.created_at = ? AND j.id < ?))'
@@ -985,7 +986,8 @@ class TaskMediaJobs:
         with self.repository._connect() as conn:
             rows = conn.execute("SELECT j.* FROM job_runs j JOIN task_events e ON e.workspace_id=j.workspace_id "
                 "AND e.job_id=j.id AND e.id='event_' || j.id || '_start' "
-                "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND json_extract(e.payload_json,'$.member_id')=?" + before +
+                "WHERE j.workspace_id=? AND j.task_id=? AND j.kind=? AND json_extract(e.payload_json,'$.member_id')=? "
+                "AND json_extract(e.payload_json,'$.operation') IS NOT ?" + before +
                 ' ORDER BY j.created_at DESC,j.id DESC LIMIT ?', parameters).fetchall()
         jobs = []
         for row in rows[:limit]:
@@ -1031,6 +1033,32 @@ class TaskMediaJobs:
         if row is None or event is None:
             raise KeyError(job_id)
         return self.repository.job_records.job_run_from_row(row), json.loads(event["payload_json"])
+
+    def read_public(self, workspace_id, job_id):
+        job, event = self.read(workspace_id, job_id)
+        if event.get("operation") == CANDIDATE_CLIP_PREVIEW:
+            raise KeyError(job_id)
+        return job, event
+
+    def cancellation_pending(self, job):
+        return job.status not in {"succeeded", "failed", "cancelled"} or any(
+            row["state"] in {"waiting", "blocked", "granted", "yield_requested"}
+            for row in self.repository.job_records.list_creation_job_request_states(job.workspace_id, job.id))
+
+    def cancel(self, runtime, job, actor):
+        if job.status not in {"queued", "running", "interrupted"}:
+            return
+        with self.repository.connection_factory() as conn:
+            rows = conn.execute(
+                "SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_id=? AND owner_type='creation_job' "
+                "AND state IN ('waiting','blocked','granted','yield_requested')",
+                (job.workspace_id, job.id),
+            ).fetchall()
+        for row in rows:
+            runtime.scheduler.cancel(row["id"], actor)
+            runtime.registrations["creation_job"].executor.request_cancel(row["id"])
+        self.repository.job_records.finish_job_run(job.workspace_id, job.id, status="cancelled",
+            failure_reason="user_cancelled", impact="当前时间线保持不变。", repair_action="需要时重新安排媒体处理。")
 
     def _read_access(self, job, event, actor, *, check_scope=True, connection=None):
         from app.creation_execution import CreationExecutionActor
@@ -1137,7 +1165,9 @@ class TaskMediaJobs:
             repair_action="请结合当前作业状态查询原请求；检查记录不会重新提交或启动媒体。")
         self.repository.execution_records.append_task_event(TaskEvent(id=event_id, workspace_id=job.workspace_id,
             task_id=job.task_id, job_id=job.id, event_type="task_media_resource_admission",
-            payload={**binding, **receipt.model_dump(mode="json")}, created_at=timestamp), connection=conn)
+            payload={**binding, **receipt.model_dump(mode="json"),
+                **({"admission_reason": decision.reason} if start.get("operation") == CANDIDATE_CLIP_PREVIEW else {})},
+            created_at=timestamp), connection=conn)
 
     def resource_admission_receipt(self, job, start, actor, request, projected_status):
         if request is None or self._read_access(job, start, actor) != "ready":
@@ -1197,7 +1227,11 @@ class TaskMediaJobs:
                 if self.clip_preview is None:
                     return "stale"
                 return "ready" if self.clip_preview.use_case.legacy_result_current(job, event, actor) else "stale"
-            current, resources = self.facts(job.workspace_id, job.task_id, event["operation"], event["arguments"], actor)
+            if event["operation"] == CANDIDATE_CLIP_PREVIEW and connection is not None:
+                command = CandidateClipPreviewCommand(**event["arguments"]["candidate"])
+                current, resources = self.clip_preview.use_case.seal_candidate(actor, job.task_id, command, connection=connection)
+            else:
+                current, resources = self.facts(job.workspace_id, job.task_id, event["operation"], event["arguments"], actor)
         except PermissionError:
             return "unauthorized"
         except (KeyError, FileNotFoundError, ValueError):
@@ -1239,6 +1273,17 @@ class TaskMediaJobs:
             conn.execute("BEGIN IMMEDIATE")
             if write_guard is not None:
                 write_guard(conn)
+            if payload["operation"] == CANDIDATE_CLIP_PREVIEW:
+                command = CandidateClipPreviewCommand(**arguments["candidate"])
+                self.clip_preview.use_case.require_candidate_head(actor, task_id, command, connection=conn)
+                original = conn.execute(
+                    "SELECT job_id FROM task_events WHERE workspace_id=? AND task_id=? AND event_type='task_media_submitted' "
+                    "AND json_extract(payload_json,'$.operation')=? AND json_extract(payload_json,'$.member_id')=? "
+                    "AND json_extract(payload_json,'$.arguments.candidate.request_id')=? LIMIT 1",
+                    (run.workspace_id, task_id, CANDIDATE_CLIP_PREVIEW, actor.member_id, command.request_id),
+                ).fetchone()
+                if original is not None and original["job_id"] != run.id:
+                    raise ValueError("原候选预览请求已绑定其他输入")
             if "_clip_preview" in arguments:
                 job = self.repository.task_media_submissions.create_clip_preview_job(run, payload,
                     expected_version_id=arguments["_clip_preview"]["base_version_id"], connection=conn)
@@ -1295,6 +1340,8 @@ class TaskMediaJobs:
                     return self.check(job, event, actor, check_scope=False)
                 if version != task.current_timeline_version_id:
                     return "stale"
+        if event["operation"] == CANDIDATE_CLIP_PREVIEW:
+            return self.check(job, event, actor, check_scope=False, connection=conn)
         return self.check(job, event, actor, check_scope=False)
 
     def capture_local(self, request, conn):
@@ -1302,6 +1349,8 @@ class TaskMediaJobs:
             job, event = self.read(request.workspace_id, request.owner_id, conn)
         except (KeyError, ValueError):
             return lambda current: "stale"
+        candidate = (CandidateClipPreviewCommand(**event["arguments"]["candidate"])
+                     if event["operation"] == CANDIDATE_CLIP_PREVIEW else None)
         # Resolve the sealed source graph once, before any write lock. The
         # commit check reads only revisions of those concrete dependencies.
         references = set()
@@ -1384,11 +1433,21 @@ class TaskMediaJobs:
                 row = current.execute("SELECT id,created_at FROM narration_artifacts WHERE workspace_id=? AND id=?",
                                       (job.workspace_id, narration_id)).fetchone()
                 source_rows.append(tuple(row) if row else None)
+            candidate_row = None
+            if candidate is not None:
+                candidate_row = current.execute(
+                    "SELECT id,base_version_id,head_version_id FROM timeline_candidates "
+                    "WHERE workspace_id=? AND task_id=? AND id=?",
+                    (job.workspace_id, job.task_id, candidate.candidate_id),
+                ).fetchone()
             return (tuple(job_row) if job_row else None, tuple(task) if task else None,
                     tuple(plan) if plan else None, tuple(script) if script else None,
-                    tuple(montage) if montage else None, tuple(source_rows))
+                    tuple(montage) if montage else None, tuple(source_rows), tuple(candidate_row) if candidate_row else None)
         expected = read(conn)
         if expected[1] is None:
+            return lambda current: "stale"
+        if candidate is not None and expected[-1] != (
+                candidate.candidate_id, event["input_facts"]["formal_base_version_id"], candidate.version_id):
             return lambda current: "stale"
         def check(current):
             from app.creation_execution import CreationExecutionActor
@@ -1425,7 +1484,7 @@ class TaskMediaJobs:
         from app.creation_execution import CreationExecutionActor, CpuRenderGrantContext
         from app.granted_subprocess import GrantedCommandCancelled
         from app.host_resource_probes import HostResourceRefusal
-        from app.device_scheduler import RecoveryBlocked
+        from app.device_scheduler import RecoveryBlocked, StaleGrantInput
         from app.repository import set_workspace_context, reset_workspace_context
         from app.creation.audio_ingress_use_case import AUDIO_INGRESS_ACTIONS, AudioIngressRejected
         from app.creation.editing.audio_edit_use_case import AudioEditUseCase, AudioEditRejected
@@ -1497,7 +1556,7 @@ class TaskMediaJobs:
                 resources["max_output_bytes"], resources["threads"], cancellation)
             if job.status in {"queued", "interrupted"}:
                 job = self.repository.job_records.claim_job_run(job.workspace_id, job.id)
-            direct_clip = "_clip_preview" in event["arguments"]
+            direct_clip = "_clip_preview" in event["arguments"] or event["operation"] == CANDIDATE_CLIP_PREVIEW
             context.check()
             try:
                 result_event = self.repository.execution_records.get_task_event(job.workspace_id, f"event_{job.id}_result")
@@ -1598,12 +1657,15 @@ class TaskMediaJobs:
                              (job.workspace_id, job.id))
         except RecoveryBlocked:
             raise
-        except PermissionError:
+        except PermissionError as exc:
             if executor._pause_for_quit(grant, scheduler):
                 return
             if self.repository.job_records.get_job_run(job.workspace_id, job.id).status == "cancelled":
                 scheduler.complete_unit(grant, checkpoint_database_path=self.repository.database_path,
                     checkpoint_write=lambda conn, current: checkpoint(conn, current, "cancelled", "user_cancelled"), cancelled=True)
+            elif event["operation"] == CANDIDATE_CLIP_PREVIEW and isinstance(exc, StaleGrantInput):
+                scheduler.fail_unit(grant, reason="stale_candidate_preview",
+                    failure_write=lambda conn, current: checkpoint(conn, current, "failed", "stale_candidate_preview"))
             elif not executor._defer_permission_loss(grant, scheduler):
                 raise
         except Exception as exc:
