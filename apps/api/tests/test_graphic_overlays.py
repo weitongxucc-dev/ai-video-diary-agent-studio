@@ -43,7 +43,8 @@ def test_title_entry_command_moves_only_the_selected_title_interval():
     other = TextOverlay(text='另一条标题', start_seconds=1, end_seconds=3).model_dump()
     with pytest.raises(ValueError, match='请选中'):
         compile_overlay_command('标题提前半秒', [title, other])
-    for command in ('标题提前半秒', '标题提前15帧', '标题「数智分会」入场改到第45帧'):
+    for command in ('标题提前半秒', '标题提前15帧', '标题「数智分会」入场改到第45帧',
+                    '标题提前半秒，改完后回放', '标题「数智分会」移到第45帧, 改完后回放！'):
         action, value, target = compile_overlay_command(command, [title, other],
             selected_refs=[f"overlay:{title['id']}"])
         assert (action, target) == ('update', title['id'])
