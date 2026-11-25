@@ -132,7 +132,8 @@ export type AppShellProps = {
   assistantContext?: HomeCommandComposerProps;
   workspaceTabs?: ReactNode;
   resourceOpen?: boolean;
-  resourcePanel?: { content: ReactNode; inspector?: ReactNode; inspectorTitle?: string; inspectorOpenKey?: string };
+  onResourceInspectorClose?: () => void;
+  resourcePanel?: { content: ReactNode; inspector?: ReactNode; inspectorTitle?: string; inspectorOpenKey?: string; onInspectorClose?: () => void; manageHref?: string };
   onReleaseResourcePane?: () => void;
   closeBlockedReason?: string;
 };
@@ -278,6 +279,7 @@ export function AppShellFrame({
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [resourceDetailsOpen, setResourceDetailsOpen] = useState(false);
+  const resourceDetailsOpener = useRef<HTMLElement | null>(null);
   const resourceInspectorOpenKey = resourcePanel?.inspectorOpenKey;
   const [quickOpen, setQuickOpen] = useState(false);
   const [conversationFocused, setConversationFocused] = useState(false);
@@ -336,7 +338,7 @@ export function AppShellFrame({
   const taskReadSequence = useRef(0);
   const previousTaskProps = useRef(creationTasks);
   useEffect(() => { setDetailsOpen(false); }, [inspectorDismissKey]);
-  useEffect(() => { setResourceDetailsOpen(false); }, [pathname]);
+  useEffect(() => { resourceDetailsOpener.current = null; setResourceDetailsOpen(false); }, [pathname]);
   useEffect(() => {
     if (resourceInspectorOpenKey) setResourceDetailsOpen(true);
   }, [pathname, resourceInspectorOpenKey]);
@@ -355,7 +357,10 @@ export function AppShellFrame({
   const focusConversation = editingPaneNeedsRoom && conversationFocused && !chat.hidden;
   const inspectorOpen = dockInspector || dockQuickInspector;
   const resourceInspectorOpen = active && Boolean(resourcePanel?.inspector) && resourceDetailsOpen;
-  const openResourceInspector = useCallback(() => setResourceDetailsOpen(true), []);
+  const openResourceInspector = useCallback((opener?: HTMLElement) => {
+    resourceDetailsOpener.current = opener ?? null;
+    setResourceDetailsOpen(true);
+  }, []);
   const panelContext = useMemo(() => ({ inspectorOpen, resourceOpen, resourceInspectorOpen, openResourceInspector, conversationFocused: focusConversation, revealTaskPanel, openQuickInspector: quickAvailable ? openQuickInspector : undefined }), [inspectorOpen, resourceOpen, resourceInspectorOpen, openResourceInspector, focusConversation, revealTaskPanel, quickAvailable, openQuickInspector]);
   const inlineInspector = dockInspector && !editorAuxiliaryHost && !hasLeftResourcePanel;
   const resourceReplacesChat = !hasLeftResourcePanel && !chat.hidden && (resourceOpen || (dockInspector || dockQuickInspector) && Boolean(editorAuxiliaryHost)) && contentWidth > 0 && contentWidth - panels.rightWidth - 280 < 440;
@@ -576,7 +581,10 @@ export function AppShellFrame({
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}${hasLeftResourcePanel ? ` ${editorShell.withLeftResource}` : ""}`}>
         {resourcePanel ? <aside className={editorShell.resourceColumn} aria-label="作品资源">
           {resourcePanel.content}
-          {resourcePanel.inspector ? <WorkspaceInspector open={resourceInspectorOpen} title={resourcePanel.inspectorTitle ?? "资源详情"} onClose={() => setResourceDetailsOpen(false)}>{resourcePanel.inspector}</WorkspaceInspector> : null}
+          <WorkspaceInspector open={resourceInspectorOpen} title={resourcePanel.inspectorTitle ?? "资源详情"} manageHref={resourcePanel.manageHref} opener={resourceDetailsOpener} mediaEscape onClose={() => {
+            setResourceDetailsOpen(false);
+            resourcePanel.onInspectorClose?.();
+          }}>{resourcePanel.inspector}</WorkspaceInspector>
         </aside> : null}
         <div ref={contentGrid} data-inspector-open={inlineInspector || undefined} className={`${editorShell.contentGrid}${inlineInspector ? ` ${editorShell.withInspector}` : ""}${!chatVisible ? ` ${editorShell.chatCollapsed}` : ""}${workspaceHidden ? ` ${editorShell.workspaceCollapsed}` : ""}${inspectorLayout === "reading" ? ` ${editorShell.readingInspector}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
           <section id={conversationId} ref={conversationNode} data-conversation-pane data-assistant-material-scope={assistantTarget?.materialContext ? "true" : undefined} onPlayCapture={event => { if (!chatVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} aria-label="曜核哈力斯" hidden={!chatVisible} className={editorShell.conversation}>

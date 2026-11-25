@@ -3,7 +3,8 @@ import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { AudioLines, Plus, MessageSquarePlus, RefreshCw, ShieldCheck, UserRound, Upload } from "lucide-react";
 import { type FormEvent, type SyntheticEvent, useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
-import { useWorkspaceSearchParams as useSearchParams } from "./workbench/context";
+import { useWorkspacePage, useWorkspaceSearchParams } from "./workbench/context";
+import { WorkspaceAudio, WorkspaceVideo } from "./workbench/WorkspaceMedia";
 import { referenceAssistantProfile, readAssistantLocateReference, ASSISTANT_LOCATE_REFERENCE_EVENT, type SelectedAssistantReference } from "@/lib/assistant-reference";
 import { getMaterialIntakeStatus, bindMaterialIntake } from "@/lib/api";
 import type { MaterialIntakeStatus } from "@/lib/types";
@@ -43,11 +44,20 @@ const usageLabel = (value?: string) => value ? useLabels[value] ?? "历史使用
 type View = "people" | "voices" | "dictionary" | "authorizations";
 const id = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const viewLabel: Record<View, string> = { people: "人物形象", voices: "声音", dictionary: "朗读替换", authorizations: "授权记录" };
+const profileViews = ["people", "voices"] as const;
 const previewLanguageLabels = { zh: "中文", en: "English" };
 
 export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = false, returnTaskId }: { initialView?: View; embedded?: boolean; returnTaskId?: string }) {
-  const locateQuery = useSearchParams().get("locate_ref");
-  const [view, setView] = useState<View>(initialView);
+  const page = useWorkspacePage();
+  const inResourcePane = page?.auxiliary === true;
+  const search = useWorkspaceSearchParams();
+  const locateQuery = search.get("locate_ref");
+  const requestedView = search.get("view");
+  const [currentView, setView] = useState<View>(initialView);
+  const view = inResourcePane && currentView !== "people" && currentView !== "voices" ? "people" : currentView;
+  useEffect(() => {
+    if (requestedView === "people" || requestedView === "voices") setView(requestedView);
+  }, [requestedView]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [people, setPeople] = useState<PersonProfile[]>([]);
@@ -78,6 +88,7 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
   latestSelection.current = {view,person:selectedPerson,voice:selectedVoice};
   const editorTicket = editorGeneration.current;
   useEffect(() => {
+    if (page?.active === false) return;
     let active = true;
     const locate = (reference: SelectedAssistantReference | null) => {
       if (!reference || (reference.kind !== "person" && reference.kind !== "voice")) return;
@@ -109,7 +120,7 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
       catch { setShowDetail(false); setError("引用定位格式不可用，请重新从对话选择档案。"); }
     }
     return () => { active = false; window.removeEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, onLocate); };
-  }, [locateQuery]);
+  }, [locateQuery, page?.active]);
   async function refresh() {
     const before=latestSelection.current;
     try {
@@ -132,6 +143,15 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
   const voicePreviews = profileVoicePreviews.filter(run => run.language === previewLanguage);
   const selectedVoicePreview=profileVoicePreviews.find(run=>run.status==="succeeded");
   const activePreview = view === "voices" ? voicePreviews.find(run=>run.preview_text===previewText.trim()) ?? voicePreviews[0] : previews.find(run=>run.preview_type === "avatar_lipsync" && run.person_profile_id === selectedPerson?.id && run.person_version === selectedPerson?.version && run.voice_profile_id===selectedVoice?.id && run.voice_version===selectedVoice?.version);
+  const displayedPreview = inResourcePane
+    ? previews.find(run => run.status === "succeeded" && Boolean(run.output_url) && (view === "voices"
+      ? run.preview_type === "voice" && run.voice_profile_id === selectedVoice?.id && run.voice_version === selectedVoice?.version
+      : run.preview_type === "avatar_lipsync" && run.person_profile_id === selectedPerson?.id && run.person_version === selectedPerson?.version))
+    : activePreview;
+  const resultLanguage = displayedPreview?.language;
+  const resultLanguageLabel = resultLanguage === "zh" || resultLanguage === "en"
+    ? previewLanguageLabels[resultLanguage]
+    : resultLanguage || "历史记录未保存试听语言";
   const pendingVoicePreview=profileVoicePreviews.find(run=>run.status==="queued"||run.status==="running");
   const voicePreviewBusy=Boolean(pendingVoicePreview);
   const selectedId = selected?.id;
@@ -170,6 +190,61 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
     event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
     await run(async () => { await savePronunciationEntry({ id:id("pronunciation"), term:String(data.get("term")), language:String(data.get("language")) as "zh", target_pronunciation:String(data.get("target")), scope:"workspace", scope_reference:null, version:"v1" }); await refresh(); form.reset(); });
   }
+  function closeDetail() {
+    ++editorGeneration.current;
+    setShowDetail(false);
+    setShowCreate(false);
+  }
+  const reportPreviewPlaybackError = () => setError("已保存的生成预览暂时无法播放，请刷新后核对。");
+
+  const detail = showDetail && selected ? <section className={styles.stage}>
+    <div className={styles.profileHeading}><strong>{view==="voices"?"声音参考":"人物参考"}</strong><button type="button" aria-label="引用当前档案到对话" title="引用当前档案到对话" onClick={()=>{
+      referenceAssistantProfile({kind:view==="voices"?"voice":"person",profile_id:selected.id,version:selected.version,label:selected.display_name||"未命名档案"},true);
+      if (!inResourcePane) setShowDetail(false);
+    }}><MessageSquarePlus size={16}/></button></div>
+    {!inResourcePane ? <button type="button" onClick={() => { ++editorGeneration.current;setEditorProfile(selected);setShowCreate(true); }}>编辑参考</button> : null}
+    <p>{usageLabel(selected.use_state)} · 参考已保存</p>
+    {selected.current_authorization ? <p>{authTone(selected.current_authorization).label}</p> : null}
+    <label>固定版本<AppSelect aria-label="档案版本" value={selected.version} onValueChange={version => {
+      const ticket = ++editorGeneration.current;
+      void run(async () => {
+        if (view === "voices") {
+          const object = await getVoiceProfile(selected.id, version);
+          if (editorGeneration.current === ticket) setVoice(object);
+        } else {
+          const object = await getPersonProfile(selected.id, version);
+          if (editorGeneration.current === ticket) setPerson(object);
+        }
+      });
+    }}>{versions.map((item,index) => <AppSelectOption key={item.version} value={item.version}>第{versions.length-index}版</AppSelectOption>)}</AppSelect></label>
+    <ReferencePlayback object={selected} voice={view === "voices"}/>
+    <details><summary>档案标识</summary><p>{selected.id} · {selected.version}</p></details>
+    {!selected.runnable ? <p>当前参考不能用于生成。编辑参考可重新选择来源或检查使用限制。</p> : null}
+    {selected.runnable_reason ? <details><summary>参考诊断</summary><p>{selected.runnable_reason}</p></details> : null}
+    {inResourcePane ? <p>{displayedPreview ? "已保存的固定版本预览。" : "此版本暂无已生成的预览。"}在完整管理中可编辑档案或检查生成条件。</p> : <>
+      {view === "voices" && selectedVoice ? <><p>{selectedVoice.reference_text || "参考文字未填写；生成前需填写实际对应文字。"}</p>{selectedVoice.language === "zh-en" ? <div role="group" aria-label="试听语言" className={styles.previewLanguage}><span>试听语言</span>{(["zh", "en"] as const).map(language => <Button key={language} type="button" variant={previewLanguage === language ? "secondary" : "outline"} aria-pressed={previewLanguage === language} disabled={busy} onClick={() => setBilingualPreviewLanguage(language)}>{previewLanguageLabels[language]}</Button>)}</div> : <p>试听语言：{previewLanguageLabels[selectedVoice.language]}</p>}<label>短试听文字<textarea aria-label="短试听文字" value={previewText} onChange={event => setPreviewText(event.target.value)} disabled={busy}/></label></> : <label>本次预览声音<AppSelect aria-label="人物预览声音" value={selectedVoice?.id ?? ""} onValueChange={newValue => setVoice(voices.find(v => v.id===newValue) ?? null)}><AppSelectOption value="">选择独立声音</AppSelectOption>{voices.map(v => <AppSelectOption key={v.id} value={v.id}>{v.display_name}</AppSelectOption>)}</AppSelect></label>}
+      {view!=="voices" ? selectedVoicePreview ? <p>口型将使用该声音版本最近成功的试听：{selectedVoicePreview.preview_text || "历史记录未保存文字，音频身份仍为已记录的同一声音版本。"}</p> : <p>先为选中的声音生成短试听，再回来制作人物口型。 <button type="button" onClick={()=>{setView("voices");setShowDetail(Boolean(selectedVoice));}}>打开声音试听</button></p> : null}
+      {generationCapability && !generationCapability.available ? <section role="status"><p>参考已保存，暂不可生成。请准备本地{view === "voices" ? "声音" : "人物口型"}模型后重试。 <Link href="/health">查看运行条件</Link></p><details><summary>模型准备详情</summary><p>{generationCapability.message}</p><p>{generationCapability.repair_action}</p></details></section> : null}
+      {voiceModelMismatch ? <p>该声音版本尚未选择当前模型，请编辑参考，选择已配置模型并保存新版本。</p> : null}
+      {view === "voices" && pendingVoicePreview && pendingVoicePreview.language !== previewLanguage ? <p role="status">该声音还有另一种语言的试听等待或生成。可切换语言查看或取消。</p> : null}
+      <div className={styles.detailActions}>
+        {view === "voices" && selectedVoice ? <button type="button" disabled={busy || !selectedVoice.runnable} onClick={() => void run(async () => { setDefault(await setDefaultVoice(selectedVoice.id,selectedVoice.version)); setNotice("已保存默认声音的固定版本。"); })}>{defaultVoice?.id===selectedVoice.id && defaultVoice.version===selectedVoice.version ? "当前默认版本" : "设为默认声音"}</button> : null}
+        <button type="button" disabled={busy || voicePreviewBusy || Boolean(voiceModelMismatch) || !selected.runnable || generationCapability?.available === false || (view === "voices" ? !selectedVoice?.reference_text.trim() || !previewText.trim() : !selectedVoice || !selectedVoicePreview) || activePreview?.status==="queued" || activePreview?.status==="running"} onClick={() => void preview()}>{view==="voices" ? "生成短试听" : "制作人物短预览"}</button>
+      </div>
+    </>}
+    {displayedPreview ? <section key={displayedPreview.identity} aria-label="生成预览状态">
+      <strong>{view==="voices"?"生成试听结果":"生成口型结果"}</strong>
+      {view==="voices" ? <><p>这次结果的试听语言：{resultLanguageLabel}</p><p>这次结果的试听文字：{displayedPreview.preview_text || "历史记录未保存试听文字"}</p>{!inResourcePane && displayedPreview.preview_text!==previewText.trim() ? <p>当前输入与这条结果不同，修改文字后需要生成新的试听。</p> : null}</> : null}
+      <p>{({queued:"等待设备许可",running:"正在生成",succeeded:"已生成",cancelled:"已取消",failed:"失败",blocked:"阻断",unavailable:"能力不可用"})[displayedPreview.status]}</p>
+      <p>{displayedPreview.impact} {displayedPreview.repair_action}</p>
+      {displayedPreview.reason ? <details><summary>预览诊断</summary><p>{displayedPreview.reason}</p></details> : null}
+      {displayedPreview.status==="succeeded" && displayedPreview.output_url ? view==="voices"
+        ? <WorkspaceAudio aria-label="已生成试听" controls preload="none" src={displayedPreview.output_url} onError={reportPreviewPlaybackError}/>
+        : <WorkspaceVideo aria-label="已生成口型预览" controls preload="none" src={displayedPreview.output_url} onError={reportPreviewPlaybackError}/> : null}
+      {!inResourcePane && ["queued","running"].includes(displayedPreview.status) ? <button type="button" onClick={() => void run(async () => { await cancelPreview(displayedPreview); await refresh(); })}>取消预览</button> : null}
+    </section> : null}
+    {inResourcePane && error ? <p role="alert">{error}</p> : null}
+  </section> : null;
   const editorCard = showCreate ? <HomeCardDialog title={view==="voices" ? "登记声音" : "登记人物"} footer={<button className={styles.primaryButton} type="submit" form={editorFormId} disabled={editorBusy}>{editorBusy ? "正在处理…" : "保存参考"}</button>} onClose={() => {++editorGeneration.current;setShowCreate(false);}}><ProfileEditor voiceCapability={capabilities.voice} formId={editorFormId} onBusyChange={setEditorBusy} voice={view==="voices"} selected={editorProfile} onSave={async object => {
         await refresh();
         if(editorGeneration.current===editorTicket && latestSelection.current.view===view){
@@ -177,38 +252,43 @@ export function PeopleAndVoiceWorkspace({ initialView = "people", embedded = fal
           setNotice("档案新版本已保存；未调用生成模型。");setShowCreate(false);setShowDetail(true);
         }
       }}/></HomeCardDialog> : null;
-  const body = <div className={styles.page}>
-    {showSampling ? <HomeCardDialog title="制作我的声音" onClose={() => setShowSampling(false)}><VoiceSamplingSetup onSkip={() => setShowSampling(false)} onReceived={() => { void refresh(); }}/></HomeCardDialog> : null}
+  const visibleViews: readonly View[] = inResourcePane ? profileViews : (Object.keys(viewLabel) as View[]);
+  const profiles = view === "voices" ? voices : people;
+  const nameQuery = query.trim().toLocaleLowerCase();
+  const visibleProfiles = profiles.filter(item => (item.display_name || "").toLocaleLowerCase().includes(nameQuery));
+  const body = <div className={`${styles.page}${inResourcePane ? ` ${styles.resourcePane}` : ""}`}>
+    {showSampling && !inResourcePane ? <HomeCardDialog title="制作我的声音" onClose={() => setShowSampling(false)}><VoiceSamplingSetup onSkip={() => setShowSampling(false)} onReceived={() => { void refresh(); }}/></HomeCardDialog> : null}
     {returnTaskId ? <Link className={styles.returnLink} href={`/tasks/${encodeURIComponent(returnTaskId)}`}>返回当前任务</Link> : null}
-    {!embedded ? <nav className={styles.workspaceTabs}>{(Object.keys(viewLabel) as View[]).map(key => <button key={key} type="button" onClick={() => { ++editorGeneration.current;setView(key);setQuery("");setShowCreate(false);setShowDetail(false); }} aria-pressed={view===key}>{viewLabel[key]}</button>)}</nav> : null}
+    {!embedded ? <nav className={styles.workspaceTabs} aria-label="档案分类">{visibleViews.map(key => <button key={key} type="button" onClick={() => { closeDetail(); setView(key); setQuery(""); }} aria-pressed={view===key}>{viewLabel[key]}</button>)}</nav> : null}
     {error ? error.includes("预算尚未标定") ? <section><p role="alert">本机生成资源限额尚未配置，参考已保存。 <Link href="/health">查看运行条件</Link></p><details><summary>资源限额诊断</summary><p>{error}</p></details></section> : <p role="alert">{error}</p> : null}{notice ? <p role="status">{notice}</p> : null}
     {view === "dictionary" ? <Dictionary entries={entries} onSubmit={entry} busy={busy}/> : view === "authorizations" ? <AuthorizationList authorizations={authorizations}/> : <>
-      <header className={styles.sectionHeader}><h2 className={styles.srOnly}>{viewLabel[view]}</h2><label className={styles.profileSearch}>搜索名称<input aria-label="搜索人物与声音名称" type="search" placeholder="输入名称" value={query} onChange={event=>setQuery(event.target.value)}/></label>{view === "voices" ? <button type="button" onClick={() => { setShowDetail(false); setShowCreate(false); setShowSampling(true); }}>录制我的声音</button> : null}<button type="button" onClick={() => { ++editorGeneration.current;setEditorProfile(null);setShowDetail(false);setShowCreate(true); }}><Plus size={16}/>新增{view === "voices" ? "声音" : "人物"}</button><button type="button" aria-label="刷新列表" title="刷新列表" onClick={() => { setError(null); void refresh(); }}><RefreshCw size={16}/></button></header>
-      <details className={styles.usageHelp}><summary>使用说明</summary><p className={styles.optionalSetup}>{view === "voices" ? "自己的声音可稍后设置；原声素材剪辑不需要先创建声音档案。" : "人物形象可稍后添加；不出镜的视频不需要人物档案。添加参考后仍需实际预览验证生成能力。"}</p></details>
+      <header className={styles.sectionHeader}>
+        <h2 className={styles.srOnly}>{viewLabel[view]}</h2>
+        <label className={styles.profileSearch}>搜索名称<input aria-label="搜索人物与声音名称" type="search" placeholder="输入名称" value={query} onChange={event=>setQuery(event.target.value)}/></label>
+        {!inResourcePane ? <>
+          {view === "voices" ? <button type="button" onClick={() => { setShowDetail(false); setShowCreate(false); setShowSampling(true); }}>录制我的声音</button> : null}
+          <button type="button" onClick={() => { ++editorGeneration.current;setEditorProfile(null);setShowDetail(false);setShowCreate(true); }}><Plus size={16}/>新增{view === "voices" ? "声音" : "人物"}</button>
+        </> : null}
+        <button type="button" aria-label="刷新列表" title="刷新列表" onClick={() => { setError(null); void refresh(); }}><RefreshCw size={16}/></button>
+      </header>
+      {!inResourcePane ? <details className={styles.usageHelp}><summary>使用说明</summary><p className={styles.optionalSetup}>{view === "voices" ? "自己的声音可稍后设置；原声素材剪辑不需要先创建声音档案。" : "人物形象可稍后添加；不出镜的视频不需要人物档案。添加参考后仍需实际预览验证生成能力。"}</p></details> : null}
 
       {loading ? <p role="status">正在读取档案…</p> : null}
-      <div className={styles.workspace}><aside className={styles.objectRail}>{(view === "voices" ? voices : people).filter(item=>(item.display_name||"").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).map(item => <button key={item.id} type="button" aria-pressed={selected?.id===item.id} onClick={() => { ++editorGeneration.current;if (view === "voices") setVoice(item as VoiceProfile); else setPerson(item as PersonProfile);  setShowCreate(false);setShowDetail(true); }}><span className={styles.objectIcon}>{view === "voices" ? <AudioLines size={16}/> : <UserRound size={16}/>}</span><span className={styles.objectInfo}><strong>{item.display_name || "未命名档案"}</strong><small>{item.runnable ? "参考已保存" : "参考需要处理"}</small></span></button>)}</aside></div>
-      {!loading && !error && !(view==="voices"?voices:people).length ? <Empty title="还没有档案" text="登记有效参考即可保存，人物关联与模型不是登记前提。"/> : null}
-      {!loading && query.trim() && (view==="voices"?voices:people).length>0 && !(view==="voices"?voices:people).some(item=>(item.display_name||"").toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) ? <p>没有匹配的档案，请换个名称或清空搜索。</p> : null}
-      {showDetail && selected ? <HomeCardDialog kind="detail" title={selected.display_name||"未命名档案"} onClose={()=>{++editorGeneration.current;setShowDetail(false);setShowCreate(false);}}><section className={styles.stage}>
-        <div className={styles.profileHeading}><strong>{view==="voices"?"声音参考":"人物参考"}</strong><button type="button" aria-label="引用当前档案到对话" title="引用当前档案到对话" onClick={()=>{referenceAssistantProfile({kind:view==="voices"?"voice":"person",profile_id:selected.id,version:selected.version,label:selected.display_name||"未命名档案"},true);setShowDetail(false);}}><MessageSquarePlus size={16}/></button></div><button type="button" onClick={() => { ++editorGeneration.current;setEditorProfile(selected);setShowCreate(true); }}>编辑参考</button><p>{usageLabel(selected.use_state)} · 参考已保存</p>
-        <label>固定版本<AppSelect aria-label="档案版本" value={selected.version} onValueChange={newValue => { ++editorGeneration.current;const version=newValue; void run(async () => { const object=view==="voices" ? await getVoiceProfile(selected.id,version) : await getPersonProfile(selected.id,version);if(view==="voices")setVoice(object as VoiceProfile);else setPerson(object as PersonProfile); }); }}>{versions.map((item,index) => <AppSelectOption key={item.version} value={item.version}>第{versions.length-index}版</AppSelectOption>)}</AppSelect></label>
-        <ReferencePlayback object={selected} voice={view === "voices"}/><details><summary>档案标识</summary><p>{selected.id} · {selected.version}</p></details>{!selected.runnable ? <p>当前参考不能用于生成。编辑参考可重新选择来源或检查使用限制。</p> : null}{selected.runnable_reason ? <details><summary>参考诊断</summary><p>{selected.runnable_reason}</p></details> : null}
-        {view === "voices" && selectedVoice ? <><p>{selectedVoice.reference_text || "参考文字未填写；生成前需填写实际对应文字。"}</p>{selectedVoice.language === "zh-en" ? <div role="group" aria-label="试听语言" className={styles.previewLanguage}><span>试听语言</span>{(["zh", "en"] as const).map(language => <Button key={language} type="button" variant={previewLanguage === language ? "secondary" : "outline"} aria-pressed={previewLanguage === language} disabled={busy} onClick={() => setBilingualPreviewLanguage(language)}>{previewLanguageLabels[language]}</Button>)}</div> : <p>试听语言：{previewLanguageLabels[selectedVoice.language]}</p>}<label>短试听文字<textarea aria-label="短试听文字" value={previewText} onChange={event => setPreviewText(event.target.value)} disabled={busy}/></label></> : <label>本次预览声音<AppSelect aria-label="人物预览声音" value={selectedVoice?.id ?? ""} onValueChange={newValue => setVoice(voices.find(v => v.id===newValue) ?? null)}><AppSelectOption value="">选择独立声音</AppSelectOption>{voices.map(v => <AppSelectOption key={v.id} value={v.id}>{v.display_name}</AppSelectOption>)}</AppSelect></label>}
-        {view!=="voices" ? selectedVoicePreview ? <p>口型将使用该声音版本最近成功的试听：{selectedVoicePreview.preview_text || "历史记录未保存文字，音频身份仍为已记录的同一声音版本。"}</p> : <p>先为选中的声音生成短试听，再回来制作人物口型。 <button type="button" onClick={()=>{setView("voices");setShowDetail(Boolean(selectedVoice));}}>打开声音试听</button></p> : null}
-        {generationCapability && !generationCapability.available ? <section role="status"><p>参考已保存，暂不可生成。请准备本地{view === "voices" ? "声音" : "人物口型"}模型后重试。 <Link href="/health">查看运行条件</Link></p><details><summary>模型准备详情</summary><p>{generationCapability.message}</p><p>{generationCapability.repair_action}</p></details></section> : null}
-        {voiceModelMismatch ? <p>该声音版本尚未选择当前模型，请编辑参考，选择已配置模型并保存新版本。</p> : null}
-        {view === "voices" && pendingVoicePreview && pendingVoicePreview.language !== previewLanguage ? <p role="status">该声音还有另一种语言的试听等待或生成。可切换语言查看或取消。</p> : null}
-        <div className={styles.detailActions}>
-          {view === "voices" && selectedVoice ? <button type="button" disabled={busy || !selectedVoice.runnable} onClick={() => void run(async () => { setDefault(await setDefaultVoice(selectedVoice.id,selectedVoice.version)); setNotice("已保存默认声音的固定版本。"); })}>{defaultVoice?.id===selectedVoice.id && defaultVoice.version===selectedVoice.version ? "当前默认版本" : "设为默认声音"}</button> : null}
-          <button type="button" disabled={busy || voicePreviewBusy || Boolean(voiceModelMismatch) || !selected.runnable || generationCapability?.available === false || (view === "voices" ? !selectedVoice?.reference_text.trim() || !previewText.trim() : !selectedVoice || !selectedVoicePreview) || activePreview?.status==="queued" || activePreview?.status==="running"} onClick={() => void preview()}>{view==="voices" ? "生成短试听" : "制作人物短预览"}</button>
-        </div>
-        {activePreview ? <section key={activePreview.identity} aria-label="生成预览状态"><strong>{view==="voices"?"生成试听结果":"生成口型结果"}</strong>{view==="voices" ? <><p>这次结果的试听语言：{previewLanguage && previewLanguageLabels[previewLanguage]}</p><p>这次结果的试听文字：{activePreview.preview_text || "历史记录未保存试听文字"}</p>{activePreview.preview_text!==previewText.trim() ? <p>当前输入与这条结果不同，修改文字后需要生成新的试听。</p> : null}</> : null}<p>{({queued:"等待设备许可",running:"正在生成",succeeded:"已生成",cancelled:"已取消",failed:"失败",blocked:"阻断",unavailable:"能力不可用"})[activePreview.status]}</p><p>{activePreview.impact} {activePreview.repair_action}</p>{activePreview.reason ? <details><summary>预览诊断</summary><p>{activePreview.reason}</p></details> : null}{activePreview.status==="succeeded" && activePreview.output_url ? view==="voices" ? <audio controls src={activePreview.output_url}/> : <video controls src={activePreview.output_url}/> : null}{["queued","running"].includes(activePreview.status) ? <button type="button" onClick={() => void run(async () => { await cancelPreview(activePreview); await refresh(); })}>取消预览</button> : null}</section> : null}
-      </section>{editorCard}</HomeCardDialog> : editorCard}
+      <div className={styles.workspace}><aside className={styles.objectRail}>{visibleProfiles.map(item => <button key={item.id} type="button" data-open-details={inResourcePane || undefined} aria-pressed={selected?.id===item.id} onClick={() => { ++editorGeneration.current;setError(null);if (view === "voices") setVoice(item as VoiceProfile); else setPerson(item as PersonProfile);setShowCreate(false);setShowDetail(true); }}><span className={styles.objectIcon}>{view === "voices" ? <AudioLines size={16}/> : <UserRound size={16}/>}</span><span className={styles.objectInfo}><strong title={item.display_name}>{item.display_name || "未命名档案"}</strong><small>{item.runnable ? "参考已保存" : "参考需要处理"}</small></span></button>)}</aside></div>
+      {!loading && !error && profiles.length === 0 ? <Empty title="还没有档案" text={inResourcePane ? "可在完整管理中登记人物或声音。" : "登记有效参考即可保存，人物关联与模型不是登记前提。"}/> : null}
+      {!loading && nameQuery && profiles.length > 0 && visibleProfiles.length === 0 ? <p>没有匹配的档案，请换个名称或清空搜索。</p> : null}
+      {!inResourcePane ? detail && selected
+        ? <HomeCardDialog kind="detail" title={selected.display_name || "未命名档案"} onClose={closeDetail}>{detail}{editorCard}</HomeCardDialog>
+        : editorCard : null}
 
     </>}
   </div>;
-  return embedded ? body : <AppShell>{body}</AppShell>;
+  return embedded ? body : <AppShell
+    inspector={inResourcePane ? detail : undefined}
+    inspectorTitle={selected?.display_name || "档案详情"}
+    inspectorOpenKey={inResourcePane && showDetail && selected ? `${view}:${selected.id}:${selected.version}:${editorTicket}` : undefined}
+    onResourceInspectorClose={inResourcePane ? closeDetail : undefined}
+  >{body}</AppShell>;
 }
 
 function ReferencePlayback({object,voice}:{object:PersonProfile|VoiceProfile;voice:boolean}) {
@@ -218,9 +298,13 @@ function ReferencePlayback({object,voice}:{object:PersonProfile|VoiceProfile;voi
   const ref=object.reference; const url=object.reference_url;
   const importedWav = voice && (!ref?.asset_id || ref.asset_id.startsWith("voice_source_"));
   if (!url) return <p>{object.reference_issue || "参考来源失联或不可读取；保留原档案，可重新选择来源并保存新版本。"}</p>;
+  if (!voice && ref?.asset_id && !material) return error
+    ? <p role="alert">{error}</p>
+    : <p role="status">正在读取人物参考…</p>;
   function position(media:HTMLMediaElement) { media.currentTime=ref?.start_seconds??0; }
   function boundary(media:HTMLMediaElement) { if(ref?.end_seconds!=null && media.currentTime>=ref.end_seconds){media.pause();media.currentTime=ref.start_seconds??0;} }
-  return <section aria-label="已保存参考">{error ? <p role="alert">{error}</p> : null}<p>原始参考 · {importedWav ? "原始 WAV 样本" : material?.file_name || "已保存参考"}{ref?.start_seconds!=null ? ` · ${ref.start_seconds}–${ref.end_seconds}秒` : " · 完整文件"}</p>{importedWav && material?.file_name ? <details><summary>参考文件标识</summary><p>{material.file_name}</p></details> : null}{voice ? <audio aria-label="原始声音参考" controls src={url} onLoadedMetadata={e=>position(e.currentTarget)} onTimeUpdate={e=>boundary(e.currentTarget)}/> : material?.media_type==="image" ? <img alt="原始人物参考" src={url}/> : <video aria-label="原始人物参考" controls src={url} onLoadedMetadata={e=>position(e.currentTarget)} onTimeUpdate={e=>boundary(e.currentTarget)}/>}</section>;
+  const playbackError = () => setError("此参考暂时无法读取。可在完整管理中检查来源。");
+  return <section aria-label="已保存参考">{error ? <p role="alert">{error}</p> : null}<p>原始参考 · {importedWav ? "原始 WAV 样本" : material?.file_name || "已保存参考"}{ref?.start_seconds!=null ? ` · ${ref.start_seconds}–${ref.end_seconds}秒` : " · 完整文件"}</p>{importedWav && material?.file_name ? <details><summary>参考文件标识</summary><p>{material.file_name}</p></details> : null}{voice ? <WorkspaceAudio aria-label="原始声音参考" controls preload="metadata" src={url} onError={playbackError} onLoadedMetadata={e=>position(e.currentTarget)} onTimeUpdate={e=>boundary(e.currentTarget)}/> : material?.media_type==="image" ? <img alt="原始人物参考" src={url} onError={playbackError}/> : <WorkspaceVideo aria-label="原始人物参考" controls preload="metadata" src={url} onError={playbackError} onLoadedMetadata={e=>position(e.currentTarget)} onTimeUpdate={e=>boundary(e.currentTarget)}/>}</section>;
 }
 
 function ProfileEditor({voice,selected,onSave,formId,onBusyChange,voiceCapability}:{voiceCapability?:MediaCapability;voice:boolean;selected:PersonProfile|VoiceProfile|null;onSave:(item:PersonProfile|VoiceProfile)=>Promise<void>;formId:string;onBusyChange:(busy:boolean)=>void}) {

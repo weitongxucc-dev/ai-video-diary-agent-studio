@@ -260,3 +260,24 @@ it("hides both template dialogs without discarding the unsaved version draft", a
   expect(within(dialog).getByLabelText("新文案的风格要求")).toHaveValue("保留未保存风格");
   expect(createVersion).not.toHaveBeenCalled();
 });
+
+it("opens the fixed template as a docked preview and keeps its version when opening management", async () => {
+  const slot = { id:"/templates", href:"/templates?mode=panel", active:true, updateShell:vi.fn(), viewState:new Map<string, unknown>() };
+  const oldVersion = { ...template, name:"原模板", version:1 };
+  const recentVersion = { ...template, name:"新版模板", version:2 };
+  const route = (auxiliary:boolean) => <WorkspacePageContext.Provider value={{...slot, auxiliary}}>
+    <TemplateLibraryWorkspace offline={false} templates={[oldVersion, recentVersion]}/>
+  </WorkspacePageContext.Provider>;
+  const page = render(route(true));
+  fireEvent.click(screen.getByRole("button", {name:/版本记录/}));
+  fireEvent.click(screen.getByRole("button", {name:/原模板 · 第1版/}));
+  expect(screen.getByRole("region", {name:"制作结构预览"})).toBeVisible();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("button", {name:"编辑名称与文案风格"})).toBeNull();
+  expect(screen.queryByRole("link", {name:"使用此模板"})).toBeNull();
+  page.rerender(route(false));
+  const details = await screen.findByRole("dialog", {name:"模板详情"});
+  expect(within(details).getByRole("heading", {name:"原模板 · 第1版"})).toBeVisible();
+  expect(await within(details).findByRole("link", {name:"使用此模板"})).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=1");
+  expect(createVersion).not.toHaveBeenCalled();
+});

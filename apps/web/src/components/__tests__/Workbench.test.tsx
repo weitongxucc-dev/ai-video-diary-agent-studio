@@ -40,9 +40,10 @@ function Page({ id }: { id: string }) {
   const task = id.startsWith("/tasks/") ? { id: id.split("/").at(-1), name: `作品 ${id.at(-1)}` } as CreationTask : null;
   return <AppShell inspector={<Inspector />} assistantContext={task ? { task } : undefined}><input aria-label={`页面草稿 ${id}`} value={draft} onChange={event => setDraft(event.target.value)} /><WorkspaceVideo aria-label={`预览 ${id}`} src={`${id}/preview.mp4`} />{!task ? <button data-open-details>查看资源详情</button> : null}</AppShell>;
 }
+const resourceLabels: Record<string, string> = { "/library": "素材库", "/knowledge": "知识库", "/profiles": "人物与声音", "/templates": "视频模板" };
 function route() {
   const path = navigation.path;
-  const label = path === "/library" ? "素材库" : path === "/knowledge" ? "知识库" : `作品 ${path.at(-1)}`;
+  const label = resourceLabels[path] ?? `作品 ${path.at(-1)}`;
   return <WorkspaceRoute label={label}><Page id={path} /></WorkspaceRoute>;
 }
 function fixture(children: ReactNode) { return <WorkbenchTargetProvider><Workbench>{children}</Workbench></WorkbenchTargetProvider>; }
@@ -74,7 +75,7 @@ it("opens full resource management without losing the work target, drafts, or re
   expect(composerMount).toHaveBeenCalledTimes(1);
 });
 
-it("shows materials and knowledge in the left panel without remounting the active work or conversation", async () => {
+it("shows the four resource routes in the left panel without remounting the active work or conversation", async () => {
   const view = render(fixture(route()));
   const workDraft = await screen.findByRole("textbox", { name: "页面草稿 /tasks/a" });
   const chatDraft = screen.getByRole("textbox", { name: "持续对话草稿" });
@@ -85,7 +86,7 @@ it("shows materials and knowledge in the left panel without remounting the activ
   fireEvent.timeUpdate(player);
   fireEvent.play(player);
 
-  for (const [path, title] of [["/library", "素材库"], ["/knowledge", "知识库"]]) {
+  for (const [path, title] of Object.entries(resourceLabels)) {
     navigation.path = path;
     navigation.search = "mode=panel";
     view.rerender(fixture(route()));
@@ -108,6 +109,29 @@ it("shows materials and knowledge in the left panel without remounting the activ
   navigation.search = "";
   view.rerender(fixture(route()));
   expect(workDraft).toBeVisible();
+});
+
+it.each(["/profiles", "/templates"])("opens %s as a full workspace without an active work, including a panel URL", async path => {
+  navigation.path = path;
+  navigation.search = "mode=panel";
+  render(fixture(route()));
+  expect(await screen.findByRole("region", { name: resourceLabels[path] })).toBeVisible();
+  expect(screen.queryByRole("complementary", { name: "作品资源" })).toBeNull();
+  expect(screen.getByLabelText("发送目标")).toHaveTextContent("home");
+});
+
+it.each([
+  ["/profiles", "view=voices&task=a"],
+  ["/templates", "return_to=%2Fproduction%3Fnew%3D1"],
+])("keeps the %s repair route in full management with a work already open", async (path, search) => {
+  const view = render(fixture(route()));
+  const field = await screen.findByRole("textbox", { name: "页面草稿 /tasks/a" });
+  navigation.path = path;
+  navigation.search = search;
+  view.rerender(fixture(route()));
+  expect(await screen.findByRole("region", { name: resourceLabels[path] })).toBeVisible();
+  expect(screen.queryByRole("complementary", { name: "作品资源" })).toBeNull();
+  expect(field).not.toBeVisible();
 });
 
 it("keeps one conversation and explicit task target while browsing, isolates two task drafts, and restores a closed view", async () => {
