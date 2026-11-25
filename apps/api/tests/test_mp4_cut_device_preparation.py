@@ -40,7 +40,7 @@ def cut_preparation_http(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(sys.platform != 'darwin' or not shutil.which('ffmpeg') or not shutil.which('ffprobe'),
                     reason='requires the existing macOS CPU preparation backend')
-@pytest.mark.parametrize('outcome', ['done', 'timeout', 'unknown_release'])
+@pytest.mark.parametrize('outcome', ['base_only', 'done', 'timeout', 'unknown_release'])
 def test_http_cpu_preparation_keeps_cut_measurement_in_original_receipt(cut_preparation_http, monkeypatch, outcome):
     client, repo, profile = cut_preparation_http
     url = '/api/device/resource-preparations'
@@ -73,6 +73,8 @@ def test_http_cpu_preparation_keeps_cut_measurement_in_original_receipt(cut_prep
     payload = {'request_id': str(uuid4()), 'kind': 'cpu', 'shape': {'width_px': 1280, 'height_px': 720,
         'frame_rate': 30, 'duration_seconds': 2.0, 'clip_count': 2,
         'audio_input_count': 2, 'sample_rate': 48000, 'channels': 2}}
+    if outcome != 'base_only':
+        payload['shape']['measure_mp4_cut'] = True
     submitted = client.post(url, json=payload)
     assert submitted.status_code == 200, submitted.text
     request = submitted.json()
@@ -89,16 +91,34 @@ def test_http_cpu_preparation_keeps_cut_measurement_in_original_receipt(cut_prep
         time.sleep(.1)
     root = profile.parent / 'resource-preparations'
     plan_path = root / 'plans' / f"{request['plan_id']}.json"
-    plan = json.loads(plan_path.read_bytes())
-    bound = plan['mp4_cut_probe']
-    assert len(calls) >= 2 and calls[0]['grant'] == calls[1]['grant']
-    grant = calls[0]['grant']
-    receipt_path = root / 'receipts' / f'{grant.request_id}-{grant.generation}.json'
+    original_plan = plan_path.read_bytes()
+    plan = json.loads(original_plan)
     with repo._connect() as connection:
-        row = connection.execute('SELECT checkpoint_ref FROM device_work_requests WHERE id=?', (request['id'],)).fetchone()
+        row = connection.execute('SELECT checkpoint_ref,last_grant_generation FROM device_work_requests WHERE id=?',
+                                 (request['id'],)).fetchone()
         permit_state = connection.execute('SELECT state FROM device_permit WHERE id=1').fetchone()[0]
+    receipt_path = root / 'receipts' / f"{request['id']}-{row['last_grant_generation']}.json"
     ledger = device_paths.device_lock_path().with_suffix('.lock.state')
     ledger_state = json.loads(ledger.read_bytes())['state']
+    if outcome == 'base_only':
+        assert state == 'done' and runtime.last_error is None and permit_state == ledger_state == 'free'
+        assert not calls
+        assert 'measure_mp4_cut' not in plan['shape'] and 'measure_mp4_cut' not in plan['request_binding']['shape']
+        raw = receipt_path.read_bytes()
+        assert row['checkpoint_ref'] == 'device-resource-preparation:' + hashlib.sha256(raw).hexdigest()
+        assert 'mp4_cut_probe' not in plan and 'mp4_cut_probe' not in json.loads(raw)
+        final = client.post(request_url + '/finalize')
+        assert final.status_code == 200 and final.json()['profile_published'] and not final.json()['normal_work_started']
+        replay = {**payload, 'shape': {**payload['shape'], 'measure_mp4_cut': False}}
+        assert client.post(url, json=replay).json()['id'] == request['id']
+        changed = {**payload, 'shape': {**payload['shape'], 'measure_mp4_cut': True}}
+        assert client.post(url, json=changed).status_code == 409
+        assert plan_path.read_bytes() == original_plan and receipt_path.read_bytes() == raw and not calls
+        return
+    bound = plan['mp4_cut_probe']
+    assert plan['shape']['measure_mp4_cut'] is plan['request_binding']['shape']['measure_mp4_cut'] is True
+    assert len(calls) >= 2 and calls[0]['grant'] == calls[1]['grant']
+    grant = calls[0]['grant']
     if outcome != 'done':
         assert [call['phase'] for call in calls] == ['fixture', 'source_probe']
         assert row['checkpoint_ref'] is None and not receipt_path.exists()
@@ -151,7 +171,30 @@ def test_http_cpu_preparation_keeps_cut_measurement_in_original_receipt(cut_prep
     published = json.loads(profile.read_bytes())['budget']
     assert 'mp4_cut_probe' not in published
     assert published['cpu_render']['max_timeout_seconds'] == receipt['elapsed_seconds'] * plan['policy']['measured_margin']
-    assert client.post(url, json=payload).json()['id'] == request['id'] and len(calls) == 4
+    assert client.post(url, json=payload).json()['id'] == request['id']
+    changed = {**payload, 'shape': {name: value for name, value in payload['shape'].items() if name != 'measure_mp4_cut'}}
+    assert client.post(url, json=changed).status_code == 409
+    assert plan_path.read_bytes() == original_plan and receipt_path.read_bytes() == raw and len(calls) == 4
+
+
+@pytest.mark.parametrize('changes, message', [
+    ({'duration_seconds': 0.5}, '至少 1 秒'),
+    ({'presenter_clip_count': 1, 'source_bytes': 1024}, '只支持普通 CPU 准备'),
+])
+def test_http_rejects_unsupported_explicit_cut_shape(cut_preparation_http, monkeypatch, changes, message):
+    from app import device_resource_configuration
+    client, repo, profile = cut_preparation_http
+    identity = current_device_identity({'DEVICE_ID': 'isolated-cut-preparation'})
+    monkeypatch.setattr(device_resource_configuration, 'current_device_identity', lambda _: replace(identity, platform='darwin'))
+    response = client.post('/api/device/resource-preparations', json={
+        'request_id': str(uuid4()), 'kind': 'cpu', 'shape': {'width_px': 1280, 'height_px': 720,
+            'frame_rate': 30, 'duration_seconds': 2.0, 'clip_count': 2,
+            'audio_input_count': 2, 'sample_rate': 48000, 'channels': 2, 'measure_mp4_cut': True, **changes}})
+    assert response.status_code == 409 and message in response.text
+    assert main.device_runtime is None and not profile.exists() and not device_paths.device_lock_path().exists()
+    assert not list((profile.parent / 'resource-preparations' / 'plans').glob('*.json'))
+    with repo._connect() as connection:
+        assert connection.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == 0
 
 
 def test_cpu_preparation_keeps_existing_non_mac_capability_boundary(cut_preparation_http, monkeypatch):
