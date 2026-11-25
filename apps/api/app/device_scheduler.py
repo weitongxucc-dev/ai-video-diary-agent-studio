@@ -475,7 +475,9 @@ def cancel_ungranted_preparation(database_path, lock_path, request_id, *, observ
                 prior_grant = conn.execute(
                     "SELECT 1 FROM device_request_events WHERE request_id=? AND permit_generation IS NOT NULL LIMIT 1",
                     (request_id,)).fetchone()
-                if (current.state not in {"waiting", "blocked"} or current.attempt_number != 1
+                cancelled_by_owner = current.state == "cancelled" and current.wait_reason == "user_cancelled"
+                if ((current.state not in {"waiting", "blocked"} and not cancelled_by_owner)
+                        or current.attempt_number != 1
                         or current.last_grant_generation is not None or row["checkpoint_ref"] is not None
                         or prior_grant is not None):
                     raise PermissionError("缺少计划时只能取消未曾取得许可的待处理设备准备")

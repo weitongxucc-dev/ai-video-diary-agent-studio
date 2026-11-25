@@ -143,6 +143,10 @@ def test_original_member_can_cancel_an_orphaned_preparation(metadata_http_state,
     assert audit and preserved_audit == audit
     assert not plan_path.exists()
     assert history.ledger_path.read_bytes() == ledger_bytes
+    replayed = client.post(url)
+    assert replayed.status_code == 200, replayed.text
+    assert replayed.json() == response.json()
+    assert snapshot() == (cancelled, audit)
     grant = successor.pick_and_grant()
     assert grant.owner_id == 'next-work'
     _complete(successor, grant)
