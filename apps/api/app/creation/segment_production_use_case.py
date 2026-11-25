@@ -1,17 +1,20 @@
 """Section-scoped audiovisual production and constrained revisions in the existing task."""
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from contextlib import nullcontext
+from datetime import datetime
 import hashlib
 import json
 import math
 from pathlib import Path
 
+from app.creation.contracts import ArtifactRecord, EditProposal, JobRun, NarrationSegment, TaskEvent
 from app.creation.duration_requirement import DurationConflict, SectionWindow
 from app.creation.editing.narration_preview_use_case import inspect_narration_revision
 from app.creation.reference_picture_order import FRAME_RATE, ReferencePictureOrder
 from app.creation.section_revision_evidence import fixed_page
+from app.creation.section_adoption import section_candidate_selection
 from app.device_scheduler import SchedulePolicy, SubmissionIntent, VerifiedWork, RecoveryBlocked
 from app.models import utc_now
 
@@ -28,6 +31,37 @@ def digest_section_version(script_id,section_id,text,audio_reference):
 
 def revision_execution_key(input_digest, reference):
     return f'segment_revision:{input_digest}:{reference.identity}'
+
+
+def _file_identity(path):
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def _candidate_file_content(path, *, max_bytes, check):
+    from app.quality_worker_runtime import hash_file
+
+    before = _file_identity(path)
+    size = before[2]
+    if not 0 < size <= max_bytes:
+        raise ValueError('候选文件大小不符合原登记范围')
+    sha256 = hash_file(path, check=check, max_bytes=size)
+    if before != _file_identity(path):
+        raise ValueError('候选文件在校验期间变化')
+    return {'sha256': sha256, 'size_bytes': size}, before
+
+
+@dataclass(frozen=True)
+class SectionCandidateFacts:
+    proposal: EditProposal
+    publication: TaskEvent
+    job: JobRun
+    segment: NarrationSegment
+    audio_path: str
+    audio_content: dict
+    artifacts: tuple[ArtifactRecord, ArtifactRecord]
+    before_text: str | None
+    sources: tuple[dict, ...]
 
 
 class SegmentProductionUseCase:
@@ -161,7 +195,9 @@ class SegmentProductionUseCase:
         current_version = current['segment_version'] if current is not None else None
         if result is None:
             status, reason = 'not_produced', 'original_request_has_no_publication'
-        elif not result['adopted']:
+        elif not result['adopted'] and result_version != current_version and not (
+                result.get('adoption_proposal_id') and self._candidate_operation(
+                    task.workspace_id, task.id, result['adoption_proposal_id'], connection=connection)):
             status, reason = 'candidate', 'candidate_not_adopted'
         elif result_version != current_version:
             status, reason = 'superseded', 'current_section_adopts_other_publication'
@@ -232,6 +268,193 @@ class SegmentProductionUseCase:
             if self.capture_revision_evidence(actor, evidence) != evidence:
                 raise ValueError('修订引用的固定资料页已变化，请重新核对原文。')
         return current, rules
+
+    def _knowledge_candidate(self, workspace_id, task_id, actor, proposal_id, owner, *, connection):
+        from app.schemas import NarrationRevisionRequest
+        from app.materials.contracts import material_usage_eligibility
+        from app.source_policy import knowledge_item_readable
+
+        task = self.require_actor(workspace_id, task_id, actor, connection=connection)
+        proposal = self.repository.edit_records.get_edit_proposal(workspace_id, proposal_id, connection=connection)
+        if proposal.task_id != task_id or proposal.operation.get('operation_type') != 'ReviseScriptSection':
+            raise KeyError(proposal_id)
+        selection = proposal.operation['payload']
+        if 'publication_id' not in selection or proposal.status not in {'proposed', 'confirmed'}:
+            raise ValueError('原资料候选不再可确认')
+        job = self.repository.job_records.get_job_run(workspace_id, selection['job_id'], connection=connection)
+        if job.task_id != task_id or job.kind != SEGMENT_REVISION_KIND or job.status != 'succeeded':
+            raise ValueError('原候选作业未成功完成')
+        records = self.repository.execution_records
+        start = records.get_task_event(workspace_id, f'event_{job.id}_start', connection=connection)
+        if (start.task_id, start.job_id, start.event_type) != (task_id, job.id, 'segment_revision_requested'):
+            raise ValueError('原候选没有对应的修订请求')
+        if self.actor_from_event(workspace_id, start.payload) != actor:
+            raise PermissionError('资料候选不属于原成员')
+        if owner.authorization_verdict(task, actor, 'narration_edit', connection=connection) != 'ready':
+            raise PermissionError('原段落修订许可已失效')
+        command = NarrationRevisionRequest.model_validate(start.payload['command'])
+        publication = records.get_task_event(workspace_id, selection['publication_id'], connection=connection)
+        audio_event = records.get_task_event(workspace_id, f'event_{job.id}_revision_audio', connection=connection)
+        prepared = records.get_task_event(workspace_id, self.video_preparation_id(job, command.section_id), connection=connection)
+        for saved, event_type in ((publication, 'segment_publication'), (audio_event, 'segment_revision_audio'),
+                                  (prepared, 'segment_video_prepared')):
+            if (saved.task_id, saved.job_id, saved.event_type) != (task_id, job.id, event_type):
+                raise ValueError('候选发布、音频或画面准备不属于同一原作业')
+        payload, video = publication.payload, prepared.payload
+        evidence = start.payload.get('knowledge_evidence')
+        if (command.adoption_mode != 'candidate' or not evidence or payload.get('knowledge_evidence') != evidence
+                or payload.get('adoption_proposal_id') != proposal_id or payload.get('adopted') is not False
+                or (payload['request_id'], payload['input_id'], payload['section_id'], payload['script_id'], payload['text'],
+                    payload['segment_version']) != (command.request_id, command.input_id, command.section_id,
+                    command.script_id, command.replacement_text, publication.id)
+                or start.payload['input_digest'] != job.input_digest or digest(start.payload['command']) != job.input_digest
+                or video['input_digest'] != job.input_digest or video['montage'] != payload['montage']
+                or self.capture_revision_evidence(actor, evidence) != evidence):
+            raise ValueError('原修订、资料页或候选发布绑定已变化')
+        done = connection.execute("SELECT id,checkpoint_ref FROM device_work_requests WHERE workspace_id=? "
+            "AND owner_type='creation_job' AND owner_id=? AND member_id=? AND input_digest=? AND unit_key=? AND state='done'",
+            (workspace_id, job.id, actor.member_id, job.input_digest, video['unit_key'])).fetchone()
+        if done is None or not done['checkpoint_ref']:
+            raise ValueError('原段落视频没有已释放的完成检查点')
+        checkpoint = records.get_task_event(workspace_id, done['checkpoint_ref'], connection=connection)
+        if ((checkpoint.task_id, checkpoint.job_id, checkpoint.event_type)
+                != (task_id, job.id, 'segment_execution_checkpoint')
+                or (checkpoint.payload.get('publication_ref'), checkpoint.payload.get('request_id'),
+                    checkpoint.payload.get('unit_key'), checkpoint.payload.get('status'))
+                != (publication.id, done['id'], video['unit_key'], 'succeeded')):
+            raise ValueError('原完成检查点与选定候选不一致')
+        values = dict(audio_event.payload['segment'])
+        for key in ('created_at', 'updated_at'):
+            values[key] = datetime.fromisoformat(values[key])
+        segment = NarrationSegment(**values)
+        audio_content = audio_event.payload.get('audio_content')
+        cache_key = audio_event.payload['audio_cache_key']
+        audio = self.repository.narration_artifacts.get_narration_artifact(workspace_id, cache_key, connection=connection)
+        if (audio_content is None or audio is None or audio.task_id != task_id or audio.script_id != command.script_id
+                or (segment.workspace_id, segment.task_id, segment.script_id, segment.source_section_id,
+                    segment.text, segment.status, segment.audio_reference, segment.duration_seconds)
+                != (workspace_id, task_id, command.script_id, command.section_id,
+                    command.replacement_text, 'ready', payload['narration_reference'], audio.duration_seconds)
+                or segment.audio_reference != self.repository.narration_artifacts.narration_artifact_reference(cache_key)
+                or video['audio_cache_key'] != cache_key):
+            raise ValueError('原候选缺少已封存的同源配音')
+        artifacts = tuple(records.get_artifact_record(workspace_id, payload[key], connection=connection)
+                          for key in ('video_artifact_id', 'subtitle_artifact_id'))
+        transform = self.repository.lineage_records.get_transform_run(workspace_id,
+            f'transform_{publication.id}', connection=connection)
+        if (any((item.task_id, item.producer_job_id, item.kind) != (task_id, job.id, kind)
+                or segment.audio_reference not in item.input_refs or item.size_bytes <= 0
+                for item, kind in zip(artifacts, ('rendered_video', 'subtitle_track')))
+                or (transform.task_id, transform.job_id, transform.transform_type, transform.status,
+                    transform.input_digest, transform.output_refs)
+                != (task_id, job.id, 'section_audiovisual_render', 'succeeded',
+                    digest([payload['montage'], video['sources']]), [item.logical_ref for item in artifacts])
+                or selection != section_candidate_selection(publication, job, command.base_version_id, audio_content, artifacts)):
+            raise ValueError('原候选的已登记产物或选择摘要不一致')
+        material_refs = set()
+        source_paths = {Path(source['path']).resolve() for source in video['sources']}
+        for clip in payload['montage']['clips']:
+            if clip.get('person_render_id'):
+                raise ValueError('此资料候选包含人物产物，当前采用入口尚不能核验')
+            asset = self.repository.get_asset(workspace_id, clip['asset_id'], connection=connection)
+            segment_id = clip.get('segment_id')
+            clip_segment = next((item for item in asset.segments if item.id == segment_id), None)
+            if ((segment_id and clip_segment is None)
+                    or not material_usage_eligibility(asset, clip_segment, purpose='automatic').eligible or not knowledge_item_readable(
+                    user_id=actor.user_id or actor.member_id, local_diagnostic=False,
+                    visibility=asset.visibility, owner_user_id=asset.owner_user_id)):
+                raise PermissionError('候选镜头的原素材当前不可采用')
+            path = self.repository.resolve_clip_media_reference(workspace_id, asset.id, clip['source_path'], connection=connection)
+            if path.resolve() not in source_paths:
+                raise ValueError('候选镜头与原源文件绑定已变化')
+            material_refs.add(f'asset:{asset.id}')
+        if owner.task_authorizations is not None and owner.task_authorizations.verdict(actor, task_id, 'narration_edit',
+                references=material_refs, connection=connection) != 'ready':
+            raise PermissionError('候选镜头已超出当前作品的素材许可')
+        before_text = None
+        if proposal.status == 'proposed':
+            current, _rules = self.verify_revision(workspace_id, task_id, actor, command, connection=connection)
+            self.validate_planning_dependency(video, workspace_id=workspace_id, task_id=task_id,
+                connection=connection, target_text=command.replacement_text)
+            before_text = current['text']
+        return task, SectionCandidateFacts(proposal, publication, job, segment, audio.audio_path,
+                                           audio_content, artifacts, before_text, tuple(video['sources']))
+
+    def knowledge_candidate(self, workspace_id, task_id, actor, proposal_id, owner):
+        with self.repository.execution_inputs.creation_execution_read() as conn:
+            return self._knowledge_candidate(workspace_id, task_id, actor, proposal_id, owner, connection=conn)[1]
+
+    def _candidate_operation(self, workspace_id, task_id, proposal_id, *, connection=None):
+        with self.repository.execution_inputs.creation_execution_read(connection) as conn:
+            return self.repository.section_adoption.confirmed_candidate(workspace_id, task_id, proposal_id,
+                                                                        connection=conn)
+
+    def _candidate_outcome(self, operation):
+        from app.creation.editing.metadata_use_case import MetadataEditResult
+        from app.montage import creation_task_montage_plan_from_payload
+
+        workspace_id, task_id = operation.workspace_id, operation.task_id
+        version = self.repository.timeline_records.get_timeline_version(workspace_id, operation.result_version_id)
+        montage = version.snapshot.get('montage')
+        return MetadataEditResult(operation, creation_task_montage_plan_from_payload(montage) if montage else None,
+                                   self.repository.task_records.get_creation_task(workspace_id, task_id), None)
+
+    def knowledge_candidate_receipt(self, workspace_id, task_id, proposal_id, request_id):
+        operation = self._candidate_operation(workspace_id, task_id, proposal_id)
+        if operation is None:
+            return None
+        if operation.payload.get('confirmation_request_id') != request_id:
+            raise ValueError('此候选已由另一原请求正式采用')
+        return self._candidate_outcome(operation)
+
+    def adopt_knowledge_candidate(self, workspace_id, task_id, actor, proposal_id, owner, *,
+                                  request_id, base_version_id, selection_digest, verify_confirmation):
+        """Only the trusted confirmation adapter can supply the verified request guard."""
+        def read_confirmed(conn):
+            task, facts = self._knowledge_candidate(workspace_id, task_id, actor, proposal_id, owner, connection=conn)
+            selection = facts.proposal.operation['payload']
+            if (selection['base_version_id'], selection['selection_digest']) != (base_version_id, selection_digest):
+                raise ValueError('明确确认与所见候选或基础版本不一致')
+            verify_confirmation(conn, facts)
+            operation = self.repository.section_adoption.confirmed_candidate(
+                workspace_id, task_id, proposal_id, connection=conn)
+            if operation is not None and operation.payload.get('confirmation_request_id') != request_id:
+                raise ValueError('此候选已由另一原请求正式采用')
+            return task, facts, operation
+
+        with self.repository.execution_inputs.creation_execution_read() as conn:
+            _task, facts, operation = read_confirmed(conn)
+        if operation is None:
+            paths = [(Path(facts.audio_path), facts.audio_content)]
+            paths.extend((self.artifact_store.resolve_file(item.logical_ref),
+                          {'sha256': item.sha256, 'size_bytes': item.size_bytes}) for item in facts.artifacts)
+            verified_files = []
+            for path, expected in paths:
+                content, identity = _candidate_file_content(path, max_bytes=expected['size_bytes'], check=lambda: None)
+                if content != expected:
+                    raise ValueError('候选音视频或字幕与原登记摘要不一致')
+                verified_files.append((path, identity))
+            def check_sources():
+                for source in facts.sources:
+                    stat = Path(source['path']).stat()
+                    if (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns) != (
+                            source['size'], source['mtime_ns'], source['ctime_ns']):
+                        raise ValueError('候选的原音画来源已变化')
+            change = self.section_timeline_change()
+            change.prepare_current(workspace_id, task_id, facts.segment.source_section_id,
+                facts.publication.payload['montage'], facts.segment, facts.job)
+            with self.repository.connection_factory() as conn:
+                conn.execute('BEGIN IMMEDIATE')
+                task, current, operation = read_confirmed(conn)
+                if operation is None:
+                    if current != facts:
+                        raise ValueError('候选在提交前已变化')
+                    check_sources()
+                    if any(_file_identity(path) != expected for path, expected in verified_files):
+                        raise ValueError('候选产物在采用前已变化')
+                    operation, _version = self.repository.section_adoption.adopt_candidate(task,
+                        facts.publication, facts.segment, change, facts.proposal, request_id, connection=conn)
+        return self._candidate_outcome(operation)
 
     def submit_revision(self, workspace_id, task_id, actor, command, *, runtime, write_guard=None):
         self.require_actor(workspace_id, task_id, actor)
@@ -1210,6 +1433,11 @@ class SegmentProductionUseCase:
             if grant.unit_key.startswith('segment_revision:'):
                 self.verify_revision(job.workspace_id,job.task_id,actor,command)
                 audio, segment, measured_bytes = self.narration_stage.prepare_revision(task,command,grant_context=context)
+                audio_content = {}
+                if event.get('knowledge_evidence'):
+                    content, _identity = _candidate_file_content(Path(audio.audio_path),
+                        max_bytes=measured_bytes, check=context.check)
+                    audio_content = {'audio_content': content}
                 from app.creation.duration_requirement import DurationConflict
                 try:
                     video_preparation = self.prepare_video(job,event,task,command.section_id,audio,owner,text=command.replacement_text)
@@ -1222,7 +1450,7 @@ class SegmentProductionUseCase:
                     self.persist_video_preparation(video_preparation,current,connection=conn)
                     self.repository.execution_records.append_task_event(TaskEvent(id=f'event_{job.id}_revision_audio',workspace_id=job.workspace_id,
                         task_id=job.task_id,job_id=job.id,event_type='segment_revision_audio',payload={
-                            'audio_cache_key':audio.cache_key,'segment':asdict(segment)}),connection=conn)
+                            'audio_cache_key':audio.cache_key,'segment':asdict(segment),**audio_content}),connection=conn)
                     settle(conn,current)
                     return self.repository.segment_units.checkpoint_segment_unit(current,status='queued',connection=conn,
                         reason='waiting_for_user' if video_preparation.event_type in {'segment_visual_decision_required', 'segment_visual_planning_conflict'} else None,
@@ -1243,6 +1471,12 @@ class SegmentProductionUseCase:
                 reference = current_context['audio']['artifact_ref']
                 audio = self.repository.narration_artifacts.get_narration_artifact(job.workspace_id,reference.removeprefix('narration://artifact/'))
                 text = current_context['text']
+            audio_content = prepared.get('audio_content') if command and event.get('knowledge_evidence') else None
+            if audio_content is not None:
+                content, audio_identity = _candidate_file_content(Path(audio.audio_path),
+                    max_bytes=audio_content['size_bytes'], check=context.check)
+                if content != audio_content:
+                    raise ValueError('原候选配音在画面制作前已变化')
             from app.montage import creation_task_montage_plan_from_payload
             prepared_video = self.repository.execution_records.get_task_event(job.workspace_id,self.video_preparation_id(job,section_id)).payload
             plan_payload,sources = prepared_video['montage'],prepared_video['sources']
@@ -1317,9 +1551,11 @@ class SegmentProductionUseCase:
             def commit_video(conn,current):
                 if command:
                     self.verify_revision(job.workspace_id,job.task_id,actor,command,connection=conn)
+                if audio_content is not None and _file_identity(Path(audio.audio_path)) != audio_identity:
+                    raise ValueError('原候选配音在画面制作期间变化')
                 self.repository.section_adoption.publish_segment_version(publication,artifacts,transform,edges,adopted=adopted,
                     expected_version_id=current_context['base_version_id'],expected_segment_version=current_context['segment_version'],
-                    segment=segment,timeline_change=timeline_change,connection=conn)
+                    segment=segment,timeline_change=timeline_change,audio_content=audio_content,connection=conn)
                 settle(conn,current)
                 return self.repository.segment_units.checkpoint_segment_unit(current,status='succeeded' if command else 'queued',
                     connection=conn,payload={'publication_ref':publication.id})

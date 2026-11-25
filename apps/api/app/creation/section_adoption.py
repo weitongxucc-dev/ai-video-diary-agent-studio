@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import datetime
+import hashlib
 import json
 import sqlite3
 from uuid import uuid4
@@ -22,6 +23,15 @@ from app.creation.timeline_records import TimelineRecordStore
 from app.creation.transactions import EditAdoptionTransaction
 from app.models import utc_now
 from app.persistence_json import _json_payload
+
+
+def section_candidate_selection(event, job, base_version_id, audio_content, artifacts):
+    publication = {key: value for key, value in event.payload.items() if key != 'adoption_proposal_id'}
+    content = [base_version_id, event.id, job.input_digest, publication, audio_content,
+        [(item.id, item.logical_ref, item.sha256, item.size_bytes) for item in artifacts]]
+    return {'base_version_id': base_version_id, 'request_id': publication['request_id'],
+        'job_id': job.id, 'publication_id': event.id, 'section_id': publication['section_id'],
+        'selection_digest': hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).hexdigest()}
 
 
 class SectionAdoptionTransaction:
@@ -50,11 +60,28 @@ class SectionAdoptionTransaction:
         self.replace_adopted_narration_segment = replace_adopted_narration_segment
 
     def publish_segment_version(self, event, artifacts, transform, edges, *, adopted, expected_version_id,
-                                expected_segment_version, segment=None, timeline_change=None, connection):
+                                expected_segment_version, segment=None, timeline_change=None, audio_content=None, connection):
         task = require_creation_task(connection,event.workspace_id,event.task_id)
         payload = event.payload
         if self.stage_section_version(task.workspace_id,task.id,payload['section_id'],connection=connection) != expected_segment_version:
             raise ValueError('发布前段落或时间线已变化；原采用版本保留')
+        if audio_content is not None and not adopted and payload.get('knowledge_evidence'):
+            if not expected_version_id or task.current_timeline_version_id != expected_version_id:
+                raise ValueError('资料候选的作品基础版本已变化')
+            job = self.job_records.get_job_run(task.workspace_id, event.job_id, connection=connection)
+            selection = section_candidate_selection(event, job, expected_version_id, audio_content, artifacts)
+            target = [f'section:{selection["section_id"]}']
+            intent = _EditIntent(id=f'intent_{job.id}_section_candidate', workspace_id=task.workspace_id, task_id=task.id,
+                raw_command='保存资料段落候选', context_stage='narration', selected_object_refs=target,
+                playhead_ms=None, intent_type='revise_script_section', scope={'section_id': selection['section_id']},
+                constraints={}, confidence=1.0, status='interpreted')
+            self.edit_records.create_edit_intent(intent, connection=connection, source=None)
+            proposal = _EditProposal(id=f'proposal_{job.id}_section_candidate', workspace_id=task.workspace_id,
+                task_id=task.id, intent_id=intent.id, summary='采用已生成的资料段落候选', target_refs=target,
+                operation={'operation_type': 'ReviseScriptSection', 'payload': selection}, invalidated_refs=[],
+                preview={}, external_effects=[])
+            self.edit_records.create_edit_proposal(proposal, connection=connection)
+            event = replace(event, payload={**payload, 'adoption_proposal_id': proposal.id})
         for artifact in artifacts:
             self.execution_records.create_artifact_record(artifact,connection=connection)
         self.lineage_records.create_transform_run(transform,connection=connection)
@@ -62,71 +89,97 @@ class SectionAdoptionTransaction:
             self.lineage_records.create_dependency_edge(edge,connection=connection)
         self.execution_records.append_task_event(event,connection=connection)
         if adopted:
-            row = connection.execute('SELECT snapshot_json,sequence FROM timeline_versions WHERE workspace_id=? AND id=?',
-                (task.workspace_id,task.current_timeline_version_id)).fetchone()
-            snapshot = json.loads(row['snapshot_json']) if row else {}
-            snapshot['stage_segments'] = {**snapshot.get('stage_segments',{}),payload['section_id']:event.id}
-            invalidations = dict(snapshot.get('stage_segment_invalidations', {}))
-            invalidations.pop(payload['section_id'], None)
-            snapshot['stage_segment_invalidations'] = invalidations
-            # A local change invalidates the composed output while preserving its immutable ancestor.
-            for key in ('rendered_video_ref','rendered_artifact_id','creation_render_request_id','output_refs'):
-                snapshot.pop(key,None)
-            operation = None
-            tracks = []
-            if segment is not None:
-                header, _ = self.script_records.read_execution_script_metadata(connection, task.workspace_id, payload['script_id'])
-                before = self.read_creation_section_input(task, header, payload['section_id'], connection=connection)['audio']
-                if before is None:
-                    raise ValueError('局部修订缺少原配音分段')
-                before_state = self.stage_segment_state(task.workspace_id,task.id,payload['section_id'],connection=connection)
-                if before_state is None or task.current_timeline_version_id is None:
-                    raise ValueError('局部修订缺少原采用段及历史基础，未覆盖原成果')
-                history = {'section_id':payload['section_id'],'before_segment':asdict(before),'after_segment':asdict(segment),
-                    'before_publication':before_state['segment_version'],'after_publication':event.id,
-                    'request_id':payload['request_id'],'input_id':payload['input_id'],
-                    'before_dependencies':self.section_dependency_snapshot(task.workspace_id,task.id,payload['section_id'],connection=connection)}
-                history = json.loads(json.dumps(history,default=lambda value:value.isoformat()))
-                result_version_id = f'timeline_{uuid4().hex}'
-                history['before_timeline_version_id'] = task.current_timeline_version_id
-                history['after_timeline_version_id'] = result_version_id
-                if timeline_change is None:
-                    raise ValueError('局部修改缺少同源时间线联动负责人')
-                snapshot,tracks = timeline_change(task,snapshot,payload['section_id'],payload['montage'],segment,
-                    result_version_id,self.job_records.get_job_run(task.workspace_id,event.job_id,connection=connection),connection)
-                operation_id = f'operation_{uuid4().hex}'
-                history['operation_id'] = operation_id
+            self._adopt_publication(task, event, segment, timeline_change, connection=connection)
+        return event.id
+
+    def confirmed_candidate(self, workspace_id, task_id, proposal_id, *, connection):
+        row = connection.execute("SELECT * FROM edit_operations WHERE workspace_id=? AND task_id=? "
+            "AND proposal_id=? AND operation_type='ReviseScriptSection' AND status='applied'",
+            (workspace_id, task_id, proposal_id)).fetchone()
+        return self.edit_records.edit_operation_from_row(row) if row else None
+
+    def adopt_candidate(self, task, publication, segment, timeline_change, proposal, request_id, *, connection):
+        duplicate = connection.execute("SELECT 1 FROM edit_operations WHERE workspace_id=? AND task_id=? "
+            "AND operation_type='ReviseScriptSection' AND json_extract(payload_json,'$.confirmation_request_id')=?",
+            (task.workspace_id, task.id, request_id)).fetchone()
+        if duplicate is not None:
+            raise ValueError('原确认请求已绑定其他候选')
+        return self._adopt_publication(task, publication, segment, timeline_change, proposal=proposal,
+            confirmation_request_id=request_id, connection=connection)
+
+    def _adopt_publication(self, task, event, segment, timeline_change, *, connection, proposal=None,
+                           confirmation_request_id=None):
+        payload = event.payload
+        row = connection.execute('SELECT snapshot_json,sequence FROM timeline_versions WHERE workspace_id=? AND id=?',
+            (task.workspace_id,task.current_timeline_version_id)).fetchone()
+        snapshot = json.loads(row['snapshot_json']) if row else {}
+        snapshot['stage_segments'] = {**snapshot.get('stage_segments',{}),payload['section_id']:event.id}
+        invalidations = dict(snapshot.get('stage_segment_invalidations', {}))
+        invalidations.pop(payload['section_id'], None)
+        snapshot['stage_segment_invalidations'] = invalidations
+        # A local change invalidates the composed output while preserving its immutable ancestor.
+        for key in ('rendered_video_ref','rendered_artifact_id','creation_render_request_id','output_refs'):
+            snapshot.pop(key,None)
+        operation = None
+        tracks = []
+        if segment is not None:
+            header, _ = self.script_records.read_execution_script_metadata(connection, task.workspace_id, payload['script_id'])
+            before = self.read_creation_section_input(task, header, payload['section_id'], connection=connection)['audio']
+            if before is None:
+                raise ValueError('局部修订缺少原配音分段')
+            before_state = self.stage_segment_state(task.workspace_id,task.id,payload['section_id'],connection=connection)
+            if before_state is None or task.current_timeline_version_id is None:
+                raise ValueError('局部修订缺少原采用段及历史基础，未覆盖原成果')
+            history = {'section_id':payload['section_id'],'before_segment':asdict(before),'after_segment':asdict(segment),
+                'before_publication':before_state['segment_version'],'after_publication':event.id,
+                'request_id':payload['request_id'],'input_id':payload['input_id'],
+                'before_dependencies':self.section_dependency_snapshot(task.workspace_id,task.id,payload['section_id'],connection=connection)}
+            history = json.loads(json.dumps(history,default=lambda value:value.isoformat()))
+            result_version_id = f'timeline_{uuid4().hex}'
+            history['before_timeline_version_id'] = task.current_timeline_version_id
+            history['after_timeline_version_id'] = result_version_id
+            if timeline_change is None:
+                raise ValueError('局部修改缺少同源时间线联动负责人')
+            snapshot,tracks = timeline_change(task,snapshot,payload['section_id'],payload['montage'],segment,
+                result_version_id,self.job_records.get_job_run(task.workspace_id,event.job_id,connection=connection),connection)
+            operation_id = f'operation_{uuid4().hex}'
+            history['operation_id'] = operation_id
+            if proposal is None:
                 intent = _EditIntent(id=f'intent_{uuid4().hex}',workspace_id=task.workspace_id,task_id=task.id,
                     raw_command='受约束局部文案修订',context_stage='narration',selected_object_refs=[f'section:{payload["section_id"]}'],
                     playhead_ms=None,intent_type='revise_script_section',scope={'section_id':payload['section_id']},
                     constraints={},confidence=1.0,status='interpreted')
-                self.edit_records.create_edit_intent(intent,connection=connection,source=None)
+                self.edit_records.create_edit_intent(intent, connection=connection, source=None)
                 proposal = _EditProposal(id=f'proposal_{uuid4().hex}',workspace_id=task.workspace_id,task_id=task.id,
                     intent_id=intent.id,summary='更新目标段的正文、配音、字幕及镜头',target_refs=[f'section:{payload["section_id"]}'],
                     operation={'operation_type':'ReviseScriptSection','payload':history},invalidated_refs=[],preview={},external_effects=[])
                 self.edit_records.create_edit_proposal(proposal,connection=connection)
-                applied_at = utc_now()
-                operation = _EditOperation(id=operation_id,workspace_id=task.workspace_id,task_id=task.id,proposal_id=proposal.id,
-                    operation_type='ReviseScriptSection',payload=history,base_version_id=task.current_timeline_version_id,
-                    result_version_id=result_version_id,status='applied',created_at=applied_at,applied_at=applied_at)
-            version = _TimelineVersion(id=f'timeline_{uuid4().hex}',workspace_id=task.workspace_id,task_id=task.id,
-                parent_version_id=task.current_timeline_version_id,sequence=row['sequence']+1 if row else 1,
-                snapshot=snapshot,created_by_operation_id=None)
-            if operation is not None:
-                version = replace(version,id=operation.result_version_id,created_by_operation_id=operation.id)
-                full = snapshot.get('montage')
-                self.edit_adoption.confirm(task.workspace_id,task.id,proposal.id,operation=operation,result_version=version,
-                    montage_plan_id=full['id'] if full else None,montage_payload=full,subtitle_tracks=tracks,connection=connection)
             else:
-                self.timeline_records.create_timeline_version(version,connection=connection,expected_current_version_id=task.current_timeline_version_id)
-            if segment is not None:
-                self.replace_adopted_narration_segment(task, segment, connection=connection)
-                self._invalidate_section_composition(task.workspace_id,task.id,connection)
-                self.execution_records.append_task_event(_TaskEvent(id=f'event_{operation.id}_dependencies',workspace_id=task.workspace_id,
-                    task_id=task.id,job_id=event.job_id,event_type='section_edit_dependencies',payload={
-                    'operation_id':operation.id,'dependencies':self.section_dependency_snapshot(task.workspace_id,task.id,
-                    payload['section_id'],connection=connection)}),connection=connection)
-        return event.id
+                history.update(candidate_job_id=event.job_id, knowledge_evidence=payload['knowledge_evidence'],
+                    selection_digest=proposal.operation['payload']['selection_digest'],
+                    confirmation_request_id=confirmation_request_id)
+            applied_at = utc_now()
+            operation = _EditOperation(id=operation_id,workspace_id=task.workspace_id,task_id=task.id,proposal_id=proposal.id,
+                operation_type='ReviseScriptSection',payload=history,base_version_id=task.current_timeline_version_id,
+                result_version_id=result_version_id,status='applied',created_at=applied_at,applied_at=applied_at)
+        version = _TimelineVersion(id=f'timeline_{uuid4().hex}',workspace_id=task.workspace_id,task_id=task.id,
+            parent_version_id=task.current_timeline_version_id,sequence=row['sequence']+1 if row else 1,
+            snapshot=snapshot,created_by_operation_id=None)
+        if operation is not None:
+            version = replace(version,id=operation.result_version_id,created_by_operation_id=operation.id)
+            full = snapshot.get('montage')
+            self.edit_adoption.confirm(task.workspace_id,task.id,proposal.id,operation=operation,result_version=version,
+                montage_plan_id=full['id'] if full else None,montage_payload=full,subtitle_tracks=tracks,connection=connection)
+        else:
+            self.timeline_records.create_timeline_version(version,connection=connection,expected_current_version_id=task.current_timeline_version_id)
+        if segment is not None:
+            self.replace_adopted_narration_segment(task, segment, connection=connection)
+            self._invalidate_section_composition(task.workspace_id,task.id,connection)
+            self.execution_records.append_task_event(_TaskEvent(id=f'event_{operation.id}_dependencies',workspace_id=task.workspace_id,
+                task_id=task.id,job_id=event.job_id,event_type='section_edit_dependencies',payload={
+                'operation_id':operation.id,'dependencies':self.section_dependency_snapshot(task.workspace_id,task.id,
+                payload['section_id'],connection=connection)}),connection=connection)
+        return operation, version
 
     def _invalidate_section_composition(self,workspace_id,task_id,connection):
         task = require_creation_task(connection,workspace_id,task_id)
