@@ -471,7 +471,8 @@ def test_status_is_read_only_after_service_recreation_and_rejects_other_owner_or
     recreated = DeviceResourcePreparation(profile_path=service.profile_path, device=service.device,
         settings=service.settings, write_paths=paths, verify_identity=access.verify_identity)
     result = recreated.status(database_path=repository.database_path, request_id=request.id, actor=actor)
-    assert result == {'id': request.id, 'plan_id': plan_id, 'state': 'waiting', 'wait_reason': None}
+    assert result == {'id': request.id, 'plan_id': plan_id, 'state': 'waiting', 'wait_reason': None,
+                      'mp4_cut_measurement': 'not_requested'}
     with repository._connect() as connection:
         connection.execute("UPDATE device_work_requests SET state='failed',wait_reason='device_preparation_failed' WHERE id=?",
                            (request.id,))
