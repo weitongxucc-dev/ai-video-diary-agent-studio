@@ -4,7 +4,10 @@ import re
 from pathlib import Path
 
 from app.creation_execution import CreationExecutionActor
-from app.schemas import TaskMediaJobResponse
+from app.media_execution import EditPlan, FFMPEG_OPERATION
+from app.media_execution.bound_cut import BOUND_CUT_FACT, BOUND_CUT_KIND
+from app.schemas import TaskMediaJobResponse, TaskMediaPublishedVersion
+from app.task_audio import media_digest
 from app.task_media_submission_use_case import read_bound_cut_asset
 
 
@@ -84,6 +87,74 @@ class MediaResultUseCase:
             raise MediaResultRejected(404, '媒体输出文件当前不可读取。') from exc
         return path
 
+    def _stale_cut_publication(self, media, job, event, actor):
+        """Resolve a saved cut's version identity from its registered provenance."""
+        resources = event.get("resources")
+        if (job.status != "succeeded" or event["operation"] != FFMPEG_OPERATION
+                or event["result_kind"] != "media_output" or not isinstance(resources, dict)
+                or resources.get("kind") != BOUND_CUT_KIND):
+            return None
+        workspace_id, task_id = job.workspace_id, job.task_id
+        try:
+            inputs = event["input_facts"]
+            binding = inputs[BOUND_CUT_FACT]
+            arguments = event["arguments"]
+            preparation_id = binding["preparation"]["request_id"]
+            plan = EditPlan.from_value(arguments["edit_plan"])
+            if (not preparation_id or arguments.get("preparation_request_id") != preparation_id
+                    or (plan.workspace_id, plan.task_id, plan.member_id) != (workspace_id, task_id, actor.member_id)
+                    or (plan.request_id, plan.base_version_id) != (inputs["request_id"], inputs["base_version_id"])
+                    or media_digest(plan.as_dict()) != inputs["plan_digest"] or len(plan.operations) != 1):
+                return None
+            cut = plan.operations[0]
+            asset_id = cut.options["asset_id"]
+            if (cut.operation != "cut" or len(cut.inputs) != 1
+                    or asset_id != binding["source"]["asset_id"]):
+                return None
+
+            with self.repository.connection_factory() as conn:
+                conn.execute("BEGIN")
+                current, saved = media.read(workspace_id, job.id, conn)
+                if (current.task_id != task_id or current.status != "succeeded" or saved != event
+                        or saved.get("input_digest") != current.input_digest
+                        or media._read_access(current, saved, actor, connection=conn) != "ready"):
+                    return None
+                read_bound_cut_asset(self.repository, actor, asset_id, connection=conn)
+                records = self.repository.execution_records
+                start, completed, verified = (
+                    records.get_task_event(workspace_id, f"event_{job.id}_{suffix}", connection=conn)
+                    for suffix in ("start", "result", "verified"))
+                if any((record.task_id, record.job_id, record.event_type) != (task_id, job.id, event_type)
+                       for record, event_type in zip((start, completed, verified),
+                           ("task_media_submitted", "task_media_result", "task_media_verified"))):
+                    return None
+                result = completed.payload["result"]
+                if (not isinstance(result, dict) or result.get("status") != "succeeded"
+                        or (result.get("request_id"), result.get("base_version_id")) != (plan.request_id, plan.base_version_id)
+                        or verified.payload.get("outputs") != {"media_execution": result}):
+                    return None
+                inner_job_id, version_id = result["job_id"], result["timeline_version_id"]
+                if (not isinstance(inner_job_id, str) or not inner_job_id
+                        or result.get("media_job_id") != inner_job_id or not isinstance(version_id, str)):
+                    return None
+                task = self.repository.task_records.get_creation_task(workspace_id, task_id, connection=conn)
+                if task.current_timeline_version_id == version_id:
+                    return None
+                inner_start = records.get_task_event(workspace_id, f"event_{inner_job_id}_media_start", connection=conn)
+                expected_plan = {**plan.as_dict(), "metadata": {**plan.metadata, BOUND_CUT_FACT: binding}}
+                if ((inner_start.task_id, inner_start.job_id, inner_start.event_type)
+                        != (task_id, inner_job_id, "media_execution_submitted")
+                        or inner_start.payload.get("request_id") != plan.request_id
+                        or inner_start.payload.get("plan") != expected_plan
+                        or not self.repository.timeline_history.matches_media_publication(
+                            conn, workspace_id, task_id, version_id, base_version_id=plan.base_version_id,
+                            job_id=inner_job_id, request_id=plan.request_id, output_refs=result["output_refs"])):
+                    return None
+            return TaskMediaPublishedVersion(request_id=plan.request_id, base_version_id=plan.base_version_id,
+                                             timeline_version_id=version_id)
+        except (KeyError, TypeError, ValueError, PermissionError):
+            return None
+
     def receipt(self, media, job, actor, scheduler):
         current, event = media.read(job.workspace_id, job.id)
         if CreationExecutionActor.from_event(job.workspace_id, event) != actor or media.authorization_verdict(current,event,actor,check_scope=False) != "ready":
@@ -99,6 +170,7 @@ class MediaResultUseCase:
                         raise MediaResultRejected(404, "任务媒体作业不存在") from exc
         verdict = media.check(current, event, actor)
         status = "stale" if verdict != "ready" and current.status not in {"failed", "cancelled"} else current.status
+        published_version = self._stale_cut_publication(media, current, event, actor) if verdict == "stale" else None
         result = None
         result_invalid = status == "succeeded" and not self.outputs.published_outputs_current(current)
         if result_invalid:
@@ -136,7 +208,7 @@ class MediaResultUseCase:
         return TaskMediaJobResponse(job_id=job.id, status=status, result_kind=event["result_kind"],
             operation=event["operation"], target_refs=refs, input_digest=job.input_digest, created_at=job.created_at,
             result_url=f"/api/creation-tasks/{job.task_id}/media-jobs/{job.id}", base_version_id=event["input_facts"]["base_version_id"],
-            device_request_id=device_request_id, waiting_reason=waiting_reason, result=result,
+            device_request_id=device_request_id, waiting_reason=waiting_reason, result=result, published_version=published_version,
             resource_wait=media.resource_admission_receipt(current, event, actor, device_request, status),
             failure_reason="result_invalid" if result_invalid else current.failure_reason,
             repair_action="本次媒体文件已丢失或变化；请恢复原文件。系统不会重渲染已提交产物。" if result_invalid else current.repair_action).model_dump(mode="json")

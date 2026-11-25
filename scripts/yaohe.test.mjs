@@ -229,12 +229,29 @@ test('request query preserves failed original HTTP result',async t=>{
 
 test('job wait is finite and cancellation is a single ordinary POST',async t=>{
   const f=await fixture(t,(call,res)=>send(res,200,{job_id:'job_1',status:call.method==='POST'?'cancelled':'queued',result:null}));
-  const start=Date.now();
-  const waiting=await f.cli('job','wait',TASK,'job_1','--timeout-seconds','0.03');
-  assert.equal(waiting.code,3); assert.ok(Date.now()-start<1000);
+  const {jobCommand}=await import('./yaohe/job-commands.mjs');
+  const jobPath=`${PREFIX}/media-jobs/job_1`;
+  const originalNow=Date.now;
+  let now=0;
+  let reads=0;
+  try {
+    Date.now=()=>now;
+    const waiting=await jobCommand(async(path,options)=>{
+      assert.equal(++reads,1);
+      assert.equal(path,jobPath);
+      assert.deepEqual(options,{timeout:30});
+      now=30;
+      return {job_id:'job_1',status:'queued',result:null};
+    },{positional:['job','wait',TASK,'job_1'],flags:{'timeout-seconds':'0.03'}});
+    assert.equal(waiting.code,3);
+    assert.equal(waiting.state,'pending');
+    assert.equal(waiting.job_locator,jobPath);
+  } finally {
+    Date.now=originalNow;
+  }
   const cancelled=await f.cli('job','cancel',TASK,'job_1');
   assert.equal(cancelled.code,0); assert.equal(cancelled.json.data.status,'cancelled');
-  assert.equal(f.calls.filter(call=>call.method==='POST').length,1);
+  assert.deepEqual(f.calls.map(({method,url})=>[method,url]),[['POST',`${jobPath}/cancel`]]);
 });
 
 test('job succeeded needs result and failed remains failed',async t=>{

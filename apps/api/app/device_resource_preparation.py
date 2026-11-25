@@ -685,6 +685,8 @@ class DeviceResourcePreparation:
     def status(self, *, database_path, request_id, actor):
         row, plan = self._request(database_path=database_path, request_id=request_id, actor=actor)
         result = {'id': row['id'], 'plan_id': plan['id'], 'state': row['state'], 'wait_reason': row['wait_reason']}
+        if row['unit_key'] == 'cpu-prepare:v1':
+            result['mp4_cut_measurement'] = self._mp4_cut_measurement_status(row, plan)
         if row['state'] == 'failed':
             result['failure_code'] = row['wait_reason'] or 'device_preparation_failed'
             if row['wait_reason'] == 'device_preparation_sampling_incomplete':
@@ -704,8 +706,7 @@ class DeviceResourcePreparation:
                 'AND owner_type=? AND owner_id=?', (actor.workspace_id, OWNER_TYPE, plan_id)).fetchone()
         return None if row is None else self.status(database_path=database_path, request_id=row[0], actor=actor)
 
-    def _completed_receipt(self, *, database_path, request_id, actor):
-        row, plan = self._request(database_path=database_path, request_id=request_id, actor=actor)
+    def _read_completed_receipt(self, row, plan):
         if row['state'] != 'done':
             raise DeviceProfileUnavailable('设备准备尚未取得完成回执；请读取原请求，不重复启动。')
         receipt_path = self.root / 'receipts' / f"{row['id']}-{row['last_grant_generation']}.json"
@@ -714,31 +715,65 @@ class DeviceResourcePreparation:
             raise DeviceProfileUnavailable('设备准备回执与许可检查点不匹配；保留原档供核查。')
         receipt = json.loads(raw)
         if ((row['workspace_id'], row['member_id'], row['unit_key']) != (plan['workspace_id'], plan['member_id'], 'cpu-prepare:v1')
+                or row['owner_id'] != plan['id']
                 or receipt['request_id'] != row['id'] or receipt['generation'] != row['last_grant_generation']
                 or receipt['input_digest'] != row['input_digest'] or row['input_digest'] != plan['input_digest']
-                or receipt['plan_id'] != plan['id'] or receipt['device'] != asdict(self.device)
+                or receipt['plan_id'] != plan['id'] or receipt['device'] != plan['device']
+                or receipt['device'] != asdict(self.device)
                 or receipt['backends'] != plan['backends'] or receipt['shape'] != plan['shape']
                 or json.loads(row['resources_json']) != self._resources(plan)):
             raise DeviceProfileUnavailable('设备准备来源或设备已变化；保留原回执并重新准备。')
+        return receipt
+
+    def _completed_receipt(self, *, database_path, request_id, actor):
+        row, plan = self._request(database_path=database_path, request_id=request_id, actor=actor)
+        receipt = self._read_completed_receipt(row, plan)
         identities = {name: backend_identity(name, None, settings=self.settings) for name in plan['backends']}
         if identities != plan['backends']:
             raise DeviceProfileUnavailable('媒体工具已变化；需要重新准备对应能力，原记录保持。')
         return plan, receipt, identities, row['checkpoint_ref']
 
-    def read_mp4_cut_measurement(self, *, database_path, request_id, actor):
-        plan, receipt, _, checkpoint = self._completed_receipt(
-            database_path=database_path, request_id=request_id, actor=actor)
+    @staticmethod
+    def _archived_mp4_cut(plan, receipt):
         spec = plan.get('mp4_cut_probe', {})
         cut = receipt.get('mp4_cut_probe', {})
-        stages = cut.get('stages', {})
-        if (plan['shape'].get('measure_mp4_cut') is not True
+        stages = cut.get('stages') if isinstance(cut, dict) else None
+        unavailable = '指定准备回执没有完整的三阶段 MP4 截取测量。'
+        if (not isinstance(spec, dict) or not isinstance(stages, dict)
+                or plan['shape'].get('measure_mp4_cut') is not True
                 or spec.get('contract') != MP4_CUT_PROBE or cut.get('contract') != MP4_CUT_PROBE
                 or spec.get('pipe_limit_bytes') != PREPARATION_PIPE_BYTES
                 or cut.get('plan_digest') != _digest(spec)
-                or any(cut.get(key) != spec.get(key) for key in ('tools', 'limits', 'cpu_policy', 'pipe_limit_bytes'))
-                or set(stages) != {'source_probe', 'encode', 'output_probe'}
-                or any(stage.get('group_released') is not True for stage in stages.values())):
-            raise DeviceProfileUnavailable('指定准备回执没有完整的三阶段 MP4 截取测量。')
+                or any(cut.get(key) != spec.get(key)
+                       for key in ('tools', 'limits', 'cpu_policy', 'pipe_limit_bytes', 'sample_interval_seconds'))
+                or set(stages) != {'source_probe', 'encode', 'output_probe'}):
+            raise DeviceProfileUnavailable(unavailable)
+        for stage in stages.values():
+            resources = stage.get('resources') if isinstance(stage, dict) else None
+            if (not isinstance(resources, dict) or stage.get('group_released') is not True
+                    or resources.get('rss_sample_complete') is not True
+                    or resources.get('threads_sample_complete') is not True
+                    or any(type(value) is not int or value <= 0 for value in
+                           (resources.get('peak_rss_bytes'), resources.get('peak_threads')))):
+                raise DeviceProfileUnavailable(unavailable)
+        return spec, cut
+
+    def _mp4_cut_measurement_status(self, row, plan):
+        if (plan['shape'].get('measure_mp4_cut', False) is False and 'mp4_cut_probe' not in plan
+                and row['input_digest'] == plan['input_digest']):
+            return 'not_requested'
+        if row['state'] != 'done':
+            return 'unknown'
+        try:
+            self._archived_mp4_cut(plan, self._read_completed_receipt(row, plan))
+        except (OSError, KeyError, TypeError, ValueError, DeviceProfileUnavailable):
+            return 'unknown'
+        return 'recorded'
+
+    def read_mp4_cut_measurement(self, *, database_path, request_id, actor):
+        plan, receipt, _, checkpoint = self._completed_receipt(
+            database_path=database_path, request_id=request_id, actor=actor)
+        spec, cut = self._archived_mp4_cut(plan, receipt)
         if any(_hash_file(tool['path']) != tool['sha256'] for tool in spec['tools'].values()):
             raise DeviceProfileUnavailable('截取测量绑定的 FFmpeg/FFprobe 已变化。')
         return {'request_id': request_id, 'generation': receipt['generation'], 'checkpoint': checkpoint,

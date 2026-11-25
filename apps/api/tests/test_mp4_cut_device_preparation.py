@@ -12,6 +12,7 @@ import pytest
 
 from app import device_paths, main
 from app import device_resource_preparation as preparation
+from app.creation_execution import CreationExecutionActor
 from app.device_resource_configuration import current_device_identity
 from app.device_scheduler import ProcessIdentity, RecoveryBlocked
 from app.local_members import LocalMemberService
@@ -107,8 +108,10 @@ def test_http_cpu_preparation_keeps_cut_measurement_in_original_receipt(cut_prep
         raw = receipt_path.read_bytes()
         assert row['checkpoint_ref'] == 'device-resource-preparation:' + hashlib.sha256(raw).hexdigest()
         assert 'mp4_cut_probe' not in plan and 'mp4_cut_probe' not in json.loads(raw)
+        assert status.json()['mp4_cut_measurement'] == 'not_requested'
         final = client.post(request_url + '/finalize')
         assert final.status_code == 200 and final.json()['profile_published'] and not final.json()['normal_work_started']
+        assert final.json()['mp4_cut_measurement'] == 'not_requested'
         replay = {**payload, 'shape': {**payload['shape'], 'measure_mp4_cut': False}}
         assert client.post(url, json=replay).json()['id'] == request['id']
         changed = {**payload, 'shape': {**payload['shape'], 'measure_mp4_cut': True}}
@@ -123,6 +126,7 @@ def test_http_cpu_preparation_keeps_cut_measurement_in_original_receipt(cut_prep
         assert [call['phase'] for call in calls] == ['fixture', 'source_probe']
         assert row['checkpoint_ref'] is None and not receipt_path.exists()
         assert not profile.exists()
+        assert status.json()['mp4_cut_measurement'] == 'unknown'
         if outcome == 'unknown_release':
             assert isinstance(runtime.last_error, RecoveryBlocked) and '释放状态未知' in str(runtime.last_error)
             assert state == 'granted' and permit_state == ledger_state == 'held'
@@ -134,6 +138,7 @@ def test_http_cpu_preparation_keeps_cut_measurement_in_original_receipt(cut_prep
             assert state == 'failed' and runtime.last_error is None and permit_state == ledger_state == 'free'
             finalized = client.post(request_url + '/finalize')
             assert finalized.status_code == 200 and finalized.json()['profile_published'] is False
+            assert finalized.json()['mp4_cut_measurement'] == 'unknown'
         assert not profile.exists()
         return
     assert state == 'done' and runtime.last_error is None and permit_state == ledger_state == 'free'
@@ -168,6 +173,7 @@ def test_http_cpu_preparation_keeps_cut_measurement_in_original_receipt(cut_prep
     assert receipt['elapsed_seconds'] + cut['elapsed_seconds'] < plan['bootstrap_budget']['cpu_render']['max_timeout_seconds']
     final = client.post(request_url + '/finalize')
     assert final.status_code == 200 and final.json()['profile_published'] and not final.json()['normal_work_started']
+    assert final.json()['id'] == request['id'] and final.json()['mp4_cut_measurement'] == 'recorded'
     published = json.loads(profile.read_bytes())['budget']
     assert 'mp4_cut_probe' not in published
     assert published['cpu_render']['max_timeout_seconds'] == receipt['elapsed_seconds'] * plan['policy']['measured_margin']
@@ -175,6 +181,54 @@ def test_http_cpu_preparation_keeps_cut_measurement_in_original_receipt(cut_prep
     changed = {**payload, 'shape': {name: value for name, value in payload['shape'].items() if name != 'measure_mp4_cut'}}
     assert client.post(url, json=changed).status_code == 409
     assert plan_path.read_bytes() == original_plan and receipt_path.read_bytes() == raw and len(calls) == 4
+
+    original_profile = profile.read_bytes()
+    with monkeypatch.context() as readonly:
+        def unexpected(*args, **kwargs):
+            pytest.fail('a status GET may only read durable evidence')
+
+        for name in ('backend_identity', '_hash_file', '_atomic_json', 'run_granted_command'):
+            readonly.setattr(preparation, name, unexpected)
+        readonly.setattr(main, 'bind_device_runtime', unexpected)
+        read = client.get(request_url)
+        assert read.status_code == 200 and read.json()['id'] == request['id']
+        assert read.json()['mp4_cut_measurement'] == 'recorded'
+        assert str(root) not in read.text and all(tool['path'] not in read.text for tool in cut['tools'].values())
+        assert client.get(url + '/missing').status_code == 404
+        members = main.local_members_service
+        _, token = members.join(members.create_invite_code(), 'other member')
+        denied = client.get(request_url, headers={'X-Local-Member-Token': token})
+        assert denied.status_code == 403 and 'mp4_cut_measurement' not in denied.text
+
+        receipt_path.unlink()
+        assert client.get(request_url).json()['mp4_cut_measurement'] == 'unknown'
+        receipt_path.write_bytes(raw + b'\n')
+        assert client.get(request_url).json()['mp4_cut_measurement'] == 'unknown'
+        incomplete = json.loads(raw)
+        incomplete['mp4_cut_probe']['stages']['encode']['resources']['rss_sample_complete'] = False
+        wrong_generation = {**receipt, 'generation': receipt['generation'] + 1}
+        with repo._connect() as connection:
+            for candidate in (incomplete, wrong_generation):
+                data = json.dumps(candidate).encode()
+                receipt_path.write_bytes(data)
+                checkpoint = 'device-resource-preparation:' + hashlib.sha256(data).hexdigest()
+                connection.execute('UPDATE device_work_requests SET checkpoint_ref=? WHERE id=?',
+                    (checkpoint, request['id']))
+                connection.commit()
+                assert client.get(request_url).json()['mp4_cut_measurement'] == 'unknown'
+            connection.execute('UPDATE device_work_requests SET checkpoint_ref=? WHERE id=?',
+                (row['checkpoint_ref'], request['id']))
+        receipt_path.write_bytes(raw)
+
+    with monkeypatch.context() as changed_tools:
+        changed_tools.setattr(preparation, '_hash_file', lambda _: '0' * 64)
+        actor = CreationExecutionActor.from_event(plan['workspace_id'], plan['actor_identity'])
+        assert client.get(request_url).json()['mp4_cut_measurement'] == 'recorded'
+        with pytest.raises(preparation.DeviceProfileUnavailable, match='FFmpeg/FFprobe 已变化'):
+            main._device_preparation_service().read_mp4_cut_measurement(
+                database_path=repo.database_path, request_id=request['id'], actor=actor)
+    assert profile.read_bytes() == original_profile and plan_path.read_bytes() == original_plan
+    assert main.device_runtime is None and len(calls) == 4
 
 
 @pytest.mark.parametrize('changes, message', [

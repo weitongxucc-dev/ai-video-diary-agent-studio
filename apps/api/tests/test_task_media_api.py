@@ -194,10 +194,128 @@ def test_result_read_cannot_cross_member_task_or_changed_input(tmp_path, monkeyp
     assert client.get(url.replace('/task/', '/other/')).status_code == 404
     state['revision'] = 2
     stale = client.get(url).json()
-    assert stale['status'] == 'stale' and stale['result'] is None
+    assert stale['status'] == 'stale' and stale['result'] is None and stale['published_version'] is None
     monkeypatch.setattr(main, '_require_permit_actor', lambda *args: replace(actor, member_id='other'))
     assert client.get(url).status_code == 404
     runtime.stop(0)
+
+
+@pytest.mark.parametrize("legacy_pointer", [False, True])
+def test_stale_bound_cut_reads_only_its_verified_published_identity(tmp_path, monkeypatch, legacy_pointer):
+    from contextlib import closing
+
+    from app.artifact_store import ArtifactStore
+    from app.creation.contracts import ArtifactRecord, JobRun, TaskEvent, TimelineVersion
+    from app.device_scheduler import DeviceRequestReadAccess
+    from app.local_members import LocalMemberService
+    from app.media_execution import EditPlan, FFMPEG_OPERATION, MediaOperation
+    from app.media_execution.bound_cut import BOUND_CUT_FACT, BOUND_CUT_KIND
+    from app.models import utc_now
+    from app.production import MaterialAsset
+    from app.task_audio import media_digest
+    from test_production_foundation import edit_adoption_no_execution
+
+    forbid_execution = edit_adoption_no_execution(monkeypatch)
+    repo, actor, _, _, _, media = case(tmp_path)
+    members = LocalMemberService(repo.database_path)
+    _, token = members.whoami(None)
+    uploader, other_token = members.join(members.create_invite_code(), "样片上传者")
+    ws, task_id = actor.workspace_id, "task"
+    source = tmp_path / "private-source.mp4"
+    asset = repo._save_asset(MaterialAsset("cut-source", ws, source.name, str(source), 1024, utc_now(),
+                                          owner_user_id=uploader.member_id, visibility="shared"))
+    base = repo.timeline_records.create_timeline_version(TimelineVersion("cut-base", ws, task_id, None, 1, {}, None))
+    plan = EditPlan(ws, task_id, base.id, "1c741ba8-6deb-49ee-9ae6-9ef3f3411613",
+                    (MediaOperation("cut", (str(source),), "media-output.mp4",
+                                    {"asset_id": asset.id, "start": .25, "duration": 1.}),),
+                    member_id=actor.member_id)
+    identity = {"request_id": plan.request_id, "base_version_id": base.id}
+    prep_id = "a" * 32
+    binding = {"preparation": {"request_id": prep_id}, "source": {"asset_id": asset.id}}
+    facts = {**identity, "plan_digest": media_digest(plan.as_dict()), BOUND_CUT_FACT: binding}
+    media.facts = lambda *_args: (facts, {"kind": BOUND_CUT_KIND})
+    outer, start = media.prepare_submission(actor, task_id, FFMPEG_OPERATION,
+        {"edit_plan": plan.as_dict(), "preparation_request_id": prep_id}, "media_output")
+    repo.job_records.create_job_run(outer)
+    outer_start = f"event_{outer.id}_start"
+    repo.execution_records.append_task_event(TaskEvent(outer_start, ws, task_id, outer.id,
+                                                       "task_media_submitted", start))
+
+    inner_id = "media_saved_cut"
+    child_id = f"timeline_media_{inner_id}"
+    output_ref = f"media/{inner_id}/1-media-output.mp4"
+    repo.job_records.create_job_run(JobRun(inner_id, ws, task_id, "media_execution", "inner-cut", "sealed"))
+    repo.job_records.claim_job_run(ws, inner_id)
+    inner_plan = {**plan.as_dict(), "metadata": {BOUND_CUT_FACT: binding}}
+    inner_start = f"event_{inner_id}_media_start"
+    repo.execution_records.append_task_event(TaskEvent(inner_start, ws, task_id, inner_id,
+        "media_execution_submitted", {"request_id": plan.request_id, "plan": inner_plan}))
+    artifact = ArtifactRecord("cut-artifact", ws, task_id, "media_output", output_ref,
+                              "a" * 64, 1024, inner_id, [f"timeline:{base.id}"])
+    repo.execution_records.create_artifact_record(artifact)
+    child = repo.timeline_records.create_timeline_version(TimelineVersion(child_id, ws, task_id, base.id, 2,
+        {"media_execution": {"job_id": inner_id, "request_id": plan.request_id, "outputs": [output_ref]}},
+        inner_id if legacy_pointer else None))
+    completed = f"event_{inner_id}_media_result"
+    repo.execution_records.append_task_event(TaskEvent(completed, ws, task_id, inner_id, "media_execution_completed",
+        {"request_id": plan.request_id, "timeline_version_id": child.id, "outputs": [output_ref]}))
+    repo.job_records.finish_job_run(ws, inner_id, status="succeeded", output_refs=[output_ref])
+    published = {**identity, "timeline_version_id": child.id}
+    result = {**published, "status": "succeeded", "job_id": inner_id, "media_job_id": inner_id,
+              "output_refs": [output_ref], "log_path": str(tmp_path / "private-log.txt")}
+    _declared_result(repo, outer, result)
+    repo.execution_records.append_task_event(TaskEvent(f"event_{outer.id}_verified", ws, task_id, outer.id,
+        "task_media_verified", {"outputs": {"media_execution": result}}))
+    later = repo.timeline_records.create_timeline_version(TimelineVersion("later-head", ws, task_id, child.id, 3, {}, None))
+
+    store = ArtifactStore(tmp_path / "artifacts")
+    monkeypatch.setattr(store, "resolve_file", forbid_execution)
+    monkeypatch.setattr(media, "facts", forbid_execution)
+    monkeypatch.setattr(main, "production_repo", repo)
+    monkeypatch.setattr(main, "artifact_store", store)
+    monkeypatch.setattr(main, "local_members_service", members)
+    reader = DeviceRequestReadAccess(repo.database_path, owners=None)
+    monkeypatch.setattr(main, "_media_result_read_components", lambda: (media, reader))
+    url = f"/api/creation-tasks/{task_id}/media-jobs/{outer.id}"
+    with closing(TestClient(main.app, headers={"X-Local-Member-Token": token})) as client:
+        def read(expected):
+            response = client.get(url)
+            assert response.status_code == 200, response.text
+            saved = response.json()
+            assert (saved["status"], saved["result"], saved["published_version"]) == ("stale", None, expected)
+            assert output_ref not in response.text and str(tmp_path) not in response.text
+
+        read(published)
+        assert client.get(f"{url}/outputs/1").status_code == 409
+        assert client.get(url.replace("/task/", "/other/")).status_code == 404
+        assert client.get(url, headers={"X-Local-Member-Token": other_token}).status_code == 404
+        assert client.get(f"{url}-missing").status_code == 404
+        if not legacy_pointer:
+            mismatches = [
+                ("UPDATE task_events SET payload_json=json_set(payload_json,'$.input_digest',?) WHERE id=?",
+                 outer_start, "wrong-digest", outer.input_digest),
+                ("UPDATE task_events SET payload_json=json_set(payload_json,'$.result.timeline_version_id',?) WHERE id=?",
+                 f"event_{outer.id}_result", "forged-cut", child.id),
+                ("UPDATE task_events SET payload_json=json_set(payload_json,'$.plan.base_version_id',?) WHERE id=?",
+                 inner_start, later.id, base.id),
+                ("UPDATE task_events SET payload_json=json_set(payload_json,'$.timeline_version_id',?) WHERE id=?",
+                 completed, later.id, child.id),
+                ("UPDATE artifact_records SET task_id=? WHERE id=?", artifact.id, "other", task_id),
+                ("UPDATE job_runs SET status=? WHERE id=?", outer.id, "interrupted", "succeeded"),
+            ]
+            for statement, key, invalid, original in mismatches:
+                with repo.connection_factory() as conn:
+                    conn.execute(statement, (invalid, key))
+                read(None)
+                with repo.connection_factory() as conn:
+                    conn.execute(statement, (original, key))
+            read(published)
+            repo.set_asset_visibility(ws, asset.id, "private")
+            assert client.get(url).status_code == 404
+            assert client.get(f"{url}/outputs/1").status_code == 404
+        assert repo.task_records.get_creation_task(ws, task_id).current_timeline_version_id == later.id
+        assert repo.timeline_records.get_timeline_version(ws, child.id) == child
+        assert len(repo.job_records.list_job_runs(ws, task_id)) == 2
 
 
 def _resource_api_case(tmp_path, monkeypatch):

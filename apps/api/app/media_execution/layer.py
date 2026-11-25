@@ -306,7 +306,7 @@ class MediaExecutionLayer:
             snapshot["media_execution"] = {"job_id": job_id, "request_id": plan.request_id,
                 "outputs": refs, "log_path": result["log_path"], "operations": [item.as_dict() for item in plan.operations]}
             version = TimelineVersion(id=f"timeline_media_{job_id}", workspace_id=plan.workspace_id, task_id=plan.task_id,
-                parent_version_id=base.id, sequence=sequence, snapshot=snapshot, created_by_operation_id=job_id)
+                parent_version_id=base.id, sequence=sequence, snapshot=snapshot, created_by_operation_id=None)
             self.repository.timeline_records.create_timeline_version(version, connection=conn,
                 expected_current_version_id=plan.base_version_id)
             self.repository.execution_records.append_task_event(TaskEvent(

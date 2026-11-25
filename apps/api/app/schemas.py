@@ -2856,6 +2856,12 @@ class ResourceAdmissionReceipt(BaseModel):
         return self
 
 
+class TaskMediaPublishedVersion(BaseModel):
+    request_id: str
+    base_version_id: str
+    timeline_version_id: str
+
+
 class TaskMediaJobResponse(BaseModel):
     operation: str
     target_refs: list[str] = Field(default_factory=list, max_length=8)
@@ -2869,6 +2875,7 @@ class TaskMediaJobResponse(BaseModel):
     waiting_reason: str | None = None
     base_version_id: str | None = None
     result: dict[str, object] | None = None
+    published_version: TaskMediaPublishedVersion | None = None
     failure_reason: str | None = None
     repair_action: str | None = None
     resource_wait: ResourceAdmissionReceipt | None = None

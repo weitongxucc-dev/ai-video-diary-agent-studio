@@ -11,21 +11,41 @@ if TYPE_CHECKING:
     from app.production import ProductionRepository
 
 
+def edit_operation_for_version(
+    repository: ProductionRepository, version: TimelineVersion
+) -> EditOperation | None:
+    operation_id = version.created_by_operation_id
+    if operation_id is None:
+        return None
+    try:
+        operation = repository.edit_records.get_edit_operation(version.workspace_id, operation_id)
+    except KeyError:
+        if repository.timeline_history.is_legacy_media_publication(version):
+            return None
+        raise
+    if operation.task_id != version.task_id or operation.result_version_id != version.id:
+        raise KeyError(operation_id)
+    return operation
+
+
 def history_edit_head(
     repository: ProductionRepository,
     workspace_id: str,
+    task_id: str,
     version_id: str | None,
     *,
     for_redo: bool,
 ) -> tuple[TimelineVersion | None, EditOperation | None]:
-    # Render-only versions have no edit. Control versions point to the exact
+    # Generated versions have no edit. Control versions point to the exact
     # restored snapshot, so repeated undo/redo walks the same immutable history.
     while version_id:
         version = repository.timeline_records.get_timeline_version(workspace_id, version_id)
-        if version.created_by_operation_id is None:
+        if version.task_id != task_id:
+            raise KeyError(version_id)
+        operation = edit_operation_for_version(repository, version)
+        if operation is None:
             version_id = version.parent_version_id
             continue
-        operation = repository.edit_records.get_edit_operation(workspace_id, version.created_by_operation_id)
         if for_redo and operation.operation_type == "RedoTimelineVersion" and operation.payload.get("target_undo_operation_id"):
             # A scoped redo restores an original edit's content. Continue the
             # pending redo chain from the exact undo it consumed, rather than
@@ -48,7 +68,7 @@ def undo_target_versions(
 ) -> tuple[TimelineVersion | None, TimelineVersion | None]:
     try:
         changed, _ = history_edit_head(
-            repository, workspace_id, task.current_timeline_version_id, for_redo=False
+            repository, workspace_id, task.id, task.current_timeline_version_id, for_redo=False
         )
         if changed is None or changed.parent_version_id is None:
             return None, None
@@ -62,7 +82,7 @@ def redo_target_versions(
 ) -> tuple[TimelineVersion | None, TimelineVersion | None]:
     try:
         current, operation = history_edit_head(
-            repository, workspace_id, task.current_timeline_version_id, for_redo=True
+            repository, workspace_id, task.id, task.current_timeline_version_id, for_redo=True
         )
         if current is None or operation.operation_type != "UndoTimelineVersion":
             return None, None

@@ -28,6 +28,19 @@ from test_host_resource_probes import _render_budget
 from test_task_media_grants import case
 
 
+def _assert_cut_history(client, base, child, job_id):
+    history = '/api/creation-tasks/task/timeline/versions'
+    assert child.created_by_operation_id is None
+    assert child.snapshot['media_execution']['job_id'] == job_id
+    listing, version = client.get(history), client.get(f'{history}/{child.id}')
+    assert listing.status_code == version.status_code == 200, (listing.text, version.text)
+    assert listing.json()['current_version_id'] == child.id
+    assert [item['id'] for item in listing.json()['items']] == [child.id, base.id]
+    summary = version.json()['version']
+    assert summary == listing.json()['items'][0]
+    assert (summary['parent_version_id'], summary['operation_id'], summary['operation_type']) == (base.id, None, None)
+
+
 @pytest.mark.parametrize(('variant', 'fps', 'start', 'end', 'presentations', 'failure'), [
     ('mp4', 30, 0, 2, [index / 30 for index in range(60)], None),
     ('mp4', 1, 0.5, 1.5, [0, 0.5], None),
@@ -166,9 +179,12 @@ def test_bound_video_cut_publishes_only_verified_video(
         assert receipt['status'] == 'succeeded'
         assert [version.id for version in versions] == [base.id, outer['timeline_version_id']]
         assert versions[-1].parent_version_id == base.id
+        assert versions[-1].created_by_operation_id is None
         artifact, = records
         assert artifact.logical_ref in outer['output_refs'] and artifact.producer_job_id == outer['job_id']
         assert reference in artifact.input_refs
+        if variant == 'mp4' and fps == 30:
+            _assert_cut_history(client, base, versions[-1], outer['job_id'])
         url, = receipt['result']['output_urls']
         downloaded = client.get(url)
         assert downloaded.status_code == 200

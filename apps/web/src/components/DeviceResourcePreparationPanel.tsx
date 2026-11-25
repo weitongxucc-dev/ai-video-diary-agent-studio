@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AppSelect, AppSelectOption } from './AppSelect';
 import {
   finalizeDevicePreparation, getDevicePreparation, getDeviceResourceStatus, prepareCpuResources,
@@ -25,13 +25,14 @@ function readAttempt(scope: string): Attempt | null {
   const value = JSON.parse(raw) as Attempt;
   if (value.scope !== scope || value.payload?.kind !== 'cpu'
       || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value.payload.request_id)
-      || !value.payload.shape || Object.keys(value.payload.shape).some(key=>![...shapeKeys,'overlay_count','template_count','native_command'].includes(key))
+      || !value.payload.shape || Object.keys(value.payload.shape).some(key=>![...shapeKeys,'overlay_count','template_count','native_command','measure_mp4_cut'].includes(key))
       || ['overlay_count','template_count'].some(key=>{
         const count=value.payload.shape[key as 'overlay_count'|'template_count'];
         return count!==undefined&&(!Number.isInteger(count)||count<0);
       })
       || (value.payload.shape.template_count??0)>(value.payload.shape.overlay_count??0)
       || value.payload.shape.native_command!==undefined&&typeof value.payload.shape.native_command!=='boolean'
+      || value.payload.shape.measure_mp4_cut!==undefined&&typeof value.payload.shape.measure_mp4_cut!=='boolean'
       || shapeKeys.some(key => {
         const item = value.payload.shape[key as keyof CpuPreparationShape];
         return typeof item !== 'number' || !Number.isFinite(item) || item <= 0
@@ -80,6 +81,9 @@ export function DeviceResourcePreparationPanel() {
   const [audioInputs, setAudioInputs] = useState('2');
   const [overlays,setOverlays]=useState('0'),[templates,setTemplates]=useState('0');
   const [nativeCommand,setNativeCommand]=useState(false);
+  const [measureMp4Cut, setMeasureMp4Cut] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState<{ id: string; message: string } | null>(null);
+  const cutDescriptionId = useId();
   const busyRef = useRef(false);
   const mounted = useRef(false);
   const scope = useRef<string | null>(null);
@@ -94,6 +98,7 @@ export function DeviceResourcePreparationPanel() {
     if (scope.current !== current.actor_scope) {
       scope.current = current.actor_scope;
       setReceipt(null);
+      setMeasureMp4Cut(false);
       setStorageError(false);
       try {
         const saved = readAttempt(current.actor_scope);
@@ -181,10 +186,15 @@ export function DeviceResourcePreparationPanel() {
       if(layerCount)shape.overlay_count=layerCount;
       if(templateCount)shape.template_count=templateCount;
       if(nativeCommand)shape.native_command=true;
+      if (measureMp4Cut) {
+        if (shape.duration_seconds < 1) throw new Error('MP4 截取测量需要至少 1 秒的处理时长。');
+        shape.measure_mp4_cut = true;
+      }
       original = { scope: current.actor_scope, payload: { request_id: crypto.randomUUID(), kind: 'cpu', shape } };
       try { saveAttempt(original); }
       catch { throw new Error('无法保存原准备记录，尚未发送请求。请恢复应用存储后重试。'); }
       rememberAttempt(original);
+      setMeasureMp4Cut(false);
       setReceipt(null);
     }
     // A known queue identity is always observed, never submitted again.
@@ -228,6 +238,7 @@ export function DeviceResourcePreparationPanel() {
     if (!attempt?.inputRejected || attempt.workId) return;
     await currentStatus(attempt.scope);
     localStorage.removeItem(storageKey(attempt.scope));
+    setMeasureMp4Cut(attempt.payload.shape.measure_mp4_cut === true);
     rememberAttempt(null);
     setReceipt(null);
   });
@@ -237,6 +248,25 @@ export function DeviceResourcePreparationPanel() {
   const profileLabel = !status ? error ? '暂时无法读取资源档' : '正在读取资源档' : recorded ? '基础媒体准备已记录'
     : status.profile_status === 'invalid' ? '资源档需要重新准备' : status.profile_status === 'available' ? '资源档已就绪，基础媒体仍需准备' : '基础媒体尚未准备';
   const closed = attempt?.finalized;
+  const cutRequested = attempt?.payload.shape.measure_mp4_cut === true;
+  const measureCutChecked = attempt && !closed ? cutRequested : measureMp4Cut;
+  const cutDurationTooShort = !locked && measureCutChecked && Number(duration) < 1;
+  const cutReceiptId = receipt?.state === 'done' && receipt.mp4_cut_measurement === 'recorded'
+    && receipt.id === attempt?.workId && /^[0-9a-f]{32}$/.test(receipt.id) ? receipt.id : null;
+  const cutMeasurementMessage = cutReceiptId ? 'MP4 截取测量已记录。'
+    : receipt?.mp4_cut_measurement === 'not_requested' ? '本次未请求 MP4 截取测量。'
+    : cutRequested && (receipt?.state === 'failed' || receipt?.state === 'cancelled') ? '本次未取得 MP4 截取测量回执。'
+    : cutRequested && (!receipt || active.has(receipt.state)) ? '本次包含 MP4 截取测量，等待原准备回执。'
+    : receipt ? 'MP4 截取测量回执状态未知。' : null;
+
+  const copyCutReceipt = async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopyFeedback({ id, message: '已复制截取准备回执编号。' });
+    } catch {
+      setCopyFeedback({ id, message: '复制未成功，可以手动选择并复制编号。' });
+    }
+  };
 
   return <section className={styles.panel} aria-label="基础媒体准备">
     <header className={styles.header}><div><h3>基础媒体准备</h3><span className={recorded ? styles.ready : styles.secondary}>{profileLabel}</span></div><IconButton label="重新读取状态" disabled={busy} onClick={() => void refresh()}><RefreshCw/></IconButton></header>
@@ -255,7 +285,7 @@ export function DeviceResourcePreparationPanel() {
       <label><span>帧率</span><AppSelect aria-label="帧率" value={fps} onValueChange={setFps}>
         <AppSelectOption value="24">24 帧/秒</AppSelectOption><AppSelectOption value="25">25 帧/秒</AppSelectOption><AppSelectOption value="30">30 帧/秒</AppSelectOption>
       </AppSelect></label>
-      <label><span>处理时长（秒）</span><input aria-label="处理时长（秒）" type="number" min="0" step="any" value={duration} onChange={event => setDuration(event.target.value)}/></label>
+      <label><span>处理时长（秒）</span><input aria-label="处理时长（秒）" type="number" min={measureCutChecked ? 1 : 0} step="any" value={duration} onChange={event => setDuration(event.target.value)}/></label>
     </fieldset>
     <details className={styles.workload}>
       <summary>工作负载<span>{clips} 个镜头 · {audioInputs} 路声音 · {overlays} 层图文{Number(templates) ? ` · ${templates} 层动画` : ''}{nativeCommand ? ' · 程序化制作' : ''}</span></summary>
@@ -267,22 +297,39 @@ export function DeviceResourcePreparationPanel() {
       <label className={styles.nativeChoice}><input type="checkbox" checked={nativeCommand} onChange={e=>setNativeCommand(e.target.checked)}/>同时准备程序化制作</label>
       </fieldset>
     </details>
+    <div>
+      <label className={styles.measurementChoice}>
+        <input type="checkbox" checked={measureCutChecked} disabled={locked} aria-describedby={cutDescriptionId}
+          onChange={event => setMeasureMp4Cut(event.target.checked)} />
+        同时测量 MP4 截取
+      </label>
+      <p id={cutDescriptionId} className={styles.secondary}>开始准备时使用合成的 30 帧/秒样片测量截取能力。处理时长至少 1 秒。</p>
+      {cutDurationTooShort ? <p className={styles.error}>请将处理时长设为至少 1 秒。</p> : null}
+    </div>
     <p className={styles.secondary}>音频使用 48 kHz 立体声。准备结果只记录所选规格的条件，不代表整条视频制作已通过。</p>
     {attempt && !closed ? <p role="status">{attempt.inputRejected ? '输入尚未被接受，未开始准备。请修改规格后再提交。' : receipt ? receiptLabel(receipt) : '尚未取得原请求的队列回执，请沿原输入继续核对。'}</p> : null}
     {closed ? <p role="status">{receipt?.state === 'done' ? '已取得核验启用回执，已有作品没有自动开始制作。' : '原准备已收束，资源档是否可用以当前读取结果为准。'}</p> : null}
+    {cutMeasurementMessage ? <p role="status">{cutMeasurementMessage}</p> : null}
+    {cutReceiptId ? <div className={styles.cutReceipt}>
+      <p>截取准备回执编号 <code>{cutReceiptId}</code></p>
+      <p className={styles.secondary}>提交截取时会核对素材、区间和当前设备条件。</p>
+      <Button type="button" variant="outline" onClick={() => void copyCutReceipt(cutReceiptId)}>复制截取准备回执编号</Button>
+      <p role="status">{copyFeedback?.id === cutReceiptId ? copyFeedback.message : null}</p>
+    </div> : null}
     {receipt?.state === 'failed' && receipt.failure_reason ? <div role="alert">
       <p className={styles.error}>{receipt.failure_reason}</p>
       {receipt.repair_action ? <p>{receipt.repair_action}</p> : null}
     </div> : null}
     <div className={styles.actions}>
       {attempt?.workId && receipt && terminal.has(receipt.state) && !closed ? <Button type="button" disabled={busy} onClick={() => void finalize()}>{busy ? '正在核验…' : receipt.state === 'done' ? '核验并启用' : '收束原准备'}</Button>
-        : <Button type="button" disabled={busy || !status?.cpu_preparation_supported || !status.preparation_configured || storageError} onClick={() => void (attempt?.inputRejected ? correctInput() : submit())}>
+        : <Button type="button" disabled={busy || !status?.cpu_preparation_supported || !status.preparation_configured || storageError || cutDurationTooShort} onClick={() => void (attempt?.inputRejected ? correctInput() : submit())}>
           {busy ? '正在处理…' : attempt && !closed ? attempt.inputRejected ? '修改准备规格' : attempt.workId ? '刷新原准备进度' : '继续核对原请求' : recorded || closed ? '重新准备基础媒体' : '开始准备基础媒体'}
         </Button>}
     </div>
     {error ? <div role="alert"><p className={styles.error}>本次操作未完成，原准备记录保留。</p><details className={styles.details}><summary>原因与处理</summary><p>{error}</p></details></div> : null}
     {attempt ? <details className={styles.details}><summary>本次准备记录</summary>
       <p>规格：{attempt.payload.shape.width_px} × {attempt.payload.shape.height_px} · {attempt.payload.shape.frame_rate} 帧/秒 · {attempt.payload.shape.duration_seconds} 秒 · {attempt.payload.shape.clip_count} 个镜头 · {attempt.payload.shape.audio_input_count} 路声音</p>
+      {cutRequested ? <p>本次包含 MP4 截取测量。</p> : null}
       <p>请求：{attempt.payload.request_id}{attempt.workId ? `；队列：${attempt.workId}` : ''}</p>
       {receipt?.wait_reason && !receipt.failure_reason ? <p>设备等待原因：{receipt.wait_reason}</p> : null}
     </details> : null}
