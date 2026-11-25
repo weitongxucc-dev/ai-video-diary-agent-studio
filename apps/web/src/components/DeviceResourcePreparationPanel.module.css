@@ -11,6 +11,10 @@
 .fields input { width:min(120px,100%);min-width:0;min-height:32px;padding:4px 8px;border:1px solid var(--border-1);border-radius:8px;background:var(--surface-1);color:var(--text-1);font:inherit; }
 .fields input:focus-visible { outline:2px solid var(--accent);outline-offset:2px; }
 .fields input[type=checkbox] {width:16px;min-height:16px;}
+.measurementChoice { display:inline-flex;align-items:center;gap:8px;min-block-size:44px; }
+.measurementChoice input { inline-size:16px;block-size:16px;margin:0;accent-color:var(--accent); }
+.cutReceipt { min-inline-size:0;overflow-wrap:anywhere; }
+.cutReceipt button { margin-block:6px; }
 .actions { display:flex;flex-wrap:wrap;gap:8px;align-items:center; }
 .panel button:disabled { cursor:default;opacity:.6; }
 .details { min-width:0;color:var(--text-2);font-size:12px;line-height:18px;overflow-wrap:anywhere; }

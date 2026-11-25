@@ -17,6 +17,9 @@ const status = { platform: 'darwin', cpu_preparation_supported: true, preparatio
   actor_scope: scope, profile_status: 'unprepared', revision: null, available_operations: [] };
 const queued = { id: 'original-work', plan_id: 'original-plan', state: 'waiting', wait_reason: null };
 const done = { ...queued, state: 'done' };
+const cutId = 'a4'.repeat(16);
+const cutPayload = { ...payload, shape: { ...payload.shape, measure_mp4_cut: true } };
+const cutQueued = { ...queued, id: cutId, mp4_cut_measurement: 'unknown' };
 
 beforeEach(() => {
   vi.resetAllMocks(); localStorage.clear();
@@ -53,6 +56,7 @@ it('persists the complete input before POST and retries an unknown result with e
   }).mockResolvedValueOnce(queued);
   render(<DeviceResourcePreparationPanel/>);
   await screen.findByText('基础媒体尚未准备');
+  expect(screen.getByRole('checkbox', { name: '同时测量 MP4 截取' })).not.toBeChecked();
   fireEvent.change(screen.getByRole('spinbutton', { name: '处理时长（秒）' }), { target: { value: '17' } });
   fireEvent.click(screen.getByRole('button', { name: '开始准备基础媒体' }));
   await screen.findByRole('alert');
@@ -62,6 +66,67 @@ it('persists the complete input before POST and retries an unknown result with e
   expect(api.prepare).toHaveBeenNthCalledWith(1, payload, scope);
   expect(api.prepare).toHaveBeenNthCalledWith(2, payload, scope);
   expect(crypto.randomUUID).toHaveBeenCalledTimes(1);
+});
+
+it('starts cutoff measurement only on explicit submit and reopens the same recorded receipt', async () => {
+  const recorded = { ...cutQueued, state: 'done', mp4_cut_measurement: 'recorded' };
+  api.prepare.mockResolvedValue(cutQueued);
+  api.read.mockResolvedValue(recorded);
+  api.finalize.mockResolvedValue({ ...recorded, profile_published: true, normal_work_started: false });
+  const first = render(<DeviceResourcePreparationPanel/>);
+  await screen.findByText('基础媒体尚未准备');
+  const checkbox = screen.getByRole('checkbox', { name: '同时测量 MP4 截取' });
+  fireEvent.click(checkbox);
+  fireEvent.change(screen.getByRole('spinbutton', { name: '处理时长（秒）' }), { target: { value: '0.5' } });
+  expect(screen.getByRole('button', { name: '开始准备基础媒体' })).toBeDisabled();
+  expect(api.prepare).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByRole('spinbutton', { name: '处理时长（秒）' }), { target: { value: '17' } });
+  fireEvent.click(screen.getByRole('button', { name: '开始准备基础媒体' }));
+  await screen.findByText('本次包含 MP4 截取测量，等待原准备回执。');
+  expect(api.prepare).toHaveBeenCalledWith(cutPayload, scope);
+  expect(checkbox).toBeChecked();
+  expect(checkbox).toBeDisabled();
+  expect(screen.queryByRole('button', { name: '复制截取准备回执编号' })).not.toBeInTheDocument();
+  first.unmount();
+
+  render(<DeviceResourcePreparationPanel/>);
+  await screen.findByText('MP4 截取测量已记录。');
+  expect(screen.getByText(cutId)).toBeVisible();
+  expect(screen.getByText('提交截取时会核对素材、区间和当前设备条件。')).toBeVisible();
+  expect(api.read).toHaveBeenCalledWith(cutId, scope);
+  fireEvent.click(screen.getByRole('button', { name: '核验并启用' }));
+  await screen.findByText(/已取得核验启用回执/);
+  expect(api.finalize).toHaveBeenCalledWith(cutId, scope);
+  expect(api.prepare).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('checkbox', { name: '同时测量 MP4 截取' })).not.toBeChecked();
+  expect(screen.getByRole('button', { name: '复制截取准备回执编号' })).toBeEnabled();
+});
+
+it.each([
+  { submitted: payload, result: { ...done, mp4_cut_measurement: 'not_requested' }, label: '本次未请求 MP4 截取测量。' },
+  { submitted: cutPayload, result: { ...done, id: cutId }, label: 'MP4 截取测量回执状态未知。' },
+  { submitted: cutPayload, result: { ...cutQueued, state: 'failed' }, label: '本次未取得 MP4 截取测量回执。' },
+])('shows $label without a copyable receipt number', async ({ submitted, result, label }) => {
+  localStorage.setItem(key(), JSON.stringify({ scope, payload: submitted, workId: result.id }));
+  api.read.mockResolvedValue(result);
+  render(<DeviceResourcePreparationPanel/>);
+  expect(await screen.findByText(label)).toBeVisible();
+  expect(screen.queryByRole('button', { name: '复制截取准备回执编号' })).not.toBeInTheDocument();
+  expect(api.prepare).not.toHaveBeenCalled();
+});
+
+it('clears the previous member’s measurement receipt when the preparation scope changes', async () => {
+  localStorage.setItem(key(), JSON.stringify({ scope, payload: cutPayload, workId: cutId, finalized: true }));
+  api.read.mockResolvedValue({ ...cutQueued, state: 'done', mp4_cut_measurement: 'recorded' });
+  render(<DeviceResourcePreparationPanel/>);
+  await screen.findByText('MP4 截取测量已记录。');
+  api.read.mockClear();
+  api.status.mockResolvedValue({ ...status, actor_scope: otherScope });
+  fireEvent.click(screen.getByRole('button', { name: '重新读取状态' }));
+  await waitFor(() => expect(screen.queryByText('MP4 截取测量已记录。')).not.toBeInTheDocument());
+  expect(screen.getByRole('checkbox', { name: '同时测量 MP4 截取' })).not.toBeChecked();
+  expect(api.read).not.toHaveBeenCalled();
+  expect(api.prepare).not.toHaveBeenCalled();
 });
 
 it('restores unknown submissions after refresh without automatically submitting a replacement', async () => {
