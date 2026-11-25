@@ -2035,6 +2035,8 @@ describe("CreationTaskWorkspace", () => {
       let closeWorkbench: (() => void) | undefined;
       if (workbench) {
         mocks.realShell = true;
+        mocks.askAssistant.mockReset();
+        previewReadRestores.push(() => mocks.askAssistant.mockReset());
         Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) });
         closeWorkbench = renderWorkbench(initial).unmount;
         await screen.findByLabelText("任务对话要求");
@@ -2075,16 +2077,28 @@ describe("CreationTaskWorkspace", () => {
       });
       previewReadRestores.push(() => { mocks.getTimelineVersion.mockReset(); });
 
+      async function enterMessage(message: string) {
+        const input = await readyInput("任务对话要求");
+        const form = input.closest("form")!;
+        fireEvent.change(input, { target: { value: message } });
+        return waitFor(() => {
+          const submit = within(form).getByRole("button", { name: "发送" });
+          expect(submit).toBeEnabled();
+          return submit;
+        }, { container: form });
+      }
       async function send(message: string) {
-        fireEvent.change(await readyInput("任务对话要求"), { target: { value: message } });
-        await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
-        await clickAndSettle(screen.getByRole("button", { name: "发送" }));
+        await clickAndSettle(await enterMessage(message));
       }
-      function acceptReplay() {
-        mocks.askAssistant.mockResolvedValueOnce({ reply: "已收到片段回放请求。", provider: "local", model: "本地回放" });
-      }
+      const replayReply = { reply: "已收到片段回放请求。", provider: "local", model: "本地回放" };
+      const negativeReplay = "不要回放刚才修改的片段";
+      let replayResponse = () => Promise.resolve(replayReply);
+      if (offline) mocks.askAssistant.mockImplementation(() => replayResponse());
       if (workbench && !offline) {
-        mocks.askAssistant.mockImplementationOnce(async () => {
+        mocks.askAssistant.mockImplementation(async (_taskId, input) => {
+          // Match the submitted turn rather than queueing replies which
+          // can outlive an interrupted test.
+          if (input.message === requestReplay || input.message === negativeReplay) return replayResponse();
           mocks.getWorkspace.mockResolvedValue(publishedResponse ? published : next);
           if (publishedResponse) mocks.getExecution.mockResolvedValue(renderReceipt);
           else if (manualProduction) {
@@ -2146,7 +2160,6 @@ describe("CreationTaskWorkspace", () => {
         expect(screen.getByRole("slider", { name: "时间线播放位置" })).toHaveAttribute("aria-valuetext", "00:05.0");
         expect(screen.queryByRole("button", { name: "回放刚才的修改" })).not.toBeInTheDocument();
         if (scenario === "workbench explicit") {
-          acceptReplay();
           await send(requestReplay);
           expect(await screen.findByText("当前修改版本待合成，成片就绪后可手动回放。")).toBeVisible();
         }
@@ -2247,18 +2260,15 @@ describe("CreationTaskWorkspace", () => {
       }
       if (scenario === "workbench explicit" || offline) {
         if (!offline) {
-          acceptReplay(); // Even a replay-shaped response cannot authorize a negative input.
-          await send("不要回放刚才修改的片段");
+          await send(negativeReplay);
           expect(play).not.toHaveBeenCalled();
           fireEvent.play(rendered);
-          acceptReplay();
           await send(requestReplay);
           expect(await screen.findByText("已保留当前播放位置，可在右侧点击「回放刚才的修改」。")).toBeVisible();
           expect(play).not.toHaveBeenCalled();
           fireEvent.pause(rendered);
           const transport = screen.getByRole("slider", { name: "成片播放位置" });
           fireEvent.pointerDown(transport);
-          acceptReplay();
           await send(requestReplay);
           expect(await screen.findByText("已保留当前播放位置，可在右侧点击「回放刚才的修改」。")).toBeVisible();
           fireEvent.pointerUp(transport);
@@ -2266,22 +2276,20 @@ describe("CreationTaskWorkspace", () => {
           fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
           const draft = await screen.findByLabelText("标题文字");
           fireEvent.change(draft, { target: { value: "正在精调的草稿" } });
-          acceptReplay();
           await send(requestReplay);
           expect(await screen.findByText("已保留当前播放位置，可在右侧点击「回放刚才的修改」。")).toBeVisible();
           expect(draft).toHaveValue("正在精调的草稿");
           expect(play).not.toHaveBeenCalled();
           fireEvent.click(screen.getByRole("button", { name: "定位修改的标题" }));
-          let finishReplay: ((value: unknown) => void) | undefined;
-          mocks.askAssistant.mockImplementationOnce(() => new Promise(resolve => { finishReplay = resolve; }));
-          fireEvent.change(await readyInput("任务对话要求"), { target: { value: requestReplay } });
-          await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
-          fireEvent.click(screen.getByRole("button", { name: "发送" }));
+          let finishReplay: ((value: typeof replayReply) => void) | undefined;
+          replayResponse = () => new Promise(resolve => { finishReplay = resolve; });
+          fireEvent.click(await enterMessage(requestReplay));
           await waitFor(() => expect(finishReplay).toBeTypeOf("function"));
           const audio = screen.getByRole("button", { name: "选择音频：目标配音段" });
           fireEvent.click(audio);
           expect(rendered.currentTime).toBe(6);
-          await act(async () => finishReplay!({ reply: "已收到片段回放请求。", provider: "local", model: "本地回放" }));
+          await act(async () => finishReplay!(replayReply));
+          replayResponse = () => Promise.resolve(replayReply);
           expect(audio).toHaveAttribute("aria-pressed", "true");
           expect(play).not.toHaveBeenCalled();
           expect(rendered.currentTime).toBe(6);
@@ -2289,7 +2297,6 @@ describe("CreationTaskWorkspace", () => {
           fireEvent.change(await readyInput("任务对话要求"), { target: { value: "标题提前半秒，改完后回放" } });
           expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
         }
-        acceptReplay();
         await send(requestReplay);
         await waitFor(() => expect(play).toHaveBeenCalledOnce());
         expect(rendered.currentTime).toBe(.5);
