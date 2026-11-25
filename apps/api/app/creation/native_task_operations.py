@@ -712,16 +712,22 @@ class NativeTaskOperations:
                     values[relative]={'path':relative,'sha256':file_hash(path),'size_bytes':path.stat().st_size}
         return values
 
-    def cancel_origin(self,actor,binding,runtime,*,deadline_monotonic):
+    def cancel_origin(self,actor,binding,runtime_for,*,deadline_monotonic):
+        """Check the drained host turn's registered jobs before opening the media runtime."""
         self.require_actor(actor,binding['task_id'])
         processed = set()
         cursor = None
-        condition = runtime.registrations['creation_job'].owner.native_case._completion
+        runtime = None
         while True:
             jobs,total = self.repository.native_execution_records.list_native_jobs(actor.workspace_id,binding['task_id'],limit=100,
                 turn_id=binding['turn_id'],session_id=binding.get('session_id'),unreleased_only=True,before=cursor)
             if not total and cursor is None:
                 return {'jobs':[],'total_count':0,'truncated':False,'processed_count':len(processed),'cancellation_complete':True}
+            if time.monotonic()>=deadline_monotonic:
+                break
+            if runtime is None:
+                runtime = runtime_for()
+                condition = runtime.registrations['creation_job'].owner.native_case._completion
             new = [job for job in jobs if job.id not in processed]
             for job in new:
                 if time.monotonic()>=deadline_monotonic:
@@ -886,4 +892,4 @@ class NativeOperationHandler:
                 'submission_effect':'unknown' if entered else 'not_submitted'}}
 
     def cancel(self,*,source_binding,deadline_monotonic):
-        return self.case.cancel_origin(self.actor,source_binding,self.runtime(),deadline_monotonic=deadline_monotonic)
+        return self.case.cancel_origin(self.actor,source_binding,self.runtime,deadline_monotonic=deadline_monotonic)

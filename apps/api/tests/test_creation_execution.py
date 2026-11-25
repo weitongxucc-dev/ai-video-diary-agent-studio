@@ -4918,6 +4918,9 @@ def test_native_cas_unknown_replay_and_real_output_registration(tmp_path):
 
 def test_native_queued_script_change_never_launches_and_origin_cancel_drains_all(tmp_path,monkeypatch):
     import base64
+    from app.creation.native_task_operations import NativeOperationHandler
+    from app.device_runtime import RuntimeUnavailable
+
     case = _native_operations_case(tmp_path)
     case.call('native_task_file',{'action':'write','path':'/task/work/run.py','expected_sha256':None,
         'content_base64':base64.b64encode(b'print(1)').decode()})
@@ -4929,12 +4932,27 @@ def test_native_queued_script_change_never_launches_and_origin_cancel_drains_all
     case.executor.execute(case.scheduler.pick_and_grant(),case.scheduler)
     result = case.call('read_task_command',{'job_id':submitted['job_id']})
     assert result['status']=='failed' and result['process_state']=='not_started' and result['release_state']=='released'
+    binding = {'task_id':case.task_id,'turn_id':'turn_native','session_id':'session_native'}
+    sibling, _ = case.repo.native_execution_records.create_native_operation(case.actor,
+        {**case.origin,'session_id':'other_session'},'keep-other-session','submit_task_command',{}, {},
+        write_guard=lambda conn:None)
+
+    def unavailable_runtime():
+        raise RuntimeUnavailable('isolated runtime unavailable')
+
+    handler_without_runtime = NativeOperationHandler(case.native,case.actor,None,unavailable_runtime)
+    empty = handler_without_runtime.cancel(source_binding=binding,deadline_monotonic=time.monotonic()+10)
+    assert empty['cancellation_complete'] and empty['processed_count']==0 and empty['total_count']==0
+
     for index in range(105):
         case.repo.native_execution_records.create_native_operation(case.actor,case.origin,f'cancel_{index}','submit_task_command',
             {'request_id':f'cancel_{index}','command':'not launched'}, {},write_guard=lambda conn:None)
-    settled=case.native.cancel_origin(case.actor,{'task_id':case.task_id,'turn_id':'turn_native','session_id':'session_native'},
-        case.runtime,deadline_monotonic=time.monotonic()+10)
+    with pytest.raises(RuntimeUnavailable):
+        handler_without_runtime.cancel(source_binding=binding,deadline_monotonic=time.monotonic()+10)
+    owner = NativeOperationHandler(case.native,case.actor,None,lambda:case.runtime)
+    settled = owner.cancel(source_binding=binding,deadline_monotonic=time.monotonic()+10)
     assert settled['cancellation_complete'] and settled['processed_count']==105 and settled['total_count']==0,settled
+    assert case.repo.job_records.get_job_run(case.actor.workspace_id,sibling.id).status=='queued'
 
 
 def _replace_fixed_voice_file(case, *, changed=False):
