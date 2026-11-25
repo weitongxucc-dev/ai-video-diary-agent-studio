@@ -22,6 +22,16 @@
 .emptyStage p { margin: 0; color: var(--text-1); }
 .source, .muted, .draftNote { color: var(--text-3); font-size: 12px; line-height: 1.6; }
 .source { margin: 12px 0 0; }
+.summary { min-inline-size:0; padding:12px; color:var(--text-1); font-size:13px; overflow-wrap:break-word; }
+.summary h2 { margin:0 0 10px; font-size:14px; font-weight:550; }
+.summary p { margin:6px 0; }
+.summary button { cursor:pointer; }
+.summaryRecords { display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+.summaryRecords li { min-inline-size:0; padding-block:8px; border-block-end:1px solid var(--border-1); }
+.summaryRecords time { display:block; margin-block:4px; color:var(--text-3); font-size:12px; }
+.summaryFacts { display:grid; grid-template-columns:auto minmax(0,1fr); gap:4px 8px; margin:8px 0 0; }
+.summaryFacts dt { color:var(--text-2); }
+.summaryFacts dd { min-inline-size:0; margin:0; overflow-wrap:anywhere; }
 .publishFlow { display: grid; gap: 12px; }
 .publishFlow p { margin: 0; line-height: 1.6; }
 .field { display: grid; gap: 5px; min-width: 0; color: var(--text-2); font-size: 13px; }

@@ -23,7 +23,9 @@ export const WorkbenchAssistantTargetContext = createContext<AppShellProps["assi
 
 export const HOME_OVERVIEW_HREF = "/?mode=panel";
 export const FULL_HOME_HREF = "/?mode=manage";
-const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates"];
+export const DEVICE_STATUS_PATH = "/device-status";
+export const DEVICE_SETTINGS_HREF = "/settings?section=runtime";
+const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates", "/history", DEVICE_STATUS_PATH];
 export const workspaceResourcePageIds = [...workspaceResourcePaths, HOME_OVERVIEW_HREF];
 const workResourcePanels = new Map([
   ["/", HOME_OVERVIEW_HREF],
@@ -31,6 +33,8 @@ const workResourcePanels = new Map([
   ["/knowledge", "/knowledge?mode=panel"],
   ["/profiles", "/profiles?mode=panel"],
   ["/templates", "/templates?mode=panel"],
+  ["/history", "/history?mode=panel"],
+  [DEVICE_STATUS_PATH, `${DEVICE_STATUS_PATH}?mode=panel`],
 ]);
 
 export function workspaceNavigationHref(href: string, hasActiveWork: boolean) {
@@ -38,6 +42,7 @@ export function workspaceNavigationHref(href: string, hasActiveWork: boolean) {
 }
 
 export function workspaceResourceManageHref(pageId: string) {
+  if (pageId === DEVICE_STATUS_PATH) return DEVICE_SETTINGS_HREF;
   return pageId === HOME_OVERVIEW_HREF ? FULL_HOME_HREF : `${pageId}?mode=manage`;
 }
 

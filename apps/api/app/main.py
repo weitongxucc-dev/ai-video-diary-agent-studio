@@ -363,7 +363,7 @@ from app.reference_video_routes import build_reference_video_router
 from app.legacy_montage_routes import LegacyMontageResponseAdapter, build_legacy_montage_router
 from app.knowledge_notes_routes import build_knowledge_notes_router
 from app.device_preparation_routes import build_device_preparation_router
-from app.device_resource_status import resource_preparation_status, preparation_actor_scope
+from app.device_resource_status import resource_preparation_status, preparation_actor_scope, saved_resource_profile_summary
 _clone_subtitle_track = _owner_app_creation_transactions.clone_subtitle_track
 LocalVisualUnderstanding = _owner_app_visual_understanding.LocalVisualUnderstanding
 PlatformAuthService = _owner_app_platform_auth_service.PlatformAuthService
@@ -5950,6 +5950,7 @@ app.include_router(build_device_preparation_router(
     application=_device_preparation_application,
     profile_status=lambda actor: resource_preparation_status(settings, os.environ, model_catalog, actor,
         runtime_error=device_runtime.last_error if device_runtime is not None else None),
+    saved_profile_summary=lambda: saved_resource_profile_summary(settings, os.environ),
     actor_scope=lambda actor: preparation_actor_scope(actor, os.environ)))
 
 

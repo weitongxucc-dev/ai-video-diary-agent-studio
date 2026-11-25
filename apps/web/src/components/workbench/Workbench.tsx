@@ -13,7 +13,7 @@ import { Button } from "../ui/button";
 import { ConversationTarget } from "./ConversationTarget";
 import { MediaVisibility } from "../ui/media-visibility";
 import { ScrollArea } from "../ui/scroll-area";
-import { HOME_OVERVIEW_HREF, WorkbenchAssistantTargetContext, WorkbenchRegistry, WorkspacePanelContext, WorkspacePageContext, workspacePageId, workspaceResourcePageIds, workspaceResourceManageHref, isCreationDraftPage, isWorkbenchManagedPath, isWorkResourcePanel, shouldDockWorkspaceResource, type WorkspacePage } from "./context";
+import { DEVICE_STATUS_PATH, HOME_OVERVIEW_HREF, WorkbenchAssistantTargetContext, WorkbenchRegistry, WorkspacePanelContext, WorkspacePageContext, workspacePageId, workspaceResourcePageIds, workspaceResourceManageHref, isCreationDraftPage, isWorkbenchManagedPath, isWorkResourcePanel, shouldDockWorkspaceResource, type WorkspacePage } from "./context";
 import { EditorDockProvider } from "./EditorDock";
 import { EditorResourcePane } from "./EditorResourcePane";
 import styles from "./Workbench.module.css";
@@ -192,7 +192,8 @@ function MemberWorkbench({ children }: { children: ReactNode }) {
               const view = <PageMount key={page.id} page={page} active={managed && (page.id === activeId || page.id === dockedTask?.id)} auxiliary={auxiliary} leftResource={auxiliary && leftResourceOpen} updateShell={updateShell} />;
               return resourceIds.includes(page.id) ? <EditorResourcePane key={page.id} title={page.label} active={managed && page.id === activeId} docked={auxiliary} leftDock={auxiliary && leftResourceOpen ? {
                 host: resourceHost, manageHref: workspaceResourceManageHref(page.id),
-                manageLabel: page.id === HOME_OVERVIEW_HREF ? "打开完整首页" : undefined,
+                manageLabel: page.id === HOME_OVERVIEW_HREF ? "打开完整首页" : page.id === DEVICE_STATUS_PATH ? "运行情况" : undefined,
+                managePrefetch: page.id === DEVICE_STATUS_PATH ? false : undefined,
               } : undefined} showDrawerLink={page.id === "/library" || page.id === "/knowledge"} onClose={() => { if (dockedTask) activate(dockedTask.id); }}>{view}</EditorResourcePane> : view;
             })}
           </div>

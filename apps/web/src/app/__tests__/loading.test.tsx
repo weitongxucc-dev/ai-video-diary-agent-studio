@@ -14,22 +14,32 @@ beforeEach(() => {
   navigation.readSearch.mockImplementation(() => new URLSearchParams(navigation.search));
 });
 
-it.each(["/", "/tasks/task-a", "/library", "/knowledge", "/profiles", "/templates"])("leaves loading to the persistent workbench for %s", path => {
+it.each(["/", "/tasks/task-a", "/library", "/knowledge", "/profiles", "/templates", "/history"])("leaves loading to the persistent workbench for %s", path => {
   navigation.path = path;
   const view = render(<WorkbenchRegistry.Provider value={{ register: vi.fn(), forget: vi.fn() }}><Loading /></WorkbenchRegistry.Provider>);
   expect(view.container).toBeEmptyDOMElement();
 });
 
-it.each(["/settings", "/production", "/history", "/health"])("retains the independent loading shell for %s", path => {
+it.each(["/settings", "/production", "/health"])("retains the independent loading shell for %s", path => {
   navigation.path = path;
   render(<WorkbenchRegistry.Provider value={{ register: vi.fn(), forget: vi.fn() }}><Loading /></WorkbenchRegistry.Provider>);
   expect(screen.getByRole("main", { name: "独立页面外壳" })).toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent("正在读取");
 });
 
-it("still renders loading when a resource route has no workbench owner", () => {
-  navigation.path = "/templates";
+it.each(["/templates", "/history"])("still renders loading when %s has no workbench owner", path => {
+  navigation.path = path;
   render(<Loading />);
+  expect(screen.getByRole("status")).toHaveTextContent("正在读取");
+});
+
+it("hands device summary loading to the workbench and keeps a fallback for direct visits", () => {
+  navigation.path = "/device-status";
+  navigation.search = "mode=panel";
+  const view = render(<WorkbenchRegistry.Provider value={{ register: vi.fn(), forget: vi.fn() }}><Loading /></WorkbenchRegistry.Provider>);
+  expect(view.container).toBeEmptyDOMElement();
+  view.rerender(<Loading />);
+  expect(screen.getByRole("main", { name: "独立页面外壳" })).toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent("正在读取");
 });
 
