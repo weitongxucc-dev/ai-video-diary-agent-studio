@@ -4,8 +4,8 @@
     "description": "OpenFilm 对话栏录屏（用户问\"你看下当前能做什么视频剪辑\"）还原成的事件剧本。时间 t 为毫秒，0 = 用户点击发送。录屏时间 = t/1000 + 9 秒。",
     "how_to_use": [
       "1. 写一个回放器：按 t 顺序把 events 喂给对话栏的事件处理层（不要直接操作 UI）。支持 1x / 5x / 暂停 / 跳到检查点。",
-      "2. 在每个 checkpoint 的 at_ms 暂停，把 UI 状态与 expect 比对，并与 frames/ 里对应截图肉眼对照。",
-      "3. expect 里值为 \"unspecified\" 的项，规格未确定，不要据此断言。"
+      "2. 在每个 checkpoint 的 at_ms 暂停，用 expect 和 frames/ 对照录屏观察。",
+      "3. 曜核生产验收使用 SPEC.md §8 的映射。录屏的模型徽标、页脚、展开状态和 unspecified 项不直接作为曜核界面断言。"
     ],
     "assumptions": [
       "assistant_text 的 streamMs 是估计值（录屏没有测出流式速度），仅用于回放。",
