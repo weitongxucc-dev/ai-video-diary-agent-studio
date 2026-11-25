@@ -196,6 +196,7 @@ def test_preparation_http_reuses_request_and_never_resumes_old_work(metadata_htt
     assert first.status_code == 200, first.text
     receipt = first.json()
     assert receipt["state"] == "waiting"
+    assert receipt["mp4_cut_measurement"] == "not_requested"
     assert actions == ["old_pause", "old_stop", "preparation_start"]
     repeated = state.client.post(url, json=payload)
     assert repeated.status_code == 200 and repeated.json() == receipt
