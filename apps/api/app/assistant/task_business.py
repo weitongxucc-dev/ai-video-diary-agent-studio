@@ -21,7 +21,7 @@ from app.schemas import CreationTaskScriptDraftRequest, CreationTaskScriptConfir
 
 from contextlib import nullcontext as _Borrow
 
-def record_narration_semantic_review(production, task, origin, payload, *, write_guard):
+def record_narration_semantic_review(production, task, origin, payload, *, write_guard, capture_evidence=None):
     """Store a model comparison, never a deterministic factual verdict."""
     from app.creation.contracts import TaskEvent
     from app.schemas import NarrationSemanticReviewRequest
@@ -46,10 +46,35 @@ def record_narration_semantic_review(production, task, origin, payload, *, write
         raise ValueError('语义复核缺少可信原回合')
     identity=hashlib.sha256(json.dumps([task.workspace_id,task.id,source,payload['request_id']],
         sort_keys=True,ensure_ascii=False).encode()).hexdigest()
-    event=TaskEvent(id='narration_semantic_review_'+identity,workspace_id=task.workspace_id,task_id=task.id,
+    event_id = 'narration_semantic_review_' + identity
+    from app.assistant.section_revision_evidence import allows_linked_adoption, selected_knowledge_pages
+    context = origin.get('context') or {}
+    page_refs = selected_knowledge_pages(context)
+    guarded_write = write_guard
+    if page_refs:
+        try:
+            previous = production.execution_records.get_task_event(task.workspace_id, event_id)
+        except KeyError:
+            previous = None
+        if previous is None:
+            if payload['base_version_id'] != (context.get('target_snapshot') or {}).get('timeline_version_id'):
+                raise ValueError('资料修订须绑定此输入所见的作品版本。')
+            if capture_evidence is None:
+                raise ValueError('固定资料读面尚未就绪。')
+            evidence = capture_evidence(page_refs, for_adoption=False)
+            payload.update(knowledge_evidence=evidence, knowledge_evidence_apply_allowed=allows_linked_adoption(origin))
+
+            def guarded_write(conn):
+                write_guard(conn)
+                if capture_evidence(page_refs, for_adoption=False) != evidence:
+                    raise ValueError('修订引用的固定资料页已变化，请重新核对原文。')
+        elif 'knowledge_evidence' in previous.payload:
+            for key in ('knowledge_evidence', 'knowledge_evidence_apply_allowed'):
+                payload[key] = previous.payload[key]
+    event=TaskEvent(id=event_id,workspace_id=task.workspace_id,task_id=task.id,
         job_id=None,event_type='narration_semantic_review',payload={**payload,'source':source,
         'evidence_kind':'pi_semantic_comparison'})
-    event=production.save_semantic_review(event,write_guard=write_guard)
+    event=production.save_semantic_review(event,write_guard=guarded_write)
     return {'semantic_review_ref':event.id,**event.payload}
 
 
@@ -643,7 +668,10 @@ class TaskBusiness:
         if operation=='record_narration_semantic_review':
             return record_narration_semantic_review(self.production,task,
                 {**origin,'assistant_turn_id':goal['current_turn_id']},
-                {k:v for k,v in args['payload'].items() if k not in {'assistant_turn_id','input_id'}},write_guard=guard)
+                {k:v for k,v in args['payload'].items() if k not in {'assistant_turn_id','input_id'}},write_guard=guard,
+                capture_evidence=(lambda refs, *, for_adoption:
+                    self.segments.capture_revision_evidence(actor, refs, for_adoption=for_adoption))
+                    if self.segments is not None else None)
         if operation=='read_task_workspace':
             facts = dict(self.workspace_facts(ws,task))
             if generation:

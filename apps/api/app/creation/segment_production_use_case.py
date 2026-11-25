@@ -11,6 +11,7 @@ from pathlib import Path
 from app.creation.duration_requirement import DurationConflict, SectionWindow
 from app.creation.editing.narration_preview_use_case import inspect_narration_revision
 from app.creation.reference_picture_order import FRAME_RATE, ReferencePictureOrder
+from app.creation.section_revision_evidence import fixed_page
 from app.device_scheduler import SchedulePolicy, SubmissionIntent, VerifiedWork, RecoveryBlocked
 from app.models import utc_now
 
@@ -73,14 +74,16 @@ class SegmentProductionUseCase:
             video = {'kind': 'video', 'artifact_ref': record.logical_ref, 'sha256': record.sha256,
                 'segment_version': version, 'duration_seconds': adopted['duration_seconds'],
                 'url': f'/api/creation-tasks/{task_id}/segments/{section_id}/versions/{version}/video'}
+        pages = adopted.get('knowledge_evidence', []) if adopted is not None else []
+        reference_ids = self.section_source_ids(section, pages)
         return {'task_id': task_id, 'section_id': section_id, 'ordinal': current['ordinal'], 'script_id': script.id,
             'base_version_id': task.current_timeline_version_id, 'segment_version': version,
             'title': section.title, 'text': section.content, 'source_text_sha256': text_hash,
             'dependency_digest':digest(dependencies),
-            'visual_prompt': section.visual_prompt, 'source_references': section.evidence_reference_ids,
-            'source_bindings': self.source_bindings(metadata, section, limit=24, connection=connection),
-            'source_binding_total_count': len(section.evidence_reference_ids),
-            'source_bindings_truncated': len(section.evidence_reference_ids) > 24,
+            'visual_prompt': section.visual_prompt, 'source_references': reference_ids,
+            'source_bindings': self.source_bindings(metadata, section, pages=pages, limit=24, connection=connection),
+            'source_binding_total_count': len(reference_ids),
+            'source_bindings_truncated': len(reference_ids) > 24,
             'locked_body_digest': metadata['locked_body_digest'],
             'adjacent_sections': [asdict(item) for item in self.repository.section_inputs.creation_section_neighbors(
                 task,script,section_id,connection=connection)],
@@ -92,15 +95,23 @@ class SegmentProductionUseCase:
             'adopted': adopted is not None and adopted['current_validity'] == 'current',
             'adoption': self.adoption(task, adopted, connection=connection)}
 
-    def source_bindings(self, metadata, section, *, offset=0, limit=24, connection=None):
+    @staticmethod
+    def section_source_ids(section, pages):
+        return list(dict.fromkeys([*section.evidence_reference_ids, *(page['reference_id'] for page in pages)]))
+
+    def source_bindings(self, metadata, section, *, pages=(), offset=0, limit=24, connection=None):
         try:
             run = self.repository.script_records.get_script_generation_run(metadata['workspace_id'], metadata['run_id'], connection=connection)
         except KeyError:
             run = None
         fixed = ({item['reference_id']: item for item in run.input_references}
             if run is not None and run.task_id == metadata['task_id'] else {})
+        page_bindings = {page['reference_id']: page for page in pages}
         result = []
-        for reference_id in section.evidence_reference_ids[offset:offset+limit]:
+        for reference_id in self.section_source_ids(section, pages)[offset:offset+limit]:
+            if reference_id in page_bindings:
+                result.append(page_bindings[reference_id])
+                continue
             original = fixed.get(reference_id)
             if original is None:
                 # Only an evidence object's exact persisted ID is a fallback binding.
@@ -126,8 +137,11 @@ class SegmentProductionUseCase:
         with self.repository.execution_inputs.creation_execution_read() as conn:
             task = self.require_actor(workspace_id, task_id, actor, connection=conn)
             script, metadata = self.repository.script_records.read_execution_script_metadata(conn,workspace_id,task.confirmed_script_id)
-            section = self.repository.section_inputs.read_creation_section_input(task,script,section_id,connection=conn)['section']
-            bindings = self.source_bindings(metadata, section, offset=offset, limit=limit, connection=conn)
+            current = self.repository.section_inputs.read_creation_section_input(task,script,section_id,connection=conn)
+            pages = (current['adopted'] or {}).get('knowledge_evidence', [])
+            reference_ids = self.section_source_ids(current['section'], pages)
+            bindings = self.source_bindings(metadata, current['section'], pages=pages,
+                offset=offset, limit=limit, connection=conn)
             version = self.repository.section_inputs.stage_section_version(workspace_id,task_id,section_id,connection=conn)
         items = []
         for binding in bindings:
@@ -137,16 +151,29 @@ class SegmentProductionUseCase:
             elif self.source_repository is None:
                 value = {'status': 'unavailable', 'reason_code': 'fixed_source_reader_unavailable',
                     'text_offset': text_offset, 'truncated': False}
+            elif binding.get('locator'):
+                try:
+                    actual, title, text = fixed_page(self.source_repository, workspace_id,
+                        actor.user_id or actor.member_id, binding, for_adoption=False)
+                except ValueError:
+                    value = {'status': 'unavailable', 'reason_code': 'fixed_reference_unavailable',
+                        'text_offset': text_offset, 'truncated': False}
+                else:
+                    window = text[text_offset:text_offset + max_chars]
+                    value = {'status': 'matched', 'title': title, 'text': window, 'total_chars': len(text),
+                        'version_or_identity': binding['version_or_identity'],
+                        'text_offset': text_offset, 'truncated': text_offset + len(window) < len(text),
+                        'content_digest': actual['content_digest'], 'window_digest': hashlib.sha256(window.encode()).hexdigest()}
             else:
                 value = self.source_repository.read_fixed_reference_window(workspace_id, kind=binding['kind'],
                     object_id=binding['object_id'], version_or_identity=binding['version_or_identity'],
                     user_id=actor.user_id or actor.member_id, offset=text_offset, limit=max_chars)
-                if (value['status'] == 'matched' and binding['content_digest'] is not None
-                        and binding['content_digest'] != value.get('content_digest')):
-                    value = {'status': 'changed', 'reason_code': 'original_content_digest_mismatch',
-                        'text_offset': text_offset, 'truncated': False}
+            if (value['status'] == 'matched' and binding['content_digest'] is not None
+                    and binding['content_digest'] != value.get('content_digest')):
+                value = {'status': 'changed', 'reason_code': 'original_content_digest_mismatch',
+                    'text_offset': text_offset, 'truncated': False}
             items.append({'binding': binding, **value})
-        total = len(section.evidence_reference_ids)
+        total = len(reference_ids)
         return {'task_id': task_id, 'section_id': section_id, 'script_id': script.id,
             'segment_version': version,
             'items': items, 'offset': offset, 'limit': limit, 'total_count': total, 'truncated': offset+len(items) < total}
@@ -183,6 +210,12 @@ class SegmentProductionUseCase:
                 'truncated': offset+len(values)<script.sections_total_count, 'revision_requests': receipts,
                 'available_video_count': sum(item['video'] is not None for item in values), 'segments': values}
 
+    def capture_revision_evidence(self, actor, references, *, for_adoption):
+        if references and self.source_repository is None:
+            raise ValueError("固定资料读面尚未就绪。")
+        return [fixed_page(self.source_repository, actor.workspace_id, actor.user_id or actor.member_id,
+                           ref, for_adoption=for_adoption)[0] for ref in references]
+
     def verify_revision(self, workspace_id, task_id, actor, command, *, connection=None):
         current = self.context(workspace_id, task_id, command.section_id, actor, connection=connection)
         if (current['script_id'] != command.script_id or current['segment_version'] != command.expected_segment_version
@@ -215,6 +248,16 @@ class SegmentProductionUseCase:
             raise ValueError('Pi复核未覆盖明确规则，或对照原句没有绑定实际正文')
         if current['locked_body_digest'] and command.section_id not in payload.get('authorized_locked_section_ids', []):
             raise PermissionError('原正文已锁定，本次回执没有明确的局部解锁授权')
+        if evidence := payload.get('knowledge_evidence'):
+            adopting = command.adoption_mode == 'apply'
+            if payload['request_id'] != command.request_id:
+                raise ValueError('资料复核不属于该段修订的原请求。')
+            if adopting and not payload['knowledge_evidence_apply_allowed']:
+                raise PermissionError('此输入只允许查看候选或保护其他轨道，未采用资料修订。')
+            if adopting and current['adoption']['result_segment_version'] is None:
+                raise ValueError('目标段尚无可回查的采用版本，未提交局部资料修订。')
+            if self.capture_revision_evidence(actor, evidence, for_adoption=adopting) != evidence:
+                raise ValueError('修订引用的固定资料页已变化，请重新核对原文。')
         return current, rules
 
     def submit_revision(self, workspace_id, task_id, actor, command, *, runtime, write_guard=None):
@@ -226,6 +269,7 @@ class SegmentProductionUseCase:
                 raise ValueError('同一修改请求身份已绑定其他内容')
             return self.read_request(workspace_id, task_id, command.request_id, actor)
         _current, rules = self.verify_revision(workspace_id, task_id, actor, command)
+        review = self.repository.execution_records.get_task_event(workspace_id, command.semantic_review_ref)
         task = self.repository.task_records.get_creation_task(workspace_id, task_id)
         def submit_guard(conn):
             if write_guard is not None:
@@ -238,7 +282,8 @@ class SegmentProductionUseCase:
         plan = self.repository.plan_records.get_creation_plan(task.workspace_id, task.plan_id)
         with prepare_narration_source(self.repository, task, plan, actor) as prepared:
             job = self.repository.segment_revisions.create_segment_revision_job(
-                task, actor, encoded, rules, prepared, write_guard=submit_guard, budget_policy=policy)
+                task, actor, encoded, rules, prepared, write_guard=submit_guard, budget_policy=policy,
+                knowledge_evidence=review.payload.get('knowledge_evidence', []))
         runtime.scheduler.submit(SubmissionIntent(workspace_id, 'creation_job', job.id, job.input_digest,
             self.revision_key(job), SchedulePolicy()), actor)
         runtime.wake()
@@ -266,6 +311,7 @@ class SegmentProductionUseCase:
             'section_id': event.payload['command']['section_id'], 'job_id': job.id, 'status': job.status,
             'device_requests': [dict(item) for item in requests], 'result': result,
             'rules_check': event.payload['rules_check'], 'semantic_review_ref': event.payload['command']['semantic_review_ref'],
+            **({'knowledge_evidence': event.payload['knowledge_evidence']} if 'knowledge_evidence' in event.payload else {}),
             'queue_state': requests[-1]['state'] if requests else 'submission_pending',
             'waiting_reason': job.failure_reason or (requests[-1]['wait_reason'] or requests[-1]['last_failure_reason']
                 if requests else 'queue_submission_pending'),
@@ -872,6 +918,10 @@ class SegmentProductionUseCase:
         operation = 'narration_edit' if job.kind == SEGMENT_REVISION_KIND else 'render'
         if owner.authorization_verdict(task, actor, operation, connection=connection,check_scope=connection is None) != 'ready':
             raise PermissionError('段落执行的原任务授权不可用')
+        if event.get('knowledge_evidence') and intent.unit_key.startswith('segment_video:'):
+            from app.schemas import NarrationRevisionRequest
+            self.verify_revision(task.workspace_id, task.id, actor,
+                NarrationRevisionRequest.model_validate(event['command']), connection=connection)
         if intent.unit_key.startswith('segment_revision:'):
             if self.visual_decision(job,event['command']['section_id'],connection=connection) is not None:
                 raise ValueError('原段落已有音频检查点，不能重新配音')
@@ -1293,6 +1343,12 @@ class SegmentProductionUseCase:
             def commit_video(conn,current):
                 if command:
                     self.verify_revision(job.workspace_id,job.task_id,actor,command,connection=conn)
+                previous = self.repository.section_inputs.stage_segment_state(
+                    job.workspace_id, job.task_id, section_id, connection=conn)
+                pages = {item['reference_id']: item for item in (previous or {}).get('knowledge_evidence', [])}
+                pages.update((item['reference_id'], item) for item in event.get('knowledge_evidence', []))
+                if pages:
+                    publication.payload['knowledge_evidence'] = list(pages.values())
                 self.repository.section_adoption.publish_segment_version(publication,artifacts,transform,edges,adopted=adopted,
                     expected_version_id=current_context['base_version_id'],expected_segment_version=current_context['segment_version'],
                     segment=segment,timeline_change=timeline_change,connection=conn)

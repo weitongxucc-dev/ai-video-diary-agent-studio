@@ -31,7 +31,8 @@ class SegmentRevisionTransactions:
                 (workspace_id, task_id, member_id, request_id)).fetchone()
         return self.execution_records.task_event_from_row(row) if row is not None else None
 
-    def create_segment_revision_job(self, task, actor, command, rules_check, prepared, *, write_guard=None, budget_policy=None):
+    def create_segment_revision_job(self, task, actor, command, rules_check, prepared, *, write_guard=None,
+                                    budget_policy=None, knowledge_evidence=()):
         encoded = json.dumps(command, ensure_ascii=False, sort_keys=True, default=str)
         input_digest = hashlib.sha256(encoded.encode()).hexdigest()
         run = _JobRun(id=f'job_{uuid4().hex}', workspace_id=task.workspace_id, task_id=task.id,
@@ -57,6 +58,7 @@ class SegmentRevisionTransactions:
                 origin_event_id=f'event_{job.id}_start', connection=conn)
             payload = {**actor.identity_payload(), 'command': command, 'rules_check': rules_check,
                 'input_digest': input_digest, 'script_id': command['script_id'], 'plan_id': current.plan_id, 'source_binding_event_id': source_id,
+                **({'knowledge_evidence': knowledge_evidence} if knowledge_evidence else {}),
                 **({'execution_budget_policy': budget_policy} if budget_policy is not None else {})}
             self.execution_records.append_task_event(_TaskEvent(id=f'event_{job.id}_start', workspace_id=job.workspace_id,
                 task_id=job.task_id, job_id=job.id, event_type='segment_revision_requested', payload=payload,

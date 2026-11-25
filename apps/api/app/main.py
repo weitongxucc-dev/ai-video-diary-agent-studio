@@ -3933,6 +3933,7 @@ def _assistant_semantic_receipt_http_router(route_names):
         origin_for=lambda: _local_revision_origin,
         conversations_for=lambda: conversation_repo,
         production_for=lambda: production_repo,
+        segment_case_for=lambda: _segment_production_use_case,
         http_error_for=lambda: HTTPException,
         route_names=route_names,
     )
