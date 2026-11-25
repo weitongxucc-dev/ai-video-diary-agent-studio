@@ -23,9 +23,35 @@ export type TimelineCandidateDetail = {
   base_version_id: string;
   head_version_id: string;
   version: TimelineCandidateVersion;
+  adoption?: TimelineCandidateAdoptionResult | null;
 };
 
-export type TimelineCandidateSummary = Omit<TimelineCandidateDetail, "version">;
+export type TimelineCandidateSummary = Omit<TimelineCandidateDetail, "version" | "adoption">;
+
+type CropSettings = Pick<CropEdit, "fit_mode" | "crop_x" | "crop_y">;
+
+type AdoptionBinding = {
+  task_id: string;
+  candidate_id: string;
+  candidate_version_id: string;
+  candidate_sequence: number;
+  base_version_id: string;
+  base_sequence: number;
+  clip_id: string;
+};
+
+export type TimelineCandidateAdoptionSelection = AdoptionBinding & {
+  clip_number: number;
+  before: CropSettings;
+  after: CropSettings;
+  selection_digest: string;
+};
+
+export type TimelineCandidateAdoptionResult = AdoptionBinding & {
+  operation_id: string;
+  result_version_id: string;
+  result_sequence: number;
+};
 
 export type TimelineCandidatePreview = {
   task_id: string;
@@ -59,6 +85,55 @@ function requireTarget(target: TimelineCandidateTarget, candidate: TimelineCandi
   if (candidate.task_id !== target.taskId || candidate.id !== target.candidateId) {
     throw new Error("候选版本与所选作品或候选不一致。");
   }
+}
+
+function requireAdoption(expected: AdoptionBinding, actual: AdoptionBinding) {
+  if (actual.task_id !== expected.task_id || actual.candidate_id !== expected.candidate_id
+      || actual.candidate_version_id !== expected.candidate_version_id || actual.candidate_sequence !== expected.candidate_sequence
+      || actual.base_version_id !== expected.base_version_id || actual.base_sequence !== expected.base_sequence
+      || actual.clip_id !== expected.clip_id) {
+    throw new Error("采用回执与所选候选、基线或镜头不一致。");
+  }
+}
+
+function adoptionInput(binding: AdoptionBinding) {
+  return {
+    expected_timeline_version_id: binding.candidate_version_id,
+    expected_timeline_sequence: binding.candidate_sequence,
+    base_version_id: binding.base_version_id,
+    base_sequence: binding.base_sequence,
+    clip_id: binding.clip_id,
+  };
+}
+
+export async function prepareTimelineCandidateAdoption(
+  target: TimelineCandidateTarget, candidate: TimelineCandidateDetail,
+  base: Pick<TimelineCandidateVersion, "id" | "sequence">, clipId: string,
+) {
+  requireTarget(target, candidate);
+  const binding: AdoptionBinding = {
+    task_id: target.taskId, candidate_id: target.candidateId,
+    candidate_version_id: candidate.version.id, candidate_sequence: candidate.version.sequence,
+    base_version_id: base.id, base_sequence: base.sequence, clip_id: clipId,
+  };
+  const selection = await creationPlanRequest<TimelineCandidateAdoptionSelection>(`${candidatePath(target)}/adoption/prepare`, {
+    method: "POST", body: JSON.stringify(adoptionInput(binding)),
+  });
+  requireAdoption(binding, selection);
+  return selection;
+}
+
+export async function confirmTimelineCandidateAdoption(selection: TimelineCandidateAdoptionSelection, requestId: string) {
+  const target = { taskId: selection.task_id, candidateId: selection.candidate_id };
+  const result = await creationPlanRequest<TimelineCandidateAdoptionResult>(`${candidatePath(target)}/adoption/confirm`, {
+    method: "POST",
+    body: JSON.stringify({ ...adoptionInput(selection), request_id: requestId, selection_digest: selection.selection_digest }),
+  });
+  requireAdoption(selection, result);
+  if (!result.operation_id || !result.result_version_id || result.result_sequence !== result.base_sequence + 1) {
+    throw new Error("正式保存结果暂不可核对，请读取原采用回执。");
+  }
+  return result;
 }
 
 function candidatePreviewPath(target: TimelineCandidateTarget, versionId: string, jobId: string) {
