@@ -18,7 +18,7 @@ SELECT v.workspace_id,v.task_id,v.id,v.sequence,v.parent_version_id,v.created_at
 FROM timeline_versions v
 LEFT JOIN edit_operations o ON o.workspace_id=v.workspace_id AND o.id=v.created_by_operation_id
 LEFT JOIN edit_proposals p ON p.workspace_id=o.workspace_id AND p.id=o.proposal_id
-WHERE v.workspace_id=? AND v.task_id=?
+WHERE v.workspace_id=? AND v.task_id=? AND v.candidate_id IS NULL
 """
 
 
@@ -58,7 +58,7 @@ class TimelineHistoryReadRepository:
             raise ValueError("历史读取范围无效")
         with self._connect() as conn:
             current_id = self._current_version(conn, workspace_id, task_id)
-            total = conn.execute("SELECT COUNT(*) FROM timeline_versions WHERE workspace_id=? AND task_id=?",
+            total = conn.execute("SELECT COUNT(*) FROM timeline_versions WHERE workspace_id=? AND task_id=? AND candidate_id IS NULL",
                                  (workspace_id, task_id)).fetchone()[0]
             rows = conn.execute(_VERSION_QUERY +
                 " AND (? IS NULL OR v.sequence<?) ORDER BY v.sequence DESC LIMIT ?",

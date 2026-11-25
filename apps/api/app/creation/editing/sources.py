@@ -102,6 +102,7 @@ class EditClipSourceReader:
                                replacement: tuple[str, str] | None, user_id: str | None,
                                local_diagnostic: bool, automatic_replacement: bool = False,
                                expected_replacement_version: datetime | None = None,
+                               montage: dict | None = None,
                                connection: sqlite3.Connection | None = None):
         """The current material/source authority shared by typed preview and direct commit."""
         if connection is None:
@@ -109,8 +110,9 @@ class EditClipSourceReader:
                 return self.facts(workspace_id, task_id, clip_ids=clip_ids,
                     replacement=replacement, user_id=user_id, local_diagnostic=local_diagnostic,
                     automatic_replacement=automatic_replacement,
-                    expected_replacement_version=expected_replacement_version, connection=conn)
-        plan = self._read_montage(workspace_id, task_id, connection=connection)
+                    expected_replacement_version=expected_replacement_version,
+                    montage=montage, connection=conn)
+        plan = self._read_montage(workspace_id, task_id, connection=connection) if montage is None else montage
         clips = [clip for clip in plan["clips"] if clip["id"] in clip_ids]
         if len(clips) != len(clip_ids):
             raise KeyError("当前任务镜头不存在")
