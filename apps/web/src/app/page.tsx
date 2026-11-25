@@ -20,7 +20,8 @@ function HomeShell() {
   </AppShell>;
 }
 
-export default async function HomePage({ searchParams }: { searchParams?: Promise<{ new?: string }> }) {
-  if ((await searchParams)?.new === "1") redirect(NEW_VIDEO_HREF);
-  return <Suspense fallback={null}><WorkspaceRoute label="首页"><HomeShell /></WorkspaceRoute></Suspense>;
+export default async function HomePage({ searchParams }: { searchParams?: Promise<{ new?: string; mode?: string }> }) {
+  const params = await searchParams;
+  if (params?.new === "1") redirect(NEW_VIDEO_HREF);
+  return <Suspense fallback={null}><WorkspaceRoute label={params?.mode === "panel" ? "首页概览" : "首页"}><HomeShell /></WorkspaceRoute></Suspense>;
 }
