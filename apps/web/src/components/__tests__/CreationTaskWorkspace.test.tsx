@@ -1847,42 +1847,80 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.generatePersonRender).not.toHaveBeenCalled();
     expect(mocks.renderMontage).not.toHaveBeenCalled();
   });
-  it("selects the playhead clip, keeps its position and discards a late preview for another clip", async () => {
-    const initial = subtitleCoverWorkspace();
-    const clip = {
-      id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
-      source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 3,
-      timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9,
-      match_reasons: [], needs_confirmation: false, role: "b_roll" as const,
-      locked: false, manually_selected: false,
-    };
-    initial.montage!.clips = [clip, { ...clip, id: "clip-2", timeline_start_seconds: 3, timeline_end_seconds: 6 }];
-    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
-    fireEvent.click(getWorkspaceViewControl(/^检查与输出：/));
-    const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
-    player.currentTime = 3;
-    fireEvent.seeked(player);
-    expect(screen.getByLabelText("局部修改要求")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "调整成片" }));
-    fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
-    const editor = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
-    fireEvent.loadedMetadata(editor);
-    expect(editor.currentTime).toBe(3);
-    expect(openStoryboardClip(2)).toHaveAttribute("aria-pressed", "true");
-    let resolvePreview!: (value: ReturnType<typeof exactPreview>) => void;
-    mocks.previewEdit.mockReturnValue(new Promise((resolve) => { resolvePreview = resolve; }));
-    fireEvent.change(await readyInput("局部修改要求"), { target: { value: "换成另一个镜头" } });
-    fireEvent.click(screen.getByRole("button", { name: "精确预览修改" }));
-    fireEvent.click(openStoryboardClip(1));
-    await act(async () => resolvePreview(exactPreview(initial.task, "ReplaceClip")));
-    expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
-    expect(editor.currentTime).toBe(1.5);
-    expect(openStoryboardClip(1)).toHaveAttribute("aria-pressed", "true");
-    editor.currentTime = 6;
-    fireEvent.pause(editor);
-    expect(openStoryboardClip(2)).toHaveAttribute("aria-pressed", "true");
-    expect(mocks.confirmEdit).not.toHaveBeenCalled();
-  });
+  it.each(["response pending", "confirmation visible", "user selects a different shot"] as const)(
+    "preserves the playback position and handles exact preview scope when %s",
+    async (scenario) => {
+      const initial = subtitleCoverWorkspace();
+      const clip = {
+        id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+        source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 3,
+        timeline_start_seconds: 0, timeline_end_seconds: 3, match_score: .9,
+        match_reasons: [], needs_confirmation: false, role: "b_roll" as const,
+        locked: false, manually_selected: false,
+      };
+      initial.montage!.clips = [
+        clip,
+        { ...clip, id: "clip-2", timeline_start_seconds: 3, timeline_end_seconds: 6 },
+        { ...clip, id: "clip-3", timeline_start_seconds: 6, timeline_end_seconds: 9 },
+      ];
+      renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+      fireEvent.click(getWorkspaceViewControl(/^检查与输出：/));
+      const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+      player.currentTime = 3;
+      fireEvent.seeked(player);
+      expect(screen.getByLabelText("局部修改要求")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "调整成片" }));
+      fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
+      const editor = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+      fireEvent.loadedMetadata(editor);
+      expect(editor.currentTime).toBe(3);
+      expect(openStoryboardClip(2)).toHaveAttribute("aria-pressed", "true");
+      fireEvent.canPlay(editor);
+      fireEvent.play(editor);
+      const playbackControl = screen.getByRole("button", { name: "暂停成片" });
+      const positionControl = screen.getByRole("slider", { name: "成片播放位置" });
+
+      const preview = exactPreview(initial.task, "ReplaceClip");
+      preview.proposal.target_refs = ["clip:clip-2"];
+      let resolvePreview!: (value: ReturnType<typeof exactPreview>) => void;
+      mocks.previewEdit.mockReturnValue(new Promise((resolve) => { resolvePreview = resolve; }));
+      fireEvent.change(await readyInput("局部修改要求"), { target: { value: "换成另一个镜头" } });
+      fireEvent.click(screen.getByRole("button", { name: "精确预览修改" }));
+      expect(mocks.previewEdit).toHaveBeenCalledWith(initial.task.id, expect.objectContaining({
+        selected_object_refs: ["clip:clip-2"], playhead_ms: 3000,
+      }));
+      if (scenario === "confirmation visible") {
+        await act(async () => resolvePreview(preview));
+        expect(screen.getByRole("button", { name: "应用到草稿" })).toBeVisible();
+      }
+      if (scenario === "user selects a different shot") {
+        fireEvent.click(openStoryboardClip(1));
+        await act(async () => resolvePreview(preview));
+        expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
+        expect(openStoryboardClip(1)).toHaveAttribute("aria-pressed", "true");
+        expect(editor.currentTime).toBe(1.5);
+      }
+
+      editor.currentTime = 6.5;
+      fireEvent.timeUpdate(editor);
+      expect(editor.currentTime).toBe(6.5);
+      expect(positionControl).toHaveValue("6.5");
+      expect(playbackControl).toBeVisible();
+      expect(playbackControl).toHaveAttribute("aria-label", "暂停成片");
+
+      if (scenario !== "user selects a different shot") {
+        if (scenario === "response pending") await act(async () => resolvePreview(preview));
+        expect(screen.getByRole("button", { name: "应用到草稿" })).toBeVisible();
+        expect(openStoryboardClip(2)).toHaveAttribute("aria-pressed", "true");
+        fireEvent.click(screen.getByRole("button", { name: "返回详情" }));
+        expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
+      }
+
+      fireEvent.pause(editor);
+      expect(openStoryboardClip(3)).toHaveAttribute("aria-pressed", "true");
+      expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    },
+  );
 
   it("restores server fields and the saved authorization receipt after undo", async () => {
     const initial = workspaceWithCover();

@@ -942,6 +942,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     playheadRef.current = time; setAudioPlayhead(time);
     if (!["montage", "review"].includes(activeView) || selectedOverlayId || editorDraft) return;
     if (selectedAudioId || selectedCueId) return;
+    // Keep the edit target and its confirmation anchored while the playhead advances.
+    if (busy === "edit-preview" || editPreview) return;
     const clips = montage.clips;
     const clip = clips.find((item, index) => time >= item.timeline_start_seconds
       && (time < item.timeline_end_seconds
