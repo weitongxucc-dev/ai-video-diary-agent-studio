@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import subprocess
@@ -106,11 +107,45 @@ class FfmpegWorker:
                 if not output_path.exists() or output_path.stat().st_size == 0:
                     raise MediaExecutionError("media_output_missing", "FFmpeg 未产生可信输出。", "检查编码器和输出目录后沿原请求重试。")
                 summary = {"size_bytes": output_path.stat().st_size}
+                if prepared.logical_kind == "video_cut":
+                    summary.update(self._validate_video_cut(
+                        output_path, float(operation.options["duration"]), cancel_event, log))
             current_outputs.append({"path": str(output_path), "operation": operation.operation,
                                     "output_name": output_name, "summary": summary})
             if progress is not None:
                 progress(int(index * 100 / total))
         return {"outputs": current_outputs, "log_path": str(log_path), "request_id": plan.request_id}
+
+    def _validate_video_cut(self, path: Path, duration: float, cancel_event, log) -> dict:
+        probe = self._run_process(self.adapter.cut_probe_command(path), cancel_event, log)
+        if probe.returncode != 0:
+            raise MediaExecutionError("media_cut_probe_failed", "截取文件的画面无法核验，未发布。",
+                                      "检查源片和编码器后查询原截取作业。")
+        media = self.adapter.parse_probe(probe.stdout)
+        video = next(iter(media["streams"]), {})
+        frame_count = str(video.get("nb_read_frames", ""))
+        if not frame_count.isdecimal() or int(frame_count) == 0:
+            raise MediaExecutionError("media_cut_no_video_frames", "所选区间没有可用视频帧，未发布截取文件。",
+                                      "调整区间以包含源片画面后重新截取。")
+        try:
+            actual_duration = float(media["format"]["duration"])
+            video_start = float(video["start_time"])
+            video_end = video_start + float(video["duration"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MediaExecutionError("media_cut_duration_unverified", "截取文件缺少可核验的画面时长，未发布。",
+                                      "检查源片时间戳后查询原截取作业。") from exc
+        # Allow container and audio-sample rounding, while checking the actual
+        # video stream as well as the container clock.
+        tolerance = 0.01
+        if (video.get("codec_name") != "h264"
+                or not math.isclose(actual_duration, duration, rel_tol=0, abs_tol=tolerance)
+                or not (-tolerance <= video_start < video_end <= duration + tolerance)):
+            raise MediaExecutionError("media_cut_range_mismatch", "截取文件的画面或时长与请求区间不一致，未发布。",
+                                      "检查源片时间戳和截取范围后查询原作业。")
+        facts = {"video_frames": int(frame_count), "duration_seconds": actual_duration,
+                 "video_start_seconds": video_start, "video_end_seconds": video_end}
+        log("video_cut_verified", **facts)
+        return facts
 
     def _run_process(self, command: tuple[str, ...], cancel_event: threading.Event | None,
                      log: Callable[..., None]) -> subprocess.CompletedProcess[str]:

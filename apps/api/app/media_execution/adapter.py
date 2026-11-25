@@ -50,8 +50,19 @@ class FfmpegAdapter:
         if name in {"cut", "trim"}:
             start = float(operation.options.get("start", 0))
             duration = float(operation.options["duration"])
-            command = (self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", str(start), "-i", str(inputs[0]),
-                       "-t", str(duration), "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", str(output_path))
+            command = (self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", str(start),
+                       "-i", str(inputs[0]), "-t", str(duration))
+            # The task-bound video entry seals the asset ID. Keep that
+            # contract separate from generic internal media operations.
+            if "asset_id" in operation.options:
+                # Retain fractional frame times and align decode/presentation
+                # order so MP4 cannot trim reordered frames at the cut end.
+                duration_filter = f"setts=duration=min(DURATION\\,{duration}/TB-PTS)"
+                command += ("-map", "0:V:0?", "-map", "0:a:0?", "-bf:v", "0",
+                            "-fps_mode:v", "passthrough", "-enc_time_base:v", "1:90000",
+                            "-bsf:v", duration_filter)
+            command += ("-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", str(output_path))
+            return PreparedCommand(name, command, output_path, inputs, "video_cut" if "asset_id" in operation.options else "media_file")
         elif name in {"fit", "aspect_ratio", "export"}:
             width = int(operation.options.get("width", 1080))
             height = int(operation.options.get("height", 1920))
@@ -80,6 +91,11 @@ class FfmpegAdapter:
             raise MediaExecutionError("unsupported_media_operation", f"未执行媒体操作 {operation.operation}。",
                                       "改用已登记的媒体能力，或先为该能力提供适配器。")
         return PreparedCommand(name, command, output_path, inputs, "media_file")
+
+    def cut_probe_command(self, path: Path) -> tuple[str, ...]:
+        return (self.ffprobe, "-v", "error", "-select_streams", "V:0", "-count_frames",
+                "-show_entries", "stream=codec_name,nb_read_frames,start_time,duration:format=duration",
+                "-of", "json", str(path))
 
     def concat(self, inputs: tuple[Path, ...], output_path: Path, manifest_path: Path) -> PreparedCommand:
         if len(inputs) < 2:

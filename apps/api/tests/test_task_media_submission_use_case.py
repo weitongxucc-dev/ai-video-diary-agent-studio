@@ -35,8 +35,8 @@ def test_domain_input_rejects_paths_and_arbitrary_parameters():
         BoundMediaSubmission.from_value(_command(asset_id="/tmp/input.mp4"))
 
 
-def test_submission_builds_controlled_plan_and_reuses_same_request():
-    asset = SimpleNamespace(duration_seconds=10)
+def test_submission_builds_controlled_plan():
+    asset = SimpleNamespace(duration_seconds=10, visibility="shared", owner_user_id=None)
     timeline = SimpleNamespace(snapshot={"montage": {"clips": [{"asset_id": "asset-1"}]}})
     task = SimpleNamespace(id="task-1", workspace_id="local", owner_user_id=None,
                            current_timeline_version_id="timeline-1")
@@ -44,7 +44,7 @@ def test_submission_builds_controlled_plan_and_reuses_same_request():
     class Repo:
         task_records = SimpleNamespace(get_creation_task=lambda *_: task)
         timeline_records = SimpleNamespace(get_timeline_version=lambda *_: timeline)
-        def get_asset(self, *_):
+        def get_asset(self, *_, **kwargs):
             return asset
         def workspace_media_reference_for_asset(self, *_):
             return "workspace://clips/asset-1.mp4"
@@ -56,13 +56,13 @@ def test_submission_builds_controlled_plan_and_reuses_same_request():
             def __enter__(self): return self
             def __exit__(self, *_): return False
             def execute(self, *_): return self
-            def fetchall(self): return []
+            def fetchone(self): return None
         def _connect(self): return self.Conn()
 
     class Media:
         task_authorizations = None
         def __init__(self): self.plans = []
-        def submit(self, runtime, actor, task_id, operation, arguments, result_kind):
+        def submit(self, runtime, actor, task_id, operation, arguments, result_kind, *, write_guard):
             self.plans.append((operation, arguments, result_kind))
             return SimpleNamespace(id="job-1")
         def read(self, workspace_id, job_id):
@@ -78,6 +78,60 @@ def test_submission_builds_controlled_plan_and_reuses_same_request():
     assert operation == "ffmpeg_execution" and result_kind == "media_output"
     assert plan["operations"][0]["inputs"] == ["/controlled/clips/asset-1.mp4"]
     assert plan["operations"][0]["options"]["asset_id"] == "asset-1"
+
+
+def test_cut_request_identity_survives_publication_and_competing_submissions(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from app.creation.contracts import TimelineVersion
+    from test_task_media_grants import case
+
+    repo, actor, _, _, build, media = case(tmp_path)
+    base = repo.timeline_records.create_timeline_version(TimelineVersion(
+        "timeline-1", "local", "task", None, 1, {"montage": {"clips": [{"asset_id": "asset-1"}]}}, None))
+    use_case = TaskMediaSubmissionUseCase(repo, task_media=media)
+    monkeypatch.setattr(repo, "get_asset", lambda *_, **kwargs: SimpleNamespace(
+        duration_seconds=10, visibility="shared", owner_user_id=None))
+    monkeypatch.setattr(repo, "workspace_media_reference_for_asset", lambda *_: "workspace://asset-1.mp4")
+    monkeypatch.setattr(repo, "resolve_clip_media_reference", lambda *_: tmp_path / "source.mp4")
+    barrier = Barrier(2)
+    saved_submit = media.submit
+
+    def compete(*args, **kwargs):
+        barrier.wait(timeout=5)
+        return saved_submit(*args, **kwargs)
+
+    runtime = build(media)
+    try:
+        def submit(command):
+            try:
+                return use_case.submit(runtime, actor, "task", command)
+            except TaskMediaSubmissionRejected as exc:
+                return exc
+
+        commands = [_command(), _command(end_seconds=4)]
+        with monkeypatch.context() as patch:
+            patch.setattr(media, "submit", compete)
+            with ThreadPoolExecutor(max_workers=2) as workers:
+                attempted = list(workers.map(submit, commands))
+        winner, = [i for i, result in enumerate(attempted) if not isinstance(result, TaskMediaSubmissionRejected)]
+        original = attempted[winner]
+        assert attempted[1 - winner].status_code == 409
+
+        repo.timeline_records.create_timeline_version(
+            TimelineVersion("timeline-2", "local", "task", base.id, 2, {}, None),
+            expected_current_version_id=base.id)
+        assert submit(commands[winner]).id == original.id
+        assert submit(commands[1 - winner]).status_code == 409
+        assert submit({**commands[winner], "request_id": "22222222-2222-4222-8222-222222222222"}).status_code == 409
+        other = CreationExecutionActor("local", "other-member")
+        with pytest.raises(TaskMediaSubmissionRejected, match="原媒体请求不属于当前成员"):
+            use_case.submit(runtime, other, "task", commands[winner])
+        assert [job.id for job in repo.job_records.list_job_runs("local", "task")] == [original.id]
+        assert len(repo.job_records.list_creation_job_request_states("local", original.id)) == 1
+    finally:
+        runtime.stop(0)
 
 
 def test_formal_post_route_returns_receipt_and_domain_error():
