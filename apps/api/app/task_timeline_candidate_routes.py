@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import FileResponse, JSONResponse
 
 from app.creation.clip_preview import CandidateClipPreviewCommand, CandidateClipPreviewTarget, ClipPreviewUnavailable
+from app.creation.editing.timeline_candidate_adoption import CandidateAdoptionTarget, TimelineCandidateAdoptionUseCase
 from app.creation.editing.timeline_candidates import TimelineCandidateUseCase
 from app.montage import creation_task_montage_plan_from_payload
 
@@ -37,10 +38,26 @@ class CandidatePreviewRequest(_VersionBinding):
     clip_id: str = Field(min_length=1, max_length=120)
 
 
-def _read_model(candidate, version):
+class CandidateAdoptionRequest(_VersionBinding):
+    base_version_id: str = Field(min_length=1, max_length=120)
+    base_sequence: int = Field(ge=1)
+    clip_id: str = Field(min_length=1, max_length=120)
+
+    def target(self, candidate_id):
+        return CandidateAdoptionTarget(str(candidate_id), self.expected_timeline_version_id,
+            self.expected_timeline_sequence, self.base_version_id, self.base_sequence, self.clip_id)
+
+
+class CandidateAdoptionConfirmation(CandidateAdoptionRequest):
+    request_id: UUID
+    selection_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def _read_model(candidate, version, adoption=None):
     plan = creation_task_montage_plan_from_payload(version.snapshot["montage"])
     return {
         **asdict(candidate),
+        "adoption": adoption,
         "version": {
             "id": version.id,
             "parent_version_id": version.parent_version_id,
@@ -68,7 +85,7 @@ def _candidate_errors():
 
 
 def build_task_timeline_candidate_router(*, repository_for, access_for, preview_for,
-                                         actor_for, media_for, runtime_for):
+                                         actor_for, media_for, runtime_for, metadata_for):
     router = APIRouter(prefix="/api/creation-tasks/{task_id}/timeline/candidates")
 
     @router.get("")
@@ -103,6 +120,23 @@ def build_task_timeline_candidate_router(*, repository_for, access_for, preview_
                 task, member_id, str(candidate_id), expected_version_id=payload.expected_timeline_version_id,
                 expected_sequence=payload.expected_timeline_sequence, request_id=str(payload.request_id),
                 clip_id=payload.clip_id, fit_mode=payload.fit_mode, crop_x=payload.crop_x, crop_y=payload.crop_y))
+
+    @router.post("/{candidate_id}/adoption/prepare")
+    def prepare_candidate_adoption(task_id: str, candidate_id: UUID, request: Request,
+                                   payload: CandidateAdoptionRequest):
+        task, member_id = access_for()(task_id, request, write=True)
+        with _candidate_errors():
+            return TimelineCandidateAdoptionUseCase(metadata_for()).prepare(
+                task, member_id, payload.target(candidate_id))
+
+    @router.post("/{candidate_id}/adoption/confirm")
+    def confirm_candidate_adoption(task_id: str, candidate_id: UUID, request: Request,
+                                   payload: CandidateAdoptionConfirmation):
+        task, member_id = access_for()(task_id, request, write=True)
+        with _candidate_errors():
+            return TimelineCandidateAdoptionUseCase(metadata_for()).confirm(
+                task, member_id, payload.target(candidate_id),
+                request_id=str(payload.request_id), selection_digest=payload.selection_digest)
 
     @router.post("/{candidate_id}/previews")
     def submit_timeline_candidate_preview(task_id: str, candidate_id: UUID, request: Request,

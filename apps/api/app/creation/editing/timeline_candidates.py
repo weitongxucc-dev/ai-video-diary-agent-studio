@@ -12,6 +12,48 @@ from app.creation.task_input_reads import require_creation_task
 from app.montage import creation_task_montage_plan_from_payload
 
 
+def candidate_crop_snapshot(base_snapshot, plan, clip):
+    montage = base_snapshot["montage"]
+    refresh_montage_review_state(plan)
+    # The new cut can carry the original track inputs, but no proof of
+    # publication or rendered output belonging to its parent.
+    publication_keys = {
+        "edit_operation_id", "invalidated_refs", "output_refs", "transform_run_id",
+        "audio_delivery", "reused_job_id", "creation_render_request_id",
+        "render_input_digest", "render_input_timeline_version_id",
+        "render_input_subtitle_tracks", "render_input_subtitles_visible",
+    }
+    snapshot = {key: value for key, value in base_snapshot.items() if key not in publication_keys}
+    snapshot["cover_asset_id"] = None
+    snapshot["montage"] = {
+        **montage,
+        "clips": [
+            {**item, "fit_mode": clip.fit_mode, "crop_x": clip.crop_x, "crop_y": clip.crop_y}
+            if item["id"] == clip.id else item
+            for item in montage["clips"]
+        ],
+        "output_path": None,
+        "subtitle_path": None,
+        "status": plan.status,
+        "message": "候选裁切已保存。",
+    }
+    return snapshot
+
+
+def candidate_adoption_receipt_id(candidate):
+    scope = [candidate.workspace_id, candidate.task_id, candidate.id]
+    return "event_candidate_adoption_" + hashlib.sha256(json.dumps(scope).encode()).hexdigest()
+
+
+def candidate_adoption_receipt(repository, candidate, *, connection):
+    try:
+        return repository.execution_records.get_task_event(
+            candidate.workspace_id, candidate_adoption_receipt_id(candidate), connection=connection,
+        )
+    except KeyError:
+        return None
+
+
 class TimelineCandidateUseCase:
     def __init__(self, repository):
         self.repository = repository
@@ -38,7 +80,8 @@ class TimelineCandidateUseCase:
             conn.execute("BEGIN")
             self._owned_task(conn, task, member_id)
             candidate = self.versions.get_candidate(task.workspace_id, task.id, candidate_id, connection=conn)
-            return candidate, self._head(conn, candidate)
+            receipt = candidate_adoption_receipt(self.repository, candidate, connection=conn)
+            return candidate, self._head(conn, candidate), receipt.payload["result"] if receipt else None
 
     def fork(self, task, member_id, candidate_id, *, expected_version_id, expected_sequence):
         with closing(self.repository.connection_factory()) as conn, conn:
@@ -103,29 +146,7 @@ class TimelineCandidateUseCase:
                 raise ValueError("候选镜头或其来源已不可用") from exc
             except OSError as exc:
                 raise ValueError("候选镜头的源文件不可读取") from exc
-            refresh_montage_review_state(plan)
-            # The new cut can carry the original track inputs, but no proof of
-            # publication or rendered output belonging to its parent.
-            publication_keys = {
-                "edit_operation_id", "invalidated_refs", "output_refs", "transform_run_id",
-                "audio_delivery", "reused_job_id", "creation_render_request_id",
-                "render_input_digest", "render_input_timeline_version_id",
-                "render_input_subtitle_tracks", "render_input_subtitles_visible",
-            }
-            snapshot = {key: value for key, value in base.snapshot.items() if key not in publication_keys}
-            snapshot["cover_asset_id"] = None
-            snapshot["montage"] = {
-                **montage,
-                "clips": [
-                    {**item, "fit_mode": clip.fit_mode, "crop_x": clip.crop_x, "crop_y": clip.crop_y}
-                    if item["id"] == clip.id else item
-                    for item in montage["clips"]
-                ],
-                "output_path": None,
-                "subtitle_path": None,
-                "status": plan.status,
-                "message": "候选裁切已保存。",
-            }
+            snapshot = candidate_crop_snapshot(base.snapshot, plan, clip)
             version = TimelineVersion(f"timeline_{uuid4().hex}", task.workspace_id, task.id, base.id,
                 base.sequence + 1, snapshot, created_by_operation_id=None)
             self.versions.advance_candidate(candidate, version, connection=conn)
