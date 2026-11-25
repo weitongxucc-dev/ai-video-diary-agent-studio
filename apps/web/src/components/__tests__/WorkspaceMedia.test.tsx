@@ -1,14 +1,30 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { StrictMode, useLayoutEffect, useRef, type RefObject } from "react";
+import { StrictMode, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
-import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
+import { WorkspaceAudio, WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import { WorkspacePageContext, type WorkspacePageSlot } from "../workbench/context";
 import { useWorkspaceViewState } from "../workbench/context";
 import { WorkspaceInspector } from "../workbench/WorkspaceInspector";
-import { Dialog } from "../ui/overlay";
+import { Dialog, Sheet } from "../ui/overlay";
 
 afterEach(cleanup);
+
+function mockMediaEscape() {
+  const listeners = new Set<(id: string) => void>();
+  let owner: string | null = null;
+  vi.stubGlobal("electronAPI", {
+    setCardMediaEscape: (id: string | null) => { owner = id; },
+    onCardMediaEscape: (listener: (id: string) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  });
+  return {
+    get owner() { return owner; },
+    deliver: (id: string) => act(() => { listeners.forEach(listener => listener(id)); }),
+  };
+}
 it("keeps a source preview's playhead separate from a thumbnail of the same file", () => {
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
@@ -110,4 +126,103 @@ it("returns focus to the resource row once its portal list becomes visible", asy
   view.rerender(<ResourceDock open={false} />);
   expect(row).toBeVisible();
   await waitFor(() => expect(row).toHaveFocus());
+});
+
+it.each([WorkspaceAudio, WorkspaceVideo])("closes resource details for focused native media Escape and lets fullscreen handle Escape", Media => {
+  const bridge = mockMediaEscape();
+  const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => undefined);
+  const fullscreenProperty = Object.getOwnPropertyDescriptor(document, "fullscreenElement");
+  let fullscreen: Element | null = null;
+  Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => fullscreen });
+  function ResourceDock() {
+    const [open, setOpen] = useState(false);
+    const opener = useRef<HTMLButtonElement>(null);
+    return <>
+      <button ref={opener} onClick={() => setOpen(true)}>资源行</button>
+      <audio controls tabIndex={0} aria-label="其他播放器" />
+      <WorkspaceInspector title="资源详情" open={open} onClose={() => setOpen(false)} opener={opener} mediaEscape>
+        <Media controls tabIndex={0} aria-label="资源预览" src="/api/resource/preview" />
+      </WorkspaceInspector>
+    </>;
+  }
+  try {
+    render(<ResourceDock />);
+    const row = screen.getByRole("button", { name: "资源行" });
+    const media = screen.getByLabelText("资源预览");
+    row.focus();
+    fireEvent.click(row);
+    screen.getByLabelText("其他播放器").focus();
+    expect(bridge.owner).toBeNull();
+    media.focus();
+    expect(media).toHaveFocus();
+    const owner = bridge.owner;
+    expect(owner).toEqual(expect.any(String));
+    fullscreen = media;
+    fireEvent(document, new Event("fullscreenchange"));
+    expect(bridge.owner).toBeNull();
+    bridge.deliver(owner!);
+    fireEvent.keyDown(media, { key: "Escape" });
+    expect(screen.getByRole("heading", { name: "资源详情" })).toBeVisible();
+
+    fullscreen = null;
+    fireEvent(document, new Event("fullscreenchange"));
+    expect(bridge.owner).toBe(owner);
+    media.blur();
+    expect(bridge.owner).toBeNull();
+    bridge.deliver(owner!);
+    expect(screen.getByRole("heading", { name: "资源详情" })).toBeVisible();
+    media.focus();
+    bridge.deliver(owner!);
+    expect(media).not.toHaveAttribute("src");
+    expect(pause).toHaveBeenCalled();
+    expect(row).toHaveFocus();
+    expect(bridge.owner).toBeNull();
+
+    fireEvent.click(row);
+    fireEvent.keyDown(screen.getByRole("heading", { name: "资源详情" }), { key: "Escape" });
+    expect(row).toHaveFocus();
+    expect(media).not.toHaveAttribute("src");
+  } finally {
+    cleanup();
+    vi.unstubAllGlobals();
+    if (fullscreenProperty) Object.defineProperty(document, "fullscreenElement", fullscreenProperty);
+    else Reflect.deleteProperty(document, "fullscreenElement");
+  }
+});
+
+it("keeps the focused resource media registered when another card opens and closes", () => {
+  const bridge = mockMediaEscape();
+  const closeResource = vi.fn();
+  const closeSheet = vi.fn();
+  const content = (sheetOpen: boolean) => <>
+    <WorkspaceInspector title="资源详情" open onClose={closeResource} mediaEscape>
+      <audio controls tabIndex={0} aria-label="详情播放器" />
+    </WorkspaceInspector>
+    <Sheet title="另一张卡片" open={sheetOpen} onClose={closeSheet}>
+      <video controls tabIndex={0} aria-label="卡片播放器" />
+    </Sheet>
+  </>;
+  try {
+    const view = render(content(true));
+    const resource = screen.getByLabelText("详情播放器");
+    resource.focus();
+    expect(resource).toHaveFocus();
+    expect(bridge.owner).toEqual(expect.any(String));
+    const resourceId = bridge.owner!;
+
+    screen.getByLabelText("卡片播放器").focus();
+    expect(bridge.owner).toEqual(expect.any(String));
+    expect(bridge.owner).not.toBe(resourceId);
+    resource.focus();
+    expect(bridge.owner).toBe(resourceId);
+    view.rerender(content(false));
+    expect(bridge.owner).toBe(resourceId);
+    bridge.deliver(resourceId);
+    expect(closeResource).toHaveBeenCalledOnce();
+    expect(closeSheet).not.toHaveBeenCalled();
+  } finally {
+    cleanup();
+    vi.unstubAllGlobals();
+  }
 });

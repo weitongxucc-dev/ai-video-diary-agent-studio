@@ -13,29 +13,53 @@ export type OverlayProps = {
   onClose: () => void; anchor?: RefObject<HTMLElement | null>;
 };
 
-function useMediaEscape(open: boolean, onClose: () => void) {
+// The desktop window holds one registration, even when multiple cards are open.
+let mediaEscapeOwner: string | null = null;
+
+export function useMediaEscape<T extends HTMLElement>(open: boolean, onClose: () => void) {
   const id = useId();
-  const node = useRef<HTMLDivElement>(null);
+  const node = useRef<T>(null);
   useEffect(() => {
-    if (!open) return;
-    const sync = () => {
+    const { setCardMediaEscape, onCardMediaEscape } = window.electronAPI ?? {};
+    if (!open || !setCardMediaEscape || !onCardMediaEscape) return;
+    const hasFocusedMedia = () => {
       const focused = document.activeElement;
-      const selected = focused instanceof HTMLMediaElement && node.current?.contains(focused) && !document.fullscreenElement;
-      window.electronAPI?.setCardMediaEscape?.(selected ? id : null);
+      return focused instanceof HTMLMediaElement && node.current?.contains(focused)
+        && !focused.closest("[hidden]") && !document.fullscreenElement;
+    };
+    const release = () => {
+      if (mediaEscapeOwner !== id) return;
+      mediaEscapeOwner = null;
+      setCardMediaEscape(null);
+    };
+    const sync = () => {
+      if (!hasFocusedMedia()) {
+        release();
+      } else if (mediaEscapeOwner !== id) {
+        mediaEscapeOwner = id;
+        setCardMediaEscape(id);
+      }
     };
     document.addEventListener("focusin", sync);
+    document.addEventListener("focusout", release);
     document.addEventListener("fullscreenchange", sync);
-    const unsubscribe = window.electronAPI?.onCardMediaEscape?.(value => {
-      if (value === id && !document.fullscreenElement && document.activeElement instanceof HTMLMediaElement
-          && node.current?.contains(document.activeElement)) onClose();
+    const unsubscribe = onCardMediaEscape(value => {
+      if (value === id && mediaEscapeOwner === id && hasFocusedMedia()) onClose();
     });
-    return () => { document.removeEventListener("focusin", sync); document.removeEventListener("fullscreenchange", sync); unsubscribe?.(); window.electronAPI?.setCardMediaEscape?.(null); };
+    sync();
+    return () => {
+      document.removeEventListener("focusin", sync);
+      document.removeEventListener("focusout", release);
+      document.removeEventListener("fullscreenchange", sync);
+      unsubscribe();
+      release();
+    };
   }, [id, open, onClose]);
   return { id, node };
 }
 
 export function Dialog({ title, children, footer, open, onClose, anchor, sheet = false }: OverlayProps & { sheet?: boolean }) {
-  const { id, node } = useMediaEscape(open, onClose);
+  const { id, node } = useMediaEscape<HTMLDivElement>(open, onClose);
   const visible = useContext(MediaVisibilityContext) && open;
   return <BaseDialog.Root open={open} modal={!sheet} disablePointerDismissal={sheet} onOpenChange={(next, details) => {
     if (document.fullscreenElement && details.reason === "escape-key") { details.cancel(); return; }

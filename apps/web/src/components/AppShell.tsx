@@ -581,7 +581,7 @@ export function AppShellFrame({
       <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}${hasLeftResourcePanel ? ` ${editorShell.withLeftResource}` : ""}`}>
         {resourcePanel ? <aside className={editorShell.resourceColumn} aria-label="作品资源">
           {resourcePanel.content}
-          <WorkspaceInspector open={resourceInspectorOpen} title={resourcePanel.inspectorTitle ?? "资源详情"} manageHref={resourcePanel.manageHref} opener={resourceDetailsOpener} onClose={() => {
+          <WorkspaceInspector open={resourceInspectorOpen} title={resourcePanel.inspectorTitle ?? "资源详情"} manageHref={resourcePanel.manageHref} opener={resourceDetailsOpener} mediaEscape onClose={() => {
             setResourceDetailsOpen(false);
             resourcePanel.onInspectorClose?.();
           }}>{resourcePanel.inspector}</WorkspaceInspector>

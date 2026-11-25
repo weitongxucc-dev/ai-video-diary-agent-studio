@@ -2,17 +2,20 @@
 import Link from "next/link";
 import { useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
 import { MediaVisibility } from "../ui/media-visibility";
+import { useMediaEscape } from "../ui/overlay";
 import { X } from "lucide-react";
 import { Button } from "../ui/button";
 import styles from "../EditorShell.module.css";
 import resourceStyles from "./Workbench.module.css";
 
 /** Persistent editing stays beside the work, without a modal backdrop. */
-export function WorkspaceInspector({ title, open, onClose, children, manageHref, opener }: {
+export function WorkspaceInspector({ title, open, onClose, children, manageHref, opener, mediaEscape = false }: {
   title: string; open: boolean; onClose: () => void; children: ReactNode;
   manageHref?: string;
   opener?: RefObject<HTMLElement | null>;
+  mediaEscape?: boolean;
 }) {
+  const { node } = useMediaEscape<HTMLElement>(open && mediaEscape, onClose);
   const heading = useRef<HTMLHeadingElement>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
@@ -35,8 +38,8 @@ export function WorkspaceInspector({ title, open, onClose, children, manageHref,
     });
     return () => cancelAnimationFrame(frame);
   }, [open, opener]);
-  return <aside hidden={!open} className={styles.inspectorDock} aria-label={title} onKeyDown={event => {
-    if (event.key === "Escape" && !event.defaultPrevented) { event.stopPropagation(); onClose(); }
+  return <aside ref={node} hidden={!open} className={styles.inspectorDock} aria-label={title} onKeyDown={event => {
+    if (open && event.key === "Escape" && !event.defaultPrevented && !document.fullscreenElement) { event.stopPropagation(); onClose(); }
   }}>
     <header><h2 ref={heading} tabIndex={-1}>{title}</h2>{manageHref ? <Link className={resourceStyles.resourceLink} href={manageHref}>完整管理</Link> : null}<Button variant="ghost" size="icon" type="button" aria-label={manageHref ? "返回资源列表" : "关闭属性面板"} title={manageHref ? "返回资源列表" : "关闭属性面板"} onClick={onClose}><X size={16}/></Button></header>
     <MediaVisibility visible={open}><div className={styles.inspectorBody}>{children}</div></MediaVisibility>
