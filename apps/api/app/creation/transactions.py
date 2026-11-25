@@ -321,7 +321,7 @@ class EditAdoptionTransaction:
             base_row = conn.execute(
                 """
                 SELECT sequence FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                WHERE workspace_id = ? AND task_id = ? AND id = ? AND candidate_id IS NULL
                 """,
                 (workspace_id, task_id, operation.base_version_id),
             ).fetchone()
@@ -339,7 +339,8 @@ class EditAdoptionTransaction:
                     (operation.id, workspace_id, task_id, proposal_id),
                 ).fetchone(),
                 conn.execute(
-                    "SELECT 1 FROM timeline_versions WHERE id = ? OR (workspace_id = ? AND task_id = ? AND sequence = ?)",
+                    "SELECT 1 FROM timeline_versions WHERE id=? OR "
+                    "(workspace_id=? AND task_id=? AND sequence=? AND candidate_id IS NULL)",
                     (
                         result_version.id,
                         workspace_id,

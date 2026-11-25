@@ -15,7 +15,7 @@ import { AppSelect, AppSelectOption } from "@/components/AppSelect";
 import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
 import { VisualEffectsInspector } from "./VisualEffectsInspector";
 
-import { useContext, useEffect, useId, useLayoutEffect, useRef, useState, type RefObject, type ReactNode } from "react";
+import { useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useRef, useState, type RefObject, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Check, Clapperboard, Lock, Unlock, Maximize, Pause, Play, Plus, Replace, Volume2, VolumeX, ListVideo, SlidersHorizontal, ChevronDown, SkipBack, SkipForward } from "lucide-react";
 import { apiUrl, listenCreationTaskAudio, resolveCreationTaskMediaResponse, cancelCreationTaskMediaJob, taskMediaJobLabel, TaskMediaJobError } from "@/lib/api";
 import type { CreationTaskMontageClip, CreationTaskExactEditInput, CreationTaskMontage, CreationTaskSubtitleTrack, CreationTaskPersonRender, CreationTaskPersonRenderCapability, GraphicOverlay, MontageClipCandidate, TaskMediaJob } from "@/lib/types";
@@ -131,7 +131,10 @@ function StaticClipThumbnail({ clip, taskId, className, statusId }: { clip: Crea
   </span>;
 }
 
-function ClipMedia({ clip, taskId, className, statusId, preview = false, bounded = false }: { clip: CreationTaskMontageClip; taskId: string; className?: string; statusId?: string; preview?: boolean; bounded?: boolean }) {
+function ClipMedia({ clip, taskId, className, statusId, preview = false, bounded = false, onPlaybackChange }: {
+  clip: CreationTaskMontageClip; taskId: string; className?: string; statusId?: string; preview?: boolean; bounded?: boolean;
+  onPlaybackChange?: (playing: boolean) => void;
+}) {
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
   const [retry, setRetry] = useState(0);
@@ -156,8 +159,9 @@ function ClipMedia({ clip, taskId, className, statusId, preview = false, bounded
       current.currentTime = seekTarget.current;
     }}
     onSeeking={event => { if (event.currentTarget === videoRef.current) seekTarget.current = event.currentTarget.currentTime; }}
+    onPlay={() => onPlaybackChange?.(true)} onPause={() => onPlaybackChange?.(false)} onEnded={() => onPlaybackChange?.(false)}
     onLoadedData={event => frameReady(event.currentTarget)} onSeeked={event => frameReady(event.currentTarget)} onCanPlay={event => frameReady(event.currentTarget)}
-    onError={event => { if (event.currentTarget === videoRef.current) setState("error"); }} />;
+    onError={event => { if (event.currentTarget === videoRef.current) { onPlaybackChange?.(false); setState("error"); } }} />;
   const message = missing ? "未关联媒体" : state === "loading" ? (preview ? "正在读取原片…" : "读取缩略图…") : state === "error" ? (preview ? "原片暂时无法读取" : "缩略图读取失败") : "缩略图已定位";
   const previewContent = <>{video}<span className={ui.playerBadge}>{clip.person_render_id ? "人物口型 · 非成片" : "源素材 · 原始画面，非成片"}</span>
     {missing || state !== "ready" ? <div className={mediaUi.playerState} role={state === "error" ? "alert" : "status"}>
@@ -183,10 +187,17 @@ function CanvasControls({ ratio, fitMode, versionId, editError, busy, onPreview,
 }
 
 type VideoStageMontage = Pick<CreationTaskMontage, "clips" | "cues" | "duration_seconds" | "output_url" | "low_confidence_clip_count" | "aspect_ratio" | "graphic_overlays">;
-export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montage, planAspectRatio, subtitleTracks, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, timelineActions, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay, editError, onEditSubtitle, seekRequest, audioSelection, titleReplay }:  {
+export type TitleReplayRequest = { turnId: string; versionId: string; isCurrent: () => boolean };
+export type CaptureReplayPermission = () => (() => boolean) | undefined;
+
+export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montage, planAspectRatio, subtitleTracks, selectedId, onSelect, onPosition, videoRef, initialTime, renderAction, timelineActions, audioTracks, busy = false, onPreview, onDraftChange = () => {}, selectedOverlayId, onSelectOverlay, editError, onEditSubtitle, seekRequest, audioSelection, titleReplay, replayRequest, replayPermissionRef, replayStatus, onReplayInterruption }:  {
   editError?: string; onEditSubtitle?: (cueId: string) => void;
   seekRequest?: { seconds: number };
   titleReplay?: { startSeconds: number; endSeconds: number; mediaReady: boolean };
+  replayRequest?: TitleReplayRequest | null;
+  replayPermissionRef?: RefObject<CaptureReplayPermission | null>;
+  replayStatus?: string;
+  onReplayInterruption?: () => void;
   audioSelection?: { id: string; seconds?: number };
   selectedOverlayId?: string|null; onSelectOverlay?: (id:string)=>void;
   taskId: string; versionId: string | null; narrationCacheKey: string | null; montage: VideoStageMontage;
@@ -202,8 +213,17 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
   const [time, setTime] = useWorkspaceViewState("video.time", initialTime);
   const positionRef = useRef(time);
   const boundedReplay = useRef<{ identity: string; endSeconds: number } | null>(null);
+  const interactionRevision = useRef(0);
+  const scrubbing = useRef(false);
+  const sourcePlaying = useRef(false);
+  const attemptedReplay = useRef(new Set<string>());
+  const [blockedReplay, setBlockedReplay] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    sourcePlaying.current = false;
+  }, [selectedId, montage.output_url, viewActive]);
   useLayoutEffect(() => {
     if (!seekRequest) return;
+    interactionRevision.current += 1;
     boundedReplay.current = null;
     positionRef.current = seekRequest.seconds;
     setTime(seekRequest.seconds);
@@ -225,6 +245,18 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
       setPlaying(false);
     }
   }, [viewActive, montage.output_url]);
+  useLayoutEffect(() => {
+    if (!viewActive) {
+      interactionRevision.current += 1;
+      scrubbing.current = false;
+    }
+  }, [viewActive]);
+  useImperativeHandle(replayPermissionRef, () => () => {
+    if (!viewActive || scrubbing.current || sourcePlaying.current || continuePlayback.current || videoRef.current?.paused === false) return;
+    const revision = interactionRevision.current;
+    return () => revision === interactionRevision.current && !scrubbing.current && !sourcePlaying.current
+      && !continuePlayback.current && videoRef.current?.paused !== false;
+  }, [viewActive, videoRef]);
   const aspectRatio = montage.aspect_ratio ?? planAspectRatio;
   const previewRatio = aspectRatio === "16:9" ? 16 / 9 : aspectRatio === "1:1" ? 1 : 9 / 16;
   const canvasFitMode = montage.clips.length > 0 && montage.clips.every(clip => clip.fit_mode === "fit")
@@ -256,6 +288,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
     onPosition(seconds);
   }
   function seek(value: number) {
+    interactionRevision.current += 1;
     boundedReplay.current = null;
     if (videoRef.current) videoRef.current.currentTime = value;
     position(value);
@@ -263,29 +296,57 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
   function outputEvent(video: HTMLVideoElement, state: "loading" | "ready" | "error") {
     if (video === videoRef.current) setOutputState({ identity: outputIdentity, state });
   }
-  function startPlayback(video: HTMLVideoElement) {
+  function startPlayback(video: HTMLVideoElement, onBlocked?: () => void) {
     void video.play().catch(error => {
       if (video !== videoRef.current || error.name === "AbortError") return;
       boundedReplay.current = null;
       continuePlayback.current = false;
       setPlaying(false);
-      if (error.name !== "NotAllowedError") outputEvent(video, "error");
+      if (error.name === "NotAllowedError") onBlocked?.();
+      else outputEvent(video, "error");
     });
   }
   function togglePlayback() {
     const video = videoRef.current;
     if (!video) return;
+    onReplayInterruption?.();
+    interactionRevision.current += 1;
     if (video.paused) startPlayback(video);
     else video.pause();
   }
   const titleMediaReady = Boolean(titleReplay?.mediaReady && montage.output_url);
-  function replayTitleEdit() {
+  const outputUrl = montage.output_url && versionId
+    ? `${montage.output_url}${montage.output_url.includes("?") ? "&" : "?"}expected_version_id=${encodeURIComponent(versionId)}`
+    : montage.output_url;
+  function setScrubbing(active: boolean) {
+    if (active) {
+      onReplayInterruption?.();
+      interactionRevision.current += 1;
+    }
+    scrubbing.current = active;
+  }
+  function replayTitleEdit(turnId?: string) {
     const video = videoRef.current;
     if (!video || !titleReplay || !titleMediaReady || playbackState !== "ready" || !viewActive) return;
+    const previous = video.currentTime;
+    setBlockedReplay(null);
     seek(titleReplay.startSeconds);
+    const revision = interactionRevision.current;
     boundedReplay.current = { identity: outputIdentity, endSeconds: titleReplay.endSeconds };
-    startPlayback(video);
+    startPlayback(video, turnId ? () => {
+      if (revision === interactionRevision.current) seek(previous);
+      setBlockedReplay(turnId);
+    } : undefined);
   }
+  const playRequestedReplay = useRef(replayTitleEdit);
+  playRequestedReplay.current = replayTitleEdit;
+  useEffect(() => {
+    if (!replayRequest || attemptedReplay.current.has(replayRequest.turnId)) return;
+    const canPlay = viewActive && versionId === replayRequest.versionId && titleMediaReady && replayRequest.isCurrent();
+    if (canPlay && playbackState === "loading") return;
+    attemptedReplay.current.add(replayRequest.turnId);
+    if (canPlay && playbackState === "ready") playRequestedReplay.current(replayRequest.turnId);
+  }, [playbackState, replayRequest, titleMediaReady, versionId, viewActive]);
   const subtitleTrack = <SubtitleTimelineTrack track={subtitleTracks.find(track => track.language === "zh-CN" && track.status === "valid" && track.style.enabled !== false) ?? subtitleTracks.find(track => track.status === "valid" && track.style.enabled !== false)} montage={montage} selectedClipId={selectedId} onSelect={(id, time) => { onSelect(id, false); seek(time); }} onEdit={onEditSubtitle}/>;
   const previewTools = <div className={ui.monitorTools} role="group" aria-label="预览工具">
     <IconButton label={storyboardOpen ? "收起镜头列表" : "展开镜头列表"} aria-expanded={storyboardOpen} onClick={() => setStoryboardOpen(open => !open)}><ListVideo /></IconButton>
@@ -301,7 +362,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
     <section className={ui.monitor} aria-label="视频预览">
     <div className={ui.playerViewport} ref={playerViewport}>
     <div className={ui.player} data-editor-player data-editor-aspect-ratio={aspectRatio} style={{ aspectRatio: previewRatio, ...(playerSize ?? {}) }}>
-      {montage.output_url ? <WorkspaceVideo key={`${outputIdentity}:${outputRetry}`} aria-label="剪辑成片预览" positionKey="" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(versionId ?? "")}`)} muted={muted}
+      {outputUrl ? <WorkspaceVideo key={`${outputIdentity}:${outputRetry}`} aria-label="剪辑成片预览" positionKey="" ref={videoRef} playsInline preload="metadata" src={apiUrl(outputUrl)} muted={muted}
         onLoadedMetadata={event => {
           const video = event.currentTarget;
           if (video !== videoRef.current) return;
@@ -327,7 +388,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
           position(video.currentTime);
         }}
         onSeeked={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget.currentTime); }}
-        onPlay={event => { if (event.currentTarget === videoRef.current) { continuePlayback.current = true; setPlaying(true); } }}
+        onPlay={event => { if (event.currentTarget === videoRef.current) { interactionRevision.current += 1; continuePlayback.current = true; setPlaying(true); } }}
         onPause={event => { if (event.currentTarget === videoRef.current) {
           boundedReplay.current = null;
           continuePlayback.current = false;
@@ -342,7 +403,14 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
           setPlaying(false);
           outputEvent(event.currentTarget, "error");
         }} />
-        : selected ? <ClipMedia key={clipMediaKey(selected, taskId)} clip={selected} taskId={taskId} preview />
+        : selected ? <ClipMedia key={clipMediaKey(selected, taskId)} clip={selected} taskId={taskId} preview
+          onPlaybackChange={active => {
+            sourcePlaying.current = active;
+            if (active) {
+              interactionRevision.current += 1;
+              onReplayInterruption?.();
+            }
+          }} />
           : <p>{montage.clips.length ? "从时间线选择镜头" : "时间线还没有镜头"}</p>}
       {montage.output_url && playbackState !== "ready" ? <div className={mediaUi.playerState} role={playbackState === "error" ? "alert" : "status"}>
         <span>{playbackState === "error" ? "成片暂时无法播放" : "正在读取成片…"}</span>
@@ -352,19 +420,25 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
     </div>
     <div className={ui.monitorBar}>
       {montage.output_url ? <div className={ui.transport} data-editor-transport role="group" aria-label="作品播放控制">
-        <IconButton className={ui.iconButton} label="跳到开头" onClick={() => seek(0)}><SkipBack /></IconButton>
+        <IconButton className={ui.iconButton} label="跳到开头" onClick={() => { onReplayInterruption?.(); seek(0); }}><SkipBack /></IconButton>
         <IconButton className={ui.iconButton} label={playing && playbackState === "ready" ? "暂停成片" : "播放成片"} onClick={togglePlayback}>{playing && playbackState === "ready" ? <Pause /> : <Play />}</IconButton>
-        <IconButton className={ui.iconButton} label="跳到结尾" onClick={() => seek(montage.duration_seconds)}><SkipForward /></IconButton>
+        <IconButton className={ui.iconButton} label="跳到结尾" onClick={() => { onReplayInterruption?.(); seek(montage.duration_seconds); }}><SkipForward /></IconButton>
         <IconButton className={ui.iconButton} label={muted ? "取消静音" : "静音"} onClick={() => setMuted(!muted)}>{muted ? <VolumeX /> : <Volume2 />}</IconButton>
-        <input aria-label="成片播放位置" aria-valuetext={editorTime(time)} type="range" min={0} max={montage.duration_seconds} step={0.01} value={Math.min(time, montage.duration_seconds)} onChange={event => seek(Number(event.target.value))} />
+        <input aria-label="成片播放位置" aria-valuetext={editorTime(time)} type="range" min={0} max={montage.duration_seconds} step={0.01} value={Math.min(time, montage.duration_seconds)}
+          onPointerDown={() => setScrubbing(true)}
+          onPointerUp={() => setScrubbing(false)} onPointerCancel={() => setScrubbing(false)} onLostPointerCapture={() => setScrubbing(false)}
+          onChange={event => { onReplayInterruption?.(); seek(Number(event.target.value)); }} />
         <div className={ui.monitorReadout}>
           <span className={ui.monitorMode}>合成预览</span>
           <time className={ui.monitorTime}>{editorTime(time)} <span>/ {editorTime(montage.duration_seconds)}</span></time>
         </div>
       </div> : <span className={ui.monitorMode}>当前剪辑尚未合成</span>}
-      {titleReplay ? titleMediaReady
-        ? <Button variant="outline" type="button" disabled={playbackState !== "ready"} onClick={replayTitleEdit}>回放刚才的修改</Button>
-        : <span role="status">本次标题修改已保存，当前版本待合成。</span> : null}
+      {titleReplay && titleMediaReady
+        ? <Button variant="outline" type="button" disabled={playbackState !== "ready"} onClick={() => replayTitleEdit()}>回放刚才的修改</Button>
+        : titleReplay && !replayStatus ? <span role="status">本次标题修改已保存，当前版本待合成。</span> : null}
+      {replayStatus ? <span role="status">{replayStatus}</span> : null}
+      {titleMediaReady && blockedReplay && blockedReplay === replayRequest?.turnId
+        ? <span role="status">浏览器需要你点击回放按钮。</span> : null}
       {montage.low_confidence_clip_count > 0 ? <span className={ui.monitorWarning}>{montage.low_confidence_clip_count} 个镜头待查看</span> : null}
       {previewTools}
     </div>
@@ -374,7 +448,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
       <span className={ui.shotImage}><ClipThumbnail clip={clip} taskId={taskId} statusId={`${storyboardId}-thumbnail-${index}`} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
       <span className={ui.shotLabel}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><small>{editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</small></span>
     </button>)}</div> : null}
-    <TimelineViewport actions={timelineActions} duration={montage.duration_seconds} time={time} playing={playing} selectedTime={audioSelection?.seconds ?? selected?.timeline_start_seconds} selectionKey={audioSelection?.id ?? selectedId} formatTime={editorTime} onSeek={value => { const clip = montage.clips.find(item => value >= item.timeline_start_seconds && value < item.timeline_end_seconds); if (clip && clip.id !== selectedId) onSelect(clip.id, false); seek(value); }}>
+    <TimelineViewport actions={timelineActions} duration={montage.duration_seconds} time={time} playing={playing} selectedTime={audioSelection?.seconds ?? selected?.timeline_start_seconds} selectionKey={audioSelection?.id ?? selectedId} formatTime={editorTime} onScrubChange={setScrubbing} onSeek={value => { onReplayInterruption?.(); const clip = montage.clips.find(item => value >= item.timeline_start_seconds && value < item.timeline_end_seconds); if (clip && clip.id !== selectedId) onSelect(clip.id, false); seek(value); }}>
       {onSelectOverlay && montage.graphic_overlays?.length ? <OverlayTimeline formatTime={editorTime} items={montage.graphic_overlays} duration={montage.duration_seconds} selectedId={selectedOverlayId} disabled={busy} onSelect={onSelectOverlay}/> : null}
       <div className={ui.track}>
         <span><Clapperboard aria-hidden />画面</span>

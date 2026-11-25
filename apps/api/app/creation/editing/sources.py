@@ -29,11 +29,12 @@ class EditClipSourceReader:
         self._segment_eligible = segment_eligible
         self._conflict_error = conflict_error
 
-    def _source_video(self, workspace_id, task_id, clip, *, user_id, local_diagnostic, connection):
+    def _source_video(self, workspace_id, task_id, clip, *, user_id, local_diagnostic, connection, montage=None):
         """A selected whole-file range is proved by its plan, never by a missing segment."""
         task = self._read_task(workspace_id, task_id, connection=connection)
         plan = self._read_plan(workspace_id, task.plan_id, connection=connection)
-        montage = self._read_montage(workspace_id, task_id, connection=connection)
+        if montage is None:
+            montage = self._read_montage(workspace_id, task_id, connection=connection)
         source = plan.source_media
         if (source is None or task.confirmed_script_id is not None or montage['script_id'] is not None
                 or clip['segment_id'] is not None or clip['cue_id'] is not None
@@ -68,6 +69,13 @@ class EditClipSourceReader:
         selection = ClipSourceSelection(start, end, source['preserve_audio'], asset.id, None, reference, clip['role'])
         return selection, source, asset, observed
 
+    def _require_eligible_segment(self, asset, segment, workspace_id, *, automation_only):
+        eligibility = material_usage_eligibility(asset, segment, purpose="automatic" if automation_only else "manual")
+        if not eligibility.eligible:
+            raise self._conflict_error(f"{eligibility.status}：{eligibility.reason}；{eligibility.repair_action}")
+        if not self._segment_eligible(asset, segment, workspace_id, automation_only=automation_only):
+            raise self._conflict_error("素材片段当前不可用，请检查来源、范围和使用限制")
+
     def resolve(self, workspace_id, task_id, clip, values, *, user_id, local_diagnostic):
         replacing = values.get("asset_id") is not None or values.get("segment_id") is not None
         if clip.person_render_id and not replacing:
@@ -88,11 +96,7 @@ class EditClipSourceReader:
             raise PermissionError("当前成员无权使用该素材")
         if segment is None:
             raise KeyError("material segment not found")
-        eligibility=material_usage_eligibility(asset,segment,purpose='automatic' if values.get('automation_only') else 'manual')
-        if not eligibility.eligible:
-            raise self._conflict_error(f'{eligibility.status}：{eligibility.reason}；{eligibility.repair_action}')
-        if not self._segment_eligible(asset, segment, workspace_id, automation_only=bool(values.get('automation_only'))):
-            raise self._conflict_error("素材片段当前不可用，请检查来源、范围和使用限制")
+        self._require_eligible_segment(asset, segment, workspace_id, automation_only=bool(values.get("automation_only")))
         speech = effective_segment_usage_role(asset, segment) == "a_roll"
         return ClipSourceSelection(segment.start_seconds, segment.end_seconds, speech,
             asset.id, segment.id, self._asset_reference(workspace_id, asset.id),
@@ -102,6 +106,7 @@ class EditClipSourceReader:
                                replacement: tuple[str, str] | None, user_id: str | None,
                                local_diagnostic: bool, automatic_replacement: bool = False,
                                expected_replacement_version: datetime | None = None,
+                               montage: dict | None = None,
                                connection: sqlite3.Connection | None = None):
         """The current material/source authority shared by typed preview and direct commit."""
         if connection is None:
@@ -109,8 +114,9 @@ class EditClipSourceReader:
                 return self.facts(workspace_id, task_id, clip_ids=clip_ids,
                     replacement=replacement, user_id=user_id, local_diagnostic=local_diagnostic,
                     automatic_replacement=automatic_replacement,
-                    expected_replacement_version=expected_replacement_version, connection=conn)
-        plan = self._read_montage(workspace_id, task_id, connection=connection)
+                    expected_replacement_version=expected_replacement_version,
+                    montage=montage, connection=conn)
+        plan = self._read_montage(workspace_id, task_id, connection=connection) if montage is None else montage
         clips = [clip for clip in plan["clips"] if clip["id"] in clip_ids]
         if len(clips) != len(clip_ids):
             raise KeyError("当前任务镜头不存在")
@@ -119,7 +125,7 @@ class EditClipSourceReader:
         for clip in material_clips:
             if clip['segment_id'] is None:
                 selection, source, asset, observed = self._source_video(workspace_id, task_id, clip,
-                    user_id=user_id, local_diagnostic=local_diagnostic, connection=connection)
+                    user_id=user_id, local_diagnostic=local_diagnostic, connection=connection, montage=plan)
                 source_facts[(asset.id, None)] = {'asset_id':asset.id, 'segment_id':None,
                     'reference':selection.reference, 'modified_at':asset.modified_at.isoformat(),
                     'start_seconds':selection.start_seconds, 'end_seconds':selection.end_seconds,
@@ -140,6 +146,10 @@ class EditClipSourceReader:
             segment = next((item for item in asset.segments if item.id == segment_id), None)
             if segment is None:
                 raise ValueError("镜头来源或使用状态已失效")
+            # A supplied candidate snapshot is the edit's actual source. Its
+            # bound segments must still be usable for the new manual operation.
+            if montage is not None:
+                self._require_eligible_segment(asset, segment, workspace_id, automation_only=False)
             if (asset_id, segment_id) == replacement:
                 if automatic_replacement:
                     eligibility = material_usage_eligibility(asset, segment, purpose="automatic")

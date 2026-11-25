@@ -200,7 +200,8 @@ def _compile_title_entry(text, values, selected_refs):
         r'(?:把)?(?P<current>当前|这个|选中的)?标题\s*'
         r'(?:(?P<index>[1-9]\d*)|[“「](?P<name>[^”」]+)[”」])?(?:的?入场(?:时间)?)?\s*'
         r'(?:(?P<direction>提前|推迟)\s*(?P<amount>半|\d+(?:\.\d+)?)\s*(?P<unit>秒|帧)'
-        r'|(?:改到|移到|设为)\s*第\s*(?P<frame>\d+)\s*帧)', text,
+        r'|(?:改到|移到|设为)\s*第\s*(?P<frame>\d+)\s*帧)'
+        r'(?:[，,]\s*改完后回放)?', text,
     )
     if not match:
         return None
@@ -244,7 +245,7 @@ def _compile_title_entry(text, values, selected_refs):
 
 def compile_overlay_command(command, values, sources=(), selected_refs=()):
     text=command.strip().rstrip('。！')
-    entry = _compile_title_entry(text, values, selected_refs)
+    entry = _compile_title_entry(command.strip().rstrip('。！!'), values, selected_refs)
     if entry is not None:
         return entry
     contextual=re.match(r'(?:把)?(?:当前|这个|选中的)(标题|图片|标识|箭头)',text)

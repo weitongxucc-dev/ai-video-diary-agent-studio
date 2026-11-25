@@ -1,4 +1,4 @@
-import type { AssistantConversationTurn, CreationExecutionStatus, CreationTask, CreationTaskAssistantTurnResponse,
+import type { AssistantConversation, AssistantConversationTurn, CreationExecutionStatus, CreationTask, CreationTaskAssistantTurnResponse,
   CreationTaskEditConfirmResponse, CreationTaskEditOperation, CreationTaskTimelineVersionDetail, CreationTaskWorkspace } from "@/lib/types";
 import { assistantTaskTurnResult, assistantTurnScriptWindowRequest } from "../useAssistantConversation";
 
@@ -6,6 +6,45 @@ export type TimelineEditTarget =
   | { kind: "shot"; id: string }
   | { kind: "subtitle"; id: string; trackId?: string }
   | { kind: "title"; id: string; replay: { startSeconds: number; endSeconds: number } };
+
+export type TitleReplayIntent = "after-title-edit" | "last-title-edit";
+
+export function titleReplayIntent(message: string): TitleReplayIntent | undefined {
+  const text = message.trim().replace(/[。！!]+$/, "");
+  if (text === "回放刚才修改的片段") return "last-title-edit";
+  // Match the existing title timing command and the explicit replay suffix as
+  // a whole. Quotes, questions, and playback restrictions are separate inputs.
+  const title = /^(?:把)?(?:当前|这个|选中的)?标题\s*(?:[1-9]\d*|[“「][^”」]+[”」])?(?:的?入场(?:时间)?)?\s*/;
+  const timing = /^(?:(?:提前|推迟)\s*(?:半|\d+(?:\.\d+)?)\s*(?:秒|帧)|(?:改到|移到|设为)\s*第\s*\d+\s*帧)[，,]\s*改完后回放$/;
+  const prefix = title.exec(text);
+  if (prefix && timing.test(text.slice(prefix[0].length))) return "after-title-edit";
+}
+
+export function persistedTitleReplayInput(conversation: AssistantConversation | null, task: CreationTask, conversationId: string,
+  message: string, result: CreationTaskAssistantTurnResponse, intent: TitleReplayIntent) {
+  if (conversation?.id !== conversationId || conversation.workspace_id !== task.workspace_id
+    || conversation.scope_kind !== "task" || conversation.scope_id !== task.id) return;
+  const turn = conversation.turns.at(-1);
+  if (!turn || turn.id !== result.turn_id || turn.status !== "completed" || turn.user_message !== message
+    || turn.events.some(event => event.type === "assistant_input"
+      && ["consumed", "completed", "interrupted"].includes(event.status))) return;
+  const persisted = assistantTaskTurnResult(turn)?.response;
+  if (persisted?.turn_id !== turn.id) return;
+  const origin = { turnId: turn.id, conversationId };
+  if (intent === "last-title-edit") {
+    if (persisted.provider === "local" && persisted.model === "本地回放") return origin;
+    return;
+  }
+  const saved = assistantSavedEdit(task.id, persisted);
+  const input = persisted.edit_request?.submitted_input;
+  if (saved?.operation.operation_type === "EditGraphicOverlay"
+    && saved.operation.id === assistantSavedEdit(task.id, result)?.operation.id
+    && input?.assistant_turn_id === turn.id && input.expected_timeline_version_id === task.current_timeline_version_id) {
+    return { ...origin, saved };
+  }
+}
+
+export type TitleReplayInput = NonNullable<ReturnType<typeof persistedTitleReplayInput>>;
 
 type ResultLocation =
   | { stage: "script"; scriptId: string; updatedAt?: string | null }

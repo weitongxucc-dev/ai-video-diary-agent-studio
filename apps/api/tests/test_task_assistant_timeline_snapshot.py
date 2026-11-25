@@ -51,7 +51,7 @@ def task_client(tmp_path, monkeypatch, request):
 
     monkeypatch.setattr(main, "run_task_turn", run)
 
-    def create(sequence, *, reader_token=token):
+    def create(sequence, *, reader_token=token, message="核对任务，不执行写入。", task_scope=False):
         plan = CreationPlan(
             id="plan", workspace_id="qa", goal="版本校验", name="隔离任务", target_count=1,
             language="zh-CN", aspect_ratio="9:16", duration_target_seconds=30,
@@ -73,10 +73,10 @@ def task_client(tmp_path, monkeypatch, request):
             ))
         headers = {"X-Local-Member-Token": reader_token}
         client = TestClient(main.app)
-        conversation = client.post("/api/assistant/conversations/current", headers=headers,
-                                   json={"scope_kind": "home", "scope_id": "home"}).json()
+        scope = {"scope_kind": "task", "scope_id": task.id} if task_scope else {"scope_kind": "home", "scope_id": "home"}
+        conversation = client.post("/api/assistant/conversations/current", headers=headers, json=scope).json()
         payload = {
-            "conversation_id": conversation["id"], "message": "核对任务，不执行写入。",
+            "conversation_id": conversation["id"], "message": message,
             "client_request_id": str(uuid4()), "expected_draft_version": 1,
             "context_stage": task.stage, "expected_timeline_sequence": sequence,
             "expected_timeline_version_id": f"timeline-{sequence}" if sequence else None,
@@ -87,6 +87,34 @@ def task_client(tmp_path, monkeypatch, request):
         return client, headers, payload
 
     return create, production, conversations, calls, member.member_id
+
+
+@pytest.mark.parametrize(("message", "local"), [
+    ("回放刚才修改的片段", True),
+    ("不要回放刚才修改的片段", False),
+    ("我上次说过「回放刚才修改的片段」", False),
+    ("标题提前半秒，改完后回放", False),
+])
+def test_task_turn_handles_only_the_explicit_read_only_replay_locally(task_client, message, local):
+    create, production, conversations, calls, _ = task_client
+    client, headers, payload = create(2, message=message, task_scope=True)
+    endpoint = "/api/creation-tasks/task/assistant/turn"
+    stale = client.post(endpoint, headers=headers, json={**payload, "expected_timeline_version_id": "timeline-1"})
+    assert stale.status_code == 409
+    first = client.post(endpoint, headers=headers, json=payload)
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert (body["provider"], body["model"]) == (("local", "本地回放") if local else ("controlled", "fixture"))
+    retry = client.post(endpoint, headers=headers, json=payload)
+    assert retry.status_code == 200 and retry.json() == body
+    assert len(calls) == (0 if local else 1)
+    saved, = conversations.list_turns(payload["conversation_id"])
+    assert saved["id"] == body["turn_id"] and saved["user_message"] == message and saved["status"] == "completed"
+    assert production.task_records.get_creation_task("qa", "task").current_timeline_version_id == "timeline-2"
+    if local:
+        assert body["execution_action"] is None and body["edit_request"] is None
+        assert "已播放" not in body["reply"]
+        assert not saved["result"].get("goal_continuation")
 
 
 @pytest.mark.parametrize("sequence", [0, 2], ids=["new-task", "persisted-timeline"])

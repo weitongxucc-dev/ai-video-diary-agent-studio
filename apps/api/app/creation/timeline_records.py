@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime
 import sqlite3
 from typing import Literal
@@ -11,6 +12,15 @@ from app.creation.contracts import TimelineVersion
 from app.creation.task_input_reads import require_creation_task
 from app.models import utc_now
 from app.persistence_json import _json_object, _json_payload
+
+
+@dataclass(frozen=True)
+class TimelineCandidate:
+    workspace_id: str
+    task_id: str
+    id: str
+    base_version_id: str
+    head_version_id: str
 
 
 def validate_timeline_version(version: TimelineVersion) -> None:
@@ -61,11 +71,13 @@ class TimelineRecordStore:
             "SELECT * FROM timeline_versions WHERE id = ?",
             (version.id,),
         ).fetchone()
+        if existing_row is not None and existing_row["candidate_id"] is not None:
+            raise ValueError("候选时间线不能直接发布为正式版本")
         if existing_row is None:
             existing_row = conn.execute(
                 """
                 SELECT * FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ? AND sequence = ?
+                WHERE workspace_id = ? AND task_id = ? AND sequence = ? AND candidate_id IS NULL
                 """,
                 (version.workspace_id, version.task_id, version.sequence),
             ).fetchone()
@@ -92,7 +104,7 @@ class TimelineRecordStore:
         latest_row = conn.execute(
             """
             SELECT id, sequence FROM timeline_versions
-            WHERE workspace_id = ? AND task_id = ?
+            WHERE workspace_id = ? AND task_id = ? AND candidate_id IS NULL
             ORDER BY sequence DESC LIMIT 1
             """,
             (version.workspace_id, version.task_id),
@@ -104,7 +116,7 @@ class TimelineRecordStore:
             parent = conn.execute(
                 """
                 SELECT sequence FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                WHERE workspace_id = ? AND task_id = ? AND id = ? AND candidate_id IS NULL
                 """,
                 (
                     version.workspace_id,
@@ -117,24 +129,7 @@ class TimelineRecordStore:
             if version.sequence != int(latest_row["sequence"]) + 1:
                 raise ValueError("时间线版本序号必须连续递增")
         try:
-            conn.execute(
-                """
-                INSERT INTO timeline_versions
-                    (id, workspace_id, task_id, parent_version_id, sequence,
-                     snapshot_json, created_by_operation_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    version.id,
-                    version.workspace_id,
-                    version.task_id,
-                    version.parent_version_id,
-                    version.sequence,
-                    _json_object(version.snapshot),
-                    version.created_by_operation_id,
-                    version.created_at.isoformat(),
-                ),
-            )
+            self._insert_version(conn, version, candidate_id=None)
         except sqlite3.IntegrityError as exc:
             raise ValueError("时间线版本已存在，不能覆盖") from exc
         task.current_timeline_version_id = version.id
@@ -153,12 +148,79 @@ class TimelineRecordStore:
         )
         return version
 
+    @staticmethod
+    def _insert_version(connection, version, *, candidate_id):
+        connection.execute(
+            """
+            INSERT INTO timeline_versions
+                (id, workspace_id, task_id, parent_version_id, sequence, snapshot_json,
+                 created_by_operation_id, created_at, candidate_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (version.id, version.workspace_id, version.task_id, version.parent_version_id,
+             version.sequence, _json_object(version.snapshot), version.created_by_operation_id,
+             version.created_at.isoformat(), candidate_id),
+        )
+
+    @staticmethod
+    def get_candidate(workspace_id, task_id, candidate_id, *, connection) -> TimelineCandidate:
+        row = connection.execute(
+            "SELECT * FROM timeline_candidates WHERE workspace_id=? AND task_id=? AND id=?",
+            (workspace_id, task_id, candidate_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError(candidate_id)
+        return TimelineCandidate(**dict(row))
+
+    @staticmethod
+    def list_candidates(workspace_id, task_id, *, limit, after_id, connection) -> list[TimelineCandidate]:
+        rows = connection.execute(
+            "SELECT * FROM timeline_candidates WHERE workspace_id=? AND task_id=? AND id>? ORDER BY id LIMIT ?",
+            (workspace_id, task_id, after_id, limit),
+        ).fetchall()
+        return [TimelineCandidate(**dict(row)) for row in rows]
+
+    @staticmethod
+    def create_candidate(base: TimelineVersion, candidate_id: str, *, connection) -> TimelineCandidate:
+        candidate = TimelineCandidate(base.workspace_id, base.task_id, candidate_id, base.id, base.id)
+        connection.execute(
+            "INSERT INTO timeline_candidates(workspace_id, task_id, id, base_version_id, head_version_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (candidate.workspace_id, candidate.task_id, candidate.id, candidate.base_version_id, candidate.head_version_id),
+        )
+        return candidate
+
+    def get_candidate_version(self, candidate: TimelineCandidate, version_id: str, *, connection) -> TimelineVersion:
+        scope = None if version_id == candidate.base_version_id else candidate.id
+        row = connection.execute(
+            "SELECT * FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=? AND candidate_id IS ?",
+            (candidate.workspace_id, candidate.task_id, version_id, scope),
+        ).fetchone()
+        if row is None:
+            raise KeyError(version_id)
+        return self.timeline_version_from_row(row)
+
+    def advance_candidate(self, candidate: TimelineCandidate, version: TimelineVersion, *, connection) -> None:
+        validate_timeline_version(version)
+        head = self.get_candidate_version(candidate, candidate.head_version_id, connection=connection)
+        if (version.workspace_id, version.task_id, version.parent_version_id, version.sequence) != (
+                head.workspace_id, head.task_id, head.id, head.sequence + 1):
+            raise ValueError("候选版本与原分支谱系不一致")
+        advanced = connection.execute(
+            "UPDATE timeline_candidates SET head_version_id=? WHERE workspace_id=? AND task_id=? AND id=? "
+            "AND head_version_id=?",
+            (version.id, candidate.workspace_id, candidate.task_id, candidate.id, head.id),
+        ).rowcount
+        if advanced != 1:
+            raise ValueError("候选时间线已变化，请重新读取候选")
+        self._insert_version(connection, version, candidate_id=candidate.id)
+
     def get_timeline_version(
         self, workspace_id: str, version_id: str, *, connection: sqlite3.Connection | None = None
     ) -> TimelineVersion:
         with (self._connect() if connection is None else nullcontext(connection)) as conn:
             row = conn.execute(
-                "SELECT * FROM timeline_versions WHERE workspace_id = ? AND id = ?",
+                "SELECT * FROM timeline_versions WHERE workspace_id = ? AND id = ? AND candidate_id IS NULL",
                 (workspace_id, version_id),
             ).fetchone()
         if row is None:
@@ -170,7 +232,7 @@ class TimelineRecordStore:
     ) -> int:
         require_creation_task(connection, workspace_id, task_id)
         row = connection.execute(
-            "SELECT MAX(sequence) FROM timeline_versions WHERE workspace_id = ? AND task_id = ?",
+            "SELECT MAX(sequence) FROM timeline_versions WHERE workspace_id = ? AND task_id = ? AND candidate_id IS NULL",
             (workspace_id, task_id),
         ).fetchone()
         return (row[0] or 0) + 1
@@ -183,7 +245,7 @@ class TimelineRecordStore:
             rows = conn.execute(
                 """
                 SELECT * FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ? ORDER BY sequence ASC
+                WHERE workspace_id = ? AND task_id = ? AND candidate_id IS NULL ORDER BY sequence ASC
                 """,
                 (workspace_id, task_id),
             ).fetchall()
@@ -192,9 +254,11 @@ class TimelineRecordStore:
     def timeline_contains_version(self, workspace_id, task_id, current_id, ancestor_id):
         with self._connect() as conn:
             return conn.execute("WITH RECURSIVE history(id,parent_version_id) AS ("
-                "SELECT id,parent_version_id FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=? UNION "
+                "SELECT id,parent_version_id FROM timeline_versions "
+                "WHERE workspace_id=? AND task_id=? AND id=? AND candidate_id IS NULL UNION "
                 "SELECT v.id,v.parent_version_id FROM timeline_versions v JOIN history h ON h.parent_version_id=v.id "
-                "WHERE v.workspace_id=? AND v.task_id=?) SELECT 1 FROM history WHERE id=? LIMIT 1",
+                "WHERE v.workspace_id=? AND v.task_id=? AND v.candidate_id IS NULL) "
+                "SELECT 1 FROM history WHERE id=? LIMIT 1",
                 (workspace_id, task_id, current_id, workspace_id, task_id, ancestor_id)).fetchone() is not None
 
     def timeline_version_from_row(self, row: sqlite3.Row) -> TimelineVersion:
@@ -224,7 +288,7 @@ class TimelineRecordStore:
         return connection.execute(
                 """
                 SELECT 1 FROM timeline_versions
-                WHERE workspace_id = ? AND task_id = ? AND id = ?
+                WHERE workspace_id = ? AND task_id = ? AND id = ? AND candidate_id IS NULL
                 """,
                 (workspace_id, task_id, version_id),
             ).fetchone() is not None

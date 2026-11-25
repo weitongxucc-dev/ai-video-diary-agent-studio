@@ -25,15 +25,16 @@ export const HOME_OVERVIEW_HREF = "/?mode=panel";
 export const FULL_HOME_HREF = "/?mode=manage";
 export const DEVICE_STATUS_PATH = "/device-status";
 export const DEVICE_SETTINGS_HREF = "/settings?section=runtime";
-const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates"];
-export const workspaceResourcePageIds = [...workspaceResourcePaths, HOME_OVERVIEW_HREF, DEVICE_STATUS_PATH];
+const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates", "/history", DEVICE_STATUS_PATH];
+export const workspaceResourcePageIds = [...workspaceResourcePaths, HOME_OVERVIEW_HREF];
 const workResourcePanels = new Map([
   ["/", HOME_OVERVIEW_HREF],
-  [DEVICE_STATUS_PATH, `${DEVICE_STATUS_PATH}?mode=panel`],
   ["/library", "/library?mode=panel&resource=materials"],
   ["/knowledge", "/knowledge?mode=panel"],
   ["/profiles", "/profiles?mode=panel"],
   ["/templates", "/templates?mode=panel"],
+  ["/history", "/history?mode=panel"],
+  [DEVICE_STATUS_PATH, `${DEVICE_STATUS_PATH}?mode=panel`],
 ]);
 
 export function workspaceNavigationHref(href: string, hasActiveWork: boolean) {
@@ -66,7 +67,7 @@ export function isCreationDraftPage(id: string) {
 }
 
 export function isWorkbenchManagedPath(pathname: string, search?: Pick<URLSearchParams, "get"> | null) {
-  return isCreationDraftRoute(pathname, search) || pathname === "/" || workspaceResourcePageIds.includes(pathname) || pathname.startsWith("/tasks/");
+  return isCreationDraftRoute(pathname, search) || pathname === "/" || workspaceResourcePaths.includes(pathname) || pathname.startsWith("/tasks/");
 }
 
 export function useWorkspacePage() { return useContext(WorkspacePageContext); }
