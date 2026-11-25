@@ -65,11 +65,9 @@ def test_fixed_manual_page_candidates_require_trusted_desktop_to_adopt(tmp_path,
     monkeypatch.setattr(main, '_content_identity_http_adapter', lambda: SimpleNamespace(
         reader=lambda *_: (member, False), assistant_member=lambda *_: member, visible=lambda *_: True))
     monkeypatch.setattr(main, 'local_members_service', members)
-    monkeypatch.setattr(main, '_verify_creation_identity', case.owner.verify_identity)
     monkeypatch.setattr(main, '_require_automation_task_open', lambda *_: None)
     monkeypatch.setattr(main, '_segment_production_use_case', lambda: case.segments)
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
-    monkeypatch.setattr(main, '_desktop_section_owner', lambda: case.owner)
     monkeypatch.setattr(main, '_desktop_section_confirmation', DesktopSectionConfirmation())
     monkeypatch.setattr(main.app.state, 'desktop_control_token', control['X-Yaohe-Desktop-Control'])
     monkeypatch.setattr(main, '_automation_runtime', lambda: SimpleNamespace(require_task_open=lambda *_: None))
@@ -99,6 +97,9 @@ def test_fixed_manual_page_candidates_require_trusted_desktop_to_adopt(tmp_path,
         creation_task_montage_plan_to_payload(full))
     edits = MetadataEditUseCase(repo, case.segments.artifact_store, output_root=tmp_path / 'review', audio_service=None)
     base = edits.ensure_montage_base('local', task, full)
+    authority = main._task_authorizations_for_goal()
+    authority.ensure(repo.task_records.get_creation_task('local', task_id), actor, interactive=True)
+    assert authority.verdict(actor, task_id, 'narration_edit', references={'asset:section_video'}) == 'ready'
     original_plan = repo.plan_records.get_creation_plan('local', task.plan_id)
     original_script = repo.script_records.get_creation_task_script('local', case.script_id)
     original_other = case.segments.context('local', task_id, 'section_2', actor)
@@ -244,8 +245,22 @@ def test_fixed_manual_page_candidates_require_trusted_desktop_to_adopt(tmp_path,
         assert client.post(edit_url + '/confirm', json=body).status_code == 403
         assert client.post(edit_url + '/confirm', json={'request_id': confirmation_id}).status_code == 403
         assert host.post(second_url + '/confirm', headers=control, json=body).status_code == 404
+        assert host.post(edit_url.replace(task_id, 'task_other') + '/confirm', headers=control,
+                         json=body).status_code == 404
         assert host.post(edit_url + '/confirm', headers=control,
                            json={**body, 'expected_base_version_id': 'wrong-version'}).status_code == 409
+        rotated = uuid4().hex
+        with repo.connection_factory() as conn:
+            conn.execute('UPDATE local_members SET token=? WHERE member_id=?', (rotated, member))
+        try:
+            assert client.get(summary_url).status_code == 401
+            current_session = client.get(summary_url, headers={'X-Local-Member-Token': rotated}).json()
+            assert current_session['selection_digest'] == displayed['selection_digest']
+            assert current_session['session_fingerprint'] != displayed['session_fingerprint']
+            assert host.post(edit_url + '/confirm', headers=control, json=body).status_code == 403
+        finally:
+            with repo.connection_factory() as conn:
+                conn.execute('UPDATE local_members SET token=? WHERE member_id=?', (local_token, member))
         remote = TestClient(api, client=('192.0.2.42', 58587))
         try:
             assert remote.post(edit_url + '/confirm', headers=control, json=body).status_code == 403
@@ -322,6 +337,11 @@ def test_fixed_manual_page_candidates_require_trusted_desktop_to_adopt(tmp_path,
         expired = submit(pending, pending_review, 'candidate')
         assert expired.status_code == 409
         assert repo.job_records.list_job_runs('local', task_id) == jobs
+        repo.update_asset_use_state('local', 'section_video', 'excluded')
+        assert client.get(summary_url).status_code == 403
+        assert host.post(edit_url + '/confirm', headers=control, json=body).status_code == 403
+        assert len(repo.edit_records.list_edit_operations('local', task_id)) == 1
+        assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == version.id
     finally:
         host.close()
         client.close()
