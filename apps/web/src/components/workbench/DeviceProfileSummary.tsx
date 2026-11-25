@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { getSavedDeviceProfileSummary, type SavedDeviceProfileSummary } from "@/lib/api/device-preparation";
 import { DEVICE_SETTINGS_HREF, useWorkspacePage } from "./context";
@@ -39,10 +39,10 @@ function DeviceProfileSummary() {
 
 export function DeviceProfileRouteView() {
   const page = useWorkspacePage();
-  const router = useRouter();
-  const standalone = page?.active && !page.auxiliary;
-  useEffect(() => {
-    if (standalone) router.replace(DEVICE_SETTINGS_HREF);
-  }, [router, standalone]);
-  return page?.active && page.auxiliary ? <DeviceProfileSummary /> : null;
+  if (page && !page.active) return null;
+  if (page?.auxiliary) return <DeviceProfileSummary />;
+  return <div className={styles.summary}>
+    <p>当前是否可用请到设置检查。</p>
+    <Link href={DEVICE_SETTINGS_HREF} prefetch={false} className={styles.settingsLink}>运行情况</Link>
+  </div>;
 }

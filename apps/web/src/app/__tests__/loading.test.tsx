@@ -33,6 +33,16 @@ it("still renders loading when a resource route has no workbench owner", () => {
   expect(screen.getByRole("status")).toHaveTextContent("正在读取");
 });
 
+it("hands device summary loading to the workbench and keeps a fallback for direct visits", () => {
+  navigation.path = "/device-status";
+  navigation.search = "mode=panel";
+  const view = render(<WorkbenchRegistry.Provider value={{ register: vi.fn(), forget: vi.fn() }}><Loading /></WorkbenchRegistry.Provider>);
+  expect(view.container).toBeEmptyDOMElement();
+  view.rerender(<Loading />);
+  expect(screen.getByRole("main", { name: "独立页面外壳" })).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("正在读取");
+});
+
 it("leaves the new-video draft loading to the workbench", () => {
   navigation.path = "/production";
   navigation.search = "new=1";

@@ -15,3 +15,11 @@
   margin-block-start: 8px;
   color: var(--text-2);
 }
+
+.settingsLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-block-start: 4px;
+  text-decoration: underline;
+}

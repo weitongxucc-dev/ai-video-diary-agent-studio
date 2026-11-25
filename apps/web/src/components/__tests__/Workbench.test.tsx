@@ -12,11 +12,11 @@ import { AppShell, type AppShellProps } from "../AppShell";
 import type { HomeCommandComposerProps } from "../HomeCommandComposer";
 import type { CreationTask } from "@/lib/types";
 
-const navigation = vi.hoisted(() => ({ path: "/tasks/a", search: "", push: vi.fn(), replace: vi.fn() }));
+const navigation = vi.hoisted(() => ({ path: "/tasks/a", search: "", push: vi.fn() }));
 const readSavedProfile = vi.hoisted(() => vi.fn());
 const composerMount = vi.hoisted(() => vi.fn());
 const workDetailsOpened = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ usePathname: () => navigation.path, useSearchParams: () => new URLSearchParams(navigation.search), useRouter: () => ({ push: navigation.push, replace: navigation.replace }) }));
+vi.mock("next/navigation", () => ({ usePathname: () => navigation.path, useSearchParams: () => new URLSearchParams(navigation.search), useRouter: () => ({ push: navigation.push }) }));
 vi.mock("@/lib/api/device-preparation", () => ({ getSavedDeviceProfileSummary: readSavedProfile }));
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ token: "member-epoch" }) }));
 vi.mock("../AssistantConversationProvider", () => ({ useAssistantSelection: () => null }));
@@ -176,10 +176,10 @@ it("reads the saved device profile beside the same work and links to explicit se
   expect(vi.mocked(HTMLMediaElement.prototype.pause).mock.contexts).not.toContain(player);
 });
 
-it("opens the existing settings route without reading a summary when there is no active work", async () => {
+it("offers the existing settings link without a background device read when there is no active work", async () => {
   navigation.path = "/device-status"; navigation.search = "mode=panel";
   render(fixture(<DeviceStatusPage />));
-  await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/settings?section=runtime"));
+  expect(await screen.findByRole("link", { name: "运行情况" })).toHaveAttribute("href", "/settings?section=runtime");
   expect(readSavedProfile).not.toHaveBeenCalled();
 });
 
