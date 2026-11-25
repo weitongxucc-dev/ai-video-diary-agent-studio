@@ -12,8 +12,9 @@ SELECT v.workspace_id,v.task_id,v.id,v.sequence,v.parent_version_id,v.created_at
        o.id AS linked_operation_id,o.workspace_id AS operation_workspace_id,
        o.task_id AS operation_task_id,o.result_version_id,o.operation_type,p.target_refs_json,
        json_extract(o.payload_json,'$.request_id') AS source_request_id,
-       CASE WHEN o.id IS NULL AND v.id='timeline_media_' || v.created_by_operation_id
-            THEN json_extract(v.snapshot_json,'$.media_execution') END AS legacy_media_execution,
+       CASE WHEN o.id IS NULL AND (v.id='timeline_media_' || v.created_by_operation_id
+            OR (v.created_by_operation_id IS NULL AND v.id GLOB 'timeline_media_*'))
+            THEN json_extract(v.snapshot_json,'$.media_execution') END AS media_execution,
        coalesce(json_array_length(v.snapshot_json,'$.montage.clips'),0) AS shot_count,
        coalesce(json_array_length(v.snapshot_json,'$.subtitle_track_ids'),0) AS subtitle_track_count,
        coalesce(json_array_length(v.snapshot_json,'$.narration_segments'),0) AS narration_segment_count
@@ -38,12 +39,13 @@ class TimelineHistoryReadRepository:
         return row["current_id"]
 
     @staticmethod
-    def _legacy_media_publication(conn, row):
-        """Recognize only the older media writer's fully bound completion."""
-        raw = row["legacy_media_execution"]
+    def _media_publication(conn, row):
+        """Read the fully bound completion of a formal media-generated version."""
+        raw = row["media_execution"]
         if not isinstance(raw, str) or not row["parent_version_id"]:
-            return False
-        workspace_id, task_id, job_id = row["workspace_id"], row["task_id"], row["operation_id"]
+            return None
+        workspace_id, task_id = row["workspace_id"], row["task_id"]
+        job_id = row["id"].removeprefix("timeline_media_")
         completion = conn.execute("""
             SELECT j.output_refs_json,e.payload_json
             FROM job_runs j
@@ -52,7 +54,7 @@ class TimelineHistoryReadRepository:
             WHERE j.workspace_id=? AND j.task_id=? AND j.id=? AND j.kind='media_execution' AND j.status='succeeded'
             """, (workspace_id, task_id, job_id)).fetchone()
         if completion is None:
-            return False
+            return None
         artifacts = conn.execute("""
             SELECT logical_ref,input_refs_json FROM artifact_records
             WHERE workspace_id=? AND task_id=? AND producer_job_id=? AND kind='media_output'
@@ -60,25 +62,27 @@ class TimelineHistoryReadRepository:
         try:
             snapshot, event = json.loads(raw), json.loads(completion["payload_json"])
             if not isinstance(snapshot, dict) or not isinstance(event, dict) or snapshot.get("job_id") != job_id:
-                return False
+                return None
             request, outputs = snapshot.get("request_id"), snapshot.get("outputs")
             if (not isinstance(request, str) or not request or request != event.get("request_id")
                     or event.get("timeline_version_id") != row["id"]
                     or not isinstance(outputs, list) or not outputs
                     or any(not isinstance(ref, str) or not ref for ref in outputs)
                     or outputs != event.get("outputs") or outputs != json.loads(completion["output_refs_json"])):
-                return False
+                return None
             parent_ref = f'timeline:{row["parent_version_id"]}'
             inputs = [json.loads(artifact["input_refs_json"]) for artifact in artifacts]
-            return (len(outputs) == len(artifacts)
+            if (len(outputs) == len(artifacts)
                     and set(outputs) == {artifact["logical_ref"] for artifact in artifacts}
-                    and all(isinstance(refs, list) and parent_ref in refs for refs in inputs))
+                    and all(isinstance(refs, list) and parent_ref in refs for refs in inputs)):
+                return snapshot
         except (TypeError, ValueError):
-            return False
+            return None
+        return None
 
     def _facts(self, conn, row, *, subtitle_count=None):
         operation_id = row["operation_id"]
-        if row["linked_operation_id"] is None and self._legacy_media_publication(conn, row):
+        if operation_id is not None and self._media_publication(conn, row) is not None:
             operation_id = None
         version = HistoryVersionFacts(
             workspace_id=row["workspace_id"], task_id=row["task_id"], id=row["id"],
@@ -104,7 +108,20 @@ class TimelineHistoryReadRepository:
             conn.execute("BEGIN")
             row = conn.execute(_VERSION_QUERY + " AND v.id=? AND v.created_by_operation_id=?",
                                (version.workspace_id, version.task_id, version.id, operation_id)).fetchone()
-            return row is not None and self._legacy_media_publication(conn, row)
+            return row is not None and self._media_publication(conn, row) is not None
+
+    def matches_media_publication(self, conn, workspace_id, task_id, version_id, *,
+                                  base_version_id, job_id, request_id, output_refs):
+        if version_id != f"timeline_media_{job_id}":
+            return False
+        row = conn.execute(_VERSION_QUERY + """
+            AND v.id=? AND v.parent_version_id=? AND EXISTS (
+                SELECT 1 FROM timeline_versions parent WHERE parent.workspace_id=v.workspace_id
+                AND parent.task_id=v.task_id AND parent.id=v.parent_version_id AND parent.candidate_id IS NULL)
+            """, (workspace_id, task_id, version_id, base_version_id)).fetchone()
+        publication = self._media_publication(conn, row) if row is not None else None
+        return (publication is not None and publication["request_id"] == request_id
+                and publication["outputs"] == output_refs)
 
     def page(self, workspace_id, task_id, *, limit=20, before_sequence=None):
         if not 1 <= limit <= 50 or before_sequence is not None and before_sequence < 1:
