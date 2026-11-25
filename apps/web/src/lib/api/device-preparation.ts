@@ -32,6 +32,7 @@ export type CpuPreparationShape = {
   overlay_count?: number;
   template_count?: number;
   native_command?: boolean;
+  measure_mp4_cut?: boolean;
 };
 
 export type CpuPreparationRequest = {
@@ -62,6 +63,7 @@ export type DevicePreparationReceipt = {
   failure_code?: string;
   failure_reason?: string;
   repair_action?: string;
+  mp4_cut_measurement?: 'not_requested' | 'recorded' | 'unknown';
 };
 
 export type DevicePreparationFinalization = DevicePreparationReceipt & {
