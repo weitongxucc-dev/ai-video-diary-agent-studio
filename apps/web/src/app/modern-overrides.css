@@ -390,8 +390,58 @@ h4 {
 .status-success { color: var(--success); }
 .status-warning { color: var(--warning); }
 .status-danger { color: var(--danger); }
-.status-running { color: var(--focus); }
+.status-running { color: var(--running); }
 .status-idle { color: var(--text-3); }
+
+/* Theme colors for workbench controls that still use older local treatments. */
+.assistant-conversation-panel .assistant-conversation-entry:not(:focus-within),
+[aria-label="外观设置"] [data-app-select-trigger]:not(:focus-visible):not([aria-expanded="true"]) {
+  border-color: var(--control-boundary);
+}
+
+.assistant-conversation-panel .assistant-send:enabled {
+  --button-hover-bg: var(--send-action-hover);
+  --button-pressed-bg: var(--send-action-hover);
+  --button-hover-fg: var(--send-action-contrast);
+  background: var(--send-action);
+  color: var(--send-action-contrast);
+}
+
+.assistant-conversation-panel .assistant-send:focus-visible {
+  outline-color: var(--focus);
+}
+
+[data-conversation-pane] > header > span > img {
+  outline: 1px solid var(--agent-brand);
+  outline-offset: 1px;
+}
+
+.assistant-conversation-panel .assistant-stream-status,
+.assistant-conversation-panel .assistant-tool-observation .assistant-activity-row {
+  color: var(--running);
+}
+
+.assistant-conversation-panel .assistant-tool-observation progress {
+  accent-color: var(--running);
+}
+
+.assistant-conversation-panel .assistant-tool-observation .assistant-activity-row:has(.assistant-activity-state),
+.assistant-conversation-panel .assistant-tool-observation .assistant-activity-state,
+[aria-label="变更预览"] > header > span {
+  color: var(--warning);
+}
+
+.library-card[data-open-details].is-selected {
+  border-color: var(--selection-line);
+}
+
+.library-grid.is-list .library-card[data-open-details].is-selected {
+  box-shadow: inset 2px 0 var(--selection-line);
+}
+
+.library-card[data-open-details] .library-card__state.state-failed {
+  color: var(--danger);
+}
 
 .readiness-callout {
   display: flex;
