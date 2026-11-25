@@ -5,7 +5,7 @@ starting point, not an estimate of model memory or a promise about a whole film.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 from fractions import Fraction
@@ -31,7 +31,7 @@ from app.device_resource_profile import (
     PROFILE_OPERATION_NAMES, DeviceProfileIdentity, DeviceProfileUnavailable, _digest, load_device_resource_profile,
 )
 from app.device_resource_volumes import sample_write_volumes
-from app.device_scheduler import SubmissionIntent, SchedulePolicy, VerifiedWork
+from app.device_scheduler import RecoveryBlocked, SubmissionIntent, SchedulePolicy, VerifiedWork, cancel_ungranted_preparation
 from app.device_runtime import OwnerRegistration
 from app.host_memory import MemoryPolicy, sample_host_memory
 from app.host_resource_probes import HostBudget, CpuRenderBudget, CpuAudioBudget, RuntimeCpuPolicy, Y4M_SERIAL_PICTURE_FORMAT
@@ -210,12 +210,13 @@ def _mp4_cut_plan(shape, probe_seconds, budget, ffmpeg, ffprobe):
             'cpu_policy': asdict(render.running_cpu_policy), 'sample_interval_seconds': budget.sample_seconds}
 
 
-def request_kind(*, database_path, request_id, actor):
-    """Select the original preparation service; its status rechecks full identity."""
-    with sqlite3.connect(Path(database_path).resolve().as_uri() + '?mode=ro', uri=True) as connection:
-        connection.execute('PRAGMA query_only=ON')
+def request_kind(*, database_path, request_id, actor, cpu_queue_cancel=False):
+    """Select the original service; the queue uses this only for CPU cancellation."""
+    with closing(sqlite3.connect(Path(database_path).resolve().as_uri() + '?mode=ro', uri=True)) as connection:
         row = connection.execute('SELECT owner_type, workspace_id, member_id, unit_key '
             'FROM device_work_requests WHERE id=?', (request_id,)).fetchone()
+    if cpu_queue_cancel and (row is None or row[0] != OWNER_TYPE or row[3] != 'cpu-prepare:v1'):
+        return None
     if row is None:
         raise KeyError(request_id)
     if row[:3] != (OWNER_TYPE, actor.workspace_id, actor.member_id):
@@ -395,10 +396,13 @@ class DeviceResourcePreparation:
         _atomic_json(self.root / 'plans' / f'{plan_id}.json', plan)
         return plan_id, budget
 
-    def _plan(self, plan_id):
+    def _plan_path(self, plan_id):
         if not isinstance(plan_id, str) or len(plan_id) != 32 or any(c not in '0123456789abcdef' for c in plan_id):
             raise ValueError('Invalid preparation identity')
-        plan = _read(self.root / 'plans' / f'{plan_id}.json')
+        return self.root / 'plans' / f'{plan_id}.json'
+
+    def _plan(self, plan_id):
+        plan = _read(self._plan_path(plan_id))
         if _digest({key: value for key, value in plan.items() if key != 'input_digest'}) != plan['input_digest']:
             raise ValueError('Preparation plan changed')
         return plan
@@ -468,6 +472,55 @@ class DeviceResourcePreparation:
         return self._can_access(self._plan(request.owner_id), actor)
 
     can_view_detail = can_manage
+
+    def cancel_if_plan_missing(self, *, database_path, lock_path, request_id, actor):
+        from app.creation_execution import CreationExecutionActor
+
+        def check_binding(request):
+            if (not isinstance(actor, CreationExecutionActor)
+                    or (request.owner_type, request.unit_key, request.workspace_id, request.member_id)
+                    != (OWNER_TYPE, 'cpu-prepare:v1', actor.workspace_id, actor.member_id)
+                    or actor.member_id.startswith('account:') != (actor.device_id is not None)
+                    or (actor.device_id is not None and actor.device_id != self.device.device_id)):
+                raise PermissionError('设备准备的原成员、工作区或设备身份不匹配')
+
+        def plan_missing(request):
+            try:
+                self._plan_path(request.owner_id).lstat()
+            except FileNotFoundError:
+                return True
+            except OSError as exc:
+                raise RecoveryBlocked('原设备准备计划的位置不可核实') from exc
+            return False
+
+        def observe(request):
+            check_binding(request)
+            if not plan_missing(request):
+                return False
+            if self.verify_identity(actor) != 'ready':
+                raise PermissionError('设备准备的原成员身份不可核验')
+            return True
+
+        def recheck(request, conn):
+            check_binding(request)
+            if not plan_missing(request):
+                raise PermissionError('原设备准备计划已恢复，请按原计划处理')
+            if actor.device_id is None and conn.execute(
+                'SELECT 1 FROM local_members WHERE member_id=?', (actor.member_id,)
+            ).fetchone() is None:
+                raise PermissionError('原设备准备成员已失效')
+            try:
+                with os.scandir(self.root / 'receipts') as receipts:
+                    if any(item.name.startswith(f'{request.id}-') and item.name.endswith('.json')
+                           for item in receipts):
+                        raise RecoveryBlocked('原设备准备已有回执，请按原许可核查')
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise RecoveryBlocked('原设备准备回执的位置不可核实') from exc
+
+        return cancel_ungranted_preparation(database_path, lock_path, request_id,
+            observe_owner=observe, recheck_owner=recheck)
 
     def can_wake(self, request, actor):
         return False

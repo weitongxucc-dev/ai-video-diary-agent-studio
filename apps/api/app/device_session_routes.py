@@ -1,9 +1,12 @@
 """Device-session and queue HTTP; identity, scheduling and job control remain with their original owners."""
 from fastapi import APIRouter
 from fastapi import HTTPException, Request
+from app.device_resource_preparation import request_kind
+from app.device_resource_profile import DeviceProfileUnavailable
+from app.device_scheduler import RecoveryBlocked
 from app.member_permits import DeviceHeartbeatRequest
 
-def build_device_session_router(*, workspace_for, require_actor_for, request_actor_for, runtime_for, control_for, repository_for, execution_for, heartbeat_type_for, executor_type_for, quality_kind_for, cover_kind_for, person_kind_for, narration_kind_for, task_media_kind_for) -> APIRouter:
+def build_device_session_router(*, workspace_for, require_actor_for, request_actor_for, runtime_for, control_for, repository_for, execution_for, heartbeat_type_for, executor_type_for, quality_kind_for, cover_kind_for, person_kind_for, narration_kind_for, task_media_kind_for, preparation_application_for) -> APIRouter:
     router = APIRouter()
 
     def _creation_job_for_request(workspace_id: str, request_id: str):
@@ -47,6 +50,21 @@ def build_device_session_router(*, workspace_for, require_actor_for, request_act
         actor = request_actor_for()(request, workspace_id)
         if actor is None:
             raise HTTPException(status_code=403, detail='缺少可核查的原制作身份，不能取消')
+        try:
+            kind = request_kind(database_path=repository_for().database_path, request_id=request_id,
+                                actor=actor, cpu_queue_cancel=True)
+            if kind is not None:
+                cancelled = preparation_application_for(kind=kind).cancel_if_plan_missing(request_id, actor)
+                if cancelled is not None:
+                    return cancelled
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail='该执行单元不存在') from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (RecoveryBlocked, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except DeviceProfileUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         runtime = runtime_for()()
         try:
             detail = runtime.scheduler.cancel(request_id, actor)

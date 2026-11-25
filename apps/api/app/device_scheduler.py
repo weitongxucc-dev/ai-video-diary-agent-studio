@@ -15,7 +15,7 @@ import os
 import re
 import sqlite3
 import uuid
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
@@ -430,6 +430,66 @@ class DeviceRequestReadAccess:
         if view.get('id', view.get('request_id')) != row['id']:
             return None, {}
         return self._request(row), view
+
+
+def _cancel_request_row(conn: sqlite3.Connection, row: sqlite3.Row, now: str) -> dict[str, object]:
+    state = {"waiting": "cancelled", "blocked": "cancelled", "granted": "yield_requested"}.get(row["state"])
+    if state is not None:
+        conn.execute("UPDATE device_work_requests SET state=?, wait_reason='user_cancelled', updated_at=? WHERE id=?",
+                     (state, now, row["id"]))
+    return dict(conn.execute("SELECT id,state,wait_reason FROM device_work_requests WHERE id=?", (row["id"],)).fetchone())
+
+
+def cancel_ungranted_preparation(database_path, lock_path, request_id, *, observe_owner, recheck_owner):
+    """Cancel through the existing queue without binding or starting a driver."""
+    database = Path(database_path).resolve()
+    lock = Path(lock_path)
+    # This path may only use an existing lock and ledger. It cannot claim,
+    # recover, or initialize a coordinator.
+    with closing(sqlite3.connect(database.as_uri() + "?mode=rw", uri=True,
+                                 timeout=5, isolation_level=None)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+        if row is None:
+            raise KeyError(request_id)
+        observed = DeviceRequestReadAccess._request(row)
+        if not observe_owner(observed):
+            return None
+        try:
+            fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError as exc:
+            raise RecoveryBlocked("原设备许可锁不可核实") from exc
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RecoveryBlocked("原设备许可锁仍在使用") from exc
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT * FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+                if row is None:
+                    raise KeyError(request_id)
+                current = DeviceRequestReadAccess._request(row)
+                if current != observed:
+                    raise PermissionError("设备准备的归属或状态已变化")
+                prior_grant = conn.execute(
+                    "SELECT 1 FROM device_request_events WHERE request_id=? AND permit_generation IS NOT NULL LIMIT 1",
+                    (request_id,)).fetchone()
+                if (current.state not in {"waiting", "blocked"} or current.attempt_number != 1
+                        or current.last_grant_generation is not None or row["checkpoint_ref"] is not None
+                        or prior_grant is not None):
+                    raise PermissionError("缺少计划时只能取消未曾取得许可的待处理设备准备")
+                permit = conn.execute("SELECT state, generation, lock_key, request_id FROM device_permit WHERE id=1").fetchone()
+                ledger = _load_device_ledger(lock.with_name(lock.name + ".state"))
+                lock_key = hashlib.sha256(str(lock.resolve()).encode()).hexdigest()
+                if (ledger["state"] != "free" or ledger.get("database_path") != str(database)
+                        or ledger.get("request_id") is not None or permit is None
+                        or tuple(permit) != ("free", ledger["generation"], lock_key, None)):
+                    raise RecoveryBlocked("不能核实原业务库及设备许可均已释放")
+                recheck_owner(current, conn)
+                return _cancel_request_row(conn, row, _stamp(datetime.now(timezone.utc)))
+        finally:
+            os.close(fd)
 
 
 class DeviceScheduler(DeviceRequestReadAccess):
@@ -1803,15 +1863,11 @@ class DeviceScheduler(DeviceRequestReadAccess):
                     (observed.workspace_id, observed.member_id, observed.owner_type, observed.owner_id,
                      observed.input_digest, observed.unit_key, observed.attempt_number)):
                 raise PermissionError("观察期间执行单元的归属或尝试已变化")
-            if row["state"] in {"waiting", "blocked"}:
-                conn.execute("UPDATE device_work_requests SET state='cancelled', wait_reason='user_cancelled', updated_at=? WHERE id=?", (_stamp(self._now()), request_id))
-            elif row["state"] == "granted":
-                conn.execute("UPDATE device_work_requests SET state='yield_requested', wait_reason='user_cancelled', updated_at=? WHERE id=?", (_stamp(self._now()), request_id))
-            cancelled = conn.execute("SELECT id,state,wait_reason FROM device_work_requests WHERE id=?", (request_id,)).fetchone()
+            cancelled = _cancel_request_row(conn, row, _stamp(self._now()))
             conn.commit()
         # Cancellation is authorized by exact ownership even after revocation.
         # Return its actual stored result without granting any queue read right.
-        return dict(cancelled)
+        return cancelled
 
     def close(self) -> None:
         """Stop this coordinator; a held ledger remains for recovery audit."""

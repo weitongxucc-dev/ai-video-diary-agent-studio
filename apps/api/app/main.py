@@ -5830,6 +5830,7 @@ app.include_router(build_device_session_router(
     require_actor_for=lambda: _require_permit_actor,
     request_actor_for=lambda: _request_permit_actor,
     runtime_for=lambda: _creation_runtime,
+    preparation_application_for=lambda **kwargs: _device_preparation_application(**kwargs),
     control_for=lambda: _creation_execution_control,
     repository_for=lambda: production_repo,
     execution_for=lambda: creation_execution,

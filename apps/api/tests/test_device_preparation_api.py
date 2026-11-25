@@ -1,5 +1,7 @@
 """Real HTTP/auth/plan/queue composition, with the media driver held unstarted."""
 from dataclasses import replace
+import json
+import sqlite3
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -13,6 +15,137 @@ from test_typed_assistant_edits_api import metadata_http_state as metadata_http_
 def preparation_metadata_no_execution(monkeypatch):
     from test_production_foundation import edit_adoption_no_execution
     edit_adoption_no_execution(monkeypatch)
+
+
+def test_original_member_can_cancel_an_orphaned_preparation(metadata_http_state, monkeypatch, tmp_path):
+    from app import device_paths, device_resource_configuration
+    from app.creation_execution import CreationExecutionActor
+    from app.device_runtime import OwnerRouter, build_device_runtime
+    from app.device_scheduler import DeviceScheduler, PriorDeviceWorkPending
+    from app.member_permits import MemberDeviceAccess
+    from test_device_scheduler import Owners, Processes, Resources, _complete, _db, _intent
+
+    state = metadata_http_state
+    monkeypatch.setattr(main, 'LEGACY_WORKSPACE_ID', state.task.workspace_id)
+    monkeypatch.setattr(device_paths, 'application_data_root', lambda: tmp_path / 'device-lock')
+    monkeypatch.setenv('DEVICE_ID', 'isolated-device')
+    identity = device_resource_configuration.current_device_identity
+    monkeypatch.setattr(device_resource_configuration, 'current_device_identity',
+        lambda environment: replace(identity(environment), platform='darwin'))
+    monkeypatch.setattr(main, 'settings', replace(main.settings, device_resource_mode='normal',
+        device_resource_profile_path=str(tmp_path / 'device' / 'profile.json'),
+        temporary_root_path=str(tmp_path / 'temporary')))
+    monkeypatch.setattr(preparation, 'sample_host_memory', lambda: SimpleNamespace(
+        pressure='normal', available_bytes=2 * 1024**3))
+    monkeypatch.setattr(preparation.psutil, 'Process', lambda: SimpleNamespace(
+        memory_info=lambda: SimpleNamespace(rss=100 * 1024**2)))
+    database = state.repo.database_path
+    lock = device_paths.device_lock_path()
+    history = DeviceScheduler(database, lock, owners=Owners(), resources=Resources(), processes=Processes())
+    history.submit(_intent('previous-work'), 'member-a')
+    _complete(history, history.pick_and_grant())
+
+    service = main._device_preparation_service()
+    actor = CreationExecutionActor(state.task.workspace_id, state.member.member_id)
+    access = MemberDeviceAccess(state.members, identity_verifier=main._verify_creation_identity)
+    shape = preparation.CpuPreparationShape(64, 64, 24, 1.0, 2, 2, 8000, 1)
+    plan_id, _ = service.prepare(shape, actor, request_id=str(uuid4()))
+    runtime = build_device_runtime(database_path=database, device_lock_path=lock, device_access=access,
+        registrations={'device_preparation': service.registration()},
+        resources=Resources(), processes=Processes())
+    request = runtime.scheduler.submit(service.intent(plan_id, actor), actor)
+    plan_path = service.root / 'plans' / f'{plan_id}.json'
+
+    driver_calls = []
+
+    def forbidden():
+        pytest.fail('cancelling a missing plan cannot start or recover the normal runtime')
+
+    def legacy_runtime():
+        driver_calls.append(True)
+        return runtime
+
+    monkeypatch.setattr(main, '_creation_runtime', legacy_runtime)
+    client = state.client
+    intact_plan_id, _ = service.prepare(shape, actor, request_id=str(uuid4()))
+    intact = runtime.scheduler.submit(service.intent(intact_plan_id, actor), actor)
+    response = client.post(f'/api/device/queue/{intact.id}/cancel')
+    assert response.status_code == 200 and response.json()['state'] == 'cancelled'
+    assert len(driver_calls) == 1
+    monkeypatch.setattr(main, '_creation_runtime', forbidden)
+
+    plan_path.unlink()
+    normal = DeviceScheduler(database, lock, owners=OwnerRouter({}, access),
+        resources=Resources(), processes=Processes())
+    assert normal.pick_and_grant() is None
+    original = normal._get(request.id)
+    assert (original.state, original.wait_reason, original.last_grant_generation) == ('blocked', 'owner_unknown', None)
+    with state.repo._connect() as conn:
+        row = conn.execute('SELECT * FROM device_work_requests WHERE id=?', (request.id,)).fetchone()
+        DeviceScheduler._record_event(conn, row, 'deferred', 'dependency_unavailable', None, row['updated_at'])
+
+    def snapshot():
+        with state.repo._connect() as conn:
+            row = dict(conn.execute('SELECT * FROM device_work_requests WHERE id=?', (request.id,)).fetchone())
+            audit = [dict(event) for event in conn.execute(
+                'SELECT * FROM device_request_events WHERE request_id=?', (request.id,))]
+        return row, audit
+
+    stored, audit = snapshot()
+    ledger_bytes = history.ledger_path.read_bytes()
+
+    next_database = tmp_path / 'next.sqlite'
+    _db(next_database)
+    successor = DeviceScheduler(next_database, lock, owners=Owners(), resources=Resources(), processes=Processes())
+    successor.submit(_intent('next-work'), 'member-a')
+    with pytest.raises(PriorDeviceWorkPending):
+        successor.pick_and_grant()
+
+    url = f'/api/device/queue/{request.id}/cancel'
+    _, foreign = state.members.join(state.members.create_invite_code(), 'foreign member')
+    assert client.post(url, headers={'X-Local-Member-Token': foreign}).status_code == 403
+    assert client.post(url, headers={'X-Test-Workspace': 'different-workspace'}).status_code == 403
+    with monkeypatch.context() as different_device:
+        different_device.setattr(device_paths, 'application_data_root', lambda: tmp_path / 'different-device')
+        assert client.post(url).status_code == 409
+    copied_database = tmp_path / 'copied-original.sqlite'
+    with state.repo._connect() as original_db, sqlite3.connect(copied_database) as copied_db:
+        original_db.backup(copied_db)
+    with monkeypatch.context() as other_database:
+        other_database.setattr(main, 'production_repo', SimpleNamespace(database_path=copied_database))
+        assert client.post(url).status_code == 409
+    with sqlite3.connect(copied_database) as copied_db:
+        copied = copied_db.execute('SELECT state,wait_reason FROM device_work_requests WHERE id=?', (request.id,)).fetchone()
+    assert copied == ('blocked', 'owner_unknown')
+    ledger = json.loads(ledger_bytes)
+    history.ledger_path.write_text(json.dumps({**ledger, 'state': 'held'}))
+    assert client.post(url).status_code == 409
+    history.ledger_path.write_bytes(ledger_bytes)
+    for state_name, generation in (('blocked', 1), ('granted', None), ('yield_requested', 1)):
+        with state.repo._connect() as conn:
+            conn.execute('UPDATE device_work_requests SET state=?, last_grant_generation=? WHERE id=?',
+                         (state_name, generation, request.id))
+        assert client.post(url).status_code == 403
+    with state.repo._connect() as conn:
+        conn.execute("UPDATE device_work_requests SET state='blocked', last_grant_generation=NULL WHERE id=?", (request.id,))
+        conn.execute("UPDATE device_permit SET state='held' WHERE id=1")
+    assert client.post(url).status_code == 409
+    with state.repo._connect() as conn:
+        conn.execute("UPDATE device_permit SET state='free' WHERE id=1")
+    assert snapshot() == (stored, audit)
+
+    response = client.post(url)
+    assert response.status_code == 200, response.text
+    assert response.json() == {'id': request.id, 'state': 'cancelled', 'wait_reason': 'user_cancelled'}
+    cancelled, preserved_audit = snapshot()
+    assert {**cancelled, 'updated_at': stored['updated_at']} == {
+        **stored, 'state': 'cancelled', 'wait_reason': 'user_cancelled'}
+    assert audit and preserved_audit == audit
+    assert not plan_path.exists()
+    assert history.ledger_path.read_bytes() == ledger_bytes
+    grant = successor.pick_and_grant()
+    assert grant.owner_id == 'next-work'
+    _complete(successor, grant)
 
 
 def test_profile_status_reads_current_profile_without_exposing_host_paths(metadata_http_state, monkeypatch, tmp_path):
@@ -211,7 +344,6 @@ def test_preparation_http_reuses_request_and_never_resumes_old_work(metadata_htt
     assert len(actions) == 3  # Waiting/unknown cannot publish or release an active driver.
     with state.repo._connect() as connection:
         assert connection.execute("SELECT count(*) FROM device_work_requests").fetchone()[0] == 1
-        import json
         resources = json.loads(connection.execute('SELECT resources_json FROM device_work_requests WHERE id=?',
             (receipt['id'],)).fetchone()[0])
         assert resources['overlay_count'] == overlay_count

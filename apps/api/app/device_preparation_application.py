@@ -4,6 +4,7 @@ The composition root supplies lifecycle access; this use case owns transitions,
 not HTTP, media execution, or a second scheduler.
 """
 from app.device_resource_preparation import OWNER_TYPE, CpuPreparationShape
+from app.device_paths import device_lock_path
 
 
 class DevicePreparationConflict(RuntimeError):
@@ -21,6 +22,11 @@ class DevicePreparationApplication:
 
     def status(self, request_id, actor):
         return self.service.status(database_path=self.database_path, request_id=request_id, actor=actor)
+
+    def cancel_if_plan_missing(self, request_id, actor):
+        with self.lifecycle_lock:
+            return self.service.cancel_if_plan_missing(database_path=self.database_path,
+                lock_path=device_lock_path(), request_id=request_id, actor=actor)
 
     def dispatch(self, action, *, actor, request_id, shape=None):
         """Dispatch the task-bound adapter using its verified execution identity."""
