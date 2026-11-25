@@ -306,7 +306,7 @@ def test_template_field_version_endpoint_rejects_invalid_fields_without_writing(
 def test_shared_template_reader_cannot_append_through_existing_task_save(state, monkeypatch, tmp_path):
     from types import SimpleNamespace
     production, template, _client = state
-    _member, token = main.local_members_service.join(main.local_members_service.create_invite_code(), "任务模板只读成员")
+    member, token = main.local_members_service.join(main.local_members_service.create_invite_code(), "任务模板只读成员")
     production.video_templates.set_video_template_visibility("workspace_a", template.id, "shared")
     reader = TestClient(main.app, headers={"X-Local-Member-Token": token})
     # This focused permission test substitutes the rendered-task prerequisites only;
@@ -314,7 +314,7 @@ def test_shared_template_reader_cannot_append_through_existing_task_save(state, 
     from app.creation.contracts import CreationTask
     from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_to_payload
     task = CreationTask('fixture-rendered-task', 'workspace_a', 'fixture-plan', 'template permission',
-        'knowledge_explanation', current_timeline_version_id='fixture-timeline')
+        'knowledge_explanation', current_timeline_version_id='fixture-timeline', owner_user_id=member.member_id)
     montage = CreationTaskMontagePlan('fixture-montage', task.workspace_id, task.id, 'fixture-script',
         'template permission', 'rendered', [], [], 1, 0, output_path='fixture-output')
     output = tmp_path / "fixture-output"
@@ -330,19 +330,57 @@ def test_shared_template_reader_cannot_append_through_existing_task_save(state, 
 
 
 def test_template_private_preflight_and_visibility_changes_require_current_owner(state):
-    production, template, owner = state
+    production, template, _ = state
+    member, member_token = main.local_members_service.join(main.local_members_service.create_invite_code(), "普通成员模板作者")
     _member, token = main.local_members_service.join(main.local_members_service.create_invite_code(), "模板读取者")
+    template = production.video_templates.save_video_template(
+        replace(template, id="member-template"), verified_owner_user_id=member.member_id)
+    owner = TestClient(main.app, headers={"X-Local-Member-Token": member_token})
     reader = TestClient(main.app, headers={"X-Local-Member-Token": token})
     payload = {"goal": "完全不同的新主题", "template_id": template.id, "template_version": 1}
     path = f"/api/video-templates/{template.id}/visibility"
     assert reader.post("/api/creation-plans/preview", json=payload).status_code == 404
-    assert reader.put(path, json={"visibility": "shared"}).status_code == 403
+    assert reader.put(path, json={"visibility": "shared"}).status_code == 404
+    assert owner.put(path, json={"visibility": "shared"},
+                     headers={"X-Local-Member-Token": "invalid-token"}).status_code == 401
     assert owner.put(path, json={"visibility": "shared"}).status_code == 200
     assert reader.post("/api/creation-plans/preview", json=payload).status_code == 200
+    assert reader.get(f"/api/video-templates/{template.id}?version=1",
+                      headers={"x-test-workspace": "workspace_b"}).status_code == 404
     assert reader.put(path, json={"visibility": "private"}).status_code == 403
     assert production.video_templates.get_video_template("workspace_a", template.id, 1).visibility == "shared"
     assert owner.put(path, json={"visibility": "private"}).status_code == 200
     assert reader.post("/api/creation-plans/preview", json=payload).status_code == 404
+
+
+def test_cannot_save_a_template_from_another_members_private_task(state, monkeypatch):
+    production, template, owner = state
+    _, token = main.local_members_service.join(main.local_members_service.create_invite_code(), "参考片外部成员")
+    preview = owner.post("/api/creation-plans/preview", json={"goal": "私有参考片"}).json()
+    created = owner.post("/api/creation-plans/confirm", json={
+        "goal": "私有参考片", "preflight_fingerprint": preview["preflight_fingerprint"],
+    })
+    assert created.status_code == 201, created.text
+    task_id = created.json()["creation_task"]["id"]
+    before = production.video_templates.list_video_templates("workspace_a", local_diagnostic=True)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("参考片归属检查必须早于方案、成片和媒体读取")
+
+    monkeypatch.setattr(main, "_creation_plan_for_task_or_404", forbidden)
+    reader = TestClient(main.app, headers={"X-Local-Member-Token": token})
+    payload = {"name": "未经授权的参考片模板"}
+    response = reader.post(f"/api/creation-tasks/{task_id}/templates", json=payload)
+    missing = reader.post("/api/creation-tasks/missing/templates", json=payload)
+    assert response.status_code == missing.status_code == 404, response.text
+    assert response.json() == missing.json()
+    production.task_records.set_creation_task_visibility("workspace_a", task_id, "shared")
+    assert reader.get(f"/api/creation-tasks/{task_id}").status_code == 200
+    assert reader.post(f"/api/creation-tasks/{task_id}/templates", json=payload).status_code == 404
+    invalid = owner.post(f"/api/creation-tasks/{task_id}/templates", json=payload,
+                         headers={"X-Local-Member-Token": "invalid-token"})
+    assert invalid.status_code == 401
+    assert production.video_templates.list_video_templates("workspace_a", local_diagnostic=True) == before == [template]
 
 
 def test_explicit_knowledge_pin_preserves_history_and_rechecks_current_access(state):

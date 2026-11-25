@@ -52,9 +52,6 @@ class VideoTemplateHTTPAdapter:
 
     def set_video_template_visibility_route(self, template_id: str, request: Request, payload: ContentVisibilityRequest) -> dict[str, object]:
         """显式共享或收回一个用户模板；返回同一列的回读值。"""
-        denied = self._write_guard(request)
-        if denied is not None:
-            return denied
         workspace_id = self._workspace_for(request)
         user_id, _ = self._reader_for(request, workspace_id)
         versions = self._records_for().list_video_templates(workspace_id, viewer_user_id=user_id)
@@ -112,11 +109,12 @@ class VideoTemplateHTTPAdapter:
 
     def save_creation_task_template(self, task_id: str, request: Request, payload: SaveVideoTemplateRequest) -> dict[str, object]:
         workspace_id = self._workspace_for(request)
+        reader_id, local_diagnostic = self._reader_for(request, workspace_id)
         case = self._case_for()
         task = self._task_for(workspace_id, task_id)
-        plan = self._plan_for(workspace_id, task)
         try:
-            montage = case.rendered_source(workspace_id, task_id, task)
+            montage = case.rendered_source(workspace_id, task_id, task, reader_user_id=reader_id,
+                                           local_diagnostic=local_diagnostic)
             try:
                 output = self._output_for(workspace_id, task_id, subtitle=False)
                 case.require_nonempty_output(output)
@@ -126,17 +124,18 @@ class VideoTemplateHTTPAdapter:
             if payload.template_id:
                 previous = self.read_template(request, workspace_id, payload.template_id, payload.expected_version)
                 case.check_save_template_origin(previous)
-                reader_id, _ = self._reader_for(request, workspace_id)
                 case.require_save_owner(previous, reader_id=reader_id)
+            plan = self._plan_for(workspace_id, task)
             tracks = self._tracks_for(workspace_id, task, montage=montage)
             template = case.build_from_task(workspace_id, task_id, task, plan, montage, tracks, name=payload.name, style_instruction=payload.style_instruction, template_id=payload.template_id, expected_version=payload.expected_version)
-            _, template_local_diagnostic = self._reader_for(request, self._workspace_for(request))
             try:
-                return asdict(case.persist_task_template(template, verified_owner_user_id=self._reader_for(request, self._workspace_for(request))[0], local_diagnostic=template_local_diagnostic))
+                return asdict(case.persist_task_template(template, verified_owner_user_id=reader_id,
+                                                         local_diagnostic=local_diagnostic))
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
         except VideoTemplateRejected as exc:
-            status = {'task_not_rendered': 409, 'target_pair_incomplete': 422, 'task_builtin_overwrite': 409, 'task_not_owner': 403, 'persist_conflict': 409}[exc.code]
+            status = {'source_task_not_owned': 404, 'task_not_rendered': 409, 'target_pair_incomplete': 422,
+                'task_builtin_overwrite': 409, 'task_not_owner': 403, 'persist_conflict': 409}[exc.code]
             failure = HTTPException(status_code=status, detail=exc.message)
             if exc.__cause__ is not None:
                 raise failure from exc.__cause__
