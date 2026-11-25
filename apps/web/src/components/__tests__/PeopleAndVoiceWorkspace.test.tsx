@@ -11,15 +11,16 @@ const intake=vi.hoisted(()=>({getMaterialIntakeStatus:vi.fn(),bindMaterialIntake
 vi.mock("@/lib/api",()=>intake);
 const importer=vi.hoisted(()=>vi.fn());
 vi.mock("@/lib/directoryPicker",()=>({importLocalMaterials:importer}));
-vi.mock("@/components/AppShell",()=>({AppShell:({children}:{children:React.ReactNode})=><>{children}</>}));
+vi.mock("@/components/AppShell",()=>({AppShell:({children,inspector,inspectorTitle}:import("../AppShell").AppShellProps)=><>{children}{inspector ? <aside aria-label={inspectorTitle}>{inspector}</aside> : null}</>}));
 import {PeopleAndVoiceWorkspace} from "../PeopleAndVoiceWorkspace";
+import { WorkspacePageContext } from "../workbench/context";
 import {MediaProfilesApiError} from "@/lib/media-profiles-api";
 import {assistantReferenceHref} from "@/lib/assistant-reference";
 const person={id:"person",version:"p1",display_name:"人物",authorization:null,current_authorization:null,runnable:true,reference_url:"/reference/person",reference:{asset_id:"visual"},use_state:"available"};
 const voice={id:"voice",version:"v1",display_name:"独立声音",person_profile_id:"",person_version:"",authorization:null,current_authorization:null,runnable:true,reference_url:"/reference/voice",reference:{asset_id:"audio"},use_state:"available",reference_audio_path:"workspace://saved.wav",reference_text:"参考原句",model_id:"model",language:"zh"};
 const audio={id:"audio",file_name:"合成声音.wav",media_type:"audio",workspace_reference:"workspace://audio.wav",duration_seconds:2,segments:[],use_state:"available"};
 const visual={...audio,id:"visual",file_name:"合成照片.png",media_type:"image",workspace_reference:"workspace://portrait.png",duration_seconds:null};
-beforeEach(()=>{navigation.query="";});
+
 it("opens the frozen version from the durable navigation hint again after remount",async()=>{
   navigation.query=assistantReferenceHref({kind:"voice",profile_id:"voice",version:"v0",label:"旧版本声音"}).split("?")[1];
   const first=render(<PeopleAndVoiceWorkspace/>);
@@ -55,9 +56,36 @@ it("locates a frozen voice version from the conversation without replacing its r
   expect(screen.getByLabelText("档案版本")).toHaveAttribute("data-selected-value","v0");
   expect(referenceProfile).not.toHaveBeenCalled();
 });
-beforeEach(()=>{vi.resetAllMocks();api.listPersonProfiles.mockResolvedValue({items:[person]});api.listVoiceProfiles.mockResolvedValue({items:[voice]});api.getDefaultVoice.mockResolvedValue(voice);api.listPronunciationEntries.mockResolvedValue({items:[]});api.listAuthorizations.mockResolvedValue({items:[]});api.listMediaPreviews.mockResolvedValue({items:[]});api.listPersonProfileVersions.mockResolvedValue({items:[person]});api.listVoiceProfileVersions.mockResolvedValue({items:[voice,{...voice,version:"v0"}]});api.getVoiceProfile.mockImplementation((id,version)=>Promise.resolve({...voice,id,version}));api.getPersonProfile.mockImplementation((id,version)=>Promise.resolve({...person,id,version}));api.getReferenceMaterial.mockImplementation(id=>Promise.resolve(id==="audio"?audio:visual));api.listReferenceMaterials.mockResolvedValue({assets:[audio,visual],total_count:2});api.getMediaCapability.mockResolvedValue({available:true,model_id:null,message:"未配置模型"});vi.stubGlobal("URL",{...URL,createObjectURL:vi.fn(()=>"blob:synthetic-audio"),revokeObjectURL:vi.fn()});api.mediaProfilesErrorMessage.mockImplementation(cause=>cause instanceof Error?cause.message:"请求失败");});
-afterEach(()=>{cleanup();vi.unstubAllGlobals();});
+beforeEach(()=>{
+  vi.resetAllMocks();
+  navigation.query="";
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  api.listPersonProfiles.mockResolvedValue({items:[person]});api.listVoiceProfiles.mockResolvedValue({items:[voice]});api.getDefaultVoice.mockResolvedValue(voice);api.listPronunciationEntries.mockResolvedValue({items:[]});api.listAuthorizations.mockResolvedValue({items:[]});api.listMediaPreviews.mockResolvedValue({items:[]});api.listPersonProfileVersions.mockResolvedValue({items:[person]});api.listVoiceProfileVersions.mockResolvedValue({items:[voice,{...voice,version:"v0"}]});api.getVoiceProfile.mockImplementation((id,version)=>Promise.resolve({...voice,id,version}));api.getPersonProfile.mockImplementation((id,version)=>Promise.resolve({...person,id,version}));api.getReferenceMaterial.mockImplementation(id=>Promise.resolve(id==="audio"?audio:visual));api.listReferenceMaterials.mockResolvedValue({assets:[audio,visual],total_count:2});api.getMediaCapability.mockResolvedValue({available:true,model_id:null,message:"未配置模型"});vi.stubGlobal("URL",{...URL,createObjectURL:vi.fn(()=>"blob:synthetic-audio"),revokeObjectURL:vi.fn()});api.mediaProfilesErrorMessage.mockImplementation(cause=>cause instanceof Error?cause.message:"请求失败");});
+afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();});
 async function openProfile(name:string) { fireEvent.click(await screen.findByRole("button",{name:new RegExp(`^${name}.*参考`)}));await screen.findByRole("heading",{name}); }
+
+it("reads and references the same voice version in the dock and its full management page", async () => {
+  const slot = { id:"/profiles", href:"/profiles?mode=panel", active:true, updateShell:vi.fn(), viewState:new Map<string, unknown>() };
+  const route = (auxiliary:boolean) => <WorkspacePageContext.Provider value={{...slot, auxiliary}}><PeopleAndVoiceWorkspace/></WorkspacePageContext.Provider>;
+  const page = render(route(true));
+  fireEvent.click(screen.getByRole("button", {name:"声音"}));
+  fireEvent.click(await screen.findByRole("button", {name:/独立声音.*参考/}));
+  expect(screen.getByRole("complementary", {name:"独立声音"})).toBeVisible();
+  expect(screen.getByLabelText("原始声音参考")).toHaveAttribute("src", "/reference/voice");
+  expect(screen.queryByRole("button", {name:"生成短试听"})).toBeNull();
+  expect(screen.queryByRole("button", {name:"朗读替换"})).toBeNull();
+  await chooseSelectValue(screen.getByLabelText("档案版本"), "v0");
+  await waitFor(() => expect(screen.getByLabelText("档案版本")).toHaveAttribute("data-selected-value", "v0"));
+  fireEvent.click(screen.getByRole("button", {name:"引用当前档案到对话"}));
+  expect(referenceProfile).toHaveBeenCalledWith({kind:"voice", profile_id:"voice", version:"v0", label:"独立声音"}, true);
+  page.rerender(route(false));
+  expect(await screen.findByRole("dialog", {name:"独立声音"})).toBeVisible();
+  expect(screen.getByLabelText("档案版本")).toHaveAttribute("data-selected-value", "v0");
+  expect(screen.getByRole("button", {name:"生成短试听"})).toBeVisible();
+  expect(api.setDefaultVoice).not.toHaveBeenCalled();
+});
+
 describe("independent profile consumers",()=>{
  it("registers a new person from a real asset reference without proof, person or model fields",async()=>{
   api.savePersonProfile.mockResolvedValue({...person,id:"new-person",version:"p2"});render(<PeopleAndVoiceWorkspace/>);await openProfile("人物");fireEvent.click(screen.getByRole("button",{name:"新增人物"}));fireEvent.change(screen.getByLabelText("名称"),{target:{value:"新人物"}});await inspectSelectOptions(screen.getByLabelText("参考素材"),()=>screen.findByRole("option",{name:"合成照片.png"}));await chooseSelectValue(screen.getByLabelText("参考素材"), "visual");fireEvent.submit(screen.getByLabelText("名称").closest("form")!);await waitFor(()=>expect(api.savePersonProfile).toHaveBeenCalledTimes(1));const input=api.savePersonProfile.mock.calls[0][0];expect(input.id).not.toBe(person.id);expect(input).toMatchObject({display_name:"新人物",avatar_reference:visual.workspace_reference,reference:{asset_id:"visual"},use_state:"available"});expect(input).not.toHaveProperty("authorization");expect(input).not.toHaveProperty("model_id");

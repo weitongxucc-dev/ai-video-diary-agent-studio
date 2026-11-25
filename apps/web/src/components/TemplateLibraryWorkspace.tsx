@@ -48,10 +48,12 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
   const router = useRouter();
   const page = useWorkspacePage();
   const pageActive = page?.active ?? true;
+  const inResourcePane = page?.auxiliary === true;
+  const managementActive = pageActive && !inResourcePane;
   const params = useSearchParams();
   // A retained template page owns the return address it was opened with.
   const rawReturn = (page ? new URL(page.href, "http://localhost").searchParams : params)?.get("return_to") ?? null;
-  const activeRef = useRef(pageActive);
+  const activeRef = useRef(managementActive);
   const repairRevision = useRef(0);
   const [repairContext, setRepairContext] = useState<PreflightRepairContext | null>(null);
   const [repairReady, setRepairReady] = useState(false);
@@ -59,16 +61,17 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
   const [repairError, setRepairError] = useState<string | null>(null);
   useLayoutEffect(() => {
     const revision = repairRevision.current;
-    activeRef.current = pageActive;
-    if (!pageActive) setRepairBusy(false);
+    activeRef.current = managementActive;
+    if (!managementActive) setRepairBusy(false);
     return () => {
       activeRef.current = false;
       repairRevision.current = revision + 1;
     };
-  }, [pageActive, rawReturn]);
+  }, [managementActive, rawReturn]);
   useEffect(() => {
     let active = true;
     setRepairContext(null); setRepairReady(false); setRepairError(null); setRepairBusy(false);
+    if (inResourcePane) return;
     if (rawReturn !== null && !boundedPreflightReturn(rawReturn, window.location.origin)) { setRepairError("返回创作地址无效，没有回退其他草稿。"); return; }
     void readPreflightDraftScope().then(scope => {
       if (!active) return;
@@ -77,7 +80,7 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
       setRepairContext(value); setRepairReady(true);
     }).catch(cause => { if (active) setRepairError(`不能读取修复上下文：${cause instanceof Error ? cause.message : "读取失败"}`); });
     return () => { active = false; };
-  }, [rawReturn]);
+  }, [inResourcePane, rawReturn]);
   async function handleUseDraftTemplate(item: VideoTemplate) {
     if (!activeRef.current || !repairContext || !repairReady || repairBusy) return;
     const request = repairRevision.current;
@@ -135,6 +138,11 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
   const visible = byVersion.filter(item=>(resourceCategory==='all'||categoryOf(item)===resourceCategory)&&(!haystack||item.name.toLowerCase().includes(haystack)));
   const selected = selectedKey ? allTemplates.find(item => `${item.id}:${item.version}` === selectedKey) : visible[0];
   const settings = selected?.settings;
+  function closeDetail() {
+    ++editorRevision.current;
+    setEditing(null);
+    setDetailsOpen(false);
+  }
   const creationHref = selected ? `/production?new=1&template_id=${encodeURIComponent(selected.id)}&template_version=${selected.version}` : "";
   const useLabel = selected?.origin === "built_in" ? "使用此制作结构" : "使用此模板";
   const useAction = selected?.settings.kind === 'visual_component'
@@ -147,8 +155,13 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
     : null;
   const hasQuery = haystack.length > 0;
   const empty = visible.length === 0;
-  const inspector = canAct && selected && settings ? selected.settings.visual
-    ? <VisualTemplateLibraryEditor key={`${selected.id}:${selected.version}`} template={selected} onSaved={saved=>{
+  const inspector = canAct && selected && settings ? settings.visual
+    ? inResourcePane ? <section className={own.panelDetail}>
+      <h3>{selected.name} · 第{selected.version}版</h3>
+      <VisualTemplatePreview key={`${selected.id}:${selected.version}`} definition={settings.visual} />
+      <p>在作品的「图文与动画」中选择动画组件。</p>
+    </section>
+    : <VisualTemplateLibraryEditor key={`${selected.id}:${selected.version}`} template={selected} onSaved={saved=>{
       setSavedVersions(current=>[...current.filter(item=>!(item.id===saved.id&&item.version===saved.version)),saved]);
       setSelectedKey(`${saved.id}:${saved.version}`);
     }}/>
@@ -168,18 +181,19 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
       <div><dt>素材与确认</dt><dd>按新主题检索；选题、文案和生成仍需确认</dd></div>
       <div><dt>可见范围</dt><dd>{visibilityOf(selected) === "shared" ? "团队共享" : "仅自己可见"}</dd></div>
     </dl>
-    {selected.origin === "user" ? selected.can_edit === true ? <button type="button" className={own.editButton} onClick={() => { ++editorRevision.current; setEditing(selected); setSaveNotice(null); }}><Pencil size={15}/>编辑名称与文案风格</button> : <p className={own.readOnly}>此模板只读；可用固定版本创作。</p> : null}
-    {saveNotice ? <p role="status">{saveNotice}</p> : null}
-    {editing ? <TemplateVersionEditor key={`${editing.id}:${editing.version}`} open={pageActive && detailsOpen} template={editing} onClose={() => { ++editorRevision.current;setEditing(null); }} onSaved={(saved, ticket) => {
+    {!inResourcePane && selected.origin === "user" ? selected.can_edit === true ? <button type="button" className={own.editButton} onClick={() => { ++editorRevision.current; setEditing(selected); setSaveNotice(null); }}><Pencil size={15}/>编辑名称与文案风格</button> : <p className={own.readOnly}>此模板只读；可用固定版本创作。</p> : null}
+    {!inResourcePane && saveNotice ? <p role="status">{saveNotice}</p> : null}
+    {!inResourcePane && editing ? <TemplateVersionEditor key={`${editing.id}:${editing.version}`} open={pageActive && detailsOpen} template={editing} onClose={() => { ++editorRevision.current;setEditing(null); }} onSaved={(saved, ticket) => {
       setSavedVersions(current => [...current.filter(item => !(item.id === saved.id && item.version === saved.version)), saved]);
       if (ticket === editorRevision.current) { setSelectedKey(`${saved.id}:${saved.version}`);setSaveNotice(`已保存「${saved.name}」第${saved.version}版。`);setEditing(null); }
     }} ticket={editorRevision.current}/> : null}
-    {selected.origin === "user" && selected.can_edit === true ? <section className={own.visibilitySection}>
+    {!inResourcePane && selected.origin === "user" && selected.can_edit === true ? <section className={own.visibilitySection}>
       {visibilityOf(selected) === "shared"
         ? <button disabled={visibilityBusy} onClick={() => void changeTemplateVisibility(selected, "private")} type="button">收回为仅自己可见</button>
         : <button disabled={visibilityBusy} onClick={() => void changeTemplateVisibility(selected, "shared")} type="button">共享给团队</button>}
       {visibilityError?.id === selected.id ? <p role="alert">{visibilityError.message}</p> : null}
-    </section> : selected.origin === "built_in" ? <section className={own.visibilitySection}><p>内置模板由系统提供，不单独设置可见范围。</p></section> : null}
+    </section> : !inResourcePane && selected.origin === "built_in" ? <section className={own.visibilitySection}><p>内置模板由系统提供，不单独设置可见范围。</p></section> : null}
+    {inResourcePane ? <p>可从完整管理使用此版本新建视频。当前作品继续使用原设置。</p> : null}
     <section className={styles.inspectorNotice}><strong>当前未复用</strong><p>逐镜头调色、美颜、音轨编排、转场、静态图文、人物口型、封面、双语字幕、模型与成本偏好、发布规则及自动任务。</p></section>
   </div> : null;
 
@@ -188,31 +202,35 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
     const structure = item.settings.script_structure?.join(" → ") || (item.settings.script_section_count ? `${item.settings.script_section_count} 段，按新主题重新撰写` : "按新主题生成");
     const body = <><span className={own.previewMark} aria-label={item.settings.visual?"动画组件":"文案结构预览"} title={item.settings.visual?categories[item.settings.visual.category]:structure}><Layers3 size={19}/></span><span className={own.rowCopy}><strong>{item.name} · 第{item.version}版{item.settings.visual ? " · 动画组件" : item.settings.kind === "composition" ? " · 整片组合" : " · 制作结构"}</strong><small>{item.settings.visual ? `${categories[item.settings.visual.category]} · ${item.settings.visual.width}×${item.settings.visual.height} · ${item.settings.visual.duration_seconds} 秒 · ${item.settings.visual.provenance[0].license}` : `${item.settings.aspect_ratio} · ${item.settings.duration_target_seconds} 秒 · ${item.settings.script_section_count ?? item.settings.script_structure?.length ?? "未固定"} 段`}</small></span><ChevronRight size={16} aria-hidden="true"/></>;
     if (!canAct) return <div key={key} className={own.templateRow} data-offline-inert>{body}</div>;
-    return <article className={own.templateCard} key={key}>{item.settings.visual ? <div className={own.effectPreview} style={{"--template-preview-width": `${160 * item.settings.visual.width / item.settings.visual.height}px`} as CSSProperties}><VisualTemplatePreview definition={item.settings.visual} compact/></div> : null}<button type="button" aria-pressed={selected?.id === item.id && selected.version === item.version} onClick={() => { ++editorRevision.current;setEditing(null);setSaveNotice(null);setSelectedKey(key);setDetailsOpen(true); }} className={own.templateRow}>{body}</button></article>;
+    return <article className={own.templateCard} key={key}>{!inResourcePane && item.settings.visual ? <div className={own.effectPreview} style={{"--template-preview-width": `${160 * item.settings.visual.width / item.settings.visual.height}px`} as CSSProperties}><VisualTemplatePreview definition={item.settings.visual} compact/></div> : null}<button type="button" data-open-details={inResourcePane || undefined} aria-pressed={selected?.id === item.id && selected.version === item.version} onClick={() => { ++editorRevision.current;setEditing(null);setSaveNotice(null);setSelectedKey(key);setDetailsOpen(true); }} className={own.templateRow}>{body}</button></article>;
   });
   const structures = visible.filter(item => !item.settings.visual);
   const visuals = visible.filter(item => item.settings.visual);
   const grid = <>
     {structures.length ? <section className={own.templateGroup} aria-label="制作结构与组合">{visuals.length ? <h2>制作结构与组合</h2> : null}<div className={own.templateList}>{templateRows(structures)}</div></section> : null}
-    {visuals.length ? <section className={own.templateGroup} aria-label="动画组件">{structures.length ? <h2>动画组件</h2> : null}<div className={own.templateList} data-gallery>{templateRows(visuals)}</div></section> : null}
+    {visuals.length ? <section className={own.templateGroup} aria-label="动画组件">{structures.length ? <h2>动画组件</h2> : null}<div className={own.templateList} data-gallery={!inResourcePane || undefined}>{templateRows(visuals)}</div></section> : null}
   </>;
 
   const emptyStage = hasQuery
     ? <section className={styles.emptyStage}><p>没有找到名称匹配“{trimmed}”的模板。</p><button type="button" onClick={() => setQuery("")}>清除搜索</button></section>
-    : <section className={styles.emptyStage}><p>{emptyCopy[view].title} {emptyCopy[view].hint}</p><Link href={emptyCopy[view].href}>{emptyCopy[view].action}</Link></section>;
+    : <section className={inResourcePane ? own.panelEmpty : styles.emptyStage}><p>{emptyCopy[view].title} {emptyCopy[view].hint}</p>{!inResourcePane ? <Link href={emptyCopy[view].href}>{emptyCopy[view].action}</Link> : null}</section>;
 
-  return <AppShell><div className={styles.page}>
-    {offline ? <section className={styles.capabilityBanner}><span><WifiOff size={16} /></span><div><strong>暂时无法读取模板</strong><p>请检查本地服务后刷新；已保存的模板暂不可操作。</p></div><Link href="/health">检查运行情况</Link></section> : null}
+  const showDetail = detailsOpen && canAct && Boolean(selected);
+  return <AppShell inspector={inResourcePane && showDetail ? inspector : undefined} inspectorTitle="模板详情"
+    inspectorOpenKey={inResourcePane && showDetail ? selectedKey ?? undefined : undefined}
+    onResourceInspectorClose={inResourcePane ? closeDetail : undefined}>
+    <div className={`${styles.page}${inResourcePane ? ` ${own.resourcePane}` : ""}`}>
+    {offline ? <section className={`${styles.capabilityBanner} ${own.offlineBanner}`}><span><WifiOff size={16} /></span><div><strong>暂时无法读取模板</strong><p>请检查本地服务后刷新；已保存的模板暂不可操作。</p></div><Link href="/health">检查运行情况</Link></section> : null}
     <div className={`${styles.viewBar} ${own.toolbar}`}><nav className={styles.tabs} aria-label="模板视图">{views.map(({ id, label, icon: Icon }) => <button type="button" key={id} aria-pressed={view === id} className={view === id ? styles.activeTab : undefined} onClick={() => { ++editorRevision.current;setEditing(null);setSaveNotice(null);setView(id); setResourceCategory("all"); setSelectedKey(null); setQuery(""); setDetailsOpen(false); }}><Icon size={15} />{label}</button>)}</nav>
       <label data-input-group className={own.search}><Search size={15} /><input type="search" aria-label="搜索模板名称" placeholder="搜索模板名称…" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
-      {canAct && selected ? <><button className={styles.secondaryButton} type="button" onClick={() => { setSelectedKey(`${selected.id}:${selected.version}`);setDetailsOpen(true); }}>查看详情</button>{selected.settings.visual || !repairReady || repairError || repairContext ? useAction : <Link className={styles.primaryButton} href={creationHref}>用这个做 <ArrowRight size={15} /></Link>}</> : null}
+      {!inResourcePane && canAct && selected ? <><button className={styles.secondaryButton} type="button" onClick={() => { setSelectedKey(`${selected.id}:${selected.version}`);setDetailsOpen(true); }}>查看详情</button>{selected.settings.visual || !repairReady || repairError || repairContext ? useAction : <Link className={styles.primaryButton} href={creationHref}>用这个做 <ArrowRight size={15} /></Link>}</> : null}
     </div>
     {!offline && availableCategories.length>1 ? <label className={own.resourceFilter}>资源类型 <select aria-label="资源类型" value={resourceCategory} onChange={event=>{setResourceCategory(event.target.value);setSelectedKey(null);}}><option value="all">全部资源（{byVersion.length}）</option>{availableCategories.map(key=><option value={key} key={key}>{categories[key]}</option>)}</select></label> : null}
-    {repairError ? <p role="alert">{repairError}</p> : null}
-    {repairContext ? <p>换用模板保留原目标、时长和人物声音选择，返回后重新检查；不会自动创建任务。</p> : null}
+    {!inResourcePane && repairError ? <p role="alert">{repairError}</p> : null}
+    {!inResourcePane && repairContext ? <p>换用模板保留原目标、时长和人物声音选择，返回后重新检查；不会自动创建任务。</p> : null}
     {empty ? (offline ? null : emptyStage) : grid}
   </div>
-    <HomeCardDialog kind="detail" title="模板详情" open={pageActive && detailsOpen && canAct && Boolean(selected)} onClose={() => { ++editorRevision.current;setEditing(null);setDetailsOpen(false); }} footer={selected ? <div className={own.detailFooter}><span>第{selected.version}版</span>{useAction}</div> : null}>{inspector}</HomeCardDialog>
+    {!inResourcePane ? <HomeCardDialog kind="detail" title="模板详情" open={pageActive && showDetail} onClose={closeDetail} footer={selected ? <div className={own.detailFooter}><span>第{selected.version}版</span>{useAction}</div> : null}>{inspector}</HomeCardDialog> : null}
   </AppShell>;
 }
 

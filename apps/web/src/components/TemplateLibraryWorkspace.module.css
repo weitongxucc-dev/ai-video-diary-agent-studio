@@ -90,3 +90,23 @@
 .effectPreview { display:flex; align-items:center; justify-content:center; height:176px; overflow:hidden; padding:8px; border-radius:8px; background:var(--surface-2); }
 .effectPreview > section { width:100%; max-width:var(--template-preview-width); }
 .effectPreview p { margin:0; font-size:12px; color:var(--text-2); }
+
+.resourcePane { box-sizing:border-box; padding:var(--space-2); }
+.resourcePane .toolbar { flex-direction:column; align-items:stretch; gap:var(--space-2); }
+.resourcePane .toolbar > nav { flex:initial; flex-wrap:wrap; gap:var(--space-2); }
+.resourcePane .toolbar > nav button { min-width:0; }
+.resourcePane .toolbar .search { flex:initial; min-width:0; }
+.resourcePane .search:focus-within { outline:2px solid var(--focus); outline-offset:1px; }
+.resourcePane .resourceFilter { flex-wrap:wrap; }
+.resourcePane .resourceFilter select { min-width:0; max-width:100%; }
+.resourcePane .templateGroup { margin-top:var(--space-2); }
+.resourcePane .templateList { padding:0; }
+.resourcePane .rowCopy { overflow-wrap:anywhere; }
+.panelDetail { min-width:0; overflow-wrap:anywhere; }
+.panelDetail h3 { margin:0 0 var(--space-2); font:inherit; }
+.panelEmpty { color:var(--text-2); }
+
+@container (max-width: 360px) {
+  .resourcePane .offlineBanner { grid-template-columns:minmax(0,1fr); }
+  .resourcePane .offlineBanner > a { grid-column:1; }
+}

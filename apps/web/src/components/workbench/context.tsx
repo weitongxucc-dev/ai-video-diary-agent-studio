@@ -14,7 +14,7 @@ export type WorkspacePageSlot = {
 export const WorkspacePanelContext = createContext<{
   inspectorOpen: boolean; resourceOpen: boolean; conversationFocused: boolean; revealTaskPanel: () => void;
   resourceInspectorOpen?: boolean;
-  openResourceInspector?: () => void;
+  openResourceInspector?: (opener?: HTMLElement) => void;
   openQuickInspector?: () => void;
 }>({ inspectorOpen: false, resourceOpen: false, conversationFocused: false, revealTaskPanel: () => {} });
 export const WorkbenchRegistry = createContext<{ register: (page: Omit<WorkspacePage, "open">) => void; forget: (id: string) => void } | null>(null);
@@ -25,6 +25,8 @@ export const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/
 const workResourcePanels = new Map([
   ["/library", "/library?mode=panel&resource=materials"],
   ["/knowledge", "/knowledge?mode=panel"],
+  ["/profiles", "/profiles?mode=panel"],
+  ["/templates", "/templates?mode=panel"],
 ]);
 
 export function workspaceNavigationHref(href: string, hasActiveWork: boolean) {
@@ -32,7 +34,15 @@ export function workspaceNavigationHref(href: string, hasActiveWork: boolean) {
 }
 
 export function isWorkResourcePanel(pathname: string, search?: Pick<URLSearchParams, "get"> | null) {
-  return search?.get("mode") === "panel" && workResourcePanels.has(pathname);
+  const mode = search?.get("mode");
+  if (mode === "panel") return workResourcePanels.has(pathname);
+  // Existing fixed profile references use locate_ref without a mode.
+  return !mode && pathname === "/profiles" && Boolean(search?.get("locate_ref")) && !search?.get("task");
+}
+
+export function shouldDockWorkspaceResource(pathname: string, search?: Pick<URLSearchParams, "get"> | null) {
+  return isWorkResourcePanel(pathname, search)
+    || (search?.get("mode") !== "manage" && (pathname === "/library" || pathname === "/knowledge"));
 }
 
 export function isCreationDraftRoute(pathname: string, search?: Pick<URLSearchParams, "get"> | null) {
