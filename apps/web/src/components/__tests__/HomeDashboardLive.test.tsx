@@ -39,6 +39,7 @@ vi.mock("@/hooks/useLocalMemberIdentity", () => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
 
 import { HomeDashboardLive } from "@/components/HomeWorkspace";
+import { WorkspacePageContext } from "@/components/workbench/context";
 
 const meta = { scope: "caller_visible" as const, source: "creation_task", as_of: "2026-10-04T00:00:00Z" };
 
@@ -70,6 +71,33 @@ beforeEach(() => {
 });
 
 describe("首页真实数据容器", () => {
+  it("reads only the member dashboard for a docked overview and retries without inventing counts", async () => {
+    const dashboard = payload(7, "只应出现在完整首页");
+    dashboard.counts.push({ key: "tasks", label: "任务", value: 2, meta });
+    dashboard.counts.push({ key: "works", label: "作品记录", value: 0, meta });
+    dashboard.counts.push({ key: "voices", label: "声音", value: 5, meta: { ...meta, scope: "workspace" } });
+    api.getHomeDashboard.mockRejectedValueOnce(new Error("首页连接失败")).mockResolvedValue(dashboard);
+    render(<WorkspacePageContext.Provider value={{ id: "/?mode=panel", href: "/?mode=panel", active: true,
+      auxiliary: true, viewState: new Map(), updateShell: vi.fn() }}>
+      <HomeDashboardLive />
+    </WorkspacePageContext.Provider>);
+
+    const overview = screen.getByRole("region", { name: "当前成员概览" });
+    expect(await within(overview).findByRole("alert")).toHaveTextContent("首页连接失败");
+    expect(within(overview).queryByText("0")).not.toBeInTheDocument();
+    fireEvent.click(within(overview).getByRole("button", { name: "重新读取" }));
+    expect((await within(overview).findByText("作品记录")).parentElement).toHaveTextContent("作品记录0");
+    expect(within(overview).getByText("可见素材").parentElement).toHaveTextContent("可见素材7");
+    expect(within(overview).getByText("任务").parentElement).toHaveTextContent("任务2");
+    expect(within(overview).queryByText("声音")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "开始创作" })).not.toBeInTheDocument();
+    expect(api.getHomeDashboard).toHaveBeenCalledWith(7);
+    expect(api.listCreationTasks).not.toHaveBeenCalled();
+    expect(api.getProductionFoundation).not.toHaveBeenCalled();
+    expect(api.getMaterialLibraryInsights).not.toHaveBeenCalled();
+    expect(api.getProductionMaterials).not.toHaveBeenCalled();
+  });
+
   it("uses real zero-filled range responses and replaces the compact state with a nonzero trend", async () => {
     api.getHomeDashboard.mockImplementation(async (days: 7 | 30) => {
       const data = payload(days, "unused");
