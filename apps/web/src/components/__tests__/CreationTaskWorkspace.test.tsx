@@ -9,6 +9,9 @@ import { CreationPlanApiError, getCreationTaskScriptGenerationRequest, stopAssis
 import { AssistantConversationProvider } from "../AssistantConversationProvider";
 import { referenceAssistantMaterial } from "@/lib/assistant-reference";
 import { WorkspacePageContext, type WorkspacePageSlot } from "../workbench/context";
+import { Workbench } from "../workbench/Workbench";
+import { WorkbenchTargetProvider } from "../workbench/WorkbenchTarget";
+import { WorkspaceRoute } from "../workbench/WorkspaceRoute";
 import { TaskViewNavigation } from "../creation-task/TaskViewNavigation";
 import { Tabs } from "../ui/tabs";
 import { ScriptEditor, ConfirmedScriptView } from "../creation-task/ScriptStage";
@@ -118,7 +121,7 @@ vi.mock("../AssistantConversationProvider", async (importOriginal) => {
 
 vi.mock("@/components/AppShell", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/AppShell")>();
-  return { AppShell: (props: import("@/components/AppShell").AppShellProps) => {
+  return { ...actual, AppShell: (props: import("@/components/AppShell").AppShellProps) => {
     if (mocks.realShell) return <actual.AppShell {...props} />;
     const { children, conversation, inspector, inspectorConfirmation, quickInspector, quickInspectorLabel, toolbar, toolbarActions, inspectorTitle = "任务详情" } = props;
     const findConversation = (node: import("react").ReactNode): void => { for (const child of Children.toArray(node)) {
@@ -130,7 +133,10 @@ vi.mock("@/components/AppShell", async (importOriginal) => {
     return <><header>{toolbar}{toolbarActions}</header><section>{conversation}</section><main>{children}</main>{mocks.showQuickInspector && quickInspector ? <section aria-label={quickInspectorLabel}>{quickInspector(mocks.openQuickDetails)}</section> : null}{inspector ? <aside aria-label={inspectorTitle}>{inspector}</aside> : null}{inspectorConfirmation}</>;
   } };
 });
-vi.mock("next/navigation", () => ({ usePathname: () => "/tasks/task-1", useRouter: () => ({ push: vi.fn(), back: vi.fn() }), useSearchParams: () => new URLSearchParams() }));
+vi.mock("next/navigation", () => {
+  const router = { push: vi.fn(), back: vi.fn() };
+  return { usePathname: () => "/tasks/task-1", useRouter: () => router, useSearchParams: () => new URLSearchParams() };
+});
 vi.mock("@/lib/supabase/client", () => ({ createClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: mocks.memberId } }, error: null }), getSession: async () => ({ data: { session: { user: { id: mocks.memberId } } }, error: null }), onAuthStateChange: (callback: typeof mocks.authChange) => { mocks.authChange = callback; return {data:{subscription:{unsubscribe:vi.fn()}}}; } } }) }));
 vi.mock("@/lib/local-member-auth", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/local-member-auth")>(),
   ensureLocalMemberIdentity: async () => ({ member_id: mocks.memberId, role: "owner", member_token: "fixture-token" }),
@@ -264,7 +270,8 @@ vi.mock("@/lib/api", async importOriginal => ({ ...(await importOriginal<typeof 
       assistant_text: events.filter((event) => event.type === "text_delta").map((event) => event.delta).join(""),
       status: "completed" as const, events, result: { kind: "task_turn", execution_action: result.execution_action ?? null,
         execution_status: result.execution_status?.job?.status ?? null, script_draft: result.script_draft?.id ?? null,
-        topic_candidates: Boolean(result.topic_candidates), edit_preview: Boolean(result.edit_preview) },
+      topic_candidates: Boolean(result.topic_candidates), edit_preview: Boolean(result.edit_preview),
+        ...(result.edit_request ? { response: result } : {}) },
       created_at: "2026-10-09T00:00:00Z", updated_at: "2026-10-09T00:00:01Z" };
     mocks.assistantConversations.set(saved.id, { ...saved, draft_text: "", draft_version: input.expected_draft_version + 1,
       turns: [...saved.turns, turn], updated_at: turn.updated_at });
@@ -1949,6 +1956,132 @@ describe("CreationTaskWorkspace", () => {
     expect(within(screen.getByRole("group", { name: "封面标题位置" })).getByRole("button", { name: "中部" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(/本次保存时后台执行授权未就绪（原授权已过期）；修改已保留。/)).toBeVisible();
   });
+
+  it.each(["exact", "workbench", "unrelated publication", "undo version"] as const)(
+    "keeps the saved title replay scoped to its published child for %s", async (scenario) => {
+      const initial = subtitleCoverWorkspace();
+      initial.task.current_timeline_version_id = "timeline-version-5";
+      initial.task.timeline_sequence = 5;
+      initial.subtitle_tracks[0].timeline_version_id = "timeline-version-5";
+      const title = { kind: "text" as const, id: "title-1", text: "数智分会",
+        start_seconds: 2, end_seconds: 4, x: .5, y: .15, width: .8, font_size: 64, font_family: "PingFang SC", color: "#FFFFFF" };
+      initial.montage!.graphic_overlays = [title];
+      const next = structuredClone(initial);
+      next.montage!.graphic_overlays = [{ ...title, start_seconds: 1.5, end_seconds: 3.5 }];
+      next.task.current_timeline_version_id = "timeline-version-6";
+      next.task.timeline_sequence = 6;
+      next.task.output_ready = false;
+      next.montage!.output_url = null;
+      next.montage!.status = "ready";
+      const proposal = exactPreview(initial.task, "EditGraphicOverlay");
+      proposal.proposal.target_refs = ["overlay:title-1"];
+      Object.assign(proposal.proposal.operation.payload, {
+        base_version_id: initial.task.current_timeline_version_id, graphic_overlays: next.montage!.graphic_overlays,
+      });
+      mocks.getWorkspace.mockResolvedValue(initial);
+      mocks.previewEdit.mockResolvedValue(proposal);
+      const saved = { montage: next.montage, operation: {
+        id: "saved-title", task_id: initial.task.id, workspace_id: initial.task.workspace_id,
+        operation_type: "EditGraphicOverlay", status: "applied",
+        base_version_id: initial.task.current_timeline_version_id,
+        result_version_id: next.task.current_timeline_version_id,
+      } };
+      mocks.confirmEdit.mockResolvedValueOnce(saved);
+      const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+      previewReadRestores.push(() => play.mockRestore());
+
+      const subject = <CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />;
+      if (scenario === "workbench") {
+        mocks.realShell = true;
+        Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) });
+        render(<WorkbenchTargetProvider><AssistantConversationProvider><Workbench>
+          <WorkspaceRoute label={initial.task.name}>{subject}</WorkspaceRoute>
+        </Workbench></AssistantConversationProvider></WorkbenchTargetProvider>);
+        await screen.findByLabelText("任务对话要求");
+      } else {
+        renderTaskSubject(subject);
+      }
+      fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
+      fireEvent.click(screen.getByRole("button", { name: /^标题1 · 数智分会/ }));
+      const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+      player.currentTime = 5;
+      fireEvent.timeUpdate(player);
+      let finishRender!: (value: unknown) => void;
+      const rendering = new Promise(resolve => { finishRender = resolve; });
+      if (scenario === "workbench") {
+        mocks.askAssistant.mockImplementationOnce(async () => {
+          mocks.getWorkspace.mockResolvedValue(next);
+          mocks.getExecution.mockReturnValue(rendering);
+          return { reply: "标题已提前半秒。", provider: "test", model: "test", edit_preview: null, edit_request: {
+            task_id: initial.task.id, phase: "apply", status: "recorded", result: saved,
+          } };
+        });
+        fireEvent.change(await readyInput("任务对话要求"), { target: { value: "标题提前半秒" } });
+        await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeEnabled());
+        await clickAndSettle(screen.getByRole("button", { name: "发送" }));
+        expect(mocks.askAssistant).toHaveBeenCalledWith(initial.task.id, expect.objectContaining({
+          message: "标题提前半秒", expected_timeline_version_id: "timeline-version-5",
+        }), expect.any(Function));
+      } else {
+        fireEvent.change(await readyInput("局部修改要求"), { target: { value: "标题提前半秒" } });
+        fireEvent.click(screen.getByRole("button", { name: "精确预览修改" }));
+        expect(mocks.previewEdit).toHaveBeenCalledWith(initial.task.id, expect.objectContaining({
+          raw_command: "标题提前半秒", selected_object_refs: ["overlay:title-1"],
+        }));
+        const confirm = await screen.findByRole("button", { name: "应用到草稿" });
+        expect(mocks.confirmEdit).not.toHaveBeenCalled();
+        mocks.getWorkspace.mockResolvedValue(next);
+        mocks.getExecution.mockReturnValue(rendering);
+        await clickAndSettle(confirm);
+      }
+      expect(await screen.findByText("本次标题修改已保存，当前版本待合成。")).toBeVisible();
+      expect(screen.getByRole("slider", { name: "时间线播放位置" })).toHaveAttribute("aria-valuetext", "00:05.0");
+      expect(screen.queryByRole("button", { name: "回放刚才的修改" })).not.toBeInTheDocument();
+      const published = structuredClone(next);
+      published.task.current_timeline_version_id = "timeline-version-7";
+      published.task.timeline_sequence = 7;
+      published.task.output_ready = true;
+      published.montage!.output_url = "/api/creation-tasks/task-1/output";
+      published.montage!.status = "rendered";
+      if (scenario === "undo version") published.montage!.graphic_overlays = [title];
+      const renderReceipt = {
+        task_id: initial.task.id, job: { id: "render-job", status: "succeeded" }, stages: [], video_ready: true,
+        output_version: { job_id: "render-job",
+          base_version: { timeline_version_id: scenario === "unrelated publication" ? "unrelated-base" : "timeline-version-6", timeline_sequence: 6 },
+          result_version: { timeline_version_id: "timeline-version-7", timeline_sequence: 7 } },
+      };
+      mocks.getTimelineVersion.mockResolvedValue({
+        task_id: initial.task.id,
+        version: { id: "timeline-version-7", sequence: 7, is_current: true, parent_version_id: "timeline-version-6",
+          operation_id: scenario === "undo version" ? "undo-operation" : null },
+        artifacts: [{ kind: "video", status: "available", url: "/timeline/versions/timeline-version-7/artifacts/video" }],
+      });
+      previewReadRestores.push(() => { mocks.getTimelineVersion.mockReset(); });
+      mocks.getWorkspace.mockResolvedValue(published);
+      await act(async () => finishRender(renderReceipt));
+      await expectTaskVersion(/版本 7$/);
+      const rendered = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+      fireEvent.loadedMetadata(rendered);
+      fireEvent.canPlay(rendered);
+      expect(rendered.currentTime).toBe(5);
+      expect(rendered).toHaveAttribute("src", expect.stringContaining("version=timeline-version-7"));
+      expect(play).not.toHaveBeenCalled();
+      if (scenario === "unrelated publication" || scenario === "undo version") {
+        expect(screen.queryByRole("button", { name: "回放刚才的修改" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "定位修改的标题" })).not.toBeInTheDocument();
+        return;
+      }
+      expect(mocks.getTimelineVersion).toHaveBeenCalledWith(initial.task.id, "timeline-version-7");
+      if (scenario === "workbench") {
+        fireEvent.click(await screen.findByRole("button", { name: "查看当前剪辑" }));
+        expect(rendered.currentTime).toBe(1.5);
+        expect(play).not.toHaveBeenCalled();
+      }
+      fireEvent.click(await screen.findByRole("button", { name: "回放刚才的修改" }));
+      expect(rendered.currentTime).toBe(.5);
+      expect(play).toHaveBeenCalledOnce();
+    }, 15_000,
+  );
 
   it.each(['not_submitted','unknown'] as const)('timeline restore %s preserves the correct retry boundary', async effect=>{
     const initial=workspaceWithCover();

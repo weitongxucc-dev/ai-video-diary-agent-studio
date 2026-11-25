@@ -176,7 +176,17 @@ class CommandPreviewUseCase:
                 raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc
             if edit:
                 action, value, overlay_identity = edit
-                return self.exact_action(task, CreationTaskExactEditRequest(operation_type='EditGraphicOverlay', overlay_action=action, graphic_overlay=value, overlay_id=overlay_identity), identity=identity, request_source=request_source, draft_only=draft_only, execution=execution, actor=actor, reader_identity=reader_identity)
+                title_timing = action == 'update' and value.get('kind') in {'text', 'template'} and any(
+                    overlay['id'] == overlay_identity and overlay['start_seconds'] != value['start_seconds']
+                    for overlay in overlay_plan.graphic_overlays)
+                expected_version = (request_source['expected_timeline_version_id']
+                                    if request_source is not None else short_preview_base_version)
+                if title_timing and expected_version != task.current_timeline_version_id:
+                    raise EditPreviewRejected(409, '时间线已变化，请重新选择当前版本的图文叠加层。')
+                outcome = self.exact_action(task, CreationTaskExactEditRequest(operation_type='EditGraphicOverlay', overlay_action=action, graphic_overlay=value, overlay_id=overlay_identity), identity=identity, request_source=request_source, draft_only=draft_only, execution=execution, actor=actor, reader_identity=reader_identity)
+                if title_timing and expected_version is not None and outcome[1].operation['payload']['base_version_id'] != expected_version:
+                    raise EditPreviewRejected(409, '预览期间时间线已变化，请重新选择当前版本的图文叠加层。')
+                return outcome
         selected_ref = selected_reference(payload)
         if selected_ref.startswith('clip:'):
             transition = re.fullmatch('(?:(?:当前|这个)?镜头)?(?:与前一个镜头)?(?:添加|改为|设置)?叠化(?:转场)?\\s*(\\d+(?:\\.\\d+)?)\\s*秒[。！]?', command)

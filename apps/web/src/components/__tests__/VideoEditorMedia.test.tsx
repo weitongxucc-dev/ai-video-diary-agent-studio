@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createRef } from "react";
+import { createRef, type ComponentProps } from "react";
 import { WorkspacePageContext, type WorkspacePageSlot } from "../workbench/context";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CreationTaskMontageClip, CreationTaskWorkspace } from "@/lib/types";
@@ -44,8 +44,8 @@ function workspace(selected = clip, output: string | null = null, version = "tim
     montage: { clips: [selected], cues: [], duration_seconds: 3, aspect_ratio: ratio, output_url: output, low_confidence_clip_count: 0 },
     subtitle_tracks: [] } as unknown as CreationTaskWorkspace;
 }
-function stage(data = workspace(), ref = createRef<HTMLVideoElement>()) {
-  return <VideoEditingStage taskId={data.task.id} versionId={data.task.current_timeline_version_id} narrationCacheKey={data.task.narration_cache_key} montage={data.montage!} planAspectRatio={data.plan.aspect_ratio} subtitleTracks={data.subtitle_tracks} selectedId={clip.id} onSelect={vi.fn()} onPosition={vi.fn()} videoRef={ref} initialTime={0} renderAction={null} />;
+function stage(data = workspace(), ref = createRef<HTMLVideoElement>(), titleReplay?: ComponentProps<typeof VideoEditingStage>["titleReplay"]) {
+  return <VideoEditingStage taskId={data.task.id} versionId={data.task.current_timeline_version_id} narrationCacheKey={data.task.narration_cache_key} montage={data.montage!} planAspectRatio={data.plan.aspect_ratio} subtitleTracks={data.subtitle_tracks} selectedId={clip.id} onSelect={vi.fn()} onPosition={vi.fn()} videoRef={ref} initialTime={0} renderAction={null} titleReplay={titleReplay} />;
 }
 
 it("uses the saved plan ratio when an older montage has no canvas ratio",()=>{
@@ -241,6 +241,48 @@ describe("source and output playback identity", () => {
     view.rerender(stage(workspace(clip, "/output.mp4", "timeline-4")));
     fireEvent.loadedMetadata(player());
     expect(player().currentTime).toBe(1.7);
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it("replays a saved title range only on request and from the current ready version", () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    const ref = createRef<HTMLVideoElement>();
+    const range = { startSeconds: .5, endSeconds: 2.7, mediaReady: false };
+    const name = "回放刚才的修改";
+    const { rerender } = render(stage(workspace(clip, "/output.mp4", "timeline-3"), ref));
+    ref.current!.currentTime = 2.3;
+    fireEvent.timeUpdate(ref.current!);
+
+    rerender(stage(workspace(clip, null, "timeline-4"), ref, range));
+    expect(screen.getByText("本次标题修改已保存，当前版本待合成。")).toBeVisible();
+    expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "时间线播放位置" })).toHaveAttribute("aria-valuetext", "00:02.3");
+
+    rerender(stage(workspace(clip, "/output.mp4", "timeline-4"), ref, { ...range, mediaReady: true }));
+    const player = ref.current!;
+    fireEvent.loadedMetadata(player);
+    expect(player.currentTime).toBe(2.3);
+    expect(player).toHaveAttribute("src", expect.stringContaining("version=timeline-4"));
+    expect(screen.getByRole("button", { name })).toBeDisabled();
+    fireEvent.canPlay(player);
+    expect(play).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name }));
+    expect(player.currentTime).toBe(.5);
+    expect(player.muted).toBe(false);
+    expect(play).toHaveBeenCalledTimes(1);
+    fireEvent.play(player);
+    const pauses = vi.mocked(player.pause).mock.calls.length;
+    player.currentTime = 2.8;
+    fireEvent.timeUpdate(player);
+    expect(player.currentTime).toBe(2.7);
+    expect(player.pause).toHaveBeenCalledTimes(pauses + 1);
+
+    fireEvent.click(screen.getByRole("button", { name }));
+    fireEvent.play(player);
+    rerender(stage(workspace(clip, "/output.mp4", "timeline-5"), ref));
+    fireEvent.loadedMetadata(ref.current!);
+    expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
     expect(play).toHaveBeenCalledTimes(2);
   });
 

@@ -43,8 +43,8 @@ import { useAssistantSelection, useAssistantReferenceStatus, useAssistantKnowled
 import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AppShell } from "@/components/AppShell";
 import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components/HomeCommandComposer";
-import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, getCreationTaskEditRequest, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
-import type { CreationTask, AssistantConversationTurn, CreationTaskQualityCheck, CreationTaskExactEditInput, CreationTaskClipMetadataInput, CreationTaskMetadataSaveInput, CreationTaskEditOperation, CreationTaskEditPreviewResponse, CreationTaskAssistantTurnResponse, CreationTaskRecording, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState, CreationExecutionStatus, MontageClipCandidate } from "@/lib/types";
+import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskTimelineVersion, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, getCreationTaskEditRequest, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
+import type { CreationTask, AssistantConversationTurn, CreationTaskQualityCheck, CreationTaskExactEditInput, CreationTaskClipMetadataInput, CreationTaskMetadataSaveInput, CreationTaskEditConfirmResponse, CreationTaskEditPreviewResponse, CreationTaskAssistantTurnResponse, CreationTaskRecording, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState, CreationExecutionStatus, MontageClipCandidate } from "@/lib/types";
 import styles from "./CreationTaskWorkspace.module.css";
 import { AudioTimelineTracks, AudioTimelineInspector } from "./AudioTimelineEditor";
 import { previewCreationTaskAudio, previewCreationTaskVisual, saveCreationTaskRecording } from "@/lib/api";
@@ -54,7 +54,7 @@ import { VideoEditingStage, VideoClipInspector, VideoClipQuickEditor, createVide
 import editorUi from "./VideoEditor.module.css";
 import type { BusyAction, PendingLocalEdit } from './creation-task/edit-context';
 import type { OpenAssistantResult } from "@/lib/types/assistant";
-import { savedAssistantResultLocation, timelineEditTarget, timelineEditTargetLabel, type TimelineEditTarget } from "./creation-task/assistant-result-location";
+import { assistantSavedEdit, matchesTitlePublication, savedAssistantResultLocation, savedTitleEditTarget, timelineEditTarget, timelineEditTargetLabel, titlePublicationCandidate, type TimelineEditTarget } from "./creation-task/assistant-result-location";
 import { savedAssistantAudioResult } from "./creation-task/assistant-result-audio";
 import type { WorkspaceView } from './creation-task/stage-navigation';
 import { queuedEditNotice } from './creation-task/edit-context';
@@ -905,10 +905,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
-  function selectOverlay(id: string|null) {
+  function selectOverlay(id: string|null, movePlayhead = true) {
     invalidateEditPreview(); setEditorDraft(false); setSelectedOverlayId(id); setSelectedAudioId(null);
     const item=workspace.montage?.graphic_overlays?.find(value=>value.id===id);
-    if(item){const time=(item.start_seconds+item.end_seconds)/2;playheadRef.current=time;
+    if(item && movePlayhead){const time=(item.start_seconds+item.end_seconds)/2;playheadRef.current=time;
       if(montageVideoRef.current){montageVideoRef.current.pause();montageVideoRef.current.currentTime=time;}}
   }
 
@@ -1071,6 +1071,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   async function askAssistant() {
     const message = editCommand.trim();
     if (!message) return;
+    const base = currentWorkspace.current;
     const referenceSnapshot = latestSelectionSnapshot.current;
     const taskReferences = selectionState?.items.filter(item => "task_id" in item) ?? [];
     const materialSnapshot = taskReferences.length ? null : selectedMaterialReference?.selection ?? null;
@@ -1158,6 +1159,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       if (!ownsTurn()) return;
       // Some saved effects are reported only in the final result.
       const { script_draft: draft, script_window_request: window, segment_revision: segment, timeline_restore: restore } = result;
+      const savedEdit = assistantSavedEdit(task.id, result);
+      const titleTarget = savedEdit?.operation ? savedTitleEditTarget(base, savedEdit) : undefined;
+      const titleVersion = titleTarget ? savedEdit?.operation.result_version_id : undefined;
       const savedScript = draft?.task_id === task.id ? { id: draft.id, updatedAt: draft.updated_at }
         : window?.task_id === task.id && (window.status === "saved" || window.status === "confirmed")
           ? { id: window.script_id, updatedAt: window.updated_at } : null;
@@ -1168,8 +1172,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         ? restore.receipt.result_version_id
         : segment?.revision?.task_id === task.id && segment.revision.status === "succeeded" && segment.revision.adoption.status === "current"
           ? segment.revision.adoption.current_timeline_version_id : null;
-      if ((savedScript && !workspaceAlreadyHasScript) || (savedVersion && savedVersion !== currentVersion) || result.timeline_action) {
+      if ((savedScript && !workspaceAlreadyHasScript) || (savedVersion && savedVersion !== currentVersion)
+        || (titleVersion && titleVersion !== currentVersion) || result.timeline_action) {
         await readSavedWorkspace();
+      }
+      if (ownsTurn() && titleTarget && titleVersion === currentWorkspace.current.task.current_timeline_version_id && titleVersion) {
+        setLastLocalEdit({ versionId: titleVersion, target: titleTarget });
       }
       if (!ownsTurn() || revision !== editContextRevision.current) return;
       if (result.execution_status) executionController.acceptExecution(result.execution_status);
@@ -1289,6 +1297,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   async function confirmEdit() {
     if (!editPreview) return;
+    const base = currentWorkspace.current;
     const proposal = editPreview.proposal;
     const inputOwner = previewInputOwner.current;
     const preserveNextDraft = assistantPreview;
@@ -1316,7 +1325,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
             operationType: proposal.operation.operation_type, targetRefs: [...proposal.target_refs] });
           setNotice(queuedEditNotice(proposal.operation.operation_type));
         } else {
-          showLocalEditResult(result.operation);
+          showLocalEditResult(result, base);
           setNotice('修改已保存，可撤销。' + (editExecutionReadinessMessage(result.execution_readiness) ?? ''));
         }
         invalidateEditPreview();
@@ -1361,8 +1370,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setTimelineFocus({ versionId, seconds });
   }
 
-  function showLocalEditResult(operation: CreationTaskEditOperation) {
-    const target = timelineEditTarget(operation);
+  function showLocalEditResult(result: CreationTaskEditConfirmResponse, base: WorkspaceState) {
+    const { operation } = result;
+    const target = timelineEditTarget(operation) ?? savedTitleEditTarget(base, result);
     if (target && operation.task_id === task.id && operation.workspace_id === task.workspace_id
       && operation.status === "applied" && operation.result_version_id) {
       setLastLocalEdit({ versionId: operation.result_version_id, target });
@@ -1534,12 +1544,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       await refresh(true, () => owns());
       return false;
     }
+    const base = currentWorkspace.current;
     await refresh(true, () => owns());
     if (!owns()) return false;
     sessionStorage.removeItem(`subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`);
     pendingMetadataSaveRef.current = null;
     setPendingMetadataSave(null);
-    showLocalEditResult(receipt.result.operation);
+    showLocalEditResult(receipt.result, base);
     if ('clip_id' in pending.input) {
       const draftKey = `${pending.taskId}:${pending.input.clip_id}`;
       setClipDrafts(current => { const next = { ...current }; delete next[draftKey]; return next; });
@@ -1631,6 +1642,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   async function previewExactEdit(input: CreationTaskExactEditInput, media = false) {
     if (isMetadataSaveInput(input) && !media) return saveMetadataEdit(input);
     if (busy !== null) return false;
+    const base = currentWorkspace.current;
     setBusy("edit-confirm"); setError(null); setNotice(null); invalidateEditPreview();
     const revision = editContextRevision.current;
     const sequence = ++previewRequestSequence.current;
@@ -1655,6 +1667,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           return false;
         }
         saved = true;
+        showLocalEditResult(result, base);
         setNotice('修改已保存，可撤销。' + (editExecutionReadinessMessage(result.execution_readiness) ?? ''));
         setClipDrafts(current => {
           const next = { ...current };
@@ -1894,6 +1907,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       onTransferReply: activeView === "script" ? transferReplyToDraft : undefined,
       transferDraftState: latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none",
       onOpenResultStage: openAssistantResult,
+      onTaskEditSaved: result => showLocalEditResult(result, workspace),
       onOpenEditProposal: turn => void openSavedEditProposal(turn),
       onPreviewPinnedEdit: pinnedCommandTarget && (currentPinned?.kind === "shot" || currentPinned?.kind === "subtitle") && busy === null
         ? () => void previewEdit() : undefined,
@@ -1944,6 +1958,15 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [scriptResultFocus, setScriptResultFocus] = useState<{ id: string; request: number } | null>(null);
 
   function locateSavedEdit(current: WorkspaceState, target: TimelineEditTarget, seconds?: number) {
+    if (target.kind === "title") {
+      const overlay = current.montage?.graphic_overlays?.find(item => item.id === target.id);
+      if (!overlay) return "当前版本找不到这次修改的标题，请在版本历史中核对。";
+      openView("montage");
+      selectOverlay(overlay.id, false);
+      seekTimeline(overlay.start_seconds);
+      setResultInspectorRequest(request => request + 1);
+      return;
+    }
     if (target.kind === "shot") {
       const clip = current.montage?.clips.find(item => item.id === target.id);
       if (!clip) return "当前时间线找不到这个镜头，请在版本历史中核对。";
@@ -1985,6 +2008,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
     const audioResult = stage === "montage" ? savedAssistantAudioResult(turn) : null;
     if (!audioResult) {
+      if (location.stage === "montage" && location.workspaceId === current.task.workspace_id
+        && lastLocalEdit?.versionId === location.versionId && visibleLocalEdit?.kind === "title") {
+        return locateSavedEdit(current, visibleLocalEdit);
+      }
       if (current.task.current_timeline_version_id !== location.versionId) {
         return "这次修改保存在另一个时间线版本中，请在原作品的版本历史中查看。";
       }
@@ -2034,7 +2061,28 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if (task.stage === "montage" && hasTimeline) setStageDetailsRequest({});
   }
   const auxiliaryHidden = hasTimeline && !isEditor && (panel.resourceOpen || panel.inspectorOpen || panel.conversationFocused);
-  const visibleLocalEdit = lastLocalEdit?.versionId === task.current_timeline_version_id ? lastLocalEdit.target : null;
+  const titleEditVersionId = lastLocalEdit?.target.kind === "title" ? lastLocalEdit.versionId : null;
+  const candidatePublication = titleEditVersionId && task.output_ready && workspace.montage?.status === "rendered"
+    && workspace.montage.output_url ? titlePublicationCandidate(task, execution, titleEditVersionId) : undefined;
+  const publicationKey = candidatePublication ? `${task.id}:${titleEditVersionId}:${candidatePublication.timeline_version_id}` : null;
+  const [verifiedPublicationKey, setVerifiedPublicationKey] = useState<string | null>(null);
+  const titlePublicationReady = publicationKey !== null && publicationKey === verifiedPublicationKey;
+  useEffect(() => {
+    if (!candidatePublication || !titleEditVersionId || !publicationKey || titlePublicationReady || workbenchPage?.active === false) return;
+    let active = true;
+    // Both reads must identify the same current child, and only the production
+    // receipt proves the input version. A history artifact alone is insufficient.
+    void getCreationTaskTimelineVersion(task.id, candidatePublication.timeline_version_id).then(detail => {
+      if (active && matchesTitlePublication(detail, task.id, titleEditVersionId, candidatePublication)) {
+        setVerifiedPublicationKey(publicationKey);
+      }
+    }).catch(() => {
+      // A later execution read can retry the history lookup.
+    });
+    return () => { active = false; };
+  }, [candidatePublication, execution, publicationKey, task.id, titleEditVersionId, titlePublicationReady, workbenchPage?.active]);
+  const visibleLocalEdit = lastLocalEdit && (lastLocalEdit.versionId === task.current_timeline_version_id || titlePublicationReady)
+    ? lastLocalEdit.target : null;
   const localEditResultAction = visibleLocalEdit ? <Button variant="ghost" type="button"
     aria-label={timelineEditTargetLabel(visibleLocalEdit)} title="修改已保存，可在当前版本核对"
     onClick={() => {
@@ -2058,7 +2106,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           onSelectionPreview={indices => void reviseCompoundSelection(indices)} /> : null}
         <TaskViewNavigation editingActions={<>{isEditor ? (!hasTimeline ? timelineActions : undefined) : selectedReferenceAction}{localEditResultAction}</>}
           workspace={workspace} execution={execution} activeView={activeView} onOpen={openEditingView} onLocateStage={openCurrentStage} />
-        {workspace.montage ? <div className={styles.persistentStage}><VideoEditingStage seekRequest={timelineFocus?.versionId === task.current_timeline_version_id ? timelineFocus : undefined} audioSelection={selectedAudioTrack ? { id: selectedAudioId!, seconds: selectedAudioClip ? selectedAudioClip.timeline_start_ms / 1000 : undefined } : undefined} onEditSubtitle={id => { const message = locateSavedEdit(workspace, { kind: "subtitle", id }); if (message) setNotice(message); }} timelineActions={timelineActions} editError={error?.message} selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? subtitleTrack => <AudioTimelineTracks sharedTimeScale subtitleTrack={subtitleTrack} onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} taskId={task.id} versionId={task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} taskId={task.id} versionId={task.current_timeline_version_id} narrationCacheKey={task.narration_cache_key} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /></div> : null}
+        {workspace.montage ? <div className={styles.persistentStage}><VideoEditingStage titleReplay={visibleLocalEdit?.kind === "title" ? { ...visibleLocalEdit.replay, mediaReady: titlePublicationReady } : undefined} seekRequest={timelineFocus?.versionId === task.current_timeline_version_id ? timelineFocus : undefined} audioSelection={selectedAudioTrack ? { id: selectedAudioId!, seconds: selectedAudioClip ? selectedAudioClip.timeline_start_ms / 1000 : undefined } : undefined} onEditSubtitle={id => { const message = locateSavedEdit(workspace, { kind: "subtitle", id }); if (message) setNotice(message); }} timelineActions={timelineActions} editError={error?.message} selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? subtitleTrack => <AudioTimelineTracks sharedTimeScale subtitleTrack={subtitleTrack} onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} taskId={task.id} versionId={task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} taskId={task.id} versionId={task.current_timeline_version_id} narrationCacheKey={task.narration_cache_key} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /></div> : null}
         <EditorPaneMount docked={hasTimeline && !isEditor} hidden={auxiliaryHidden} homeClassName={styles.taskPaneHome} mountClassName={hasTimeline && !isEditor ? styles.taskPaneDock : styles.taskPaneHome}><EditingStatusTray actionLabel={error || executionError ? "查看原因" : localConfirmation ? "查看修改" : execution?.job?.status === "running" || execution?.job?.status === "queued" ? "查看进度" : task.output_ready ? "检查成片" : "制作与检查"} revealReason={detailsRevealReason} compact={hasTimeline && isEditor} attention={Boolean(error || executionError || task.stage_status === "failed" || task.stage_status === "waiting_for_user" || localConfirmation || pendingMetadataSave || pendingTimelineRestore)} status={error ? "修改未完成" : executionError ? "制作未完成" : (pendingMetadataSave || pendingTimelineRestore ? "操作结果待核对" : execution?.job?.status === "running" ? "后台制作中" : execution?.job?.status === "queued" ? "制作已排队" : localConfirmation ? "修改方案待确认" : task.stage_status === "failed" ? task.stage_reason ?? "制作未完成" : creationTaskShortStatus(task.stage_status, task.stage))}>
         <MediaVisibility visible={!auxiliaryHidden}><TabsContent value={activeView} hidden={auxiliaryHidden} className={hasTimeline ? [styles.auxiliaryBody, isEditor ? styles.editingAuxiliary : ""].filter(Boolean).join(" ") : styles.workspaceBody}>
         <header className={hasTimeline ? styles.stageRuntime : styles.stageHeading} data-timeline-version={task.timeline_sequence}>

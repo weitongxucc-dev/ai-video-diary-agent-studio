@@ -1,10 +1,12 @@
 """Versioned text overlays and deterministic local rasterization."""
 from pathlib import Path
 from typing import Literal
+from math import inf, nextafter
 import re
 from uuid import uuid4
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.creation.reference_picture_order import FRAME_RATE
 from app.creation.visual_template_contracts import VisualTemplateOverlay, slice_template_motion
 
 
@@ -193,8 +195,58 @@ def splice_overlays(values, intervals):
     return result
 
 
+def _compile_title_entry(text, values, selected_refs):
+    match = re.fullmatch(
+        r'(?:把)?(?P<current>当前|这个|选中的)?标题\s*'
+        r'(?:(?P<index>[1-9]\d*)|[“「](?P<name>[^”」]+)[”」])?(?:的?入场(?:时间)?)?\s*'
+        r'(?:(?P<direction>提前|推迟)\s*(?P<amount>半|\d+(?:\.\d+)?)\s*(?P<unit>秒|帧)'
+        r'|(?:改到|移到|设为)\s*第\s*(?P<frame>\d+)\s*帧)', text,
+    )
+    if not match:
+        return None
+    selected_ids = [ref.removeprefix('overlay:') for ref in selected_refs if ref.startswith('overlay:')]
+    candidates = [value for value in values if value.get('kind', 'text') in {'text', 'template'}]
+    if selected_ids:
+        candidates = [value for value in candidates if value['id'] in selected_ids]
+    if match['index']:
+        index = int(match['index']) - 1
+        static = [value for value in values if value.get('kind') != 'template']
+        # The timeline numbers all rows and the inspector numbers its static rows.
+        indexed = {rows[index]['id'] for rows in (values, static) if index < len(rows)
+                   and rows[index].get('kind', 'text') == 'text'}
+        candidates = [value for value in candidates if value['id'] in indexed]
+    if match['name']:
+        candidates = [value for value in candidates if value.get('text', value.get('name')) == match['name']]
+    if len(candidates) != 1 or len(selected_ids) > 1 or (match['current'] and not selected_ids):
+        raise ValueError('请选中一个当前版本的标题，或明确指定标题名称。')
+    value = candidates[0]
+    if value.get('kind') == 'template' and not (selected_ids or match['name']):
+        raise ValueError('请先选中作为标题的动画图层。')
+    if match['frame'] is not None:
+        start = int(match['frame']) / FRAME_RATE
+    else:
+        amount = .5 if match['amount'] == '半' else float(match['amount'])
+        if match['unit'] == '帧':
+            if amount % 1:
+                raise ValueError('按帧移动标题时，请填写整数帧数。')
+            amount /= FRAME_RATE
+        start = value['start_seconds'] + (-amount if match['direction'] == '提前' else amount)
+    if start == value['start_seconds']:
+        raise ValueError('标题入场时间没有变化。')
+    duration = value['end_seconds'] - value['start_seconds']
+    end = start + duration
+    # Keep a keyframe at the layer's end inside its interval after translating it.
+    if end - start < duration:
+        end = nextafter(end, inf)
+    changed = parse_overlay({**value, 'start_seconds': start, 'end_seconds': end})
+    return 'update', changed.model_dump(), changed.id
+
+
 def compile_overlay_command(command, values, sources=(), selected_refs=()):
     text=command.strip().rstrip('。！')
+    entry = _compile_title_entry(text, values, selected_refs)
+    if entry is not None:
+        return entry
     contextual=re.match(r'(?:把)?(?:当前|这个|选中的)(标题|图片|标识|箭头)',text)
     if contextual:
         refs=[ref.removeprefix('overlay:') for ref in selected_refs if ref.startswith('overlay:')]

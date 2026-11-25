@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { apiUrl, confirmCreationPlan, confirmCreationTaskEdit, getRuntimeSettings, previewCreationPlan, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, sendWorkspaceAssistantPlanTurn, undoCreationTaskTimeline, updateAssistantPlanPreview } from "@/lib/api";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
 import { readCreationTaskTimelineRestore } from '@/lib/api';
-import type { AssistantConversation, AssistantConversationTurn, CreationPlanPreview, CreationTask, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection, WorkspaceAssistantPlanTurnResponse } from "@/lib/types";
+import type { AssistantConversation, AssistantConversationTurn, CreationPlanPreview, CreationTask, CreationTaskEditConfirmResponse, CreationTaskEditPreviewResponse, MaterialAssistantResult, MaterialAssistantSelection, WorkspaceAssistantPlanTurnResponse } from "@/lib/types";
 import { PreflightFacts } from "@/components/CreateProductionTaskForm";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { CreationRequestPanel } from "@/components/CreationRequestPanel";
@@ -18,6 +18,7 @@ import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMate
 import { assistantTaskTurnResult, assistantTurnScriptWindowRequest, useAssistantConversation } from "@/components/useAssistantConversation";
 import { AssistantConversationPanel, AssistantFailureMessage } from "@/components/AssistantConversationPanel";
 import { editExecutionReadinessMessage } from './creation-task/stage-labels';
+import { assistantSavedEdit } from "./creation-task/assistant-result-location";
 import { CREATION_TASKS_CHANGED_EVENT } from './creation-task/task-list-facts';
 
 import type { MaterialUsageContext } from "./ui/material-usage";
@@ -41,6 +42,7 @@ export type HomeCommandComposerProps = {
     onOpenResultStage?: OpenAssistantResult;
     onOpenEditProposal?: (turn: AssistantConversationTurn) => void;
     onPreviewPinnedEdit?: () => void;
+    onTaskEditSaved?: (result: CreationTaskEditConfirmResponse) => void;
   };
   materialContext?: {
     selection: MaterialAssistantSelection | null;
@@ -270,8 +272,10 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
         setTaskPreview(result.edit_preview ? { conversationId: turn.conversationId, preview: result.edit_preview } : null);
         setTaskPreviewOpen(Boolean(result.edit_preview));
+        const savedEdit = assistantSavedEdit(task.id, result);
+        if (savedEdit) taskContext?.onTaskEditSaved?.(savedEdit);
         const receiptKeys = fresh ? appliedTaskReceiptKeys(fresh, task.id) : [];
-        if (onTaskUpdated && (result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration || result.segment_revision || result.timeline_restore
+        if (onTaskUpdated && (savedEdit || result.execution_action || result.topic_candidates || result.timeline_action || result.script_draft || result.storyboard_regeneration || result.segment_revision || result.timeline_restore
           || receiptKeys.some(key => !appliedTaskReads.current.has(key)))) {
           for (const key of receiptKeys) appliedTaskReads.current.add(key);
           onTaskUpdated();
@@ -324,7 +328,10 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       setTaskPreview(null);
       setTaskPreviewOpen(false);
       const queued = "status" in result;
-      if (!queued) setTaskAwaitingRead(latestTaskFacts.current);
+      if (!queued) {
+        taskContext?.onTaskEditSaved?.(result);
+        setTaskAwaitingRead(latestTaskFacts.current);
+      }
       setTaskActionStatus(queued ? `修改已排队，作业 ID：${result.job_id}。队列回执不代表制作完成，当前版本保持不变。` : '修改已保存，可撤销。'+(editExecutionReadinessMessage(result.execution_readiness) ?? ''));
       onTaskUpdated?.();
     } catch (cause) {
