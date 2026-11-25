@@ -1,4 +1,5 @@
 """Exercise the formal cut route, worker, and publication against real synthetic media."""
+from array import array
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -26,13 +27,14 @@ from test_host_resource_probes import _render_budget
 from test_task_media_grants import case
 
 
-@pytest.mark.parametrize(('fps', 'start', 'end', 'frames', 'video_start'), [
-    (30, 0, 2, 60, 0),
-    (1, 0.5, 1.5, 1, 0.5),
-    (1, 0.25, 0.75, 0, None),
+@pytest.mark.parametrize(('fps', 'start', 'end', 'presentations', 'delayed_video'), [
+    (30, 0, 2, [index / 30 for index in range(60)], False),
+    (1, 0.5, 1.5, [0, 0.5], False),
+    (1, 0.25, 0.75, [0], False),
+    (1, 0.25, 0.75, [], True),
 ])
 def test_bound_video_cut_publishes_only_verified_video(
-    tmp_path, monkeypatch, granted_media, fps, start, end, frames, video_start,
+    tmp_path, monkeypatch, granted_media, fps, start, end, presentations, delayed_video,
 ):
     repo, actor, _, _, build, media = case(tmp_path)
     members = LocalMemberService(repo.database_path)
@@ -40,10 +42,14 @@ def test_bound_video_cut_publishes_only_verified_video(
     source_owner, other_token = members.join(members.create_invite_code(), '样片上传者')
     source = repo.video_library_path / 'synthetic-video.mp4'
     source.parent.mkdir(parents=True, exist_ok=True)
+    picture = "drawbox=c=blue:t=fill:enable='gte(t,1)'"
+    if delayed_video:
+        picture += ',trim=start=1'
+    # Picture and audio change together at source time one second.
     with granted_media(kind='creation_render') as context:
-        encoded = context.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', f'testsrc2=s=96x64:r={fps}:d=4',
-            '-f', 'lavfi', '-i', 'sine=frequency=440:duration=4', '-c:v', 'libx264', '-threads:v', '1',
-            '-c:a', 'aac', str(source)], output_paths=(source,))
+        encoded = context.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', f'color=red:s=96x64:r={fps}:d=4',
+            '-f', 'lavfi', '-i', r'aevalsrc=0.5*sin(2*PI*if(lt(t\,1)\,440\,880)*t):d=4',
+            '-vf', picture, '-c:v', 'libx264', '-threads:v', '1', '-c:a', 'aac', str(source)], output_paths=(source,))
     assert encoded.returncode == 0, encoded.stderr
     stats = source.stat()
     asset = repo._save_asset(MaterialAsset(id='authorized-qa', workspace_id='local', file_name=source.name,
@@ -113,7 +119,7 @@ def test_bound_video_cut_publishes_only_verified_video(
         assert {job.id for job in repo.job_records.list_job_runs('local', 'task')} == {receipt['job_id'], outer['job_id']}
         versions = repo.timeline_records.list_timeline_versions('local', 'task')
         records = repo.execution_records.list_artifact_records('local', 'task')
-        if not frames:
+        if not presentations:
             assert receipt['status'] == 'failed' and receipt['failure_reason'] == 'media_cut_no_video_frames'
             assert receipt['result'] is None
             assert [version.id for version in versions] == [base.id] and not records
@@ -134,14 +140,32 @@ def test_bound_video_cut_publishes_only_verified_video(
         assert hashlib.sha256(downloaded.content).hexdigest() == artifact.sha256
         output = tmp_path / 'downloaded.mp4'
         output.write_bytes(downloaded.content)
-        probe = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-count_frames', '-show_streams',
-            '-show_format', '-of', 'json', str(output)], timeout=10))
+        probe = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-show_frames', '-show_streams',
+            '-show_format', '-show_entries', 'frame=media_type,best_effort_timestamp_time:'
+            'stream=codec_type,codec_name,start_time,duration:format=duration', '-of', 'json', str(output)], timeout=10))
         tracks = {item['codec_type']: item for item in probe['streams']}
         assert tracks['video']['codec_name'] == 'h264' and tracks['audio']['codec_name'] == 'aac'
-        assert int(tracks['video']['nb_read_frames']) == frames
-        assert float(tracks['video']['start_time']) == pytest.approx(video_start, abs=0.001)
-        assert float(tracks['video']['duration']) == pytest.approx(end - start - video_start, abs=0.001)
+        actual_pts = [float(frame['best_effort_timestamp_time']) for frame in probe['frames']
+                      if frame['media_type'] == 'video']
+        assert actual_pts == pytest.approx(presentations, abs=0.001)
+        assert float(tracks['video']['duration']) == pytest.approx(end - start, abs=0.001)
+        assert float(tracks['audio']['start_time']) == pytest.approx(0, abs=0.001)
         assert float(probe['format']['duration']) == pytest.approx(end - start, abs=0.001)
+        if fps == 1:
+            cmd = ['ffmpeg', '-v', 'error', '-nostdin', '-i', str(output)]
+            pixels = subprocess.check_output([*cmd, '-vf', 'scale=1:1,format=rgb24', '-fps_mode', 'passthrough',
+                '-f', 'rawvideo', 'pipe:1'], timeout=10)
+            assert len(pixels) == 3 * len(presentations)
+            assert pixels[0] > 180 and pixels[2] < 40
+            if start == 0.5:
+                assert pixels[3] < 40 and pixels[5] > 180
+                samples = array('h', subprocess.check_output([*cmd, '-map', '0:a:0', '-ar', '8000',
+                    '-f', 's16le', 'pipe:1'], timeout=10))
+                # The original 440 Hz and 880 Hz tones meet at the picture cut.
+                for lo, hi, frequency in ((0.39, 0.49, 440), (0.51, 0.61, 880)):
+                    window = samples[round(lo * 8000):round(hi * 8000)]
+                    rising = sum(a <= 0 < b for a, b in zip(window, window[1:]))
+                    assert rising == pytest.approx(frequency * (hi - lo), abs=2)
         assert client.get(url.replace('/task/media-jobs/', '/another-task/media-jobs/')).status_code == 404
         assert client.get(url, headers={'X-Local-Member-Token': other_token}).status_code == 404
         repo.set_asset_visibility('local', asset.id, 'private')

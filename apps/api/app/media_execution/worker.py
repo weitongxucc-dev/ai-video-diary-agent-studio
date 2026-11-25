@@ -12,7 +12,7 @@ from contextlib import suppress
 from functools import partial
 from pathlib import Path
 
-from .adapter import FfmpegAdapter
+from .adapter import FfmpegAdapter, VideoCut, video_frame_intervals
 from .capabilities import ToolDependency
 from .contracts import (
     EditPlan,
@@ -81,9 +81,18 @@ class FfmpegWorker:
                 "operation": operation.operation, "index": index,
             })
             log("command_start", inputs=[str(item) for item in inputs], output=str(output_path))
-            prepared = self.adapter.concat(inputs, output_path, job_root / f"step-{index}.concat.txt") if operation.operation.lower() == "join" else self.adapter.prepare(
-                operation.__class__(operation=operation.operation, inputs=tuple(str(item) for item in inputs),
-                                    output_name=operation.output_name, options=operation.options), output_path)
+            cut = None
+            name = operation.operation.lower()
+            if name in {"cut", "trim"} and inputs and "asset_id" in operation.options:
+                source_media = self._probe_video_cut(inputs[0], cancel_event, log)
+                cut = VideoCut.from_source(source_media, operation.options["start"], operation.options["duration"])
+                prepared = self.adapter.video_cut(name, inputs[0], output_path, cut)
+            elif name == "join":
+                prepared = self.adapter.concat(inputs, output_path, job_root / f"step-{index}.concat.txt")
+            else:
+                prepared = self.adapter.prepare(
+                    operation.__class__(operation=operation.operation, inputs=tuple(str(item) for item in inputs),
+                                        output_name=operation.output_name, options=operation.options), output_path)
             try:
                 completed = self._run_process(prepared.command, cancel_event, log)
             except MediaProcessReleaseUnverified as exc:
@@ -107,43 +116,41 @@ class FfmpegWorker:
                 if not output_path.exists() or output_path.stat().st_size == 0:
                     raise MediaExecutionError("media_output_missing", "FFmpeg 未产生可信输出。", "检查编码器和输出目录后沿原请求重试。")
                 summary = {"size_bytes": output_path.stat().st_size}
-                if prepared.logical_kind == "video_cut":
-                    summary.update(self._validate_video_cut(
-                        output_path, float(operation.options["duration"]), cancel_event, log))
+                if cut is not None:
+                    summary.update(self._validate_video_cut(output_path, cut, cancel_event, log))
             current_outputs.append({"path": str(output_path), "operation": operation.operation,
                                     "output_name": output_name, "summary": summary})
             if progress is not None:
                 progress(int(index * 100 / total))
         return {"outputs": current_outputs, "log_path": str(log_path), "request_id": plan.request_id}
 
-    def _validate_video_cut(self, path: Path, duration: float, cancel_event, log) -> dict:
+    def _probe_video_cut(self, path: Path, cancel_event, log) -> dict:
         probe = self._run_process(self.adapter.cut_probe_command(path), cancel_event, log)
         if probe.returncode != 0:
-            raise MediaExecutionError("media_cut_probe_failed", "截取文件的画面无法核验，未发布。",
+            log("video_cut_probe_failed", stderr=probe.stderr[-4000:])
+            raise MediaExecutionError("media_cut_probe_failed", "视频画面无法核验，未发布截取文件。",
                                       "检查源片和编码器后查询原截取作业。")
-        media = self.adapter.parse_probe(probe.stdout)
-        video = next(iter(media["streams"]), {})
-        frame_count = str(video.get("nb_read_frames", ""))
-        if not frame_count.isdecimal() or int(frame_count) == 0:
-            raise MediaExecutionError("media_cut_no_video_frames", "所选区间没有可用视频帧，未发布截取文件。",
-                                      "调整区间以包含源片画面后重新截取。")
+        return self.adapter.parse_probe(probe.stdout)
+
+    def _validate_video_cut(self, path: Path, cut: VideoCut, cancel_event, log) -> dict:
+        media = self._probe_video_cut(path, cancel_event, log)
+        actual = [(begin, end) for _, begin, end in video_frame_intervals(media)]
         try:
             actual_duration = float(media["format"]["duration"])
-            video_start = float(video["start_time"])
-            video_end = video_start + float(video["duration"])
         except (KeyError, TypeError, ValueError) as exc:
-            raise MediaExecutionError("media_cut_duration_unverified", "截取文件缺少可核验的画面时长，未发布。",
+            raise MediaExecutionError("media_cut_duration_unverified", "截取文件缺少可核验的容器时长，未发布。",
                                       "检查源片时间戳后查询原截取作业。") from exc
-        # Allow container and audio-sample rounding, while checking the actual
-        # video stream as well as the container clock.
-        tolerance = 0.01
-        if (video.get("codec_name") != "h264"
-                or not math.isclose(actual_duration, duration, rel_tol=0, abs_tol=tolerance)
-                or not (-tolerance <= video_start < video_end <= duration + tolerance)):
+        # Allow two output ticks for the filter and muxer's timestamp rounding.
+        same_intervals = len(actual) == len(cut.intervals) and all(
+            abs(actual_start - start) <= 2 / 90000 and abs(actual_end - end) <= 2 / 90000
+            for (actual_start, actual_end), (start, end) in zip(actual, cut.intervals)
+        )
+        if (not same_intervals or media["streams"][0].get("codec_name") != "h264"
+                or not math.isclose(actual_duration, float(cut.source_end - cut.source_start), rel_tol=0, abs_tol=0.01)):
             raise MediaExecutionError("media_cut_range_mismatch", "截取文件的画面或时长与请求区间不一致，未发布。",
                                       "检查源片时间戳和截取范围后查询原作业。")
-        facts = {"video_frames": int(frame_count), "duration_seconds": actual_duration,
-                 "video_start_seconds": video_start, "video_end_seconds": video_end}
+        facts = {"video_frames": len(actual), "duration_seconds": actual_duration,
+                 "video_start_seconds": float(actual[0][0]), "video_end_seconds": float(actual[-1][1])}
         log("video_cut_verified", **facts)
         return facts
 

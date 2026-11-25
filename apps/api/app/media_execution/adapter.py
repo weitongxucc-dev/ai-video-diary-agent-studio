@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,75 @@ class PreparedCommand:
     output_path: Path
     input_paths: tuple[Path, ...]
     logical_kind: str
+
+
+def video_frame_intervals(media: dict) -> list[tuple[int, Fraction, Fraction]]:
+    """Read display intervals from decoded frames in the first real video stream."""
+    if not media.get("frames"):
+        return []
+    try:
+        time_base = Fraction(media["streams"][0]["time_base"])
+        intervals = []
+        for frame in media["frames"]:
+            pts = int(frame["best_effort_timestamp"])
+            # Older FFprobe reports the decoded frame duration as pkt_duration.
+            duration = int(frame.get("duration", frame.get("pkt_duration")))
+            if time_base <= 0 or duration <= 0 or (intervals and pts <= intervals[-1][0]):
+                raise ValueError("invalid frame presentation clock")
+            intervals.append((pts, pts * time_base, (pts + duration) * time_base))
+        return intervals
+    except (KeyError, IndexError, TypeError, ValueError, ZeroDivisionError) as exc:
+        raise MediaExecutionError("media_cut_duration_unverified", "无法核验视频帧的呈现区间，未发布。",
+                                  "检查源片或编码工具能否提供有效的帧时间戳和时长。") from exc
+
+
+@dataclass(frozen=True)
+class VideoCut:
+    source_start: Fraction
+    source_end: Fraction
+    first_pts: int
+    last_pts: int
+    intervals: tuple[tuple[Fraction, Fraction], ...]
+
+    @classmethod
+    def from_source(cls, media: dict, start: float, duration: float) -> VideoCut:
+        frames = video_frame_intervals(media)
+        if not frames:
+            raise cls.no_video_frames()
+        try:
+            origin = Fraction(media["format"]["start_time"])
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+            raise MediaExecutionError("media_cut_duration_unverified", "无法核验原片的起始时钟，未发布。",
+                                      "检查源片是否有可读取的媒体起始时间。") from exc
+        # Resolve both edges at FFmpeg's microsecond precision. The sealed
+        # duration is a float difference and can otherwise admit an end frame
+        # whose start equals the requested end.
+        start_offset = Fraction(str(start))
+        end_offset = start_offset + Fraction(str(duration))
+        source_start = origin + Fraction(round(start_offset * 1_000_000), 1_000_000)
+        source_end = origin + Fraction(round(end_offset * 1_000_000), 1_000_000)
+        selected = []
+        for index, (pts, frame_start, frame_end) in enumerate(frames):
+            if frame_start >= source_end:
+                break
+            # A following frame supersedes this one at its presentation time.
+            if index + 1 < len(frames):
+                frame_end = min(frame_end, frames[index + 1][1])
+            begin, end = max(source_start, frame_start), min(source_end, frame_end)
+            if begin < end:
+                selected.append((pts, begin - source_start, end - source_start))
+        if not selected:
+            raise cls.no_video_frames()
+        if any(previous[2] != current[1] for previous, current in zip(selected, selected[1:])):
+            raise MediaExecutionError("media_cut_presentation_gap", "区间内画面呈现不连续，当前 MP4 截取无法保持该空档。",
+                                      "请选择画面连续的区间。")
+        return cls(source_start, source_end, selected[0][0], selected[-1][0],
+                   tuple((begin, end) for _, begin, end in selected))
+
+    @staticmethod
+    def no_video_frames() -> MediaExecutionError:
+        return MediaExecutionError("media_cut_no_video_frames", "所选区间与源片的画面呈现区间没有交集，未发布。",
+                                   "请选择包含源片画面的区间。")
 
 
 class FfmpegAdapter:
@@ -51,18 +121,8 @@ class FfmpegAdapter:
             start = float(operation.options.get("start", 0))
             duration = float(operation.options["duration"])
             command = (self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", str(start),
-                       "-i", str(inputs[0]), "-t", str(duration))
-            # The task-bound video entry seals the asset ID. Keep that
-            # contract separate from generic internal media operations.
-            if "asset_id" in operation.options:
-                # Retain fractional frame times and align decode/presentation
-                # order so MP4 cannot trim reordered frames at the cut end.
-                duration_filter = f"setts=duration=min(DURATION\\,{duration}/TB-PTS)"
-                command += ("-map", "0:V:0?", "-map", "0:a:0?", "-bf:v", "0",
-                            "-fps_mode:v", "passthrough", "-enc_time_base:v", "1:90000",
-                            "-bsf:v", duration_filter)
-            command += ("-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", str(output_path))
-            return PreparedCommand(name, command, output_path, inputs, "video_cut" if "asset_id" in operation.options else "media_file")
+                       "-i", str(inputs[0]), "-t", str(duration), "-c:v", "libx264", "-c:a", "aac",
+                       "-movflags", "+faststart", str(output_path))
         elif name in {"fit", "aspect_ratio", "export"}:
             width = int(operation.options.get("width", 1080))
             height = int(operation.options.get("height", 1920))
@@ -92,9 +152,28 @@ class FfmpegAdapter:
                                       "改用已登记的媒体能力，或先为该能力提供适配器。")
         return PreparedCommand(name, command, output_path, inputs, "media_file")
 
+    def video_cut(self, operation: str, source: Path, output: Path, cut: VideoCut) -> PreparedCommand:
+        # Keep the first intersecting frame, even if its PTS predates the cut.
+        # Use the same absolute source clock for audio, whose samples must be trimmed.
+        video = (f"trim=start_pts={cut.first_pts}:end_pts={cut.last_pts + 1},"
+                 f"settb=1/90000,setpts=max(0\\,PTS-({cut.source_start})/TB)")
+        audio = (f"atrim=start={round(cut.source_start * 1_000_000)}us:"
+                 f"end={round(cut.source_end * 1_000_000)}us,asetpts=PTS-({cut.source_start})/TB")
+        last_start, last_end = cut.intervals[-1]
+        # Earlier packet durations are determined by successive PTS. Set the last
+        # one explicitly to the proven intersection, including for a single frame.
+        duration = f"setts=duration=if(eq(N\\,{len(cut.intervals) - 1})\\,({last_end - last_start})/TB\\,DURATION)"
+        command = (self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-copyts", "-i", str(source),
+                   "-map", "0:V:0", "-map", "0:a:0?", "-vf", video, "-af", audio,
+                   "-c:v", "libx264", "-bf:v", "0", "-fps_mode:v", "passthrough", "-enc_time_base:v", "1:90000",
+                   "-bsf:v", duration, "-video_track_timescale", "90000", "-movie_timescale", "90000",
+                   "-c:a", "aac", "-movflags", "+faststart", str(output))
+        return PreparedCommand(operation, command, output, (source,), "video_cut")
+
     def cut_probe_command(self, path: Path) -> tuple[str, ...]:
-        return (self.ffprobe, "-v", "error", "-select_streams", "V:0", "-count_frames",
-                "-show_entries", "stream=codec_name,nb_read_frames,start_time,duration:format=duration",
+        return (self.ffprobe, "-v", "error", "-select_streams", "V:0", "-show_frames",
+                "-show_entries", "frame=best_effort_timestamp,duration,pkt_duration:"
+                "stream=codec_name,time_base:format=start_time,duration",
                 "-of", "json", str(path))
 
     def concat(self, inputs: tuple[Path, ...], output_path: Path, manifest_path: Path) -> PreparedCommand:
