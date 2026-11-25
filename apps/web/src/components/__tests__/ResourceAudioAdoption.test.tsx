@@ -2,11 +2,16 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ResourceAudioAdoption } from "../resource-library/ResourceAudioAdoption";
 
-const api = vi.hoisted(() => ({ read: vi.fn(), confirm: vi.fn(), undo: vi.fn(), import: vi.fn(), preview: vi.fn(), resolve: vi.fn(), readJob: vi.fn() }));
+const api = vi.hoisted(() => ({ read: vi.fn(), history: vi.fn(), confirm: vi.fn(), undo: vi.fn(), import: vi.fn(), preview: vi.fn(), resolve: vi.fn(), readJob: vi.fn() }));
 vi.mock("@/lib/api/creation-tasks", () => ({ getCreationTaskWorkspace: api.read, confirmCreationTaskEdit: api.confirm, undoCreationTaskTimeline: api.undo }));
+vi.mock("@/lib/api/creation-transport", () => ({ creationPlanRequest: api.history }));
 vi.mock("@/lib/api/task-media", () => ({ importCreationTaskResourceAudio: api.import, previewCreationTaskAudio: api.preview, resolveCreationTaskMediaResponse: api.resolve, getCreationTaskMediaJob: api.readJob }));
 const resource = { id: "openfilm:music", version: 2, name: "钢琴", category_id: "music" };
 const workspace = { task: { id: "task", name: "新作品", current_timeline_version_id: "v1", timeline_sequence: 1 }, montage: { duration_seconds: 20, audio_timeline: { tracks: [{ id: "music", name: "配乐", role: "music", locked: false }] } } };
+const glass = { id: "openfilm:sound-glass-pulse", version: 1, name: "玻璃脉冲", category_id: "sfx" };
+const adopted = { ...workspace, task: { ...workspace.task, current_timeline_version_id: "v2", timeline_sequence: 2, can_undo: true } };
+const glassAdoption = { timeline_version_id: "v2", sequence: 2, transition: "added", operation_type: "EditAudioTimeline", operation_id: "glass-op" };
+const glassHistory = { completeness: "complete", current_resource_present: true, timeline_history: [glassAdoption] };
 beforeEach(() => {
   vi.resetAllMocks();
   api.read.mockResolvedValue(workspace);
@@ -15,6 +20,56 @@ beforeEach(() => {
   api.preview.mockResolvedValue({ proposal: { id: "proposal", summary: "加入钢琴" } });
   api.confirm.mockResolvedValue({ operation: { id: "op", status: "applied", result_version_id: "v2" } });
   api.undo.mockResolvedValue({});
+});
+
+it("recovers the fixed resource's adoption on reopening and retries the same original undo request", async () => {
+  api.read.mockResolvedValue(adopted);
+  api.history.mockResolvedValue(glassHistory);
+  api.undo.mockRejectedValueOnce(new Error("本地服务未接通。"));
+  render(<ResourceAudioAdoption taskId="task" resource={glass} playheadMs={0} />);
+  const undo = await screen.findByRole("button", { name: "撤销本次采用" });
+  expect(screen.getByText("已加入当前作品音轨。")).toBeVisible();
+  expect(screen.getByRole("button", { name: "准备采用" })).toBeVisible();
+  expect(api.history).toHaveBeenCalledWith("/api/creation-tasks/task/audio/resources/openfilm%3Asound-glass-pulse/history?version=1", { signal: expect.any(AbortSignal) });
+  expect(api.import).not.toHaveBeenCalled();
+
+  fireEvent.click(undo);
+  expect(await screen.findByRole("alert")).toHaveTextContent("本地服务未接通");
+  expect(api.undo).toHaveBeenCalledWith("task", {
+    request_id: expect.any(String), target_operation_id: "glass-op",
+    expected_timeline_version_id: "v2", expected_timeline_sequence: 2,
+  });
+
+  api.read.mockResolvedValue(workspace);
+  fireEvent.click(undo);
+  await screen.findByText(/已撤销本次音轨采用/);
+  expect(api.undo).toHaveBeenCalledTimes(2);
+  expect(api.undo.mock.calls[1]).toEqual(api.undo.mock.calls[0]);
+});
+
+it("leaves newer work intact when the recovered adoption is no longer the current version", async () => {
+  api.read.mockResolvedValue(adopted);
+  api.history.mockResolvedValue(glassHistory);
+  render(<ResourceAudioAdoption taskId="task" resource={glass} playheadMs={0} />);
+  const undo = await screen.findByRole("button", { name: "撤销本次采用" });
+  api.read.mockResolvedValue({ ...adopted, task: { ...adopted.task, current_timeline_version_id: "v3", timeline_sequence: 3 } });
+  fireEvent.click(undo);
+  expect(await screen.findByRole("alert")).toHaveTextContent("作品已更新");
+  expect(api.undo).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "撤销本次采用" })).not.toBeInTheDocument();
+});
+
+it.each([
+  { ...glassHistory, timeline_history: [{ ...glassAdoption, transition: "retained" }] },
+  { ...glassHistory, timeline_history: [{ ...glassAdoption, timeline_version_id: "old-head" }] },
+  { ...glassHistory, completeness: "partial" },
+])("does not offer targeted undo from history without a complete, matching addition", async history => {
+  api.read.mockResolvedValue(adopted);
+  api.history.mockResolvedValue(history);
+  render(<ResourceAudioAdoption taskId="task" resource={glass} playheadMs={0} />);
+  await screen.findByText("新作品");
+  expect(screen.queryByRole("button", { name: "撤销本次采用" })).not.toBeInTheDocument();
+  expect(screen.queryByText("已加入当前作品音轨。")).not.toBeInTheDocument();
 });
 
 it("imports the chosen fixed resource, previews trimmed placement, confirms explicitly and undoes only its operation", async () => {
