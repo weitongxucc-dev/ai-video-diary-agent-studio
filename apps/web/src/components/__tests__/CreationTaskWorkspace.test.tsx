@@ -2024,7 +2024,6 @@ describe("CreationTaskWorkspace", () => {
         result_version_id: next.task.current_timeline_version_id,
         applied_at: "2026-10-26T00:00:00Z",
       } };
-      mocks.confirmEdit.mockResolvedValueOnce(saved);
       const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
       previewReadRestores.push(() => play.mockRestore());
 
@@ -2135,6 +2134,7 @@ describe("CreationTaskWorkspace", () => {
           expect(mocks.confirmEdit).not.toHaveBeenCalled();
           mocks.getWorkspace.mockResolvedValue(next);
           mocks.getExecution.mockReturnValue(rendering);
+          mocks.confirmEdit.mockResolvedValueOnce(saved);
           await clickAndSettle(confirm);
         }
       }
