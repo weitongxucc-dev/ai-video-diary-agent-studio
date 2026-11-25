@@ -29,7 +29,7 @@ function storeWidth(key: string, value: number | null) {
   else localStorage.setItem(key, String(value));
 }
 
-export function useEditorPanels(enabled: boolean) {
+export function useEditorPanels(enabled: boolean, useNavigationRail = false) {
   const [left, setLeft] = useState<number | null>(null);
   const [right, setRight] = useState<number | null>(null);
   const [navigationCollapsed, setNavigationCollapsed] = useState(false);
@@ -63,7 +63,7 @@ export function useEditorPanels(enabled: boolean) {
   }, [enabled, loaded, left, right, navigationCollapsed, chatCollapsed, workspaceCollapsed]);
 
   // Keep a useful editor at the desktop minimum; the drawer never consumes a grid track.
-  const narrow = viewport < narrowNavigationBreakpoint;
+  const narrow = useNavigationRail || viewport < narrowNavigationBreakpoint;
   const collapsed = narrow || navigationCollapsed;
   const defaultLeft = viewport >= 1560 ? 192 : viewport >= 1360 ? 176 : minimumNavigationWidth;
   const defaultRight = viewport >= 1560 ? 400 : viewport >= 1360 ? 368 : viewport >= 1280 ? 344 : narrow ? 320 : 336;

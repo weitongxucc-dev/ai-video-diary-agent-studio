@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { useToast } from "@/components/PixelToast";
 import { toggleHelpPanel } from "@/lib/helpPanel";
+import { workspaceNavigationHref } from "./workbench/context";
 
 type RouteShortcut = {
   keys: string[];
@@ -64,7 +65,10 @@ function matchesBinding(event: KeyboardEvent, keys: string[]): boolean {
   });
 }
 
-export function KeyboardShortcuts({ onOpenSearch }: { onOpenSearch: (target: EventTarget | null) => void }) {
+export function KeyboardShortcuts({ onOpenSearch, hasActiveWork = false }: {
+  onOpenSearch: (target: EventTarget | null) => void;
+  hasActiveWork?: boolean;
+}) {
   const router = useRouter();
   const { pushToast } = useToast();
 
@@ -104,7 +108,7 @@ export function KeyboardShortcuts({ onOpenSearch }: { onOpenSearch: (target: Eve
         );
         if (navBinding) {
           event.preventDefault();
-          router.push(navBinding.href);
+          router.push(workspaceNavigationHref(navBinding.href, hasActiveWork));
           pushToast({
             kind: "info",
             message: `已跳转 · ${navBinding.label}`,
@@ -116,7 +120,7 @@ export function KeyboardShortcuts({ onOpenSearch }: { onOpenSearch: (target: Eve
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onOpenSearch, router, pushToast]);
+  }, [hasActiveWork, onOpenSearch, router, pushToast]);
 
   return null;
 }

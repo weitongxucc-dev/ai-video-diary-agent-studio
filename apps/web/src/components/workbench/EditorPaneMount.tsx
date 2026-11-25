@@ -6,10 +6,12 @@ import { useActiveEditorDock } from "./EditorDock";
 import { useWorkspacePage } from "./context";
 
 /** Move one stable portal destination; never remount a form when docking changes. */
-export function EditorPaneMount({ docked, hidden, homeClassName, mountClassName, children }: {
+export function EditorPaneMount({ docked, hidden, homeClassName, mountClassName, children, dockHost }: {
   docked: boolean; hidden: boolean; homeClassName: string; mountClassName: string; children: ReactNode;
+  dockHost?: HTMLElement | null;
 }) {
-  const host = useActiveEditorDock("auxiliary");
+  const editorHost = useActiveEditorDock("auxiliary");
+  const host = dockHost === undefined ? editorHost : dockHost;
   const active = useWorkspacePage()?.active !== false;
   const invisible = hidden || !active;
   const home = useRef<HTMLDivElement>(null);

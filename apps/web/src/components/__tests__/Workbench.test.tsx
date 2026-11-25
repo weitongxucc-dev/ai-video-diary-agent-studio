@@ -1,11 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Workbench } from "../workbench/Workbench";
 import { WorkbenchTargetProvider } from "../workbench/WorkbenchTarget";
 import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
-import { useWorkspacePage, useWorkspaceViewState } from "../workbench/context";
+import { useWorkspacePage, useWorkspaceViewState, WorkspacePanelContext } from "../workbench/context";
 import { WorkspaceRoute } from "../workbench/WorkspaceRoute";
 import { AppShell, type AppShellProps } from "../AppShell";
 import type { HomeCommandComposerProps } from "../HomeCommandComposer";
@@ -13,12 +13,20 @@ import type { CreationTask } from "@/lib/types";
 
 const navigation = vi.hoisted(() => ({ path: "/tasks/a", search: "", push: vi.fn() }));
 const composerMount = vi.hoisted(() => vi.fn());
+const workDetailsOpened = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ usePathname: () => navigation.path, useSearchParams: () => new URLSearchParams(navigation.search), useRouter: () => ({ push: navigation.push }) }));
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({ useLocalMemberIdentity: () => ({ token: "member-epoch" }) }));
 vi.mock("../AssistantConversationProvider", () => ({ useAssistantSelection: () => null }));
 vi.mock("../AppShell", async importOriginal => {
   const original = await importOriginal<typeof import("../AppShell")>();
-  return { ...original, AppShellFrame: ({ children, conversation, workspaceTabs, inspector }: AppShellProps) => <>{workspaceTabs}{conversation}<main>{children}</main>{inspector}</> };
+  return { ...original, AppShellFrame: ({ children, conversation, workspaceTabs, inspector, resourcePanel }: AppShellProps) => {
+    const [resourceInspectorOpen, setResourceInspectorOpen] = useState(false);
+    return <WorkspacePanelContext.Provider value={{ resourceInspectorOpen, openResourceInspector: () => setResourceInspectorOpen(true), inspectorOpen: false, resourceOpen: Boolean(resourcePanel), conversationFocused: false, revealTaskPanel: () => {} }}>
+      {workspaceTabs}{resourcePanel ? <aside aria-label="作品资源">{resourcePanel.content}{resourceInspectorOpen ? <p>已打开资源详情</p> : null}</aside> : null}{conversation}<main onClick={event => {
+        if (event.target instanceof Element && event.target.closest("[data-open-details]")) workDetailsOpened();
+      }}>{children}</main>{inspector}
+    </WorkspacePanelContext.Provider>;
+  } };
 });
 vi.mock("../HomeCommandComposer", () => ({ HomeCommandComposer: ({ task }: HomeCommandComposerProps) => {
   const [draft, setDraft] = useState(() => { composerMount(); return ""; });
@@ -30,11 +38,12 @@ function Inspector() { return createPortal(<><output aria-label="检查器页面
 function Page({ id }: { id: string }) {
   const [draft, setDraft] = useWorkspaceViewState("test.draft", "");
   const task = id.startsWith("/tasks/") ? { id: id.split("/").at(-1), name: `作品 ${id.at(-1)}` } as CreationTask : null;
-  return <AppShell inspector={<Inspector />} assistantContext={task ? { task } : undefined}><input aria-label={`页面草稿 ${id}`} value={draft} onChange={event => setDraft(event.target.value)} /><WorkspaceVideo aria-label={`预览 ${id}`} src={`${id}/preview.mp4`} /></AppShell>;
+  return <AppShell inspector={<Inspector />} assistantContext={task ? { task } : undefined}><input aria-label={`页面草稿 ${id}`} value={draft} onChange={event => setDraft(event.target.value)} /><WorkspaceVideo aria-label={`预览 ${id}`} src={`${id}/preview.mp4`} />{!task ? <button data-open-details>查看资源详情</button> : null}</AppShell>;
 }
 function route() {
   const path = navigation.path;
-  return <WorkspaceRoute label={path === "/library" ? "素材库" : `作品 ${path.at(-1)}`}><Page id={path} /></WorkspaceRoute>;
+  const label = path === "/library" ? "素材库" : path === "/knowledge" ? "知识库" : `作品 ${path.at(-1)}`;
+  return <WorkspaceRoute label={label}><Page id={path} /></WorkspaceRoute>;
 }
 function fixture(children: ReactNode) { return <WorkbenchTargetProvider><Workbench>{children}</Workbench></WorkbenchTargetProvider>; }
 beforeEach(() => {
@@ -63,6 +72,42 @@ it("opens full resource management without losing the work target, drafts, or re
   expect(screen.getByLabelText("预览 /tasks/a")).toBe(player);
   expect(player.currentTime).toBe(12);
   expect(composerMount).toHaveBeenCalledTimes(1);
+});
+
+it("shows materials and knowledge in the left panel without remounting the active work or conversation", async () => {
+  const view = render(fixture(route()));
+  const workDraft = await screen.findByRole("textbox", { name: "页面草稿 /tasks/a" });
+  const chatDraft = screen.getByRole("textbox", { name: "持续对话草稿" });
+  const player = screen.getByLabelText("预览 /tasks/a") as HTMLVideoElement;
+  fireEvent.change(workDraft, { target: { value: "选中的字幕" } });
+  fireEvent.change(chatDraft, { target: { value: "未发送要求" } });
+  player.currentTime = 12;
+  fireEvent.timeUpdate(player);
+  fireEvent.play(player);
+
+  for (const [path, title] of [["/library", "素材库"], ["/knowledge", "知识库"]]) {
+    navigation.path = path;
+    navigation.search = "mode=panel";
+    view.rerender(fixture(route()));
+    expect(screen.getByRole("complementary", { name: "作品资源" })).toContainElement(await screen.findByRole("region", { name: title }));
+    expect(screen.getByRole("link", { name: "完整管理" })).toHaveAttribute("href", `${path}?mode=manage`);
+    expect(workDraft).toBeVisible();
+    expect(workDraft).toHaveValue("选中的字幕");
+    expect(chatDraft).toHaveValue("未发送要求");
+    expect(screen.getByLabelText("发送目标")).toHaveTextContent("a");
+    expect(screen.getByLabelText("预览 /tasks/a")).toBe(player);
+    expect(player.currentTime).toBe(12);
+    expect(vi.mocked(HTMLMediaElement.prototype.pause).mock.contexts).not.toContain(player);
+  }
+  const resource = screen.getByRole("complementary", { name: "作品资源" });
+  fireEvent.click(within(resource).getByRole("button", { name: "查看资源详情" }));
+  expect(within(resource).getByText("已打开资源详情")).toBeVisible();
+  expect(workDetailsOpened).not.toHaveBeenCalled();
+  expect(player).toBeVisible();
+  navigation.path = "/tasks/a";
+  navigation.search = "";
+  view.rerender(fixture(route()));
+  expect(workDraft).toBeVisible();
 });
 
 it("keeps one conversation and explicit task target while browsing, isolates two task drafts, and restores a closed view", async () => {

@@ -46,7 +46,7 @@ import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components
 import { Button } from "./ui/button";
 import { IconButton } from "./ui/icon-button";
 import { Tooltip } from "./ui/tooltip";
-import { WorkbenchAssistantTargetContext, WorkspacePanelContext, isCreationDraftRoute, useWorkspacePage } from "./workbench/context";
+import { WorkbenchAssistantTargetContext, WorkspacePanelContext, isCreationDraftRoute, useWorkspacePage, workspaceNavigationHref } from "./workbench/context";
 import { useConversationVisibility } from "./workbench/useConversationVisibility";
 import { useWorkbenchTarget } from "./workbench/WorkbenchTarget";
 import { ConversationTarget } from "./workbench/ConversationTarget";
@@ -132,6 +132,7 @@ export type AppShellProps = {
   assistantContext?: HomeCommandComposerProps;
   workspaceTabs?: ReactNode;
   resourceOpen?: boolean;
+  resourcePanel?: { content: ReactNode; inspector?: ReactNode; inspectorTitle?: string; inspectorOpenKey?: string };
   onReleaseResourcePane?: () => void;
   closeBlockedReason?: string;
 };
@@ -153,12 +154,14 @@ function currentRouteFor(pathname: string, searchParams?: Pick<URLSearchParams, 
     .sort((a, b) => b.href.length - a.href.length)[0] ?? routeLabels[0];
 }
 
-function NavigationRows({ pathname, showMembers }: { pathname: string; showMembers: boolean }) {
+function NavigationRows({ pathname, showMembers, hasActiveWork }: { pathname: string; showMembers: boolean; hasActiveWork: boolean }) {
   const searchParams = useSearchParams();
-  return <NavigationRowsContent pathname={pathname} searchParams={searchParams} showMembers={showMembers} />;
+  return <NavigationRowsContent pathname={pathname} searchParams={searchParams} showMembers={showMembers} hasActiveWork={hasActiveWork} />;
 }
 
-function NavigationRowsContent({ pathname, searchParams, showMembers = true }: { pathname: string; searchParams?: Pick<URLSearchParams, "get">; showMembers?: boolean }) {
+function NavigationRowsContent({ pathname, searchParams, showMembers = true, hasActiveWork = false }: {
+  pathname: string; searchParams?: Pick<URLSearchParams, "get">; showMembers?: boolean; hasActiveWork?: boolean;
+}) {
   return <>
     {primaryNav.filter((item) => showMembers || item.href !== "/members").map((item) => {
       const ItemIcon = item.icon;
@@ -168,7 +171,7 @@ function NavigationRowsContent({ pathname, searchParams, showMembers = true }: {
           aria-label={item.label}
           aria-current={active ? "page" : undefined}
           className={`desktop-nav-row${active ? " is-active" : ""}`}
-          href={item.href}
+          href={workspaceNavigationHref(item.href, hasActiveWork)}
           title={item.label}
           key={item.href}
         >
@@ -238,12 +241,14 @@ export function AppShellFrame({
   toolbarActions,
   workspaceTabs,
   resourceOpen = false,
+  resourcePanel,
   onReleaseResourcePane,
 }: AppShellProps & { active?: boolean }) {
   const sharedAssistantTarget = useContext(WorkbenchAssistantTargetContext);
   const assistantTarget = assistantContext ?? sharedAssistantTarget;
   const { clearTarget } = useWorkbenchTarget();
-  const panels = useEditorPanels(true);
+  const hasLeftResourcePanel = Boolean(resourcePanel);
+  const panels = useEditorPanels(true, hasLeftResourcePanel);
   const contentGrid = useRef<HTMLDivElement>(null);
   const [contentWidth, setContentWidth] = useState(0);
   useEffect(() => {
@@ -268,14 +273,22 @@ export function AppShellFrame({
   const showMembersNav = localMemberRole !== "member";
   const localAuthMode = process.env.NEXT_PUBLIC_AUTH_MODE === "local";
   const pathname = usePathname() ?? "";
+  const hasActiveWork = Boolean(activeCreationTaskId);
   const standalone = ["/settings", "/health", "/onboarding", "/privacy", "/terms", "/members", "/profile", "/learning", "/sources"].some(route => pathname === route || pathname.startsWith(`${route}/`));
   const router = useRouter();
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [resourceDetailsOpen, setResourceDetailsOpen] = useState(false);
+  const resourceInspectorOpenKey = resourcePanel?.inspectorOpenKey;
   const [quickOpen, setQuickOpen] = useState(false);
   const [conversationFocused, setConversationFocused] = useState(false);
   useEffect(() => { setConversationFocused(false); }, [editingPane, pathname]);
-  const editingPaneNeedsRoom = Boolean(editingPane) && contentWidth > 0 && contentWidth - panels.rightWidth < 720;
-  const closeInspectorForReference = useCallback(() => { setDetailsOpen(false); setQuickOpen(false); setConversationFocused(true); onReleaseResourcePane?.(); }, [onReleaseResourcePane]);
+  const editingPaneNeedsRoom = !hasLeftResourcePanel && Boolean(editingPane) && contentWidth > 0 && contentWidth - panels.rightWidth < 720;
+  const closeInspectorForReference = useCallback(() => {
+    setDetailsOpen(false);
+    setQuickOpen(false);
+    setConversationFocused(true);
+    if (!hasLeftResourcePanel) onReleaseResourcePane?.();
+  }, [hasLeftResourcePanel, onReleaseResourcePane]);
   const chat = useConversationVisibility({ pathname, creation: editorLayout || pathname.startsWith("/tasks/") || autoFocus, enabled: active && !standalone, collapsed: panels.chatCollapsed, open: panels.openChat, toggle: panels.toggleChat, onReference: closeInspectorForReference });
   const workspaceHidden = editorLayout && panels.workspaceCollapsed && !chat.hidden;
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -323,6 +336,10 @@ export function AppShellFrame({
   const taskReadSequence = useRef(0);
   const previousTaskProps = useRef(creationTasks);
   useEffect(() => { setDetailsOpen(false); }, [inspectorDismissKey]);
+  useEffect(() => { setResourceDetailsOpen(false); }, [pathname]);
+  useEffect(() => {
+    if (resourceInspectorOpenKey) setResourceDetailsOpen(true);
+  }, [pathname, resourceInspectorOpenKey]);
   useEffect(() => {
     if (inspectorConfirmationKey && !quickOpen) setDetailsOpen(true);
   }, [inspectorConfirmationKey, quickOpen]);
@@ -336,9 +353,13 @@ export function AppShellFrame({
   const revealTaskPanel = useCallback(() => { setDetailsOpen(false); setConversationFocused(false); onReleaseResourcePane?.(); }, [onReleaseResourcePane]);
   const openQuickInspector = useCallback(() => { setDetailsOpen(false); setQuickOpen(true); }, []);
   const focusConversation = editingPaneNeedsRoom && conversationFocused && !chat.hidden;
-  const panelContext = useMemo(() => ({ inspectorOpen: dockInspector || dockQuickInspector, resourceOpen, conversationFocused: focusConversation, revealTaskPanel, openQuickInspector: quickAvailable ? openQuickInspector : undefined }), [dockInspector, dockQuickInspector, resourceOpen, focusConversation, revealTaskPanel, quickAvailable, openQuickInspector]);
-  const resourceReplacesChat = !chat.hidden && (resourceOpen || (dockInspector || dockQuickInspector) && Boolean(editorAuxiliaryHost)) && contentWidth > 0 && contentWidth - panels.rightWidth - 280 < 440;
-  const inspectorReplacesChat = !chat.hidden && dockInspector && !editorAuxiliaryHost && contentWidth > 0 && contentWidth - panels.rightWidth - 360 < 440;
+  const inspectorOpen = dockInspector || dockQuickInspector;
+  const resourceInspectorOpen = active && Boolean(resourcePanel?.inspector) && resourceDetailsOpen;
+  const openResourceInspector = useCallback(() => setResourceDetailsOpen(true), []);
+  const panelContext = useMemo(() => ({ inspectorOpen, resourceOpen, resourceInspectorOpen, openResourceInspector, conversationFocused: focusConversation, revealTaskPanel, openQuickInspector: quickAvailable ? openQuickInspector : undefined }), [inspectorOpen, resourceOpen, resourceInspectorOpen, openResourceInspector, focusConversation, revealTaskPanel, quickAvailable, openQuickInspector]);
+  const inlineInspector = dockInspector && !editorAuxiliaryHost && !hasLeftResourcePanel;
+  const resourceReplacesChat = !hasLeftResourcePanel && !chat.hidden && (resourceOpen || (dockInspector || dockQuickInspector) && Boolean(editorAuxiliaryHost)) && contentWidth > 0 && contentWidth - panels.rightWidth - 280 < 440;
+  const inspectorReplacesChat = !chat.hidden && inlineInspector && contentWidth > 0 && contentWidth - panels.rightWidth - 360 < 440;
   const conversationNode = useRef<HTMLElement>(null);
   const mainNode = useRef<HTMLElement>(null);
   const mainVisible = !workspaceHidden;
@@ -446,7 +467,7 @@ export function AppShellFrame({
       id: `nav-${item.href}`,
       label: item.label,
       description: item.label === "首页" ? "查看任务、阻断和通知" : item.label === "定时任务" ? "安排到期时间，查看待确认步骤与执行记录" : `打开${item.label}`,
-      href: item.href,
+      href: workspaceNavigationHref(item.href, hasActiveWork),
       icon: item.icon,
     })),
     ...recentTasks.map((task) => ({
@@ -459,7 +480,7 @@ export function AppShellFrame({
     ...(showMembersNav ? [{ id: "members", label: "成员与空间", description: "管理成员与共享空间", href: "/settings?section=creators", icon: Users }] : []),
     { id: "health", label: "运行情况", description: "检查模型、本地服务和任务阻断", href: "/settings?section=runtime", icon: Activity },
     { id: "settings", label: "设置", description: "配置模型、目录和外部连接", href: "/settings", icon: Settings },
-  ], [recentTasks, showMembersNav]);
+  ], [hasActiveWork, recentTasks, showMembersNav]);
 
   return (
     <div className={`desktop-shell ${editorShell.shell}${editorLayout ? " video-editor-shell" : ""}${navigationCollapsed ? ` ${editorShell.collapsed}` : ""}`} style={{ "--editor-left": `${panels.leftWidth}px`, "--editor-right": `${panels.rightWidth}px` } as CSSProperties} onKeyDown={event => {
@@ -503,8 +524,8 @@ export function AppShellFrame({
       }}>
         <nav className="desktop-sidebar__scroll" aria-label="主要导航">
           <div className="desktop-nav-group">
-            <Suspense fallback={<NavigationRowsContent pathname={pathname} showMembers={showMembersNav} />}>
-              <NavigationRows pathname={pathname} showMembers={showMembersNav} />
+            <Suspense fallback={<NavigationRowsContent pathname={pathname} showMembers={showMembersNav} hasActiveWork={hasActiveWork} />}>
+              <NavigationRows pathname={pathname} showMembers={showMembersNav} hasActiveWork={hasActiveWork} />
             </Suspense>
           </div>
           {navigationCollapsed ? <Link href={NEW_VIDEO_HREF} className="desktop-nav-row" aria-label="新建视频" title="新建视频"><Plus size={16}/></Link> : null}
@@ -552,8 +573,12 @@ export function AppShellFrame({
       </aside>
 
       <WorkspacePanelContext.Provider value={panelContext}>
-      <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}`}>
-        <div ref={contentGrid} data-inspector-open={dockInspector && !editorAuxiliaryHost || undefined} className={`${editorShell.contentGrid}${dockInspector && !editorAuxiliaryHost ? ` ${editorShell.withInspector}` : ""}${!chatVisible ? ` ${editorShell.chatCollapsed}` : ""}${workspaceHidden ? ` ${editorShell.workspaceCollapsed}` : ""}${inspectorLayout === "reading" ? ` ${editorShell.readingInspector}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
+      <section className={`desktop-workspace${editorLayout ? " editor-workspace" : ""}${hasLeftResourcePanel ? ` ${editorShell.withLeftResource}` : ""}`}>
+        {resourcePanel ? <aside className={editorShell.resourceColumn} aria-label="作品资源">
+          {resourcePanel.content}
+          {resourcePanel.inspector ? <WorkspaceInspector open={resourceInspectorOpen} title={resourcePanel.inspectorTitle ?? "资源详情"} onClose={() => setResourceDetailsOpen(false)}>{resourcePanel.inspector}</WorkspaceInspector> : null}
+        </aside> : null}
+        <div ref={contentGrid} data-inspector-open={inlineInspector || undefined} className={`${editorShell.contentGrid}${inlineInspector ? ` ${editorShell.withInspector}` : ""}${!chatVisible ? ` ${editorShell.chatCollapsed}` : ""}${workspaceHidden ? ` ${editorShell.workspaceCollapsed}` : ""}${inspectorLayout === "reading" ? ` ${editorShell.readingInspector}` : ""}`} data-editor-toolbar-parent={editorLayout ? "" : undefined}>
           <section id={conversationId} ref={conversationNode} data-conversation-pane data-assistant-material-scope={assistantTarget?.materialContext ? "true" : undefined} onPlayCapture={event => { if (!chatVisible && event.target instanceof HTMLMediaElement) event.target.pause(); }} aria-label="曜核哈力斯" hidden={!chatVisible} className={editorShell.conversation}>
             <header className={editorShell.conversationHeader}><span><Image alt="" aria-hidden src="/yaohe-icon.png" width={22} height={22} unoptimized/><span data-assistant-header-title className="assistant-header-title" aria-live="polite" title="新对话"/></span><div className={editorShell.conversationActions}><div data-assistant-header-actions className="assistant-header-actions"/><IconButton label="收起曜核哈力斯" onClick={() => { chat.toggle(); conversationTrigger.current?.focus(); }}><PanelRight size={16}/></IconButton></div></header>
             <div className={editorShell.conversationContext}>{conversationActions ?? (assistantTarget?.task ? <ConversationTarget name={assistantTarget.task.name} onReturn={() => router.push(creationTaskHref(assistantTarget.task!))} onClear={clearTarget} /> : <span>新视频构思</span>)}</div>
@@ -566,13 +591,16 @@ export function AppShellFrame({
             {!workspaceReady ? <div className={editorShell.bootNotice}><p role="status">{workspaceBoot.message}</p>{workspaceBoot.href ? <Link href={workspaceBoot.href}>{workspaceBoot.href === '/onboarding' ? '完成首次设置' : '登录账号'}</Link> : null}{workspaceBoot.retry ? <Button variant="outline" onClick={workspaceBoot.retry}>重新核验</Button> : null}</div> : null}
             <MediaVisibility visible={mainVisible}>{children}</MediaVisibility>
           </main>
-          {providedInspector && !standalone ? (editorAuxiliaryHost ? createPortal(<WorkspaceInspector open={dockInspector} title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{dockInspector ? inspectorConfirmation : null}</WorkspaceInspector>, editorAuxiliaryHost) : <WorkspaceInspector open={dockInspector} title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{dockInspector ? inspectorConfirmation : null}</WorkspaceInspector>) : null}
+          {providedInspector && !standalone ? (editorAuxiliaryHost ? createPortal(<WorkspaceInspector open={dockInspector} title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{dockInspector ? inspectorConfirmation : null}</WorkspaceInspector>, editorAuxiliaryHost) : !hasLeftResourcePanel ? <WorkspaceInspector open={dockInspector} title={inspectorTitle} onClose={() => setDetailsOpen(false)}>{providedInspector}{dockInspector ? inspectorConfirmation : null}</WorkspaceInspector> : null) : null}
           {quickInspector && editorAuxiliaryHost ? createPortal(<WorkspaceInspector open={dockQuickInspector} title={quickInspectorLabel ?? "镜头参数"} onClose={() => setQuickOpen(false)}>{dockQuickInspector ? quickInspector(() => { setQuickOpen(false); setDetailsOpen(true); }) : null}{dockQuickInspector ? inspectorConfirmation : null}</WorkspaceInspector>, editorAuxiliaryHost) : null}
         </div>
 
       </section>
       </WorkspacePanelContext.Provider>
-      {active ? <KeyboardShortcuts onOpenSearch={target => { setSearchParentId(homeCardParentForTarget(target)); setSearchOpen(true); }} /> : null}
+      {active ? <KeyboardShortcuts hasActiveWork={hasActiveWork} onOpenSearch={target => { setSearchParentId(homeCardParentForTarget(target)); setSearchOpen(true); }} /> : null}
+      {dockInspector && hasLeftResourcePanel && !editorAuxiliaryHost ? <HomeCardDialog kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>
+        {providedInspector}{inspectorConfirmation}
+      </HomeCardDialog> : null}
       {active && providedInspector && standalone ? <HomeCardDialog open={detailsOpen && !quickOpen && !panels.workspaceCollapsed} kind="detail" title={inspectorTitle} onClose={() => setDetailsOpen(false)}>
         {providedInspector}
         {detailsOpen && !quickOpen ? inspectorConfirmation : null}

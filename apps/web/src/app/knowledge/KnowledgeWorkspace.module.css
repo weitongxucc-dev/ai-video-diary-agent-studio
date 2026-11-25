@@ -124,6 +124,11 @@
 .collectionTabs { composes: tabs from "../../components/ui/workspace-controls.module.css"; border-bottom:1px solid var(--border-1); margin-bottom:12px; }
 
 @container (max-width:480px) { .searchBar label { flex-basis:100%; } .searchBar [data-app-select-trigger] { flex:1; max-width:none; } }
+@container (max-width:300px) {
+  .sourceList.list .cover { grid-template-columns:32px minmax(0,1fr); grid-template-rows:auto auto; }
+  .sourceList.list .coverArt { width:28px; min-height:28px; }
+  .sourceList.list .coverStatus { grid-column:2; grid-row:auto; padding-inline:0; }
+}
 
 .inspectorActions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; }
 .inspectorActions button { max-width:100%; white-space:normal; text-align:left; }
