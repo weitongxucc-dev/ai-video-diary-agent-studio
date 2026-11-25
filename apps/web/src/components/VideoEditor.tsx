@@ -190,8 +190,8 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
   selectedOverlayId?: string|null; onSelectOverlay?: (id:string)=>void;
   taskId: string; versionId: string | null; narrationCacheKey: string | null; montage: VideoStageMontage;
   planAspectRatio: NonNullable<CreationTaskMontage["aspect_ratio"]>; subtitleTracks: CreationTaskSubtitleTrack[];
-  selectedId: string | null; onSelect: (id: string) => void;
-  onPosition: (video: HTMLVideoElement) => void; videoRef: RefObject<HTMLVideoElement | null>;
+  selectedId: string | null; onSelect: (id: string, movePlayhead?: boolean) => void;
+  onPosition: (seconds: number) => void; videoRef: RefObject<HTMLVideoElement | null>;
   initialTime: number; renderAction: ReactNode; timelineActions?: ReactNode; audioTracks?: (subtitleTrack: ReactNode) => ReactNode; busy?: boolean; onDraftChange?:()=>void; onPreview?: (input:CreationTaskExactEditInput)=>Promise<boolean>;
 }) {
   const viewActive = useWorkspacePage()?.active ?? true;
@@ -199,10 +199,15 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
   const auxiliaryRef = useEditorDockHost("auxiliary");
   const panel = useContext(WorkspacePanelContext);
   const [time, setTime] = useWorkspaceViewState("video.time", initialTime);
+  const positionRef = useRef(time);
   useLayoutEffect(() => {
-    if (seekRequest) setTime(seekRequest.seconds);
-  }, [seekRequest, setTime]);
+    if (!seekRequest) return;
+    positionRef.current = seekRequest.seconds;
+    setTime(seekRequest.seconds);
+    if (videoRef.current) videoRef.current.currentTime = seekRequest.seconds;
+  }, [seekRequest, setTime, videoRef]);
   const [playing, setPlaying] = useState(false);
+  const continuePlayback = useRef(false);
   const [muted, setMuted] = useWorkspaceViewState("video.muted", false);
   const outputIdentity = JSON.stringify([taskId, versionId, montage.output_url]);
   const [outputState, setOutputState] = useState<{ identity: string; state: "loading" | "ready" | "error" }>({ identity: outputIdentity, state: "loading" });
@@ -210,7 +215,12 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
   const [outputRetry, setOutputRetry] = useState(0);
   const storyboardId = useId();
   const [storyboardOpen, setStoryboardOpen] = useWorkspaceViewState("video.storyboard-open", false);
-  useEffect(() => { setPlaying(false); }, [outputIdentity]);
+  useEffect(() => {
+    if (!viewActive || !montage.output_url) {
+      continuePlayback.current = false;
+      setPlaying(false);
+    }
+  }, [viewActive, montage.output_url]);
   const aspectRatio = montage.aspect_ratio ?? planAspectRatio;
   const previewRatio = aspectRatio === "16:9" ? 16 / 9 : aspectRatio === "1:1" ? 1 : 9 / 16;
   const canvasFitMode = montage.clips.length > 0 && montage.clips.every(clip => clip.fit_mode === "fit")
@@ -236,18 +246,33 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
     resize();
     return () => observer.disconnect();
   }, [viewActive, previewRatio]);
-  function position(video: HTMLVideoElement) { setTime(video.currentTime); onPosition(video); }
-  function seek(value: number) { setTime(value); if (videoRef.current) { videoRef.current.currentTime = value; position(videoRef.current); } }
+  function position(seconds: number) {
+    positionRef.current = seconds;
+    setTime(seconds);
+    onPosition(seconds);
+  }
+  function seek(value: number) {
+    if (videoRef.current) videoRef.current.currentTime = value;
+    position(value);
+  }
   function outputEvent(video: HTMLVideoElement, state: "loading" | "ready" | "error") {
     if (video === videoRef.current) setOutputState({ identity: outputIdentity, state });
+  }
+  function startPlayback(video: HTMLVideoElement) {
+    void video.play().catch(error => {
+      if (video !== videoRef.current || error.name === "AbortError") return;
+      continuePlayback.current = false;
+      setPlaying(false);
+      if (error.name !== "NotAllowedError") outputEvent(video, "error");
+    });
   }
   function togglePlayback() {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) void video.play().catch(() => outputEvent(video, "error"));
+    if (video.paused) startPlayback(video);
     else video.pause();
   }
-  const subtitleTrack = <SubtitleTimelineTrack track={subtitleTracks.find(track => track.language === "zh-CN" && track.status === "valid" && track.style.enabled !== false) ?? subtitleTracks.find(track => track.status === "valid" && track.style.enabled !== false)} montage={montage} selectedClipId={selectedId} onSelect={(id, time) => { onSelect(id); seek(time); }} onEdit={onEditSubtitle}/>;
+  const subtitleTrack = <SubtitleTimelineTrack track={subtitleTracks.find(track => track.language === "zh-CN" && track.status === "valid" && track.style.enabled !== false) ?? subtitleTracks.find(track => track.status === "valid" && track.style.enabled !== false)} montage={montage} selectedClipId={selectedId} onSelect={(id, time) => { onSelect(id, false); seek(time); }} onEdit={onEditSubtitle}/>;
   const previewTools = <div className={ui.monitorTools} role="group" aria-label="预览工具">
     <IconButton label={storyboardOpen ? "收起镜头列表" : "展开镜头列表"} aria-expanded={storyboardOpen} onClick={() => setStoryboardOpen(open => !open)}><ListVideo /></IconButton>
     {panel.openQuickInspector ? <IconButton label="编辑镜头参数" onClick={panel.openQuickInspector}><SlidersHorizontal /></IconButton> : null}
@@ -262,12 +287,29 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
     <section className={ui.monitor} aria-label="视频预览">
     <div className={ui.playerViewport} ref={playerViewport}>
     <div className={ui.player} data-editor-player data-editor-aspect-ratio={aspectRatio} style={{ aspectRatio: previewRatio, ...(playerSize ?? {}) }}>
-      {montage.output_url ? <WorkspaceVideo key={`${outputIdentity}:${outputRetry}`} aria-label="剪辑成片预览" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(versionId ?? "")}`)} muted={muted}
-        onLoadedMetadata={event => { if (event.currentTarget === videoRef.current) event.currentTarget.currentTime = initialTime; }}
+      {montage.output_url ? <WorkspaceVideo key={`${outputIdentity}:${outputRetry}`} aria-label="剪辑成片预览" positionKey="" ref={videoRef} playsInline preload="metadata" src={apiUrl(`${montage.output_url}?version=${encodeURIComponent(versionId ?? "")}`)} muted={muted}
+        onLoadedMetadata={event => {
+          const video = event.currentTarget;
+          if (video !== videoRef.current) return;
+          video.currentTime = Math.min(positionRef.current, Number.isFinite(video.duration) ? video.duration : montage.duration_seconds);
+          if (continuePlayback.current) startPlayback(video);
+        }}
         onLoadedData={event => { if (event.currentTarget.readyState >= 2) outputEvent(event.currentTarget, "ready"); }} onCanPlay={event => outputEvent(event.currentTarget, "ready")}
-        onTimeUpdate={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget); }} onSeeked={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget); }}
-        onPlay={event => { if (event.currentTarget === videoRef.current) setPlaying(true); }} onPause={event => { if (event.currentTarget === videoRef.current) { setPlaying(false); position(event.currentTarget); } }}
-        onEnded={event => { if (event.currentTarget === videoRef.current) setPlaying(false); }} onError={event => outputEvent(event.currentTarget, "error")} />
+        onTimeUpdate={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget.currentTime); }}
+        onSeeked={event => { if (event.currentTarget === videoRef.current) position(event.currentTarget.currentTime); }}
+        onPlay={event => { if (event.currentTarget === videoRef.current) { continuePlayback.current = true; setPlaying(true); } }}
+        onPause={event => { if (event.currentTarget === videoRef.current) {
+          continuePlayback.current = false;
+          setPlaying(false);
+          position(event.currentTarget.currentTime);
+        } }}
+        onEnded={event => { if (event.currentTarget === videoRef.current) { continuePlayback.current = false; setPlaying(false); } }}
+        onError={event => {
+          if (event.currentTarget !== videoRef.current) return;
+          continuePlayback.current = false;
+          setPlaying(false);
+          outputEvent(event.currentTarget, "error");
+        }} />
         : selected ? <ClipMedia key={clipMediaKey(selected, taskId)} clip={selected} taskId={taskId} preview />
           : <p>{montage.clips.length ? "从时间线选择镜头" : "时间线还没有镜头"}</p>}
       {montage.output_url && playbackState !== "ready" ? <div className={mediaUi.playerState} role={playbackState === "error" ? "alert" : "status"}>
@@ -297,7 +339,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
       <span className={ui.shotImage}><ClipThumbnail clip={clip} taskId={taskId} statusId={`${storyboardId}-thumbnail-${index}`} />{clip.locked ? <Lock size={13} /> : clip.needs_confirmation ? <span className={ui.reviewDot} title="待确认" /> : null}</span>
       <span className={ui.shotLabel}><strong>镜头 {String(index + 1).padStart(2, "0")}</strong><small>{editorTime(clip.timeline_start_seconds)}–{editorTime(clip.timeline_end_seconds)}</small></span>
     </button>)}</div> : null}
-    <TimelineViewport actions={timelineActions} duration={montage.duration_seconds} time={time} playing={playing} selectedTime={audioSelection?.seconds ?? selected?.timeline_start_seconds} selectionKey={audioSelection?.id ?? selectedId} formatTime={editorTime} onSeek={value => { const clip = montage.clips.find(item => value >= item.timeline_start_seconds && value < item.timeline_end_seconds); if (clip && clip.id !== selectedId) onSelect(clip.id); seek(value); }}>
+    <TimelineViewport actions={timelineActions} duration={montage.duration_seconds} time={time} playing={playing} selectedTime={audioSelection?.seconds ?? selected?.timeline_start_seconds} selectionKey={audioSelection?.id ?? selectedId} formatTime={editorTime} onSeek={value => { const clip = montage.clips.find(item => value >= item.timeline_start_seconds && value < item.timeline_end_seconds); if (clip && clip.id !== selectedId) onSelect(clip.id, false); seek(value); }}>
       {onSelectOverlay && montage.graphic_overlays?.length ? <OverlayTimeline formatTime={editorTime} items={montage.graphic_overlays} duration={montage.duration_seconds} selectedId={selectedOverlayId} disabled={busy} onSelect={onSelectOverlay}/> : null}
       <div className={ui.track}>
         <span><Clapperboard aria-hidden />画面</span>
@@ -308,7 +350,7 @@ export function VideoEditingStage({ taskId, versionId, narrationCacheKey, montag
           return <button key={clip.id} type="button" className={ui.videoTimelineClip}
             style={{ left: `${clip.timeline_start_seconds / montage.duration_seconds * 100}%`, width: `${(clip.timeline_end_seconds - clip.timeline_start_seconds) / montage.duration_seconds * 100}%` }}
             title={label} aria-label={`定位${label}`} aria-pressed={!audioSelection && clip.id === selectedId}
-            onClick={() => { onSelect(clip.id); seek(clip.timeline_start_seconds); }}>
+            onClick={() => { onSelect(clip.id, false); seek(clip.timeline_start_seconds); }}>
             <span className={ui.timelineThumbnail}><ClipThumbnail clip={clip} taskId={taskId} /></span>
             <span className={ui.timelineClipLabel}>{shot}{clip.locked ? <Lock aria-hidden /> : clip.needs_confirmation ? <span className={ui.clipReviewMark} aria-hidden /> : null}</span>
           </button>;

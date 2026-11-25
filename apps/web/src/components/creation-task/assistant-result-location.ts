@@ -1,10 +1,30 @@
-import type { AssistantConversationTurn, CreationTaskEditConfirmResponse } from "@/lib/types";
+import type { AssistantConversationTurn, CreationTaskEditConfirmResponse, CreationTaskEditOperation } from "@/lib/types";
 import { assistantTaskTurnResult, assistantTurnScriptWindowRequest } from "../useAssistantConversation";
+
+export type TimelineEditTarget =
+  | { kind: "shot"; id: string }
+  | { kind: "subtitle"; id: string; trackId?: string };
 
 type ResultLocation =
   | { stage: "script"; scriptId: string; updatedAt?: string | null }
   | { stage: "narration"; versionId: string; sectionId?: string; segmentId?: string }
-  | { stage: "montage"; versionId: string };
+  | { stage: "montage"; versionId: string; workspaceId?: string; target?: TimelineEditTarget };
+
+export function timelineEditTarget(operation: CreationTaskEditOperation): TimelineEditTarget | undefined {
+  const payload = operation.payload;
+  if (operation.operation_type === "UpdateSubtitleCue" && payload && "cue_id" in payload && typeof payload.cue_id === "string") {
+    return { kind: "subtitle", id: payload.cue_id, trackId: "track_id" in payload ? payload.track_id : undefined };
+  }
+  if ((operation.operation_type === "ChangeCrop" || operation.operation_type === "TrimClip"
+    || operation.operation_type === "ReplaceClip" || operation.operation_type === "SetClipLock")
+    && payload && "clip_id" in payload && typeof payload.clip_id === "string") {
+    return { kind: "shot", id: payload.clip_id };
+  }
+}
+
+export function timelineEditTargetLabel(target: TimelineEditTarget) {
+  return target.kind === "shot" ? "定位修改的镜头" : "定位修改的字幕";
+}
 
 export function savedAssistantResultLocation(turn: AssistantConversationTurn, taskId: string): ResultLocation | null {
   const result = assistantTaskTurnResult(turn);
@@ -35,7 +55,8 @@ export function savedAssistantResultLocation(turn: AssistantConversationTurn, ta
         return { stage: "narration", versionId: operation.result_version_id,
           segmentId: payload && "narration_segment_id" in payload ? payload.narration_segment_id : undefined };
       }
-      return { stage: "montage", versionId: operation.result_version_id };
+      return { stage: "montage", versionId: operation.result_version_id,
+        workspaceId: operation.workspace_id, target: timelineEditTarget(operation) };
     }
   }
   const restore = response.timeline_restore?.receipt;

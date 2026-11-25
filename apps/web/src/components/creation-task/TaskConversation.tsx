@@ -11,6 +11,7 @@ import { assistantHistoryTurns, type AssistantTurnRecord } from "./assistant-his
 import type { BusyAction } from './edit-context';
 import { EditPreviewCard } from './EditPreviewCard';
 import { errorDetails } from "./request-errors";
+import type { MaterialUsageContext } from "../ui/material-usage";
 
 export function TaskConversationHistory({ taskId }: { taskId: string }) {
     const [attempt, setAttempt] = useState(0);
@@ -36,7 +37,7 @@ export function TaskConversationHistory({ taskId }: { taskId: string }) {
     </details> : null;
 }
 
-export function ContextCommandBar({ localConfirmation = false, compact = false, scriptMode = false, busy, command, onCancel, onCommandChange, onConfirm, onExactPreview, onSelectionPreview, preview, assistantState, onTransferReply, onOpenResultStage, onOpenEditProposal, transferDraftState, onAssistantSend, onConversationChange, previewCommand, legacyHistory, assistantConfigured, selectedContextLabel, materialContextLabel, onClearReference, selectedContextPlaceholder, }: {
+export function ContextCommandBar({ localConfirmation = false, compact = false, scriptMode = false, busy, command, onCancel, onCommandChange, onConfirm, onExactPreview, onSelectionPreview, preview, assistantState, onTransferReply, onOpenResultStage, onOpenEditProposal, transferDraftState, onAssistantSend, onConversationChange, previewCommand, legacyHistory, assistantConfigured, selectedContextLabel, materialContextLabel, selectedContextPlaceholder, materialUsage }: {
     localConfirmation?: boolean;
     compact?: boolean;
     scriptMode?: boolean;
@@ -45,7 +46,7 @@ export function ContextCommandBar({ localConfirmation = false, compact = false, 
     onCancel: () => void;
     onCommandChange: (value: string) => void;
     onConfirm: () => void;
-    onExactPreview: () => void;
+    onExactPreview?: () => void;
     onSelectionPreview: (indices: number[]) => void;
     preview: CreationTaskEditPreviewResponse | null;
     assistantState: ReturnType<typeof useAssistantConversation>;
@@ -60,8 +61,8 @@ export function ContextCommandBar({ localConfirmation = false, compact = false, 
     assistantConfigured: boolean;
     selectedContextLabel: string | null;
     materialContextLabel: string | null;
-    onClearReference: () => void;
     selectedContextPlaceholder: string;
+    materialUsage?: MaterialUsageContext;
 }) {
     const barRef = useRef<HTMLElement>(null);
     const [chosen, setChosen] = useState<number[] | null>(null);
@@ -71,8 +72,8 @@ export function ContextCommandBar({ localConfirmation = false, compact = false, 
     }, [preview, compact]);
     useEffect(() => { setChosen(null); }, [preview?.proposal.id]);
     return (<section aria-label={scriptMode ? "文案对话" : "修改视频"} className={editorUi.chatCommand} ref={barRef}>
-      <AssistantConversationPanel busy={busy !== null} compact={compact} configured={assistantConfigured} onTransferReply={onTransferReply} onOpenResultStage={onOpenResultStage} onOpenEditProposal={onOpenEditProposal} transferDraftState={transferDraftState} input={assistantState.draftText} inputLabel={scriptMode ? "文案要求" : "局部修改要求"} onInput={onCommandChange} onSend={async () => onAssistantSend()} onConversationChange={onConversationChange} placeholder={selectedContextPlaceholder} scopeLabel={materialContextLabel ? `当前素材 · ${materialContextLabel}` : scriptMode ? "当前任务 · 文案" : selectedContextLabel ? `当前任务 · ${selectedContextLabel}` : "当前任务"} state={assistantState} legacyHistory={legacyHistory}/>
-      {selectedContextLabel && !scriptMode ? <button className={editorUi.composerPreview} disabled={busy !== null || !command.trim()} onClick={onExactPreview} type="button">精确预览修改</button> : null}
+      <AssistantConversationPanel busy={busy !== null} compact={compact} configured={assistantConfigured} onTransferReply={onTransferReply} onOpenResultStage={onOpenResultStage} onOpenEditProposal={onOpenEditProposal} transferDraftState={transferDraftState} input={assistantState.draftText} inputLabel={scriptMode ? "文案要求" : "局部修改要求"} onInput={onCommandChange} onSend={async () => onAssistantSend()} onConversationChange={onConversationChange} placeholder={selectedContextPlaceholder} scopeLabel={materialContextLabel ? `当前素材 · ${materialContextLabel}` : scriptMode ? "当前任务 · 文案" : selectedContextLabel ? `当前任务 · ${selectedContextLabel}` : "当前任务"} state={assistantState} legacyHistory={legacyHistory} materialUsage={materialUsage}/>
+      {onExactPreview && !scriptMode ? <button className={editorUi.composerPreview} disabled={busy !== null || !command.trim()} onClick={onExactPreview} type="button">精确预览修改</button> : null}
       {preview && !localConfirmation ? <EditPreviewCard key={preview.proposal.id} preview={preview} busy={busy} compact={compact} command={previewCommand} onCancel={onCancel} onConfirm={onConfirm} kind="modal" chosen={chosen} onChosen={setChosen} onSelectionPreview={onSelectionPreview}/> : null}
     </section>);
 }

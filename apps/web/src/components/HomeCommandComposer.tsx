@@ -40,6 +40,7 @@ export type HomeCommandComposerProps = {
     transferDraftState?: "none" | "draft" | "confirmed";
     onOpenResultStage?: OpenAssistantResult;
     onOpenEditProposal?: (turn: AssistantConversationTurn) => void;
+    onPreviewPinnedEdit?: () => void;
   };
   materialContext?: {
     selection: MaterialAssistantSelection | null;
@@ -221,6 +222,8 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
     const command = rawMessage.trim();
     if (!command || pending || awaitingVersionRead) return;
     const referenceSnapshot = latestSelectionSnapshot.current;
+    const timelineReferences = selectionState?.items.filter(item => "task_id" in item) ?? [];
+    const pinned = timelineReferences.length === 1 ? timelineReferences[0] : null;
     const revision = scopeRevision.current;
     setPending("chat");
     setError(null);
@@ -250,7 +253,8 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
       if (task) {
         const result = await sendCreationTaskAssistantTurn(task.id, {
           conversation_id: turn.conversationId,
-          message: command, context_stage: taskContext?.stage ?? task.stage,
+          message: command,
+          context_stage: pinned?.kind === "shot" ? "montage" : pinned?.kind === "subtitle" ? "subtitle_cover" : taskContext?.stage ?? task.stage,
           client_request_id: turn.clientRequestId,
           expected_draft_version: expectedDraftVersion,
           expected_reference_version: selectionState?.version,
@@ -259,7 +263,8 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
           ...(knowledgeReference ? {selected_knowledge_reference:{knowledge_item_id:knowledgeReference.knowledge_item_id,version:knowledgeReference.version,...(knowledgeReference.locator ? {locator:knowledgeReference.locator} : {})}} : {}),
           // With a saved selection, the API derives refs from its frozen CAS.
           // Removing a chip must not resurrect a page's previous local selection.
-          selected_object_refs: selectionState ? [] : taskContext?.selectedObjectRefs ?? [], playhead_ms: taskContext?.getPlayheadMs() ?? null,
+          selected_object_refs: selectionState ? [] : taskContext?.selectedObjectRefs ?? [],
+          playhead_ms: timelineReferences.length ? pinned?.kind === "shot" ? pinned.start_ms ?? null : null : taskContext?.getPlayheadMs() ?? null,
         }, onStreamEvent);
         const fresh = assistant.isCurrentConversation(turn.conversationId) ? await assistant.refresh() : null;
         if (revision !== scopeRevision.current || !assistant.isCurrentConversation(turn.conversationId)) return;
@@ -501,6 +506,9 @@ export function HomeCommandComposer({ assignLocation = assignDocumentLocation, a
         busy={pending !== null || awaitingVersionRead}
         configured={modelConfigured}
         composerActions={<>
+          {taskContext?.onPreviewPinnedEdit ? <Button variant="ghost" type="button"
+            disabled={pending !== null || awaitingVersionRead || !assistant.draftText.trim()}
+            onClick={taskContext.onPreviewPinnedEdit}>精确预览修改</Button> : null}
           {task && undoAvailable && !taskContext?.timelinePresent ? <Button variant="ghost" className="assistant-recovery-action" disabled={pending !== null} onClick={() => void undoTaskEdit()} type="button" aria-label={pending === "undo" ? "撤销中" : "撤销修改"} title={`撤销“${task.name}”上一次已保存的修改`}>{pending === "undo" ? <LoaderCircle size={15} aria-hidden className="is-spinning"/> : <Undo2 size={15} aria-hidden/>}撤销作品修改</Button> : null}
           {task && restoreRequest ? <Button variant="ghost" className="assistant-recovery-action" disabled={pending !== null} onClick={() => void queryTaskRestore()} type="button" aria-label="查询原撤销结果" title="查询原请求的结果，不重复提交撤销">{pending === "undo" ? <LoaderCircle size={14} aria-hidden className="is-spinning"/> : <RotateCcw size={14} aria-hidden/>}查询原撤销结果</Button> : null}
         </>}

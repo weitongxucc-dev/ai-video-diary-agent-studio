@@ -1,7 +1,7 @@
 "use client";
 import { WorkspacePanelContext, useWorkspacePage, useWorkspaceViewState } from "./workbench/context";
 
-import { readAssistantLocateReference, referenceAssistantSelection, type SelectedAssistantReference } from "@/lib/assistant-reference";
+import { ASSISTANT_LOCATE_REFERENCE_EVENT, readAssistantLocateReference, referenceAssistantSelection, type SelectedAssistantReference } from "@/lib/assistant-reference";
 import { useWorkspaceSearchParams as useSearchParams } from "./workbench/context";
 import { canOpenStage, hasSavedTimeline } from "./creation-task/stage-navigation";
 import { editExecutionReadinessMessage } from './creation-task/stage-labels';
@@ -39,12 +39,12 @@ import { creationTaskShortStatus, creationTaskStatusPresentation } from "@/lib/c
 import { CheckCircle2, Clapperboard, FileText, LoaderCircle, Sparkles } from "lucide-react";
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
-import { useAssistantSelection, useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
+import { useAssistantSelection, useAssistantReferenceStatus, useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
 import { useAssistantConversation } from "@/components/useAssistantConversation";
 import { AppShell } from "@/components/AppShell";
 import { HomeCommandComposer, type HomeCommandComposerProps } from "@/components/HomeCommandComposer";
 import { getCreationTaskMediaJob, taskMediaJobMatchesContext, getCreationTaskGraphicSources, cancelCreationTaskMediaJob, resolveCreationTaskMediaResponse, TaskMediaJobError, confirmCreationTaskEdit, confirmCreationTaskScript, transferAssistantReplyToScript, confirmCreationTaskTopic, generateCreationTaskPersonRender, generateCreationTaskTopics, getCreationTaskMontageClipCandidates, getCreationTaskTopics, getCreationPlan, getCreationTaskWorkspace, getCreationTaskScriptSections, getCreationTaskEditPreview, setCreationPlanVisibility, setCreationTaskVisibility, initializeCreationTaskTimeline, startCreationExecution, resumeCreationExecution, cancelCreationExecution, getRuntimeSettings, previewCreationTaskEdit, sendCreationTaskAssistantTurn, sendMaterialAssistantTurn, previewCompoundSelection, previewCreationTaskExactEdit, applyCreationTaskExactEdit, getCreationTaskEditRequest, selectCreationTaskNarrationVoice, listCreationTaskRecordings, adoptCreationTaskRecording, undoCreationTaskTimeline, redoCreationTaskTimeline } from "@/lib/api";
-import type { CreationTask, AssistantConversationTurn, CreationTaskQualityCheck, CreationTaskExactEditInput, CreationTaskClipMetadataInput, CreationTaskMetadataSaveInput, CreationTaskEditPreviewResponse, CreationTaskAssistantTurnResponse, CreationTaskRecording, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState, CreationExecutionStatus, MontageClipCandidate } from "@/lib/types";
+import type { CreationTask, AssistantConversationTurn, CreationTaskQualityCheck, CreationTaskExactEditInput, CreationTaskClipMetadataInput, CreationTaskMetadataSaveInput, CreationTaskEditOperation, CreationTaskEditPreviewResponse, CreationTaskAssistantTurnResponse, CreationTaskRecording, CreationTaskTopicsResponse, CreationTaskWorkspace as WorkspaceState, CreationExecutionStatus, MontageClipCandidate } from "@/lib/types";
 import styles from "./CreationTaskWorkspace.module.css";
 import { AudioTimelineTracks, AudioTimelineInspector } from "./AudioTimelineEditor";
 import { previewCreationTaskAudio, previewCreationTaskVisual, saveCreationTaskRecording } from "@/lib/api";
@@ -54,7 +54,7 @@ import { VideoEditingStage, VideoClipInspector, VideoClipQuickEditor, createVide
 import editorUi from "./VideoEditor.module.css";
 import type { BusyAction, PendingLocalEdit } from './creation-task/edit-context';
 import type { OpenAssistantResult } from "@/lib/types/assistant";
-import { savedAssistantResultLocation } from "./creation-task/assistant-result-location";
+import { savedAssistantResultLocation, timelineEditTarget, timelineEditTargetLabel, type TimelineEditTarget } from "./creation-task/assistant-result-location";
 import { savedAssistantAudioResult } from "./creation-task/assistant-result-audio";
 import type { WorkspaceView } from './creation-task/stage-navigation';
 import { queuedEditNotice } from './creation-task/edit-context';
@@ -282,10 +282,13 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [selectedClipId, setSelectedClipId] = useWorkspaceViewState<string | null>("task.selectedClipId", null);
   const montageVideoRef = useRef<HTMLVideoElement>(null);
   const playheadRef = useRef<number | null>(restoredPlayhead ?? null);
+  const [timelineFocus, setTimelineFocus] = useState<{ versionId: string | null; seconds: number } | null>(null);
+  const [lastLocalEdit, setLastLocalEdit] = useState<{ versionId: string; target: TimelineEditTarget } | null>(null);
   const editContextRevision = useRef(0);
   const previewRequestSequence = useRef(0);
   const assistantRequestSequence = useRef(0);
   const [selectedCueId, setSelectedCueId] = useWorkspaceViewState<string | null>("task.selectedCueId", null);
+  const [subtitleFocusRequest, setSubtitleFocusRequest] = useState(0);
   const [selectedCover, setSelectedCover] = useWorkspaceViewState("task.selectedCover", false);
   const [activeSubtitleTrackId, setActiveSubtitleTrackId] = useWorkspaceViewState<string | null>("task.activeSubtitleTrackId",
     initialWorkspace.subtitle_tracks.find((track) => track.language === "zh-CN")?.id
@@ -380,7 +383,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     return input === draftInput.current && input.taskId === currentTaskId.current
       && Boolean(input.conversationId && assistantConversation.isCurrentConversation(input.conversationId));
   }
-  const [detachedReference, setDetachedReference] = useWorkspaceViewState<string | null>("task.detachedReference", null);
   const [sharingOpen, setSharingOpen] = useState(false);
   const [visibilityBusy, setVisibilityBusy] = useState(false);
   const [visibilityError, setVisibilityError] = useState<string | null>(null);
@@ -535,6 +537,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         : null;
 
   const selectionState = useAssistantSelection();
+  const referenceStatus = useAssistantReferenceStatus();
   const replacementTarget = useRef<string | null>(null);
   replacementTarget.current = selectedEditContext?.kind === "clip" ? selectedEditContext.id : null;
   const selectionSnapshot = JSON.stringify([selectionState?.version, selectionState?.items]);
@@ -544,27 +547,76 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   function referenceSelectedObject() {
     if (!task.current_timeline_version_id || !selectedEditContext || selectedEditContext.kind === "cover") return;
     const kinds = {clip:"shot", cue:"subtitle", overlay:"effect", audio:"audio", narration:"narration"} as const;
+    const clip = workspace.montage?.clips[selectedClipIndex];
+    const range = selectedEditContext.kind === "clip" && clip ? [clip.timeline_start_seconds, clip.timeline_end_seconds]
+      : selectedEditContext.kind === "cue" && selectedSubtitleCue ? [selectedSubtitleCue.start_seconds, selectedSubtitleCue.end_seconds]
+      : selectedEditContext.kind === "overlay" && selectedOverlay ? [selectedOverlay.start_seconds, selectedOverlay.end_seconds] : null;
     referenceAssistantSelection([{kind:kinds[selectedEditContext.kind], object_id:selectedEditContext.id,
-      task_id:task.id, version:task.current_timeline_version_id, label:selectedEditContext.label}], true);
+      task_id:task.id, version:task.current_timeline_version_id,
+      label:selectedEditContext.kind === "cue" && selectedSubtitleCue
+        ? `${selectedEditContext.label} · ${Array.from(selectedSubtitleCue.text).slice(0, 80).join("")}`
+        : selectedEditContext.label,
+      ...(range && Math.round(range[0] * 1000) < Math.round(range[1] * 1000)
+        ? { start_ms: Math.round(range[0] * 1000), end_ms: Math.round(range[1] * 1000) } : {})}], true);
   }
-  useEffect(() => {
-    const locate = () => {
-      let item: SelectedAssistantReference | null;
-      try { item = readAssistantLocateReference(locateSearch); } catch (error) { setNotice(error instanceof Error ? error.message : "引用定位不可用。"); return; }
-      if (!item) return;
-      if (!("task_id" in item) || item.task_id !== task.id) return;
-      if (item.version !== task.current_timeline_version_id) { setNotice("引用来自旧版本，请重新选择；没有改绑当前对象。"); return; }
-      setActiveView(item.kind === "subtitle" ? "subtitle_cover" : item.kind === "narration" ? "narration" : "montage");
-      setSelectedClipId(item.kind === "shot" ? item.object_id : null);
-      setSelectedCueId(item.kind === "subtitle" ? item.object_id : null);
+  const locateFromUrl = useRef<string | null>(null);
+  const locateTimeline = useRef<(item: SelectedAssistantReference) => boolean>(() => false);
+  locateTimeline.current = item => {
+    if (workbenchPage?.active === false || !("task_id" in item) || item.task_id !== task.id) return false;
+    if (item.version !== task.current_timeline_version_id) {
+      setNotice("此引用来自较早的作品版本，请重新选择引用。");
+    } else if (item.kind === "shot" || item.kind === "subtitle") {
+      const message = locateSavedEdit(workspace, { kind: item.kind, id: item.object_id },
+        item.start_ms == null ? undefined : item.start_ms / 1000);
+      if (message) setNotice(message);
+    } else {
+      openEditingView(item.kind === "narration" ? "narration" : "montage");
+      setSelectedClipId(null);
+      setSelectedCueId(null);
+      setSelectedCover(false);
       setSelectedNarrationSegmentId(item.kind === "narration" ? item.object_id : null);
       setSelectedOverlayId(item.kind === "effect" ? item.object_id : null);
       setSelectedAudioId(item.kind === "audio" ? item.object_id : null);
-      if (item.start_ms !== undefined && montageVideoRef.current) { montageVideoRef.current.currentTime=item.start_ms/1000; playheadRef.current=item.start_ms/1000; }
+      if (item.start_ms != null) seekTimeline(item.start_ms / 1000);
+    }
+    return true;
+  };
+  useEffect(() => {
+    const locate = (event: Event) => {
+      if (locateTimeline.current((event as CustomEvent<SelectedAssistantReference>).detail)) event.preventDefault();
     };
-    locate();
-  },[task.id,task.current_timeline_version_id,locateSearch]);
-  const selectedTaskReference = selectedEditContext && selectedEditContext.ref !== detachedReference ? selectedEditContext : null;
+    window.addEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
+    return () => window.removeEventListener(ASSISTANT_LOCATE_REFERENCE_EVENT, locate);
+  }, []);
+  useEffect(() => {
+    if (workbenchPage?.active === false) return;
+    const raw = locateSearch.get("locate_ref");
+    if (raw === locateFromUrl.current) return;
+    locateFromUrl.current = raw;
+    try {
+      const item = readAssistantLocateReference(locateSearch);
+      if (item) locateTimeline.current(item);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "引用定位不可用。");
+    }
+  }, [locateSearch, workbenchPage?.active]);
+  const fixedTimelineReferences = selectionState?.items.filter(item => "task_id" in item) ?? [];
+  const pinned = fixedTimelineReferences.length === 1 ? fixedTimelineReferences[0] : null;
+  const currentPinned = pinned?.task_id === task.id && pinned.version === task.current_timeline_version_id
+    && !referenceStatus.pending && !referenceStatus.reason ? pinned : null;
+  const pinnedCueTrack = currentPinned?.kind === "subtitle" ? workspace.subtitle_tracks.find(track => track.status === "valid"
+    && track.timeline_version_id === currentPinned.version && track.cues.some(cue => cue.id === currentPinned.object_id)) : null;
+  const pinnedPrefixes = { shot: "clip", narration: "narration", effect: "overlay", audio: "audio" } as const;
+  const pinnedCommandTarget = currentPinned && currentPinned.kind !== "subtitle" ? {
+    stage: currentPinned.kind === "narration" ? "narration" as const : "montage" as const,
+    refs: [`${pinnedPrefixes[currentPinned.kind]}:${currentPinned.object_id}`],
+    playhead: currentPinned.kind === "shot" ? currentPinned.start_ms ?? null : null,
+  } : currentPinned && pinnedCueTrack ? {
+    stage: "subtitle_cover" as const,
+    refs: [`cue:${currentPinned.object_id}`, `subtitle-track:${pinnedCueTrack.id}`],
+    playhead: null,
+  } : null;
+  const hasFixedTimelineReference = fixedTimelineReferences.length > 0;
 
   function invalidateEditPreview() {
     mediaController.current?.abort();
@@ -608,7 +660,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   async function restoreMediaPreview(candidate: TaskMediaJob) {
-    const selectedRefs = selectedTaskReference ? [selectedTaskReference.ref,
+    const selectedRefs = selectedEditContext ? [selectedEditContext.ref,
       ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : [];
     if (busy !== null || !taskMediaJobMatchesContext(candidate, task.current_timeline_version_id, selectedRefs)) return;
     const revision = ++editContextRevision.current;
@@ -693,12 +745,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if (!sameProposalBase) invalidateEditPreview();
     setReplacementClipId(null);
     setReplacementCandidates([]);
-    const retainedClip = next.montage?.clips.find(clip => clip.id === selectedClipId);
-    const retainedOverlay=next.montage?.graphic_overlays?.find(item=>item.id===selectedOverlayId);
-    if (!selectionChanged) {
-      playheadRef.current = retainedOverlay ? (retainedOverlay.start_seconds+retainedOverlay.end_seconds)/2 : selectedAudioId ? audioPlayhead : retainedClip && next.montage?.output_url
-        ? (retainedClip.timeline_start_seconds + retainedClip.timeline_end_seconds) / 2 : null;
-    }
     setEditorDraft(false);
     setSelectedOverlayId(current=>next.montage?.graphic_overlays?.some(item=>item.id===current)?current:null);
     retainWorkspaceView(next, preserveActiveView);
@@ -859,21 +905,14 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
-  function activateTaskSelection() {
-    if (detachedReference !== null) invalidateEditPreview();
-    setDetachedReference(null);
-  }
-
   function selectOverlay(id: string|null) {
-    if (id) activateTaskSelection();
     invalidateEditPreview(); setEditorDraft(false); setSelectedOverlayId(id); setSelectedAudioId(null);
     const item=workspace.montage?.graphic_overlays?.find(value=>value.id===id);
     if(item){const time=(item.start_seconds+item.end_seconds)/2;playheadRef.current=time;
       if(montageVideoRef.current){montageVideoRef.current.pause();montageVideoRef.current.currentTime=time;}}
   }
 
-  function selectClip(clipId: string) {
-    activateTaskSelection();
+  function selectClip(clipId: string, movePlayhead = true) {
     if(selectedOverlayId){setEditorDraft(false);invalidateEditPreview();}
     setSelectedOverlayId(null);
     setSelectedAudioId(null);
@@ -884,32 +923,25 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setSelectedNarrationSegmentId(null);
     setSelectedCover(false);
     const clip = workspace.montage?.clips.find((item) => item.id === clipId);
-    if (clip && workspace.montage?.output_url && montageVideoRef.current) {
-      const position = (clip.timeline_start_seconds + clip.timeline_end_seconds) / 2;
-      montageVideoRef.current.currentTime = position;
-      playheadRef.current = position;
-      setAudioPlayhead(position);
+    if (clip && movePlayhead && workspace.montage?.output_url) {
+      seekTimeline((clip.timeline_start_seconds + clip.timeline_end_seconds) / 2);
     }
   }
 
   function locateQualityFinding(finding: CreationTaskQualityCheck["findings"][number]) {
     const clip = workspace.montage?.clips.find(item => finding.clip_ids.includes(item.id));
-    if (clip) selectClip(clip.id);
-    playheadRef.current = finding.start_seconds;
-    setAudioPlayhead(finding.start_seconds);
-    if (montageVideoRef.current) {
-      montageVideoRef.current.pause();
-      montageVideoRef.current.currentTime = finding.start_seconds;
-    }
+    if (clip) selectClip(clip.id, false);
+    montageVideoRef.current?.pause();
+    seekTimeline(finding.start_seconds);
   }
 
-  function selectPlayingClip(video: HTMLVideoElement) {
+  function selectPlayingClip(seconds: number) {
     const montage = workspace.montage;
     if (!montage) return;
-    const time = Math.min(video.currentTime, montage.duration_seconds);
+    const time = Math.min(seconds, montage.duration_seconds);
     playheadRef.current = time; setAudioPlayhead(time);
     if (!["montage", "review"].includes(activeView) || selectedOverlayId || editorDraft) return;
-    if (selectedAudioId) return;
+    if (selectedAudioId || selectedCueId) return;
     const clips = montage.clips;
     const clip = clips.find((item, index) => time >= item.timeline_start_seconds
       && (time < item.timeline_end_seconds
@@ -923,8 +955,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectCue(cueId: string) {
-    activateTaskSelection();
     setSelectedAudioId(null);
+    setSelectedOverlayId(null);
     if (selectedCueId !== cueId || selectedClipId || selectedNarrationSegmentId || selectedAudioId) invalidateEditPreview();
     setSelectedClipId(null);
     setSelectedCueId(cueId);
@@ -933,7 +965,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectNarrationSegment(segmentId: string) {
-    activateTaskSelection();
     if (selectedNarrationSegmentId !== segmentId || selectedClipId || selectedCueId) invalidateEditPreview();
     setSelectedClipId(null);
     setSelectedCueId(null);
@@ -942,7 +973,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectCover() {
-    activateTaskSelection();
     if (!selectedCover || selectedClipId || selectedCueId || selectedNarrationSegmentId) invalidateEditPreview();
     setSelectedClipId(null);
     setSelectedCueId(null);
@@ -959,6 +989,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   function openView(view: WorkspaceView) {
     if (view === activeView) return;
+    if (activeView === "subtitle_cover") setSubtitleFocusRequest(0);
     setSavingTemplate(false);
     setActiveView(view);
     invalidateEditPreview();
@@ -991,34 +1022,40 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function preparePersonEdit(clipId: string, command: string) {
-    selectClip(clipId);
+    selectClip(clipId, false);
     setEditCommand(command);
     invalidateEditPreview();
   }
 
   async function previewEdit(commandOverride?: string) {
     const rawCommand = (commandOverride ?? editCommand).trim();
-    if (!selectedEditContext || !rawCommand) return;
+    const usePinnedTarget = commandOverride === undefined && hasFixedTimelineReference;
+    const target = usePinnedTarget ? pinnedCommandTarget : selectedEditContext && {
+      stage: activeView,
+      refs: [selectedEditContext.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])],
+      playhead: selectedEditContext.kind === "clip" && playheadRef.current !== null ? Math.round(playheadRef.current * 1000) : null,
+    };
+    if (!target || !rawCommand || busy !== null) return;
     if(commandOverride === undefined && editPreview?.proposal.operation.operation_type==="EditCompoundTimeline" && editPreview.proposal.operation.payload.selection_enabled){
       await reviseCompoundSelection(rawCommand);return;
     }
     const input = commandOverride === undefined ? draftInput.current : null;
-    if (montageVideoRef.current && !montageVideoRef.current.paused) montageVideoRef.current.pause();
+    const fixedSnapshot = latestSelectionSnapshot.current;
     invalidateEditPreview();
     const revision = editContextRevision.current;
     const sequence = ++previewRequestSequence.current;
     const ownsRequest = () => sequence === previewRequestSequence.current && currentTaskId.current === task.id;
-    const stillCurrent = () => ownsRequest() && revision === editContextRevision.current;
+    const stillCurrent = () => ownsRequest() && revision === editContextRevision.current
+      && (!usePinnedTarget || fixedSnapshot === latestSelectionSnapshot.current);
     setBusy("edit-preview");
     setError(null);
     setNotice(null);
     try {
       const response = await previewCreationTaskEdit(task.id, {
         raw_command: rawCommand,
-        context_stage: activeView,
-        selected_object_refs: [selectedEditContext.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])],
-        playhead_ms: selectedEditContext.kind === "clip" && playheadRef.current !== null
-          ? Math.round(playheadRef.current * 1000) : null,
+        context_stage: target.stage,
+        selected_object_refs: target.refs,
+        playhead_ms: target.playhead,
       });
       const preview = await resolveEditMedia(response, revision);
       if (stillCurrent()) setEditPreview(preview, input);
@@ -1034,10 +1071,8 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if (!message) return;
     const referenceSnapshot = latestSelectionSnapshot.current;
     const taskReferences = selectionState?.items.filter(item => "task_id" in item) ?? [];
-    const selectedReference = taskReferences[0];
     const materialSnapshot = taskReferences.length ? null : selectedMaterialReference?.selection ?? null;
-    const snapshotPlayhead = selectedReference?.kind === "shot" && playheadRef.current !== null ? Math.round(playheadRef.current * 1000) : null;
-    if (montageVideoRef.current && !montageVideoRef.current.paused) montageVideoRef.current.pause();
+    const snapshotPlayhead = taskReferences.length === 1 && taskReferences[0].kind === "shot" ? taskReferences[0].start_ms ?? null : null;
     invalidateEditPreview();
     const revision = editContextRevision.current;
     const requestSequence = ++assistantRequestSequence.current;
@@ -1080,9 +1115,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         }
       }
       const expectedDraftVersion = await turn.draftCheckpoint;
-      // Browsing a clip cannot retarget a frozen material-only request. Changes
-      // to the explicit reference CAS or conversation still reject the send.
-      if (!ownsRequest() || (!materialSnapshot && revision !== editContextRevision.current) || referenceSnapshot !== latestSelectionSnapshot.current || !assistantConversation.isCurrentConversation(turn.conversationId)) {
+      // The reference CAS and original workspace version own this request even
+      // when browsing has moved the selection or playhead.
+      if (!ownsRequest() || referenceSnapshot !== latestSelectionSnapshot.current || !assistantConversation.isCurrentConversation(turn.conversationId)) {
         await assistantConversation.failUnpersistedTurn(turn.conversationId, turn.localTurnId,
           "编辑范围已切换；本轮没有发送，原要求已保留为草稿。");
         releaseBusy();
@@ -1103,7 +1138,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         ...(selectedKnowledgeReference ? { selected_knowledge_reference: { knowledge_item_id: selectedKnowledgeReference.knowledge_item_id, version: selectedKnowledgeReference.version, ...(selectedKnowledgeReference.locator ? { locator: selectedKnowledgeReference.locator } : {}) } } : {}),
         ...(selectedProfileReference ? {selected_profile_reference:{kind:selectedProfileReference.kind,profile_id:selectedProfileReference.profile_id,version:selectedProfileReference.version}} : {}),
         message,
-        context_stage: activeView,
+        context_stage: pinnedCommandTarget?.stage ?? activeView,
         // The API derives object refs from the frozen selection CAS, including multi-select.
         selected_object_refs: [],
         playhead_ms: snapshotPlayhead,
@@ -1279,6 +1314,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
             operationType: proposal.operation.operation_type, targetRefs: [...proposal.target_refs] });
           setNotice(queuedEditNotice(proposal.operation.operation_type));
         } else {
+          showLocalEditResult(result.operation);
           setNotice('修改已保存，可撤销。' + (editExecutionReadinessMessage(result.execution_readiness) ?? ''));
         }
         invalidateEditPreview();
@@ -1299,7 +1335,6 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectAudio(id: string, time?: number) {
-    activateTaskSelection();
     setSelectedOverlayId(null);
     invalidateEditPreview(); setEditorDraft(false); setSelectedAudioId(id);
     setAudioPlayhead(time ?? playheadRef.current ?? 0);
@@ -1310,8 +1345,26 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function positionAudioListen(time: number) {
-    playheadRef.current=time;setAudioPlayhead(time);
-    if(montageVideoRef.current){montageVideoRef.current.pause();montageVideoRef.current.currentTime=time;}
+    montageVideoRef.current?.pause();
+    seekTimeline(time);
+  }
+
+  function seekTimeline(seconds: number) {
+    if (!Number.isFinite(seconds)) return;
+    const duration = currentWorkspace.current.montage?.duration_seconds ?? 0;
+    seconds = Math.max(0, Math.min(seconds, duration));
+    playheadRef.current = seconds;
+    setAudioPlayhead(seconds);
+    const versionId = currentWorkspace.current.task.current_timeline_version_id;
+    setTimelineFocus({ versionId, seconds });
+  }
+
+  function showLocalEditResult(operation: CreationTaskEditOperation) {
+    const target = timelineEditTarget(operation);
+    if (target && operation.task_id === task.id && operation.workspace_id === task.workspace_id
+      && operation.status === "applied" && operation.result_version_id) {
+      setLastLocalEdit({ versionId: operation.result_version_id, target });
+    }
   }
 
   async function previewVisual(input: VisualEditInput) {
@@ -1484,6 +1537,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     sessionStorage.removeItem(`subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`);
     pendingMetadataSaveRef.current = null;
     setPendingMetadataSave(null);
+    showLocalEditResult(receipt.result.operation);
     if ('clip_id' in pending.input) {
       const draftKey = `${pending.taskId}:${pending.input.clip_id}`;
       setClipDrafts(current => { const next = { ...current }; delete next[draftKey]; return next; });
@@ -1820,9 +1874,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     || (activeView === "subtitle_cover" && activeSubtitleTrack)
   );
   const legacyHistory = <TaskConversationHistory key={task.id} taskId={task.id} />;
+  const materialUsage = workspace.montage && task.current_timeline_version_id
+    ? { taskId: task.id, taskName: task.name, versionId: task.current_timeline_version_id, clips: workspace.montage.clips, selectedClipId }
+    : undefined;
   const taskAssistantProps: HomeCommandComposerProps = { task, legacyHistory, onTaskUpdated: () => { void refresh(true); }, taskContext: {
       timelinePresent: hasTimeline,
-      materialUsage: workspace.montage && task.current_timeline_version_id ? { taskId: task.id, taskName: task.name, versionId: task.current_timeline_version_id, clips: workspace.montage.clips, selectedClipId } : undefined,
+      materialUsage,
       onReplaceClipFromMaterial: selectedEditContext?.kind === "clip" ? async source => {
         if (currentTaskId.current !== task.id || currentWorkspace.current.task.current_timeline_version_id !== source.versionId ||
           replacementTarget.current !== source.clipId) return false;
@@ -1830,15 +1887,47 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           asset_id: source.assetId, segment_id: source.segmentId, source_start_seconds: source.startSeconds });
       } : undefined,
       stage: activeView,
-      selectedObjectRefs: selectedTaskReference ? [selectedTaskReference.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : [],
+      selectedObjectRefs: selectedEditContext ? [selectedEditContext.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : [],
       getPlayheadMs: () => playheadRef.current === null ? null : Math.round(playheadRef.current * 1000),
       onTransferReply: activeView === "script" ? transferReplyToDraft : undefined,
       transferDraftState: latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none",
       onOpenResultStage: openAssistantResult,
       onOpenEditProposal: turn => void openSavedEditProposal(turn),
+      onPreviewPinnedEdit: pinnedCommandTarget && (currentPinned?.kind === "shot" || currentPinned?.kind === "subtitle") && busy === null
+        ? () => void previewEdit() : undefined,
     } };
+  const selectedContextLabel = hasFixedTimelineReference || !selectedEditContext ? null
+    : isEditor && selectedOverlay ? `${selectedEditContext.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}`
+    : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}`
+    : selectedEditContext.label;
+  const canPreviewCommand = hasFixedTimelineReference ? Boolean(pinnedCommandTarget) : Boolean(selectedContextLabel);
   const conversation = hasContextConversation
-    ? <ContextCommandBar onOpenResultStage={openAssistantResult} localConfirmation={localConfirmation} scriptMode={activeView === "script"} key={task.id} onSelectionPreview={indices => void reviseCompoundSelection(indices)} compact busy={busy} command={editCommand} previewCommand={previewCommand} onCancel={() => invalidateEditPreview()} onCommandChange={(value) => { setEditCommand(value); if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline" || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview(); }} onConfirm={() => void confirmEdit()} onExactPreview={() => void previewEdit()} preview={editPreview} assistantState={assistantConversation} onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onTransferReply={activeView === "script" ? transferReplyToDraft : undefined} transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"} onConversationChange={() => { generationReadOwner.current = null; assistantRequestSequence.current += 1; previewRequestSequence.current += 1; invalidateEditPreview(); setBusy(null); setError(null); }} legacyHistory={legacyHistory} assistantConfigured={assistantConfigured} onClearReference={() => setDetachedReference(selectedEditContext?.ref ?? null)} materialContextLabel={selectedTaskReference ? null : selectedMaterialReference?.label ?? null} selectedContextLabel={!selectedTaskReference ? null : isEditor && selectedOverlay ? `${selectedEditContext?.label} · ${editorTime(selectedOverlay.start_seconds)}–${editorTime(selectedOverlay.end_seconds)}` : isEditor && selectedClip && !selectedAudioId ? `${selectedEditContext?.label} · ${editorTime(selectedClip.timeline_start_seconds)}–${editorTime(selectedClip.timeline_end_seconds)}` : selectedEditContext?.label ?? null} selectedContextPlaceholder={selectedTaskReference ? "说说怎么改" : selectedMaterialReference ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} />
+    ? <ContextCommandBar key={task.id} compact localConfirmation={localConfirmation} scriptMode={activeView === "script"}
+      busy={busy} command={editCommand} previewCommand={previewCommand} preview={editPreview}
+      onCancel={invalidateEditPreview} onConfirm={() => void confirmEdit()} onExactPreview={canPreviewCommand ? () => void previewEdit() : undefined}
+      onSelectionPreview={indices => void reviseCompoundSelection(indices)}
+      onCommandChange={value => {
+        setEditCommand(value);
+        if (!assistantPreview && (editPreview?.proposal.operation.operation_type !== "EditCompoundTimeline"
+          || !editPreview.proposal.operation.payload.selection_enabled)) invalidateEditPreview();
+      }}
+      assistantState={assistantConversation} assistantConfigured={assistantConfigured} legacyHistory={legacyHistory}
+      onAssistantSend={askAssistant} onOpenEditProposal={turn => void openSavedEditProposal(turn)} onOpenResultStage={openAssistantResult}
+      onTransferReply={activeView === "script" ? transferReplyToDraft : undefined}
+      transferDraftState={latestScript?.selection_status === "confirmed" ? "confirmed" : latestScript?.selection_status === "draft" ? "draft" : "none"}
+      onConversationChange={() => {
+        generationReadOwner.current = null;
+        assistantRequestSequence.current += 1;
+        previewRequestSequence.current += 1;
+        invalidateEditPreview();
+        setBusy(null);
+        setError(null);
+      }}
+      materialUsage={materialUsage}
+      materialContextLabel={hasFixedTimelineReference || selectedEditContext ? null : selectedMaterialReference?.label ?? null}
+      selectedContextLabel={selectedContextLabel}
+      selectedContextPlaceholder={hasFixedTimelineReference || selectedEditContext ? "说说怎么改" : selectedMaterialReference
+        ? "说说想怎样整理这条素材" : activeView === "script" ? "说说文案想怎么写" : "想问什么？"} />
     : <HomeCommandComposer {...taskAssistantProps} />;
 
   const selectedReferenceAction = hasContextConversation ? <SelectedObjectReferenceAction onReference={referenceSelectedObject} referenceLabel={selectedEditContext && selectedEditContext.kind !== "cover" ? `引用${selectedEditContext.label}到对话` : undefined} /> : undefined;
@@ -1847,11 +1936,33 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     panel.revealTaskPanel();
     openView(view);
   }
-  const [audioResultFocus, setAudioResultFocus] = useState<{ versionId: string; seconds: number; request: number } | null>(null);
-  const currentAudioResultFocus = audioResultFocus?.versionId === task.current_timeline_version_id ? audioResultFocus : null;
+  const [resultInspectorRequest, setResultInspectorRequest] = useState(0);
   const [stageDetailsRequest, setStageDetailsRequest] = useState<object | null>(null);
 
   const [scriptResultFocus, setScriptResultFocus] = useState<{ id: string; request: number } | null>(null);
+
+  function locateSavedEdit(current: WorkspaceState, target: TimelineEditTarget, seconds?: number) {
+    if (target.kind === "shot") {
+      const clip = current.montage?.clips.find(item => item.id === target.id);
+      if (!clip) return "当前时间线找不到这个镜头，请在版本历史中核对。";
+      openView("montage");
+      selectClip(clip.id, false);
+      seekTimeline(seconds !== undefined && seconds >= clip.timeline_start_seconds && seconds < clip.timeline_end_seconds
+        ? seconds : clip.timeline_start_seconds);
+      setResultInspectorRequest(request => request + 1);
+      return;
+    }
+    const cueTrack = current.subtitle_tracks.find(track => track.timeline_version_id === current.task.current_timeline_version_id
+      && (!target.trackId || track.id === target.trackId) && track.cues.some(cue => cue.id === target.id));
+    const cue = cueTrack?.cues.find(item => item.id === target.id);
+    if (!cue || !cueTrack || !canOpenStage("subtitle_cover", current)) return "当前版本找不到这条字幕，请在版本历史中核对。";
+    openEditingView("subtitle_cover");
+    setActiveSubtitleTrackId(cueTrack.id);
+    selectCue(cue.id);
+    seekTimeline(seconds !== undefined && seconds >= cue.start_seconds && seconds < cue.end_seconds
+      ? seconds : cue.start_seconds);
+    setSubtitleFocusRequest(request => request + 1);
+  }
 
   function openAssistantResult(stage: Parameters<OpenAssistantResult>[0], turn: AssistantConversationTurn) {
     const current = currentWorkspace.current;
@@ -1874,6 +1985,10 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if (!audioResult) {
       if (current.task.current_timeline_version_id !== location.versionId) {
         return "这次修改保存在另一个时间线版本中，请在原作品的版本历史中查看。";
+      }
+      if (location.stage === "montage" && location.target) {
+        if (location.workspaceId !== current.task.workspace_id) return "这次修改属于原作品，请回到该作品查看。";
+        return locateSavedEdit(current, location.target);
       }
       if (location.stage === "narration" && (location.segmentId || location.sectionId)) {
         const segment = current.narration?.segments.find(item => location.segmentId
@@ -1904,8 +2019,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     const clip = track.clips.find(item => item.id === audioResult.targetId);
     const seconds = (clip?.timeline_start_ms ?? track.clips[0]?.timeline_start_ms ?? 0) / 1000;
     openEditingView("montage");
-    selectAudio(audioResult.targetId, seconds);
-    setAudioResultFocus(previous => ({ versionId: audioResult.versionId, seconds, request: (previous?.request ?? 0) + 1 }));
+    selectAudio(audioResult.targetId);
+    seekTimeline(seconds);
+    setResultInspectorRequest(request => request + 1);
   }
   const automaticDetailsReason = error ?? executionError ?? pendingMetadataSave ?? pendingTimelineRestore;
   const detailsRevealReason = useMemo(() => stageDetailsRequest
@@ -1916,16 +2032,31 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     if (task.stage === "montage" && hasTimeline) setStageDetailsRequest({});
   }
   const auxiliaryHidden = hasTimeline && !isEditor && (panel.resourceOpen || panel.inspectorOpen || panel.conversationFocused);
+  const visibleLocalEdit = lastLocalEdit?.versionId === task.current_timeline_version_id ? lastLocalEdit.target : null;
+  const localEditResultAction = visibleLocalEdit ? <Button variant="ghost" type="button"
+    aria-label={timelineEditTargetLabel(visibleLocalEdit)} title="修改已保存，可在当前版本核对"
+    onClick={() => {
+      const message = locateSavedEdit(currentWorkspace.current, visibleLocalEdit);
+      if (message) setNotice(message);
+    }}>定位修改</Button> : null;
+  const [previewSteps, setPreviewSteps] = useState<{ proposalId: string; chosen: number[] } | null>(null);
   return (
-    <AppShell editingPane={hasTimeline && !isEditor ? activeView : undefined} closeBlockedReason={recordingOpen ? "录音窗口仍打开，请先保存或结束录音，再关闭作品页签。" : undefined} assistantContext={taskAssistantProps} inspectorOpenKey={currentAudioResultFocus ? `audio-result:${currentAudioResultFocus.request}` : undefined} inspectorConfirmation={inspectorConfirmation} inspectorConfirmationKey={localConfirmation ? editPreview?.proposal.id : undefined} conversation={conversation} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={hasTimeline} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span aria-label="当前作品版本">{task.current_timeline_version_id ? `作品版本 #${task.timeline_sequence}` : "作品版本尚未建立"}</span></div>}
+    <AppShell editingPane={hasTimeline && !isEditor ? activeView : undefined} closeBlockedReason={recordingOpen ? "录音窗口仍打开，请先保存或结束录音，再关闭作品页签。" : undefined} assistantContext={taskAssistantProps} inspectorOpenKey={resultInspectorRequest ? `edit-result:${resultInspectorRequest}` : undefined} inspectorConfirmation={inspectorConfirmation} inspectorConfirmationKey={localConfirmation ? editPreview?.proposal.id : undefined} conversation={conversation} creationTasks={shellTasks} inspector={inspector} quickInspector={quickInspector} quickInspectorKey={quickInspector ? clipDraftKey : undefined} quickInspectorLabel={quickInspector ? `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")} 快速编辑` : undefined} editorLayout={hasTimeline} toolbar={<div className={editorUi.toolbarTitle}><h1>{task.name}</h1><span aria-label="当前作品版本">{task.current_timeline_version_id ? `作品版本 #${task.timeline_sequence}` : "作品版本尚未建立"}</span></div>}
       toolbarActions={<><TaskSaveState busy={busy !== null} pending={Boolean(editPreview)} dirty={Boolean(editorDraft || quickInspector && clipDraftChanged)} saved={isEditor} /><TaskOutputActions shareOpen={sharingOpen} onShare={() => setSharingOpen(true)} onSave={isEditor ? () => { void saveVideo(); } : undefined} busy={busy !== null} canSave={Boolean(task.output_ready && workspace.montage?.output_url)} /></>} inspectorTitle={isEditor ? selectedOverlay ? selectedEditContext?.label : selectedAudioTrack ? selectedAudioClip?.name ?? selectedAudioTrack.name : `镜头 ${String(selectedClipIndex + 1).padStart(2, "0")}` : activeView === "subtitle_cover" ? "当前选择" : "任务详情"} workspaceStatus={workspaceStatus}>
       <HomeCardDialog kind="config" open={sharingOpen} title="任务与方案共享" onClose={() => setSharingOpen(false)}>{sharingControls}</HomeCardDialog>
       <HomeCardDialog kind="detail" title="历史时间线版本" open={historyOpen} onClose={() => setHistoryOpen(false)} footer={<button type="button" onClick={() => setHistoryOpen(false)}>收起历史版本</button>}>
         <TimelineVersionHistory taskId={task.id} open={historyOpen} currentVersionId={task.current_timeline_version_id} restoreBusy={busy!==null || Boolean(pendingTimelineRestore)} onRestore={(operationId,redo)=>void undoTimeline(redo,operationId)} />
       </HomeCardDialog>
       <Tabs value={activeView} onValueChange={value => { const view = value as WorkspaceView; if (canOpenStage(view, workspace)) openEditingView(view); }} onChangeCapture={() => { navigationReadRevision.current += 1; }} data-editor-workspace="" data-active-view={activeView} className={[hasTimeline ? `${editorUi.workspace} ${styles.timelineWorkspace}` : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
-        <TaskViewNavigation editingActions={isEditor ? (!hasTimeline ? timelineActions : undefined) : selectedReferenceAction} workspace={workspace} execution={execution} activeView={activeView} onOpen={openEditingView} onLocateStage={openCurrentStage} />
-        {workspace.montage ? <div className={styles.persistentStage}><VideoEditingStage seekRequest={currentAudioResultFocus ?? undefined} audioSelection={selectedAudioTrack ? { id: selectedAudioId!, seconds: selectedAudioClip ? selectedAudioClip.timeline_start_ms / 1000 : undefined } : undefined} onEditSubtitle={id => { openEditingView("subtitle_cover"); selectCue(id); }} timelineActions={timelineActions} editError={error?.message} selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? subtitleTrack => <AudioTimelineTracks sharedTimeScale subtitleTrack={subtitleTrack} onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} taskId={task.id} versionId={task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} taskId={task.id} versionId={task.current_timeline_version_id} narrationCacheKey={task.narration_cache_key} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /></div> : null}
+        {workbenchPage?.active && editPreview && !localConfirmation ? <EditPreviewCard key={editPreview.proposal.id}
+          preview={editPreview} busy={busy} compact command={previewCommand} kind="modal" onCancel={invalidateEditPreview}
+          onConfirm={() => void confirmEdit()}
+          chosen={previewSteps?.proposalId === editPreview.proposal.id ? previewSteps.chosen : null}
+          onChosen={chosen => setPreviewSteps({ proposalId: editPreview.proposal.id, chosen })}
+          onSelectionPreview={indices => void reviseCompoundSelection(indices)} /> : null}
+        <TaskViewNavigation editingActions={<>{isEditor ? (!hasTimeline ? timelineActions : undefined) : selectedReferenceAction}{localEditResultAction}</>}
+          workspace={workspace} execution={execution} activeView={activeView} onOpen={openEditingView} onLocateStage={openCurrentStage} />
+        {workspace.montage ? <div className={styles.persistentStage}><VideoEditingStage seekRequest={timelineFocus?.versionId === task.current_timeline_version_id ? timelineFocus : undefined} audioSelection={selectedAudioTrack ? { id: selectedAudioId!, seconds: selectedAudioClip ? selectedAudioClip.timeline_start_ms / 1000 : undefined } : undefined} onEditSubtitle={id => { const message = locateSavedEdit(workspace, { kind: "subtitle", id }); if (message) setNotice(message); }} timelineActions={timelineActions} editError={error?.message} selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={()=>invalidateEditPreview()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? subtitleTrack => <AudioTimelineTracks sharedTimeScale subtitleTrack={subtitleTrack} onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} taskId={task.id} versionId={task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} taskId={task.id} versionId={task.current_timeline_version_id} narrationCacheKey={task.narration_cache_key} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /></div> : null}
         <EditorPaneMount docked={hasTimeline && !isEditor} hidden={auxiliaryHidden} homeClassName={styles.taskPaneHome} mountClassName={hasTimeline && !isEditor ? styles.taskPaneDock : styles.taskPaneHome}><EditingStatusTray actionLabel={error || executionError ? "查看原因" : localConfirmation ? "查看修改" : execution?.job?.status === "running" || execution?.job?.status === "queued" ? "查看进度" : task.output_ready ? "检查成片" : "制作与检查"} revealReason={detailsRevealReason} compact={hasTimeline && isEditor} attention={Boolean(error || executionError || task.stage_status === "failed" || task.stage_status === "waiting_for_user" || localConfirmation || pendingMetadataSave || pendingTimelineRestore)} status={error ? "修改未完成" : executionError ? "制作未完成" : (pendingMetadataSave || pendingTimelineRestore ? "操作结果待核对" : execution?.job?.status === "running" ? "后台制作中" : execution?.job?.status === "queued" ? "制作已排队" : localConfirmation ? "修改方案待确认" : task.stage_status === "failed" ? task.stage_reason ?? "制作未完成" : creationTaskShortStatus(task.stage_status, task.stage))}>
         <MediaVisibility visible={!auxiliaryHidden}><TabsContent value={activeView} hidden={auxiliaryHidden} className={hasTimeline ? [styles.auxiliaryBody, isEditor ? styles.editingAuxiliary : ""].filter(Boolean).join(" ") : styles.workspaceBody}>
         <header className={hasTimeline ? styles.stageRuntime : styles.stageHeading} data-timeline-version={task.timeline_sequence}>
@@ -1933,9 +2064,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           <JobProgressPanel graphicEditor={<GraphicOverlayEditor onMediaPreview={input=>void previewExactEdit(input,true)} taskId={task.id} versionId={task.current_timeline_version_id} items={workspace.montage?.graphic_overlays ?? []}
             selectedId={null} duration={workspace.montage?.duration_seconds ?? 0} busy={busy !== null}
             onPreview={input => void previewExactEdit(input)} onDraftChange={() => {invalidateEditPreview(); setEditorDraft(true);}} />}
-            selectedRefs={selectedTaskReference ? [selectedTaskReference.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : []} restoreBusy={busy !== null} onRestoreMedia={candidate => void restoreMediaPreview(candidate)} recoveredMedia={recoveredMedia?.taskId === task.id && recoveredMedia.job.base_version_id === task.current_timeline_version_id ? recoveredMedia : null} mediaJob={pendingMediaJob?.taskId === task.id ? pendingMediaJob.value : null} onCancelMedia={() => void cancelMediaPreview()} showLiveStatus={!execution?.job || !["queued", "running"].includes(execution.job.status)} key={task.id} task={task} taskId={task.id} pendingEditJobId={pendingLocalEdit?.taskId === task.id ? pendingLocalEdit.jobId : null} onEditSettled={localEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} />
+            selectedRefs={selectedEditContext ? [selectedEditContext.ref, ...(activeView === "subtitle_cover" && activeSubtitleTrack ? [`subtitle-track:${activeSubtitleTrack.id}`] : [])] : []} restoreBusy={busy !== null} onRestoreMedia={candidate => void restoreMediaPreview(candidate)} recoveredMedia={recoveredMedia?.taskId === task.id && recoveredMedia.job.base_version_id === task.current_timeline_version_id ? recoveredMedia : null} mediaJob={pendingMediaJob?.taskId === task.id ? pendingMediaJob.value : null} onCancelMedia={() => void cancelMediaPreview()} showLiveStatus={!execution?.job || !["queued", "running"].includes(execution.job.status)} key={task.id} task={task} taskId={task.id} pendingEditJobId={pendingLocalEdit?.taskId === task.id ? pendingLocalEdit.jobId : null} onEditSettled={localEditSettled} refreshToken={`${execution?.job?.id ?? "none"}:${execution?.job?.status ?? "none"}:${execution?.stages.length ?? 0}`} />
         </header>
-        {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">{!pendingMetadataSave ? <CheckCircle2 size={17} /> : null}{notice}</div> : null}
+        {notice ? <div className={isEditor ? editorUi.feedback : styles.notice} role="status">{!pendingMetadataSave ? <CheckCircle2 size={17} aria-hidden /> : null}{notice}</div> : null}
         {pendingMetadataSave?.taskId === task.id ? <div role="status">保存结果待核对。原输入已保留，不会重复提交。<Button variant="outline" disabled={busy !== null} onClick={() => void queryMetadataSave()}>查询原保存结果</Button><details><summary>保存请求详情</summary><p>原请求：{pendingMetadataSave.input.request_id}</p></details></div> : null}
         {pendingTimelineRestore?.taskId===task.id ? <p role="status">撤销或重做请求等待核对。<Button variant="outline" disabled={busy!==null} onClick={()=>void queryTimelineRestore()}>查询原撤销重做结果</Button></p> : null}
         {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={!editRequestRecoveryReady || busy !== null || pendingMetadataSave !== null || pendingTimelineRestore !== null} onClick={() => { if (!editRequestRecoveryReady || editRequestOperation.current || pendingMetadataSaveRef.current || pendingTimelineRestoreRef.current) return; void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。"); } } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
@@ -2045,7 +2176,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
         {activeView === "montage" && task.stage === "montage" && !workspace.montage ? <section className={styles.workSection}><div className={styles.emptyAction}><Clapperboard size={30} /><h2>准备视频剪辑</h2><p>在上方核对文案与要求后继续制作。</p></div></section> : null}
 
-        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleWorkspace onSeekPreview={positionAudioListen} activeTrack={activeSubtitleTrack} busy={busy !== null || Boolean(pendingMetadataSave)} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} onRedo={() => void undoTimeline(true)} selectedCover={selectedCover} selectedCueId={selectedCueId} taskId={task.id} versionId={task.current_timeline_version_id} canUndo={task.can_undo} canRedo={task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} /> : null}
+        {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleWorkspace focusRequest={subtitleFocusRequest} onSeekPreview={positionAudioListen} activeTrack={activeSubtitleTrack} busy={busy !== null || Boolean(pendingMetadataSave)} onDraftChange={() => invalidateEditPreview()} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} onRedo={() => void undoTimeline(true)} selectedCover={selectedCover} selectedCueId={selectedCueId} taskId={task.id} versionId={task.current_timeline_version_id} canUndo={task.can_undo} canRedo={task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} /> : null}
 
         <div className={activeView === "review" ? styles.reviewPane : styles.flowContents} role={activeView === "review" ? "tabpanel" : undefined} id={`review-panel-result-${task.id}`} aria-labelledby={activeView === "review" ? `review-result-${task.id}` : undefined} hidden={activeView === "review" && reviewPane !== "result"}>
         {(activeView === "review" || activeView === "montage") && workspace.montage ? <FinalVideoQualityCheck

@@ -1,7 +1,7 @@
 "use client";
 import { useWorkspaceViewState } from "./workbench/context";
 import NextImage from "next/image";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo } from "react";
 import { Languages, Save, Undo2, Redo2, Settings2 } from "lucide-react";
 import { apiUrl } from "@/lib/api";
 import type { CreationTaskExactEditInput, CreationTaskSubtitleCue, CreationTaskSubtitleTrack, CreationTaskMontage, CreationTaskCoverAsset, CreationTaskCapability } from "@/lib/types";
@@ -180,6 +180,7 @@ export function SubtitleWorkspace({
   onRedo,
   selectedCover,
   selectedCueId,
+  focusRequest = 0,
   taskId, versionId, canUndo, canRedo, cover, montage, planAspectRatio, subtitleTracks: tracks, translationCapability, frameCapability,
 }: {
   activeTrack: CreationTaskSubtitleTrack;
@@ -196,6 +197,7 @@ export function SubtitleWorkspace({
   onRedo: () => void;
   selectedCover: boolean;
   selectedCueId: string | null;
+  focusRequest?: number;
   taskId: string; versionId: string | null; canUndo: boolean; canRedo: boolean | undefined;
   cover: CreationTaskCoverAsset | null; montage: Pick<CreationTaskMontage, "duration_seconds" | "output_url" | "aspect_ratio"> | null;
   planAspectRatio: NonNullable<CreationTaskMontage["aspect_ratio"]>; subtitleTracks: CreationTaskSubtitleTrack[];
@@ -230,13 +232,9 @@ export function SubtitleWorkspace({
     onSeekPreview(bounded);
   }
 
-  const cuePosition = `${versionId}:${activeTrack.id}:${selectedCueId}:${currentCue?.start_seconds}`;
-  const positionedCue = useRef(cuePosition);
   useEffect(() => {
-    if (positionedCue.current === cuePosition) return;
-    positionedCue.current = cuePosition;
-    if (selectedCueId && currentCue) seekFrame(currentCue.start_seconds);
-  }, [cuePosition]);
+    if (focusRequest) setView("subtitle");
+  }, [focusRequest, setView]);
 
   function enableBilingual() {
     onSelectTrack(sourceTrack.id);

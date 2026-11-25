@@ -6579,6 +6579,34 @@ it('keeps polling and reserves the original generation until its draft-ready run
   expect(result.current.blocked).toBe(false);
 });
 
+it("locates the saved subtitle cue on its own language track without playing", async () => {
+  const initial = subtitleCoverWorkspace();
+  const task = initial.task;
+  const chinese = initial.subtitle_tracks[0];
+  const english = { ...chinese, id: "subtitle-track-en", language: "en-US" as const,
+    cues: [{ ...chinese.cues[0], id: "subtitle-en-1", text: "Saved English caption", start_seconds: 3.2, end_seconds: 4.5 }] };
+  initial.subtitle_tracks.push(english);
+  const id = "conversation-subtitle";
+  mocks.currentAssistantConversation.set(`task:${task.id}`, id);
+  mocks.assistantConversations.set(id, { id, workspace_id: task.workspace_id, scope_kind: "task", scope_id: task.id,
+    title: "字幕修改", draft_text: "", draft_version: 0, created_at: task.created_at, updated_at: task.updated_at,
+    turns: [{ id: "saved-subtitle", sequence: 1, status: "completed", user_message: "改这句英文字幕", assistant_text: "已保存英文字幕",
+      events: [], created_at: task.created_at, updated_at: task.updated_at,
+      result: { kind: "task_turn", response: { edit_request: { task_id: task.id, phase: "apply", status: "recorded",
+        result: { operation: { task_id: task.id, workspace_id: task.workspace_id, status: "applied", operation_type: "UpdateSubtitleCue",
+          result_version_id: task.current_timeline_version_id, payload: { cue_id: english.cues[0].id, track_id: english.id } } } } } },
+    }] });
+  mocks.getWorkspace.mockResolvedValue(initial);
+  renderTaskSubject(<CreationTaskWorkspace initialWorkspace={initial} initialTasks={[task]} initialTopics={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: "样式" }));
+  fireEvent.click(await screen.findByRole("button", { name: "定位修改的字幕" }));
+  expect(screen.getByRole("tab", { name: "字幕" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByLabelText("字幕 1 文本")).toHaveValue("Saved English caption");
+  const video = screen.getByLabelText<HTMLVideoElement>("剪辑成片预览");
+  expect(video.currentTime).toBe(3.2);
+  expect(video.paused).toBe(true);
+});
+
 it("opens the saved audio clip and rejects historical, missing, or foreign result targets", async () => {
   const initial = subtitleCoverWorkspace();
   const task = initial.task;

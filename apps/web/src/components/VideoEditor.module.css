@@ -231,6 +231,7 @@
 }
 .track .videoTimelineClip {
   position:absolute;
+  container-type:inline-size;
   inset-block:2px;
   height:auto;
   display:flex;
@@ -404,6 +405,9 @@
 
 .timelineClipLabel { display:flex; align-items:center; gap:var(--space-1); flex:none; padding-inline-end:var(--space-1); font-variant-numeric:tabular-nums; }
 .timelineClipLabel svg { width:var(--space-3); height:var(--space-3); }
+@container (max-width:72px) {
+  .timelineClipLabel { display:none; }
+}
 .clipReviewMark { width:var(--space-1); height:var(--space-1); border-radius:50%; background:var(--warning); }
 .tracks .audioTimeline { gap:var(--space-1); }
 .tracks .audioTrack { min-height:calc(var(--control-height) + var(--space-2)); margin-block-end:var(--space-1); }

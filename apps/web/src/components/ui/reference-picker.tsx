@@ -5,6 +5,8 @@ import { Plus, Search, X } from "lucide-react";
 import { getProductionMaterials } from "@/lib/api/materials";
 import type { MaterialAsset } from "@/lib/types";
 import { useAssistantSelection } from "../AssistantConversationProvider";
+import { workspaceNavigationHref } from "../workbench/context";
+import { useWorkbenchTarget } from "../workbench/WorkbenchTarget";
 import { Button } from "./button";
 import { Popover, PopoverContent, PopoverTrigger, PopoverTitle, PopoverClose } from "./popover";
 import { ReferencePreview } from "./reference-preview";
@@ -13,6 +15,7 @@ export function ReferencePicker({open, onOpenChange, onAdded}: {
   open:boolean; onOpenChange:(open:boolean)=>void; onAdded:()=>void;
 }) {
   const selection=useAssistantSelection();
+  const { targetId } = useWorkbenchTarget();
   const [query,setQuery]=useState("");
   const queryRef=useRef(query);queryRef.current=query;
   const [assets,setAssets]=useState<MaterialAsset[]>([]);
@@ -38,7 +41,7 @@ export function ReferencePicker({open, onOpenChange, onAdded}: {
         onAdded();onOpenChange(false);
       }}><ReferencePreview assetId={asset.id} mediaType={asset.media_type}/><span>{asset.file_name}<small>{asset.media_type === "audio" ? "音频" : asset.media_type === "image" ? "图片" : "视频"} · 整条素材</small></span></Button></li>)}</ul>}
       {!loading&&!error&&!assets.length?<p>没有找到素材。</p>:null}
-      <nav className="assistant-reference-links"><Link href="/library" onClick={()=>onOpenChange(false)}>完整素材库与片段</Link><Link href="/knowledge" onClick={()=>onOpenChange(false)}>引用资料</Link><Link href="/profiles" onClick={()=>onOpenChange(false)}>人物与声音</Link></nav>
+      <nav className="assistant-reference-links"><Link href={workspaceNavigationHref("/library", Boolean(targetId))} onClick={()=>onOpenChange(false)}>完整素材库与片段</Link><Link href={workspaceNavigationHref("/knowledge", Boolean(targetId))} onClick={()=>onOpenChange(false)}>引用资料</Link><Link href="/profiles" onClick={()=>onOpenChange(false)}>人物与声音</Link></nav>
     </PopoverContent>
   </Popover>;
 }

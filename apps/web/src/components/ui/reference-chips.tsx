@@ -12,7 +12,10 @@ import { Popover, PopoverContent, PopoverTrigger, PopoverTitle, PopoverClose } f
 
 const labels = { shot: "镜头", narration: "配音", audio: "音轨", subtitle: "字幕", effect: "效果", material: "素材", person: "人物", voice: "声音", knowledge: "资料" };
 const icons = { shot: Clapperboard, narration: AudioLines, audio: AudioLines, subtitle: Captions, effect: Sparkles, material: Film, person: UserRound, voice: AudioLines, knowledge: FileText };
-function time(ms: number) { return `${Math.floor(ms / 60000).toString().padStart(2,"0")}:${Math.floor(ms / 1000 % 60).toString().padStart(2,"0")}`; }
+function time(ms: number) {
+  const seconds = (ms % 60000 / 1000).toFixed(3).padStart(6, "0").replace(/\.?0+$/, "");
+  return `${Math.floor(ms / 60000).toString().padStart(2, "0")}:${seconds}`;
+}
 
 export function ReferenceChips({ items, onRemove, usage }: { items: SelectedAssistantReference[]; onRemove: (item: SelectedAssistantReference)=>void; usage?: MaterialUsageContext }) {
   const [expanded, setExpanded] = useState(false);
@@ -37,12 +40,14 @@ export function ReferenceChips({ items, onRemove, usage }: { items: SelectedAssi
         <div className="assistant-reference-heading"><PopoverTitle>本轮引用 · {items.length}</PopoverTitle><PopoverClose render={<Button variant="ghost" size="icon"/>} aria-label="关闭引用列表"><X size={16}/></PopoverClose></div>
         <ul className="assistant-reference-list">{items.map(item => {
       const Icon = icons[item.kind];
-      const range = "start_ms" in item && item.start_ms != null && item.end_ms != null ? ` · ${time(item.start_ms)}–${time(item.end_ms)}` : "";
+      const range = "start_ms" in item && item.start_ms != null && item.end_ms != null ? ` · 时间线 ${time(item.start_ms)}–${time(item.end_ms)}` : "";
       const locator = item.kind === "knowledge" && item.locator ? ` · ${item.locator}` : "";
-      const version = "version" in item ? " · 已固定版本" : "";
-      const name = `${labels[item.kind]} · ${item.label}${locator}${range}${version}`;
+      const fixed = "version" in item || item.kind === "material" && Boolean(item.selection.expected_updated_at);
+      const version = fixed ? " · 已固定版本" : "";
+      const scope = item.kind === "material" ? item.selection.scope === "segment" ? " · 源片段" : " · 整条素材" : "";
+      const name = `${labels[item.kind]} · ${item.label}${scope}${locator}${range}${version}`;
       return <li className="assistant-reference-item" key={assistantReferenceKey(item)}>
-        <Button variant="ghost" className="assistant-reference-locate" title={name} aria-label={`定位${name}`} onClick={()=>{ setExpanded(false); locateAssistantReference(item); }}><Icon size={16} aria-hidden/><span>{item.label}<small>{labels[item.kind]}{locator}{range}{version}</small></span></Button>
+        <Button variant="ghost" className="assistant-reference-locate" title={name} aria-label={`定位${name}`} onClick={()=>{ setExpanded(false); locateAssistantReference(item); }}><Icon size={16} aria-hidden/><span>{item.label}<small>{labels[item.kind]}{scope}{locator}{range}{version}</small></span></Button>
         <Button variant="ghost" size="icon" aria-label={`取消${labels[item.kind]}引用：${item.label}${locator}${range}`} title="移除引用" onClick={()=>onRemove(item)}><X size={16} aria-hidden/></Button>
       </li>;
     })}</ul>
