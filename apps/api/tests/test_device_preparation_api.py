@@ -51,6 +51,77 @@ def test_profile_status_reads_current_profile_without_exposing_host_paths(metada
     assert other['actor_scope'] != available['actor_scope']
 
 
+def test_saved_profile_summary_uses_existing_member_guard_and_only_reads_the_file(metadata_http_state, monkeypatch, tmp_path):
+    import subprocess
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app import device_resource_configuration as configuration, device_resource_status as status
+    from app.device_preparation_routes import build_device_preparation_router
+    from test_device_resource_profile import DEVICE, PROFILE_FILENAME, profile_document, write_profile
+
+    state = metadata_http_state
+    monkeypatch.setattr(main, 'LEGACY_WORKSPACE_ID', state.task.workspace_id)
+    path = tmp_path / PROFILE_FILENAME
+    settings = replace(main.settings, device_resource_mode='normal', device_resource_profile_path=str(path))
+    environment = {'DEVICE_ID': DEVICE.device_id}
+    monkeypatch.setattr(configuration.platform, 'machine', lambda: DEVICE.architecture)
+    monkeypatch.setattr(configuration.psutil, 'virtual_memory', lambda: SimpleNamespace(total=DEVICE.physical_memory_bytes))
+    document = profile_document()
+    document['device']['platform'] = configuration.sys.platform
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('saved profile summary must not inspect live backends, launch a process or read the device ledger')
+
+    monkeypatch.setattr(configuration, 'backend_identity', forbidden)
+    monkeypatch.setattr(status, 'resolve_device_resources', forbidden)
+    monkeypatch.setattr(status, 'production_device_blocker', forbidden)
+    monkeypatch.setattr(status, 'device_lock_path', forbidden)
+    monkeypatch.setattr(subprocess, 'run', forbidden)
+
+    reads = []
+
+    def read_summary():
+        reads.append(True)
+        return status.saved_resource_profile_summary(settings, environment)
+
+    app = FastAPI()
+    wiring = dict(authorized_actor=lambda request: main._require_permit_actor(request, main.current_workspace_id(request)),
+        application=forbidden, profile_status=lambda actor: {'member': actor.member_id}, actor_scope=forbidden)
+    app.include_router(build_device_preparation_router(**wiring, saved_profile_summary=read_summary))
+    url = '/api/device/resource-preparations/profile/summary'
+    with TestClient(app, headers={'X-Local-Member-Token': state.token}) as client:
+        rejected = client.get(url, headers={'x-test-workspace': 'different-workspace'})
+        assert rejected.status_code == 403
+        assert not reads
+        assert client.get('/api/device/resource-preparations').json() == {'member': state.member.member_id}
+        assert client.get(url).json() == {'status': 'missing', 'revision': None}
+
+        written = write_profile(tmp_path, document)
+        assert written == path
+        original = written.read_bytes()
+        assert client.get(url).json() == {'status': 'saved', 'revision': 3}
+        assert written.read_bytes() == original
+
+        environment['DEVICE_ID'] = 'different-device'
+        assert client.get(url).json() == {'status': 'device_mismatch', 'revision': None}
+        environment.clear()
+        assert client.get(url).json() == {'status': 'device_unbound', 'revision': None}
+
+        environment['DEVICE_ID'] = DEVICE.device_id
+        document['evidence'] = {'host': {'record_id': 'missing-host-evidence', 'sha256': '1' * 64}}
+        write_profile(tmp_path, document)
+        assert client.get(url).json() == {'status': 'unreadable', 'revision': None}
+        written.write_text('{"format_version": 99}')
+        assert client.get(url).json() == {'status': 'unreadable', 'revision': None}
+
+    legacy = FastAPI()
+    legacy.include_router(build_device_preparation_router(**wiring))
+    with TestClient(legacy) as client:
+        assert client.get(url).status_code == 404
+
+
 def test_preparation_expected_actor_scope_rejects_before_read_or_submission(metadata_http_state, monkeypatch):
     state = metadata_http_state
     monkeypatch.setattr(main, 'LEGACY_WORKSPACE_ID', 'ws')

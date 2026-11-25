@@ -20,7 +20,7 @@ def _respond(action):
         raise HTTPException(503, str(exc)) from exc
 
 
-def build_device_preparation_router(*, authorized_actor, application, profile_status, actor_scope):
+def build_device_preparation_router(*, authorized_actor, application, profile_status, actor_scope, saved_profile_summary=None):
     router = APIRouter(prefix='/api/device/resource-preparations')
 
     def bound_actor(request):
@@ -33,6 +33,12 @@ def build_device_preparation_router(*, authorized_actor, application, profile_st
     @router.get('')
     def current_profile(request: Request):
         return profile_status(authorized_actor(request))
+
+    if saved_profile_summary is not None:
+        @router.get('/profile/summary')
+        def saved_profile(request: Request):
+            authorized_actor(request)
+            return saved_profile_summary()
 
     @router.post('')
     def prepare(payload: DevicePreparationRequest, request: Request):

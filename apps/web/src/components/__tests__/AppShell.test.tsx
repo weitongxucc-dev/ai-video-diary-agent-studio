@@ -366,6 +366,7 @@ describe("AppShell", () => {
       expect(screen.queryByRole("link", { name: `资源面板：${label}` })).not.toBeInTheDocument();
     }
     expect(screen.queryByRole("link", { name: "成员与空间" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "设备状态" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "设备设置" })).toHaveAttribute("href", "/settings");
     expect(screen.queryByRole("button", { name: "创作者与空间菜单" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles?mode=manage");
@@ -830,6 +831,7 @@ describe("hidden workspace media", () => {
     expect(within(nav).getByRole("link", { name: "人物与声音" })).toHaveAttribute("href", "/profiles?mode=panel");
     expect(within(nav).getByRole("link", { name: "视频模板" })).toHaveAttribute("href", "/templates?mode=panel");
     expect(within(nav).getByRole("link", { name: "发布与数据" })).toHaveAttribute("href", "/history?mode=panel");
+    expect(within(nav).getByRole("link", { name: "设备状态" })).toHaveAttribute("href", "/device-status?mode=panel");
     const detailTrigger = screen.getByRole("button", { name: "查看片段" });
     fireEvent.click(detailTrigger);
     expect(within(screen.getByRole("complementary", { name: "作品资源" })).getByText("原片 12 秒")).toBeVisible();

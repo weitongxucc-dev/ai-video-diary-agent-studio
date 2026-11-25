@@ -5,11 +5,41 @@ import sys
 from pathlib import Path
 
 from app.device_paths import device_lock_path
-from app.device_resource_configuration import resolve_device_resources
-from app.device_resource_profile import DeviceProfileUnavailable
+from app.device_resource_configuration import current_device_identity, resolve_device_resources
+from app.device_resource_profile import DeviceProfileUnavailable, load_device_resource_profile
 from app.device_scheduler import production_device_blocker
 
 PREPARATION_ENDPOINT = '/api/device/resource-preparations'
+
+
+def saved_resource_profile_summary(settings, environment) -> dict[str, str | int | None]:
+    """Read the saved profile identity and revision without checking execution readiness."""
+    location = settings.device_resource_profile_path
+    if not location:
+        return {'status': 'missing', 'revision': None}
+    path = Path(location)
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return {'status': 'missing', 'revision': None}
+    except OSError:
+        return {'status': 'unreadable', 'revision': None}
+    try:
+        device = current_device_identity(environment)
+    except DeviceProfileUnavailable:
+        return {'status': 'device_unbound', 'revision': None}
+    try:
+        # With no backend adapters, unavailable operations carry no live evidence.
+        profile = load_device_resource_profile(path, device=device, backend_identities={})
+    except DeviceProfileUnavailable as exc:
+        cause = exc.__cause__
+        if isinstance(cause, FileNotFoundError) and cause.filename == str(path):
+            return {'status': 'missing', 'revision': None}
+        # The parser wraps its device comparison in a ValueError without a code.
+        if type(cause) is ValueError and str(cause) == 'Resource profile belongs to a different device configuration':
+            return {'status': 'device_mismatch', 'revision': None}
+        return {'status': 'unreadable', 'revision': None}
+    return {'status': 'saved', 'revision': profile.revision}
 
 
 def preparation_error_detail(error: object) -> dict[str, object] | None:
