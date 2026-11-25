@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .adapter import is_bound_video_cut
 from .contracts import EditPlan, MediaExecutionError
 
 FFMPEG_OPERATION = "ffmpeg_execution"
@@ -70,10 +71,13 @@ class TaskMediaExecutionDelegate:
             raise PermissionError("媒体 delegate 的成员身份与封存事件不一致")
         return plan
 
-    def submit(self, job, event: Mapping[str, Any], actor_identity: Mapping[str, Any], *, cancel_event=None) -> dict[str, Any]:
+    def submit(self, job, event: Mapping[str, Any], actor_identity: Mapping[str, Any], *,
+               cancel_event=None, grant_context=None) -> dict[str, Any]:
         plan = self.plan_from_event(event, actor_identity, job=job)
-        result = (self.entrypoint.submit(plan, cancel_event=cancel_event)
-                  if cancel_event is not None else self.entrypoint.submit(plan))
+        execution = {"cancel_event": cancel_event} if cancel_event is not None else {}
+        if grant_context is not None and len(plan.operations) == 1 and is_bound_video_cut(plan.operations[0]):
+            execution["grant_context"] = grant_context
+        result = self.entrypoint.submit(plan, **execution)
         return self._receipt(job, plan, result)
 
     def resume(self, job, event: Mapping[str, Any], actor_identity: Mapping[str, Any]) -> dict[str, Any]:

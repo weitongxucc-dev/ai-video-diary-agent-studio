@@ -18,6 +18,11 @@ class PreparedCommand:
     logical_kind: str
 
 
+def is_bound_video_cut(operation: MediaOperation) -> bool:
+    return (operation.operation.lower() in {"cut", "trim"}
+            and bool(operation.inputs) and "asset_id" in operation.options)
+
+
 def video_frame_intervals(media: dict) -> list[tuple[int, Fraction, Fraction]]:
     """Read display intervals from decoded frames in the first real video stream."""
     if not media.get("frames"):
@@ -36,6 +41,22 @@ def video_frame_intervals(media: dict) -> list[tuple[int, Fraction, Fraction]]:
     except (KeyError, IndexError, TypeError, ValueError, ZeroDivisionError) as exc:
         raise MediaExecutionError("media_cut_duration_unverified", "无法核验视频帧的呈现区间，未发布。",
                                   "检查源片或编码工具能否提供有效的帧时间戳和时长。") from exc
+
+
+def _rounded_frame_period(stream: dict) -> tuple[Fraction, Fraction] | None:
+    """The two tick lengths that can represent one declared frame period."""
+    time_base = Fraction(stream["time_base"])
+    try:
+        frame_rate = Fraction(stream.get("avg_frame_rate", "0"))
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    if frame_rate <= 0:
+        return None
+    period_ticks = 1 / (frame_rate * time_base)
+    shorter = period_ticks.numerator // period_ticks.denominator
+    if shorter == 0 or period_ticks.denominator == 1:
+        return None
+    return shorter * time_base, (shorter + 1) * time_base
 
 
 @dataclass(frozen=True)
@@ -63,13 +84,20 @@ class VideoCut:
         end_offset = start_offset + Fraction(str(duration))
         source_start = origin + Fraction(round(start_offset * 1_000_000), 1_000_000)
         source_end = origin + Fraction(round(end_offset * 1_000_000), 1_000_000)
+        rounded_period = _rounded_frame_period(media["streams"][0])
         selected = []
         for index, (pts, frame_start, frame_end) in enumerate(frames):
             if frame_start >= source_end:
                 break
             # A following frame supersedes this one at its presentation time.
             if index + 1 < len(frames):
-                frame_end = min(frame_end, frames[index + 1][1])
+                next_start = frames[index + 1][1]
+                # A coarse source time base can store a frame duration rounded
+                # down and successive PTS spaced by the rounded-up period.
+                if rounded_period == (frame_end - frame_start, next_start - frame_start):
+                    frame_end = next_start
+                else:
+                    frame_end = min(frame_end, next_start)
             begin, end = max(source_start, frame_start), min(source_end, frame_end)
             if begin < end:
                 selected.append((pts, begin - source_start, end - source_start))
@@ -152,7 +180,8 @@ class FfmpegAdapter:
                                       "改用已登记的媒体能力，或先为该能力提供适配器。")
         return PreparedCommand(name, command, output_path, inputs, "media_file")
 
-    def video_cut(self, operation: str, source: Path, output: Path, cut: VideoCut) -> PreparedCommand:
+    def video_cut(self, operation: str, source: Path, output: Path, cut: VideoCut,
+                  *, threads: int | None = None) -> PreparedCommand:
         # Keep the first intersecting frame, even if its PTS predates the cut.
         # Use the same absolute source clock for audio, whose samples must be trimmed.
         video = (f"trim=start_pts={cut.first_pts}:end_pts={cut.last_pts + 1},"
@@ -163,18 +192,21 @@ class FfmpegAdapter:
         # Earlier packet durations are determined by successive PTS. Set the last
         # one explicitly to the proven intersection, including for a single frame.
         duration = f"setts=duration=if(eq(N\\,{len(cut.intervals) - 1})\\,({last_end - last_start})/TB\\,DURATION)"
-        command = (self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-copyts", "-i", str(source),
+        decode_limits = ("-threads", str(threads), "-filter_threads", str(threads)) if threads is not None else ()
+        encode_limits = ("-threads:v", str(threads), "-threads:a", str(threads)) if threads is not None else ()
+        command = (self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-copyts", *decode_limits, "-i", str(source),
                    "-map", "0:V:0", "-map", "0:a:0?", "-vf", video, "-af", audio,
                    "-c:v", "libx264", "-bf:v", "0", "-fps_mode:v", "passthrough", "-enc_time_base:v", "1:90000",
                    "-bsf:v", duration, "-video_track_timescale", "90000", "-movie_timescale", "90000",
-                   "-c:a", "aac", "-movflags", "+faststart", str(output))
+                   "-c:a", "aac", *encode_limits, "-movflags", "+faststart", str(output))
         return PreparedCommand(operation, command, output, (source,), "video_cut")
 
-    def cut_probe_command(self, path: Path) -> tuple[str, ...]:
-        return (self.ffprobe, "-v", "error", "-select_streams", "V:0", "-show_frames",
+    def cut_probe_command(self, path: Path, *, threads: int | None = None) -> tuple[str, ...]:
+        decode_limits = ("-threads", str(threads)) if threads is not None else ()
+        return (self.ffprobe, "-v", "error", *decode_limits, "-select_streams", "V:0", "-show_frames",
                 "-show_entries", "frame=best_effort_timestamp,duration,pkt_duration:"
-                "stream=codec_name,time_base:format=start_time,duration",
-                "-of", "json", str(path))
+                "stream=codec_name,time_base,avg_frame_rate:format=start_time,duration",
+                "-of", "json=compact=1", str(path))
 
     def concat(self, inputs: tuple[Path, ...], output_path: Path, manifest_path: Path) -> PreparedCommand:
         if len(inputs) < 2:
