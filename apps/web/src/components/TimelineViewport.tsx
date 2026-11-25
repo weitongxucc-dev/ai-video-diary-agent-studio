@@ -14,9 +14,10 @@ function tickInterval(pixelsPerSecond: number) {
 }
 
 /** All lanes use the same time canvas; zoom and scroll are view state only. */
-export function TimelineViewport({ duration, time, playing, selectedTime, selectionKey, onSeek, formatTime, actions, children }: {
+export function TimelineViewport({ duration, time, playing, selectedTime, selectionKey, onSeek, onScrubChange, formatTime, actions, children }: {
   duration: number; time: number; playing: boolean; selectedTime?: number; selectionKey: string | null;
   onSeek: (time: number) => void; formatTime: (time: number) => string; children: ReactNode; actions?: ReactNode;
+  onScrubChange?: (scrubbing: boolean) => void;
 }) {
   const toolsRef = useEditorDockHost("timelineTools");
   const viewport = useRef<HTMLDivElement>(null);
@@ -77,6 +78,10 @@ export function TimelineViewport({ duration, time, playing, selectedTime, select
     if (!rect?.width) return;
     onSeek(Math.max(0, Math.min(duration, (clientX - rect.left) / rect.width * duration)));
   }
+  function setScrubbing(scrubbing: boolean) {
+    drag.current = scrubbing;
+    onScrubChange?.(scrubbing);
+  }
   return <section style={{ "--timeline-viewport-width": `${size.width}px` } as CSSProperties} className={ui.timelinePanel} aria-label="配音与字幕时间范围">
     <div className={ui.timelineToolbar}>
       <span className={ui.timelineName}>时间线</span>{actions}<div ref={toolsRef} className={ui.timelineToolSlot} />
@@ -91,8 +96,9 @@ export function TimelineViewport({ duration, time, playing, selectedTime, select
       <div className={ui.tracks} style={{ width: size.width && hasTimelineRange ? size.label + laneWidth : "100%" }}>
         {hasTimelineRange ? <>
         <div className={ui.ruler}><span aria-hidden /><div ref={ruler} className={ui.timeRuler} role="slider" tabIndex={0} aria-label="时间线播放位置" aria-valuemin={0} aria-valuemax={duration} aria-valuenow={Math.min(duration, time)} aria-valuetext={formatTime(time)}
-          onPointerDown={event => { drag.current = true; event.currentTarget.setPointerCapture(event.pointerId); seekAt(event.clientX); }}
-          onPointerMove={event => { if (drag.current) seekAt(event.clientX); }} onPointerUp={() => { drag.current = false; }} onLostPointerCapture={() => { drag.current = false; }}
+          onPointerDown={event => { setScrubbing(true); event.currentTarget.setPointerCapture(event.pointerId); seekAt(event.clientX); }}
+          onPointerMove={event => { if (drag.current) seekAt(event.clientX); }}
+          onPointerUp={() => setScrubbing(false)} onPointerCancel={() => setScrubbing(false)} onLostPointerCapture={() => setScrubbing(false)}
           onKeyDown={event => { const step = event.shiftKey ? 10 : 1; const next = event.key === "Home" ? 0 : event.key === "End" ? duration : event.key === "ArrowRight" ? time + step : event.key === "ArrowLeft" ? time - step : null; if (next !== null) { event.preventDefault(); onSeek(Math.max(0, Math.min(duration, next))); } }}>
           {ticks.filter(tick => tick === 0 || laneWidth - tick * pixelsPerSecond > 55).map(tick => <time key={tick} style={{ left: tick / duration * 100 + "%" }}>{formatTime(tick)}</time>)}
         </div></div>
