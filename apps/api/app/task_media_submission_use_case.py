@@ -44,16 +44,17 @@ class BoundMediaSubmission:
     asset_id: str
     start_seconds: float
     end_seconds: float
+    preparation_request_id: str | None = None
 
     @classmethod
     def from_value(cls, value: object) -> "BoundMediaSubmission":
         if not isinstance(value, dict):
             raise TaskMediaSubmissionRejected(422, "媒体提交必须是对象")
-        allowed = {"request_id", "base_version_id", "asset_id", "start_seconds", "end_seconds"}
-        unknown = sorted(set(value) - allowed)
+        required = {"request_id", "base_version_id", "asset_id", "start_seconds", "end_seconds"}
+        unknown = set(value) - required - {"preparation_request_id"}
         if unknown:
             raise TaskMediaSubmissionRejected(422, "媒体提交包含未支持的字段")
-        missing = sorted(allowed - set(value))
+        missing = required - set(value)
         if missing:
             raise TaskMediaSubmissionRejected(422, "媒体提交缺少必要的领域字段")
         request_id = value["request_id"]
@@ -77,7 +78,14 @@ class BoundMediaSubmission:
             raise TaskMediaSubmissionRejected(422, "媒体时间范围无效") from exc
         if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
             raise TaskMediaSubmissionRejected(422, "媒体时间范围必须为正向区间")
-        return cls(request_id, base_version_id, asset_id, start, end)
+        preparation_request_id = value.get("preparation_request_id")
+        if "preparation_request_id" in value:
+            try:
+                if UUID(preparation_request_id).hex != preparation_request_id:
+                    raise ValueError
+            except (ValueError, AttributeError, TypeError) as exc:
+                raise TaskMediaSubmissionRejected(422, "preparation_request_id 必须是原准备请求 ID") from exc
+        return cls(request_id, base_version_id, asset_id, start, end, preparation_request_id)
 
 
 class TaskMediaSubmissionUseCase:
@@ -144,9 +152,12 @@ class TaskMediaSubmissionUseCase:
                 raise TaskMediaSubmissionRejected(409, "媒体提交的基础时间线已变化，请重新读取当前作品")
             self._read_asset(actor, command.asset_id, connection=conn)
 
+        arguments = {"edit_plan": plan.as_dict()}
+        if command.preparation_request_id is not None:
+            arguments["preparation_request_id"] = command.preparation_request_id
         try:
             return self.task_media.submit(
-                runtime, actor, task_id, FFMPEG_OPERATION, {"edit_plan": plan.as_dict()}, "media_output",
+                runtime, actor, task_id, FFMPEG_OPERATION, arguments, "media_output",
                 write_guard=guard)
         except _RecordedCut as replay:
             return self.task_media.read(actor.workspace_id, replay.job_id)[0]
@@ -209,6 +220,7 @@ class TaskMediaSubmissionUseCase:
         plan = event["arguments"]["edit_plan"]
         operations = plan.get("operations", [])
         if (plan.get("base_version_id") != command.base_version_id or len(operations) != 1
+                or event["arguments"].get("preparation_request_id") != command.preparation_request_id
                 or operations[0].get("operation") != "cut" or operations[0].get("options") != options):
             raise TaskMediaSubmissionRejected(409, "request_id 已绑定到不同的媒体输入")
         self._read_asset(actor, command.asset_id, connection=connection)
