@@ -1969,7 +1969,9 @@ describe("CreationTaskWorkspace", () => {
     expect(titleReplayIntent(message)).toBeUndefined();
   });
 
-  it.each(["exact", "workbench", "workbench explicit", "workbench offline", "workbench published response", "unrelated publication", "undo version"] as const)(
+  it.each(["exact", "workbench", "workbench explicit", "workbench offline", "workbench published response", "unrelated publication", "undo version",
+    "workbench manual production", "workbench running production", "workbench scrub interrupts", "workbench edit interrupts",
+    "workbench source playback", "workbench new conversation", "workbench reopened", "workbench failed production", "workbench unrelated production"] as const)(
     "keeps the saved title replay scoped to its published child for %s", async (scenario) => {
       const initial = subtitleCoverWorkspace();
       initial.task.current_timeline_version_id = "timeline-version-5";
@@ -1978,6 +1980,12 @@ describe("CreationTaskWorkspace", () => {
       const title = { kind: "text" as const, id: "title-1", text: "数智分会",
         start_seconds: 2, end_seconds: 4, x: .5, y: .15, width: .8, font_size: 64, font_family: "PingFang SC", color: "#FFFFFF" };
       initial.montage!.graphic_overlays = [title];
+      if (scenario === "workbench source playback") {
+        initial.montage!.clips = [{ id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+          source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 12,
+          timeline_start_seconds: 0, timeline_end_seconds: 12, match_score: 1, match_reasons: [],
+          needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false }];
+      }
       const next = structuredClone(initial);
       next.montage!.graphic_overlays = [{ ...title, start_seconds: 1.5, end_seconds: 3.5 }];
       next.task.current_timeline_version_id = "timeline-version-6";
@@ -1988,7 +1996,11 @@ describe("CreationTaskWorkspace", () => {
       const workbench = scenario.startsWith("workbench");
       const offline = scenario === "workbench offline";
       const publishedResponse = scenario === "workbench published response";
-      const explicit = scenario === "workbench explicit" || publishedResponse;
+      const waitsForPublication = scenario.startsWith("workbench ") && !["workbench explicit", "workbench offline", "workbench published response"].includes(scenario);
+      const manualProduction = scenario === "workbench manual production";
+      const runningProduction = scenario === "workbench running production";
+      const failedProduction = scenario === "workbench failed production";
+      const unrelated = scenario === "unrelated publication" || scenario === "workbench unrelated production";
       const requestReplay = "回放刚才修改的片段";
       if (offline) mocks.getRuntimeSettings.mockResolvedValue({ status: { llm: { configured: false } } });
       const proposal = exactPreview(initial.task, "EditGraphicOverlay");
@@ -2003,23 +2015,28 @@ describe("CreationTaskWorkspace", () => {
         operation_type: "EditGraphicOverlay", status: "applied",
         base_version_id: initial.task.current_timeline_version_id,
         result_version_id: next.task.current_timeline_version_id,
+        applied_at: "2026-10-26T00:00:00Z",
       } };
       mocks.confirmEdit.mockResolvedValueOnce(saved);
       const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
       previewReadRestores.push(() => play.mockRestore());
 
-      const subject = <CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />;
+      const renderWorkbench = (initialWorkspace: WorkspaceState) => render(<WorkbenchTargetProvider><AssistantConversationProvider><Workbench>
+        <WorkspaceRoute label={initial.task.name}>
+          <CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initialWorkspace} />
+        </WorkspaceRoute>
+      </Workbench></AssistantConversationProvider></WorkbenchTargetProvider>);
+      let closeWorkbench: (() => void) | undefined;
       if (workbench) {
         mocks.realShell = true;
         Object.defineProperty(window, "matchMedia", { configurable: true, value: () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }) });
-        render(<WorkbenchTargetProvider><AssistantConversationProvider><Workbench>
-          <WorkspaceRoute label={initial.task.name}>{subject}</WorkspaceRoute>
-        </Workbench></AssistantConversationProvider></WorkbenchTargetProvider>);
+        closeWorkbench = renderWorkbench(initial).unmount;
         await screen.findByLabelText("任务对话要求");
       } else {
-        renderTaskSubject(subject);
+        renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
       }
       fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
+      if (scenario === "workbench source playback") fireEvent.click(openStoryboardClip(1));
       fireEvent.click(screen.getByRole("button", { name: /^标题1 · 数智分会/ }));
       const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
       player.currentTime = 5;
@@ -2034,14 +2051,19 @@ describe("CreationTaskWorkspace", () => {
       published.montage!.status = "rendered";
       if (scenario === "undo version") published.montage!.graphic_overlays = [title];
       const renderReceipt = {
-        task_id: initial.task.id, job: { id: "render-job", status: "succeeded" }, stages: [], video_ready: true,
+        ...queueStatus("succeeded"),
+        video_ready: true,
         output_version: { job_id: "render-job",
-          base_version: { timeline_version_id: scenario === "unrelated publication" ? "unrelated-base" : "timeline-version-6", timeline_sequence: 6 },
+          base_version: { timeline_version_id: unrelated ? "unrelated-base" : "timeline-version-6", timeline_sequence: 6 },
           result_version: { timeline_version_id: "timeline-version-7", timeline_sequence: 7 } },
       };
+      renderReceipt.job!.id = "render-job";
+      const runningReceipt = { ...queueStatus("running"), current_stage: "render", job: { ...renderReceipt.job!, status: "running" } };
+      const failedReceipt = { ...runningReceipt, job: { ...runningReceipt.job, status: "failed" },
+        stages: [{ stage: "render", status: "failed", at: "2026-10-26T00:02:00Z" }] };
       mocks.getTimelineVersion.mockResolvedValue({
         task_id: initial.task.id,
-        version: { id: "timeline-version-7", sequence: 7, is_current: true, parent_version_id: "timeline-version-6",
+        version: { id: "timeline-version-7", sequence: 7, is_current: true, parent_version_id: unrelated ? "unrelated-base" : "timeline-version-6",
           operation_id: scenario === "undo version" ? "undo-operation" : null },
         artifacts: [{ kind: "video", status: "available", url: "/timeline/versions/timeline-version-7/artifacts/video" }],
       });
@@ -2059,13 +2081,20 @@ describe("CreationTaskWorkspace", () => {
         mocks.askAssistant.mockImplementationOnce(async () => {
           mocks.getWorkspace.mockResolvedValue(publishedResponse ? published : next);
           if (publishedResponse) mocks.getExecution.mockResolvedValue(renderReceipt);
+          else if (manualProduction) {
+            mocks.previewExecution.mockResolvedValue(queuePreview());
+            mocks.getExecution.mockResolvedValue({ ...renderReceipt, video_ready: false, output_version: undefined });
+          } else if (runningProduction || failedProduction) {
+            mocks.previewExecution.mockResolvedValue(queuePreview());
+            mocks.getExecution.mockResolvedValue(runningReceipt);
+          }
           else mocks.getExecution.mockReturnValue(rendering);
           return { reply: "标题已提前半秒。", provider: "test", model: "test", edit_preview: null, edit_request: {
             task_id: initial.task.id, phase: "apply", status: "recorded", result: saved,
             submitted_input: { assistant_turn_id: `task-turn-${mocks.assistantSequence}`, expected_timeline_version_id: "timeline-version-5" },
           } };
         });
-        const message = explicit ? "标题提前半秒，改完后回放" : "标题提前半秒";
+        const message = waitsForPublication || publishedResponse ? "标题提前半秒，改完后回放" : "标题提前半秒";
         await send(message);
         expect(mocks.askAssistant).toHaveBeenCalledWith(initial.task.id, expect.objectContaining({
           message, expected_timeline_version_id: "timeline-version-5",
@@ -2103,44 +2132,114 @@ describe("CreationTaskWorkspace", () => {
         }
       }
       if (!publishedResponse) {
-        expect(await screen.findByText("本次标题修改已保存，当前版本待合成。")).toBeVisible();
+        const awaiting = runningProduction || failedProduction ? "合成进行中，完成后回放本次修改。"
+          : waitsForPublication ? "本次修改待合成。成片就绪后将回放修改片段。"
+            : "本次标题修改已保存，当前版本待合成。";
+        expect(await screen.findByText(awaiting)).toBeVisible();
         expect(screen.getByRole("slider", { name: "时间线播放位置" })).toHaveAttribute("aria-valuetext", "00:05.0");
         expect(screen.queryByRole("button", { name: "回放刚才的修改" })).not.toBeInTheDocument();
-        if (explicit) {
-          expect(await screen.findByText("当前修改版本待合成，成片就绪后可手动回放。")).toBeVisible();
+        if (scenario === "workbench explicit") {
           acceptReplay();
           await send(requestReplay);
           expect(await screen.findByText("当前修改版本待合成，成片就绪后可手动回放。")).toBeVisible();
         }
+        expect(mocks.startExecution).not.toHaveBeenCalled();
+        expect(mocks.resumeExecution).not.toHaveBeenCalled();
+        if (manualProduction) {
+          fireEvent.click(screen.getByRole("button", { name: "查看制作与检查" }));
+          fireEvent.click(await screen.findByRole("button", { name: "查看制作详情" }));
+          const dialog = await screen.findByRole("dialog", { name: "制作文案与要求" });
+          const resume = within(dialog).getByRole("button", { name: /仅重新输出当前剪辑/ });
+          expect(resume).toBeEnabled();
+          expect(mocks.resumeExecution).not.toHaveBeenCalled();
+          mocks.resumeExecution.mockImplementationOnce(async () => {
+            mocks.getExecution.mockReturnValue(rendering);
+            return runningReceipt;
+          });
+          await clickAndSettle(resume);
+          expect(mocks.resumeExecution).toHaveBeenCalledExactlyOnceWith(initial.task.id);
+        } else if (scenario === "workbench scrub interrupts") {
+          const ruler = screen.getByRole("slider", { name: "时间线播放位置" });
+          Object.defineProperty(ruler, "setPointerCapture", { value: vi.fn() });
+          fireEvent.pointerDown(ruler, { pointerId: 1 });
+          expect(await screen.findByText("自动回放已取消。成片就绪后可手动回放。")).toBeVisible();
+          fireEvent.pointerUp(ruler, { pointerId: 1 });
+          fireEvent.keyDown(ruler, { key: "ArrowRight" });
+        } else if (scenario === "workbench edit interrupts") {
+          fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
+          fireEvent.change(await screen.findByLabelText("标题文字"), { target: { value: "正在精调的草稿" } });
+          expect(await screen.findByText("自动回放已取消。成片就绪后可手动回放。")).toBeVisible();
+        } else if (scenario === "workbench source playback") {
+          const source = await screen.findByLabelText("源素材预览");
+          fireEvent.play(source);
+          expect(await screen.findByText("自动回放已取消。成片就绪后可手动回放。")).toBeVisible();
+          fireEvent.pause(source);
+        } else if (scenario === "workbench new conversation") {
+          fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+          expect(await screen.findByText("自动回放已取消。成片就绪后可手动回放。")).toBeVisible();
+        } else if (scenario === "workbench reopened") {
+          closeWorkbench?.();
+          mocks.getWorkspace.mockResolvedValue(published);
+          mocks.getExecution.mockResolvedValue(renderReceipt);
+          renderWorkbench(published);
+          const reopened = await screen.findByLabelText("剪辑成片预览");
+          fireEvent.canPlay(reopened);
+          expect(await screen.findByText("标题已提前半秒。")).toBeVisible();
+          expect(play).not.toHaveBeenCalled();
+          return;
+        } else if (failedProduction) {
+          mocks.getExecution.mockResolvedValue(failedReceipt);
+          expect(await screen.findByText("本次合成未完成。可在制作与检查中核对，成片就绪后手动回放。", {}, { timeout: 4500 })).toBeVisible();
+          openEditingStatusTray();
+          fireEvent.click(await screen.findByRole("button", { name: "查看制作详情" }));
+          const dialog = await screen.findByRole("dialog", { name: "制作文案与要求" });
+          const resume = within(dialog).getByRole("button", { name: /继续制作/ });
+          expect(resume).toBeEnabled();
+          mocks.resumeExecution.mockImplementationOnce(async () => {
+            mocks.getWorkspace.mockResolvedValue(published);
+            mocks.getExecution.mockResolvedValue(renderReceipt);
+            return renderReceipt;
+          });
+          await clickAndSettle(resume);
+        }
         mocks.getWorkspace.mockResolvedValue(published);
+        if (runningProduction) mocks.getExecution.mockResolvedValue(renderReceipt);
         await act(async () => finishRender(renderReceipt));
       }
-      await expectTaskVersion(/版本 7$/);
+      await waitFor(() => expect(document.querySelector("[data-timeline-version]")).toHaveAttribute("data-timeline-version", "7"), { timeout: 5000 });
       const rendered = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
       fireEvent.loadedMetadata(rendered);
-      expect(rendered.currentTime).toBe(5);
+      expect(rendered.currentTime).toBe(scenario === "workbench scrub interrupts" ? 6 : 5);
       expect(rendered).toHaveAttribute("src", expect.stringContaining("expected_version_id=timeline-version-7"));
       expect(play).not.toHaveBeenCalled();
       fireEvent.canPlay(rendered);
-      if (publishedResponse) {
+      if (publishedResponse || manualProduction || runningProduction) {
         await waitFor(() => expect(play).toHaveBeenCalledOnce());
         expect(rendered.currentTime).toBe(.5);
+        fireEvent.canPlay(rendered);
+        expect(play).toHaveBeenCalledOnce();
+        rendered.currentTime = 3.2;
+        fireEvent.timeUpdate(rendered);
+        expect(rendered.currentTime).toBe(3);
         return;
       }
       expect(play).not.toHaveBeenCalled();
-      if (scenario === "unrelated publication" || scenario === "undo version") {
+      if (unrelated || scenario === "undo version") {
+        if (waitsForPublication) {
+          await waitFor(() => expect(screen.queryByText("正在核对本次修改的成片版本。")).not.toBeInTheDocument());
+        }
         expect(screen.queryByRole("button", { name: "回放刚才的修改" })).not.toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "定位修改的标题" })).not.toBeInTheDocument();
         return;
       }
       expect(mocks.getTimelineVersion).toHaveBeenCalledWith(initial.task.id, "timeline-version-7");
-      if (workbench && !offline) {
+      if (workbench && !offline && !waitsForPublication) {
         fireEvent.click(await screen.findByRole("button", { name: "查看当前剪辑" }));
         expect(rendered.currentTime).toBe(1.5);
         expect(play).not.toHaveBeenCalled();
       }
-      if (explicit || offline) {
-        if (explicit) {
+      if (scenario === "workbench explicit" || offline) {
+        if (!offline) {
           acceptReplay(); // Even a replay-shaped response cannot authorize a negative input.
           await send("不要回放刚才修改的片段");
           expect(play).not.toHaveBeenCalled();

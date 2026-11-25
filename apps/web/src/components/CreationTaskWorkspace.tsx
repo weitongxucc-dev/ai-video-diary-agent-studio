@@ -37,7 +37,7 @@ import Link from "next/link";
 import { EditorPaneMount } from "./workbench/EditorPaneMount";
 import { creationTaskShortStatus, creationTaskStatusPresentation } from "@/lib/creation-task-status";
 import { CheckCircle2, Clapperboard, FileText, LoaderCircle, Sparkles } from "lucide-react";
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { HomeCardDialog } from "@/components/HomeCardDialog";
 import { useAssistantSelection, useAssistantReferenceStatus, useAssistantKnowledgeReference, useAssistantMaterialReference, useAssistantProfileReference } from "./AssistantConversationProvider";
 import { useAssistantConversation } from "@/components/useAssistantConversation";
@@ -285,6 +285,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [timelineFocus, setTimelineFocus] = useState<{ versionId: string | null; seconds: number } | null>(null);
   const [lastLocalEdit, setLastLocalEdit] = useState<{ versionId: string; target: TimelineEditTarget; conversationId?: string } | null>(null);
   const [titleReplayRequest, setTitleReplayRequest] = useState<TitleReplayRequest | null>(null);
+  const [waitingTitleReplay, setWaitingTitleReplay] = useState<{
+    taskId: string; baseVersionId: string | null; editVersionId: string; turnId: string; savedAt: number;
+    isCurrent: () => boolean; canStart: () => boolean;
+  } | null>(null);
+  const [titleReplayNotice, setTitleReplayNotice] = useState<{ editVersionId: string; message: string } | null>(null);
+  const replayRenderJob = useRef<{ turnId: string; jobId: string } | null>(null);
   const replayPermissionRef = useRef<CaptureReplayPermission>(null);
   const replayEditorRevision = useRef(0);
   const editContextRevision = useRef(0);
@@ -631,9 +637,17 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function markReplayEditorInteraction() {
+    interruptTitleReplay();
     replayEditorRevision.current += 1;
     invalidateEditPreview();
   }
+
+  const interruptTitleReplay = useCallback((message = "自动回放已取消。成片就绪后可手动回放。") => {
+    if (waitingTitleReplay) {
+      setWaitingTitleReplay(null);
+      setTitleReplayNotice({ editVersionId: waitingTitleReplay.editVersionId, message });
+    }
+  }, [waitingTitleReplay]);
 
   function changeEditorDraft(changed: boolean) {
     markReplayEditorInteraction();
@@ -812,9 +826,23 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     }
   }
 
-  async function changeExecution(operation: () => Promise<CreationExecutionStatus>) {
+  async function changeExecution(operation: () => Promise<CreationExecutionStatus>, publishes = false) {
     setBusy("execution");
-    await executionController.changeExecution(operation);
+    await executionController.changeExecution(async () => {
+      try {
+        const result = await operation();
+        if (publishes && waitingTitleReplay?.isCurrent() && result.task_id === task.id
+          && result.job && ["failed", "cancelled", "interrupted"].includes(result.job.status)) {
+          interruptTitleReplay("本次合成未完成。可在制作与检查中核对，成片就绪后手动回放。");
+        }
+        return result;
+      } catch (cause) {
+        if (publishes && waitingTitleReplay?.isCurrent()) {
+          interruptTitleReplay("本次合成未能开始。可在制作与检查中核对，再手动回放成片。");
+        }
+        throw cause;
+      }
+    });
     if (currentTaskId.current === task.id) setBusy(null);
   }
 
@@ -926,6 +954,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectClip(clipId: string, movePlayhead = true) {
+    interruptTitleReplay();
     if(selectedOverlayId){setEditorDraft(false);invalidateEditPreview();}
     setSelectedOverlayId(null);
     setSelectedAudioId(null);
@@ -1359,6 +1388,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   }
 
   function selectAudio(id: string, time?: number) {
+    interruptTitleReplay();
     setSelectedOverlayId(null);
     invalidateEditPreview(); setEditorDraft(false); setSelectedAudioId(id);
     setAudioPlayhead(time ?? playheadRef.current ?? 0);
@@ -1375,6 +1405,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
   function seekTimeline(seconds: number) {
     if (!Number.isFinite(seconds)) return;
+    interruptTitleReplay();
     const duration = currentWorkspace.current.montage?.duration_seconds ?? 0;
     seconds = Math.max(0, Math.min(seconds, duration));
     playheadRef.current = seconds;
@@ -2083,27 +2114,84 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const titlePublicationReady = Boolean(titleEditVersionId && task.output_ready
     && workspace.montage?.status === "rendered" && workspace.montage.output_url
     && verifiedPublicationKey === `${task.id}:${titleEditVersionId}:${task.current_timeline_version_id}`);
+  const currentVersionId = task.current_timeline_version_id;
+  const uncheckedReplayVersion = waitingTitleReplay && currentVersionId !== waitingTitleReplay.editVersionId
+    && currentVersionId !== waitingTitleReplay.baseVersionId ? currentVersionId : null;
+  const versionToVerify = candidatePublication?.timeline_version_id ?? uncheckedReplayVersion;
   useEffect(() => {
-    if (!candidatePublication || !titleEditVersionId || !publicationKey || titlePublicationReady || workbenchPage?.active === false) return;
+    if (!versionToVerify || !titleEditVersionId || titlePublicationReady || workbenchPage?.active === false) return;
     let active = true;
     // Both reads must identify the same current child, and only the production
     // receipt proves the input version. A history artifact alone is insufficient.
-    void getCreationTaskTimelineVersion(task.id, candidatePublication.timeline_version_id).then(detail => {
-      if (active && matchesTitlePublication(detail, task.id, titleEditVersionId, candidatePublication)) {
+    void getCreationTaskTimelineVersion(task.id, versionToVerify).then(detail => {
+      if (!active) return;
+      if (candidatePublication && publicationKey && matchesTitlePublication(detail, task.id, titleEditVersionId, candidatePublication)) {
         setVerifiedPublicationKey(publicationKey);
+      } else if (uncheckedReplayVersion === versionToVerify && detail.task_id === task.id
+        && detail.version.id === versionToVerify && detail.version.is_current) {
+        if (detail.version.parent_version_id !== titleEditVersionId || detail.version.operation_id !== null) {
+          interruptTitleReplay("剪辑版本已变化，已取消原片段的自动回放。");
+        } else if (candidatePublication) {
+          interruptTitleReplay("已取消自动回放。请在制作与检查中核对成片。");
+        }
       }
     }).catch(() => {
       // A later execution read can retry the history lookup.
     });
     return () => { active = false; };
-  }, [candidatePublication, execution, publicationKey, task.id, titleEditVersionId, titlePublicationReady, workbenchPage?.active]);
+  }, [candidatePublication, execution, interruptTitleReplay, publicationKey, task.id, titleEditVersionId,
+    titlePublicationReady, uncheckedReplayVersion, versionToVerify, workbenchPage?.active]);
   const visibleLocalEdit = lastLocalEdit && (lastLocalEdit.versionId === task.current_timeline_version_id || titlePublicationReady)
     ? lastLocalEdit.target : null;
+  const titleRenderJob = execution?.task_id === task.id && execution.job?.kind === "creation_task_execution" ? execution.job : null;
+  const titleRenderRunning = execution?.current_stage === "render"
+    && (titleRenderJob?.status === "queued" || titleRenderJob?.status === "running");
+
+  useEffect(() => {
+    if (!waitingTitleReplay) return;
+    const waiting = waitingTitleReplay;
+    if (waiting.taskId !== task.id || workbenchPage?.active === false || !waiting.isCurrent() || !waiting.canStart()) {
+      interruptTitleReplay();
+      return;
+    }
+    if (titleEditVersionId !== waiting.editVersionId) {
+      interruptTitleReplay("剪辑版本已变化，已取消原片段的自动回放。");
+      return;
+    }
+    if (currentVersionId === waiting.editVersionId && titleRenderRunning && titleRenderJob) {
+      replayRenderJob.current = { turnId: waiting.turnId, jobId: titleRenderJob.id };
+    }
+    const observed = replayRenderJob.current;
+    const renderAfterSave = execution?.stages.some(stage => stage.stage === "render" && Date.parse(stage.at) >= waiting.savedAt);
+    if (titleRenderJob && ["failed", "cancelled", "interrupted"].includes(titleRenderJob.status)
+      && (renderAfterSave || (observed?.turnId === waiting.turnId && observed.jobId === titleRenderJob.id))) {
+      interruptTitleReplay("本次合成未完成。可在制作与检查中核对，成片就绪后手动回放。");
+      return;
+    }
+    if (titlePublicationReady && currentVersionId) {
+      setWaitingTitleReplay(null);
+      setTitleReplayRequest({ turnId: waiting.turnId, versionId: currentVersionId,
+        isCurrent: () => waiting.canStart() && currentWorkspace.current.task.current_timeline_version_id === currentVersionId });
+    }
+  }, [waitingTitleReplay, task.id, workbenchPage?.active, titleEditVersionId, currentVersionId, titleRenderRunning,
+    titleRenderJob, titlePublicationReady, execution?.stages, interruptTitleReplay, busy, editorDraft, editPreview,
+    assistantConversation.conversation?.id]);
+
+  const waitingOnCurrentTask = waitingTitleReplay?.taskId === task.id && waitingTitleReplay.isCurrent();
+  const replayStatus = waitingOnCurrentTask
+    ? currentVersionId !== waitingTitleReplay.editVersionId ? "正在核对本次修改的成片版本。"
+      : titleRenderRunning ? "合成进行中，完成后回放本次修改。"
+        : "本次修改待合成。成片就绪后将回放修改片段。"
+    : titleReplayNotice?.editVersionId === titleEditVersionId ? titleReplayNotice.message : undefined;
+  const replayProductionAction = waitingOnCurrentTask && currentVersionId === waitingTitleReplay.editVersionId && !titleRenderRunning
+    ? <Button variant="outline" type="button" onClick={() => { panel.revealTaskPanel(); setStageDetailsRequest({}); }}>查看制作与检查</Button>
+    : null;
 
   function prepareTitleReplay(intent: TitleReplayIntent) {
     const editorRevision = replayEditorRevision.current;
     const playerPermission = replayPermissionRef.current?.();
-    const editing = () => Boolean(currentBusy.current || currentEditorDraft.current || currentEditPreview.current);
+    const editing = () => Boolean(currentBusy.current && currentBusy.current !== "execution"
+      || currentEditorDraft.current || currentEditPreview.current);
     const initiallyEditing = editing();
     const previousTitle = lastLocalEdit?.target.kind === "title" ? lastLocalEdit : null;
     return async (input: TitleReplayInput, isCurrent: () => boolean) => {
@@ -2114,18 +2202,27 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           ? previousTitle : null;
       const current = currentWorkspace.current;
       const versionId = current.task.current_timeline_version_id;
-      const ownsVersion = () => isCurrent() && currentTaskId.current === task.id
-        && currentWorkspace.current.task.workspace_id === task.workspace_id
-        && currentWorkspace.current.task.current_timeline_version_id === versionId;
+      const ownsScope = () => isCurrent() && currentTaskId.current === task.id
+        && currentWorkspace.current.task.workspace_id === task.workspace_id;
+      const ownsVersion = () => ownsScope() && currentWorkspace.current.task.current_timeline_version_id === versionId;
       if (!ownsVersion()) return;
       if (!title || title.target?.kind !== "title" || !versionId
         || intent === "last-title-edit" && versionId !== task.current_timeline_version_id) return "当前版本没有可核验的修改片段。";
+      const canStart = () => ownsScope() && !initiallyEditing && !editing()
+        && replayEditorRevision.current === editorRevision && Boolean(playerPermission?.());
+      if (intent === "after-title-edit" && saved && title.versionId) {
+        if (!canStart()) return "已保留当前播放位置，成片就绪后可手动回放。";
+        setTitleReplayNotice(null);
+        setWaitingTitleReplay({ taskId: task.id, baseVersionId: saved.operation.base_version_id, editVersionId: title.versionId,
+          turnId: input.turnId, savedAt: Date.parse(saved.operation.applied_at ?? saved.operation.created_at),
+          isCurrent: ownsScope, canStart });
+        executionController.pollExecution();
+        return;
+      }
       if (!current.task.output_ready || current.montage?.status !== "rendered" || !current.montage.output_url) {
         return versionId === title.versionId ? "当前修改版本待合成，成片就绪后可手动回放。"
           : "当前版本没有可核验的修改片段。";
       }
-      const canStart = () => ownsVersion() && !initiallyEditing && !editing()
-        && replayEditorRevision.current === editorRevision && Boolean(playerPermission?.());
       let published = titlePublicationCandidate(current.task, execution, title.versionId);
       if (!published) {
         const status = await getCreationExecution(task.id).catch(() => null);
@@ -2144,7 +2241,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         setVerifiedPublicationKey(key);
       }
       if (!canStart()) return "已保留当前播放位置，可在右侧点击「回放刚才的修改」。";
-      setTitleReplayRequest({ turnId: input.turnId, versionId, isCurrent: canStart });
+      setTitleReplayRequest({ turnId: input.turnId, versionId, isCurrent: () => canStart() && ownsVersion() });
     };
   }
   const localEditResultAction = visibleLocalEdit ? <Button variant="ghost" type="button"
@@ -2170,7 +2267,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           onSelectionPreview={indices => void reviseCompoundSelection(indices)} /> : null}
         <TaskViewNavigation editingActions={<>{isEditor ? (!hasTimeline ? timelineActions : undefined) : selectedReferenceAction}{localEditResultAction}</>}
           workspace={workspace} execution={execution} activeView={activeView} onOpen={openEditingView} onLocateStage={openCurrentStage} />
-        {workspace.montage ? <div className={styles.persistentStage}><VideoEditingStage replayRequest={titleReplayRequest} replayPermissionRef={replayPermissionRef} titleReplay={visibleLocalEdit?.kind === "title" ? { ...visibleLocalEdit.replay, mediaReady: titlePublicationReady } : undefined} seekRequest={timelineFocus?.versionId === task.current_timeline_version_id ? timelineFocus : undefined} audioSelection={selectedAudioTrack ? { id: selectedAudioId!, seconds: selectedAudioClip ? selectedAudioClip.timeline_start_ms / 1000 : undefined } : undefined} onEditSubtitle={id => { const message = locateSavedEdit(workspace, { kind: "subtitle", id }); if (message) setNotice(message); }} timelineActions={timelineActions} editError={error?.message} selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={() => markReplayEditorInteraction()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? subtitleTrack => <AudioTimelineTracks sharedTimeScale subtitleTrack={subtitleTrack} onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} taskId={task.id} versionId={task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} taskId={task.id} versionId={task.current_timeline_version_id} narrationCacheKey={task.narration_cache_key} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={null} /></div> : null}
+        {workspace.montage ? <div className={styles.persistentStage}><VideoEditingStage replayStatus={replayStatus} onReplayInterruption={interruptTitleReplay} replayRequest={titleReplayRequest} replayPermissionRef={replayPermissionRef} titleReplay={visibleLocalEdit?.kind === "title" ? { ...visibleLocalEdit.replay, mediaReady: titlePublicationReady } : undefined} seekRequest={timelineFocus?.versionId === task.current_timeline_version_id ? timelineFocus : undefined} audioSelection={selectedAudioTrack ? { id: selectedAudioId!, seconds: selectedAudioClip ? selectedAudioClip.timeline_start_ms / 1000 : undefined } : undefined} onEditSubtitle={id => { const message = locateSavedEdit(workspace, { kind: "subtitle", id }); if (message) setNotice(message); }} timelineActions={timelineActions} editError={error?.message} selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={() => markReplayEditorInteraction()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? subtitleTrack => <AudioTimelineTracks sharedTimeScale subtitleTrack={subtitleTrack} onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} taskId={task.id} versionId={task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} taskId={task.id} versionId={task.current_timeline_version_id} narrationCacheKey={task.narration_cache_key} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={replayProductionAction} /></div> : null}
         <EditorPaneMount docked={hasTimeline && !isEditor} hidden={auxiliaryHidden} homeClassName={styles.taskPaneHome} mountClassName={hasTimeline && !isEditor ? styles.taskPaneDock : styles.taskPaneHome}><EditingStatusTray actionLabel={error || executionError ? "查看原因" : localConfirmation ? "查看修改" : execution?.job?.status === "running" || execution?.job?.status === "queued" ? "查看进度" : task.output_ready ? "检查成片" : "制作与检查"} revealReason={detailsRevealReason} compact={hasTimeline && isEditor} attention={Boolean(error || executionError || task.stage_status === "failed" || task.stage_status === "waiting_for_user" || localConfirmation || pendingMetadataSave || pendingTimelineRestore)} status={error ? "修改未完成" : executionError ? "制作未完成" : (pendingMetadataSave || pendingTimelineRestore ? "操作结果待核对" : execution?.job?.status === "running" ? "后台制作中" : execution?.job?.status === "queued" ? "制作已排队" : localConfirmation ? "修改方案待确认" : task.stage_status === "failed" ? task.stage_reason ?? "制作未完成" : creationTaskShortStatus(task.stage_status, task.stage))}>
         <MediaVisibility visible={!auxiliaryHidden}><TabsContent value={activeView} hidden={auxiliaryHidden} className={hasTimeline ? [styles.auxiliaryBody, isEditor ? styles.editingAuxiliary : ""].filter(Boolean).join(" ") : styles.workspaceBody}>
         <header className={hasTimeline ? styles.stageRuntime : styles.stageHeading} data-timeline-version={task.timeline_sequence}>
@@ -2207,7 +2304,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           canSubmit: executionController.storyboard.canSubmit && storyboardInput !== null }}
           onRegenerateStoryboard={() => void changeStoryboard()} onReadStoryboard={() => void changeStoryboard(true)} visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}
           visualError={executionController.visualError} visualReadRequired={executionController.visualReadRequired} onReadVisualDecision={executionController.readVisualDecision}
-          onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} sourceMedia={workspace.plan.source_media} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact preview={executionPreview} execution={execution} busy={busy !== null} onRefreshPreview={() => void changeExecution(executionController.recheckRequirements)} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}
+          onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} sourceMedia={workspace.plan.source_media} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact preview={executionPreview} execution={execution} busy={busy !== null} onRefreshPreview={() => void changeExecution(executionController.recheckRequirements)} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview), true)} onResume={() => void changeExecution(() => resumeCreationExecution(task.id), true)} onCancel={() => { interruptTitleReplay("制作已请求停止，成片就绪后可手动回放。"); void changeExecution(() => cancelCreationExecution(task.id)); }} onOpenMontage={() => openView("montage")} /> : null}
         <NativeOperationsPanel key={`native-${task.id}`} taskId={task.id}
           adoptedRefs={(workspace.montage?.graphic_overlays ?? []).flatMap(overlay=>overlay.kind==='image'?[overlay.source_ref]:[])}
           canPrepare={busy===null && Boolean(task.current_timeline_version_id && workspace.montage && workspace.montage.duration_seconds>0)}
@@ -2224,7 +2321,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           canSubmit: executionController.storyboard.canSubmit && storyboardInput !== null }}
           onRegenerateStoryboard={() => void changeStoryboard()} onReadStoryboard={() => void changeStoryboard(true)} visualDecision={executionController.visualDecision} visualBusy={executionController.visualBusy}
           visualError={executionController.visualError} visualReadRequired={executionController.visualReadRequired} onReadVisualDecision={executionController.readVisualDecision}
-          onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} sourceMedia={workspace.plan.source_media} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact={activeView !== "review"} preview={executionPreview} execution={execution} busy={busy !== null} onRefreshPreview={() => void changeExecution(executionController.recheckRequirements)} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview))} onResume={() => void changeExecution(() => resumeCreationExecution(task.id))} onCancel={() => void changeExecution(() => cancelCreationExecution(task.id))} onOpenMontage={() => openView("montage")} /> : null}{activeView === "review" && !executionPreview && !execution?.job ? <p className={styles.notice}>还没有制作安排。可以先查看文案、配音与剪辑。</p> : null}
+          onAdoptVisualDecision={executionController.adoptVisualDecision} onCloseVisualDecision={executionController.closeVisualDecision} taskStage={task.stage} taskReason={task.stage_reason} sourceMedia={workspace.plan.source_media} voice={workspace.plan.selected_voice} availableVoices={workspace.available_voices} compact={activeView !== "review"} preview={executionPreview} execution={execution} busy={busy !== null} onRefreshPreview={() => void changeExecution(executionController.recheckRequirements)} onStart={() => executionPreview && void changeExecution(() => startCreationExecution(task.id, executionPreview), true)} onResume={() => void changeExecution(() => resumeCreationExecution(task.id), true)} onCancel={() => { interruptTitleReplay("制作已请求停止，成片就绪后可手动回放。"); void changeExecution(() => cancelCreationExecution(task.id)); }} onOpenMontage={() => openView("montage")} /> : null}{activeView === "review" && !executionPreview && !execution?.job ? <p className={styles.notice}>还没有制作安排。可以先查看文案、配音与剪辑。</p> : null}
         </div>
 
         {activeView === "topic" && task.stage === "topic" ? <TopicSelection topics={topics} selectedTopicId={selectedTopicId} topicTitleDraft={topicTitleDraft} knowledgeCount={workspace.plan.knowledge_references.length} sourceCount={workspace.plan.source_references.length} busy={busy} stageStatus={task.stage_status}
