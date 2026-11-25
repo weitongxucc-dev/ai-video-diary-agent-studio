@@ -15,10 +15,13 @@ from app.montage import (CreationTaskMontagePlan, MontageClip, NarrationCue,
 from app.production import ProductionRepository
 from app.creation.plan_contracts import CreationPlan
 from app.creation.contracts import (
+    ArtifactRecord,
     CreationPlanVoiceReference,
     CreationTask,
+    JobRun,
     SubtitleCue,
     SubtitleTrack,
+    TaskEvent,
     TimelineVersion,
 )
 
@@ -383,3 +386,58 @@ def test_history_detail_without_source_operation_keeps_null(history_task):
     assert response.status_code==200
     assert response.json()['version']['operation_id'] is None
     assert response.json()['version']['operation_type'] is None
+
+
+def test_legacy_media_history_requires_the_original_success_event_and_outputs(history_task):
+    repo, task_id, client = history_task
+    base = repo.timeline_records.get_timeline_version(WORKSPACE_ID, "timeline_history_v2")
+    job_id = "media_legacy_cut"
+    version_id = f"timeline_media_{job_id}"
+    event_id = f"event_{job_id}_media_result"
+    output_ref = f"media/{job_id}/1-cut.mp4"
+    artifact = ArtifactRecord(f"artifact_{job_id}_1", WORKSPACE_ID, task_id, "media_output",
+                              output_ref, "b" * 64, 1024, job_id, [f"timeline:{base.id}"])
+    repo.job_records.create_job_run(JobRun(job_id, WORKSPACE_ID, task_id, "media_execution",
+                                         "media:legacy", "legacy-input"))
+    repo.job_records.claim_job_run(WORKSPACE_ID, job_id)
+    repo.execution_records.create_artifact_record(artifact)
+    repo.job_records.finish_job_run(WORKSPACE_ID, job_id, status="succeeded", output_refs=[output_ref])
+    repo.execution_records.append_task_event(TaskEvent(event_id, WORKSPACE_ID, task_id, job_id,
+        "media_execution_completed", {"request_id": "legacy-request", "outputs": [output_ref],
+                                      "timeline_version_id": version_id}))
+    legacy = repo.timeline_records.create_timeline_version(TimelineVersion(
+        version_id, WORKSPACE_ID, task_id, base.id, 3, {**base.snapshot, "media_execution": {
+            "job_id": job_id, "request_id": "legacy-request", "outputs": [output_ref]}}, job_id))
+    history = f"/api/creation-tasks/{task_id}/timeline/versions"
+    detail = f"{history}/{legacy.id}"
+
+    def read():
+        listing, version = client.get(history), client.get(detail)
+        assert listing.status_code == version.status_code == 200
+        summary = version.json()["version"]
+        assert summary == listing.json()["items"][0]
+        assert summary["id"] == legacy.id and summary["operation_id"] is None and summary["operation_type"] is None
+        assert repo.timeline_records.get_timeline_version(WORKSPACE_ID, legacy.id) == legacy
+
+    read()
+    mismatches = [
+        ("UPDATE job_runs SET workspace_id=? WHERE id=?", job_id, "other-workspace", WORKSPACE_ID),
+        ("UPDATE job_runs SET status=? WHERE id=?", job_id, "failed", "succeeded"),
+        ("UPDATE task_events SET payload_json=json_set(payload_json,'$.timeline_version_id',?) WHERE id=?",
+         event_id, "other-version", version_id),
+        ("UPDATE artifact_records SET task_id=? WHERE id=?", artifact.id, "task_other", task_id),
+        ("UPDATE artifact_records SET logical_ref=? WHERE id=?", artifact.id, "other-output", output_ref),
+    ]
+    for statement, key, invalid, original in mismatches:
+        with repo.connection_factory() as conn:
+            conn.execute(statement, (invalid, key))
+        assert client.get(history).status_code == client.get(detail).status_code == 409
+        with repo.connection_factory() as conn:
+            conn.execute(statement, (original, key))
+    read()
+
+    broken = repo.timeline_records.create_timeline_version(replace(
+        legacy, id="timeline_missing_edit", sequence=4, parent_version_id=legacy.id,
+        created_by_operation_id="missing-edit-operation",
+    ))
+    assert client.get(history).status_code == client.get(f"{history}/{broken.id}").status_code == 409
