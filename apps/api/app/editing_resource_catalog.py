@@ -12,7 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.creation.visual_template_catalog import visual_templates
+from app.creation.video_template_use_case import VideoTemplateUseCase
+from app.creation.visual_template_contracts import VisualTemplate
 from app.creation.openfilm_transition_catalog import IDENTITY, TEMPLATE_ID
 from app.creation.fluent_sticker_catalog import sticker_preview_path
 
@@ -228,13 +229,17 @@ def _builtin_resources() -> list[EditingResource]:
             entrypoints=["read_visual_template", "preview_typed_edit", "apply_typed_edit"],
         ),
     ]
-    for identity, name, definition in visual_templates():
+    for template in VideoTemplateUseCase.builtin_templates(workspace_id=""):
+        if template.settings.get("kind") != "visual_component":
+            continue
+        identity = template.id.removeprefix("builtin_visual_")
         if identity == IDENTITY:
             continue  # The original resource remains in transitions, not a duplicate catalog item.
+        definition = VisualTemplate.model_validate(template.settings["visual"])
         if identity.startswith('fluent-sticker-'):
             resource_id = 'fluent:' + identity.removeprefix('fluent-')
             resources.append(EditingResource(
-                id=resource_id, category_id='stickers', name=name, version=1,
+                id=resource_id, category_id='stickers', name=template.name, version=1,
                 status='connected', resource_type='svg_sticker',
                 preview=ResourcePreview(kind='image', width=definition.width, height=definition.height,
                     duration_seconds=definition.duration_seconds,
@@ -253,13 +258,17 @@ def _builtin_resources() -> list[EditingResource]:
             ))
             continue
         resources.append(EditingResource(
-            id=f"template:{identity}", category_id="templates", name=name, version=1,
+            id=f"template:{identity}", category_id="templates", name=template.name, version=template.version,
             status="connected", resource_type="visual_template",
             preview=ResourcePreview(kind="html", width=definition.width, height=definition.height,
                 duration_seconds=definition.duration_seconds),
             provenance=[ResourceProvenance.model_validate(item.model_dump()) for item in definition.provenance],
-            runtime_requirements={"engine": definition.engine, "dependencies": definition.dependencies},
-            entrypoints=["read_video_templates", "read_visual_template"],
+            runtime_requirements={
+                "engine": definition.engine, "dependencies": definition.dependencies,
+                "template_id": template.id, "template_version": template.version,
+                "operation_type": "EditGraphicOverlay",
+            },
+            entrypoints=["read_video_templates", "read_visual_template", "preview_typed_edit", "apply_typed_edit"],
         ))
     resources.extend(_packaged_skill_resources())
     resources.append(_packaged_music_resource())
