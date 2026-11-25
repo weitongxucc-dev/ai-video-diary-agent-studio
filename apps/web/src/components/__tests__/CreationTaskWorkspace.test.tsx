@@ -1950,6 +1950,54 @@ describe("CreationTaskWorkspace", () => {
     expect(screen.getByText(/本次保存时后台执行授权未就绪（原授权已过期）；修改已保留。/)).toBeVisible();
   });
 
+  it("shows the saved title timing and keeps playback position while the new version awaits media", async () => {
+    const initial = subtitleCoverWorkspace();
+    const title = { kind: "text" as const, id: "title-1", text: "数智分会",
+      start_seconds: 2, end_seconds: 4, x: .5, y: .15, width: .8, font_size: 64, font_family: "PingFang SC", color: "#FFFFFF" };
+    initial.montage!.graphic_overlays = [title];
+    const next = structuredClone(initial);
+    next.montage!.graphic_overlays = [{ ...title, start_seconds: 1.5, end_seconds: 3.5 }];
+    next.task.current_timeline_version_id = "timeline-version-7";
+    next.task.timeline_sequence = 7;
+    next.task.output_ready = false;
+    next.montage!.output_url = null;
+    next.montage!.status = "ready";
+    const proposal = exactPreview(initial.task, "EditGraphicOverlay");
+    proposal.proposal.target_refs = ["overlay:title-1"];
+    Object.assign(proposal.proposal.operation.payload, {
+      base_version_id: initial.task.current_timeline_version_id, graphic_overlays: next.montage!.graphic_overlays,
+    });
+    mocks.getWorkspace.mockResolvedValue(initial);
+    mocks.previewEdit.mockResolvedValue(proposal);
+    mocks.confirmEdit.mockResolvedValueOnce({ montage: next.montage, operation: {
+      id: "saved-title", task_id: initial.task.id, workspace_id: initial.task.workspace_id,
+      operation_type: "EditGraphicOverlay", status: "applied",
+      base_version_id: initial.task.current_timeline_version_id,
+      result_version_id: next.task.current_timeline_version_id,
+    } });
+
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
+    fireEvent.click(screen.getByRole("button", { name: /^标题1 · 数智分会/ }));
+    const player = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+    player.currentTime = 5;
+    fireEvent.timeUpdate(player);
+    fireEvent.change(await readyInput("局部修改要求"), { target: { value: "标题提前半秒" } });
+    fireEvent.click(screen.getByRole("button", { name: "精确预览修改" }));
+    expect(mocks.previewEdit).toHaveBeenCalledWith(initial.task.id, expect.objectContaining({
+      raw_command: "标题提前半秒", selected_object_refs: ["overlay:title-1"],
+    }));
+    const confirm = await screen.findByRole("button", { name: "应用到草稿" });
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    mocks.getWorkspace.mockResolvedValue(next);
+    await clickAndSettle(confirm);
+    expect(await screen.findByText("本次标题修改已保存，当前版本待合成。")).toBeVisible();
+    expect(screen.getByRole("slider", { name: "时间线播放位置" })).toHaveAttribute("aria-valuetext", "00:05.0");
+    expect(screen.queryByRole("button", { name: "回放刚才的修改" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "定位修改的标题" }));
+    expect(screen.getByRole("slider", { name: "时间线播放位置" })).toHaveAttribute("aria-valuetext", "00:01.5");
+  });
+
   it.each(['not_submitted','unknown'] as const)('timeline restore %s preserves the correct retry boundary', async effect=>{
     const initial=workspaceWithCover();
     mocks.getWorkspace.mockResolvedValue(initial);

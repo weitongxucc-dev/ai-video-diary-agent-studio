@@ -1,9 +1,10 @@
-import type { AssistantConversationTurn, CreationTaskEditConfirmResponse, CreationTaskEditOperation } from "@/lib/types";
+import type { AssistantConversationTurn, CreationTaskEditConfirmResponse, CreationTaskEditOperation, CreationTaskWorkspace } from "@/lib/types";
 import { assistantTaskTurnResult, assistantTurnScriptWindowRequest } from "../useAssistantConversation";
 
 export type TimelineEditTarget =
   | { kind: "shot"; id: string }
-  | { kind: "subtitle"; id: string; trackId?: string };
+  | { kind: "subtitle"; id: string; trackId?: string }
+  | { kind: "title"; id: string; replay: { startSeconds: number; endSeconds: number } };
 
 type ResultLocation =
   | { stage: "script"; scriptId: string; updatedAt?: string | null }
@@ -23,7 +24,26 @@ export function timelineEditTarget(operation: CreationTaskEditOperation): Timeli
 }
 
 export function timelineEditTargetLabel(target: TimelineEditTarget) {
+  if (target.kind === "title") return "定位修改的标题";
   return target.kind === "shot" ? "定位修改的镜头" : "定位修改的字幕";
+}
+
+export function savedTitleEditTarget(base: CreationTaskWorkspace, result: CreationTaskEditConfirmResponse): TimelineEditTarget | undefined {
+  const { operation, montage } = result;
+  if (operation.operation_type !== "EditGraphicOverlay" || !montage
+    || operation.task_id !== base.task.id || operation.workspace_id !== base.task.workspace_id
+    || operation.status !== "applied" || !operation.result_version_id
+    || operation.base_version_id !== base.task.current_timeline_version_id) return;
+  const moved = montage.graphic_overlays?.flatMap(overlay => {
+    if (overlay.kind !== "text" && overlay.kind !== "template") return [];
+    const previous = base.montage?.graphic_overlays?.find(item => item.id === overlay.id && item.kind === overlay.kind);
+    if (!previous || previous.start_seconds === overlay.start_seconds) return [];
+    const first = Math.min(previous.start_seconds, overlay.start_seconds);
+    const last = Math.max(previous.start_seconds, overlay.start_seconds);
+    return [{ kind: "title" as const, id: overlay.id,
+      replay: { startSeconds: Math.max(0, first - 1), endSeconds: Math.min(montage.duration_seconds, last + 1) } }];
+  }) ?? [];
+  if (moved.length === 1) return moved[0];
 }
 
 export function savedAssistantResultLocation(turn: AssistantConversationTurn, taskId: string): ResultLocation | null {

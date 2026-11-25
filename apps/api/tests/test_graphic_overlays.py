@@ -2,6 +2,8 @@ import subprocess
 import pytest
 from app.graphic_overlays import TextOverlay, validate_overlays, write_text_overlay, splice_overlays, compile_overlay_command
 from app.montage import CreationTaskMontagePlan, MontageClip, MontageRenderer, NarrationCue, _resolve_subtitle_font
+from app.creation.visual_template_catalog import visual_templates
+from app.creation.visual_template_contracts import VisualTemplateOverlay
 
 
 pytestmark = pytest.mark.usefixtures("granted_montage_renderer")
@@ -34,6 +36,37 @@ def test_overlay_commands_and_linked_intervals_preserve_text():
             validate_overlays(invalid,3)
     with pytest.raises(ValueError):
         TextOverlay(text=' ',start_seconds=0,end_seconds=1)
+
+
+def test_title_entry_command_moves_only_the_selected_title_interval():
+    title = TextOverlay(text='数智分会', start_seconds=2, end_seconds=4).model_dump()
+    other = TextOverlay(text='另一条标题', start_seconds=1, end_seconds=3).model_dump()
+    with pytest.raises(ValueError, match='请选中'):
+        compile_overlay_command('标题提前半秒', [title, other])
+    for command in ('标题提前半秒', '标题提前15帧', '标题「数智分会」入场改到第45帧'):
+        action, value, target = compile_overlay_command(command, [title, other],
+            selected_refs=[f"overlay:{title['id']}"])
+        assert (action, target) == ('update', title['id'])
+        assert value == {**title, 'start_seconds': 1.5, 'end_seconds': 3.5}
+    with pytest.raises(ValueError, match='请选中'):
+        compile_overlay_command('标题「数智分会」提前半秒', [title, other], selected_refs=[f"overlay:{other['id']}"])
+    with pytest.raises(ValueError):
+        compile_overlay_command('标题提前61帧', [title])
+    with pytest.raises(ValueError):
+        _, late, _ = compile_overlay_command('标题推迟15帧', [title])
+        validate_overlays([late], 4)
+    assert title['start_seconds'] == 2
+
+
+def test_title_entry_command_retains_template_source_time_and_keyframes():
+    definition = next(item for _, _, item in visual_templates() if item.category == 'title')
+    overlay = VisualTemplateOverlay(name='数智分会', template_id='title-template', template_version=1,
+        definition=definition, start_seconds=2, end_seconds=4, animation_offset_seconds=.25,
+        keyframes=[{'seconds': 0, 'opacity': 0}, {'seconds': 2, 'opacity': 1}]).model_dump()
+    action, value, target = compile_overlay_command('当前标题提前半秒', [overlay],
+        selected_refs=[f"overlay:{overlay['id']}"])
+    assert (action, target) == ('update', overlay['id'])
+    assert value == {**overlay, 'start_seconds': 1.5, 'end_seconds': 3.5}
 
 
 def test_overlay_raster_bounds_and_missing_font_are_explicit(tmp_path):
