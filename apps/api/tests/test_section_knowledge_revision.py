@@ -57,7 +57,7 @@ def test_fixed_manual_page_revises_one_section_on_existing_timeline(tmp_path, mo
     monkeypatch.setattr(main, '_creation_runtime', lambda: runtime)
     api = FastAPI()
     api.routes.extend(route for route in main.app.routes if route.name in {
-        'creation_task_narration_semantic_review', 'revise_creation_task_segment',
+        'creation_task_input_understanding', 'creation_task_narration_semantic_review', 'revise_creation_task_segment',
         'creation_task_segment_request', 'creation_task_segment_sources'})
     client = TestClient(api)
     submit_creation_stage(case.execution, case.scheduler, case.job, actor)
@@ -124,10 +124,35 @@ def test_fixed_manual_page_revises_one_section_on_existing_timeline(tmp_path, mo
         return settled
 
     try:
-        pending_turn, pending = start_turn('先给我看按这页修订第一段的方案，不要采用。')
+        before = repo.job_records.list_job_runs('local', task_id)
+        for message in (
+            '先给我看按这页修订第一段的方案，不要采用。',
+            '请采用说明书第 3 页，但先让我确认。',
+            '请采用说明书第 3 页，等待我授权。',
+            '请采用说明书第 3 页，前提是我审核通过。',
+            '请采用说明书第 3 页可以吗',
+            'Please apply page 3 after I approve.',
+        ):
+            turn, fields = start_turn(message)
+            reviewed = review(fields)
+            assert reviewed.status_code == 200, reviewed.text
+            assert submit(fields, reviewed.json(), 'apply').status_code == 403, message
+            assert repo.job_records.list_job_runs('local', task_id) == before
+            assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == base.id
+            conversations.finish_turn(turn, 'completed')
+
+        pending_turn, pending = start_turn('采用前先让我确认第 1 段。')
+        interpretation = client.post(task_root + '/assistant/input-understanding', json={
+            'assistant_turn_id': pending_turn, 'input_id': pending['input_id'],
+            'kind': 'adoption', 'summary': 'QA 模拟把要求先确认误判为采用',
+            'target_refs': ['section:section_1']})
+        assert interpretation.status_code == 200, interpretation.text
         proposed = review(pending)
         assert proposed.status_code == 200, proposed.text
         assert submit(pending, proposed.json(), 'apply').status_code == 403
+        assert repo.job_records.list_job_runs('local', task_id) == before
+        assert base.sequence == 3
+        assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == base.id
         candidate = settle_queued(submit(pending, proposed.json(), 'candidate'))
         assert candidate['adoption']['status'] == 'candidate'
         assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == base.id
