@@ -3889,8 +3889,8 @@ def test_segment_video_failure_resumes_same_unit_without_regenerating_audio(tmp_
     assert case.segments.read_request('local',case.task_id,'revision_1',case.actor)['status']=='succeeded'
 
 
-@pytest.mark.parametrize('full_timeline',[False,True])
-def test_section_undo_redo_preserves_later_other_section_publication(tmp_path,monkeypatch,full_timeline):
+@pytest.mark.parametrize('full_timeline,legacy_media',[(False,False),(True,False),(True,True)])
+def test_section_undo_redo_preserves_later_other_section_publication(tmp_path,monkeypatch,full_timeline,legacy_media):
     from app.creation.editing.metadata_use_case import MetadataEditUseCase
     from app.creation.editing.timeline_restore_use_case import TimelineRestoreUseCase,TimelineRestoreCommand,TimelineOutputQualification
     from app.creation.montage_stage_use_case import MontageStageUseCase
@@ -3914,18 +3914,29 @@ def test_section_undo_redo_preserves_later_other_section_publication(tmp_path,mo
         case.repo.montage_plan_adoption.save_creation_task_montage_plan('local',case.task_id,full.id,creation_task_montage_plan_to_payload(full))
         edits.ensure_montage_base('local',case.repo.task_records.get_creation_task('local',case.task_id),full)
     restore = TimelineRestoreUseCase(case.repo,edits)
+    original = next(operation for operation in case.repo.edit_records.list_edit_operations('local',case.task_id)
+                    if operation.operation_type == 'ReviseScriptSection')
     for redo,text in [(False,'原文'*130),(True,'原文更紧凑')]:
         task = case.repo.task_records.get_creation_task('local',case.task_id)
-        prepared = restore.prepare_restore(TimelineRestoreCommand('local',task,redo))
-        actual=case.repo.section_inputs.section_dependency_snapshot('local',case.task_id,'section_1')
-        if json.dumps(actual,sort_keys=True,default=str)!=json.dumps(prepared.section_dependencies,sort_keys=True,default=str):
-            differences = {key: {'actual': actual.get(key), 'expected': prepared.section_dependencies.get(key)}
-                for key in actual.keys() | prepared.section_dependencies.keys()
-                if json.dumps(actual.get(key),sort_keys=True,default=str) !=
-                    json.dumps(prepared.section_dependencies.get(key),sort_keys=True,default=str)}
-            pytest.fail(json.dumps({'redo': redo, 'different_dependencies': differences},
-                ensure_ascii=False,sort_keys=True,default=str))
-        result = restore.apply_restore(prepared,TimelineOutputQualification(prepared,False))
+        if legacy_media:
+            from test_timeline_history import publish_legacy_media_version
+            base = case.repo.timeline_records.get_timeline_version('local',task.current_timeline_version_id)
+            cut = publish_legacy_media_version(case.repo,base)
+            result = restore.execute(TimelineRestoreCommand('local',task,redo),actor=case.actor,
+                request_id=f'legacy-cut-section-restore-{redo}',target_operation_id=original.id,
+                expected_timeline_version_id=cut.id,expected_timeline_sequence=cut.sequence)
+            assert case.repo.timeline_records.get_timeline_version('local',cut.id) == cut
+        else:
+            prepared = restore.prepare_restore(TimelineRestoreCommand('local',task,redo))
+            actual=case.repo.section_inputs.section_dependency_snapshot('local',case.task_id,'section_1')
+            if json.dumps(actual,sort_keys=True,default=str)!=json.dumps(prepared.section_dependencies,sort_keys=True,default=str):
+                differences = {key: {'actual': actual.get(key), 'expected': prepared.section_dependencies.get(key)}
+                    for key in actual.keys() | prepared.section_dependencies.keys()
+                    if json.dumps(actual.get(key),sort_keys=True,default=str) !=
+                        json.dumps(prepared.section_dependencies.get(key),sort_keys=True,default=str)}
+                pytest.fail(json.dumps({'redo': redo, 'different_dependencies': differences},
+                    ensure_ascii=False,sort_keys=True,default=str))
+            result = restore.apply_restore(prepared,TimelineOutputQualification(prepared,False))
         assert (result.montage is not None)==full_timeline
         assert case.repo.section_inputs.effective_creation_script('local',case.task_id).sections[0].content==text
         assert case.repo.section_inputs.stage_segment_state('local',case.task_id,'section_2')==later

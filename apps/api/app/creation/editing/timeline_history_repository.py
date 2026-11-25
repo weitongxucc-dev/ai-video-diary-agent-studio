@@ -96,6 +96,16 @@ class TimelineHistoryReadRepository:
                 source_request_id=row["source_request_id"])
         return version, operation
 
+    def is_legacy_media_publication(self, version):
+        operation_id = version.created_by_operation_id
+        if operation_id is None or version.id != f"timeline_media_{operation_id}":
+            return False
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            row = conn.execute(_VERSION_QUERY + " AND v.id=? AND v.created_by_operation_id=?",
+                               (version.workspace_id, version.task_id, version.id, operation_id)).fetchone()
+            return row is not None and self._legacy_media_publication(conn, row)
+
     def page(self, workspace_id, task_id, *, limit=20, before_sequence=None):
         if not 1 <= limit <= 50 or before_sequence is not None and before_sequence < 1:
             raise ValueError("历史读取范围无效")

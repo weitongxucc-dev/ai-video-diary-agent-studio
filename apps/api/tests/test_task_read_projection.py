@@ -1,14 +1,19 @@
 """Task list, workspace and controls expose the same authoritative history facts."""
 from dataclasses import asdict, replace
 
+import pytest
+
 from test_task_media_grants import _visual_scope_case
 from test_task_media_grants import case
 from fastapi.testclient import TestClient
 
 
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state
+from test_timeline_history import publish_legacy_media_version
 
-def test_list_workspace_controls_agree_after_apply_undo_and_redo(tmp_path, monkeypatch):
+
+@pytest.mark.parametrize("legacy_media", [False, True])
+def test_list_workspace_controls_agree_after_apply_undo_and_redo(tmp_path, monkeypatch, legacy_media):
     main,repo,actor,media,runtime,client,original,track,store=_visual_scope_case(tmp_path,monkeypatch)
     try:
         # Workspace has richer Plan/Script prerequisites; assert its shared projection
@@ -21,6 +26,11 @@ def test_list_workspace_controls_agree_after_apply_undo_and_redo(tmp_path, monke
             assert (item['timeline_sequence'],item['can_undo'],item['can_redo'])==(
                 controls['timeline_sequence'],controls['can_undo'],controls['can_redo'])
             return item
+
+        def publish_after(item):
+            base = repo.timeline_records.get_timeline_version('local', item['current_timeline_version_id'])
+            return publish_legacy_media_version(repo, base)
+
         initial=read()
         assert initial['timeline_sequence']==1 and not initial['can_undo'] and not initial['can_redo']
         saved=client.post('/api/creation-tasks/task/edits/exact',json={
@@ -28,12 +38,40 @@ def test_list_workspace_controls_agree_after_apply_undo_and_redo(tmp_path, monke
         assert saved.status_code==200,saved.text
         applied=read()
         assert applied['timeline_sequence']==2 and applied['can_undo'] and not applied['can_redo']
-        assert client.post('/api/creation-tasks/task/timeline/undo',json={'request_id': 'test_list_workspace_controls_agree_after_apply_undo_and_redo:undo:31'}).status_code==200
+        if legacy_media:
+            cut = publish_after(applied)
+            after_cut = read()
+            assert after_cut['current_timeline_version_id'] == cut.id
+            assert after_cut['can_undo'] and not after_cut['can_redo']
+        undone_response = client.post('/api/creation-tasks/task/timeline/undo', json={'request_id': 'projection-undo'})
+        assert undone_response.status_code == 200, undone_response.text
         undone=read()
-        assert undone['timeline_sequence']==3 and undone['can_redo'] and not undone['can_undo']
-        assert client.post('/api/creation-tasks/task/timeline/redo',json={'request_id': 'test_list_workspace_controls_agree_after_apply_undo_and_redo:redo:34'}).status_code==200
+        assert undone['timeline_sequence']==3 + legacy_media and undone['can_redo'] and not undone['can_undo']
+        if legacy_media:
+            cut = publish_after(undone)
+            assert read()['can_redo']
+            event_id = f"event_{cut.created_by_operation_id}_media_result"
+            with repo.connection_factory() as conn:
+                conn.execute("UPDATE task_events SET payload_json=json_set(payload_json,'$.timeline_version_id',?) WHERE id=?",
+                             ("other-version", event_id))
+            assert not read()['can_redo']
+            refused = client.post('/api/creation-tasks/task/timeline/redo', json={'request_id': 'invalid-media-redo'})
+            assert refused.status_code == 409, refused.text
+            assert read()['current_timeline_version_id'] == cut.id
+            with repo.connection_factory() as conn:
+                conn.execute("UPDATE task_events SET payload_json=json_set(payload_json,'$.timeline_version_id',?) WHERE id=?",
+                             (cut.id, event_id))
+        redone_response = client.post('/api/creation-tasks/task/timeline/redo', json={'request_id': 'projection-redo'})
+        assert redone_response.status_code == 200, redone_response.text
         redone=read()
-        assert redone['timeline_sequence']==4 and redone['can_undo'] and not redone['can_redo']
+        assert redone['timeline_sequence']==4 + 2 * legacy_media and redone['can_undo'] and not redone['can_redo']
+        if legacy_media:
+            base = repo.timeline_records.get_timeline_version('local', redone['current_timeline_version_id'])
+            wrong_owner = repo.timeline_records.create_timeline_version(replace(
+                base, id='timeline_wrong_operation_result', parent_version_id=base.id, sequence=base.sequence + 1))
+            invalid = read()
+            assert invalid['current_timeline_version_id'] == wrong_owner.id
+            assert not invalid['can_undo'] and not invalid['can_redo']
     finally:
         runtime.stop(0)
 
@@ -110,6 +148,14 @@ def test_all_nested_task_responses_agree_after_edit_undo_and_redo(person_render_
     redone = read()
     assert redone["timeline_sequence"] == undone["timeline_sequence"] + 1
     assert redone["can_undo"] and not redone["can_redo"]
+    version = state.production.timeline_records.get_timeline_version(
+        state.workspace_id, redone["current_timeline_version_id"])
+    cut = publish_legacy_media_version(state.production, version)
+    assert read()["can_undo"]
+    blocked = state.client.post(base + "/timeline/undo", json={"request_id": "whole-restore-after-cut"})
+    assert blocked.status_code == 409, blocked.text
+    assert "不能覆盖后来成果" in blocked.text
+    assert read()["current_timeline_version_id"] == cut.id
 
 
 def test_no_history_and_script_revision_rule_are_real_entity_facts(tmp_path,monkeypatch):
