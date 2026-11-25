@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.creation_execution import CreationExecutionActor
 from app.schemas import TaskMediaJobResponse
+from app.task_media_submission_use_case import read_bound_cut_asset
 
 
 class MediaResultRejected(ValueError):
@@ -84,10 +85,18 @@ class MediaResultUseCase:
         return path
 
     def receipt(self, media, job, actor, scheduler):
-        from app.schemas import TaskMediaJobResponse
         current, event = media.read(job.workspace_id, job.id)
         if CreationExecutionActor.from_event(job.workspace_id, event) != actor or media.authorization_verdict(current,event,actor,check_scope=False) != "ready":
             raise MediaResultRejected(404, "任务媒体作业不存在")
+        if event["operation"] == "ffmpeg_execution" and event["result_kind"] == "media_output":
+            operations = event["arguments"]["edit_plan"].get("operations", [])
+            for operation in operations:
+                asset_id = operation.get("options", {}).get("asset_id")
+                if operation.get("operation") == "cut" and asset_id is not None:
+                    try:
+                        read_bound_cut_asset(self.repository, actor, asset_id)
+                    except (KeyError, PermissionError) as exc:
+                        raise MediaResultRejected(404, "任务媒体作业不存在") from exc
         verdict = media.check(current, event, actor)
         status = "stale" if verdict != "ready" and current.status not in {"failed", "cancelled"} else current.status
         result = None

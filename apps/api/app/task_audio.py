@@ -1504,7 +1504,7 @@ class TaskMediaJobs:
             except KeyError:
                 if direct_media_execution:
                     result = self.media_execution_delegate.submit(
-                        job, event, actor.identity_payload(), cancel_event=cancellation)
+                        job, event, actor.identity_payload(), cancel_event=cancellation, grant_context=context)
                 elif direct_command:
                     if self.command_preview is None:
                         raise ValueError('指令编辑执行负责人未组装')

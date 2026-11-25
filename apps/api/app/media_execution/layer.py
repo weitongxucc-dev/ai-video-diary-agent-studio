@@ -18,6 +18,9 @@ from app.creation.contracts import (
     TimelineVersion,
     TransformRun,
 )
+from app.device_scheduler import RecoveryBlocked
+from app.granted_subprocess import GrantedCommandCancelled, GrantedCommandOutputLimit, GrantedCommandTimeout
+from app.host_resource_probes import HostResourceRefusal
 from app.models import utc_now
 
 from .capabilities import dependency_payload, detect_dependencies
@@ -74,7 +77,7 @@ class MediaExecutionLayer:
                         failure_reason=job.failure_reason, impact=job.impact, repair_action=job.repair_action)
 
     def submit(self, plan: EditPlan | dict, *, idempotency_suffix: str | None = None,
-               cancel_event: threading.Event | None = None) -> dict[str, object]:
+               cancel_event: threading.Event | None = None, grant_context=None) -> dict[str, object]:
         plan = plan if isinstance(plan, EditPlan) else EditPlan.from_value(plan)
         digest = hashlib.sha256(json.dumps(plan.as_dict(), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         idempotency_key = f"media:{plan.task_id}:{plan.request_id}{idempotency_suffix or ''}"
@@ -97,7 +100,7 @@ class MediaExecutionLayer:
                     "dependencies": dependency_payload(self.dependencies)}, created_at=job.created_at), connection=conn)
         if persisted.id != job_id:
             return self._existing_result(persisted, plan)
-        return self._run(job_id, plan, cancel_event=cancel_event)
+        return self._run(job_id, plan, cancel_event=cancel_event, grant_context=grant_context)
 
     def _existing_result(self, job: JobRun, plan: EditPlan) -> dict[str, object]:
         """Return the durable receipt for a repeated idempotent submission."""
@@ -153,7 +156,7 @@ class MediaExecutionLayer:
         return self.submit(retry_plan, idempotency_suffix=f":retry:{uuid4().hex}")
 
     def _run(self, job_id: str, plan: EditPlan,
-             cancel_event: threading.Event | None = None) -> dict[str, object]:
+             cancel_event: threading.Event | None = None, *, grant_context=None) -> dict[str, object]:
         key = (plan.workspace_id, job_id)
         cancel_event = cancel_event or threading.Event()
         with self._cancel_lock:
@@ -168,19 +171,44 @@ class MediaExecutionLayer:
                 return self._job_receipt(self.read(*key))
             self._cancel_events[key] = cancel_event
         try:
+            check_publication = None
+            execution = {}
+            if grant_context is not None:
+                execution["grant_context"] = grant_context
+                check_dependencies = grant_context.scheduler.capture_dependency_check(grant_context.grant)
+
+                def check_publication():
+                    grant_context.check_execution_limits()
+                    check_dependencies()
+
             worker = self.worker or FfmpegWorker(self.dependencies)
             result = worker.execute(
                 plan, job_id, self.output_root, cancel_event=cancel_event,
                 progress=lambda value: self.repository.job_records.update_job_run_progress(*key, value),
+                **execution,
             )
             with self._cancel_lock:
                 if cancel_event.is_set():
                     raise MediaExecutionCancelled()
-                return self._publish(job_id, plan, result)
-        except MediaExecutionCancelled:
+                if grant_context is not None:
+                    grant_context.check()
+                return self._publish(job_id, plan, result, check_publication=check_publication)
+        except (MediaExecutionCancelled, GrantedCommandCancelled):
             with self._cancel_lock:
                 return self._cancelled(job_id, plan)
-        except MediaProcessReleaseUnverified:
+        except GrantedCommandTimeout:
+            return self._fail(job_id, plan, MediaExecutionError(
+                "media_command_timeout", "截取已超过获许可的总时限，未发布新版本。",
+                "检查素材规模和设备预算后再试。"))
+        except GrantedCommandOutputLimit:
+            return self._fail(job_id, plan, MediaExecutionError(
+                "media_cut_output_limit", "截取产物或帧探测结果超过获许可的输出上限，未发布新版本。",
+                "请选择大小或帧数在当前设备预算内的素材。"))
+        except HostResourceRefusal as exc:
+            return self._fail(job_id, plan, MediaExecutionError(
+                "media_cut_resource_refused", f"截取时的设备资源检查未通过（{exc.decision.reason}）。",
+                "资源恢复后再试。"))
+        except (MediaProcessReleaseUnverified, RecoveryBlocked):
             # Without proof of release, preserve the running state and refuse retries.
             raise
         except MediaExecutionError as exc:
@@ -191,9 +219,12 @@ class MediaExecutionLayer:
             with self._cancel_lock:
                 del self._cancel_events[key]
 
-    def _publish(self, job_id: str, plan: EditPlan, result: dict[str, object]) -> dict[str, object]:
+    def _publish(self, job_id: str, plan: EditPlan, result: dict[str, object], *,
+                 check_publication: Callable[[], None] | None = None) -> dict[str, object]:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if check_publication is not None:
+                check_publication()
             task = self.repository.task_records.get_creation_task(plan.workspace_id, plan.task_id, connection=conn)
             job_record = self.repository.job_records.get_job_run(plan.workspace_id, job_id, connection=conn)
             if task.current_timeline_version_id != plan.base_version_id:
@@ -264,6 +295,8 @@ class MediaExecutionLayer:
                 event_type="media_execution_completed", payload={"request_id": plan.request_id, "outputs": refs,
                     "timeline_version_id": version.id, "log_path": result["log_path"]}), connection=conn)
             self.repository.job_records.finish_job_run(plan.workspace_id, job_id, status="succeeded", output_refs=refs, connection=conn)
+            if check_publication is not None:
+                check_publication()
         return {"job_id": job_id, "status": "succeeded", "request_id": plan.request_id,
                 "timeline_version_id": version.id, "output_refs": refs, "log_path": result["log_path"],
                 "failure_reason": None, "impact": None, "repair_action": None}

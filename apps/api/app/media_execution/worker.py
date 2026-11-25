@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import subprocess
@@ -11,7 +12,9 @@ from contextlib import suppress
 from functools import partial
 from pathlib import Path
 
-from .adapter import FfmpegAdapter
+from app.granted_subprocess import GrantedCommandTimeout, run_granted_command
+
+from .adapter import FfmpegAdapter, VideoCut, is_bound_video_cut, video_frame_intervals
 from .capabilities import ToolDependency
 from .contracts import (
     EditPlan,
@@ -39,7 +42,7 @@ class FfmpegWorker:
 
     def execute(self, plan: EditPlan, job_id: str, output_root: Path,
                 *, progress: Callable[[int], None] | None = None,
-                cancel_event: threading.Event | None = None) -> dict[str, object]:
+                cancel_event: threading.Event | None = None, grant_context=None) -> dict[str, object]:
         job_root = output_root / job_id
         job_root.mkdir(parents=True, exist_ok=True)
         log_path = job_root / f"request-{plan.request_id}.jsonl"
@@ -80,11 +83,24 @@ class FfmpegWorker:
                 "operation": operation.operation, "index": index,
             })
             log("command_start", inputs=[str(item) for item in inputs], output=str(output_path))
-            prepared = self.adapter.concat(inputs, output_path, job_root / f"step-{index}.concat.txt") if operation.operation.lower() == "join" else self.adapter.prepare(
-                operation.__class__(operation=operation.operation, inputs=tuple(str(item) for item in inputs),
-                                    output_name=operation.output_name, options=operation.options), output_path)
+            cut = None
+            name = operation.operation.lower()
+            if is_bound_video_cut(operation):
+                source_media = self._probe_video_cut(inputs[0], cancel_event, log, grant_context)
+                cut = VideoCut.from_source(source_media, operation.options["start"], operation.options["duration"])
+                threads = grant_context.threads if grant_context is not None else None
+                prepared = self.adapter.video_cut(name, inputs[0], output_path, cut, threads=threads)
+            elif name == "join":
+                prepared = self.adapter.concat(inputs, output_path, job_root / f"step-{index}.concat.txt")
+            else:
+                prepared = self.adapter.prepare(
+                    operation.__class__(operation=operation.operation, inputs=tuple(str(item) for item in inputs),
+                                        output_name=operation.output_name, options=operation.options), output_path)
             try:
-                completed = self._run_process(prepared.command, cancel_event, log)
+                if cut is not None and grant_context is not None:
+                    completed = self._run_granted_cut(prepared.command, grant_context, output_path=output_path)
+                else:
+                    completed = self._run_process(prepared.command, cancel_event, log)
             except MediaProcessReleaseUnverified as exc:
                 # A log write failure must not turn an unverified release into a retryable failure.
                 with suppress(OSError):
@@ -106,11 +122,65 @@ class FfmpegWorker:
                 if not output_path.exists() or output_path.stat().st_size == 0:
                     raise MediaExecutionError("media_output_missing", "FFmpeg 未产生可信输出。", "检查编码器和输出目录后沿原请求重试。")
                 summary = {"size_bytes": output_path.stat().st_size}
+                if cut is not None:
+                    summary.update(self._validate_video_cut(output_path, cut, cancel_event, log, grant_context))
             current_outputs.append({"path": str(output_path), "operation": operation.operation,
                                     "output_name": output_name, "summary": summary})
             if progress is not None:
                 progress(int(index * 100 / total))
         return {"outputs": current_outputs, "log_path": str(log_path), "request_id": plan.request_id}
+
+    @staticmethod
+    def _run_granted_cut(command, context, *, output_path=None) -> subprocess.CompletedProcess[str]:
+        env = dict(os.environ)
+        env.pop("FFREPORT", None)
+        if output_path is not None:
+            result = context.run(command, env=env, output_paths=(output_path,))
+        else:
+            # Full-source frame timing can exceed the context's default
+            # pipe limit. Bound this read using the admitted output bytes.
+            context.check()
+            remaining = context.command_deadline_monotonic - time.monotonic()
+            if remaining <= 0:
+                raise GrantedCommandTimeout("制作阶段总时限已到")
+            result = run_granted_command(context.scheduler, context.grant, command,
+                timeout_seconds=remaining, max_stdout_bytes=context.max_output_bytes, max_stderr_bytes=65536,
+                cancel_event=context.cancel_event, env=env)
+        return subprocess.CompletedProcess(command, result.returncode,
+            result.stdout.decode("utf-8", errors="replace"), result.stderr.decode("utf-8", errors="replace"))
+
+    def _probe_video_cut(self, path: Path, cancel_event, log, grant_context) -> dict:
+        threads = grant_context.threads if grant_context is not None else None
+        command = self.adapter.cut_probe_command(path, threads=threads)
+        probe = (self._run_granted_cut(command, grant_context) if grant_context is not None
+                 else self._run_process(command, cancel_event, log))
+        if probe.returncode != 0:
+            log("video_cut_probe_failed", stderr=probe.stderr[-4000:])
+            raise MediaExecutionError("media_cut_probe_failed", "视频画面无法核验，未发布截取文件。",
+                                      "检查源片和编码器后查询原截取作业。")
+        return self.adapter.parse_probe(probe.stdout)
+
+    def _validate_video_cut(self, path: Path, cut: VideoCut, cancel_event, log, grant_context) -> dict:
+        media = self._probe_video_cut(path, cancel_event, log, grant_context)
+        actual = [(begin, end) for _, begin, end in video_frame_intervals(media)]
+        try:
+            actual_duration = float(media["format"]["duration"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise MediaExecutionError("media_cut_duration_unverified", "截取文件缺少可核验的容器时长，未发布。",
+                                      "检查源片时间戳后查询原截取作业。") from exc
+        # Allow two output ticks for the filter and muxer's timestamp rounding.
+        same_intervals = len(actual) == len(cut.intervals) and all(
+            abs(actual_start - start) <= 2 / 90000 and abs(actual_end - end) <= 2 / 90000
+            for (actual_start, actual_end), (start, end) in zip(actual, cut.intervals)
+        )
+        if (not same_intervals or media["streams"][0].get("codec_name") != "h264"
+                or not math.isclose(actual_duration, float(cut.source_end - cut.source_start), rel_tol=0, abs_tol=0.01)):
+            raise MediaExecutionError("media_cut_range_mismatch", "截取文件的画面或时长与请求区间不一致，未发布。",
+                                      "检查源片时间戳和截取范围后查询原作业。")
+        facts = {"video_frames": len(actual), "duration_seconds": actual_duration,
+                 "video_start_seconds": float(actual[0][0]), "video_end_seconds": float(actual[-1][1])}
+        log("video_cut_verified", **facts)
+        return facts
 
     def _run_process(self, command: tuple[str, ...], cancel_event: threading.Event | None,
                      log: Callable[..., None]) -> subprocess.CompletedProcess[str]:
