@@ -510,7 +510,7 @@ class EditRecordStore:
         base_row = conn.execute(
             """
             SELECT * FROM timeline_versions
-            WHERE workspace_id = ? AND task_id = ? AND id = ?
+            WHERE workspace_id = ? AND task_id = ? AND id = ? AND candidate_id IS NULL
             """,
             (
                 operation.workspace_id,
@@ -525,7 +525,7 @@ class EditRecordStore:
         result_row = conn.execute(
             """
             SELECT * FROM timeline_versions
-            WHERE workspace_id = ? AND task_id = ? AND id = ?
+            WHERE workspace_id = ? AND task_id = ? AND id = ? AND candidate_id IS NULL
             """,
             (
                 operation.workspace_id,

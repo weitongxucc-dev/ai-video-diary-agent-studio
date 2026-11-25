@@ -66,7 +66,8 @@ class ProfileCandidateFeedbackReader:
                 (workspace_id, row['plan_id'])).fetchone()
             plan = json.loads(plan_row['payload']) if plan_row else {}
             def rows(table, order):
-                return conn.execute(f'SELECT * FROM {table} WHERE workspace_id=? AND task_id=? ORDER BY {order} LIMIT 2001',
+                scope = ' AND candidate_id IS NULL' if table == 'timeline_versions' else ''
+                return conn.execute(f'SELECT * FROM {table} WHERE workspace_id=? AND task_id=?{scope} ORDER BY {order} LIMIT 2001',
                     (workspace_id, task_id)).fetchall()
             tables = {table: rows(table, order) for table, order in (
                 ('narration_segments', 'created_at,id'), ('person_renders', 'created_at,id'),
