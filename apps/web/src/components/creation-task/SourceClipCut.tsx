@@ -28,7 +28,15 @@ export type SourceClipCutTarget = {
   end: number;
 };
 
-type Attempt = { input: SourceClipCutInput; sourceName: string; clipNumber: number; baseSequence: number; jobId?: string };
+type PublishedCut = { id: string; sequence: number };
+type Attempt = {
+  input: SourceClipCutInput;
+  sourceName: string;
+  clipNumber: number;
+  baseSequence: number;
+  jobId?: string;
+  observedPublication?: PublishedCut;
+};
 const preparationId = /^[0-9a-f]{32}$/;
 const requestId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const validRange = (start: number, end: number) => Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start;
@@ -43,6 +51,12 @@ function readAttempt(key: string): Attempt | null {
       || typeof saved.sourceName !== "string" || !Number.isSafeInteger(saved.clipNumber) || !Number.isSafeInteger(saved.baseSequence)
       || (saved.jobId !== undefined && (typeof saved.jobId !== "string" || !saved.jobId))) {
     throw new Error("无法核对本机保存的原截取请求。");
+  }
+  const publication = saved.observedPublication;
+  if (publication !== undefined && (!saved.jobId || typeof publication?.id !== "string" || !publication.id
+      || publication.id === saved.input.base_version_id || !Number.isSafeInteger(publication.sequence)
+      || publication.sequence <= saved.baseSequence)) {
+    throw new Error("无法核对本机保存的截取发布记录。");
   }
   return saved;
 }
@@ -106,7 +120,7 @@ export function SourceClipCut({ target, currentVersionId, onJob, onPublished }: 
   const [scope, setScope] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<Attempt | null>(null);
   const [job, setJob] = useState<TaskMediaJob | null>(null);
-  const [savedVersion, setSavedVersion] = useState<{ id: string; sequence: number } | null>(null);
+  const [savedVersion, setSavedVersion] = useState<PublishedCut | null>(null);
   const [readRevision, setReadRevision] = useState(0);
   const [scopeRevision, setScopeRevision] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -132,10 +146,11 @@ export function SourceClipCut({ target, currentVersionId, onJob, onPublished }: 
     return () => controller.abort();
   }, [taskId, scopeRevision]);
 
+  const jobId = attempt?.jobId;
+  const originalInput = attempt?.input;
+  const originalSequence = attempt?.baseSequence;
   useEffect(() => {
-    const jobId = attempt?.jobId;
-    if (!jobId || !scope) return;
-    const { input, baseSequence } = attempt;
+    if (!jobId || !scope || !originalInput || originalSequence === undefined) return;
     const controller = new AbortController();
     const signal = controller.signal;
     setSavedVersion(null);
@@ -143,28 +158,37 @@ export function SourceClipCut({ target, currentVersionId, onJob, onPublished }: 
       try {
         const response = await getCreationTaskMediaJob(taskId, jobId, signal);
         const result = await resolveCreationTaskMediaResponse(taskId, response, "media_output", {
-          signal, baseVersionId: input.base_version_id,
+          signal, baseVersionId: originalInput.base_version_id,
           onUpdate: value => {
-            requireSourceClipCutJob(taskId, value, input.base_version_id, jobId);
+            requireSourceClipCutJob(taskId, value, originalInput.base_version_id, jobId);
             setJob(value);
             callbacks.current.onJob(value);
           },
         });
-        const output = requireSourceClipCutResult(taskId, jobId, input, result);
+        const output = requireSourceClipCutResult(taskId, jobId, originalInput, result);
         const current = await getDeviceResourceStatus(signal);
         if (signal.aborted) return;
         if (current.actor_scope !== scope) throw new Error("当前设备或成员已变化，请关闭后重新打开截取。");
         const sequence = await callbacks.current.onPublished(output.timeline_version_id, signal);
         if (signal.aborted) return;
-        if (sequence === null || sequence <= baseSequence) throw new Error("截取回执已返回，当前作品版本与登记结果不一致。");
-        setSavedVersion({ id: output.timeline_version_id, sequence });
+        if (sequence === null || sequence <= originalSequence) throw new Error("截取回执已返回，当前作品版本与登记结果不一致。");
+        const observedPublication = { id: output.timeline_version_id, sequence };
+        setSavedVersion(observedPublication);
+        // Retain the observed terminal result for dismissing an old receipt.
+        // Opening bytes still requires today's authorized result and version.
+        const key = storageKey(scope, taskId);
+        const persisted = readAttempt(key);
+        if (persisted?.jobId === jobId && persisted.input.request_id === originalInput.request_id) {
+          localStorage.setItem(key, JSON.stringify({ ...persisted, observedPublication }));
+          setAttempt(current => current?.jobId === jobId ? { ...current, observedPublication } : current);
+        }
       } catch (cause) {
         if (!signal.aborted && !(cause instanceof TaskMediaJobError)) setFailure(failureMessage(cause));
       }
     };
     void read();
     return () => controller.abort();
-  }, [attempt, taskId, scope, readRevision]);
+  }, [originalInput, originalSequence, jobId, taskId, scope, readRevision]);
 
   async function run(action: (scope: string, signal: AbortSignal) => Promise<void>) {
     const signal = lifetime.current;
@@ -255,8 +279,12 @@ export function SourceClipCut({ target, currentVersionId, onJob, onPublished }: 
   const taskBusy = job && ["queued", "running", "interrupted"].includes(job.status);
   const originalRetry = job && ["failed", "cancelled"].includes(job.status) && job.failure_reason !== "result_invalid"
     && currentVersionId === job.base_version_id;
-  const terminal = job && ["succeeded", "failed", "cancelled", "stale"].includes(job.status);
   const savedCurrent = savedVersion?.id === currentVersionId;
+  const observedPublication = attempt?.observedPublication;
+  const previousPublication = current && observedPublication && target.baseSequence > observedPublication.sequence
+    ? observedPublication : undefined;
+  const canStartAnother = current && (savedVersion || previousPublication
+    || job?.status === "failed" || job?.status === "cancelled");
   const selected = attempt ?? target;
   return <div className={styles.form}>
     <p>镜头 {selected.clipNumber} · {selected.sourceName} · 作品第 {selected.baseSequence} 版</p>
@@ -267,6 +295,7 @@ export function SourceClipCut({ target, currentVersionId, onJob, onPublished }: 
     {attempt ? <>
       <p>原片 {attempt.input.start_seconds}–{attempt.input.end_seconds} 秒</p>
       <p role="status">{savedVersion ? `MP4 已保存到作品，登记于第 ${savedVersion.sequence} 版。`
+        : previousPublication ? `原截取已登记于第 ${previousPublication.sequence} 版，当前作品版本已变化。`
         : job ? cutStatus(job) : attempt.jobId ? "正在读取原截取作业…" : "原请求尚未取得队列回执。"}</p>
       {job?.status === "failed" && job.failure_reason && job.failure_reason !== "result_invalid" ? <p>原因：{job.failure_reason}</p> : null}
       {job?.repair_action ? <p>{job.repair_action}</p> : null}
@@ -288,7 +317,7 @@ export function SourceClipCut({ target, currentVersionId, onJob, onPublished }: 
           await retryCreationTaskMediaJob(taskId, job.job_id);
           if (!signal.aborted) setReadRevision(value => value + 1);
         })}>重试原作业</Button> : null}
-        {terminal && current && (job.status !== "succeeded" || savedVersion) ? <Button variant="ghost" disabled={busy} onClick={() => void run(async actorScope => {
+        {canStartAnother ? <Button variant="ghost" disabled={busy} onClick={() => void run(async actorScope => {
           const key = storageKey(actorScope, taskId);
           if (readAttempt(key)?.input.request_id !== attempt.input.request_id) {
             throw new Error("另一窗口已更新原截取记录，请关闭后重新打开。");

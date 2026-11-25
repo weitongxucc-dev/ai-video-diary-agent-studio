@@ -42,8 +42,8 @@ async function verifyPreparation() {
   fireEvent.click(screen.getByRole("button", { name: "核对回执" }));
 }
 
-const renderCut = (currentVersionId = target.baseVersionId, onPublished = vi.fn().mockResolvedValue(version.sequence)) =>
-  render(<SourceClipCut target={target} currentVersionId={currentVersionId} onPublished={onPublished} onJob={vi.fn()} />);
+const renderCut = (currentVersionId = target.baseVersionId, onPublished = vi.fn().mockResolvedValue(version.sequence), selected = target) =>
+  render(<SourceClipCut target={selected} currentVersionId={currentVersionId} onPublished={onPublished} onJob={vi.fn()} />);
 
 afterEach(() => {
   cleanup();
@@ -69,6 +69,7 @@ it.each([
 it("reconciles a lost cut receipt with the same request, then reopens the published output by GET", async () => {
   let original: Record<string, unknown> | undefined;
   let submissions = 0;
+  let publishedHeadAdvanced = false;
   const media = vi.fn((path: string, init?: RequestInit) => {
     if (path === mediaPath && init?.method === "POST") {
       const input = JSON.parse(init.body as string);
@@ -76,13 +77,18 @@ it("reconciles a lost cut receipt with the same request, then reopens the publis
         original = input;
         return Promise.reject(new Error("lost response"));
       }
+      if (publishedHeadAdvanced) return json({ ...audioCutJob, job_id: "next-cut", result_url: `${mediaPath}/next-cut`,
+        base_version_id: "advanced" }, 202);
       expect(input).toEqual(original);
       return json(audioCutJob, 202);
     }
+    if (path === jobPath && publishedHeadAdvanced) return json({ ...audioCutJob, status: "stale" });
     if (path === jobPath) return json({ ...audioCutJob, status: "succeeded", result: {
       request_id: original?.request_id, base_version_id: "base", timeline_version_id: version.id,
       output_refs: ["artifact:mp4"], output_urls: [`${jobPath}/outputs/1`],
     } });
+    if (path === `${mediaPath}/next-cut`) return json({ ...audioCutJob, job_id: "next-cut", result_url: path,
+      base_version_id: "advanced", status: "queued" });
     if (path === `${jobPath}/outputs/1`) return Promise.resolve(new Response("mp4", { headers: { "Content-Type": "video/mp4" } }));
     throw new Error(`Unexpected request ${path}`);
   });
@@ -113,6 +119,7 @@ it("reconciles a lost cut receipt with the same request, then reopens the publis
   const changed = renderCut("unrelated-version", vi.fn().mockResolvedValue(null));
   expect(await screen.findByRole("alert")).toHaveTextContent("当前作品版本与登记结果不一致");
   expect(screen.queryByRole("button", { name: "打开截取文件" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "截取另一段" })).not.toBeInTheDocument();
   changed.unmount();
 
   const revokeObjectURL = vi.fn();
@@ -127,8 +134,51 @@ it("reconciles a lost cut receipt with the same request, then reopens the publis
   expect(video).toHaveAttribute("controls");
   expect(video).not.toHaveAttribute("autoplay");
   expect(screen.getByRole("link", { name: "下载 MP4" })).toHaveAttribute("href", "blob:original-cut");
-  reopened.unmount();
+  publishedHeadAdvanced = true;
+  reopened.rerender(<SourceClipCut target={target} currentVersionId="advanced" onJob={vi.fn()} onPublished={onPublished} />);
+  expect(video).not.toBeInTheDocument();
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:original-cut");
+  reopened.unmount();
+
+  const advanced = { ...target, baseVersionId: "advanced", baseSequence: 14, clipNumber: 3,
+    assetId: "next-source", sourceName: "next.mp4", start: 2, end: 3 };
+  renderCut(advanced.baseVersionId, vi.fn().mockResolvedValue(null), advanced);
+  expect(await screen.findByText(/原截取已登记于第 13 版，当前作品版本已变化/)).toBeInTheDocument();
+  expect(screen.queryByLabelText("已保存的截取片段")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "打开截取文件" })).not.toBeInTheDocument();
+  expect(media.mock.calls.filter(([path]) => path.endsWith("/outputs/1"))).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "截取另一段" }));
+  expect(await screen.findByText("镜头 3 · next.mp4 · 作品第 14 版")).toBeInTheDocument();
+  expect(submissions).toBe(2);
+  await verifyPreparation();
+  await screen.findByText(/已核对这份准备回执/);
+  fireEvent.click(screen.getByRole("button", { name: "截取并保存" }));
+  await waitFor(() => expect(submissions).toBe(3));
+  const nextPost = media.mock.calls.filter(([path]) => path === mediaPath).at(-1)![1];
+  const nextInput = JSON.parse(nextPost?.body as string);
+  expect(nextInput).toEqual({ request_id: expect.any(String), base_version_id: "advanced", asset_id: "next-source",
+    start_seconds: 2, end_seconds: 3, preparation_request_id: preparationId });
+  expect(nextInput.request_id).not.toBe(original?.request_id);
+});
+
+it("keeps an unverified original receipt when its job is stale", async () => {
+  const media = vi.fn((path: string) => {
+    if (path === mediaPath) return json(audioCutJob, 202);
+    if (path === jobPath) return json({ ...audioCutJob, status: "stale" });
+    throw new Error(`Unexpected request ${path}`);
+  });
+  mockRequests(media);
+  const first = renderCut();
+  await verifyPreparation();
+  await screen.findByText(/已核对这份准备回执/);
+  fireEvent.click(screen.getByRole("button", { name: "截取并保存" }));
+  await screen.findByText("原版本、素材或准备回执已失效。");
+  first.unmount();
+  renderCut("advanced", vi.fn().mockResolvedValue(null), { ...target, baseVersionId: "advanced", baseSequence: 13 });
+  await screen.findByText("原版本、素材或准备回执已失效。");
+  expect(screen.queryByRole("button", { name: "截取另一段" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "打开截取文件" })).not.toBeInTheDocument();
+  expect(media.mock.calls.filter(([path]) => path === mediaPath)).toHaveLength(1);
 });
 
 it("offers explicit recovery on a failed job with the original identity", async () => {
