@@ -37,6 +37,10 @@
 .catalogPreview audio { inline-size:100%; }
 .stickerThumbnail,.stickerPreview { display:block; object-fit:contain; max-inline-size:100%; }
 .stickerPreview { justify-self:center; }
+.skillCard strong { overflow-wrap:anywhere; }
+.skillCard summary { cursor:pointer; font-size:12px; }
+.skillCard details > div { margin-block-start:6px; }
+.skillCard ul { margin:4px 0; padding-inline-start:18px; overflow-wrap:anywhere; }
 
 .adoptionFields { display:grid; gap:10px; margin:0; padding:0; border:0; min-width:0; }
 .adoptionFields label { display:grid; gap:4px; }
