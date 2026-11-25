@@ -149,8 +149,9 @@ export function registerObservationTools(pi: ToolRegistrar, {request, taskId, ve
         const query = `/api/creation-tasks/${encodeURIComponent(taskId!)}/assistant/edit-requests/${encodeURIComponent(params.request_id)}?phase=observation`;
         const receipt = await request(query);
         if (receipt.task_id !== taskId || receipt.request_id !== params.request_id || receipt.phase !== "observation") throw new Error("观察请求回执身份不一致");
-        const details = receipt.status === "recorded" && receipt.result?.job_id
-          ? {kind: "task_media_job", media_job: receipt.result}
+        const details = receipt.status === "recorded" && receipt.result_status_code === 202
+            && receipt.result?.result_kind === "observation" && receipt.result.job_id
+          ? {kind: "task_media_job", task_id: taskId, request_id: receipt.request_id, media_job: receipt.result}
           : {kind: "edit_request_status", ...receipt, query_url: query};
         return {content: [{type: "text", text: JSON.stringify(details)}], details};
       },

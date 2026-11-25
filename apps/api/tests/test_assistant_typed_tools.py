@@ -141,7 +141,7 @@ globalThis.fetch=async(url,init)=>{
  if(path.endsWith('/observations')){value=init?.method==='POST'?input.observation_job:input.observations;
   if(init?.method==='POST'&&input.lost_receipt)throw new TypeError('fixture reply lost');}
  if(path.endsWith('/edits/exact/preview')){value=input.preview;if(input.lost_receipt)throw new TypeError('fixture reply lost');}
- if(path.includes('/assistant/edit-requests/')){const phase=new URL(url).searchParams.get('phase');value={task_id:'task-current',request_id:path.split('/').pop(),phase,status:'recorded',result:phase==='observation'?input.observation_job:input.preview,...(phase==='observation'?input.observation_receipt:{})};}
+ if(path.includes('/assistant/edit-requests/')){const phase=new URL(url).searchParams.get('phase');value={task_id:'task-current',request_id:path.split('/').pop(),phase,status:'recorded',result:phase==='observation'?input.observation_job:input.preview,...(phase==='observation'?{result_status_code:202,...input.observation_receipt}:{})};}
  if(path.includes('/media-jobs/'))value=input.job;
  const failed=Boolean(body&&input.failure&&(!input.failure_once||failedPosts++===0));
  return {ok:!failed,status:failed?(input.failure_status||422):200,json:async()=>failed?{detail:'字段或版本拒绝'}:value};
@@ -560,11 +560,17 @@ def test_distinct_output_observations_are_not_limited_by_a_round_counter(tmp_pat
     assert [call["body"]["sample_times_seconds"] for call in posts] == [[1], [2], [3], [4]]
 
 
-def test_unknown_observation_receipt_is_queried_without_replaying(tmp_path):
+@pytest.mark.parametrize('match', ['original', 'other_request'])
+def test_unknown_observation_receipt_is_queried_without_replaying(tmp_path, match):
+    from app.assistant.result_projection import project_business_result
+
     job = {"job_id": "observation-job", "result_kind": "observation", "status": "queued"}
+    completed = {**job, "status": "succeeded", "result": {"observation_id": job["job_id"]}}
     request = {"tool": "observe_task_output", "args": {"target": {"kind": "final"}}}
-    seen = invoke(tmp_path, observation_job=job, lost_receipt=True, steps=[request, request,
-        {"tool": "read_task_observation_request", "fromReceipt": True}])
+    lookup = {"tool": "read_task_observation_request", "fromReceipt": match == "original",
+              "args": {"request_id": "a9e655e9-1dc2-49b2-a3e0-0429d929413e"}}
+    read = {"tool": "read_task_media_job", "args": {"job_id": job["job_id"]}}
+    seen = invoke(tmp_path, observation_job=job, job=completed, lost_receipt=True, steps=[request, request, lookup, read])
     result = seen["results"][0]["result"]["details"]
     assert result["status"] == "result_unknown" and result["phase"] == "observation"
     assert result["assistant_turn_id"] == "trusted-turn" and result["tool_call_id"] == "fixture"
@@ -574,6 +580,18 @@ def test_unknown_observation_receipt_is_queried_without_replaying(tmp_path):
     assert "尚待核验" in json.dumps(blocked, ensure_ascii=False)
     assert seen["results"][2]["result"]["details"]["media_job"] == job
     assert sum(call["method"] == "POST" for call in seen["calls"]) == 1
+    events = []
+    for step, index in [(request, 0), (lookup, 2), (read, 3)]:
+        value = seen["results"][index]["result"]
+        events.append({"type": "tool_execution_end", "toolName": step["tool"],
+                       "isError": value.get("isError", False), "result": value})
+    answer, projected = project_business_result({"answer": "已回读作业", "status": "settled", "tool_results": events})
+    if match == "original":
+        assert projected == {"kind": "media_job", "media_job": completed}
+        assert "检查已完成" in answer
+    else:
+        assert projected["kind"] == "edit_request_status" and projected["request_id"] == result["request_id"]
+        assert projected["status"] == "result_unknown"
 
 
 @pytest.mark.parametrize('foreign', [False, True])

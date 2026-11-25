@@ -378,8 +378,19 @@ def project_business_result(result: dict, kind: str = "edit_preview") -> tuple[s
                 if kind == "edit_preview" and details.get("kind") == "task_media_job":
                     candidate = details['media_job']
                     job_id = candidate.get('job_id')
-                    if event.get('toolName') in {'preview_typed_edit', 'preview_media_script',
-                            'preview_media_script_tool', 'observe_task_output'}:
+                    recovered_observation = (
+                        event.get('toolName') == 'read_task_observation_request'
+                        and candidate.get('result_kind') == 'observation' and job_id
+                        and edit_request_status is not None
+                        and edit_request_status.get('phase') == 'observation'
+                        and edit_request_status.get('status') in {'unknown', 'result_unknown'}
+                        and details.get('request_id') and details['request_id'] == edit_request_status.get('request_id')
+                        and details.get('task_id') and details['task_id'] == edit_request_status.get('task_id')
+                    )
+                    if recovered_observation:
+                        edit_request_status = None
+                    if recovered_observation or event.get('toolName') in {
+                            'preview_typed_edit', 'preview_media_script', 'preview_media_script_tool', 'observe_task_output'}:
                         submitted_media_jobs.add(job_id)
                         media_job = candidate
                     elif not submitted_media_jobs or job_id == (media_job or {}).get('job_id'):
