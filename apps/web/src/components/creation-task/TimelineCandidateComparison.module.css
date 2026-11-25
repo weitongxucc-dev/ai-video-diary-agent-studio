@@ -1,0 +1,77 @@
+.comparison {
+  container-type: inline-size;
+  display: grid;
+  gap: var(--space-md);
+}
+
+.sides,
+.fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+.side,
+.form,
+.side label {
+  display: grid;
+  align-content: start;
+  gap: var(--space-xs);
+  min-inline-size: 0;
+}
+
+.side {
+  gap: var(--space-sm);
+  padding: var(--space-sm);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+}
+
+.side select,
+.side input {
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: var(--control-height);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  padding-inline: var(--space-sm);
+  background: var(--surface-1);
+  color: var(--text-1);
+  font: inherit;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.comparison p {
+  margin: 0;
+}
+
+.meta {
+  color: var(--text-3);
+  font-size: var(--font-size-meta);
+  font-variant-numeric: var(--numeric-variant);
+  line-height: var(--line-meta);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.video {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  max-block-size: 40dvh;
+  object-fit: contain;
+  background: var(--surface-2);
+}
+
+@container (max-width: 24rem) {
+  .sides {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

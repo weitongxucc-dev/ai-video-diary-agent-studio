@@ -17,6 +17,7 @@ import { TaskViewNavigation } from "../creation-task/TaskViewNavigation";
 import { Tabs } from "../ui/tabs";
 import { ScriptEditor, ConfirmedScriptView } from "../creation-task/ScriptStage";
 import * as creationTaskApi from "@/lib/api/creation-tasks";
+import * as candidateApi from "@/lib/api/timeline-candidates";
 const previewReadRestores: (() => void)[] = [];
 vi.mock("@/lib/api/creation-tasks", async importOriginal => ({
   ...await importOriginal<typeof import("@/lib/api/creation-tasks")>(),
@@ -3502,6 +3503,68 @@ describe("CreationTaskWorkspace", () => {
     const clips = within(timeline).getAllByRole("button", { name:/^定位镜头/ });
     expect(clips[0]).toHaveStyle({ left:"20%", width:"20%" });
     expect(clips[1]).toHaveStyle({ left:"50%", width:"50%" });
+  });
+
+  it("compares the fixed timeline clip through the toolbar and returns to the same formal position", async () => {
+    const initial = subtitleCoverWorkspace();
+    initial.montage!.clips = [{
+      id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1", source_reference: "workspace://clip.mp4",
+      source_start_seconds: 0, source_end_seconds: 3, timeline_start_seconds: 2, timeline_end_seconds: 5,
+      match_score: .9, needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false,
+    }];
+    const base = initial.task.current_timeline_version_id!;
+    const details = ["a", "b"].map((id, index): candidateApi.TimelineCandidateDetail => ({
+      id, workspace_id: "local", task_id: initial.task.id, base_version_id: base, head_version_id: `${id}-7`,
+      version: { id: `${id}-7`, parent_version_id: base, sequence: 7, clips: [
+        { id: "clip-1", fit_mode: "fill", crop_x: index ? .8 : .35, crop_y: .5 },
+      ] },
+    }));
+    const list = vi.spyOn(candidateApi, "listTimelineCandidates").mockResolvedValue(details);
+    const read = vi.spyOn(candidateApi, "readTimelineCandidate").mockImplementation(async ({ candidateId }) =>
+      details.find((item) => item.id === candidateId)!);
+    const latest = vi.spyOn(candidateApi, "readLatestTimelineCandidatePreview").mockImplementation(async (target, version, clipId) => {
+      const path = `/api/creation-tasks/${target.taskId}/timeline/candidates/${target.candidateId}/versions/${version.id}/previews/job-${target.candidateId}`;
+      return { task_id: target.taskId, candidate_id: target.candidateId, version_id: version.id, clip_id: clipId,
+        job_id: `job-${target.candidateId}`, status: "succeeded", silent: true, width_px: 360, height_px: 640,
+        result_url: path, video_url: `${path}/video`, timeline_start_seconds: 2, timeline_end_seconds: 5,
+        source_start_seconds: 0, source_end_seconds: 3, waiting_reason: null, failure_reason: null };
+    });
+    const video = vi.spyOn(candidateApi, "readTimelineCandidatePreviewVideo").mockResolvedValue(new Blob(["preview"]));
+    const objectUrl = vi.fn().mockReturnValueOnce("blob:clip-a").mockReturnValueOnce("blob:clip-b");
+    const revoke = vi.fn();
+    vi.stubGlobal("URL", Object.assign(class extends URL {}, { createObjectURL: objectUrl, revokeObjectURL: revoke }));
+    try {
+      renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+      fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
+      const formal = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
+      formal.currentTime = 3.25;
+      fireEvent.timeUpdate(formal);
+      fireEvent.click(screen.getByRole("button", { name: "比较候选" }));
+      const dialog = await screen.findByRole("dialog", { name: "比较候选" });
+      expect(within(dialog).getByText("镜头 1 · 静音短预览，最多 5 秒")).toBeInTheDocument();
+      const sideA = within(dialog).getByRole("region", { name: "候选 A" });
+      const sideB = within(dialog).getByRole("region", { name: "候选 B" });
+      expect(await within(sideA).findByLabelText("水平位置（%）")).toHaveValue(35);
+      expect(await within(sideB).findByLabelText("水平位置（%）")).toHaveValue(80);
+      expect(video).not.toHaveBeenCalled();
+      fireEvent.click(await within(sideA).findByRole("button", { name: "打开预览画面" }));
+      const playerA = await within(sideA).findByLabelText("候选 A 的镜头静音预览");
+      expect(playerA).toHaveAttribute("src", "blob:clip-a");
+      expect(playerA).not.toHaveAttribute("autoplay");
+      fireEvent.click(await within(sideB).findByRole("button", { name: "打开预览画面" }));
+      expect(await within(sideB).findByLabelText("候选 B 的镜头静音预览")).toHaveAttribute("src", "blob:clip-b");
+      expect(playerA).not.toBeInTheDocument();
+      expect(revoke).toHaveBeenCalledWith("blob:clip-a");
+      expect(latest).toHaveBeenCalledWith({ taskId: "task-1", candidateId: "b" }, details[1].version, "clip-1", expect.any(AbortSignal));
+      fireEvent.click(within(dialog).getByRole("button", { name: "关闭卡片" }));
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "比较候选" })).not.toBeInTheDocument());
+      expect(revoke).toHaveBeenCalledWith("blob:clip-b");
+      expect(screen.getByLabelText("剪辑成片预览")).toBe(formal);
+      expect(formal.currentTime).toBe(3.25);
+      expect(screen.getByLabelText("当前作品版本")).toHaveTextContent("作品版本 #6");
+    } finally {
+      for (const mock of [list, read, latest, video]) mock.mockRestore();
+    }
   });
 
   it("applies subtitle style settings directly without relying on generated preview imagery", async () => {

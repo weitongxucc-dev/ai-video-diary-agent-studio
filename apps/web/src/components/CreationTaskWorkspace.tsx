@@ -33,6 +33,7 @@ import { SubtitleWorkspace } from "./SubtitleWorkspace";
 import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
 import { DesktopVoiceRecorder } from "./DesktopVoiceRecorder";
 import { TimelineVersionHistory } from "./TimelineVersionHistory";
+import { TimelineCandidateComparison, type CandidateComparisonTarget } from "./creation-task/TimelineCandidateComparison";
 import Link from "next/link";
 import { EditorPaneMount } from "./workbench/EditorPaneMount";
 import { creationTaskShortStatus, creationTaskStatusPresentation } from "@/lib/creation-task-status";
@@ -319,6 +320,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [recordings, setRecordings] = useState<CreationTaskRecording[]>([]);
   const [recordingsError, setRecordingsError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [candidateComparison, setCandidateComparison] = useState<CandidateComparisonTarget | null>(null);
   const [assistantConfigured, setAssistantConfigured] = useState(false);
   useEffect(() => {
     void getRuntimeSettings().then((runtime) => {
@@ -1992,7 +1994,18 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     : <HomeCommandComposer {...taskAssistantProps} />;
 
   const selectedReferenceAction = hasContextConversation ? <SelectedObjectReferenceAction onReference={referenceSelectedObject} referenceLabel={selectedEditContext && selectedEditContext.kind !== "cover" ? `引用${selectedEditContext.label}到对话` : undefined} /> : undefined;
-  const timelineActions = isEditor ? <TimelineEditingActions busy={busy !== null} canUndo={Boolean(task.can_undo)} canRedo={Boolean(task.can_redo)} onUndo={() => { void undoTimeline(); }} onRedo={() => { void undoTimeline(true); }} onRecord={() => setRecordingOpen(true)} onHistory={() => setHistoryOpen(true)} referenceAction={selectedReferenceAction} /> : undefined;
+  const comparisonClip = workspace.montage?.clips[selectedClipIndex];
+  const formalVersionId = task.current_timeline_version_id;
+  const compareSelectedClip = comparisonClip && !comparisonClip.locked && !comparisonClip.person_render_id && formalVersionId && task.timeline_sequence >= 1
+    ? () => {
+      montageVideoRef.current?.pause();
+      setCandidateComparison({
+        taskId: task.id, clipId: comparisonClip.id, clipNumber: selectedClipIndex + 1,
+        base: { id: formalVersionId, sequence: task.timeline_sequence },
+      });
+    }
+    : undefined;
+  const timelineActions = isEditor ? <TimelineEditingActions busy={busy !== null} canUndo={Boolean(task.can_undo)} canRedo={Boolean(task.can_redo)} onUndo={() => { void undoTimeline(); }} onRedo={() => { void undoTimeline(true); }} onRecord={() => setRecordingOpen(true)} onHistory={() => setHistoryOpen(true)} onCompare={compareSelectedClip} referenceAction={selectedReferenceAction} /> : undefined;
   function openEditingView(view: WorkspaceView) {
     panel.revealTaskPanel();
     openView(view);
@@ -2258,6 +2271,9 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       <HomeCardDialog kind="detail" title="历史时间线版本" open={historyOpen} onClose={() => setHistoryOpen(false)} footer={<button type="button" onClick={() => setHistoryOpen(false)}>收起历史版本</button>}>
         <TimelineVersionHistory taskId={task.id} open={historyOpen} currentVersionId={task.current_timeline_version_id} restoreBusy={busy!==null || Boolean(pendingTimelineRestore)} onRestore={(operationId,redo)=>void undoTimeline(redo,operationId)} />
       </HomeCardDialog>
+      {candidateComparison?.taskId === task.id ? <HomeCardDialog kind="modal" title="比较候选" onClose={() => setCandidateComparison(null)}>
+        <TimelineCandidateComparison {...candidateComparison} />
+      </HomeCardDialog> : null}
       <Tabs value={activeView} onValueChange={value => { const view = value as WorkspaceView; if (canOpenStage(view, workspace)) openEditingView(view); }} onChangeCapture={() => { navigationReadRevision.current += 1; }} data-editor-workspace="" data-active-view={activeView} className={[hasTimeline ? `${editorUi.workspace} ${styles.timelineWorkspace}` : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
         {workbenchPage?.active && editPreview && !localConfirmation ? <EditPreviewCard key={editPreview.proposal.id}
           preview={editPreview} busy={busy} compact command={previewCommand} kind="modal" onCancel={invalidateEditPreview}

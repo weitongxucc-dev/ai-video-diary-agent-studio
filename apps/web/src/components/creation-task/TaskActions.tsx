@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CircleDashed, Download, History, LoaderCircle, MessageSquarePlus, Mic, Redo2, Share2, Undo2 } from "lucide-react";
+import { Check, CircleDashed, Download, GitCompareArrows, History, LoaderCircle, MessageSquarePlus, Mic, Redo2, Share2, Undo2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
@@ -31,9 +31,9 @@ export function SelectedObjectReferenceAction({ onReference, referenceLabel }: {
   return <IconButton label="引用所选对象到对话" description={referenceLabel ?? "先选择要引用的对象"} onClick={onReference} disabled={!referenceLabel}><MessageSquarePlus /></IconButton>;
 }
 
-export function TimelineEditingActions({ busy, canUndo, canRedo, onUndo, onRedo, onRecord, onHistory, referenceAction }: {
+export function TimelineEditingActions({ busy, canUndo, canRedo, onUndo, onRedo, onRecord, onHistory, onCompare, referenceAction }: {
   busy: boolean; canUndo: boolean; canRedo: boolean; onUndo: () => void; onRedo: () => void;
-  onRecord: () => void; onHistory: () => void; referenceAction?: ReactNode;
+  onRecord: () => void; onHistory: () => void; onCompare?: () => void; referenceAction?: ReactNode;
 }) {
   return <div className={styles.timelineEditingActions} role="group" aria-label="时间线编辑工具">
     <IconButton label="撤销" description={busy ? "请等待当前操作完成" : canUndo ? "撤销上一次修改" : "没有可撤销的修改"} disabled={busy || !canUndo} onClick={onUndo}><Undo2 /></IconButton>
@@ -42,5 +42,7 @@ export function TimelineEditingActions({ busy, canUndo, canRedo, onUndo, onRedo,
     {referenceAction}
     <IconButton label="电脑录音替换旁白" description={busy ? "请等待当前操作完成" : "录制声音，替换整条旁白"} disabled={busy} onClick={onRecord}><Mic /></IconButton>
     <IconButton label="历史时间线版本" description="查看和恢复历史时间线版本" onClick={onHistory}><History /></IconButton>
+    <IconButton label="比较候选" description={onCompare ? "比较所选镜头的候选剪法" : "请选择一个未锁定的素材镜头"}
+      disabled={busy || !onCompare} aria-haspopup="dialog" onClick={onCompare}><GitCompareArrows /></IconButton>
   </div>;
 }

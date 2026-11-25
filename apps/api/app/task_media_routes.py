@@ -8,6 +8,16 @@ from app.device_resource_status import preparation_error_detail
 from app.task_media_submission_use_case import TaskMediaSubmissionRejected
 
 
+def _public_job(media, task_id, job_id, actor):
+    try:
+        job, event = media.read_public(actor.workspace_id, job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail='任务媒体作业不存在') from exc
+    if job.task_id != task_id or CreationExecutionActor.from_event(job.workspace_id, event) != actor:
+        raise HTTPException(status_code=404, detail='任务媒体作业不存在')
+    return job
+
+
 def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, read_for, read_components_for, runtime_for, repository_for, receipt_for, observations_for, output_for=None, file_response_for=None, submit_for=None, route_names) -> APIRouter:
     router = APIRouter()
 
@@ -57,48 +67,24 @@ def build_task_media_router(*, workspace_for, actor_for, task_for, list_for, rea
     @router.post('/api/creation-tasks/{task_id}/media-jobs/{job_id}/cancel')
     def cancel_task_media_job(task_id: str, job_id: str, request: Request):
         actor = actor_for()(request, workspace_for()(request))
-        from app import creation_execution
         observed_media, _requests = read_components_for()()
-        try:
-            observed_job, observed_event = observed_media.read(actor.workspace_id, job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail='任务媒体作业不存在') from exc
-        if (observed_job.task_id != task_id
-                or creation_execution.CreationExecutionActor.from_event(observed_job.workspace_id, observed_event) != actor):
-            raise HTTPException(status_code=404, detail='任务媒体作业不存在')
-        if observed_job.status in {'succeeded', 'failed', 'cancelled'} and not any(
-                row['state'] in {'waiting', 'blocked', 'granted', 'yield_requested'}
-                for row in repository_for().job_records.list_creation_job_request_states(observed_job.workspace_id, observed_job.id)):
+        observed_job = _public_job(observed_media, task_id, job_id, actor)
+        if not observed_media.cancellation_pending(observed_job):
             return read_for()(task_id, job_id, request)
         runtime = runtime_for()()
         media = runtime.registrations['creation_job'].owner.task_media
-        try:
-            job, event = media.read(actor.workspace_id, job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail='任务媒体作业不存在') from exc
-        from app.creation_execution import CreationExecutionActor
-        if job.task_id != task_id or CreationExecutionActor.from_event(job.workspace_id, event) != actor:
-            raise HTTPException(status_code=404, detail='任务媒体作业不存在')
-        if job.status in {'queued', 'running', 'interrupted'}:
-            with repository_for()._connect() as conn:
-                rows = conn.execute("SELECT id FROM device_work_requests WHERE workspace_id=? AND owner_id=? AND owner_type='creation_job' AND state IN ('waiting','blocked','granted','yield_requested')", (job.workspace_id, job.id)).fetchall()
-            for row in rows:
-                runtime.scheduler.cancel(row['id'], actor)
-                runtime.registrations['creation_job'].executor.request_cancel(row['id'])
-            repository_for().job_records.finish_job_run(job.workspace_id, job.id, status='cancelled', failure_reason='user_cancelled', impact='当前时间线保持不变。', repair_action='需要时重新安排媒体处理。')
+        job = _public_job(media, task_id, job_id, actor)
+        media.cancel(runtime, job, actor)
         return receipt_for()(media, job, actor, runtime)
 
     @router.post('/api/creation-tasks/{task_id}/media-jobs/{job_id}/retry')
     def retry_task_media_job(task_id: str, job_id: str, request: Request):
         actor = actor_for()(request, workspace_for()(request))
+        observed_media, _requests = read_components_for()()
+        _public_job(observed_media, task_id, job_id, actor)
         runtime = runtime_for()()
         media = runtime.registrations['creation_job'].owner.task_media
-        try:
-            job, event = media.read(actor.workspace_id, job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail='任务媒体作业不存在') from exc
-        if job.task_id != task_id or CreationExecutionActor.from_event(job.workspace_id, event) != actor:
-            raise HTTPException(status_code=404, detail='任务媒体作业不存在')
+        job = _public_job(media, task_id, job_id, actor)
         reason = 'result_invalid' if job.status == 'succeeded' and (not observations_for()().published_outputs_current(job)) else job.status
         if reason not in {'failed', 'cancelled', 'result_invalid'}:
             raise HTTPException(status_code=409, detail='只有失败或已取消的媒体作业可以显式重试')
