@@ -22,7 +22,7 @@ from app.creation.editing.metadata_use_case import (
     MetadataEditUseCase, MetadataEditResult, prepare_changed_montage, logical_montage_output_refs,
 )
 from app.creation.editing.picture import EditConflict
-from app.creation.projection import undo_target_versions, redo_target_versions
+from app.creation.projection import edit_operation_for_version, undo_target_versions, redo_target_versions
 from app.creation.transactions import clone_subtitle_track, clone_cover_asset, changed_stage_sections
 from app.models import utc_now
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload
@@ -477,11 +477,11 @@ class TimelineRestoreUseCase:
         if changed_version is None or target_version is None:
             raise TimelineRestoreUnavailable(command.redo)
         try:
-            changed_operation = self.repository.edit_records.get_edit_operation(
-                workspace_id, changed_version.created_by_operation_id or ""
-            )
+            changed_operation = edit_operation_for_version(self.repository, changed_version)
         except KeyError as exc:
             raise EditConflict("timeline undo operation is unavailable") from exc
+        if changed_operation is None:
+            raise EditConflict("timeline undo operation is unavailable")
         history = changed_operation.payload if changed_operation.operation_type == 'ReviseScriptSection' else changed_operation.payload.get('section_history')
         if isinstance(history,dict) and 'before_publication' in history:
             expected = (history['before_dependencies'] if command.redo else self.repository.execution_records.get_task_event(
@@ -490,8 +490,10 @@ class TimelineRestoreUseCase:
             cursor = task.current_timeline_version_id
             while cursor:
                 recent = self.repository.timeline_records.get_timeline_version(workspace_id,cursor)
-                if recent.created_by_operation_id:
-                    control = self.repository.edit_records.get_edit_operation(workspace_id,recent.created_by_operation_id)
+                if recent.task_id != task_id:
+                    raise EditConflict('段落恢复所依据的版本不属于当前作品历史')
+                control = edit_operation_for_version(self.repository, recent)
+                if control is not None:
                     if (control.payload.get('section_history',{}).get('after_publication') == history['after_publication']
                             and control.payload.get('section_restore_side') == ('before' if command.redo else 'after')):
                         expected = self.repository.execution_records.get_task_event(workspace_id,f'event_{control.id}_dependencies').payload['dependencies']
