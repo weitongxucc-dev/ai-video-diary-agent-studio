@@ -25,6 +25,7 @@ from app.media_execution import (
     build_media_execution_entrypoint,
 )
 from app.media_execution.adapter import FfmpegAdapter, PreparedCommand
+from app.media_execution.bound_cut import BOUND_CUT_FACT
 from app.media_execution.capabilities import ToolDependency, detect_dependencies
 from app.media_execution.contracts import MediaExecutionError
 from app.media_execution.worker import FfmpegWorker
@@ -71,6 +72,18 @@ def test_repository_exposes_its_connection_factory_for_composed_services(tmp_pat
     with repo.connection_factory() as connection:
         assert connection.row_factory is not None
         assert connection.execute("SELECT 1").fetchone()[0] == 1
+
+
+def test_sealed_bounded_cut_cannot_fall_back_to_ungranted_execution(tmp_path):
+    repo, base = _case(tmp_path)
+    layer = MediaExecutionLayer(repo, tmp_path / "outputs", connection_factory=repo.connection_factory)
+    plan = EditPlan("local", "task", base.id, "req-sealed-cut", (
+        MediaOperation("cut", (str(tmp_path / "source.mp4"),), options={"asset_id": "asset"}),
+    ), member_id="member", metadata={BOUND_CUT_FACT: {"preparation": "original"}})
+    with pytest.raises(MediaExecutionError, match="media_cut_permit_required"):
+        layer.submit(plan)
+    assert not repo.job_records.list_job_runs("local", "task")
+    assert repo.task_records.get_creation_task("local", "task").current_timeline_version_id == base.id
 
 
 def test_real_media_chain_persists_job_artifacts_timeline_and_request_log(tmp_path):
