@@ -23,7 +23,7 @@ export const WorkbenchAssistantTargetContext = createContext<AppShellProps["assi
 
 export const HOME_OVERVIEW_HREF = "/?mode=panel";
 export const FULL_HOME_HREF = "/?mode=manage";
-const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates"];
+const workspaceResourcePaths = ["/library", "/knowledge", "/profiles", "/templates", "/history"];
 export const workspaceResourcePageIds = [...workspaceResourcePaths, HOME_OVERVIEW_HREF];
 const workResourcePanels = new Map([
   ["/", HOME_OVERVIEW_HREF],
@@ -31,6 +31,7 @@ const workResourcePanels = new Map([
   ["/knowledge", "/knowledge?mode=panel"],
   ["/profiles", "/profiles?mode=panel"],
   ["/templates", "/templates?mode=panel"],
+  ["/history", "/history?mode=panel"],
 ]);
 
 export function workspaceNavigationHref(href: string, hasActiveWork: boolean) {

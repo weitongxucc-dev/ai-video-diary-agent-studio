@@ -26,7 +26,7 @@ from app.cpu_preparation_video import (LEGACY_PRESENTER_DELIVERY_CONTRACT, PRESE
     preparation_video_command, preparation_delivery_command)
 from app.artwork_resource_preparation import (extend_render_budget, measure_template_inputs,
     measure_native_inputs, extend_native_budget)
-from app.device_resource_configuration import backend_identity
+from app.device_resource_configuration import _hash_file, backend_identity
 from app.device_resource_profile import (
     PROFILE_OPERATION_NAMES, DeviceProfileIdentity, DeviceProfileUnavailable, _digest, load_device_resource_profile,
 )
@@ -35,13 +35,18 @@ from app.device_scheduler import SubmissionIntent, SchedulePolicy, VerifiedWork
 from app.device_runtime import OwnerRegistration
 from app.host_memory import MemoryPolicy, sample_host_memory
 from app.host_resource_probes import HostBudget, CpuRenderBudget, CpuAudioBudget, RuntimeCpuPolicy, Y4M_SERIAL_PICTURE_FORMAT
-from app.granted_subprocess import run_granted_command, GrantedCommandError
+from app.granted_subprocess import run_granted_command, GrantedCommandError, GrantedCommandTimeout
+from app.media_execution.adapter import FfmpegAdapter
+from app.media_execution.contracts import MediaExecutionError
+from app.media_execution.cut_measurement import Mp4CutLimits, measure_mp4_cut
 from app.visual_effects import VisualEffects
 
 
 OWNER_TYPE = 'device_preparation'
 POLICY_ID = 'interactive-cpu-preparation/v1'
 FILE_AUDIO_MIX_PROBE = 'concurrent-pcm-file-inputs/v1'
+MP4_CUT_PROBE = 'bounded-h264-aac-mp4-cut/v1'
+PREPARATION_PIPE_BYTES = 64 * 1024
 
 
 class PreparationSamplingIncomplete(ValueError):
@@ -66,6 +71,7 @@ class CpuPreparationShape:
     source_height_px: int | None = None
     visual_effects: dict | None = None
     presenter_clip_count: int = 0
+    measure_mp4_cut: bool = False
 
     def __post_init__(self):
         if any(type(value) is not int or value <= 0 for value in (
@@ -78,10 +84,14 @@ class CpuPreparationShape:
             raise ValueError('HTML动画图层数必须属于总叠加图层数')
         if type(self.native_command) is not bool:
             raise ValueError('程序化执行准备需要明确的布尔选择')
+        if type(self.measure_mp4_cut) is not bool:
+            raise ValueError('MP4 截取测量需要明确的布尔选择')
         if type(self.presenter_clip_count) is not int or not 0 <= self.presenter_clip_count < self.clip_count:
             raise ValueError('人物组合准备需要保留至少一个素材镜头，人物镜头数必须小于总镜头数')
         if self.presenter_clip_count and (self.frame_rate != 30 or self.overlay_count or self.native_command):
             raise ValueError('人物组合准备覆盖30帧、带字幕的直接切换，不包含额外图层或原生程序')
+        if self.measure_mp4_cut and self.presenter_clip_count:
+            raise ValueError('MP4 截取测量只支持普通 CPU 准备')
         if self.presenter_clip_count and self.source_bytes is None:
             raise ValueError('人物组合准备需要已知的生产输入总字节数')
         if self.source_bytes is not None and (type(self.source_bytes) is not int or self.source_bytes <= 0):
@@ -177,6 +187,29 @@ def _profile_state(path):
     return (document["revision"], _digest(document)) if document else (None, None)
 
 
+def _mp4_cut_plan(shape, probe_seconds, budget, ffmpeg, ffprobe):
+    seconds = min(2, math.floor(probe_seconds))
+    render = budget.cpu_render
+    if render.running_cpu_policy is None:
+        raise DeviceProfileUnavailable('MP4 截取测量需要已配置的 CPU 运行策略')
+    # Limit the synthetic sample in both orientations. The caller's preparation
+    # shape and output allowance remain authoritative for smaller runs.
+    width_cap, height_cap = (720, 1280) if shape.height_px > shape.width_px else (1280, 720)
+    width, height = min(shape.width_px, width_cap), min(shape.height_px, height_cap)
+    decode_pixels = math.ceil(width / 32) * math.ceil(height / 32) * 32**2
+    rate, sample_rate = 30, 48000
+    limits = Mp4CutLimits(width, height, decode_pixels, seconds, render.max_output_bytes // 3,
+                          render.max_output_bytes, seconds * rate + math.ceil(seconds * sample_rate / 1024) + 1)
+    tools = {}
+    for name, path in (('ffmpeg', ffmpeg), ('ffprobe', ffprobe)):
+        resolved = Path(path).resolve(strict=True)
+        tools[name] = {'path': str(resolved), 'sha256': _hash_file(resolved)}
+    return {'contract': MP4_CUT_PROBE, 'tools': tools, 'limits': asdict(limits),
+            'frame_rate': rate, 'sample_rate': sample_rate, 'channels': 2,
+            'selection': [0.25, 0.25 + seconds / 2], 'pipe_limit_bytes': PREPARATION_PIPE_BYTES,
+            'cpu_policy': asdict(render.running_cpu_policy), 'sample_interval_seconds': budget.sample_seconds}
+
+
 def request_kind(*, database_path, request_id, actor):
     """Select the original preparation service; its status rechecks full identity."""
     with sqlite3.connect(Path(database_path).resolve().as_uri() + '?mode=ro', uri=True) as connection:
@@ -225,6 +258,8 @@ class DeviceResourcePreparation:
             values.pop('native_command')
         if not shape.presenter_clip_count:
             values.pop('presenter_clip_count')
+        if not shape.measure_mp4_cut:
+            values.pop('measure_mp4_cut')
         for key in ('source_width_px', 'source_height_px', 'visual_effects'):
             if values[key] is None:
                 values.pop(key)
@@ -253,6 +288,8 @@ class DeviceResourcePreparation:
             raise PermissionError('Device preparation needs a current authorized local member')
         if self.device.platform != 'darwin':
             raise DeviceProfileUnavailable('当前CPU准备策略支持macOS；其他平台需要对应系统压力适配。')
+        if shape.measure_mp4_cut and min(shape.duration_seconds, self.policy.probe_seconds) < 1:
+            raise DeviceProfileUnavailable('MP4 截取测量需要至少 1 秒的准备样片')
         with _profile_lock(self.profile_path):
             previous = _read(self.profile_path) if self.profile_path.exists() else None
             resolved = (load_device_resource_profile(self.profile_path, device=self.device,
@@ -331,6 +368,8 @@ class DeviceResourcePreparation:
         planned_shape = asdict(shape)
         if not presenter:
             planned_shape.pop('presenter_clip_count')
+        if not shape.measure_mp4_cut:
+            planned_shape.pop('measure_mp4_cut')
         plan = {'format_version': 1, 'id': plan_id, 'device': asdict(self.device),
             'request_binding': request_binding, 'actor_identity': actor.identity_payload(),
             'workspace_id': actor.workspace_id, 'member_id': actor.member_id,
@@ -350,6 +389,8 @@ class DeviceResourcePreparation:
             plan['presenter_delivery_probe'] = PRESENTER_DELIVERY_CONTRACT
         else:
             plan['audio_mix_probe'] = FILE_AUDIO_MIX_PROBE
+        if shape.measure_mp4_cut:
+            plan['mp4_cut_probe'] = _mp4_cut_plan(shape, probe_seconds, budget, ffmpeg, ffprobe)
         plan['input_digest'] = _digest(plan)
         _atomic_json(self.root / 'plans' / f'{plan_id}.json', plan)
         return plan_id, budget
@@ -454,9 +495,10 @@ class DeviceResourcePreparation:
         native_receipt = None
         audio_mix_probe = None
         limit = limits['max_output_bytes']
-        def run(argv, paths=(), *, env=None):
+        def run(argv, paths=(), *, env=None, base_sample=True):
             result = run_granted_command(scheduler, grant, argv,
-                timeout_seconds=deadline - time.monotonic(), max_stdout_bytes=65536, max_stderr_bytes=65536,
+                timeout_seconds=deadline - time.monotonic(),
+                max_stdout_bytes=PREPARATION_PIPE_BYTES, max_stderr_bytes=PREPARATION_PIPE_BYTES,
                 output_paths=paths, max_output_file_bytes=limit, env=env)
             if result.returncode:
                 raise ValueError('CPU preparation command failed')
@@ -464,7 +506,8 @@ class DeviceResourcePreparation:
             if (observed is None or not observed.rss_sample_complete or not observed.threads_sample_complete
                     or observed.peak_rss_bytes is None or observed.peak_threads is None):
                 raise PreparationSamplingIncomplete('CPU preparation resource observation is incomplete')
-            observations.append(asdict(observed))
+            if base_sample:
+                observations.append(asdict(observed))
             return result
         try:
             with tempfile.TemporaryDirectory(prefix='cpu-preparation-', dir=self.write_paths['temporary']) as temporary:
@@ -522,16 +565,82 @@ class DeviceResourcePreparation:
                     receipt['native_command'] = native_receipt
                 if audio_mix_probe is not None:
                     receipt['audio_mix_probe'] = audio_mix_probe
-                receipt_path = self.root / 'receipts' / f'{grant.request_id}-{grant.generation}.json'
-                digest = _atomic_json(receipt_path, receipt)
+            if cut_plan := plan.get('mp4_cut_probe'):
+                check_dependencies = scheduler.capture_dependency_check(grant)
+                def check():
+                    check_dependencies()
+                    if time.monotonic() >= deadline:
+                        raise GrantedCommandTimeout('设备准备总时限已到，截取测量未完成')
+                receipt['mp4_cut_probe'] = self._measure_mp4_cut(cut_plan, run, check)
+            receipt_path = self.root / 'receipts' / f'{grant.request_id}-{grant.generation}.json'
+            digest = _atomic_json(receipt_path, receipt)
             scheduler.complete_unit(grant, checkpoint_database_path=scheduler.database_path,
                 checkpoint_write=lambda conn, current: 'device-resource-preparation:' + digest)
-        except (GrantedCommandError, ValueError, OSError, KeyError, StopIteration) as exc:
+        except (GrantedCommandError, MediaExecutionError, ValueError, OSError, KeyError, StopIteration) as exc:
             # The broker preserves unknown child release by raising RecoveryBlocked,
             # which is deliberately not caught here. No profile is published on failure.
             reason = ('device_preparation_sampling_incomplete' if isinstance(exc, PreparationSamplingIncomplete)
                 else 'device_preparation_failed')
             scheduler.fail_unit(grant, reason=reason, failure_write=lambda conn, current: None)
+
+    def _measure_mp4_cut(self, plan, run, check):
+        limits = Mp4CutLimits(**plan['limits'])
+        tools = plan['tools']
+
+        def check_tools():
+            if any(_hash_file(tool['path']) != tool['sha256'] for tool in tools.values()):
+                raise ValueError('截取样片测量期间媒体工具已变化')
+
+        check()
+        check_tools()
+        started = time.monotonic()
+        with tempfile.TemporaryDirectory(prefix='cpu-preparation-cut-', dir=self.write_paths['temporary']) as temporary:
+            work = Path(temporary)
+            fixture = work / 'fixture.mp4'
+            adapter = FfmpegAdapter(tools['ffmpeg']['path'], tools['ffprobe']['path'])
+            seconds = limits.max_source_seconds
+            # Like the base preparation, put the lavfi sources in one bounded
+            # graph so each input cannot create its own automatic thread pool.
+            graph = (f"testsrc2=size={limits.width}x{limits.height}:rate={plan['frame_rate']}:duration={seconds}[v];"
+                     f"sine=frequency=523:sample_rate={plan['sample_rate']}:duration={seconds}[a]")
+            command = [adapter.ffmpeg, '-v', 'error', '-filter_threads', '1', '-filter_complex_threads', '1',
+                '-filter_complex', graph, '-map', '[v]', '-map', '[a]',
+                '-c:v', 'libx264', '-threads:v', '1', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+                '-c:a', 'aac', '-threads:a', '1', '-ac', str(plan['channels']),
+                '-fs', str(limits.max_source_bytes), '-movflags', '+faststart', str(fixture)]
+            generated = run(command, (fixture,), env={}, base_sample=False)
+            fixture_seconds = time.monotonic() - started
+            source_bytes = fixture.stat().st_size
+            if not 0 < source_bytes <= limits.max_source_bytes:
+                raise ValueError('截取样片超出已封存字节数')
+            check()
+            with fixture.open('rb') as source:
+                digest = hashlib.file_digest(source, 'sha256').hexdigest()
+            check()
+
+            def run_cut(argv, paths, *, env):
+                # The fixture remains on disk alongside the measurement's
+                # checked source copy and encoded output.
+                return run(argv, (fixture, *paths), env=env, base_sample=False)
+
+            start, end = plan['selection']
+            measured = measure_mp4_cut(adapter, fixture, work, source_sha256=digest, source_bytes=source_bytes,
+                start=start, duration=end - start, limits=limits, run=run_cut, check=check)
+            evidence = measured['source']
+            if (evidence['video_seconds'] != seconds or evidence['video_frames'] != seconds * plan['frame_rate']
+                    or evidence['packets'] != limits.max_packets):
+                raise ValueError('截取样片没有完成计划规定的全源帧、包和时长')
+            check_tools()
+            check()
+        return {**measured, 'contract': plan['contract'], 'plan_digest': _digest(plan),
+                'tools': tools, 'cpu_policy': plan['cpu_policy'], 'pipe_limit_bytes': plan['pipe_limit_bytes'],
+                'sample_interval_seconds': plan['sample_interval_seconds'],
+                'elapsed_seconds': time.monotonic() - started,
+                'fixture': {'command': command, 'seconds': fixture_seconds,
+                            'resources': asdict(generated.observed_resources)},
+                # A returned granted command has verified its registered group
+                # exit. Any uncertain release raises before reaching this receipt.
+                'stages': {name: {**stage, 'group_released': True} for name, stage in measured['stages'].items()}}
 
     @staticmethod
     def _measure_file_audio_mix(plan, shape, video, audio, run):

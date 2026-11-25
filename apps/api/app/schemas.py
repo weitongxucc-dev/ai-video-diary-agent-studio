@@ -75,6 +75,7 @@ class DevicePreparationShapeRequest(BaseModel):
     source_height_px: int | None = Field(default=None, gt=0, multiple_of=2)
     visual_effects: VisualEffects | None = None
     presenter_clip_count: int = Field(default=0, ge=0)
+    measure_mp4_cut: bool = False
 
 
 class NarrationPreparationPronunciationReference(BaseModel):

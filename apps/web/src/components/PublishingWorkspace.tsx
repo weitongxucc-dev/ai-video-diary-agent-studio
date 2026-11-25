@@ -15,6 +15,8 @@ const statusLabels: Record<PlatformPublishJob["status"], string> = {
   queued: "等待本机发布队列", running: "正在提交", succeeded: "平台已返回发布结果",
   failed: "发布失败", cancelled: "已取消", interrupted: "结果待核对（不会自动重发）",
 };
+const platformNames: Record<string, string> = { douyin: "抖音", wechat: "微信视频号", xiaohongshu: "小红书" };
+export { statusLabels as publishStatusLabels, platformNames as publishingPlatformNames, formatTime as formatPublishingTime };
 type PublishDraft = { title: string; description: string; topics: string };
 type PublishConfirmation = PublishDraft & { taskId: string; taskName: string; versionId: string; accountRef: string };
 const emptyDraft: PublishDraft = { title: "", description: "", topics: "" };
@@ -300,7 +302,6 @@ export function PublishingWorkspace() {
   const jobFacts=selectedJob?.events.find(event=>event.type==='platform_publish_prepared')?.payload;
   const jobAccount=selectedJob?.events.find(event=>typeof event.payload.account_ref==='string')?.payload.account_ref;
   const jobPlatform=selectedJob?.events.find(event=>typeof event.payload.platform==='string')?.payload.platform;
-  const platformNames:Record<string,string>={douyin:"抖音",wechat:"微信视频号",xiaohongshu:"小红书"};
   const activePlatform = platforms.find(platform=>platform.platform===selectedPlatform);
   const activeAccount = accounts.find(account=>account.platform===selectedPlatform);
   const visibleVideos = filtered.filter(task=>task.output_ready);

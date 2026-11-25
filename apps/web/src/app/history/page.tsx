@@ -1,7 +1,8 @@
-import { PublishingWorkspace } from "@/components/PublishingWorkspace";
+import { PublishingRouteView } from "@/components/PublishingSummary";
+import { WorkspaceRoute } from "@/components/workbench/WorkspaceRoute";
 
 export const dynamic = "force-dynamic";
 
 export default function HistoryPage() {
-  return <PublishingWorkspace />;
+  return <WorkspaceRoute label="发布与数据"><PublishingRouteView /></WorkspaceRoute>;
 }
