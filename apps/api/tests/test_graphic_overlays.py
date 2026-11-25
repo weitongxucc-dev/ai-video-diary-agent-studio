@@ -67,6 +67,13 @@ def test_title_entry_command_retains_template_source_time_and_keyframes():
         selected_refs=[f"overlay:{overlay['id']}"])
     assert (action, target) == ('update', overlay['id'])
     assert value == {**overlay, 'start_seconds': 1.5, 'end_seconds': 3.5}
+    first = TextOverlay(text='第一条', start_seconds=2, end_seconds=4).model_dump()
+    second = TextOverlay(text='第二条', start_seconds=2, end_seconds=4).model_dump()
+    values = [overlay, first, second]
+    with pytest.raises(ValueError, match='请选中'):
+        compile_overlay_command('标题2提前半秒', values)
+    _, changed, target = compile_overlay_command('标题2提前半秒', values, selected_refs=[f"overlay:{second['id']}"])
+    assert target == second['id'] and changed == {**second, 'start_seconds': 1.5, 'end_seconds': 3.5}
 
 
 def test_overlay_raster_bounds_and_missing_font_are_explicit(tmp_path):

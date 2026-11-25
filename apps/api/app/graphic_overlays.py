@@ -205,19 +205,22 @@ def _compile_title_entry(text, values, selected_refs):
     if not match:
         return None
     selected_ids = [ref.removeprefix('overlay:') for ref in selected_refs if ref.startswith('overlay:')]
-    candidates = [(index, value) for index, value in enumerate(values, start=1)
-                  if value.get('kind', 'text') in {'text', 'template'}]
+    candidates = [value for value in values if value.get('kind', 'text') in {'text', 'template'}]
     if selected_ids:
-        candidates = [(index, value) for index, value in candidates if value['id'] in selected_ids]
+        candidates = [value for value in candidates if value['id'] in selected_ids]
     if match['index']:
-        candidates = [(index, value) for index, value in candidates if index == int(match['index'])]
+        index = int(match['index']) - 1
+        static = [value for value in values if value.get('kind') != 'template']
+        # The timeline numbers all rows and the inspector numbers its static rows.
+        indexed = {rows[index]['id'] for rows in (values, static) if index < len(rows)
+                   and rows[index].get('kind', 'text') == 'text'}
+        candidates = [value for value in candidates if value['id'] in indexed]
     if match['name']:
-        candidates = [(index, value) for index, value in candidates
-                      if value.get('text', value.get('name')) == match['name']]
+        candidates = [value for value in candidates if value.get('text', value.get('name')) == match['name']]
     if len(candidates) != 1 or len(selected_ids) > 1 or (match['current'] and not selected_ids):
         raise ValueError('请选中一个当前版本的标题，或明确指定标题名称。')
-    _, value = candidates[0]
-    if value.get('kind') == 'template' and not (selected_ids or match['name'] or match['index']):
+    value = candidates[0]
+    if value.get('kind') == 'template' and not (selected_ids or match['name']):
         raise ValueError('请先选中作为标题的动画图层。')
     if match['frame'] is not None:
         start = int(match['frame']) / FRAME_RATE
