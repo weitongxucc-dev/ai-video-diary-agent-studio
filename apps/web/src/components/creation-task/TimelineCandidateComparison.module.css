@@ -13,11 +13,18 @@
 
 .side,
 .form,
+.adoption,
 .side label {
   display: grid;
   align-content: start;
   gap: var(--space-xs);
   min-inline-size: 0;
+}
+
+.adoption {
+  gap: var(--space-sm);
+  border-block-start: 1px solid var(--border-1);
+  padding-block-start: var(--space-sm);
 }
 
 .side {

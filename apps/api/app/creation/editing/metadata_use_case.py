@@ -183,7 +183,8 @@ class MetadataEditUseCase:
     def verify_edit_origin(self, proposal, *, connection, direct_intent=None):
         if self.validate_origin is None:
             return
-        intent=direct_intent or self.repository.edit_records.get_edit_intent(proposal.workspace_id,proposal.intent_id)
+        intent=direct_intent or self.repository.edit_records.get_edit_intent(
+            proposal.workspace_id, proposal.intent_id, connection=connection)
         source=intent.constraints.get('request_source')
         if source is not None:
             from app.creation_execution import CreationExecutionActor
@@ -578,12 +579,12 @@ class MetadataEditUseCase:
         projected = self.subtitle_track_from_montage(workspace_id, task, current_version, montage, connection=connection)
         return [projected] if projected is not None else []
 
-    def cover_asset_for_version(self, workspace_id: str, task_id: str, version: TimelineVersion):
+    def cover_asset_for_version(self, workspace_id: str, task_id: str, version: TimelineVersion, *, connection=None):
         cover_id = version.snapshot.get('cover_asset_id')
         if not isinstance(cover_id, str) or not cover_id:
             return None
         try:
-            return self.repository.cover_records.get_cover_asset(workspace_id, task_id, cover_id)
+            return self.repository.cover_records.get_cover_asset(workspace_id, task_id, cover_id, connection=connection)
         except KeyError:
             return None
 
@@ -709,7 +710,7 @@ class MetadataEditUseCase:
             if blocker := edit_scope_blocker(edit_source, linked=linked):
                 raise EditConflict(blocker)
         authorization_write = self.prepare_material_scope(task, material_before, updated_plan, identity, connection=connection)
-        carried_tracks = [clone_subtitle_track(track, timeline_version_id=result_version_id) for track in (edited_subtitle_tracks if edited_subtitle_tracks is not None else self.current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))]
+        carried_tracks = [clone_subtitle_track(track, timeline_version_id=result_version_id) for track in (edited_subtitle_tracks if edited_subtitle_tracks is not None else self.current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan, connection=connection))]
         audio_edit = operation_payload.get('edit') if operation_type == 'EditAudioTimeline' else None
         if isinstance(audio_edit, dict) and audio_edit.get('action') == 'replace_narration':
             carried_tracks = [replace(track, status='unavailable', artifact_ref=None, transform_id=None, failure_reason='整条旁白已更换，旧字幕时间尚未复核。', impact='原字幕文字已保留，但旧字幕轨不能作为新旁白的有效字幕输出。', repair_action='逐条检查字幕文字和时间，确认后重新生成字幕与成片。') for track in carried_tracks]
@@ -725,10 +726,10 @@ class MetadataEditUseCase:
                     carried_tracks[index] = clone_subtitle_track(track, timeline_version_id=result_version_id, artifact_ref=artifact_ref, transform_id=transform_id)
             except (OSError, ValueError) as exc:
                 raise EditConflict(f'字幕重定时未保存，当前版本保持不变：{exc}') from exc
-        source_cover = self.cover_asset_for_version(workspace_id, task.id, source_version)
+        source_cover = self.cover_asset_for_version(workspace_id, task.id, source_version, connection=connection)
         carried_cover = clone_cover_asset(source_cover, timeline_version_id=result_version_id) if source_cover is not None else None
         change = prepare_change_set(proposal=proposal, base_version=base_version, operation_type=operation_type, operation_payload=operation_payload, result_version_id=result_version_id, montage_plan_id=updated_plan.id, montage_payload=montage_payload, subtitle_tracks=carried_tracks, cover_asset=carried_cover, snapshot_source=source_version.snapshot, narration_segments=narration_segments, narration_artifact=narration_artifact, narration_replacement=narration_replacement, narration_snapshot=narration_snapshot, include_track_ids=edited_subtitle_tracks is not None or bool(carried_tracks) or 'subtitle_track_ids' in source_version.snapshot, absent_cover_value=True,
-            source_subtitle_tracks=self.current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan))
+            source_subtitle_tracks=self.current_subtitle_tracks(workspace_id, task, current_version=source_version, montage=source_plan, connection=connection))
         readiness = {}
         def verify_commit(conn):
             if self.write_guard is not None:

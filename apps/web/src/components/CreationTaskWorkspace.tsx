@@ -2272,7 +2272,11 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         <TimelineVersionHistory taskId={task.id} open={historyOpen} currentVersionId={task.current_timeline_version_id} restoreBusy={busy!==null || Boolean(pendingTimelineRestore)} onRestore={(operationId,redo)=>void undoTimeline(redo,operationId)} />
       </HomeCardDialog>
       {candidateComparison?.taskId === task.id ? <HomeCardDialog kind="modal" title="比较候选" onClose={() => setCandidateComparison(null)}>
-        <TimelineCandidateComparison {...candidateComparison} />
+        <TimelineCandidateComparison {...candidateComparison} currentFormalId={task.current_timeline_version_id}
+          onAdopted={async (result) => {
+            if (currentTaskId.current !== result.task_id) return;
+            await refresh(true, (next) => next.task.id === result.task_id && next.task.timeline_sequence >= result.result_sequence);
+          }} />
       </HomeCardDialog> : null}
       <Tabs value={activeView} onValueChange={value => { const view = value as WorkspaceView; if (canOpenStage(view, workspace)) openEditingView(view); }} onChangeCapture={() => { navigationReadRevision.current += 1; }} data-editor-workspace="" data-active-view={activeView} className={[hasTimeline ? `${editorUi.workspace} ${styles.timelineWorkspace}` : styles.workspace, activeView === "subtitle_cover" ? styles.subtitleWorkspace : ""].filter(Boolean).join(" ")}>
         {workbenchPage?.active && editPreview && !localConfirmation ? <EditPreviewCard key={editPreview.proposal.id}

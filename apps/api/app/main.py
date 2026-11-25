@@ -4357,7 +4357,7 @@ app.include_router(build_task_timeline_candidate_router(
     repository_for=lambda: production_repo, access_for=lambda: _exact_edit_access,
     preview_for=lambda: TimelineCandidatePreviewUseCase(production_repo, artifact_store, _clip_preview_use_case()),
     actor_for=lambda: _require_permit_actor, media_for=lambda: _media_result_read_components()[0],
-    runtime_for=lambda: _creation_runtime,
+    runtime_for=lambda: _creation_runtime, metadata_for=lambda: _metadata_edit_use_case(),
 ))
 
 
