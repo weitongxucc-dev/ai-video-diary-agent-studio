@@ -280,10 +280,26 @@ class MetadataEditUseCase:
                 changed = apply_picture_metadata(task, montage, command, validate_graphic_sources=lambda overlays: self.validate_graphic_sources(workspace_id, task_id, overlays))
             except (EditConflict, ValueError, OSError) as exc:
                 raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
-            bound = self.repository.edit_records.get_edit_intent(workspace_id, proposal.intent_id).constraints.get('affected_source_scope')
+            constraints = self.repository.edit_records.get_edit_intent(workspace_id, proposal.intent_id).constraints
+            bound = constraints.get('affected_source_scope')
+            base = self.repository.timeline_records.get_timeline_version(workspace_id, command.base_version_id)
             if bound is not None:
                 command = EditSourceVerifier.restore_scope(command, bound)
                 verifier = EditSourceVerifier(self.repository, identity=command.actor_identity)
+            elif operation_type == 'EditGraphicOverlay':
+                verifier = None
+                if 'affected_source_scope' in constraints:
+                    raise EditPreviewRejected(status_code=409, detail='图文提案的封存来源范围无效，请重新预览')
+                before = creation_task_montage_plan_from_payload(base.snapshot['montage'])
+                if affected_source_clip_ids(before, changed):
+                    raise EditPreviewRejected(status_code=409, detail='原图文提案未封存实际影响的来源范围，请重新预览')
+                if source is not None:
+                    # Older typed overlay previews omitted the scope. Recover only
+                    # the empty scope, from the original version, without rewriting it.
+                    if source['action']['operation_type'] != operation_type:
+                        raise EditPreviewRejected(status_code=409, detail='原图文提案与编辑来源不一致，请重新预览')
+                    verifier = EditSourceVerifier(self.repository, identity=command.actor_identity)
+                    command = self.bind_affected_source_command(verifier, command, before, changed)
             else:
                 selected = set(command.values.get('clip_ids') or ([command.values['clip_id']] if command.values.get('clip_id') else []))
                 if not set(affected_source_clip_ids(montage, changed)) <= selected:
@@ -291,7 +307,6 @@ class MetadataEditUseCase:
                 verifier = EditSourceVerifier(self.repository, identity=command.actor_identity) if command.source is not None else None
             messages = {'EditGraphicOverlay': '图文已更新，可以重新渲染。', 'SetClipTransition': '转场已更新，配音与字幕时轴不变。', 'AdjustVisualEffects': '画面效果已更新，可以重新渲染。'}
             prepare_changed_montage(changed, message=messages[operation_type])
-            base = self.repository.timeline_records.get_timeline_version(workspace_id, command.base_version_id)
             return self._persist_confirmed_montage(task=task, proposal=proposal, base_version=base, updated_plan=changed, operation_type=operation_type, operation_payload=operation_payload, proposal_source_command=command, proposal_source_verifier=verifier)
         if operation_type == 'ChangeCanvas' and isinstance(operation_payload, dict):
             if task.current_timeline_version_id != operation_payload.get('base_version_id'):
@@ -774,8 +789,13 @@ class MetadataEditUseCase:
         except ValueError as exc:
             raise EditPreviewRejected(status_code=422, detail=str(exc)) from exc
         action = payload.overlay_action
-        identity = payload.graphic_overlay.id if action == 'add' else payload.overlay_id
+        overlay_id = payload.graphic_overlay.id if action == 'add' else payload.overlay_id
         base = self.ensure_montage_base(workspace_id, task, plan, source=source)
+        operation_payload = {'base_version_id': base.id, 'graphic_overlays': edited.graphic_overlays}
+        command = metadata_edit_command(task, identity, 'EditGraphicOverlay', operation_payload, source=source)
+        verifier = EditSourceVerifier(self.repository, identity=identity)
+        command = self.bind_affected_source_command(verifier, command, plan, edited)
+        source_scope = verifier.scope_payload(command)
         tracks = self.current_subtitle_tracks(workspace_id, task, current_version=base, montage=plan)
         try:
             for item in edited.graphic_overlays:
@@ -789,8 +809,8 @@ class MetadataEditUseCase:
         if self.repository.task_records.get_creation_task(workspace_id, task_id).current_timeline_version_id != base.id:
             raise EditPreviewRejected(status_code=409, detail='预览期间时间线变化，请重新预览图文叠加层')
         summary = {'add': '添加图文叠加层', 'update': '修改图文叠加层', 'delete': '删除图文叠加层'}[action]
-        intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=summary, context_stage='montage', selected_object_refs=[f'overlay:{identity}'], playhead_ms=None, intent_type='graphic_overlay', scope={'kind': 'overlay', 'id': identity}, constraints={'preserve_narration': True}, confidence=1, status='interpreted'), source=source)
-        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f'overlay:{identity}'], operation={'operation_type': 'EditGraphicOverlay', 'payload': {'base_version_id': base.id, 'graphic_overlays': edited.graphic_overlays}}, invalidated_refs=logical_montage_output_refs(plan), external_effects=[], preview={**{side: {'ref': f'timeline:{base.id}', 'label': label, 'detail': '草稿参数已计算；应用时保存新版本，不自动生成媒体。'} for side, label in (('before', '当前草稿'), ('after', '修改后草稿'))}, **{side: {'ref': record.logical_ref, 'label': '修改前' if side == 'before' else summary, 'detail': '完整成片视听预览；图文叠加层在指定区间显示，字幕、声音和镜头保持不变。', 'video_url': f'/api/creation-tasks/{task_id}/visual/artifacts/{record.id}'} for side, record in zip(('before', 'after'), records)}}))
+        intent = self.repository.edit_records.create_edit_intent(EditIntent(id=f'intent_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, raw_command=summary, context_stage='montage', selected_object_refs=[f'overlay:{overlay_id}'], playhead_ms=None, intent_type='graphic_overlay', scope={'kind': 'overlay', 'id': overlay_id}, constraints={'preserve_narration': True, 'affected_source_scope': source_scope}, confidence=1, status='interpreted'), source=source)
+        proposal = self.repository.edit_records.create_edit_proposal(EditProposal(id=f'proposal_{uuid4().hex}', workspace_id=workspace_id, task_id=task_id, intent_id=intent.id, summary=summary, target_refs=[f'overlay:{overlay_id}'], operation={'operation_type': 'EditGraphicOverlay', 'payload': operation_payload}, invalidated_refs=logical_montage_output_refs(plan), external_effects=[], preview={**{side: {'ref': f'timeline:{base.id}', 'label': label, 'detail': '草稿参数已计算；应用时保存新版本，不自动生成媒体。'} for side, label in (('before', '当前草稿'), ('after', '修改后草稿'))}, **{side: {'ref': record.logical_ref, 'label': '修改前' if side == 'before' else summary, 'detail': '完整成片视听预览；图文叠加层在指定区间显示，字幕、声音和镜头保持不变。', 'video_url': f'/api/creation-tasks/{task_id}/visual/artifacts/{record.id}'} for side, record in zip(('before', 'after'), records)}}))
         return (intent, proposal)
 
 
