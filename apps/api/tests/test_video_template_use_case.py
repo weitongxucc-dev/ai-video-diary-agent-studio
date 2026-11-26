@@ -34,7 +34,7 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     assert original.owner_user_id == owner
     original_snapshot = asdict(original)
     trace, reads = [], []
-    reader_facts = iter([(owner, False), ("declared-shared-viewer", False), (owner, False), (owner, False)])
+    reader_facts = iter([(owner, False), ("declared-shared-viewer", False), (owner, False)])
 
     def workspace_for(request):
         trace.append("workspace")
@@ -82,7 +82,8 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     output = tmp_path / "NONMEDIA-output-fixture"
     output.write_bytes(b"metadata fixture, not a playable video")
     task_id, timeline_id = "declared-task", "declared-timeline"
-    task = SimpleNamespace(id=task_id, current_timeline_version_id=timeline_id, confirmed_script_id="declared-script")
+    task = SimpleNamespace(id=task_id, owner_user_id=owner, current_timeline_version_id=timeline_id,
+        confirmed_script_id="declared-script")
     plan = SimpleNamespace(language="en-US", duration_target_seconds=45, presenter_share_target=20,
         lipsync_quality="high", selected_voice=SimpleNamespace(profile_id="voice-fixed", version="v8"))
     effects = {"exposure": 0.25, "contrast": 1.1, "saturation": 0.9, "temperature": 0.1}
@@ -149,8 +150,8 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     saved = main._video_template_http_adapter().save_creation_task_template(task_id, request,
         SaveVideoTemplateRequest(name=" 新模板 ", style_instruction=" 新任务风格 "))
     task_trace = list(trace)
-    assert task_trace == ["workspace", "task", "plan", "montage", "qualified-output-port", "nonempty-stat",
-        "subtitles", "scripts", "workspace", "reader:" + owner, "workspace", "reader:" + owner, "template.save"]
+    assert task_trace == ["workspace", "reader:" + owner, "task", "montage", "qualified-output-port",
+        "nonempty-stat", "plan", "subtitles", "scripts", "template.save"]
     expected_settings = {"kind":"composition", "visual_components":[], "language": "en-US", "aspect_ratio": "16:9", "duration_target_seconds": 45,
         "presenter_share_target": 20, "lipsync_quality": "high",
         "voice": {"profile_id": "voice-fixed", "version": "v8"}, "script_section_count": 2,
@@ -175,7 +176,7 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
         "fit_mode": "fill", "voice": None, "subtitle_style": {"name": "default", "font_family": "PingFang SC",
             "font_size": 40, "primary_color": "#FFFFFF", "emphasis_color": "#FFD54F", "position": "bottom",
             "bilingual_order": "source_then_translation"}}
-    assert reads == [owner, "declared-shared-viewer", owner, owner]
+    assert reads == [owner, "declared-shared-viewer", owner]
     with sqlite3.connect(database) as conn:
         counts = {table: conn.execute("SELECT count(*) FROM " + table).fetchone()[0]
             for table in ("video_templates", "creation_plans", "creation_tasks", "job_runs")}
