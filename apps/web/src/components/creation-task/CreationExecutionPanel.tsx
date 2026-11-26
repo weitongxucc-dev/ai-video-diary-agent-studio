@@ -1,5 +1,5 @@
 "use client";
-import { DeviceProductionStatus } from "../DeviceProductionStatus";
+import Link from "next/link";
 import { CompositionTimingSummary } from "../CompositionTimingSummary";
 import { PreviewVideo } from "./EditPreviewCard";
 import { ExecutionQueueStatus } from "../ExecutionQueueStatus";
@@ -16,6 +16,27 @@ import { CreationPlanApiError } from "@/lib/api";
 import { getCreationTaskScriptSections } from "@/lib/api/creation-tasks";
 import type { CreationTaskScriptSectionWindow } from "@/lib/types/creation-tasks";
 import type { SourceMediaSelection } from "@/lib/types/creation-plans";
+
+function RenderSpecification({ specification }: {
+    specification: NonNullable<CreationExecutionPreview["render_specification"]>;
+}) {
+    const { width_px: width, height_px: height, profile } = specification;
+    const profileMessage = {
+        missing: "这台设备尚未保存准备档。",
+        stale: "已保存设备档与当前设备或画面工具不再匹配，或工具暂不可核对。",
+        unknown: "暂不能核实适用于这次制作的画幅上限。",
+    };
+    return <>
+        <p>目标成片画幅 {width} × {height} 像素</p>
+        {profile.status === "verified" ? <>
+            <p>已核对的画幅上限 {profile.max_width_px} × {profile.max_height_px} 像素</p>
+            <p>{width > profile.max_width_px || height > profile.max_height_px
+                ? "目标画幅超出已保存的设备档上限。"
+                : "目标画幅在已保存的设备档上限内。"}制作仍需核对其他资源与执行条件。</p>
+        </> : <p>{profileMessage[profile.status]}</p>}
+        <p><Link href="/settings?section=runtime">查看设备准备</Link></p>
+    </>;
+}
 
 function ExecutionScriptWindow({ preview, onStale }: {
     preview: CreationExecutionPreview; onStale: (key: string) => void;
@@ -172,7 +193,6 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
         {sourceMedia ? needsOutput ? "重新输出当前剪辑" : "继续原片制作" : needsOutput ? "确认以上文案和要求，仅重新输出当前剪辑" : "确认以上文案和要求，继续制作"}
     </Button> : null;
     const content = <section aria-label="连续制作" className={styles.workSection}>
-    {(!job || needsOutput) && <DeviceProductionStatus />}
     <div className={styles.operationHeading}><h2>{job ? "连续制作" : "制作要求"}</h2><span className={styles.stateBadge}>{statusText}</span></div>
     {needsOutput ? <p>{sourceMedia ? "沿用当前原片与剪辑，重新输出当前时间线。" : "沿用有效配音和故事板，重新输出当前时间线。"}</p> : null}
     {(!job || resumable || waitingForUser) && preview ? <>
@@ -180,6 +200,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
       {previewStale ? <p role="status">制作前览已过期，请重新核对文案和制作要求。{onRefreshPreview ? <Button variant="outline" disabled={busy} onClick={onRefreshPreview}>重新核对文案和制作要求</Button> : null}</p> : null}
       <section className={styles.executionRequirements} aria-label="这次制作要求">
         <p>画幅 {preview.requirements.aspect_ratio} · 目标时长 {preview.requirements.duration_target_seconds} 秒 · {preview.requirements.presenter_selection ? "指定单段出镜" : `露脸目标 ${preview.requirements.presenter_share_target}%`}</p>
+        {!previewStale && preview.render_specification ? <RenderSpecification specification={preview.render_specification} /> : null}
         {sourceMedia ? <p>{sourceMedia.preserve_audio ? "保留原声" : "不使用原声音轨"}</p> : <p>口型：{preview.requirements.lipsync_quality === "high" ? "高精度" : "较快档"} · {preview.narration_source?.source_kind === "recorded"
                 ? `配音来源：本人录音 · 已采用 · ${preview.narration_source.duration_seconds.toFixed(1)} 秒`
                 : preview.narration_source?.source_kind === "generated"

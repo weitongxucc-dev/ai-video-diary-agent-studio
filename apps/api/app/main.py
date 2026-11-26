@@ -5703,8 +5703,11 @@ def _creation_render_is_valid(
 
 
 def _creation_execution_control():
+    from app.creation.render_specification import saved_render_capacity
+
     return CreationExecutionControl(production_repo, creation_execution, _render_stage_use_case(), _verify_creation_identity,
-        segments=_segment_production_use_case())
+        segments=_segment_production_use_case(),
+        render_capacity=lambda operation: saved_render_capacity(settings, os.environ, operation))
 
 
 def _new_creation_execution(repository: ProductionRepository) -> CreationExecution:
