@@ -42,9 +42,12 @@ class ResourceAudioUseCase:
         if not claims:
             raise AudioIngressRejected(404, '原资源导入请求不存在；不能据此推断未提交')
         claim, = claims
+        inputs = claim.payload['inputs']
+        if inputs.get('actor_identity') != actor.identity_payload():
+            raise AudioIngressRejected(403, '原资源导入请求归属无法核验')
         saved = self.repository.execution_records.read_edit_request_result(task, claim.id)
         receipt = {'task_id': task_id, 'request_id': request_id, 'status': 'unknown',
-                   'submitted_input': claim.payload['inputs'], 'job_id': None}
+                   'submitted_input': inputs, 'job_id': None}
         if saved and saved['status_code']>=400:
             receipt.update(status='rejected',submission_effect='not_submitted',status_code=saved['status_code'])
         elif saved:
@@ -63,8 +66,8 @@ class ResourceAudioUseCase:
             return str(uuid5(NAMESPACE_URL, str(key)))
         previous = self.read(actor, task_id, retry_of)
         inputs = previous['submitted_input']
-        if (inputs['resource_id'], inputs['version'], inputs['actor_identity']) != (resource_id, version, identity):
-            raise AudioIngressRejected(409, '原导入请求与当前资源、版本或成员不一致')
+        if (inputs['resource_id'], inputs['version']) != (resource_id, version):
+            raise AudioIngressRejected(409, '原导入请求与当前资源或版本不一致')
         if previous['status'] != 'rejected' or previous.get('submission_effect') != 'not_submitted':
             raise AudioIngressRejected(409, '原导入尚未确认未提交，请先回查原请求')
         return str(uuid5(NAMESPACE_URL, str(['audio_resource_retry', *key, previous['request_id']])))

@@ -2,14 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ResourceAudioAdoption } from "../resource-library/ResourceAudioAdoption";
 
-const api = vi.hoisted(() => ({ read: vi.fn(), history: vi.fn(), confirm: vi.fn(), undo: vi.fn(), import: vi.fn(), preview: vi.fn(), resolve: vi.fn(), readJob: vi.fn(), readRequest: vi.fn(), readRequestId: vi.fn(), scope: vi.fn() }));
+const api = vi.hoisted(() => ({ read: vi.fn(), history: vi.fn(), confirm: vi.fn(), undo: vi.fn(), import: vi.fn(), preview: vi.fn(), resolve: vi.fn(), readJob: vi.fn(), readRequest: vi.fn(), readRequestId: vi.fn() }));
 vi.mock("@/lib/api/creation-tasks", () => ({ getCreationTaskWorkspace: api.read, confirmCreationTaskEdit: api.confirm, undoCreationTaskTimeline: api.undo }));
 vi.mock("@/lib/api/creation-transport", () => ({ creationPlanRequest: api.history }));
 vi.mock("@/lib/api/task-media", () => ({ importCreationTaskResourceAudio: api.import, readCreationTaskResourceAudioRequest: api.readRequest, readCreationTaskResourceAudioRequestId: api.readRequestId, previewCreationTaskAudio: api.preview, resolveCreationTaskMediaResponse: api.resolve, getCreationTaskMediaJob: api.readJob }));
-vi.mock("@/lib/preflight-draft", async importOriginal => ({
-  ...await importOriginal<typeof import("@/lib/preflight-draft")>(),
-  readPreflightDraftScope: api.scope,
-}));
 const resource = { id: "openfilm:music", version: 2, name: "钢琴", category_id: "music" };
 const workspace = { task: { id: "task", name: "新作品", current_timeline_version_id: "v1", timeline_sequence: 1 }, montage: { duration_seconds: 20, audio_timeline: { tracks: [{ id: "music", name: "配乐", role: "music", locked: false }] } } };
 const glass = { id: "openfilm:sound-glass-pulse", version: 1, name: "玻璃脉冲", category_id: "sfx" };
@@ -17,17 +13,17 @@ const adopted = { ...workspace, task: { ...workspace.task, current_timeline_vers
 const glassAdoption = { timeline_version_id: "v2", sequence: 2, transition: "added", operation_type: "EditAudioTimeline", operation_id: "glass-op" };
 const noHistory = { completeness: "complete", current_resource_present: false, timeline_history: [], requests: [] };
 const glassHistory = { ...noHistory, current_resource_present: true, timeline_history: [glassAdoption] };
-const scope = { workspaceId: "workspace", memberId: "member" };
-const requestKey = "ai-video-diary.resource-audio-request.v1:workspace:member:task:openfilm%3Amusic:2";
 const initialId = "a0c244c9-ab13-5601-8cbc-bcb450830ca2";
 const retryId = "c8c5c234-d671-545f-b8f6-043ea47c276b";
+const otherDeviceId = "47f71d55-cb7f-5681-9dda-95ea2713c6bd";
+const requestKey = `ai-video-diary.resource-audio-request.v2:${initialId}`;
+const otherDeviceKey = `ai-video-diary.resource-audio-request.v2:${otherDeviceId}`;
 const submittedInput = { resource_id: resource.id, version: resource.version };
 const imported = { source_ref: "artifacts/task/music", duration_ms: 45000 };
 const importJob = { job_id: "resource-import", status: "succeeded", result: imported };
 beforeEach(() => {
   vi.resetAllMocks();
   sessionStorage.clear();
-  api.scope.mockResolvedValue(scope);
   api.read.mockResolvedValue(workspace);
   api.history.mockResolvedValue(noHistory);
   api.readRequestId.mockImplementation(async (_task, _resource, _version, retryOf) => ({
@@ -167,7 +163,7 @@ it("only makes a new import after a confirmed non-submission and a new user acti
   fireEvent.click(await screen.findByRole("button", { name: "重新尝试导入" }));
   await screen.findByRole("button", { name: "确认加入音轨" });
   expect(api.import).toHaveBeenCalledTimes(2);
-  expect(api.readRequestId).toHaveBeenLastCalledWith("task", resource.id, resource.version, id, expect.any(AbortSignal));
+  expect(api.readRequestId).toHaveBeenCalledWith("task", resource.id, resource.version, id, expect.any(AbortSignal));
   expect(api.import).toHaveBeenLastCalledWith("task", resource.id, resource.version, retryId, id);
   expect(sessionStorage.getItem(requestKey)).toBe(retryId);
   expect(api.confirm).not.toHaveBeenCalled();
@@ -208,16 +204,79 @@ it("reopens an unknown import and reads its original Job without another POST", 
   expect(api.confirm).not.toHaveBeenCalled();
 });
 
-it("does not read or submit a saved request after the workspace or member changes", async () => {
+it("keeps an unknown request bound to its device when reopening in the same tab", async () => {
+  api.import.mockRejectedValueOnce(new Error("响应超时"));
+  api.readRequest.mockRejectedValueOnce(Object.assign(new Error("原请求不存在"), { status: 404 }));
+  const firstDevice = render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  await screen.findByText("新作品");
+  fireEvent.click(screen.getByRole("button", { name: "准备采用" }));
+  await screen.findByText(/原导入结果尚未确认/);
+  expect(sessionStorage.getItem(requestKey)).toBe(initialId);
+  firstDevice.unmount();
+
+  // Only the authenticated device scope changes. The tab, work and resource stay the same.
+  api.readRequestId.mockResolvedValue({ request_id: otherDeviceId, original_request_id: null });
+  const secondDevice = render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  const prepare = await screen.findByRole("button", { name: "准备采用" });
+  await waitFor(() => expect(prepare).toBeEnabled());
+  fireEvent.click(prepare);
+  await screen.findByRole("button", { name: "确认加入音轨" });
+  expect(api.import).toHaveBeenLastCalledWith("task", resource.id, resource.version, otherDeviceId, undefined);
+  expect(api.readRequest).toHaveBeenCalledTimes(1);
+  expect(sessionStorage.getItem(otherDeviceKey)).toBe(otherDeviceId);
+  expect(sessionStorage.getItem(requestKey)).toBe(initialId);
+  secondDevice.unmount();
+
+  api.readRequestId.mockResolvedValue({ request_id: initialId, original_request_id: null });
+  api.readRequest.mockResolvedValue({ task_id: "task", request_id: initialId, submitted_input: submittedInput,
+    status: "recorded", job_id: "original-device-job" });
+  api.readJob.mockResolvedValue({ ...importJob, job_id: "original-device-job" });
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  const recover = await screen.findByRole("button", { name: "查询原导入请求" });
+  await waitFor(() => expect(recover).toBeEnabled());
+  fireEvent.click(recover);
+  fireEvent.click(await screen.findByRole("button", { name: "读取导入结果" }));
+  await screen.findByRole("button", { name: "确认加入音轨" });
+  expect(api.readRequest).toHaveBeenLastCalledWith("task", initialId, expect.any(AbortSignal));
+  expect(api.readJob).toHaveBeenCalledWith("task", "original-device-job", expect.any(AbortSignal));
+  expect(api.import).toHaveBeenCalledTimes(2);
+  expect(sessionStorage.getItem(otherDeviceKey)).toBe(otherDeviceId);
+  expect(sessionStorage.getItem(requestKey)).toBe(initialId);
+});
+
+it("does not read or submit a saved request after its authenticated device scope changes", async () => {
   sessionStorage.setItem(requestKey, "a0c244c9-ab13-4601-8cbc-bcb450830ca2");
   render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
   const readOriginal = await screen.findByRole("button", { name: "查询原导入请求" });
   await waitFor(() => expect(readOriginal).toBeEnabled());
-  api.scope.mockResolvedValue({ ...scope, memberId: "another-member" });
+  api.readRequestId.mockResolvedValue({ request_id: otherDeviceId, original_request_id: null });
   fireEvent.click(readOriginal);
-  await screen.findByText(/成员或工作区已变化/);
+  await screen.findByText(/设备、成员或工作区已变化/);
   expect(api.readRequest).not.toHaveBeenCalled();
   expect(api.import).not.toHaveBeenCalled();
+  expect(sessionStorage.getItem(requestKey)).toBe("a0c244c9-ab13-4601-8cbc-bcb450830ca2");
+  expect(sessionStorage.getItem(otherDeviceKey)).toBeNull();
+});
+
+it("rechecks the device before replacing a rejected request's saved pointer", async () => {
+  sessionStorage.setItem(requestKey, initialId);
+  api.readRequest.mockResolvedValue({ task_id: "task", request_id: initialId, submitted_input: submittedInput,
+    status: "rejected", submission_effect: "not_submitted", job_id: null });
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  const recover = await screen.findByRole("button", { name: "查询原导入请求" });
+  await waitFor(() => expect(recover).toBeEnabled());
+  fireEvent.click(recover);
+  const retry = await screen.findByRole("button", { name: "重新尝试导入" });
+  api.readRequestId.mockImplementation(async (_task, _resource, _version, retryOf) => {
+    if (retryOf === undefined) return { request_id: initialId, original_request_id: initialId };
+    api.readRequestId.mockResolvedValue({ request_id: otherDeviceId, original_request_id: null });
+    return { request_id: retryId, original_request_id: null };
+  });
+  fireEvent.click(retry);
+  await screen.findByText(/设备、成员或工作区已变化/);
+  expect(api.import).not.toHaveBeenCalled();
+  expect(sessionStorage.getItem(requestKey)).toBe(initialId);
+  expect(sessionStorage.getItem(otherDeviceKey)).toBeNull();
 });
 
 it.each(["recorded", "unknown", "rejected"] as const)("recovers an earlier client's %s request selected by the server", async status => {
@@ -250,7 +309,7 @@ it.each([
   expect(screen.getByRole("button", { name: "查询原导入请求" })).toBeEnabled();
   expect(screen.queryByRole("button", { name: "重新尝试导入" })).not.toBeInTheDocument();
   expect(api.readJob).not.toHaveBeenCalled();
-  expect(api.readRequestId).not.toHaveBeenCalled();
+  expect(api.readRequestId.mock.calls.every(call => call[3] === undefined)).toBe(true);
   expect(api.import).not.toHaveBeenCalled();
 });
 
@@ -280,9 +339,11 @@ it("keeps recovered request failures query-only", async () => {
 });
 
 it("requires a successful request lookup before the first submission", async () => {
-  api.readRequestId.mockRejectedValue(Object.assign(new Error("暂时无法定位原导入请求"), { status: 404 }));
   render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
-  fireEvent.click(await screen.findByRole("button", { name: "准备采用" }));
+  const prepare = await screen.findByRole("button", { name: "准备采用" });
+  await waitFor(() => expect(prepare).toBeEnabled());
+  api.readRequestId.mockRejectedValue(Object.assign(new Error("暂时无法定位原导入请求"), { status: 404 }));
+  fireEvent.click(prepare);
   expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法定位原导入请求");
   expect(sessionStorage.getItem(requestKey)).toBeNull();
   expect(api.import).not.toHaveBeenCalled();

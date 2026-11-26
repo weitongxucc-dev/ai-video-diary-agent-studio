@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { getCreationTaskWorkspace, confirmCreationTaskEdit, undoCreationTaskTimeline } from "@/lib/api/creation-tasks";
 import { creationPlanRequest } from "@/lib/api/creation-transport";
 import { importCreationTaskResourceAudio, readCreationTaskResourceAudioRequest, readCreationTaskResourceAudioRequestId, previewCreationTaskAudio, resolveCreationTaskMediaResponse, getCreationTaskMediaJob } from "@/lib/api/task-media";
-import { readPreflightDraftScope, validDraftId, type DraftScope } from "@/lib/preflight-draft";
+import { validDraftId } from "@/lib/preflight-draft";
 import type { CreationTaskWorkspace, CreationTaskEditPreviewResponse, TaskMediaResultMap, TaskMediaJob } from "@/lib/types";
 import styles from "../EditorResourceLibraryPanel.module.css";
 
@@ -24,9 +24,10 @@ type ImportRequest = { id: string } & (
   { state: "unknown" | "not_submitted" } | { state: "recorded"; jobId: string }
 );
 
-function importRequestKey(scope: DraftScope, taskId: string, resourceId: string, version: number) {
-  const parts = [scope.workspaceId, scope.memberId, taskId, resourceId, String(version)];
-  return `ai-video-diary.resource-audio-request.v1:${parts.map(encodeURIComponent).join(":")}`;
+function importRequestKey(initialRequestId: string) {
+  if (!validDraftId(initialRequestId)) throw new Error("当前设备的导入范围无法核对。");
+  // The server's initial ID includes the verified device, member, task and fixed resource.
+  return `ai-video-diary.resource-audio-request.v2:${initialRequestId}`;
 }
 
 function readResourceHistory(taskId: string, resourceId: string, version: number, signal: AbortSignal) {
@@ -58,15 +59,15 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
   const undoRequest = useRef<Parameters<typeof undoCreationTaskTimeline>[1] | null>(null);
   useEffect(() => {
     const controller = new AbortController(); lifetime.current = controller;
-    void readPreflightDraftScope().then(scope => {
+    void readCreationTaskResourceAudioRequestId(taskId, resource.id, resource.version, undefined, controller.signal).then(attempt => {
       if (controller.signal.aborted) return;
-      const key = importRequestKey(scope, taskId, resource.id, resource.version);
+      const key = importRequestKey(attempt.request_id);
       const id = sessionStorage.getItem(key);
       if (id !== null && !validDraftId(id)) throw new Error("原导入请求编号无法读取。");
       setImportRequest(id === null ? null : { id, state: "unknown" });
       setRequestKey(key);
     }).catch(() => {
-      if (!controller.signal.aborted) setError("无法恢复当前成员的导入记录，请重新打开资源后核对。");
+      if (!controller.signal.aborted) setError("无法恢复当前设备的导入记录，请重新打开资源后核对。");
     });
     void getCreationTaskWorkspace(taskId).then(async value => {
       if (controller.signal.aborted) return;
@@ -127,11 +128,12 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
     setNotice("原导入结果尚未确认。请继续查询原请求。");
   }
 
-  async function verifyImportScope(key: string) {
-    const scope = await readPreflightDraftScope();
-    if (importRequestKey(scope, taskId, resource.id, resource.version) !== key) {
-      throw new Error("成员或工作区已变化，请重新打开资源。");
+  async function verifyImportScope(key: string, signal: AbortSignal) {
+    const current = await readCreationTaskResourceAudioRequestId(taskId, resource.id, resource.version, undefined, signal);
+    if (importRequestKey(current.request_id) !== key) {
+      throw new Error("设备、成员或工作区已变化，请重新打开资源。");
     }
+    return current;
   }
 
   async function prepare() {
@@ -147,7 +149,7 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
           throw new Error("作品已更新，请核对音轨和位置后重新准备。");
         }
       }
-      await verifyImportScope(requestKey);
+      const current = await verifyImportScope(requestKey, signal);
       if (signal.aborted) return;
       const savedId = sessionStorage.getItem(requestKey);
       if (savedId !== (importRequest?.id ?? null)) {
@@ -166,9 +168,10 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
           response = await getCreationTaskMediaJob(taskId, importRequest.jobId, signal);
         } else {
           const retryOf = importRequest?.state === "not_submitted" ? importRequest.id : undefined;
-          const attempt = await readCreationTaskResourceAudioRequestId(taskId, resource.id, resource.version, retryOf, signal);
+          const attempt = retryOf === undefined ? current
+            : await readCreationTaskResourceAudioRequestId(taskId, resource.id, resource.version, retryOf, signal);
           if (signal.aborted) return;
-          await verifyImportScope(requestKey);
+          if (retryOf !== undefined) await verifyImportScope(requestKey, signal);
           if (signal.aborted) return;
           if (sessionStorage.getItem(requestKey) !== savedId) throw new Error("导入记录已变化，请重新核对。");
           const originalId = attempt.original_request_id;

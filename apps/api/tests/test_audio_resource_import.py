@@ -269,18 +269,22 @@ def test_resource_request_locator_uses_the_current_account_device(tmp_path, monk
         assert client.get(url + '/request-id', params=resource, headers=original_headers).json() == {
             'request_id': initial['request_id'], 'original_request_id': previous,
         }
-        # The production history still includes the other device; its job is still protected.
+        original_on_owner = client.get(receipt_url + previous, headers=original_headers)
+        assert original_on_owner.status_code == 200, original_on_owner.text
+        assert original_on_owner.json()['status'] == original_status
+        # Shared history uses member scope. Individual receipts require the original device.
         original_receipt = client.get(receipt_url + previous, headers=other_headers)
-        assert original_receipt.status_code == (403 if original_status == 'recorded' else 200)
+        assert original_receipt.status_code == 403
+        assert 'submitted_input' not in original_receipt.json()
         retry = {**resource, 'retry_of': previous}
         rejected_retry = client.get(url + '/request-id', params=retry, headers=other_headers)
-        assert rejected_retry.status_code == (403 if original_status == 'recorded' else 409)
+        assert rejected_retry.status_code == 403
         if original_status == 'rejected':
             valid_retry = client.get(url + '/request-id', params=retry, headers=original_headers)
             assert valid_retry.status_code == 200, valid_retry.text
             retry_id = valid_retry.json()['request_id']
             assert retry_id != previous
-            for name, status in [('other-device', 409), ('other-workspace', 404)]:
+            for name, status in [('other-device', 403), ('other-workspace', 404)]:
                 headers = {'X-Test-Actor': name}
                 assert client.get(url + '/request-id', params=retry, headers=headers).status_code == status
                 assert client.post(url, json={**retry, 'request_id': retry_id}, headers=headers).status_code == status
@@ -314,6 +318,7 @@ def test_resource_request_locator_uses_the_current_account_device(tmp_path, monk
         recovered = client.get(receipt_url + current_id, headers=other_headers).json()
         assert recovered['status'] == 'recorded' and recovered['job_id'] == current.json()['job_id']
         assert client.get(receipt_url + current_id, headers=original_headers).status_code == 403
+        assert client.get(receipt_url + previous, headers=original_headers).json() == original_on_owner.json()
         with repo._connect() as conn:
             total = 2 if original_status == 'recorded' else 1
             assert conn.execute('SELECT count(*) FROM job_runs').fetchone()[0] == total
