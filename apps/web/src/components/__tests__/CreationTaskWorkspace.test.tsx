@@ -4174,6 +4174,55 @@ describe("CreationTaskWorkspace", () => {
     expect(mocks.confirmEdit).not.toHaveBeenCalled();
   });
 
+  it.each(["confirmed refusal", "unknown result", "different input", "different request", "different work", "unmarked conflict"])(
+    "only releases a matching original-source save proven not submitted: %s", async (result) => {
+      mocks.showQuickInspector = true;
+      const initial = subtitleCoverWorkspace();
+      const { task } = initial;
+      task.stage = "montage";
+      initial.plan.source_media = { asset_id: "source", asset_updated_at: task.updated_at, source_ref: "workspace://source.mp4",
+        source_start_seconds: 0, source_end_seconds: 12, aspect_ratio: "9:16", preserve_audio: true,
+        file_signature: { size_bytes: "100", mtime_ns: "1", ctime_ns: "1", inode: "1" } };
+      initial.montage!.clips = [{ id: "source-clip", cue_id: null, asset_id: "source", segment_id: null,
+        source_reference: "workspace://source.mp4", source_start_seconds: 0, source_end_seconds: 12,
+        timeline_start_seconds: 0, timeline_end_seconds: 12, match_score: 0, match_reasons: [],
+        needs_confirmation: false, manually_selected: true, role: "a_roll", locked: false }];
+      mocks.getWorkspace.mockResolvedValue(initial);
+      mocks.exactEdit.mockRejectedValue(new CreationPlanApiError(409, null, "镜头来源或使用状态已失效"));
+      mocks.readEditRequest.mockImplementation(async (taskId, requestId) => {
+        const input = mocks.exactEdit.mock.calls[0][1];
+        return {
+          task_id: result === "different work" ? "other-task" : taskId,
+          request_id: result === "different request" ? "other-request" : requestId,
+          phase: "apply", status: result === "unknown result" ? "unknown" : "recorded",
+          submitted_input: result === "different input" ? { ...input, source_start_seconds: 2 } : input,
+          result_status_code: 409,
+          result: { detail: result === "unmarked conflict" ? "镜头来源或使用状态已失效"
+            : { error: "source_revision_recovery_required", submission_effect: "not_submitted" } },
+        };
+      });
+      renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+      fireEvent.click(openStoryboardClip(1));
+      const draft = screen.getByLabelText("镜头 1 快速裁剪起点");
+      fireEvent.change(draft, { target: { value: "1.5" } });
+      fireEvent.blur(draft);
+      await waitFor(() => expect(mocks.readEditRequest).toHaveBeenCalledOnce());
+      openEditingStatusTray();
+      const storageKey = `subtitle-save:${task.workspace_id}:${task.id}:member-1`;
+      if (result === "confirmed refusal") {
+        expect(await screen.findByText("原片登记已变化，原修改未保存。")).toBeVisible();
+        expect(screen.getByRole("button", { name: "核对原片来源" })).toBeEnabled();
+        expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument();
+        expect(sessionStorage.getItem(storageKey)).toBeNull();
+      } else {
+        expect(screen.getByRole("button", { name: "查询原保存结果" })).toBeVisible();
+        expect(JSON.parse(sessionStorage.getItem(storageKey)!).input).toEqual(mocks.exactEdit.mock.calls[0][1]);
+      }
+      expect(draft).toHaveValue(1.5);
+      expect(mocks.exactEdit).toHaveBeenCalledOnce();
+    },
+  );
+
   it("keeps each clip's quick draft through selection and a failed direct apply", async () => {
     mocks.showQuickInspector = true;
     const task = {
