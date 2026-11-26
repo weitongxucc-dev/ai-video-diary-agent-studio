@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { AudioLines, Film, Grid2X2, Music2, SlidersHorizontal, Sparkles, Sticker, Subtitles, Wand2 } from "lucide-react";
 import styles from "./EditorResourceLibraryPanel.module.css";
 import { readPreflightDraftScope } from "@/lib/preflight-draft";
+import { ResourceAudioPreview } from "./resource-library/ResourceAudioPreview";
 import { ResourceVisualPreview } from "./resource-library/ResourceVisualAdoption";
 import { SkillCatalogCard } from "./resource-library/SkillCatalogCard";
 
@@ -176,7 +177,7 @@ function CatalogResourceResults({ resources, renderResourceAction }: { resources
         {open ? <div className={styles.catalogPreview} role="region" aria-label={`${resource.name}资源预览`}>
           {canAddVisual && resource.preview.kind === "html" ? <ResourceVisualPreview resource={resource} /> : null}
           {preview && resource.preview.kind === "image" ? <img className={styles.stickerPreview} src={preview} alt={`预览：${resource.name}`} width={160} height={160} /> : null}
-          {preview && resource.preview.kind === "audio" ? <audio controls preload="none" src={preview} aria-label={`预览：${resource.name}`} /> : null}
+          {preview && resource.preview.kind === "audio" ? <ResourceAudioPreview key={preview} name={resource.name} src={preview} /> : null}
           {preview && resource.preview.kind === "video" ? <video controls width={640} height={360} preload="none" poster={typeof resource.runtime_requirements?.poster_ref === "string" ? resource.runtime_requirements.poster_ref : undefined} src={preview} aria-label={`预览：${resource.name}`} /> : null}
           {resource.preview.duration_seconds != null ? <span>{resource.preview.duration_seconds} 秒</span> : null}
           <details><summary>来源、版本与回滚</summary>
