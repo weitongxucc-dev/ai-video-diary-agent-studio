@@ -136,6 +136,22 @@ def test_reuse_preserves_design_but_drops_previous_inputs_and_object_ids():
     assert VisualTemplateOverlay.model_validate(first[0])
 
 
+def test_reused_layer_boundaries_keep_the_scaled_frame_clock():
+    original = visual_overlay().model_copy(update={
+        'start_seconds': .2, 'end_seconds': 1.0,
+    })
+    montage = SimpleNamespace(graphic_overlays=[original.model_dump()], duration_seconds=1.2)
+    settings = {'visual_components': reusable_components(montage)}
+
+    layer, = instantiate_components(settings, 4)
+    assert layer['start_seconds'] == 20 / 30
+    assert layer['end_seconds'] == 100 / 30
+
+    # The setting can also intentionally start between two frame times.
+    layer, = instantiate_components(settings, 4.01)
+    assert 20 / 30 < layer['start_seconds'] < 21 / 30
+
+
 def test_source_errors_dependencies_and_clock_are_explicit(tmp_path):
     overlay=visual_overlay()
     document=template_document(overlay.definition)
