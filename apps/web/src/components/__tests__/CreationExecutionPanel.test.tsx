@@ -151,6 +151,46 @@ it.each(renderProfileCases)("shows production canvas facts for saved profile %j"
   expect(onStart).not.toHaveBeenCalled();
 });
 
+type SourceAudioInput = NonNullable<CreationExecutionPreview["source_audio_input"]>;
+
+const sourceInputCases: Array<[SourceAudioInput, string]> = [
+  [{ status: "verified", source_bytes: 25_290_553, max_input_bytes: 23_171_072 }, "缩短所选区间仍按整文件计量"],
+  [{ status: "verified", source_bytes: 1_162_731, max_input_bytes: 23_171_072 }, "原声源文件大小在已核实的单文件上限内"],
+  [{ status: "unknown" }, "暂不能核实原声完整源文件的大小或当前音频输入上限"],
+];
+
+it.each(sourceInputCases)("shows the original audio input in production details %j", async (input, message) => {
+  const onStart = vi.fn();
+  const source = { asset_id: "source", asset_updated_at: "2026-11-09", source_ref: "workspace://source.mp4",
+    source_start_seconds: 0, source_end_seconds: 6, aspect_ratio: "9:16" as const, preserve_audio: true,
+    file_signature: { size_bytes: "100", mtime_ns: "1", ctime_ns: "1", inode: "1" } };
+  const preview: CreationExecutionPreview = {
+    task_id: "source-task", script_id: null, script_title: "", script_updated_at: null,
+    script_sections_total_count: 0, script_sections_loaded: false, plan_id: "source-plan",
+    narration_source: null, input_digest: "source-digest",
+    render_specification: { width_px: 1080, height_px: 1920, profile: { status: "unknown" } },
+    source_audio_input: input,
+    requirements: { aspect_ratio: "9:16", duration_target_seconds: 6, presenter_share_target: 0,
+      lipsync_quality: "fast", selected_voice: null, can_continue: true, continuation_blocker: null, template_settings: {} },
+  };
+  render(<CreationExecutionPanel taskStage="montage" taskReason={null} sourceMedia={source}
+    voice={null} availableVoices={[]} preview={preview} execution={null} busy={false} compact
+    onStart={onStart} onResume={vi.fn()} onCancel={vi.fn()} onOpenMontage={vi.fn()} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "核对制作要求" }));
+  const dialogue = within(screen.getByRole("dialog", { name: "原片制作要求" }));
+  expect(dialogue.getByText("沿用原片 0–6 秒的当前剪辑。")).toBeVisible();
+  expect(dialogue.getByText(text => text.includes(message))).toBeVisible();
+  if (input.status === "verified") {
+    expect(dialogue.getByText(`完整原声源文件 ${input.source_bytes.toLocaleString("zh-CN")} 字节 · 已核实单文件上限 23,171,072 字节`)).toBeVisible();
+  } else {
+    expect(dialogue.queryByText(/已核实单文件上限/)).not.toBeInTheDocument();
+  }
+  expect(dialogue.getByRole("link", { name: "查看设备准备" })).toHaveAttribute("href", "/settings?section=runtime");
+  expect(dialogue.getByRole("button", { name: "生成当前剪辑成片" })).toBeEnabled();
+  expect(onStart).not.toHaveBeenCalled();
+});
+
 describe.each([false, true])("CreationExecutionPanel compact=%s", compact => {
   it("shows storyboard confirmation without reporting narration failure from the old task stage", async () => {
     render(panel(compact, "queued", "waiting_for_user"));

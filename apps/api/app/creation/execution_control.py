@@ -16,7 +16,7 @@ from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecu
     CreationInputRejected, creation_input_rejection, revision_digest, submit_creation_stage, montage_waiting_for_confirmation,
     migrate_creation_narration_request, resume_original_narration)
 from app.creation.render_stage_use_case import RenderRejected
-from app.creation.render_specification import render_target
+from app.creation.render_specification import render_target, source_audio_bytes
 from app.creation.render_reopen import continue_failed_presenter_render
 from app.creation.contracts import TaskEvent, JobRun
 from app.creation.task_authorization import TaskAuthorizationDenied
@@ -207,7 +207,7 @@ class CreationExecutionControl:
         self.segments = segments
         self.render_capacity = render_capacity
 
-    def preview(self, workspace_id: str, task_id: str) -> dict[str, object]:
+    def preview(self, workspace_id: str, task_id: str, *, actor_for=None) -> dict[str, object]:
         from app.creation.execution_input import validate_execution_relationships
         try:
             reader = self.repository.execution_inputs
@@ -215,7 +215,18 @@ class CreationExecutionControl:
                 snapshot = reader.read_creation_execution_snapshot(workspace_id, task_id, connection=connection)
                 task, plan, script = snapshot.task, snapshot.plan, snapshot.script_header
                 validate_execution_relationships(task, script, plan)
-                (width, height), operation = render_target(self.repository, task, plan, connection=connection)
+                (width, height), operation, montage = render_target(self.repository, task, plan, connection=connection)
+                source = plan.source_media
+                timeline = montage.audio_timeline if montage is not None else None
+                # Sealing checks declared source files even when the original audio is muted.
+                has_original = source is not None and timeline is not None and any(
+                    clip.source_ref == source["source_ref"]
+                    for track in timeline.tracks if track.role == "original" for clip in track.clips)
+                original_unknown = source is not None and source["preserve_audio"] and timeline is None
+                size = None
+                if has_original and operation == "cpu_render" and actor_for is not None and self.render_stage is not None:
+                    size = source_audio_bytes(self.repository, task, source,
+                        audio=self.render_stage.metadata.audio_service, actor=actor_for(), connection=connection)
         except KeyError as exc:
             raise ExecutionControlRejected(status_code=404, detail="创作任务或确认对象不存在") from exc
         except ValueError as exc:
@@ -246,6 +257,13 @@ class CreationExecutionControl:
             continuation_blocker = "当前配音产物不可用或不再对应这版文案；请重新采用录音或选择已授权声音。"
         else:
             continuation_blocker = "请先选择已授权声音，或保存并明确采用本人录音；本人录音仅支持纯素材成片。"
+        source_audio_input = None
+        if has_original or original_unknown:
+            source_audio_input = {"status": "unknown"}
+            if size is not None and self.render_capacity is not None:
+                capacity = self.render_capacity("cpu_audio")
+                if capacity["status"] == "verified":
+                    source_audio_input = {**capacity, "source_bytes": size}
         return {
             "task_id": task.id,
             "task_execution": task_execution_requirements(task, plan),
@@ -260,6 +278,7 @@ class CreationExecutionControl:
                 "height_px": height,
                 "profile": self.render_capacity(operation) if operation and self.render_capacity else {"status": "unknown"},
             },
+            **({"source_audio_input": source_audio_input} if source_audio_input is not None else {}),
             "narration_source": ({
                 "source_kind": narration_artifact.source_kind,
                 "source_artifact_ref": narration_artifact.source_artifact_ref,

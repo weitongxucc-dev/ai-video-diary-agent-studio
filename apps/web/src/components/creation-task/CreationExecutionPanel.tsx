@@ -17,8 +17,24 @@ import { getCreationTaskScriptSections } from "@/lib/api/creation-tasks";
 import type { CreationTaskScriptSectionWindow } from "@/lib/types/creation-tasks";
 import type { SourceMediaSelection } from "@/lib/types/creation-plans";
 
-function RenderSpecification({ specification }: {
+function SourceAudioInput({ input }: {
+    input: NonNullable<CreationExecutionPreview["source_audio_input"]>;
+}) {
+    if (input.status === "unknown") {
+        return <p>暂不能核实原声完整源文件的大小或当前音频输入上限。</p>;
+    }
+    const { source_bytes: bytes, max_input_bytes: limit } = input;
+    return <>
+        <p>完整原声源文件 {bytes.toLocaleString("zh-CN")} 字节 · 已核实单文件上限 {limit.toLocaleString("zh-CN")} 字节</p>
+        <p>{bytes > limit
+            ? "原声源文件超出上限。缩短所选区间仍按整文件计量。可换用更小的源文件，或到设备准备测量并核对更高规格。"
+            : "原声源文件大小在已核实的单文件上限内。"}</p>
+    </>;
+}
+
+function RenderSpecification({ specification, sourceAudioInput }: {
     specification: NonNullable<CreationExecutionPreview["render_specification"]>;
+    sourceAudioInput: CreationExecutionPreview["source_audio_input"];
 }) {
     const { width_px: width, height_px: height, profile } = specification;
     const profileMessage = {
@@ -34,6 +50,7 @@ function RenderSpecification({ specification }: {
                 ? "目标画幅超出已保存的设备档上限。"
                 : "目标画幅在已保存的设备档上限内。"}制作仍需核对其他资源与执行条件。</p>
         </> : <p>{profileMessage[profile.status]}</p>}
+        {sourceAudioInput && <SourceAudioInput input={sourceAudioInput} />}
         <p><Link href="/settings?section=runtime">查看设备准备</Link></p>
     </>;
 }
@@ -201,7 +218,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
       {previewStale ? <p role="status">制作前览已过期，请重新核对文案和制作要求。{onRefreshPreview ? <Button variant="outline" disabled={busy} onClick={onRefreshPreview}>重新核对文案和制作要求</Button> : null}</p> : null}
       <section className={styles.executionRequirements} aria-label="这次制作要求">
         <p>画幅 {preview.requirements.aspect_ratio} · 目标时长 {preview.requirements.duration_target_seconds} 秒 · {preview.requirements.presenter_selection ? "指定单段出镜" : `露脸目标 ${preview.requirements.presenter_share_target}%`}</p>
-        {!previewStale && preview.render_specification ? <RenderSpecification specification={preview.render_specification} /> : null}
+        {!previewStale && preview.render_specification ? <RenderSpecification specification={preview.render_specification} sourceAudioInput={preview.source_audio_input} /> : null}
         {sourceMedia ? <p>{sourceMedia.preserve_audio ? "保留原声" : "不使用原声音轨"}</p> : <p>口型：{preview.requirements.lipsync_quality === "high" ? "高精度" : "较快档"} · {preview.narration_source?.source_kind === "recorded"
                 ? `配音来源：本人录音 · 已采用 · ${preview.narration_source.duration_seconds.toFixed(1)} 秒`
                 : preview.narration_source?.source_kind === "generated"
