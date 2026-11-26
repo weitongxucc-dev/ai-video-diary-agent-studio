@@ -1933,7 +1933,8 @@ describe("CreationTaskWorkspace", () => {
       }
 
       fireEvent.pause(editor);
-      expect(openStoryboardClip(3)).toHaveAttribute("aria-pressed", "true");
+      expect(openStoryboardClip(scenario === "user selects a different shot" ? 1 : 2)).toHaveAttribute("aria-pressed", "true");
+      expect(openStoryboardClip(3)).toHaveAttribute("aria-pressed", "false");
       expect(mocks.confirmEdit).not.toHaveBeenCalled();
     },
   );
@@ -2474,6 +2475,15 @@ describe("CreationTaskWorkspace", () => {
         version: "timeline-version-6", start_ms: 0, end_ms: 3200,
       })],
     }, 0));
+
+    const ruler = screen.getByRole("slider", { name: "时间线播放位置" });
+    fireEvent.keyDown(ruler, { key: "ArrowRight" });
+    expect(ruler).toHaveAttribute("aria-valuenow", "1");
+    expect(subtitle).toHaveAttribute("aria-pressed", "true");
+    const transport = screen.getByRole("slider", { name: "成片播放位置" });
+    fireEvent.change(transport, { target: { value: "2" } });
+    expect(ruler).toHaveAttribute("aria-valuenow", "2");
+    expect(subtitle).toHaveAttribute("aria-pressed", "true");
 
     if (selection === "shot") fireEvent.click(openStoryboardClip(1));
     expect(subtitle).toHaveAttribute("aria-pressed", String(selection === "subtitle"));
@@ -3593,6 +3603,7 @@ describe("CreationTaskWorkspace", () => {
     try {
       renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
       fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
+      fireEvent.click(screen.getByRole("button", { name: /^定位镜头 1：/ }));
       const formal = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
       formal.currentTime = 3.25;
       fireEvent.timeUpdate(formal);
@@ -7170,6 +7181,11 @@ it("opens the saved audio clip and rejects historical, missing, or foreign resul
   const audio = screen.getByRole("button", { name: "选择音频：目标配音段" });
   fireEvent.click(video);
   expect(audio).toHaveAttribute("aria-pressed", "false");
+
+  fireEvent.click(audio);
+  expect(audio).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("slider", { name: "时间线播放位置" })).toHaveAttribute("aria-valuenow", "1.25");
+  fireEvent.click(video);
 
   await locate("current");
   expect(audio).toHaveAttribute("aria-pressed", "true");

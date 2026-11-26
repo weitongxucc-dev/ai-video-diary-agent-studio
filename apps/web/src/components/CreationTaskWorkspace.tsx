@@ -985,25 +985,21 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     seekTimeline(finding.start_seconds);
   }
 
-  function selectPlayingClip(seconds: number) {
-    const montage = workspace.montage;
-    if (!montage) return;
-    const time = Math.min(seconds, montage.duration_seconds);
-    playheadRef.current = time; setAudioPlayhead(time);
-    if (!["montage", "review"].includes(activeView) || selectedOverlayId || editorDraft) return;
-    if (selectedAudioId || selectedCueId) return;
-    // Keep the edit target and its confirmation anchored while the playhead advances.
-    if (busy === "edit-preview" || editPreview) return;
-    const clips = montage.clips;
+  function updatePlayhead(seconds: number) {
+    if (!workspace.montage) return;
+    const time = Math.min(seconds, workspace.montage.duration_seconds);
+    playheadRef.current = time;
+    setAudioPlayhead(time);
+  }
+
+  function editShotAtPlayhead() {
+    openView("montage");
+    const time = playheadRef.current ?? 0;
+    const clips = workspace.montage?.clips ?? [];
     const clip = clips.find((item, index) => time >= item.timeline_start_seconds
       && (time < item.timeline_end_seconds
         || (index === clips.length - 1 && time === item.timeline_end_seconds)));
-    if (!clip) return;
-    if (selectedClipId !== clip.id) { setEditorDraft(false); invalidateEditPreview(); }
-    setSelectedClipId(clip.id);
-    setSelectedCueId(null);
-    setSelectedNarrationSegmentId(null);
-    setSelectedCover(false);
+    if (clip) selectClip(clip.id, false);
   }
 
   function selectCue(cueId: string) {
@@ -1408,11 +1404,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setSelectedOverlayId(null);
     setSelectedCueId(null);
     invalidateEditPreview(); setEditorDraft(false); setSelectedAudioId(id);
-    setAudioPlayhead(time ?? playheadRef.current ?? 0);
-    if (time !== undefined) {
-      playheadRef.current = time; setAudioPlayhead(time);
-      if (montageVideoRef.current) { montageVideoRef.current.pause(); montageVideoRef.current.currentTime = time; }
-    }
+    if (time !== undefined) positionAudioListen(time);
   }
 
   function positionAudioListen(time: number) {
@@ -2328,7 +2320,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
           onSelectionPreview={indices => void reviseCompoundSelection(indices)} /> : null}
         <TaskViewNavigation editingActions={<>{isEditor ? (!hasTimeline ? timelineActions : undefined) : selectedReferenceAction}{localEditResultAction}</>}
           workspace={workspace} execution={execution} activeView={activeView} onOpen={openEditingView} onLocateStage={openCurrentStage} />
-        {workspace.montage ? <div className={styles.persistentStage}><VideoEditingStage replayStatus={replayStatus} onReplayInterruption={interruptTitleReplay} replayRequest={titleReplayRequest} replayPermissionRef={replayPermissionRef} titleReplay={visibleLocalEdit?.kind === "title" ? { ...visibleLocalEdit.replay, mediaReady: titlePublicationReady } : undefined} seekRequest={timelineFocus?.versionId === task.current_timeline_version_id ? timelineFocus : undefined} audioSelection={selectedAudioTrack ? { id: selectedAudioId!, seconds: selectedAudioClip ? selectedAudioClip.timeline_start_ms / 1000 : undefined } : undefined} selectedSubtitle={selectedEditContext?.kind === "cue" && activeSubtitleTrack ? { cueId: selectedEditContext.id, trackId: activeSubtitleTrack.id } : undefined} onSelectSubtitle={selectTimelineCue} onEditSubtitle={(id, trackId) => { const message = locateSavedEdit(workspace, { kind: "subtitle", id, trackId }); if (message) setNotice(message); }} timelineActions={timelineActions} editError={error?.message} selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={() => markReplayEditorInteraction()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? subtitleTrack => <AudioTimelineTracks sharedTimeScale subtitleTrack={subtitleTrack} onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} taskId={task.id} versionId={task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} taskId={task.id} versionId={task.current_timeline_version_id} narrationCacheKey={task.narration_cache_key} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} selectedId={selectedClipId} onSelect={selectClip} onPosition={selectPlayingClip} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={replayProductionAction} /></div> : null}
+        {workspace.montage ? <div className={styles.persistentStage}><VideoEditingStage replayStatus={replayStatus} onReplayInterruption={interruptTitleReplay} replayRequest={titleReplayRequest} replayPermissionRef={replayPermissionRef} titleReplay={visibleLocalEdit?.kind === "title" ? { ...visibleLocalEdit.replay, mediaReady: titlePublicationReady } : undefined} seekRequest={timelineFocus?.versionId === task.current_timeline_version_id ? timelineFocus : undefined} audioSelection={selectedAudioTrack ? { id: selectedAudioId!, seconds: selectedAudioClip ? selectedAudioClip.timeline_start_ms / 1000 : undefined } : undefined} selectedSubtitle={selectedEditContext?.kind === "cue" && activeSubtitleTrack ? { cueId: selectedEditContext.id, trackId: activeSubtitleTrack.id } : undefined} onSelectSubtitle={selectTimelineCue} onEditSubtitle={(id, trackId) => { const message = locateSavedEdit(workspace, { kind: "subtitle", id, trackId }); if (message) setNotice(message); }} timelineActions={timelineActions} editError={error?.message} selectedOverlayId={selectedOverlayId} onSelectOverlay={selectOverlay} onDraftChange={() => markReplayEditorInteraction()} busy={busy !== null} onPreview={input=>previewExactEdit(input)} audioTracks={workspace.montage.audio_timeline ? subtitleTrack => <AudioTimelineTracks sharedTimeScale subtitleTrack={subtitleTrack} onListenPosition={positionAudioListen} key={`${task.id}:${task.current_timeline_version_id}`} taskId={task.id} versionId={task.current_timeline_version_id} audioTimeline={workspace.montage!.audio_timeline!} durationSeconds={workspace.montage!.duration_seconds} selectedId={selectedAudioId} playhead={audioPlayhead} onSelect={selectAudio} onPreview={input=>void previewAudio(input)} busy={busy !== null} /> : undefined} taskId={task.id} versionId={task.current_timeline_version_id} narrationCacheKey={task.narration_cache_key} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} selectedId={selectedClipId} onSelect={selectClip} onPosition={updatePlayhead} videoRef={montageVideoRef} initialTime={playheadRef.current ?? 0} renderAction={replayProductionAction} /></div> : null}
         <EditorPaneMount docked={hasTimeline && !isEditor} hidden={auxiliaryHidden} homeClassName={styles.taskPaneHome} mountClassName={hasTimeline && !isEditor ? styles.taskPaneDock : styles.taskPaneHome}><EditingStatusTray actionLabel={error || executionError ? "查看原因" : localConfirmation ? "查看修改" : execution?.job?.status === "running" || execution?.job?.status === "queued" ? "查看进度" : task.output_ready ? "检查成片" : "制作与检查"} revealReason={detailsRevealReason} compact={hasTimeline && isEditor} attention={Boolean(error || executionError || task.stage_status === "failed" || task.stage_status === "waiting_for_user" || localConfirmation || pendingMetadataSave || pendingTimelineRestore)} status={error ? "修改未完成" : executionError ? "制作未完成" : (pendingMetadataSave || pendingTimelineRestore ? "操作结果待核对" : execution?.job?.status === "running" ? "后台制作中" : execution?.job?.status === "queued" ? "制作已排队" : localConfirmation ? "修改方案待确认" : task.stage_status === "failed" ? task.stage_reason ?? "制作未完成" : creationTaskShortStatus(task.stage_status, task.stage))}>
         <MediaVisibility visible={!auxiliaryHidden}><TabsContent value={activeView} hidden={auxiliaryHidden} className={hasTimeline ? [styles.auxiliaryBody, isEditor ? styles.editingAuxiliary : ""].filter(Boolean).join(" ") : styles.workspaceBody}>
         <header className={hasTimeline ? styles.stageRuntime : styles.stageHeading} data-timeline-version={task.timeline_sequence}>
@@ -2461,7 +2453,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
               && measurement.outputUrl === workspace.montage?.output_url ? measurement.seconds : null;
             return <ReviewOutputView subtitleSummary={subtitleSummary} coverValid={coverValid} canEditSubtitle={Boolean(activeSubtitleTrack)}
               durationDetail={durationDetails(videoSeconds)} reviewChecks={reviewChecks}
-              busy={busy} onEditMontage={() => openView("montage")} onRecord={() => setRecordingOpen(true)} onEditSubtitles={() => openView("subtitle_cover")} onSave={() => void saveVideo()} />;
+              busy={busy} onEditMontage={editShotAtPlayhead} onRecord={() => setRecordingOpen(true)} onEditSubtitles={() => openView("subtitle_cover")} onSave={() => void saveVideo()} />;
           } : undefined} /> : null}
         {(activeView === "review" || activeView === "montage") && workspace.montage?.status === "rendered" && task.current_timeline_version_id ? <SaveVideoTemplateForm key={task.current_timeline_version_id} taskId={task.id} onEditingChange={setSavingTemplate} /> : null}
         </div>
