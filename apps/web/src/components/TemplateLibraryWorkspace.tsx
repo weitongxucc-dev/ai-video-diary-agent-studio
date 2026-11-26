@@ -15,6 +15,7 @@ import styles from "./ProductWorkspace.module.css";
 import own from "./TemplateLibraryWorkspace.module.css";
 import {VisualTemplatePreview} from "./VisualTemplatePreview";
 import {VisualTemplateLibraryEditor} from './VisualTemplateEditor';
+import { CompositionTimingSummary } from "./CompositionTimingSummary";
 
 type TemplateView = "mine" | "built-in" | "versions";
 const views = [
@@ -169,6 +170,7 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
     <h3>{selected.name} · 第{selected.version}版</h3>
     <p>{settings.visual_components?.length ? `已保存 ${settings.visual_components.length} 个动画组件，使用时填写本次主题的输入。` : null}</p>
     <TemplateStructurePreview template={selected} contentTemplate={catalog.find(item => `builtin_${item.template_id}` === selected.id)} />
+    {settings.composition_timing ? <CompositionTimingSummary timing={settings.composition_timing} /> : null}
     <dl>
       <div><dt>来源</dt><dd>{selected.source_task_id ? <Link href={`/tasks/${encodeURIComponent(selected.source_task_id)}`}>查看原片</Link> : selected.origin === "built_in" ? "内置制作结构" : "来源任务未记录"}</dd></div>
       <div><dt>文案风格</dt><dd>{settings.style_instruction || "未指定额外风格"}</dd></div>
@@ -194,7 +196,7 @@ export function TemplateLibraryWorkspace({ offline, templates, catalog = [] }: {
       {visibilityError?.id === selected.id ? <p role="alert">{visibilityError.message}</p> : null}
     </section> : !inResourcePane && selected.origin === "built_in" ? <section className={own.visibilitySection}><p>内置模板由系统提供，不单独设置可见范围。</p></section> : null}
     {inResourcePane ? <p>可从完整管理使用此版本新建视频。当前作品继续使用原设置。</p> : null}
-    <section className={styles.inspectorNotice}><strong>当前未复用</strong><p>逐镜头调色、美颜、音轨编排、转场、静态图文、人物口型、封面、双语字幕、模型与成本偏好、发布规则及自动任务。</p></section>
+    <section className={styles.inspectorNotice}><strong>当前未复用</strong><p>逐镜头调色、美颜、{settings.composition_timing ? "原音频与完整音轨编排" : "音轨编排"}、转场、静态图文、人物口型、封面、双语字幕、模型与成本偏好、发布规则及自动任务。</p></section>
   </div> : null;
 
   const templateRows = (items: VideoTemplate[]) => items.map((item) => {

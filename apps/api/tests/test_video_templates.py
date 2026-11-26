@@ -6,8 +6,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main
+from app.audio_timeline import AudioTimeline, TimelineAudioClip, TimelineAudioTrack
 from app.lipsync_models import LATENTSYNC_16_MODEL_ID, MUSETALK_MODEL_ID
 from app.creation.video_template_records import VideoTemplate
+from app.creation.video_template_use_case import VideoTemplateUseCase
+from app.montage import CreationTaskMontagePlan, MontageClip
 from app.production import ProductionRepository
 from app.source_repository import SourceRepository
 from app.sources import SourceConnector, SourceItem, KnowledgeItem
@@ -124,6 +127,47 @@ def test_missing_template_voice_blocks_without_substitution(state):
     assert preview["selected_voice"] is None
     assert not preview["confirmable"]
     assert any(item["reason"] == "template_voice_unavailable" and "v9" in item["impact"] for item in preview["blockers"])
+
+
+def test_rendered_composition_exports_timing_without_source_media_or_voice(state):
+    production, previous, client = state
+    payload = {"goal": "新作品", "template_id": previous.id, "template_version": 1}
+    preview = client.post("/api/creation-plans/preview", json=payload).json()
+    confirmed = client.post("/api/creation-plans/confirm", json={**payload,
+        "preflight_fingerprint": preview["preflight_fingerprint"]})
+    assert confirmed.status_code == 201, confirmed.text
+    plan = production.plan_records.get_creation_plan("workspace_a", confirmed.json()["id"])
+    assert plan.selected_voice.profile_id == "voice-workspace_a"
+    task = replace(production.task_records.get_creation_task("workspace_a", plan.creation_task_id),
+                   current_timeline_version_id="reference-delivery")
+    clips = [
+        MontageClip(f"clip-{index}", None, "private-picture", "private-segment", "workspace://private-picture",
+                    0, end - start, start, end, 1, [], False)
+        for index, (start, end) in enumerate(((0, 1), (1, 2.6333333333333333), (2.6333333333333333, 4)))
+    ]
+    sound = TimelineAudioClip(id="private-effect", name="Private cue name", source_ref="workspace://private-sound",
+                              source_start_ms=100, source_end_ms=700, timeline_start_ms=1300, playback_rate=2)
+    tracks = [
+        TimelineAudioTrack(id="fx", name="Source effects", role="effect", clips=[sound]),
+        TimelineAudioTrack(id="music", name="Muted", role="music", muted=True,
+                           clips=[sound.model_copy(update={"id": "muted-track-clip"})]),
+        TimelineAudioTrack(id="original", name="Reference audio", role="original",
+                           clips=[sound.model_copy(update={"id": "original-clip"})]),
+    ]
+    montage = CreationTaskMontagePlan("montage", "workspace_a", task.id, None, "", "rendered", [], clips, 4, 0,
+                                      audio_timeline=AudioTimeline(tracks=tracks))
+    case = VideoTemplateUseCase(production)
+    template = case.build_from_task("workspace_a", task.id, task, plan, montage, [], name="Reference style",
+                                    style_instruction="", template_id=None, expected_version=None)
+    assert template.source_timeline_version_id == "reference-delivery"
+    assert template.settings["composition_timing"] == {
+        "duration_frames": 120, "cut_frames": [30, 79],
+        "sound_cues": [{"role": "effect", "start_ms": 1300, "duration_ms": 300}],
+    }
+    assert template.settings["voice"] is None
+    assert "private" not in json.dumps(template.settings).lower()
+    assert production.video_templates.get_video_template("workspace_a", previous.id, 1).settings == previous.settings
+    assert montage.audio_timeline.tracks[0].clips == [sound]
 
 
 def test_template_share_is_default_and_slider_choice_rechecks_plan(state):

@@ -58,6 +58,35 @@ describe("TemplateLibraryWorkspace", () => {
     expect(await screen.findByRole("link", { name: /用这个做/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=1");
     expect(screen.getByRole("link", { name: "查看原片" })).toHaveAttribute("href", "/tasks/task_1");
   });
+  it("keeps reference cuts and sound intervals scoped to the fixed composition version", async () => {
+    const versions: VideoTemplate[] = [
+      { ...template, version: 1, settings: { ...template.settings, kind: "composition", composition_timing: {
+        duration_frames: 120, cut_frames: [30, 78], sound_cues: [{ role: "effect", start_ms: 1300, duration_ms: 300 }],
+      } } },
+      { ...template, version: 2, settings: { ...template.settings, kind: "composition", composition_timing: {
+        duration_frames: 180, cut_frames: [61], sound_cues: [{ role: "music", start_ms: 0, duration_ms: 5900 }],
+      } } },
+      { ...template, id: "legacy", name: "旧模板", settings: { ...template.settings, kind: "composition" } },
+    ];
+    renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={versions}/>);
+    const timing = () => within(screen.getByRole("region", { name: "参考节奏" }));
+    expect(timing().getByText("6.000 秒 · 180 帧")).toBeVisible();
+    expect(timing().getByText("2.033 秒 · 第 61 帧")).toBeVisible();
+    expect(timing().getByText("音乐 0.000–5.900 秒")).toBeVisible();
+    expect(await screen.findByRole("link", { name: /用这个做/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=2");
+
+    fireEvent.click(screen.getByRole("button", { name: /版本记录/ }));
+    fireEvent.click(screen.getByRole("button", { name: /视频日记 · 第1版/ }));
+    expect(timing().getByText("4.000 秒 · 120 帧")).toBeVisible();
+    expect(timing().getByText("1.000 秒 · 第 30 帧")).toBeVisible();
+    expect(timing().getByText("2.600 秒 · 第 78 帧")).toBeVisible();
+    expect(timing().getByText("音效 1.300–1.600 秒")).toBeVisible();
+    expect(timing().queryByText(/第 61 帧|5.900/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /用这个做/ })).toHaveAttribute("href", "/production?new=1&template_id=template_1&template_version=1");
+
+    fireEvent.click(screen.getByRole("button", { name: /旧模板 · 第1版/ }));
+    expect(screen.queryByRole("region", { name: "参考节奏" })).not.toBeInTheDocument();
+  });
   it("keeps built-in seeds separate from saved versions", async () => {
     renderWorkspace(<TemplateLibraryWorkspace offline={false} templates={[{ ...template, origin: "built_in" }]} />);
     expect(screen.queryByRole("link", { name: /用这个做/ })).not.toBeInTheDocument();

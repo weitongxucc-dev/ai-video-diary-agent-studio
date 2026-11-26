@@ -153,8 +153,9 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
     assert task_trace == ["workspace", "reader:" + owner, "task", "montage", "qualified-output-port",
         "nonempty-stat", "plan", "subtitles", "scripts", "template.save"]
     expected_settings = {"kind":"composition", "visual_components":[], "language": "en-US", "aspect_ratio": "16:9", "duration_target_seconds": 45,
+        "composition_timing": {"duration_frames": 60, "cut_frames": [30], "sound_cues": []},
         "presenter_share_target": 20, "lipsync_quality": "high",
-        "voice": {"profile_id": "voice-fixed", "version": "v8"}, "script_section_count": 2,
+        "voice": None, "script_section_count": 2,
         "style_instruction": "新任务风格", "fit_mode": "fit", "color_style": effects, "subtitle_style": source_style}
     assert saved["settings"] == expected_settings and saved["name"] == "新模板"
     assert re.fullmatch(r"template_[0-9a-f]{12}", saved["id"])
@@ -162,7 +163,8 @@ def test_metadata_template_append_task_settings_and_builtin_projection(tmp_path,
         1, task_id, timeline_id, owner)
     assert asdict(fresh.video_templates.get_video_template(workspace, saved["id"], 1)) == saved
     serialized = json.dumps(saved["settings"], ensure_ascii=False)
-    assert all(value not in serialized for value in ("old-clip", "old-asset", "old-segment", "old-output", "OLD TEXT", "OLD ONE"))
+    assert all(value not in serialized for value in (
+        "old-clip", "old-asset", "old-segment", "old-output", "OLD TEXT", "OLD ONE", "voice-fixed"))
     trace.clear()
     builtins = VideoTemplateUseCase(main.production_repo).builtin_templates(workspace)
     catalog = list_content_templates()

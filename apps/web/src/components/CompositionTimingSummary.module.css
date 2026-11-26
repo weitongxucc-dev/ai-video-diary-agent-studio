@@ -1,0 +1,56 @@
+.timing {
+  flex: 0 1 100%;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  box-sizing: border-box;
+  margin-block: var(--space-2);
+  padding-block-start: var(--space-2);
+  border-block-start: 1px solid var(--border-1);
+  color: var(--text-1);
+  font-size: 13px;
+  line-height: 21px;
+  overflow-wrap: break-word;
+}
+
+.timing h4 {
+  margin: 0 0 var(--space-2);
+  font-size: inherit;
+  font-weight: 500;
+}
+
+.timing > dl {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.timing > dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: 0;
+  border: 0;
+}
+
+.timing dt,
+.timing p {
+  color: var(--text-2);
+}
+
+.timing > dl dd {
+  min-inline-size: 0;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.timing ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-3);
+  margin: 0;
+  padding-inline-start: 1.25em;
+}
+
+.timing p {
+  margin: var(--space-2) 0 0;
+}

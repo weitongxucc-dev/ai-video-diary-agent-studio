@@ -2,6 +2,7 @@ import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CreationExecutionPreview, CreationExecutionStatus } from "@/lib/types";
+import type { VideoTemplateSettings } from "@/lib/types/templates";
 import { CreationExecutionPanel } from "../creation-task/CreationExecutionPanel";
 afterEach(() => vi.unstubAllGlobals());
 
@@ -28,6 +29,33 @@ function panel(compact: boolean, status: JobStatus, failureReason: string) {
     busy={false} compact={compact} onStart={vi.fn()} onResume={vi.fn()}
     onCancel={vi.fn()} onOpenMontage={vi.fn()} />;
 }
+
+it("shows the saved template snapshot in finished work without an execution preview", () => {
+  const settings: VideoTemplateSettings = {
+    kind: "composition", language: "en-US", aspect_ratio: "16:9", duration_target_seconds: 6, voice: null,
+    style_instruction: "", fit_mode: "fit", subtitle_style: {},
+    composition_timing: {
+      duration_frames: 120, cut_frames: [30, 78], sound_cues: [{ role: "effect", start_ms: 1300, duration_ms: 300 }],
+    },
+  };
+  const completed = { ...execution("succeeded", ""), video_ready: true };
+  function review(templateSettings: VideoTemplateSettings) {
+    return <CreationExecutionPanel taskStage="review" taskReason={null} voice={null} availableVoices={[]}
+      template={{ template_id: "fixed-template", template_version: 1, template_settings: templateSettings }}
+      preview={null} execution={completed} busy={false}
+      onStart={vi.fn()} onResume={vi.fn()} onCancel={vi.fn()} onOpenMontage={vi.fn()} />;
+  }
+  const view = render(review(settings));
+  const timing = within(screen.getByRole("region", { name: "模板来源 · 第1版参考节奏" }));
+  expect(timing.getByText("4.000 秒 · 120 帧")).toBeVisible();
+  expect(timing.getByText("1.000 秒 · 第 30 帧")).toBeVisible();
+  expect(timing.getByText("2.600 秒 · 第 78 帧")).toBeVisible();
+  expect(timing.getByText("音效 1.300–1.600 秒")).toBeVisible();
+  expect(timing.getByText(/切开镜头.*导入音频/)).toBeVisible();
+  view.rerender(review({ ...settings, composition_timing: undefined }));
+  expect(screen.queryByRole("region", { name: /参考节奏/ })).not.toBeInTheDocument();
+  expect(screen.getByText("成片已生成，等待检查")).toBeVisible();
+});
 
 it("keeps the video ready while details distinguish pending background records from production", async () => {
   const user = userEvent.setup();
