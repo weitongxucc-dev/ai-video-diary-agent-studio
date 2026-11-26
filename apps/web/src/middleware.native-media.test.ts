@@ -13,6 +13,7 @@ vi.mock("@/lib/supabase/middleware", () => ({
 import { middleware } from "./middleware";
 
 const mediaPath = "/api/production/materials/private-asset/media";
+const confirmationPath = "/api/creation-tasks/task_confirm/edits/proposal_confirm/section-candidate-confirmation";
 const syntheticToken = "synthetic/member+token=";
 const localCookie = `${localMemberTokenCookieName("http:", "3000")}=${encodeURIComponent(syntheticToken)}`;
 
@@ -94,6 +95,53 @@ describe("native local media identity forwarding", () => {
     expect(response.status).toBe(206);
     expect(response.headers.get("content-range")).toBe("bytes 20-30/100");
     expect(await response.text()).toBe("range-bytes");
+  });
+
+  it("forwards the explicit local session only to the exact confirmation GET and rejects owner fallback", async () => {
+    const url = `http://localhost:3000${confirmationPath}`;
+    await middleware(new NextRequest(`${url}?request_id=original`, {
+      headers: { cookie: localCookie, "x-yaohe-desktop-control": "renderer-forgery" },
+    }));
+    expect(forwardedHeaders.get("x-local-member-token")).toBe(syntheticToken);
+    expect(forwardedHeaders.has("x-yaohe-desktop-control")).toBe(false);
+    expect(forwardedUrl).toBe(`http://127.0.0.1:8000${confirmationPath}?request_id=original`);
+    expect(fetchMock.mock.calls[0][1]?.cache).toBe("no-store");
+
+    fetchMock.mockClear();
+    const noSession: HeadersInit[] = [{}, { cookie: localCookie, "x-local-member-token": "" },
+      { cookie: `${localMemberTokenCookieName("http:", "3001")}=wrong-port` }];
+    for (const headers of noSession) {
+      const response = await middleware(new NextRequest(url, { headers }));
+      expect(response.status).toBe(401);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    for (const [method, target] of [["HEAD", url], ["POST", url], ["GET", `${url}/other`],
+      ["GET", url.replace("proposal_confirm", "proposal_%2Fconfirm")],
+      ["POST", url.replace(/section-candidate-confirmation$/, "confirm")]]) {
+      await middleware(new NextRequest(target, { method, headers: {
+        cookie: localCookie, "x-yaohe-desktop-control": "renderer-forgery",
+      } }));
+      expect(forwardedHeaders.has("x-local-member-token")).toBe(false);
+      expect(forwardedHeaders.has("x-yaohe-desktop-control")).toBe(false);
+    }
+  });
+
+  it("requires an authenticated account for the confirmation GET and forwards its verified access token", async () => {
+    process.env.NEXT_PUBLIC_AUTH_MODE = "supabase";
+    const url = `http://localhost:3000${confirmationPath}`;
+    const headers = { cookie: localCookie, authorization: "Bearer renderer-forgery" };
+    authMocks.refreshSession.mockResolvedValueOnce({
+      userId: null, onboardingComplete: false, accessToken: null, response: null,
+    }).mockResolvedValueOnce({
+      userId: "verified-user", onboardingComplete: true, accessToken: "verified-session-token", response: null,
+    });
+    expect((await middleware(new NextRequest(url, { headers }))).status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await middleware(new NextRequest(url, { headers }));
+    expect(forwardedHeaders.get("authorization")).toBe("Bearer verified-session-token");
+    expect(forwardedHeaders.has("x-local-member-token")).toBe(false);
   });
 
   it("forwards local identity and Range only for the exact history video path", async () => {

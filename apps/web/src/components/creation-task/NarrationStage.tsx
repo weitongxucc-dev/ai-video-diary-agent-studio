@@ -94,7 +94,18 @@ export function NarrationDurationReviewPanel({ taskId, onSaved }: { taskId: stri
   </section>;
 }
 
-export function SegmentProductionPanel({ taskId }: { taskId: string }) {
+type SectionCandidateReceipt =
+    | { status: 'applied'; requestId: string; operationId: string; resultVersionId: string }
+    | { status: 'canceled' | 'proposed' }
+    | { status: 'rejected' | 'unknown'; error: string };
+
+type SectionCandidateAction = (taskId: string, proposalId: string) => Promise<SectionCandidateReceipt>;
+type WindowWithSectionCandidate = Window & { electronAPI?: {
+    confirmSectionCandidate?: SectionCandidateAction;
+    querySectionCandidateConfirmation?: SectionCandidateAction;
+} };
+
+export function SegmentProductionPanel({ taskId, onAdopted }: { taskId: string; onAdopted?: () => Promise<void> }) {
     const [segments,setSegments]=useState<CreationTaskSegments|null>(null);
     const [budget,setBudget]=useState<CreationTaskBudget|null>(null);
     const [preview,setPreview]=useState<CreationTaskSegment|null>(null);
@@ -106,9 +117,13 @@ export function SegmentProductionPanel({ taskId }: { taskId: string }) {
     const [receipt,setReceipt]=useState<CreationTaskSegmentRevision|null>(null);
     const [readingReceipt,setReadingReceipt]=useState(false);
     const [receiptUnknown,setReceiptUnknown]=useState(false);
+    const [adoption,setAdoption]=useState<{ taskId: string; proposalId: string; result: SectionCandidateReceipt }>();
+    const [adopting,setAdopting]=useState(false);
+    const adoptionInFlight=useRef(false);
     const receiptScope=useRef({taskId,sequence:0});
     if (receiptScope.current.taskId!==taskId) receiptScope.current={taskId,sequence:0};
     useEffect(()=>{const scope=receiptScope.current;setReadingReceipt(false);setReceiptUnknown(false);
+        adoptionInFlight.current=false;setAdopting(false);
         return()=>{scope.sequence++;};},[taskId]);
     async function inspectReceipt(requestId:string, recover=false) {
         const scope=receiptScope.current,sequence=++scope.sequence;
@@ -127,6 +142,43 @@ export function SegmentProductionPanel({ taskId }: { taskId: string }) {
             if (owns()) {setReceipt(value);setReceiptUnknown(false);setError(null);refresh();}
         } catch(cause) {if (owns()) {setReceiptUnknown(true);setError(cause instanceof Error?cause.message:'修改回执读取失败');}}
         finally {if (owns()) setReadingReceipt(false);}
+    }
+    const proposalId=!receiptUnknown && receipt?.task_id===taskId && receipt.status==='succeeded' && receipt.adoption?.status==='candidate'
+        && typeof receipt.result?.adoption_proposal_id==='string' && receipt.result.adoption_proposal_id
+        ? receipt.result.adoption_proposal_id : null;
+    const bridge=typeof window==='undefined'?undefined:(window as WindowWithSectionCandidate).electronAPI;
+    const adoptionResult=adoption?.taskId===taskId && adoption.proposalId===receipt?.result?.adoption_proposal_id
+        ? adoption.result : undefined;
+    async function adoptCandidate(queryOnly: boolean) {
+        const action=queryOnly?bridge?.querySectionCandidateConfirmation:bridge?.confirmSectionCandidate;
+        if (!proposalId || !receipt || !action || readingReceipt || adoptionInFlight.current) return;
+        const scope=receiptScope.current,sequence=scope.sequence,requestId=receipt.request_id;
+        const owns=()=>receiptScope.current===scope && scope.sequence===sequence;
+        const originalUnknown={status:'unknown',error:'原确认结果尚未核实，请查询原确认结果。'} as const;
+        adoptionInFlight.current=true;
+        setAdopting(true);
+        try {
+            let result: SectionCandidateReceipt;
+            try {
+                result=await action(taskId,proposalId);
+            } catch {
+                result=originalUnknown;
+            }
+            if (!owns()) return;
+            if (queryOnly && result.status==='rejected') result={status:'unknown',error:result.error};
+            setAdoption({taskId,proposalId,result});
+            if (result.status==='applied') {
+                void inspectReceipt(requestId);
+                await onAdopted?.().catch(()=>{
+                    if (receiptScope.current===scope) setError('采用已保存，暂未刷新作品，请重新打开当前作品核对。');
+                });
+            }
+        } finally {
+            if (receiptScope.current===scope) {
+                adoptionInFlight.current=false;
+                setAdopting(false);
+            }
+        }
     }
     const refresh=useCallback(()=>setRevision(value=>value+1),[]);
     useEffect(()=>{
@@ -171,7 +223,7 @@ export function SegmentProductionPanel({ taskId }: { taskId: string }) {
                 {current.revision_requests.items.filter(request=>request.section_id===segment.section_id).map(request=><div className={styles.segmentRevisionReceipt} key={request.request_id}>
                     <strong>本段修改 · {statuses[request.status]??request.status}</strong>
                     {request.waiting_reason?<p>{request.waiting_reason}</p>:null}
-                    <Button variant="outline" disabled={readingReceipt} onClick={()=>void inspectReceipt(request.request_id)}>查看修改回执</Button>
+                    <Button variant="outline" disabled={readingReceipt || adopting} onClick={()=>void inspectReceipt(request.request_id)}>查看修改回执</Button>
                     <small>请求 {request.request_id} · 作业 {request.job_id}</small>
                 </div>)}
             </article>)}
@@ -180,8 +232,18 @@ export function SegmentProductionPanel({ taskId }: { taskId: string }) {
         {current?.revision_requests.truncated?<p>当前显示 {current.revision_requests.items.length} / {current.revision_requests.total_count} 条修改回执。</p>:null}
         {receipt?.task_id===taskId?<div className={styles.segmentRevisionReceipt} aria-label="修改回执详情"><strong>{segmentRevisionStatus(receipt)}</strong><p>规则检查：{receipt.rules_check.status==='passed'?'通过':'未通过'} · Pi 语义对照已记录</p><small>语义复核记录 {receipt.semantic_review_ref}</small>{receipt.waiting_reason?<p>{receipt.waiting_reason}</p>:null}{receipt.adoption?.reason?<p>{segmentAdoptionReason(receipt.adoption.reason)}</p>:null}
             {receiptUnknown?<p role="status">原结果尚未核实，请先查询修改回执。</p>:null}
-            <Button variant="outline" disabled={readingReceipt} onClick={()=>void inspectReceipt(receipt.request_id)}>查询原修改结果</Button>
-            {receipt.recovery?.action==='resume_original' && !receiptUnknown?<Button variant="outline" disabled={readingReceipt} onClick={()=>void inspectReceipt(receipt.request_id,true)}>恢复原段修改</Button>:null}
+            <Button variant="outline" disabled={readingReceipt || adopting} onClick={()=>void inspectReceipt(receipt.request_id)}>查询原修改结果</Button>
+            {receipt.recovery?.action==='resume_original' && !receiptUnknown?<Button variant="outline" disabled={readingReceipt || adopting} onClick={()=>void inspectReceipt(receipt.request_id,true)}>恢复原段修改</Button>:null}
+            {proposalId && adoptionResult?.status!=='applied' ? bridge?.confirmSectionCandidate && bridge.querySectionCandidateConfirmation
+                ? <Button type="button" disabled={readingReceipt} aria-disabled={adopting}
+                    onClick={()=>void adoptCandidate(adoptionResult?.status==='unknown')}>
+                    {adoptionResult?.status==='unknown'?'查询原确认结果':adoptionResult?.status==='proposed'?'重新确认同一候选':'采用此候选'}
+                </Button>
+                : <p>采用此候选需在曜核桌面应用中进行原生确认。</p> : null}
+            <p role="status">{adoptionResult?.status==='applied' && receipt.adoption?.status==='candidate'
+                ? readingReceipt?'采用已保存，正在回读原修改结果。':'采用已保存，可查询原修改结果。'
+                : adoptionResult?.status==='proposed' ? '原请求尚未返回采用回执。可重新确认同一候选。'
+                : adoptionResult?.status==='unknown' || adoptionResult?.status==='rejected' ? adoptionResult.error : ''}</p>
         </div>:null}
         <details className={styles.segmentUsage}><summary>费用与资源记录</summary>
             {usage ? <>

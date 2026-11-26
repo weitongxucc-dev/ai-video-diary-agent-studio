@@ -14,7 +14,12 @@ import {
   redirectWithRefreshedCookies,
   refreshSession,
 } from "@/lib/supabase/middleware";
-import { localMemberTokenCookieName, localNativeMediaHeaders } from "@/lib/native-media-auth";
+import {
+  isSectionCandidateConfirmationRead,
+  LOCAL_MEMBER_TOKEN_HEADER,
+  localMemberTokenCookieName,
+  localNativeMediaHeaders,
+} from "@/lib/native-media-auth";
 
 const API_PORT = process.env.API_PORT ?? "8000";
 
@@ -25,21 +30,29 @@ async function proxyApiRequest(
 ) {
   const { pathname, search } = request.nextUrl;
   const apiUrl = `http://127.0.0.1:${API_PORT}${pathname}${search}`;
+  const confirmationRead = isSectionCandidateConfirmationRead(request.method, pathname);
 
   try {
-    const fetchOptions: RequestInit = {
-      method: request.method,
-      headers: trustedApiHeaders(request.headers, accessToken),
-    };
-    if (isLocalAuthMode()) {
+    const local = isLocalAuthMode();
+    let headers = trustedApiHeaders(request.headers, accessToken);
+    // This credential belongs to direct desktop-to-API calls.
+    headers.delete("X-Yaohe-Desktop-Control");
+    if (local) {
       const cookieName = localMemberTokenCookieName(request.nextUrl.protocol, request.nextUrl.port);
-      fetchOptions.headers = localNativeMediaHeaders(
-        fetchOptions.headers as Headers,
-        request.cookies.get(cookieName)?.value,
-        request.method,
-        pathname,
-      );
+      headers = localNativeMediaHeaders(headers, request.cookies.get(cookieName)?.value, request.method, pathname);
     }
+
+    if (confirmationRead) {
+      const authenticated = local ? headers.get(LOCAL_MEMBER_TOKEN_HEADER)?.trim() : accessToken;
+      if (!authenticated) {
+        const missing = NextResponse.json({ detail: "请先登录当前成员，再读取候选。" }, {
+          status: 401, headers: { "Cache-Control": "no-store" },
+        });
+        return sessionResponse ? copyRefreshedSession(missing, sessionResponse) : missing;
+      }
+    }
+    const fetchOptions: RequestInit = { method: request.method, headers };
+    if (confirmationRead) fetchOptions.cache = "no-store";
 
     if (request.method !== "GET" && request.method !== "HEAD" && request.body) {
       // Middleware owns the incoming request body. Cloning the NextRequest
@@ -52,7 +65,7 @@ async function proxyApiRequest(
       // that header can disagree with the forwarded byte length and make the
       // packaged fetch implementation reject the request before it reaches
       // the API. Let fetch calculate the length for the new body.
-      (fetchOptions.headers as Headers).delete("content-length");
+      headers.delete("content-length");
     }
 
     const response = await fetch(apiUrl, fetchOptions);
@@ -115,7 +128,9 @@ export async function middleware(request: NextRequest) {
         { status: 403 },
       );
     }
-    return proxyApiRequest(request, session.accessToken, session.response);
+    const accessToken = isSectionCandidateConfirmationRead(request.method, pathname) && !session.userId
+      ? null : session.accessToken;
+    return proxyApiRequest(request, accessToken, session.response);
   }
 
   const session = await refreshSession(request);

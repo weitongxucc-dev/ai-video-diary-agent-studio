@@ -2414,6 +2414,7 @@ class CreationTaskEditApplyRequest(BaseModel):
     request_id: UUID | None = None
     expected_base_version_id: str | None = None
     expected_input_digest: str | None = Field(default=None, min_length=64, max_length=64)
+    desktop_selection_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def replay_identity(self):

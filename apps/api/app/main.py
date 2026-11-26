@@ -142,7 +142,10 @@ from app.creation.editing.person_preview_use_case import PersonPreviewUseCase
 from app.creation.projection import project_task_summary
 from app.creation_task_responses import CreationTaskResponseAdapter
 from app.creation_task_text_responses import CreationTaskTextResponseAdapter
-from app.task_edit_confirmation import TaskEditConfirmationHttpAdapter, MetadataEditConfirmationHttpAdapter
+from app.task_edit_confirmation import (
+    DesktopSectionConfirmation, MetadataEditConfirmationHttpAdapter, TaskEditConfirmationHttpAdapter,
+    has_desktop_section_control,
+)
 from app.task_edit_commands import TaskEditCommandHttpAdapter
 from app.content_identity_http import ContentIdentityHttpAdapter
 from app.llm_route_snapshot import WorkspaceLlmRouteSnapshot
@@ -669,6 +672,10 @@ async def auth_boundary_middleware(request: Request, call_next):
         return await call_next(request)
     if app.state.desktop_shutdown is not None and request.method not in {"GET", "HEAD", "OPTIONS"}:
         return JSONResponse(status_code=503, content={"detail": "应用正在保存并暂停，未接收新操作"})
+    if (request.method == "POST"
+            and re.fullmatch(r"/api/creation-tasks/[^/]+/edits/[^/]+/confirm", path)
+            and has_desktop_section_control(request, app.state.desktop_control_token)):
+        return await call_next(request)
     is_device_accept = request.method == "POST" and path in {DEVICE_INVITE_ACCEPT_PATH, PAIRING_ACCEPT_PATH}
     if (
         path in PUBLIC_AUTH_PATHS
@@ -1642,6 +1649,8 @@ def _task_edit_http_router(route_names):
         compound_proposal_command_for=lambda: _task_edit_command_http_adapter().compound_proposal_command,
         confirm_cover_response_for=lambda: _cover_confirmation_http_adapter().confirm_cover_response,
         confirm_creation_task_edit_for=lambda: _task_edit_confirmation_http_adapter().confirm,
+        desktop_section_summary_for=lambda: _desktop_section_candidate_summary,
+        desktop_section_confirm_for=lambda: _desktop_section_candidate_confirm,
         confirm_linked_timeline_response_for=lambda: _metadata_edit_confirmation_http_adapter().confirm_linked_timeline_response,
         content_reader_for=lambda: _content_identity_http_adapter().reader,
         content_visible_for=lambda: _content_identity_http_adapter().visible,
@@ -4102,6 +4111,42 @@ def _task_edit_confirmation_http_adapter():
     )
 
 
+_desktop_section_confirmation = DesktopSectionConfirmation()
+
+
+def _desktop_section_summary_actor(request):
+    if auth_context.enabled:
+        principal = getattr(request.state, "principal", None)
+        credential = principal.access_token if principal is not None and principal.authenticated else None
+    else:
+        credential = _local_member_token(request)
+    if not credential:
+        raise HTTPException(403, "读取资料确认需要当前已验证成员会话")
+    return _require_permit_actor(request, current_workspace_id(request)), credential
+
+
+def _desktop_section_owner():
+    from app.creation_execution import CreationJobOwnerVerifier
+
+    return CreationJobOwnerVerifier(production_repo, verify_identity=_verify_creation_identity,
+        task_authorizations=_task_authorizations_for_goal())
+
+
+def _desktop_section_candidate_summary(task_id, proposal_id, request_id, request):
+    return _desktop_section_confirmation.summary(task_id, proposal_id, request_id, request,
+        token=app.state.desktop_control_token, actor_for=_desktop_section_summary_actor,
+        case=_segment_production_use_case(), owner=_desktop_section_owner(), metadata_response=_metadata_edit_response)
+
+
+def _desktop_section_candidate_confirm(task_id, proposal_id, request, payload):
+    from app.automation_routes import guard_automation_task
+
+    return _desktop_section_confirmation.confirm(task_id, proposal_id, request, payload,
+        token=app.state.desktop_control_token, verify_identity=_verify_creation_identity,
+        task_open=lambda actor, task_id: guard_automation_task(_automation_runtime(), actor.workspace_id, task_id, lambda: actor),
+        case=_segment_production_use_case(), owner=_desktop_section_owner(), metadata_response=_metadata_edit_response)
+
+
 def _metadata_edit_confirmation_http_adapter():
     return MetadataEditConfirmationHttpAdapter(
         linked_case_for=lambda: _linked_timeline_use_case(),
@@ -4308,6 +4353,7 @@ app.include_router(_task_edit_http_router(('get_creation_task_edit_result',)))
 
 
 app.include_router(_task_edit_http_router(('confirm_creation_task_edit',)))
+app.include_router(_task_edit_http_router(('get_section_candidate_confirmation',)))
 
 
 

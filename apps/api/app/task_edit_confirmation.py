@@ -1,4 +1,12 @@
 """HTTP confirmation of generic and metadata edit proposals."""
+from datetime import timedelta
+from hmac import compare_digest, digest as hmac_digest
+from ipaddress import ip_address
+import json
+import re
+from secrets import token_hex
+from threading import Lock
+
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -9,7 +17,135 @@ from app.creation.editing.exact_preview_use_case import ExactEditResult
 from app.creation.editing.linked_timeline_use_case import LINKED_EDIT_OPERATIONS, InsertMaterialMissing, InsertSourceRangeError
 from app.creation.editing.metadata_use_case import EditPreviewRejected, LegacyMontageReference, InvalidMontage
 from app.creation.editing.subtitle_use_case import is_subtitle_edit
+from app.models import utc_now
 from app.schemas import CreationTaskEditConfirmResponse, CreationTaskExactEditRequest
+
+
+DESKTOP_SECTION_CONTROL_HEADER = "X-Yaohe-Desktop-Control"
+
+
+def has_desktop_section_control(request, token):
+    supplied = request.headers.get(DESKTOP_SECTION_CONTROL_HEADER, "")
+    if not re.fullmatch(r"[0-9a-f]{64}", token or "") or not re.fullmatch(r"[0-9a-f]{64}", supplied):
+        return False
+    try:
+        return request.client is not None and ip_address(request.client.host).is_loopback and compare_digest(supplied, token)
+    except ValueError:
+        return False
+
+
+class DesktopSectionConfirmation:
+    """Keep signed selections in the API process. The read surface sees only a random locator."""
+
+    def __init__(self):
+        self._guard = Lock()
+        self._selections = {}
+
+    @staticmethod
+    def _signature(token, purpose, values):
+        payload = json.dumps([purpose, values], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hmac_digest(bytes.fromhex(token), payload.encode(), "sha256").hex()
+
+    def _expire(self, now):
+        for key, (expires, _selection, _signature) in list(self._selections.items()):
+            if expires <= now:
+                del self._selections[key]
+
+    def issue(self, token, selection):
+        selection_id = token_hex(32)
+        now = utc_now()
+        expires = now + timedelta(seconds=120)
+        signature = self._signature(token, "section-confirmation", [selection_id, expires.isoformat(), selection])
+        with self._guard:
+            self._expire(now)
+            if len(self._selections) >= 256:
+                raise HTTPException(429, "待确认项过多，请稍后重新读取原候选")
+            self._selections[selection_id] = (expires, selection, signature)
+        return selection_id, expires
+
+    def read(self, token, selection_id):
+        now = utc_now()
+        with self._guard:
+            self._expire(now)
+            saved = self._selections.get(selection_id)
+        if saved is None:
+            raise HTTPException(409, "原桌面确认已过期或不存在，请重新读取候选")
+        expires, selection, signature = saved
+        expected = self._signature(token, "section-confirmation", [selection_id, expires.isoformat(), selection])
+        if not compare_digest(signature, expected):
+            raise HTTPException(403, "原桌面确认来源无效")
+        return selection
+
+    def summary(self, task_id, proposal_id, request_id, request, *, token, actor_for, case, owner, metadata_response):
+        if not re.fullmatch(r"[0-9a-f]{64}", token or ""):
+            raise HTTPException(403, "此采用需要受信桌面")
+        actor, credential = actor_for(request)
+        try:
+            facts = case.knowledge_candidate(actor.workspace_id, task_id, actor, proposal_id, owner)
+            saved = case.knowledge_candidate_receipt(actor.workspace_id, task_id, proposal_id, request_id)
+        except KeyError as exc:
+            raise HTTPException(404, "原资料候选不存在") from exc
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        selection = facts.proposal.operation["payload"]
+        session = self._signature(token, "section-session", [actor.workspace_id, actor.identity_payload(), credential])
+        binding = {key: selection[key] for key in (
+            "job_id", "publication_id", "section_id", "base_version_id", "selection_digest")}
+        binding.update(proposal_id=proposal_id, request_id=request_id, session_fingerprint=session)
+        if saved is not None:
+            response = {"status": "applied", **binding, "result": metadata_response(saved).model_dump(mode="json")}
+        else:
+            selection_id, expires = self.issue(token, {**binding, "workspace_id": actor.workspace_id,
+                "task_id": task_id, "actor": actor.identity_payload()})
+            response = {"status": "proposed", **binding, "selection_id": selection_id, "expires_at": expires.isoformat(),
+                "before_text": facts.before_text, "after_text": facts.segment.text,
+                "knowledge_evidence": facts.publication.payload["knowledge_evidence"],
+                "impact": ["采用目标段的正文、配音、字幕及镜头，保留其他段落。",
+                           "原整片输出保留在历史中，当前作品需重新合成。"]}
+        return JSONResponse(response, headers={"Cache-Control": "no-store"})
+
+    def confirm(self, task_id, proposal_id, request, payload, *, token, verify_identity, task_open,
+                case, owner, metadata_response):
+        if not has_desktop_section_control(request, token) or payload is None or payload.desktop_selection_id is None:
+            raise HTTPException(403, "资料候选必须在受信桌面明确确认")
+        saved = self.read(token, payload.desktop_selection_id)
+        if (saved["task_id"], saved["proposal_id"]) != (task_id, proposal_id):
+            raise HTTPException(404, "原资料候选不存在")
+        if (saved["request_id"], saved["base_version_id"], saved["selection_digest"]) != (
+                str(payload.request_id), payload.expected_base_version_id, payload.expected_input_digest):
+            raise HTTPException(409, "桌面确认与所见候选、基础版本或原请求不一致")
+        actor = CreationExecutionActor.from_event(saved["workspace_id"], saved["actor"])
+        access = verify_identity(actor)
+        if access != "ready":
+            raise HTTPException(503 if access == "unknown" else 403, "原桌面成员许可已失效或无法核验")
+        task_open(actor, task_id)
+
+        def verify_confirmation(conn, facts):
+            if self.read(token, payload.desktop_selection_id) != saved:
+                raise PermissionError("原桌面选择已变化")
+            if actor.device_id is None:
+                member = conn.execute("SELECT token FROM local_members WHERE member_id=?", (actor.member_id,)).fetchone()
+                if member is None or self._signature(token, "section-session",
+                        [actor.workspace_id, actor.identity_payload(), member["token"]]) != saved["session_fingerprint"]:
+                    raise PermissionError("原桌面成员会话已变化")
+            selection = facts.proposal.operation["payload"]
+            if any(selection[key] != saved[key] for key in (
+                    "job_id", "publication_id", "section_id", "base_version_id", "selection_digest")):
+                raise ValueError("原桌面选择与已登记候选不一致")
+
+        try:
+            outcome = case.adopt_knowledge_candidate(actor.workspace_id, task_id, actor, proposal_id, owner,
+                request_id=saved["request_id"], base_version_id=saved["base_version_id"],
+                selection_digest=saved["selection_digest"], verify_confirmation=verify_confirmation)
+        except KeyError as exc:
+            raise HTTPException(404, "原资料候选不存在") from exc
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return metadata_response(outcome)
 
 
 class TaskEditConfirmationHttpAdapter:

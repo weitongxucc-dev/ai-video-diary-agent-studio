@@ -440,6 +440,59 @@ function createServiceSupervisor({ isDev, webPort, resourcesPath, apiEnvironment
   function getApiEndpoint() {
     return { port: apiPort, state: serviceStates.api.state };
   }
+
+  function sectionCandidateConfirmationTransport() {
+    const child = apiProcess;
+    const port = apiPort;
+    const token = apiControlToken;
+    const isCurrent = () => Boolean(child && token && apiProcess === child
+      && apiPort === port && apiControlToken === token && !apiStopping && !stopPromise
+      && serviceStates.api.state === 'ready');
+    if (!isCurrent()) return null;
+
+    return {
+      isCurrent,
+      submit(taskId, proposalId, payload, signal) {
+        if (!isCurrent()) throw new Error('本地确认服务已变化。');
+        const body = JSON.stringify(payload);
+        const requestPath = `/api/creation-tasks/${encodeURIComponent(taskId)}/edits/${encodeURIComponent(proposalId)}/confirm`;
+        return new Promise((resolve, reject) => {
+          const request = http.request({
+            hostname: '127.0.0.1', port, path: requestPath, method: 'POST', agent: false,
+            signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+            headers: {
+              'X-Yaohe-Desktop-Control': token, Accept: 'application/json',
+              'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body),
+            },
+          }, (response) => {
+            response.on('error', reject);
+            if (response.statusCode !== 200) {
+              response.resume();
+              resolve({ status: response.statusCode });
+              return;
+            }
+            const chunks = [];
+            let size = 0;
+            response.on('data', (chunk) => {
+              size += chunk.length;
+              if (size > 4 * 1024 * 1024) request.destroy(new Error('确认回执超出读取限制。'));
+              else chunks.push(chunk);
+            });
+            response.on('end', () => {
+              try {
+                resolve({ status: 200, value: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+              } catch (error) {
+                reject(error);
+              }
+            });
+          });
+          request.on('error', reject);
+          request.end(body);
+        });
+      },
+    };
+  }
+
   function getServiceStatus() {
     return {
       api: { ...serviceStates.api, pid: apiProcess ? apiProcess.pid : null, port: apiPort },
@@ -447,7 +500,8 @@ function createServiceSupervisor({ isDev, webPort, resourcesPath, apiEnvironment
     };
   }
 
-  return { startApiServer, startNextServer, stopAllServices, getApiEndpoint, getServiceStatus, setServiceState, reportServiceFailure };
+  return { startApiServer, startNextServer, stopAllServices, getApiEndpoint, getServiceStatus,
+    setServiceState, reportServiceFailure, sectionCandidateConfirmationTransport };
 }
 
 module.exports = { createServiceSupervisor };

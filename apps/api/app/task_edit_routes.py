@@ -11,8 +11,9 @@ from app.montage import creation_task_montage_plan_from_payload
 from typing import Literal
 from uuid import UUID
 from app.schemas import CreationTaskEditPreviewResponse, CreationTaskEditPreviewRequest, CreationTaskTimelineUndoRequest, CreationTaskEditConfirmResponse, CreationTaskEditQueuedResponse, CreationTaskEditJobReplayResponse, CreationTaskEditApplyRequest, CreationTaskExactEditRequest, CompoundEditSelectionRequest
+from app.task_edit_confirmation import DESKTOP_SECTION_CONTROL_HEADER
 
-def build_task_edit_router(*, edit_controls_for, audio_command_preview_for, audio_edit_rejected_for, cover_operation_for, clip_preview_command_for, clip_preview_conflict_for, clip_preview_unavailable_for, command_parse_rejected_for, creation_execution_actor_for, creation_task_edit_preview_request_for, exact_edit_source_for, edit_preview_rejected_for, goal_projection_rejected_for, http_exception_for, host_budget_uncalibrated_for, json_response_for, linked_edit_operations_for, picture_preview_rejected_for, task_media_required_for, timeline_version_conflict_for, assistant_conversation_for_request_for, assistant_member_id_for, bind_assistant_edit_instruction_for, claim_edit_request_for, command_preview_use_case_for, compound_edit_use_case_for, compound_proposal_command_for, confirm_cover_response_for, confirm_creation_task_edit_for, confirm_linked_timeline_response_for, content_reader_for, content_visible_for, creation_runtime_for, creation_task_or_404_for, current_narration_snapshot_for, edit_preview_response_for, ensure_montage_base_version_for, exact_edit_access_for, exact_preview_use_case_for, linked_timeline_apply_command_for, linked_timeline_use_case_for, logical_montage_output_refs_for, media_result_receipt_for, metadata_edit_command_for, metadata_edit_response_for, original_edit_result_for, read_edit_request_result_for, request_permit_actor_for, require_assistant_input_origin_for, require_permit_actor_for, save_edit_request_result_for, subtitle_edit_use_case_for, subtitle_proposal_command_for, topic_failure_response_for, wake_assistant_continuations_for, auth_context_for, conversation_repo_for, creation_task_montage_plan_from_payload_for, creation_task_montage_plan_to_payload_for, current_workspace_id_for, is_subtitle_edit_for, json_for, media_digest_for, production_repo_for, route_names):
+def build_task_edit_router(*, edit_controls_for, audio_command_preview_for, audio_edit_rejected_for, cover_operation_for, clip_preview_command_for, clip_preview_conflict_for, clip_preview_unavailable_for, command_parse_rejected_for, creation_execution_actor_for, creation_task_edit_preview_request_for, exact_edit_source_for, edit_preview_rejected_for, goal_projection_rejected_for, http_exception_for, host_budget_uncalibrated_for, json_response_for, linked_edit_operations_for, picture_preview_rejected_for, task_media_required_for, timeline_version_conflict_for, assistant_conversation_for_request_for, assistant_member_id_for, bind_assistant_edit_instruction_for, claim_edit_request_for, command_preview_use_case_for, compound_edit_use_case_for, compound_proposal_command_for, confirm_cover_response_for, confirm_creation_task_edit_for, desktop_section_summary_for, desktop_section_confirm_for, confirm_linked_timeline_response_for, content_reader_for, content_visible_for, creation_runtime_for, creation_task_or_404_for, current_narration_snapshot_for, edit_preview_response_for, ensure_montage_base_version_for, exact_edit_access_for, exact_preview_use_case_for, linked_timeline_apply_command_for, linked_timeline_use_case_for, logical_montage_output_refs_for, media_result_receipt_for, metadata_edit_command_for, metadata_edit_response_for, original_edit_result_for, read_edit_request_result_for, request_permit_actor_for, require_assistant_input_origin_for, require_permit_actor_for, save_edit_request_result_for, subtitle_edit_use_case_for, subtitle_proposal_command_for, topic_failure_response_for, wake_assistant_continuations_for, auth_context_for, conversation_repo_for, creation_task_montage_plan_from_payload_for, creation_task_montage_plan_to_payload_for, current_workspace_id_for, is_subtitle_edit_for, json_for, media_digest_for, production_repo_for, route_names):
     router = APIRouter()
 
     @router.get('/api/creation-tasks/{task_id}/assistant/edit-requests/{request_id}')
@@ -209,13 +210,25 @@ def build_task_edit_router(*, edit_controls_for, audio_command_preview_for, audi
         result = original_edit_result_for()(task, proposal)
         return {'proposal_id': proposal.id, 'base_version_id': proposal.operation.get('payload', {}).get('base_version_id'), 'input_digest': digest, 'status': proposal.status, 'result': json_for().loads(result.body) if isinstance(result, json_response_for()) else result.model_dump(mode='json') if result else None}
 
+    @router.get('/api/creation-tasks/{task_id}/edits/{proposal_id}/section-candidate-confirmation')
+    def get_section_candidate_confirmation(task_id: str, proposal_id: str, request_id: UUID, request: Request):
+        return desktop_section_summary_for()(task_id, proposal_id, str(request_id), request)
+
+    def require_ordinary_edit_proposal(proposal):
+        if (proposal.operation.get('operation_type') == 'ReviseScriptSection'
+                and 'publication_id' in proposal.operation.get('payload', {})):
+            raise http_exception_for()(status_code=403, detail='资料候选必须在受信桌面明确确认')
+
     @router.post('/api/creation-tasks/{task_id}/edits/{proposal_id}/confirm', response_model=CreationTaskEditConfirmResponse | CreationTaskEditQueuedResponse | CreationTaskEditJobReplayResponse)
     def confirm_creation_task_edit(task_id: str, proposal_id: str, request: Request, payload: CreationTaskEditApplyRequest | None=None):
+        if DESKTOP_SECTION_CONTROL_HEADER in request.headers or (payload is not None and payload.desktop_selection_id is not None):
+            return desktop_section_confirm_for()(task_id, proposal_id, request, payload)
         if payload is None or payload.request_id is None:
             try:
                 proposal = production_repo_for().edit_records.get_edit_proposal(current_workspace_id_for()(request), proposal_id)
             except KeyError as exc:
                 raise http_exception_for()(status_code=404, detail='creation task edit proposal not found') from exc
+            require_ordinary_edit_proposal(proposal)
             intent = production_repo_for().edit_records.get_edit_intent(proposal.workspace_id, proposal.intent_id)
             if intent.constraints.get('request_source') is not None:
                 _edit_proposal_binding(task_id, proposal_id, request)
@@ -226,6 +239,7 @@ def build_task_edit_router(*, edit_controls_for, audio_command_preview_for, audi
             wake_assistant_continuations_for()()
             return result
         task, member_id, proposal, digest = _edit_proposal_binding(task_id, proposal_id, request)
+        require_ordinary_edit_proposal(proposal)
         if proposal.operation.get('operation_type') in linked_edit_operations_for():
             return confirm_linked_timeline_response_for()(task, proposal, request, payload, wake=True)
         base = proposal.operation.get('payload', {}).get('base_version_id')

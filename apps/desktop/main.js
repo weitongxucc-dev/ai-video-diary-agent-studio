@@ -53,6 +53,7 @@ const { createServiceSupervisor } = require('./runtime/service-supervisor');
 const { createMaterialImporter } = require('./runtime/material-import');
 const { createNativeFiles } = require('./runtime/native-files');
 const { createNativeMedia } = require('./runtime/native-media');
+const { createSectionCandidateConfirmation } = require('./runtime/section-candidate-confirmation');
 const { registerDesktopIpc } = require('./runtime/ipc-handlers');
 const { createDesktopWindow } = require('./runtime/desktop-window');
 const { buildMenu } = require('./runtime/menu');
@@ -118,6 +119,11 @@ const media = createNativeMedia({
   getWindow, webOrigin,
   getMediaDirectory: (name) => app.getPath(name), getApiEndpoint: services.getApiEndpoint,
   importMaterials, pickMaterialSources: files.pickMaterialSources, recordLifecycle,
+});
+const sectionCandidateConfirmation = createSectionCandidateConfirmation({
+  getWindow, webOrigin, getApiEndpoint: services.getApiEndpoint,
+  getTransport: services.sectionCandidateConfirmationTransport,
+  showMessageBox: (window, options) => dialog.showMessageBox(window, options),
 });
 const { configureAutoUpdater, checkForUpdates } = createAutoUpdater({
   autoUpdater, dialog, getWindow, isPackaged: app.isPackaged, resourcesPath: process.resourcesPath,
@@ -192,7 +198,7 @@ async function startReadyServices() {
   await recordLifecycle('app-start', { mode: isDev ? 'development' : 'packaged' });
   if (quitInProgress) return;
   buildMenu({ app, Menu, dialog, shell, getWindow, checkForUpdates, buildIdentity });
-  registerDesktopIpc({ ipcMain, services, files, media, buildIdentity,
+  registerDesktopIpc({ ipcMain, services, files, media, sectionCandidateConfirmation, buildIdentity,
     getVersion: () => app.getVersion(), quit: () => app.quit(), checkForUpdates, companion, getWindow, webOrigin,
   });
   configureAutoUpdater();
