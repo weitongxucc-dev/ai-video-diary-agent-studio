@@ -46,7 +46,7 @@ function workspace(selected = clip, output: string | null = null, version = "tim
 }
 function stage(data = workspace(), ref = createRef<HTMLVideoElement>(), titleReplay?: ComponentProps<typeof VideoEditingStage>["titleReplay"],
   replayRequest?: ComponentProps<typeof VideoEditingStage>["replayRequest"]) {
-  return <VideoEditingStage taskId={data.task.id} versionId={data.task.current_timeline_version_id} narrationCacheKey={data.task.narration_cache_key} montage={data.montage!} planAspectRatio={data.plan.aspect_ratio} subtitleTracks={data.subtitle_tracks} selectedId={clip.id} onSelect={vi.fn()} onPosition={vi.fn()} videoRef={ref} initialTime={0} renderAction={null} titleReplay={titleReplay} replayRequest={replayRequest} />;
+  return <VideoEditingStage taskId={data.task.id} versionId={data.task.current_timeline_version_id} narrationCacheKey={data.task.narration_cache_key} montage={data.montage!} planAspectRatio={data.plan.aspect_ratio} subtitleTracks={data.subtitle_tracks} selectedId={clip.id} onSelect={vi.fn()} onSelectSubtitle={vi.fn()} onPosition={vi.fn()} videoRef={ref} initialTime={0} renderAction={null} titleReplay={titleReplay} replayRequest={replayRequest} />;
 }
 
 it("uses the saved plan ratio when an older montage has no canvas ratio",()=>{
@@ -402,7 +402,7 @@ describe("complete source in clip details and replacement", () => {
       return <WorkspacePageContext.Provider value={{...slot,active}}>
         <VideoEditingStage taskId={data.task.id} versionId={data.task.current_timeline_version_id} narrationCacheKey={data.task.narration_cache_key}
           montage={data.montage!} planAspectRatio={data.plan.aspect_ratio} subtitleTracks={data.subtitle_tracks} selectedId={selected.id}
-          onSelect={vi.fn()} onPosition={vi.fn()} videoRef={videoRef} initialTime={0} busy={false} renderAction={null}/>
+          onSelect={vi.fn()} onSelectSubtitle={vi.fn()} onPosition={vi.fn()} videoRef={videoRef} initialTime={0} busy={false} renderAction={null}/>
         {inspector(selected)}
       </WorkspacePageContext.Provider>;
     };
