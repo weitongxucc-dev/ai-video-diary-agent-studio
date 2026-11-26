@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -11,11 +12,13 @@ from PIL import Image
 import pytest
 
 import app.main as main
+import app.montage as montage
 from app.task_audio import TASK_MEDIA_CONTEXT, media_digest
 from app.production import EXACT_EDIT_SOURCE
 from app.creation_execution import CreationExecutionActor
 from app.creation.editing.exact_preview_use_case import ExactPreviewUseCase
 from app.creation.editing.metadata_use_case import EditPreviewRejected
+from app.media.template_frames import frame_manifest
 from app.schemas import CreationTaskExactEditRequest
 from test_visual_preview_application import visual_application as visual_application, _inspect
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state, permitted_media_state as permitted_media_state
@@ -80,6 +83,48 @@ def test_source_facts_distinguishes_missing_target_from_source_failures(failure,
         'replacement': ('existing-asset', 'existing-segment'),
         'user_id': 'member', 'local_diagnostic': False, 'automatic_replacement': False,
         'expected_replacement_version': None})]
+
+
+@pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='native media tools unavailable')
+def test_picture_preview_composites_template_frames_on_their_own_clock(tmp_path, monkeypatch):
+    size = (96, 54)
+    monkeypatch.setattr(montage, 'canvas_size', lambda _: size)
+    picture = tmp_path / 'picture.mp4'
+    audio = tmp_path / 'voice.wav'
+    subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=black:s=96x54:r=30:d=4',
+                    '-f', 'lavfi', '-i', 'sine=duration=4', '-map', '0:v', '-threads', '1', str(picture),
+                    '-map', '1:a', str(audio)], check=True, capture_output=True, timeout=15)
+    clip = montage.MontageClip('clip', None, 'asset', None, str(picture), 0, 4, 0, 4, 1, [], False)
+    plan = montage.CreationTaskMontagePlan('plan', 'workspace', 'task', None, 'Preview', 'ready', [], [clip], 4, 0)
+    # Model the content of an offline template sequence, including its transparent lead and tail.
+    template_dir = tmp_path / 'template'
+    template_dir.mkdir()
+    transparent = Image.new('RGBA', size)
+    active = transparent.copy()
+    active.paste('white', (8, 8, 24, 24))
+    names = [f'frame-{frame:07d}.png' for frame in range(120)]
+    for frame, name in enumerate(names):
+        (active if 20 <= frame < 100 else transparent).save(template_dir / name)
+    (template_dir / 'frames.json').write_text(json.dumps({'frames': names}))
+    sequence = frame_manifest(template_dir, len(names))
+    static = tmp_path / 'static.png'
+    Image.new('RGBA', (16, 16), 'white').save(static)
+
+    output = tmp_path / 'preview.mp4'
+    command = montage.MontageRenderer(tmp_path).build_command(plan, audio, output, [sequence, static],
+        subtitle_intervals=[(20 / 30, 100 / 30), (1, 2)], overlay_positions=[(0, 0), (48, 8)])
+    subprocess.run([command[0], '-v', 'error', '-filter_complex_threads', '1', *command[1:]],
+                   check=True, capture_output=True, timeout=30)
+    frames = subprocess.run(['ffmpeg', '-v', 'error', '-i', str(output), '-an', '-pix_fmt', 'gray',
+                             '-f', 'rawvideo', '-'], check=True, capture_output=True, timeout=15).stdout
+    frame_bytes = size[0] * size[1]
+    assert len(frames) == frame_bytes * 120
+
+    def visible_at(x, y):
+        return [frame for frame in range(120) if frames[frame * frame_bytes + y * size[0] + x] > 200]
+
+    assert visible_at(16, 16) == list(range(20, 100))
+    assert visible_at(56, 16) == list(range(30, 60))
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None or shutil.which('ffprobe') is None, reason='native media tools unavailable')
