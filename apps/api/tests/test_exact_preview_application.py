@@ -1,5 +1,5 @@
 """One typed picture preview with real audio/captions and its durable request journal."""
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import os
 from pathlib import Path
@@ -22,6 +22,7 @@ from app.media.template_frames import frame_manifest
 from app.schemas import CreationTaskExactEditRequest
 from test_visual_preview_application import visual_application as visual_application, _inspect
 from test_montage_pipeline import person_render_edit_state as person_render_edit_state, permitted_media_state as permitted_media_state
+from test_timeline_restore_application import restore_http_state
 
 
 def test_typed_graphic_action_keeps_validated_id_and_defaults_out_of_request_digest():
@@ -83,6 +84,77 @@ def test_source_facts_distinguishes_missing_target_from_source_failures(failure,
         'replacement': ('existing-asset', 'existing-segment'),
         'user_id': 'member', 'local_diagnostic': False, 'automatic_replacement': False,
         'expected_replacement_version': None})]
+
+
+@pytest.mark.parametrize('stored_scope', ['sealed', 'legacy', 'wrong', 'null', 'stale', 'changed'])
+def test_typed_graphic_confirmation_checks_sealed_source_scope(tmp_path, monkeypatch, stored_scope):
+    state = restore_http_state(tmp_path, monkeypatch)
+    monkeypatch.setattr(main, '_wake_assistant_continuations', lambda: None)
+    records = state.repo.edit_records
+    save_intent = records.create_edit_intent
+    empty_scope = {'clip_ids': [], 'input_source_facts': None, 'source_facts': [], 'clip_facts': []}
+
+    def seed_scope(intent, **kwargs):
+        constraints = dict(intent.constraints)
+        if stored_scope in {'legacy', 'stale', 'changed'}:
+            constraints.pop('affected_source_scope', None)
+        elif stored_scope == 'wrong':
+            constraints['affected_source_scope'] = {**empty_scope, 'clip_ids': ['clip']}
+        elif stored_scope == 'null':
+            constraints['affected_source_scope'] = None
+        return save_intent(replace(intent, constraints=constraints), **kwargs)
+
+    montage_before = state.repo.get_creation_task_montage_plan('ws', state.task.id)
+    layer = {'kind': 'text', 'id': 'new-title', 'text': '姓名', 'start_seconds': .2, 'end_seconds': 1}
+    payload = {'operation_type': 'EditGraphicOverlay', 'overlay_action': 'add', 'graphic_overlay': layer,
+        'request_id': str(uuid4()), 'expected_timeline_version_id': state.base.id,
+        'expected_timeline_sequence': state.base.sequence}
+    preview_url = state.base_url + '/edits/exact/preview?draft=true'
+    with monkeypatch.context() as fixture:
+        fixture.setattr(records, 'create_edit_intent', seed_scope)
+        preview = state.client.post(preview_url, json=payload)
+    assert preview.status_code == 200, preview.text
+    proposal = preview.json()['proposal']
+    intent = records.get_edit_intent('ws', proposal['intent_id'])
+    assert intent.constraints['request_source']['request_id'] == payload['request_id']
+    if stored_scope == 'sealed':
+        assert intent.constraints['affected_source_scope'] == empty_scope
+    if stored_scope == 'stale':
+        advanced = state.client.post(preview_url, json={**payload, 'request_id': str(uuid4())})
+        assert advanced.status_code == 200, advanced.text
+        other_id = advanced.json()['proposal']['id']
+        applied = state.client.post(state.base_url + f'/edits/{other_id}/confirm', json={'request_id': str(uuid4())})
+        assert applied.status_code == 200, applied.text
+    if stored_scope == 'changed':
+        # The mutable montage must not replace the proposal's original baseline.
+        different = montage.creation_task_montage_plan_from_payload(montage_before)
+        different.clips[0].source_start_seconds += .1
+        state.repo.montage_plan_adoption.save_creation_task_montage_plan('ws', state.task.id,
+            different.id, montage.creation_task_montage_plan_to_payload(different))
+
+    task_before = state.repo.task_records.get_creation_task('ws', state.task.id)
+    confirm_url = state.base_url + f"/edits/{proposal['id']}/confirm"
+    confirmation = {'request_id': str(uuid4())}
+    response = state.client.post(confirm_url, json=confirmation)
+    if stored_scope in {'wrong', 'null', 'stale', 'changed'}:
+        assert response.status_code == 409, response.text
+        detail = {'wrong': '封存来源范围与本次实际影响的镜头不一致',
+            'null': '封存来源范围无效', 'stale': '时间线',
+            'changed': '原图文提案未封存实际影响的来源范围'}[stored_scope]
+        assert detail in response.text, response.text
+        assert state.repo.task_records.get_creation_task('ws', state.task.id) == task_before
+        return
+
+    assert response.status_code == 200, response.text
+    operation = response.json()['operation']
+    assert operation['base_version_id'] == state.base.id
+    saved = state.repo.timeline_records.get_timeline_version('ws', operation['result_version_id'])
+    assert saved.snapshot['montage']['graphic_overlays'][-1]['id'] == layer['id']
+    for key in ('clips', 'audio_timeline'):
+        assert saved.snapshot['montage'][key] == montage_before[key]
+    replay = state.client.post(confirm_url, json=confirmation)
+    assert replay.status_code == 200 and replay.json() == response.json(), replay.text
+    assert records.get_edit_intent('ws', intent.id).constraints == intent.constraints
 
 
 @pytest.mark.skipif(shutil.which('ffmpeg') is None, reason='native media tools unavailable')
