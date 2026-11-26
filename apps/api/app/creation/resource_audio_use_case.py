@@ -1,10 +1,18 @@
 """Fixed catalog audio import through the existing ingress, journal and Job owners."""
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.creation.audio_ingress_use_case import AudioIngressRejected
 from app.creation.contracts import TaskEvent
 from app.creation_execution import CreationExecutionActor
 from app.models import utc_now
+
+
+def _resource_claims(events, actor):
+    member_id = actor.user_id or actor.member_id
+    return (event for event in events
+            if event.event_type == 'edit_request_claimed'
+            and event.payload.get('phase') == 'audio_resource'
+            and event.payload.get('member_id') == member_id)
 
 
 class ResourceAudioUseCase:
@@ -16,7 +24,10 @@ class ResourceAudioUseCase:
         self.receipt_for, self.conversations = receipt_for, conversations
 
     def _task(self, actor, task_id):
-        task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id)
+        try:
+            task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id)
+        except KeyError as exc:
+            raise AudioIngressRejected(404, '作品不存在') from exc
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
             raise AudioIngressRejected(403, '当前成员不能导入此任务音频')
         if self.media.verify_identity(actor) != 'ready':
@@ -26,17 +37,17 @@ class ResourceAudioUseCase:
     def read(self, actor, task_id, request_id):
         task = self._task(actor, task_id)
         request_id = str(UUID(str(request_id)))
-        claims = [event for event in self.repository.execution_records.list_task_events(actor.workspace_id, task_id)
-                  if event.event_type == 'edit_request_claimed'
-                  and event.payload.get('phase') == 'audio_resource'
-                  and event.payload.get('request_id') == request_id
-                  and event.payload.get('member_id') == (actor.user_id or actor.member_id)]
+        events = self.repository.execution_records.list_task_events(actor.workspace_id, task_id)
+        claims = [event for event in _resource_claims(events, actor) if event.payload.get('request_id') == request_id]
         if not claims:
             raise AudioIngressRejected(404, '原资源导入请求不存在；不能据此推断未提交')
         claim, = claims
+        inputs = claim.payload['inputs']
+        if inputs.get('actor_identity') != actor.identity_payload():
+            raise AudioIngressRejected(403, '原资源导入请求归属无法核验')
         saved = self.repository.execution_records.read_edit_request_result(task, claim.id)
         receipt = {'task_id': task_id, 'request_id': request_id, 'status': 'unknown',
-                   'submitted_input': claim.payload['inputs'], 'job_id': None}
+                   'submitted_input': inputs, 'job_id': None}
         if saved and saved['status_code']>=400:
             receipt.update(status='rejected',submission_effect='not_submitted',status_code=saved['status_code'])
         elif saved:
@@ -45,6 +56,43 @@ class ResourceAudioUseCase:
                 raise AudioIngressRejected(403, '原资源作业归属无法核验')
             receipt.update(status='recorded', job_id=job.id)
         return receipt
+
+    def manual_request_id(self, actor, task_id, *, resource_id, version, retry_of=None):
+        identity = actor.identity_payload()
+        key = [actor.workspace_id, task_id, identity, resource_id, version]
+        if retry_of is None:
+            self._task(actor, task_id)
+            # Keep the ID of the old HTTP caller that omits request_id.
+            return str(uuid5(NAMESPACE_URL, str(key)))
+        previous = self.read(actor, task_id, retry_of)
+        inputs = previous['submitted_input']
+        if (inputs['resource_id'], inputs['version']) != (resource_id, version):
+            raise AudioIngressRejected(409, '原导入请求与当前资源或版本不一致')
+        if previous['status'] != 'rejected' or previous.get('submission_effect') != 'not_submitted':
+            raise AudioIngressRejected(409, '原导入尚未确认未提交，请先回查原请求')
+        return str(uuid5(NAMESPACE_URL, str(['audio_resource_retry', *key, previous['request_id']])))
+
+    def locate_manual_request(self, actor, task_id, *, resource_id, version, retry_of=None):
+        request_id = self.manual_request_id(actor, task_id, resource_id=resource_id, version=version,
+                                            retry_of=retry_of)
+        original_id = None
+        if retry_of is None:
+            # The request journal is complete independently of the production history projection.
+            # Rank IDs here; the individual receipt still verifies job ownership.
+            events = self.repository.execution_records.list_task_events(actor.workspace_id, task_id)
+            statuses = {event.id: event.payload['status_code'] for event in events
+                        if event.event_type == 'edit_request_result'}
+            selection = (resource_id, version, actor.identity_payload())
+            latest = {}
+            for claim in _resource_claims(events, actor):
+                inputs = claim.payload['inputs']
+                if (inputs.get('resource_id'), inputs.get('version'), inputs.get('actor_identity')) != selection:
+                    continue
+                status = statuses.get(claim.id + '_result')
+                outcome = 'unknown' if status is None else 'rejected' if status >= 400 else 'recorded'
+                latest[outcome] = claim.payload['request_id']
+            original_id = latest.get('unknown') or latest.get('recorded') or latest.get('rejected')
+        return {'request_id': request_id, 'original_request_id': original_id}
 
     def submit(self, actor, task_id, *, resource_id, version, request_id, source=None,
                write_guard=None, runtime):

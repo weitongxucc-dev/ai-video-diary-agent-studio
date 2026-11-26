@@ -3,7 +3,8 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { getCreationTaskWorkspace, confirmCreationTaskEdit, undoCreationTaskTimeline } from "@/lib/api/creation-tasks";
 import { creationPlanRequest } from "@/lib/api/creation-transport";
-import { importCreationTaskResourceAudio, previewCreationTaskAudio, resolveCreationTaskMediaResponse, getCreationTaskMediaJob } from "@/lib/api/task-media";
+import { importCreationTaskResourceAudio, readCreationTaskResourceAudioRequest, readCreationTaskResourceAudioRequestId, previewCreationTaskAudio, resolveCreationTaskMediaResponse, getCreationTaskMediaJob } from "@/lib/api/task-media";
+import { validDraftId } from "@/lib/preflight-draft";
 import type { CreationTaskWorkspace, CreationTaskEditPreviewResponse, TaskMediaResultMap, TaskMediaJob } from "@/lib/types";
 import styles from "../EditorResourceLibraryPanel.module.css";
 
@@ -19,6 +20,23 @@ type ResourceAudioHistory = {
   }[];
 };
 
+type ImportRequest = { id: string } & (
+  { state: "unknown" | "not_submitted" } | { state: "recorded"; jobId: string }
+);
+
+function importRequestKey(initialRequestId: string) {
+  if (!validDraftId(initialRequestId)) throw new Error("当前设备的导入范围无法核对。");
+  // The server's initial ID includes the verified device, member, task and fixed resource.
+  return `ai-video-diary.resource-audio-request.v2:${initialRequestId}`;
+}
+
+function readResourceHistory(taskId: string, resourceId: string, version: number, signal: AbortSignal) {
+  return creationPlanRequest<ResourceAudioHistory>(
+    `/api/creation-tasks/${encodeURIComponent(taskId)}/audio/resources/${encodeURIComponent(resourceId)}/history?version=${version}`,
+    { signal },
+  );
+}
+
 /** Uses the same task import, edit proposal and undo APIs as the audio editor. */
 export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpdated }: {
   taskId: string; resource: { id: string; version: number; name: string; category_id: string };
@@ -30,7 +48,8 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
   const [gain, setGain] = useState(resource.category_id === "music" ? -18 : 0);
   const gainSliderId = useId();
   const [source, setSource] = useState<TaskMediaResultMap["audio_source"] | null>(null);
-  const [job, setJob] = useState<TaskMediaJob | null>(null);
+  const [requestKey, setRequestKey] = useState<string | null>(null);
+  const [importRequest, setImportRequest] = useState<ImportRequest | null>(null);
   const [preview, setPreview] = useState<CreationTaskEditPreviewResponse | null>(null);
   const [applied, setApplied] = useState<{ id: string; seen?: { versionId: string; sequence: number } } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -40,14 +59,21 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
   const undoRequest = useRef<Parameters<typeof undoCreationTaskTimeline>[1] | null>(null);
   useEffect(() => {
     const controller = new AbortController(); lifetime.current = controller;
+    void readCreationTaskResourceAudioRequestId(taskId, resource.id, resource.version, undefined, controller.signal).then(attempt => {
+      if (controller.signal.aborted) return;
+      const key = importRequestKey(attempt.request_id);
+      const id = sessionStorage.getItem(key);
+      if (id !== null && !validDraftId(id)) throw new Error("原导入请求编号无法读取。");
+      setImportRequest(id === null ? null : { id, state: "unknown" });
+      setRequestKey(key);
+    }).catch(() => {
+      if (!controller.signal.aborted) setError("无法恢复当前设备的导入记录，请重新打开资源后核对。");
+    });
     void getCreationTaskWorkspace(taskId).then(async value => {
       if (controller.signal.aborted) return;
       if (value.task.can_undo && value.task.current_timeline_version_id) {
         try {
-          const history = await creationPlanRequest<ResourceAudioHistory>(
-            `/api/creation-tasks/${encodeURIComponent(taskId)}/audio/resources/${encodeURIComponent(resource.id)}/history?version=${resource.version}`,
-            { signal: controller.signal },
-          );
+          const history = await readResourceHistory(taskId, resource.id, resource.version, controller.signal);
           if (controller.signal.aborted) return;
           // A retained state cannot disambiguate repeated uses of the same catalog version.
           const adoption = history.completeness === "complete" && history.current_resource_present
@@ -73,26 +99,109 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
   const tracks = workspace?.montage?.audio_timeline?.tracks.filter(track => !track.locked && ["music", "effect"].includes(track.role)) ?? [];
   const duration = workspace?.montage?.duration_seconds ?? 0;
 
+  async function checkImportRequest(id: string, signal: AbortSignal) {
+    let receipt: Awaited<ReturnType<typeof readCreationTaskResourceAudioRequest>> | undefined;
+    try {
+      receipt = await readCreationTaskResourceAudioRequest(taskId, id, signal);
+    } catch {
+      // A missing or unreadable receipt is still an unknown outcome.
+    }
+    if (signal.aborted) return;
+    if (receipt) {
+      if (receipt.request_id !== id || receipt.task_id !== taskId
+          || receipt.submitted_input?.resource_id !== resource.id || receipt.submitted_input.version !== resource.version) {
+        setError("原导入回执与当前资源或版本不一致，请核对原请求。");
+        return;
+      }
+      if (receipt.status === "recorded" && receipt.job_id) {
+        setImportRequest({ id, state: "recorded", jobId: receipt.job_id });
+        setError(null);
+        setNotice("原导入已登记，可读取原作业结果。");
+        return;
+      }
+      if (receipt.status === "rejected" && receipt.submission_effect === "not_submitted") {
+        setImportRequest({ id, state: "not_submitted" });
+        setNotice("原导入未提交，可以重新尝试。");
+        return;
+      }
+    }
+    setNotice("原导入结果尚未确认。请继续查询原请求。");
+  }
+
+  async function verifyImportScope(key: string, signal: AbortSignal) {
+    const current = await readCreationTaskResourceAudioRequestId(taskId, resource.id, resource.version, undefined, signal);
+    if (importRequestKey(current.request_id) !== key) {
+      throw new Error("设备、成员或工作区已变化，请重新打开资源。");
+    }
+    return current;
+  }
+
   async function prepare() {
-    if (!workspace || busy) return;
+    if (!workspace || !requestKey || busy) return;
     const signal = lifetime.current!.signal;
     setBusy(true); setError(null); setNotice(""); setPreview(null);
     try {
-      const latest = await getCreationTaskWorkspace(taskId);
+      if (importRequest?.state !== "unknown") {
+        const latest = await getCreationTaskWorkspace(taskId);
+        if (signal.aborted) return;
+        if (latest.task.current_timeline_version_id !== workspace.task.current_timeline_version_id) {
+          setWorkspace(latest);
+          throw new Error("作品已更新，请核对音轨和位置后重新准备。");
+        }
+      }
+      const current = await verifyImportScope(requestKey, signal);
       if (signal.aborted) return;
-      if (latest.task.current_timeline_version_id !== workspace.task.current_timeline_version_id) {
-        setWorkspace(latest);
-        throw new Error("作品已更新，请核对音轨和位置后重新准备。");
+      const savedId = sessionStorage.getItem(requestKey);
+      if (savedId !== (importRequest?.id ?? null)) {
+        if (savedId !== null && !validDraftId(savedId)) throw new Error("原导入请求编号无法读取。");
+        if (savedId !== null) setImportRequest({ id: savedId, state: "unknown" });
+        throw new Error("导入记录已变化，请重新核对。");
+      }
+      if (importRequest?.state === "unknown") {
+        await checkImportRequest(importRequest.id, signal);
+        return;
       }
       let audio = source;
       if (!audio) {
-        const response = job ? await getCreationTaskMediaJob(taskId, job.job_id, signal)
-          : await importCreationTaskResourceAudio(taskId, resource.id, resource.version);
+        let response: TaskMediaJob;
+        if (importRequest?.state === "recorded") {
+          response = await getCreationTaskMediaJob(taskId, importRequest.jobId, signal);
+        } else {
+          const retryOf = importRequest?.state === "not_submitted" ? importRequest.id : undefined;
+          const attempt = retryOf === undefined ? current
+            : await readCreationTaskResourceAudioRequestId(taskId, resource.id, resource.version, retryOf, signal);
+          if (signal.aborted) return;
+          if (retryOf !== undefined) await verifyImportScope(requestKey, signal);
+          if (signal.aborted) return;
+          if (sessionStorage.getItem(requestKey) !== savedId) throw new Error("导入记录已变化，请重新核对。");
+          const originalId = attempt.original_request_id;
+          const id = originalId === null ? attempt.request_id : originalId;
+          if (!validDraftId(id)) throw new Error("当前资源导入编号无法读取。");
+          sessionStorage.setItem(requestKey, id);
+          setImportRequest({ id, state: "unknown" });
+          if (originalId !== null) {
+            await checkImportRequest(id, signal);
+            return;
+          }
+          try {
+            response = await importCreationTaskResourceAudio(taskId, resource.id, resource.version, id, retryOf);
+          } catch (cause) {
+            if (signal.aborted) return;
+            if (cause instanceof Error) setError(cause.message);
+            await checkImportRequest(id, signal);
+            return;
+          }
+          if (signal.aborted) return;
+          setImportRequest({ id, state: "recorded", jobId: response.job_id });
+        }
         audio = await resolveCreationTaskMediaResponse(taskId, response, "audio_source", {
           signal, baseVersionId: null,
-          onUpdate: value => { if (!signal.aborted) setJob(value); },
+          onUpdate: value => {
+            if (!signal.aborted && (value.status === "queued" || value.status === "running")) setNotice("正在导入资源音频…");
+          },
         });
         if (signal.aborted) return;
+        setNotice("");
         setSource(audio);
       }
       const response = await previewCreationTaskAudio(taskId, {
@@ -155,6 +264,9 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
     } catch (cause) { if (!signal.aborted) setError(cause instanceof Error ? cause.message : "撤销未完成"); }
     finally { if (!signal.aborted) setBusy(false); }
   }
+  const checkingOriginal = importRequest?.state === "unknown";
+  const prepareLabel = importRequest?.state === "not_submitted" ? "重新尝试导入"
+    : importRequest?.state === "recorded" && !source ? "读取导入结果" : "准备采用";
   return <section className={styles.catalogPreview} aria-label={`采用${resource.name}`}>
     <h4>添加到当前作品</h4>
     {workspace ? <p>{workspace.task.name}</p> : <p>正在读取作品…</p>}
@@ -165,11 +277,12 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
       <label htmlFor={gainSliderId}>音量调节（dB）<input id={gainSliderId} type="range" min={-60} max={12} step={1} value={Number.isFinite(gain) ? gain : 0} aria-valuetext={Number.isFinite(gain) ? `${gain} dB` : undefined} onChange={event => setGain(event.target.valueAsNumber)} /></label>
       <label>音量（dB）<input type="number" min={-60} max={12} value={gain} onChange={event => setGain(event.target.valueAsNumber)} /></label>
       <p>从资源开头加入，超过作品结尾的部分会裁掉。准备后确认采用，原旁白保留。</p>
-      <button type="button" disabled={!trackId || !Number.isFinite(start) || start < 0 || start >= duration || !Number.isFinite(gain) || gain < -60 || gain > 12} onClick={() => void prepare()}>{busy ? "正在准备…" : job && !source ? "读取导入结果" : "准备采用"}</button>
+      {!checkingOriginal ? <button type="button" disabled={!requestKey || !trackId || !Number.isFinite(start) || start < 0 || start >= duration || !Number.isFinite(gain) || gain < -60 || gain > 12} onClick={() => void prepare()}>{busy ? "正在准备…" : prepareLabel}</button> : null}
     </fieldset> : null}
+    {checkingOriginal ? <button type="button" disabled={!workspace || busy} onClick={() => void prepare()}>{busy ? "正在处理…" : "查询原导入请求"}</button> : null}
     {preview ? <div><p>{preview.proposal.summary}</p><button type="button" disabled={busy} onClick={() => void confirm()}>确认加入音轨</button></div> : null}
     {applied ? <button type="button" disabled={busy} onClick={() => void undo()}>撤销本次采用</button> : null}
-    {notice ? <p role="status">{notice}</p> : null}
+    <span role="status">{notice || null}</span>
     {error ? <p role="alert">{error}</p> : null}
   </section>;
 }
