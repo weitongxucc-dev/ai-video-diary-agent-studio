@@ -23,7 +23,7 @@ export function CompositionTimingSummary({ timing, version, targetDurationSecond
   ));
   const targetEndMs = Math.round((targetDurationSeconds ?? 0) * 1000);
   function cueTime(ms: number) {
-    if (!scaled) return ms;
+    if (!scaled) return targetFrames > 0 ? Math.min(ms, targetEndMs) : ms;
     const frame = Math.round(ms * deliveryFrameRate * targetFrames / (1000 * timing.duration_frames));
     return Math.min(targetEndMs, Math.round(Math.min(frame, targetFrames) * 1000 / deliveryFrameRate));
   }

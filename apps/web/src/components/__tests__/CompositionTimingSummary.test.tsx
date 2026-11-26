@@ -43,3 +43,11 @@ it("identifies collapsed and too-short cuts and keeps sound suggestions within t
   expect(screen.getByText(/音效.*起止点在同一帧/)).toBeVisible();
   expect(screen.getByText("音乐 0.967–1.000 秒")).toBeVisible();
 });
+
+it("keeps a sound cue inside the saved duration when the reference and edit have the same frame count", () => {
+  render(<CompositionTimingSummary targetDurationSeconds={3.99} timing={{
+    ...timing,
+    sound_cues: [{ role: "music", start_ms: 3800, duration_ms: 200 }],
+  }} />);
+  expect(screen.getByText("音乐 3.800–3.990 秒")).toBeVisible();
+});
