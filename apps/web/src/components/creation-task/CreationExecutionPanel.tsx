@@ -59,13 +59,14 @@ function ExecutionScriptWindow({ preview, onStale }: {
     </details>;
 }
 
-export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voice, availableVoices, template, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, storyboard, onRegenerateStoryboard, onReadStoryboard, compact = false, onStart, onResume, onCancel, onOpenMontage, onRefreshPreview }: {
+export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voice, availableVoices, template, compositionDurationSeconds, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, storyboard, onRegenerateStoryboard, onReadStoryboard, compact = false, onStart, onResume, onCancel, onOpenMontage, onRefreshPreview }: {
     sourceMedia?: SourceMediaSelection | null;
     taskReason: string | null;
     taskStage: WorkspaceState["task"]["stage"];
     voice: WorkspaceState["plan"]["selected_voice"];
     availableVoices: WorkspaceState["available_voices"];
     template?: Pick<WorkspaceState["plan"], "template_id" | "template_version" | "template_settings">;
+    compositionDurationSeconds?: number;
     preview: CreationExecutionPreview | null;
     execution: CreationExecutionStatus | null;
     busy: boolean;
@@ -191,7 +192,7 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
       {!preview.requirements.can_continue && preview.requirements.continuation_blocker ? <p role="status">{preview.requirements.continuation_blocker}</p> : null}
       {!job ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || previewStale || !preview.requirements.can_continue} onClick={onStart} type="button">{preview.requirements.can_continue ? sourceMedia ? "生成当前剪辑成片" : "确认以上文案和要求，开始制作" : "暂不能开始制作"}</button></div> : null}
     </> : null}
-    {templateTiming ? <CompositionTimingSummary {...templateTiming} /> : null}
+    {templateTiming ? <CompositionTimingSummary {...templateTiming} targetDurationSeconds={compositionDurationSeconds} /> : null}
     {job ? <div>
       {execution?.waiting_reason ? <p role="status">{creationTaskFailureReason(execution.waiting_reason, taskStage)}</p> : null}
       {!taskReason && failureReason ? <p>{creationTaskFailureReason(failureReason, taskStage)}</p> : null}
