@@ -1,7 +1,7 @@
 """Task audio HTTP and artifact access; ingress, editing and recording transactions remain owner-owned."""
-from uuid import UUID, uuid5, NAMESPACE_URL
+from uuid import UUID
 from fastapi.responses import JSONResponse
-from fastapi import APIRouter, Request, UploadFile, File
+from fastapi import APIRouter, Request, UploadFile, File, Query
 from pydantic import BaseModel, ConfigDict, Field
 from app.audio_timeline import AudioEditRequest, AudioListenRequest
 from app.schemas import CreationTaskNarrationResponse, CreationTaskRecordingAdoptRequest, CreationTaskEditPreviewResponse
@@ -14,6 +14,7 @@ class CatalogAudioImportRequest(BaseModel):
     version: int = Field(ge=1, strict=True)
     request_id: UUID | None = None
     assistant_turn_id: UUID | None = None
+    retry_of: UUID | None = None
 
 
 def build_task_audio_router(*, catalog_for, submit_for, workspace_for, task_for, ingress_for, outputs_for, ingress_error_type_for, http_error_type_for, narration_for, records_for, media_kind_for, actor_for, runtime_for, actor_type_for, audio_for, file_response_for, preview_for, route_names, resource_audio_for=None, resource_source_for=None) -> APIRouter:
@@ -22,6 +23,20 @@ def build_task_audio_router(*, catalog_for, submit_for, workspace_for, task_for,
     @router.post('/api/creation-tasks/{task_id}/audio/import')
     def import_creation_task_audio(task_id: str, request: Request, audio: UploadFile=File(...)):
         return submit_for()(task_id, request, 'audio_import', 'audio_source', audio=audio)
+
+    @router.get('/api/creation-tasks/{task_id}/audio/resources/request-id')
+    def read_creation_task_audio_resource_request_id(task_id: str, request: Request,
+            resource_id: str = Query(min_length=1, max_length=160),
+            version: int = Query(ge=1), retry_of: UUID | None = None):
+        actor = actor_for()(request, workspace_for()(request))
+        if resource_audio_for is None:
+            raise http_error_type_for()(status_code=503,detail='资源音频用例尚未装配')
+        try:
+            request_id = resource_audio_for().manual_request_id(actor, task_id, resource_id=resource_id,
+                version=version, retry_of=retry_of)
+        except ingress_error_type_for() as exc:
+            raise http_error_type_for()(status_code=exc.status_code,detail=exc.detail) from exc
+        return {'request_id': request_id}
 
     @router.post('/api/creation-tasks/{task_id}/audio/resources')
     def import_creation_task_audio_resource(task_id: str, request: Request, payload: CatalogAudioImportRequest):
@@ -32,12 +47,19 @@ def build_task_audio_router(*, catalog_for, submit_for, workspace_for, task_for,
         case = resource_audio_for()
         if payload.assistant_turn_id is not None and (payload.request_id is None or resource_source_for is None):
             raise http_error_type_for()(status_code=409,detail='助手导入缺少可信原请求来源')
+        if payload.retry_of is not None and (payload.request_id is None or payload.assistant_turn_id is not None):
+            raise http_error_type_for()(status_code=422,detail='资源重试须提供手动导入的请求编号')
         source, guard = (resource_source_for(request,task_id,payload,actor)
                          if payload.assistant_turn_id is not None else (None,None))
-        request_id = str(payload.request_id or uuid5(NAMESPACE_URL,
-            str([workspace_id,task_id,actor.identity_payload(),payload.resource_id,payload.version])))
-        runtime=runtime_for()()
         try:
+            if payload.assistant_turn_id is None:
+                request_id = case.manual_request_id(actor, task_id, resource_id=payload.resource_id,
+                    version=payload.version, retry_of=payload.retry_of)
+                if payload.request_id is not None and str(payload.request_id) != request_id:
+                    raise ingress_error_type_for()(409, '导入请求编号与当前资源尝试不一致')
+            else:
+                request_id = str(payload.request_id)
+            runtime=runtime_for()()
             receipt=case.submit(actor,task_id,resource_id=payload.resource_id,version=payload.version,
                 request_id=request_id,source=source,write_guard=guard,runtime=runtime)
             if not receipt.get('job_id'):
@@ -129,5 +151,8 @@ def build_task_audio_router(*, catalog_for, submit_for, workspace_for, task_for,
     @router.post('/api/creation-tasks/{task_id}/audio/preview', response_model=CreationTaskEditPreviewResponse)
     def preview_creation_task_audio(task_id: str, request: Request, payload: AudioEditRequest):
         return preview_for()(task_id, request, payload, queue_on_required=True)
+    # The manual request-ID read is part of the catalog import entry point.
+    if 'import_creation_task_audio_resource' in route_names:
+        route_names = (*route_names, 'read_creation_task_audio_resource_request_id')
     router.routes = [route for route in router.routes if route.name in route_names]
     return router

@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { getCreationTaskWorkspace, confirmCreationTaskEdit, undoCreationTaskTimeline } from "@/lib/api/creation-tasks";
 import { creationPlanRequest } from "@/lib/api/creation-transport";
-import { importCreationTaskResourceAudio, readCreationTaskResourceAudioRequest, previewCreationTaskAudio, resolveCreationTaskMediaResponse, getCreationTaskMediaJob } from "@/lib/api/task-media";
+import { importCreationTaskResourceAudio, readCreationTaskResourceAudioRequest, readCreationTaskResourceAudioRequestId, previewCreationTaskAudio, resolveCreationTaskMediaResponse, getCreationTaskMediaJob } from "@/lib/api/task-media";
 import { readPreflightDraftScope, validDraftId, type DraftScope } from "@/lib/preflight-draft";
 import type { CreationTaskWorkspace, CreationTaskEditPreviewResponse, TaskMediaResultMap, TaskMediaJob } from "@/lib/types";
 import styles from "../EditorResourceLibraryPanel.module.css";
@@ -107,7 +107,12 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
       // A missing or unreadable receipt is still an unknown outcome.
     }
     if (signal.aborted) return;
-    if (receipt?.request_id === id && receipt.task_id === taskId) {
+    if (receipt) {
+      if (receipt.request_id !== id || receipt.task_id !== taskId
+          || receipt.submitted_input?.resource_id !== resource.id || receipt.submitted_input.version !== resource.version) {
+        setError("原导入回执与当前资源或版本不一致，请核对原请求。");
+        return;
+      }
       if (receipt.status === "recorded" && receipt.job_id) {
         setImportRequest({ id, state: "recorded", jobId: receipt.job_id });
         setError(null);
@@ -121,6 +126,13 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
       }
     }
     setNotice("原导入结果尚未确认。请继续查询原请求。");
+  }
+
+  async function verifyImportScope(key: string) {
+    const scope = await readPreflightDraftScope();
+    if (importRequestKey(scope, taskId, resource.id, resource.version) !== key) {
+      throw new Error("成员或工作区已变化，请重新打开资源。");
+    }
   }
 
   async function prepare() {
@@ -146,11 +158,8 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
             ?? recent.find(request => request.status === "recorded") ?? recent[0])?.request_id;
         }
       }
-      const scope = await readPreflightDraftScope();
+      await verifyImportScope(requestKey);
       if (signal.aborted) return;
-      if (importRequestKey(scope, taskId, resource.id, resource.version) !== requestKey) {
-        throw new Error("成员或工作区已变化，请重新打开资源。");
-      }
       const savedId = sessionStorage.getItem(requestKey);
       if (savedId !== (importRequest?.id ?? null)) {
         if (savedId !== null && !validDraftId(savedId)) throw new Error("原导入请求编号无法读取。");
@@ -174,11 +183,17 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
         if (importRequest?.state === "recorded") {
           response = await getCreationTaskMediaJob(taskId, importRequest.jobId, signal);
         } else {
-          const id = crypto.randomUUID();
+          const retryOf = importRequest?.state === "not_submitted" ? importRequest.id : undefined;
+          const { request_id: id } = await readCreationTaskResourceAudioRequestId(taskId, resource.id, resource.version, retryOf, signal);
+          if (signal.aborted) return;
+          await verifyImportScope(requestKey);
+          if (signal.aborted) return;
+          if (sessionStorage.getItem(requestKey) !== savedId) throw new Error("导入记录已变化，请重新核对。");
+          if (!validDraftId(id)) throw new Error("当前资源导入编号无法读取。");
           sessionStorage.setItem(requestKey, id);
           setImportRequest({ id, state: "unknown" });
           try {
-            response = await importCreationTaskResourceAudio(taskId, resource.id, resource.version, id);
+            response = await importCreationTaskResourceAudio(taskId, resource.id, resource.version, id, retryOf);
           } catch (cause) {
             if (signal.aborted) return;
             if (cause instanceof Error) setError(cause.message);

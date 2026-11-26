@@ -4,13 +4,18 @@ import type { CreationTaskNarration } from '../types/creation-tasks';
 import type { CreationTaskEditPreviewResponse } from '../types/task-edits';
 import { API_BASE, apiUrl, authorizedFetch } from './transport';
 import { CreationPlanApiError, creationPlanRequest } from './creation-transport';
-export function importCreationTaskResourceAudio(taskId: string, resourceId: string, version: number, requestId: string): Promise<TaskMediaJob> {
+export function readCreationTaskResourceAudioRequestId(taskId: string, resourceId: string, version: number, retryOf: string | undefined, signal: AbortSignal): Promise<{ request_id: string }> {
+    const query = new URLSearchParams({ resource_id: resourceId, version: String(version) });
+    if (retryOf !== undefined) query.set("retry_of", retryOf);
+    return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/resources/request-id?${query}`, { signal });
+}
+export function importCreationTaskResourceAudio(taskId: string, resourceId: string, version: number, requestId: string, retryOf?: string): Promise<TaskMediaJob> {
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/resources`, {
-        method: "POST", body: JSON.stringify({ resource_id: resourceId, version, request_id: requestId }),
+        method: "POST", body: JSON.stringify({ resource_id: resourceId, version, request_id: requestId, retry_of: retryOf }),
         signal: AbortSignal.timeout(30_000),
     });
 }
-type ResourceAudioImportReceipt = { task_id: string; request_id: string } & (
+type ResourceAudioImportReceipt = { task_id: string; request_id: string; submitted_input: { resource_id: string; version: number } } & (
     | { status: "recorded"; job_id: string }
     | { status: "rejected"; job_id: null; submission_effect: "not_submitted"; status_code: number }
     | { status: "unknown"; job_id: null }

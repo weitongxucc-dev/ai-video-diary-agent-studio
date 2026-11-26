@@ -1,5 +1,5 @@
 """Fixed catalog audio import through the existing ingress, journal and Job owners."""
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from app.creation.audio_ingress_use_case import AudioIngressRejected
 from app.creation.contracts import TaskEvent
@@ -16,7 +16,10 @@ class ResourceAudioUseCase:
         self.receipt_for, self.conversations = receipt_for, conversations
 
     def _task(self, actor, task_id):
-        task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id)
+        try:
+            task = self.repository.task_records.get_creation_task(actor.workspace_id, task_id)
+        except KeyError as exc:
+            raise AudioIngressRejected(404, '作品不存在') from exc
         if task.owner_user_id and task.owner_user_id != (actor.user_id or actor.member_id):
             raise AudioIngressRejected(403, '当前成员不能导入此任务音频')
         if self.media.verify_identity(actor) != 'ready':
@@ -45,6 +48,21 @@ class ResourceAudioUseCase:
                 raise AudioIngressRejected(403, '原资源作业归属无法核验')
             receipt.update(status='recorded', job_id=job.id)
         return receipt
+
+    def manual_request_id(self, actor, task_id, *, resource_id, version, retry_of=None):
+        identity = actor.identity_payload()
+        key = [actor.workspace_id, task_id, identity, resource_id, version]
+        if retry_of is None:
+            self._task(actor, task_id)
+            # Keep the ID of the old HTTP caller that omits request_id.
+            return str(uuid5(NAMESPACE_URL, str(key)))
+        previous = self.read(actor, task_id, retry_of)
+        inputs = previous['submitted_input']
+        if (inputs['resource_id'], inputs['version'], inputs['actor_identity']) != (resource_id, version, identity):
+            raise AudioIngressRejected(409, '原导入请求与当前资源、版本或成员不一致')
+        if previous['status'] != 'rejected' or previous.get('submission_effect') != 'not_submitted':
+            raise AudioIngressRejected(409, '原导入尚未确认未提交，请先回查原请求')
+        return str(uuid5(NAMESPACE_URL, str(['audio_resource_retry', *key, previous['request_id']])))
 
     def submit(self, actor, task_id, *, resource_id, version, request_id, source=None,
                write_guard=None, runtime):
