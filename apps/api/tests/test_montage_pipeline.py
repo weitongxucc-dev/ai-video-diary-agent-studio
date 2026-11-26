@@ -3623,6 +3623,29 @@ def test_template_settings_reach_initial_montage_and_subtitle_projection(person_
     assert track.style == plan.template_settings["subtitle_style"]
 
 
+def test_initial_composition_montage_creates_empty_tracks_for_sound_cues(person_render_edit_state):
+    state = person_render_edit_state
+    task = state.production.task_records.get_creation_task(state.workspace_id, state.task.id)
+    task.stage = "montage"
+    task.stage_status = "not_started"
+    plan = state.production.plan_records.get_creation_plan(state.workspace_id, task.plan_id)
+    plan.template_id, plan.template_version = "reference-composition", 1
+    plan.template_settings = {"kind": "composition", "composition_timing": {
+        "duration_frames": 120, "cut_frames": [30, 78],
+        "sound_cues": [{"role": "effect", "start_ms": 1300, "duration_ms": 300}],
+    }}
+    with state.production._connect() as conn:
+        conn.execute("UPDATE creation_tasks SET payload=? WHERE id=?", (json.dumps(asdict(task), default=str), task.id))
+        conn.execute("UPDATE creation_plans SET payload=? WHERE id=?", (json.dumps(asdict(plan), default=str), plan.id))
+    main_module._create_creation_task_montage_plan_for_workspace(state.workspace_id, task.id)
+    montage = creation_task_montage_plan_from_payload(state.production.get_creation_task_montage_plan(state.workspace_id, task.id))
+    voice, music, effects = montage.audio_timeline.tracks
+    assert voice.role == "narration" and voice.clips
+    assert all(clip.source_ref.startswith("narration://") for clip in voice.clips)
+    assert (music.role, effects.role) == ("music", "effect")
+    assert not music.clips and not effects.clips
+
+
 def test_first_subtitle_projection_spans_two_shots_but_keeps_explicit_short_track(monkeypatch):
     from app.subtitle_schedule import narration_schedule, schedule_srt
     task = SimpleNamespace(id="task", plan_id="plan", current_timeline_version_id="version")

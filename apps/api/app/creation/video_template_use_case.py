@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime
+from fractions import Fraction
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -10,6 +11,7 @@ from uuid import uuid4
 from app.content_templates import list_content_templates
 from app.creation.contracts import SubtitleTrack
 from app.creation.editing.metadata_use_case import default_subtitle_style
+from app.creation.narration_duration import DELIVERY_FRAME_RATE
 from app.montage import CreationTaskMontagePlan, creation_task_montage_plan_from_payload
 from app.creation.video_template_records import VideoTemplate
 from app.production import ProductionRepository
@@ -24,6 +26,24 @@ from app.creation.visual_template_reuse import reusable_components
 
 VideoTemplateRejectionCode = Literal["field_builtin_readonly", "field_not_owner", "task_not_rendered",
     "source_task_not_owned", "target_pair_incomplete", "task_builtin_overwrite", "task_not_owner", "persist_conflict"]
+
+
+def _composition_timing(montage: CreationTaskMontagePlan) -> dict[str, object]:
+    duration_frames = round(Fraction(str(montage.duration_seconds)) * DELIVERY_FRAME_RATE)
+    starts = {round(Fraction(str(clip.timeline_start_seconds)) * DELIVERY_FRAME_RATE) for clip in montage.clips}
+    duration_ms = round(Fraction(duration_frames * 1000, DELIVERY_FRAME_RATE))
+    sound_cues = []
+    for track in montage.audio_timeline.tracks if montage.audio_timeline is not None else ():
+        if track.role not in {"music", "effect"} or track.muted:
+            continue
+        for clip in track.clips:
+            duration = min(clip.duration_ms, duration_ms - clip.timeline_start_ms)
+            if not clip.muted and duration > 0:
+                sound_cues.append({"role": track.role, "start_ms": clip.timeline_start_ms, "duration_ms": duration})
+    sound_cues.sort(key=lambda cue: (cue["start_ms"], cue["role"], cue["duration_ms"]))
+    return {"duration_frames": duration_frames,
+            "cut_frames": sorted(frame for frame in starts if 0 < frame < duration_frames),
+            "sound_cues": sound_cues}
 
 
 class VideoTemplateRejected(RuntimeError):
@@ -147,11 +167,12 @@ class VideoTemplateUseCase:
             version=(expected_version or 0) + 1, name=name.strip(), origin="user",
             source_task_id=task_id, source_timeline_version_id=task.current_timeline_version_id,
             settings={"kind": "composition", "visual_components": reusable_components(montage),
+                      "composition_timing": _composition_timing(montage),
                       "language": plan.language, "aspect_ratio": montage.aspect_ratio,
                       "duration_target_seconds": plan.duration_target_seconds,
                       "presenter_share_target": plan.presenter_share_target,
                       "lipsync_quality": plan.lipsync_quality,
-                      "voice": {"profile_id": plan.selected_voice.profile_id, "version": plan.selected_voice.version} if plan.selected_voice else None,
+                      "voice": None,
                       "script_section_count": len(script.sections) if script else None,
                       "style_instruction": style_instruction.strip(),
                       "fit_mode": "fit" if all(clip.fit_mode == "fit" for clip in montage.clips) else "fill",

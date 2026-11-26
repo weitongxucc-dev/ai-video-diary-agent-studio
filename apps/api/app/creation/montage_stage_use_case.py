@@ -5,6 +5,7 @@ import hashlib
 import json
 from dataclasses import replace
 
+from app.audio_timeline import with_resource_audio_tracks
 from app.creation_execution import CreationStageGrantContext, current_presenter_render, iter_presenter_inputs
 from app.montage import CreationTaskMontagePlan, MontagePlanner, creation_task_montage_plan_from_payload, creation_task_montage_plan_to_payload
 from app.creation.presenter_selection import planned_presenter_sections
@@ -313,6 +314,11 @@ class MontageStageUseCase:
             reference_order=ReferencePictureOrder.from_plan(creation_plan))
         montage.duration_requirement = requirement.payload()
         montage.audio_timeline = voice_timeline_from_audio(audio, {window.section_id: window for window in windows})
+        template_settings = creation_plan.template_settings
+        if (creation_plan.template_id and creation_plan.template_version
+                and template_settings.get("kind") == "composition"
+                and template_settings.get("composition_timing", {}).get("sound_cues")):
+            montage.audio_timeline = with_resource_audio_tracks(montage.audio_timeline)
         montage.narration_linkage_created_audio_timeline = True
         for section_id, render in renders.items():
             grant_context.check()
@@ -337,13 +343,13 @@ class MontageStageUseCase:
             montage.message += " 本次受许可编排仅使用已授权素材元数据，未运行视觉语义模型。"
         montage.aspect_ratio = creation_plan.aspect_ratio
         from app.creation.visual_template_reuse import instantiate_components
-        montage.graphic_overlays = instantiate_components(creation_plan.template_settings, montage.duration_seconds)
+        montage.graphic_overlays = instantiate_components(template_settings, montage.duration_seconds)
         for clip in montage.clips:
-            clip.fit_mode = creation_plan.template_settings.get("fit_mode", "fill")
-            if creation_plan.template_settings.get("color_style") is not None:
-                clip.visual_effects.update(reusable_color_settings(creation_plan.template_settings["color_style"]))
+            clip.fit_mode = template_settings.get("fit_mode", "fill")
+            if template_settings.get("color_style") is not None:
+                clip.visual_effects.update(reusable_color_settings(template_settings["color_style"]))
         for cue in montage.cues:
-            cue.subtitle_style = dict(creation_plan.template_settings.get("subtitle_style", {}))
+            cue.subtitle_style = dict(template_settings.get("subtitle_style", {}))
         if grant_context is not None:
             grant_context.check()
             if len(json.dumps(creation_task_montage_plan_to_payload(montage)).encode()) > grant_context.max_output_bytes:
