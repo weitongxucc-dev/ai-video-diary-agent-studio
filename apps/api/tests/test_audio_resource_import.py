@@ -214,50 +214,110 @@ def test_manual_resource_attempt_claim_is_shared_across_windows(tmp_path, monkey
         client.close()
 
 
-def test_resource_retry_rejects_the_same_account_on_another_device(tmp_path, monkeypatch):
+@pytest.mark.parametrize('original_status', ['recorded', 'rejected', 'unknown'])
+def test_resource_request_locator_uses_the_current_account_device(tmp_path, monkeypatch, original_status):
     from app import main
     from app.creation_execution import CreationExecutionActor
-    from test_audio_ingress_application import audio_state
+    from test_audio_ingress_application import audio_state, pcm_bytes
 
-    repo, local_actor, media, runtime, client, *_ = audio_state(tmp_path, monkeypatch)
-    workspace_id, device_id, user_id = (str(uuid4()) for _ in range(3))
-    original = CreationExecutionActor.account(workspace_id, device_id, user_id)
+    repo, _, media, runtime, client, *_ = audio_state(tmp_path, monkeypatch)
+    workspace_id, user_id = (str(uuid4()) for _ in range(2))
+    original = CreationExecutionActor.account(workspace_id, str(uuid4()), user_id)
     other_device = CreationExecutionActor.account(workspace_id, str(uuid4()), user_id)
-    other_workspace = CreationExecutionActor.account(str(uuid4()), device_id, user_id)
+    other_workspace = CreationExecutionActor.account(str(uuid4()), original.device_id, user_id)
     actors = {'original': original, 'other-device': other_device, 'other-workspace': other_workspace}
     monkeypatch.setattr(main, 'current_workspace_id', lambda request: actors[request.headers['X-Test-Actor']].workspace_id)
-    monkeypatch.setattr(main, '_require_permit_actor', lambda request, _: actors[request.headers['X-Test-Actor']])
-    monkeypatch.setattr(media, 'verify_identity', lambda actor: 'ready')
-    monkeypatch.setattr(main, 'resource_preview_path', lambda _: None)
-    task = repo.task_records.get_creation_task(local_actor.workspace_id, 'task')
+    monkeypatch.setattr(main, '_request_permit_actor', lambda request, _: actors[request.headers['X-Test-Actor']])
+
+    def verify_identity(actor):
+        return 'ready' if actor in actors.values() else 'unauthorized'
+
+    monkeypatch.setattr(main, '_verify_creation_identity', verify_identity)
+    monkeypatch.setattr(media, 'verify_identity', verify_identity)
+    monkeypatch.setattr(runtime.scheduler.owners.access, '_identity_verifier', verify_identity)
+    wav = tmp_path / 'glass.wav'
+    monkeypatch.setattr(main, 'resource_preview_path', lambda _: wav if wav.is_file() else None)
     with repo._connect() as conn:
-        payload = json.loads(conn.execute("SELECT payload FROM creation_tasks WHERE id=?", (task.id,)).fetchone()[0])
-        payload.update(workspace_id=workspace_id, owner_user_id=user_id)
-        conn.execute('UPDATE creation_tasks SET workspace_id=?, payload=? WHERE id=?',
-                     (workspace_id, json.dumps(payload), task.id))
+        conn.execute("UPDATE creation_tasks SET workspace_id=?, payload=json_set(payload,'$.workspace_id',?,"
+                     "'$.owner_user_id',?) WHERE id='task'", (workspace_id, workspace_id, user_id))
+        conn.execute("UPDATE creation_plans SET workspace_id=?, payload=json_set(payload,'$.workspace_id',?) "
+                     "WHERE id='plan'", (workspace_id, workspace_id))
     url = '/api/creation-tasks/task/audio/resources'
+    history_url = url + '/openfilm%3Asound-glass-pulse/history?version=1'
+    receipt_url = '/api/creation-tasks/task/audio/resource-requests/'
     resource = {'resource_id': 'openfilm:sound-glass-pulse', 'version': 1}
     original_headers = {'X-Test-Actor': 'original'}
+    other_headers = {'X-Test-Actor': 'other-device'}
+
     try:
-        previous = client.get(url + '/request-id', params=resource, headers=original_headers).json()['request_id']
-        rejected = client.post(url, json=resource, headers=original_headers)
-        assert rejected.status_code == 404 and '固定音频文件不可用' in rejected.text
-        selection = {**resource, 'retry_of': previous}
-        valid = client.get(url + '/request-id', params=selection, headers=original_headers)
-        assert valid.status_code == 200, valid.text
-        retry_id = valid.json()['request_id']
-        assert retry_id != previous
-        before = repo.execution_records.list_task_events(workspace_id, task.id)
-        for name, status in [('other-device', 409), ('other-workspace', 404)]:
-            headers = {'X-Test-Actor': name}
-            assert client.get(url + '/request-id', params=selection, headers=headers).status_code == status
-            assert client.post(url, json={**selection, 'request_id': retry_id}, headers=headers).status_code == status
-        missing_task = client.get(url.replace('/task/', '/missing/') + '/request-id',
-                                  params=selection, headers=original_headers)
-        assert missing_task.status_code == 404
-        assert repo.execution_records.list_task_events(workspace_id, task.id) == before
+        initial = client.get(url + '/request-id', params=resource, headers=original_headers).json()
+        assert initial['original_request_id'] is None
+        previous = initial['request_id']
+        if original_status == 'unknown':
+            previous = str(uuid4())  # An earlier client can already have its own request UUID.
+            task = repo.task_records.get_creation_task(workspace_id, 'task')
+            repo.execution_records.claim_edit_request(task, user_id, previous, 'audio_resource',
+                {**resource, 'source': None, 'actor_identity': original.identity_payload()})
+        else:
+            if original_status == 'recorded':
+                wav.write_bytes(pcm_bytes())
+            accepted = client.post(url, json=resource, headers=original_headers)
+            assert accepted.status_code == (202 if original_status == 'recorded' else 404), accepted.text
+        before = client.get(history_url, headers=other_headers).json()
+        before_journal = repo.execution_records.list_task_events(workspace_id, 'task')
+        assert [(item['request_id'], item['status']) for item in before['requests']] == [(previous, original_status)]
+        assert client.get(url + '/request-id', params=resource, headers=original_headers).json() == {
+            'request_id': initial['request_id'], 'original_request_id': previous,
+        }
+        # The production history still includes the other device; its job is still protected.
+        original_receipt = client.get(receipt_url + previous, headers=other_headers)
+        assert original_receipt.status_code == (403 if original_status == 'recorded' else 200)
+        retry = {**resource, 'retry_of': previous}
+        rejected_retry = client.get(url + '/request-id', params=retry, headers=other_headers)
+        assert rejected_retry.status_code == (403 if original_status == 'recorded' else 409)
+        if original_status == 'rejected':
+            valid_retry = client.get(url + '/request-id', params=retry, headers=original_headers)
+            assert valid_retry.status_code == 200, valid_retry.text
+            retry_id = valid_retry.json()['request_id']
+            assert retry_id != previous
+            for name, status in [('other-device', 409), ('other-workspace', 404)]:
+                headers = {'X-Test-Actor': name}
+                assert client.get(url + '/request-id', params=retry, headers=headers).status_code == status
+                assert client.post(url, json={**retry, 'request_id': retry_id}, headers=headers).status_code == status
+            missing_task = client.get(url.replace('/task/', '/missing/') + '/request-id',
+                                      params=retry, headers=original_headers)
+            assert missing_task.status_code == 404
+        assert repo.execution_records.list_task_events(workspace_id, 'task') == before_journal
+        assert client.get(history_url, headers=other_headers).json() == before
+
+        if original_status == 'recorded':
+            # Unrelated events exceed the production history limit before either import entry.
+            with repo._connect() as conn:
+                conn.executemany("INSERT INTO task_events(id,workspace_id,task_id,event_type,payload_json,created_at) "
+                                 "VALUES (?,?,'task','fixture_progress','{}','2000-01-01T00:00:00+00:00')",
+                                 [(f'old-progress-{index}', workspace_id) for index in range(2001)])
+            partial = client.get(history_url, headers=other_headers).json()
+            assert partial['completeness'] == 'partial' and partial['requests'] == []
+            assert client.get(url + '/request-id', params=resource, headers=original_headers).json() == {
+                'request_id': previous, 'original_request_id': previous,
+            }
+        fresh = client.get(url + '/request-id', params=resource, headers=other_headers)
+        assert fresh.status_code == 200, fresh.text
+        current_id = fresh.json()['request_id']
+        assert current_id != previous and fresh.json()['original_request_id'] is None
+        wav.write_bytes(pcm_bytes())
+        current = client.post(url, json={**resource, 'request_id': current_id}, headers=other_headers)
+        assert current.status_code == 202, current.text
+        assert client.get(url + '/request-id', params=resource, headers=other_headers).json() == {
+            'request_id': current_id, 'original_request_id': current_id,
+        }
+        recovered = client.get(receipt_url + current_id, headers=other_headers).json()
+        assert recovered['status'] == 'recorded' and recovered['job_id'] == current.json()['job_id']
+        assert client.get(receipt_url + current_id, headers=original_headers).status_code == 403
         with repo._connect() as conn:
-            assert conn.execute('SELECT count(*) FROM job_runs').fetchone()[0] == 0
+            total = 2 if original_status == 'recorded' else 1
+            assert conn.execute('SELECT count(*) FROM job_runs').fetchone()[0] == total
+            assert conn.execute('SELECT count(*) FROM device_work_requests').fetchone()[0] == total
     finally:
         runtime.stop(0)
         client.close()

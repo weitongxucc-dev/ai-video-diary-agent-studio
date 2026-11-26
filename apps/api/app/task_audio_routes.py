@@ -32,11 +32,10 @@ def build_task_audio_router(*, catalog_for, submit_for, workspace_for, task_for,
         if resource_audio_for is None:
             raise http_error_type_for()(status_code=503,detail='资源音频用例尚未装配')
         try:
-            request_id = resource_audio_for().manual_request_id(actor, task_id, resource_id=resource_id,
+            return resource_audio_for().locate_manual_request(actor, task_id, resource_id=resource_id,
                 version=version, retry_of=retry_of)
         except ingress_error_type_for() as exc:
             raise http_error_type_for()(status_code=exc.status_code,detail=exc.detail) from exc
-        return {'request_id': request_id}
 
     @router.post('/api/creation-tasks/{task_id}/audio/resources')
     def import_creation_task_audio_resource(task_id: str, request: Request, payload: CatalogAudioImportRequest):

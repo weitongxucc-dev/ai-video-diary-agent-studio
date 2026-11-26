@@ -7,6 +7,14 @@ from app.creation_execution import CreationExecutionActor
 from app.models import utc_now
 
 
+def _resource_claims(events, actor):
+    member_id = actor.user_id or actor.member_id
+    return (event for event in events
+            if event.event_type == 'edit_request_claimed'
+            and event.payload.get('phase') == 'audio_resource'
+            and event.payload.get('member_id') == member_id)
+
+
 class ResourceAudioUseCase:
     def __init__(self, repository, ingress, media, *, catalog_for, path_for,
                  temporary_root, cpu_budget, receipt_for, conversations):
@@ -29,11 +37,8 @@ class ResourceAudioUseCase:
     def read(self, actor, task_id, request_id):
         task = self._task(actor, task_id)
         request_id = str(UUID(str(request_id)))
-        claims = [event for event in self.repository.execution_records.list_task_events(actor.workspace_id, task_id)
-                  if event.event_type == 'edit_request_claimed'
-                  and event.payload.get('phase') == 'audio_resource'
-                  and event.payload.get('request_id') == request_id
-                  and event.payload.get('member_id') == (actor.user_id or actor.member_id)]
+        events = self.repository.execution_records.list_task_events(actor.workspace_id, task_id)
+        claims = [event for event in _resource_claims(events, actor) if event.payload.get('request_id') == request_id]
         if not claims:
             raise AudioIngressRejected(404, '原资源导入请求不存在；不能据此推断未提交')
         claim, = claims
@@ -63,6 +68,28 @@ class ResourceAudioUseCase:
         if previous['status'] != 'rejected' or previous.get('submission_effect') != 'not_submitted':
             raise AudioIngressRejected(409, '原导入尚未确认未提交，请先回查原请求')
         return str(uuid5(NAMESPACE_URL, str(['audio_resource_retry', *key, previous['request_id']])))
+
+    def locate_manual_request(self, actor, task_id, *, resource_id, version, retry_of=None):
+        request_id = self.manual_request_id(actor, task_id, resource_id=resource_id, version=version,
+                                            retry_of=retry_of)
+        original_id = None
+        if retry_of is None:
+            # The request journal is complete independently of the production history projection.
+            # Rank IDs here; the individual receipt still verifies job ownership.
+            events = self.repository.execution_records.list_task_events(actor.workspace_id, task_id)
+            statuses = {event.id: event.payload['status_code'] for event in events
+                        if event.event_type == 'edit_request_result'}
+            selection = (resource_id, version, actor.identity_payload())
+            latest = {}
+            for claim in _resource_claims(events, actor):
+                inputs = claim.payload['inputs']
+                if (inputs.get('resource_id'), inputs.get('version'), inputs.get('actor_identity')) != selection:
+                    continue
+                status = statuses.get(claim.id + '_result')
+                outcome = 'unknown' if status is None else 'rejected' if status >= 400 else 'recorded'
+                latest[outcome] = claim.payload['request_id']
+            original_id = latest.get('unknown') or latest.get('recorded') or latest.get('rejected')
+        return {'request_id': request_id, 'original_request_id': original_id}
 
     def submit(self, actor, task_id, *, resource_id, version, request_id, source=None,
                write_guard=None, runtime):

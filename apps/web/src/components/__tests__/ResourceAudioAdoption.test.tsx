@@ -32,6 +32,7 @@ beforeEach(() => {
   api.history.mockResolvedValue(noHistory);
   api.readRequestId.mockImplementation(async (_task, _resource, _version, retryOf) => ({
     request_id: retryOf ? retryId : initialId,
+    original_request_id: null,
   }));
   api.import.mockResolvedValue(importJob);
   api.resolve.mockImplementation(async (_task, response, kind) => kind === "audio_source" ? response.result : response);
@@ -219,9 +220,9 @@ it("does not read or submit a saved request after the workspace or member change
   expect(api.import).not.toHaveBeenCalled();
 });
 
-it.each(["recorded", "unknown", "rejected"] as const)("finds an earlier client's %s request in the fixed resource history", async status => {
+it.each(["recorded", "unknown", "rejected"] as const)("recovers an earlier client's %s request selected by the server", async status => {
   const originalId = "a0c244c9-ab13-4601-8cbc-bcb450830ca2";
-  api.history.mockResolvedValue({ ...noHistory, requests: [{ request_id: originalId, status }] });
+  api.readRequestId.mockResolvedValue({ request_id: initialId, original_request_id: originalId });
   api.readRequest.mockResolvedValue({ request_id: originalId, task_id: "task", submitted_input: submittedInput, status,
     ...(status === "recorded" ? { job_id: importJob.job_id } : { job_id: null, submission_effect: "not_submitted" }),
   });
@@ -253,11 +254,36 @@ it.each([
   expect(api.import).not.toHaveBeenCalled();
 });
 
-it("requires complete history before the first submission without a local request", async () => {
-  api.history.mockResolvedValue({ ...noHistory, completeness: "partial" });
+it("uses the current device request lookup even when production history is partial", async () => {
+  api.read.mockResolvedValue(adopted);
+  api.history.mockResolvedValue({ ...glassHistory, completeness: "partial",
+    requests: [{ request_id: retryId, status: "recorded" }] });
   render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
   fireEvent.click(await screen.findByRole("button", { name: "准备采用" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("原导入历史尚未核对完整");
+  await screen.findByRole("button", { name: "确认加入音轨" });
+  expect(api.history).toHaveBeenCalled();
+  expect(api.import).toHaveBeenCalledWith("task", resource.id, resource.version, initialId, undefined);
+  expect(api.readRequest).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "撤销本次采用" })).not.toBeInTheDocument();
+});
+
+it("keeps recovered request failures query-only", async () => {
+  api.readRequestId.mockResolvedValue({ request_id: initialId, original_request_id: retryId });
+  api.readRequest.mockRejectedValue(Object.assign(new Error("原资源作业归属无法核验"), { status: 403 }));
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  fireEvent.click(await screen.findByRole("button", { name: "准备采用" }));
+  await screen.findByText(/原导入结果尚未确认/);
+  expect(sessionStorage.getItem(requestKey)).toBe(retryId);
+  expect(screen.getByRole("button", { name: "查询原导入请求" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "重新尝试导入" })).not.toBeInTheDocument();
+  expect(api.import).not.toHaveBeenCalled();
+});
+
+it("requires a successful request lookup before the first submission", async () => {
+  api.readRequestId.mockRejectedValue(Object.assign(new Error("暂时无法定位原导入请求"), { status: 404 }));
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  fireEvent.click(await screen.findByRole("button", { name: "准备采用" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("暂时无法定位原导入请求");
   expect(sessionStorage.getItem(requestKey)).toBeNull();
   expect(api.import).not.toHaveBeenCalled();
 });

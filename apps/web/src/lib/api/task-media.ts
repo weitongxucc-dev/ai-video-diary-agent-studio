@@ -4,7 +4,7 @@ import type { CreationTaskNarration } from '../types/creation-tasks';
 import type { CreationTaskEditPreviewResponse } from '../types/task-edits';
 import { API_BASE, apiUrl, authorizedFetch } from './transport';
 import { CreationPlanApiError, creationPlanRequest } from './creation-transport';
-export function readCreationTaskResourceAudioRequestId(taskId: string, resourceId: string, version: number, retryOf: string | undefined, signal: AbortSignal): Promise<{ request_id: string }> {
+export function readCreationTaskResourceAudioRequestId(taskId: string, resourceId: string, version: number, retryOf: string | undefined, signal: AbortSignal): Promise<{ request_id: string; original_request_id: string | null }> {
     const query = new URLSearchParams({ resource_id: resourceId, version: String(version) });
     if (retryOf !== undefined) query.set("retry_of", retryOf);
     return creationPlanRequest(`/api/creation-tasks/${encodeURIComponent(taskId)}/audio/resources/request-id?${query}`, { signal });

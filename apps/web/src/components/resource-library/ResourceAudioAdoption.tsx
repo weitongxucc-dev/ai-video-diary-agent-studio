@@ -11,7 +11,6 @@ import styles from "../EditorResourceLibraryPanel.module.css";
 type ResourceAudioHistory = {
   completeness: "complete" | "partial";
   current_resource_present: boolean | null;
-  requests: { request_id: string; status: "unknown" | "rejected" | "recorded" }[];
   timeline_history: {
     timeline_version_id: string;
     sequence: number;
@@ -140,22 +139,12 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
     const signal = lifetime.current!.signal;
     setBusy(true); setError(null); setNotice(""); setPreview(null);
     try {
-      let priorId: string | undefined;
       if (importRequest?.state !== "unknown") {
         const latest = await getCreationTaskWorkspace(taskId);
         if (signal.aborted) return;
         if (latest.task.current_timeline_version_id !== workspace.task.current_timeline_version_id) {
           setWorkspace(latest);
           throw new Error("作品已更新，请核对音轨和位置后重新准备。");
-        }
-        if (importRequest === null) {
-          const history = await readResourceHistory(taskId, resource.id, resource.version, signal);
-          if (signal.aborted) return;
-          if (history.completeness !== "complete") throw new Error("原导入历史尚未核对完整，请稍后重试。");
-          // Earlier clients and other sessions may already have submitted this fixed resource.
-          const recent = [...history.requests].reverse();
-          priorId = (recent.find(request => request.status === "unknown")
-            ?? recent.find(request => request.status === "recorded") ?? recent[0])?.request_id;
         }
       }
       await verifyImportScope(requestKey);
@@ -170,13 +159,6 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
         await checkImportRequest(importRequest.id, signal);
         return;
       }
-      if (priorId !== undefined) {
-        if (!validDraftId(priorId)) throw new Error("原导入请求编号无法读取。");
-        sessionStorage.setItem(requestKey, priorId);
-        setImportRequest({ id: priorId, state: "unknown" });
-        await checkImportRequest(priorId, signal);
-        return;
-      }
       let audio = source;
       if (!audio) {
         let response: TaskMediaJob;
@@ -184,14 +166,20 @@ export function ResourceAudioAdoption({ taskId, resource, playheadMs, onTaskUpda
           response = await getCreationTaskMediaJob(taskId, importRequest.jobId, signal);
         } else {
           const retryOf = importRequest?.state === "not_submitted" ? importRequest.id : undefined;
-          const { request_id: id } = await readCreationTaskResourceAudioRequestId(taskId, resource.id, resource.version, retryOf, signal);
+          const attempt = await readCreationTaskResourceAudioRequestId(taskId, resource.id, resource.version, retryOf, signal);
           if (signal.aborted) return;
           await verifyImportScope(requestKey);
           if (signal.aborted) return;
           if (sessionStorage.getItem(requestKey) !== savedId) throw new Error("导入记录已变化，请重新核对。");
+          const originalId = attempt.original_request_id;
+          const id = originalId === null ? attempt.request_id : originalId;
           if (!validDraftId(id)) throw new Error("当前资源导入编号无法读取。");
           sessionStorage.setItem(requestKey, id);
           setImportRequest({ id, state: "unknown" });
+          if (originalId !== null) {
+            await checkImportRequest(id, signal);
+            return;
+          }
           try {
             response = await importCreationTaskResourceAudio(taskId, resource.id, resource.version, id, retryOf);
           } catch (cause) {
