@@ -24,6 +24,9 @@ import { AssistantConversationContext } from "./AssistantConversationContext";
 import { enqueueAssistantInput, withdrawAssistantInput } from "@/lib/api/assistant";
 import { getCreationTaskScriptWindowRequest } from "@/lib/api/creation-tasks";
 import { CreationPlanApiError } from "@/lib/api";
+import {
+  awaitsDraftWrite, forgetDraftWrite, readDraftWriteReceipt, rememberDraftWrite, type DraftWriteReceipt,
+} from "@/lib/assistant-draft-recovery";
 import type { AssistantScriptWindowRequest } from "@/lib/types/assistant";
 
 export function assistantTaskTurnResult(turn: AssistantConversationTurn) {
@@ -188,6 +191,8 @@ function advanceDraftRevision(revisions: Map<string, number>, conversationId: st
   return next;
 }
 
+type PendingDraft = { conversation: AssistantConversation; version: number; text: string };
+
 export function useScopedAssistantConversation(scope: AssistantConversationScope) {
   const { scope_kind: scopeKind, scope_id: scopeId } = scope;
   const scopeKey = `${scopeKind}:${scopeId}`;
@@ -204,6 +209,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   const draftValue = useRef("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
   const [scriptWindowReadErrors, setScriptWindowReadErrors] = useState<Record<string, string>>({});
   const historyScrollPositions = useRef(new Map<string, number>());
   const historyExpandedDetails = useRef(new Map<string, Map<string, boolean>>());
@@ -225,6 +231,8 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   const renameRevision = useRef(0);
   const draftVersionByConversation = useRef(new Map<string, number>());
   const draftRevisionByConversation = useRef(new Map<string, number>());
+  const pendingDrafts = useRef(new Map<string, PendingDraft>());
+  const draftWrites = useRef(new Map<string, { draft: PendingDraft; receipt: DraftWriteReceipt; unknown: boolean }>());
   const localTurnRecovery = useRef(new Map<string, {
     conversationId: string;
     userMessage: string;
@@ -242,40 +250,110 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     setConversation(next);
   }, []);
 
-  const persistDraftValue = useCallback(async (conversationId: string, text: string) => {
+  const persistDraftValue = useCallback(async (conversationId: string, text: string, draft?: PendingDraft) => {
     const current = conversationRef.current;
-    const knownVersion = draftVersionByConversation.current.get(conversationId)
+    const knownVersion = draft?.version ?? draftVersionByConversation.current.get(conversationId)
       ?? (current?.id === conversationId ? current.draft_version : 0);
-    const updated = await updateAssistantConversation(conversationId, {
-      draft_text: text, expected_draft_version: knownVersion,
-    });
+    const previous = draftWrites.current.get(conversationId);
+    const after = previous?.receipt.version === knownVersion ? previous.receipt.id : undefined;
+    const write = draft ? { draft, receipt: rememberDraftWrite(draft.conversation, knownVersion, after), unknown: false } : undefined;
+    if (write) draftWrites.current.set(conversationId, write);
+    const payload = { draft_text: text, expected_draft_version: knownVersion };
+    let updated: AssistantConversation;
+    try {
+      updated = write ? await updateAssistantConversation(conversationId, {
+        ...payload, draft_write_id: write.receipt.id, after_draft_write_id: after,
+      }, { keepalive: true }) : await updateAssistantConversation(conversationId, payload);
+      if (write) forgetDraftWrite(write.draft.conversation, write.receipt);
+    } catch (cause) {
+      if (write && !(cause instanceof CreationPlanApiError && cause.status >= 400 && cause.status < 500)) {
+        write.unknown = true;
+      } else if (write) {
+        forgetDraftWrite(write.draft.conversation, write.receipt);
+      }
+      throw cause;
+    } finally {
+      if (write && !write.unknown && draftWrites.current.get(conversationId) === write) {
+        draftWrites.current.delete(conversationId);
+      }
+    }
+    const saved = pendingDrafts.current.get(conversationId);
+    if (saved && updated.draft_version > saved.version) {
+      if (updated.draft_text === saved.text) pendingDrafts.current.delete(conversationId);
+      else pendingDrafts.current.set(conversationId, { ...saved, version: updated.draft_version });
+    }
     const latestVersion = Math.max(updated.draft_version, draftVersionByConversation.current.get(conversationId) ?? 0);
     draftVersionByConversation.current.set(conversationId, latestVersion);
-    if (conversationRef.current?.id === conversationId && updated.draft_version === latestVersion) {
-      const latest = conversationRef.current;
-      if (latest) replace({
+    const latest = conversationRef.current;
+    if (latest?.id === conversationId && updated.draft_version === latestVersion) {
+      if (draftValue.current === updated.draft_text) setDraftError(null);
+      replace({
         ...latest,
         draft_text: updated.draft_text,
         draft_version: updated.draft_version,
+        draft_write_id: updated.draft_write_id,
         updated_at: updated.updated_at,
       });
     }
     return updated;
   }, [replace]);
 
-  const saveDraftValue = useCallback((conversationId: string, text: string) => {
-    const save = draftQueue.current.catch(() => undefined)
-      .then(() => persistDraftValue(conversationId, text));
+  const reportDraftError = useCallback((id: string, text: string, cause: unknown) => {
+    if (conversationRef.current?.id === id && activeScopeKey.current === scopeKey && draftValue.current === text) {
+      setDraftError(cause instanceof Error ? cause.message : "未发送草稿没有保存。");
+    }
+  }, [scopeKey]);
+
+  const saveDraftValue = useCallback((id: string, text: string) => {
+    const save = draftQueue.current.catch(() => undefined).then(() => {
+      const pending = pendingDrafts.current.get(id);
+      return persistDraftValue(id, text, pending?.text === text ? pending : undefined);
+    });
     draftQueue.current = save;
-    return save.catch((cause) => {
-      const current = conversationRef.current;
-      if (current?.id === conversationId
-        && activeScopeKey.current === scopeKey) {
-        setError(cause instanceof Error ? cause.message : "未发送草稿没有保存。");
-      }
+    return save.catch(cause => {
+      reportDraftError(id, text, cause);
       throw cause;
     });
-  }, [persistDraftValue, scopeKey]);
+  }, [persistDraftValue, reportDraftError]);
+
+  const saveEditedDraft = useCallback((id: string, text: string, leaving = false) => {
+    const save = () => {
+      const pending = pendingDrafts.current.get(id);
+      const writing = draftWrites.current.get(id);
+      if (pending?.text !== text || (writing?.draft.text === text && !writing.unknown)) return;
+      return persistDraftValue(id, text, pending);
+    };
+    // Start the final PATCH while this page still owns the input and session.
+    // An older outstanding save can win only through its exact CAS receipt.
+    const operation = leaving ? Promise.resolve(save()) : draftQueue.current.catch(() => undefined).then(save);
+    draftQueue.current = leaving ? Promise.allSettled([draftQueue.current, operation]) : operation;
+    void operation.catch(cause => reportDraftError(id, text, cause));
+  }, [persistDraftValue, reportDraftError]);
+
+  const recoverDraft = useCallback(async (current: AssistantConversation, ownsView: () => boolean) => {
+    const receipt = readDraftWriteReceipt(current);
+    if (!receipt) return current;
+    let latest = current;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1400);
+    try {
+      for (const delay of [80, 160, 320, 640]) {
+        if (!ownsView() || !awaitsDraftWrite(latest, receipt)) break;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        if (!ownsView()) break;
+        const saved = await getAssistantConversation(current.id, controller.signal);
+        if (!ownsView()) break;
+        if (saved.draft_version >= latest.draft_version) latest = saved;
+      }
+    } catch {
+      // Keep the last server snapshot; an unconfirmed receipt is never replayed.
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!awaitsDraftWrite(latest, receipt)) forgetDraftWrite(current, receipt);
+    else if (ownsView()) setDraftError("上次离开前的草稿保存未确认。当前显示服务器已保存的草稿。");
+    return latest;
+  }, []);
 
   const restoreSubmittedDraft = useCallback((conversationId: string, turnId: string) => {
     const recovery = [...localTurnRecovery.current.values()].find(item =>
@@ -338,9 +416,9 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     revision.current += 1;
     const current = conversationRef.current;
     if (!current) return;
-    const text = draftValue.current;
     await draftQueue.current.catch(() => undefined);
     const latest = conversationRef.current;
+    const text = draftValue.current;
     if (latest?.id !== current.id || latest.draft_text === text) return;
     const recoveryOwnsEmptyDraft = text === "" && [...localTurnRecovery.current.values()].some((turn) =>
       turn.conversationId === current.id
@@ -504,19 +582,24 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     const loadRevision = revision.current;
     setLoading(true);
     setError(null);
+    setDraftError(null);
     replace(null);
     setDraftTextState("");
     void getCurrentAssistantConversation({ scope_kind: scopeKind, scope_id: scopeId })
-      .then((current) => {
+      .then(async (current) => {
         if (!ownsView()) return;
+        const recovered = await recoverDraft(current, () => ownsView() && revision.current === loadRevision);
+        if (!ownsView()) return;
+        const restored = revision.current === loadRevision ? recovered : current;
         // Re-entering a conversation is a new editing epoch. A request left
         // behind by its previous visit must not replace this visit's draft.
         advanceDraftRevision(draftRevisionByConversation.current, current.id);
-        draftVersionByConversation.current.set(current.id, current.draft_version);
-        replace(current);
+        draftVersionByConversation.current.set(restored.id, restored.draft_version);
+        replace(restored);
         if (revision.current === loadRevision) {
-          draftValue.current = current.draft_text;
-          setDraftTextState(current.draft_text);
+          pendingDrafts.current.delete(restored.id);
+          draftValue.current = restored.draft_text;
+          setDraftTextState(restored.draft_text);
         } else {
           const localDraft = draftValue.current;
           setDraftTextState(localDraft);
@@ -542,26 +625,49 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
           && turn.persistedTurnId === null
           && draftRevisionFor(draftRevisions, previous.id) === turn.draftRevision);
       if (previous && previous.draft_text !== draftValue.current && !recoveryOwnsEmptyDraft) {
-        void saveDraftValue(previous.id, draftValue.current).catch(() => undefined);
+        saveEditedDraft(previous.id, draftValue.current);
       }
       if (activeScopeKey.current === scopeKey) activeScopeKey.current = null;
     };
-  }, [scopeKind, scopeId, replace, saveDraftValue, loadList]);
+  }, [scopeKind, scopeId, scopeKey, replace, saveDraftValue, saveEditedDraft, loadList, recoverDraft]);
+
+  useEffect(() => {
+    const saveOnExit = () => {
+      const current = conversationRef.current;
+      if (!current || activeScopeKey.current !== scopeKey || !matchesScope(current)) return;
+      if (draftTimer.current) clearTimeout(draftTimer.current);
+      saveEditedDraft(current.id, draftValue.current, true);
+    };
+    const saveWhenHidden = () => {
+      if (document.visibilityState === "hidden") saveOnExit();
+    };
+    document.addEventListener("visibilitychange", saveWhenHidden);
+    window.addEventListener("pagehide", saveOnExit);
+    return () => {
+      document.removeEventListener("visibilitychange", saveWhenHidden);
+      window.removeEventListener("pagehide", saveOnExit);
+    };
+  }, [matchesScope, saveEditedDraft, scopeKey]);
 
   const setDraftText = useCallback((text: string) => {
+    const changed = text !== draftValue.current;
     draftValue.current = text;
     setDraftTextState(text);
-    const currentRevision = ++revision.current;
+    const currentRevision = changed ? ++revision.current : revision.current;
     const current = conversationRef.current;
     const id = matchesScope(current) ? current?.id : undefined;
-    if (!id) return;
+    if (!id || !current) return;
     advanceDraftRevision(draftRevisionByConversation.current, id);
+    if (!changed) return;
+    setDraftError(null);
+    const version = pendingDrafts.current.get(id)?.version ?? draftVersionByConversation.current.get(id) ?? current.draft_version;
+    pendingDrafts.current.set(id, { conversation: current, version, text });
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
       if (currentRevision !== revision.current) return;
-      void saveDraftValue(id, text).catch(() => undefined);
+      saveEditedDraft(id, text);
     }, 450);
-  }, [matchesScope, saveDraftValue]);
+  }, [matchesScope, saveEditedDraft]);
 
   const beginTurn = useCallback((message: string) => {
     const current = conversationRef.current;
@@ -732,7 +838,8 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
         turns[index] = { ...turn, id: event.turn_id, status: event.turn_state, updated_at: new Date().toISOString() };
         const nextVersion = event.draft_version ?? current.draft_version;
         if (nextVersion > current.draft_version) draftVersionByConversation.current.set(current.id, nextVersion);
-        replace({ ...current, draft_text: draftValue.current, draft_version: Math.max(current.draft_version, nextVersion), turns });
+        replace({ ...current, draft_text: draftValue.current, draft_version: Math.max(current.draft_version, nextVersion),
+          draft_write_id: nextVersion > current.draft_version ? null : current.draft_write_id, turns });
         streamRevision.current += 1;
         if (event.turn_state === "failed" || event.turn_state === "stopped") restoreSubmittedDraft(conversationId, event.turn_id);
         return;
@@ -766,18 +873,22 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     };
     setLoading(true);
     setError(null);
+    setDraftError(null);
     const operation = navigationQueue.current.catch(() => undefined).then(async () => {
       requireView();
       await flushDraft();
       requireView();
-      const next = await load();
+      const selected = await load();
       requireView();
-      if (!matchesScope(next)) {
+      if (!matchesScope(selected)) {
         throw new Error("这段对话属于其他页面或对象，请回到原范围恢复。");
       }
+      const next = await recoverDraft(selected, ownsView);
+      requireView();
       advanceDraftRevision(draftRevisionByConversation.current, next.id);
       draftVersionByConversation.current.set(next.id, next.draft_version);
       replace(next);
+      pendingDrafts.current.delete(next.id);
       draftValue.current = next.draft_text;
       setDraftTextState(next.draft_text);
       setConversations(items => [next, ...items.filter(item => item.id !== next.id)]);
@@ -790,7 +901,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     });
     navigationQueue.current = operation.then(() => undefined, () => undefined);
     return operation;
-  }, [scopeKey, replace, flushDraft, matchesScope, loadList]);
+  }, [scopeKey, replace, flushDraft, matchesScope, loadList, recoverDraft]);
 
   const createNew = useCallback(() => switchConversation(() => createAssistantConversation({
     scope_kind: scopeKind, scope_id: scopeId,
@@ -854,7 +965,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
     if (conversationRef.current?.id===current.id && draftValue.current===message
         && draftRevisionFor(draftRevisionByConversation.current,current.id)===draftRevision) {
       draftValue.current=""; setDraftTextState("");
-      replace({...conversationRef.current,draft_text:"",draft_version:saved.draft_version+1});
+      replace({...conversationRef.current,draft_text:"",draft_version:saved.draft_version+1,draft_write_id:null});
     }
     await refresh();
     return receipt;
@@ -905,7 +1016,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
   const scopeReady = loadedScope.current === scopeKey && matchesScope(conversation);
   return {
     conversation: scopeReady ? conversation : null, conversations: scopeReady ? conversations : [],
-    draftText: loadedScope.current === scopeKey ? draftText : "", setDraftText, loading: loading || (!scopeReady && !error), error, setError,
+    draftText: loadedScope.current === scopeKey ? draftText : "", setDraftText, loading: loading || (!scopeReady && !error), error: error ?? draftError, setError,
     beginTurn, bindTurnEvents, isCurrentConversation, failUnpersistedTurn, sendInput, withdrawInput,
     flushDraft, refresh, scriptWindowReadErrors, refreshAfterTaskAdoption, createNew, resume, rename, stop, loadList, historyScrollPositions, historyExpandedDetails, historyFollowBottom,
     businessRefreshPaused,

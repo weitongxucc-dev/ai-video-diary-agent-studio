@@ -73,6 +73,7 @@ class ConversationRepository:
                     title TEXT NOT NULL,
                     draft_text TEXT NOT NULL DEFAULT '',
                     draft_version INTEGER NOT NULL DEFAULT 0,
+                    draft_write_id TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -125,6 +126,8 @@ class ConversationRepository:
             conversation_columns = {row["name"] for row in conn.execute("PRAGMA table_info(assistant_conversations)")}
             if "draft_version" not in conversation_columns:
                 conn.execute("ALTER TABLE assistant_conversations ADD COLUMN draft_version INTEGER NOT NULL DEFAULT 0")
+            if "draft_write_id" not in conversation_columns:
+                conn.execute("ALTER TABLE assistant_conversations ADD COLUMN draft_write_id TEXT")
             if "selected_reference_json" not in conversation_columns:
                 conn.execute("ALTER TABLE assistant_conversations ADD COLUMN selected_reference_json TEXT")
             if "reference_version" not in conversation_columns:
@@ -277,7 +280,8 @@ class ConversationRepository:
         return self.get(conversation_id, workspace_id, member_id)
 
     def save_draft(self, conversation_id: str, workspace_id: str, member_id: str,
-                   draft_text: str, expected_draft_version: int) -> dict | None:
+                   draft_text: str, expected_draft_version: int, *, draft_write_id: str | None = None,
+                   after_draft_write_id: str | None = None) -> dict | None:
         """Compare-and-save a draft under its trusted conversation owner."""
         if expected_draft_version < 0:
             raise ValueError("expected_draft_version must be non-negative")
@@ -290,12 +294,16 @@ class ConversationRepository:
             if row is None:
                 return None
             current = self._conversation(row)
-            if current["draft_version"] != expected_draft_version:
+            current_version = current["draft_version"]
+            follows_original_write = (after_draft_write_id is not None
+                and current_version == expected_draft_version + 1
+                and current["draft_write_id"] == after_draft_write_id)
+            if current_version != expected_draft_version and not follows_original_write:
                 raise ConversationDraftVersionConflict(current)
             cursor = conn.execute(
-                "UPDATE assistant_conversations SET draft_text=?,draft_version=draft_version+1,updated_at=? "
+                "UPDATE assistant_conversations SET draft_text=?,draft_version=draft_version+1,draft_write_id=?,updated_at=? "
                 "WHERE id=? AND workspace_id=? AND member_id=? AND draft_version=?",
-                (draft_text, _now(), conversation_id, workspace_id, member_id, expected_draft_version),
+                (draft_text, draft_write_id, _now(), conversation_id, workspace_id, member_id, current_version),
             )
             if cursor.rowcount != 1:
                 row = conn.execute(
@@ -836,7 +844,7 @@ class ConversationRepository:
                 (turn_id, conversation_id, int(sequence_row["sequence"]), user_message, "", now, now),
             )
             consumed = conn.execute(
-                "UPDATE assistant_conversations SET draft_text='',draft_version=draft_version+1,updated_at=? "
+                "UPDATE assistant_conversations SET draft_text='',draft_version=draft_version+1,draft_write_id=NULL,updated_at=? "
                 "WHERE id=? AND workspace_id=? AND member_id=? AND draft_version=?",
                 (now, conversation_id, workspace_id, member_id, expected_draft_version),
             )
@@ -896,7 +904,7 @@ class ConversationRepository:
             if current["draft_version"] != expected_draft_version:
                 raise ConversationDraftVersionConflict(current)
             cursor = conn.execute(
-                "UPDATE assistant_conversations SET draft_text=?,draft_version=draft_version+1,updated_at=? "
+                "UPDATE assistant_conversations SET draft_text=?,draft_version=draft_version+1,draft_write_id=NULL,updated_at=? "
                 "WHERE id=? AND workspace_id=? AND member_id=? AND draft_version=? "
                 "AND NOT EXISTS (SELECT 1 FROM assistant_conversation_request_receipts WHERE client_request_id=?)",
                 (user_message, _now(), conversation_id, workspace_id, member_id,

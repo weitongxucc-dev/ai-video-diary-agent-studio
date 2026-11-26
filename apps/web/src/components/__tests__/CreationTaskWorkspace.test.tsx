@@ -696,6 +696,7 @@ function workspaceWithCover() {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   sessionStorage.clear();
   mocks.memberId = "member-1";
   mocks.authChange = null;

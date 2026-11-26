@@ -3,6 +3,8 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantConversationProvider, useAssistantReferenceStatus, useAssistantSelection } from "../AssistantConversationProvider";
 import { useAssistantConversation } from "../useAssistantConversation";
+import { CreationPlanApiError } from "@/lib/api/creation-transport";
+import { readDraftWriteReceipt, rememberDraftWrite } from "@/lib/assistant-draft-recovery";
 import type { AssistantConversation, AssistantConversationReferenceState, AssistantSavedReference, AssistantScriptToolReceipt, CreationTaskAssistantTurnResponse } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
@@ -18,7 +20,9 @@ const api = vi.hoisted(() => ({
   saveAssistantConversationReference: vi.fn(),
 }));
 
-vi.mock("@/lib/api", () => api);
+vi.mock("@/lib/api", async () => ({
+  ...api, CreationPlanApiError: (await import("@/lib/api/creation-transport")).CreationPlanApiError,
+}));
 vi.mock("next/navigation", () => ({useRouter: () => ({push: vi.fn()})}));
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({useLocalMemberIdentity: () => ({token: "test-member"})}));
 
@@ -38,6 +42,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   vi.clearAllMocks();
   const initial = conversation();
   api.getCurrentAssistantConversation.mockResolvedValue(initial);
@@ -53,6 +58,125 @@ beforeEach(() => {
 });
 
 afterEach(() => { vi.useRealTimers(); });
+
+describe("draft persistence through page exit", () => {
+  const scope = { scope_kind: "home" as const, scope_id: "home" };
+
+  it("dispatches the newest edit immediately with the outstanding write as its CAS predecessor", async () => {
+    const earlier = deferred<AssistantConversation>();
+    const final = deferred<AssistantConversation>();
+    api.updateAssistantConversation.mockReturnValueOnce(earlier.promise).mockReturnValueOnce(final.promise);
+    const { result } = renderHook(() => useAssistantConversation(scope));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setDraftText("正在保存的第一笔"));
+    await waitFor(() => expect(api.updateAssistantConversation).toHaveBeenCalledTimes(1));
+    const first = api.updateAssistantConversation.mock.calls[0][1];
+    act(() => {
+      result.current.setDraftText("离开页面前的最新编辑");
+      window.dispatchEvent(new Event("pagehide"));
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(api.updateAssistantConversation).toHaveBeenCalledTimes(2);
+    const [id, second, options] = api.updateAssistantConversation.mock.calls[1];
+    expect(id).toBe("conversation-one");
+    expect(options).toEqual({ keepalive: true });
+    expect(second).toMatchObject({ draft_text: "离开页面前的最新编辑", expected_draft_version: 1,
+      after_draft_write_id: first.draft_write_id });
+    expect(Object.values(localStorage).join("")).not.toContain(second.draft_text);
+    await act(async () => {
+      final.resolve(conversation({ draft_text: second.draft_text, draft_version: 2, draft_write_id: second.draft_write_id }));
+      earlier.reject(new CreationPlanApiError(409, null, "旧请求输给最新编辑"));
+    });
+    expect(result.current.draftText).toBe(second.draft_text);
+    expect(result.current.error).toBeNull();
+    expect(readDraftWriteReceipt(conversation())).toBeUndefined();
+  });
+
+  it("reads a late committed write after reopening without replaying its text", async () => {
+    const first = conversation();
+    const prior = rememberDraftWrite(first, 1);
+    const receipt = rememberDraftWrite(first, 1, prior.id);
+    api.getCurrentAssistantConversation.mockResolvedValue(conversation({ draft_version: 2, draft_write_id: prior.id }));
+    api.getAssistantConversation.mockResolvedValue(conversation({
+      draft_text: "服务器已核验的最后一笔", draft_version: 3, draft_write_id: receipt.id,
+    }));
+    const { result } = renderHook(() => useAssistantConversation(scope));
+    await waitFor(() => expect(result.current.draftText).toBe("服务器已核验的最后一笔"));
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+    expect(readDraftWriteReceipt(first)).toBeUndefined();
+  });
+
+  it("does not rebase a newer local edit onto a receipt read that was already in flight", async () => {
+    const initial = conversation();
+    const receipt = rememberDraftWrite(initial, initial.draft_version);
+    const reading = deferred<AssistantConversation>();
+    api.getAssistantConversation.mockReturnValueOnce(reading.promise);
+    const { result } = renderHook(() => useAssistantConversation(scope));
+    await waitFor(() => expect(api.getAssistantConversation).toHaveBeenCalled());
+    act(() => result.current.setDraftText("回读发出之后的新编辑"));
+    await act(async () => reading.resolve(conversation({
+      draft_text: "上一页保存的文字", draft_version: 2, draft_write_id: receipt.id,
+    })));
+    expect(result.current.draftText).toBe("回读发出之后的新编辑");
+    expect(api.updateAssistantConversation).toHaveBeenCalledWith(initial.id, {
+      draft_text: "回读发出之后的新编辑", expected_draft_version: 1,
+    });
+  });
+
+  it("uses the freshly loaded draft version when returning after a save conflict", async () => {
+    let saved = conversation({ scope_kind: "task", scope_id: "task-one" });
+    const second = conversation({ id: "conversation-two", scope_kind: "task", scope_id: "task-two" });
+    api.getCurrentAssistantConversation.mockImplementation(async ({ scope_id }) =>
+      scope_id === saved.scope_id ? saved : second);
+    api.updateAssistantConversation.mockImplementation(async (_id, update) => {
+      if (update.expected_draft_version !== saved.draft_version) {
+        throw new CreationPlanApiError(409, null, "另一窗口已保存");
+      }
+      saved = { ...saved, draft_text: update.draft_text, draft_version: saved.draft_version + 1 };
+      return saved;
+    });
+    const { result, rerender } = renderHook(
+      ({ scopeId }) => useAssistantConversation({ scope_kind: "task", scope_id: scopeId }),
+      { initialProps: { scopeId: saved.scope_id } },
+    );
+    await waitFor(() => expect(result.current.conversation?.draft_version).toBe(1));
+
+    saved = { ...saved, draft_text: "另一窗口的草稿", draft_version: 2 };
+    act(() => {
+      result.current.setDraftText("未同步的旧编辑");
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    await waitFor(() => expect(result.current.error).toBe("另一窗口已保存"));
+    rerender({ scopeId: second.scope_id });
+    await waitFor(() => expect(result.current.conversation?.id).toBe(second.id));
+    rerender({ scopeId: saved.scope_id });
+    await waitFor(() => expect(result.current.draftText).toBe("另一窗口的草稿"));
+
+    act(() => {
+      result.current.setDraftText("回到作品后的新编辑");
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(api.updateAssistantConversation).toHaveBeenLastCalledWith(saved.id, expect.objectContaining({
+      draft_text: "回到作品后的新编辑", expected_draft_version: 2,
+    }), { keepalive: true });
+    await waitFor(() => expect(result.current.conversation?.draft_version).toBe(3));
+  });
+
+  it.each([
+    ["another client's edit", { draft_text: "另一客户端的草稿", draft_write_id: "98032ffc-60a8-4a06-9191-79def82d9c83" }],
+    ["accepted input", { draft_text: "", draft_write_id: null }],
+    ["another member's conversation", { id: "conversation-other" }],
+  ])("loads only the authorized server snapshot after %s", async (_description, overrides) => {
+    rememberDraftWrite(conversation(), 1);
+    const current = conversation({ ...overrides, draft_version: 2 });
+    api.getCurrentAssistantConversation.mockResolvedValue(current);
+    const { result } = renderHook(() => useAssistantConversation(scope));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.draftText).toBe(current.draft_text);
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+  });
+});
 
 function businessConversation(status: "queued" | "running" | "confirmed" | "unknown" = "queued"): AssistantConversation {
   const current = conversation();
