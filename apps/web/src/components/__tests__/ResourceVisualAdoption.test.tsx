@@ -16,7 +16,16 @@ const nameCard: CatalogResource = {
   resource_type: "visual_template",
   runtime_requirements: { engine: "openfilm-html-v1", template_id: "builtin_visual_lower-corporate", template_version: 1 },
 };
-const nameCardVisual = { ...visual, width: 1200, height: 300, duration_seconds: 4, source: "original-name-card" };
+const nameCardVisual = {
+  ...visual, width: 1200, height: 300, duration_seconds: 4, source: "original-name-card",
+  bindings: [
+    { key: "name", kind: "text", target: ".t1", default: "Lin Xiao" },
+    { key: "role", kind: "text", target: ".t2", default: "Product Director" },
+    { key: "accent", kind: "variable", target: "--accent", default: "#3b82f6" },
+    { key: "font", kind: "variable", target: "--font", default: "" },
+  ],
+  values: Object.freeze({ role: "", accent: "#11aabb" }),
+};
 beforeEach(() => {
   vi.resetAllMocks();
   api.read.mockResolvedValue(workspace);
@@ -65,7 +74,7 @@ it("requires a new preparation after the task head changes", async () => {
   expect(api.preview).not.toHaveBeenCalled();
 });
 
-it.each(["9:16", "16:9"])("uses the original name card dimensions and fixed template version on a %s timeline", async aspectRatio => {
+it.each(["9:16", "16:9"])("saves the visible name card bindings and fixed source version on a %s timeline", async aspectRatio => {
   api.read.mockResolvedValue({ ...workspace, montage: { ...workspace.montage, aspect_ratio: aspectRatio } });
   api.template.mockResolvedValue({ id: "builtin_visual_lower-corporate", version: 1, settings: { visual: nameCardVisual } });
   render(<ResourceVisualAdoption taskId="task" resource={nameCard} playheadMs={0} />);
@@ -78,7 +87,8 @@ it.each(["9:16", "16:9"])("uses the original name card dimensions and fixed temp
   expect(api.preview).toHaveBeenCalledWith("task", expect.objectContaining({
     operation_type: "EditGraphicOverlay", overlay_action: "add",
     graphic_overlay: expect.objectContaining({
-      template_id: "builtin_visual_lower-corporate", template_version: 1, definition: nameCardVisual,
+      template_id: "builtin_visual_lower-corporate", template_version: 1,
+      definition: { ...nameCardVisual, values: { name: "Lin Xiao", role: "", accent: "#11aabb", font: "" } },
       start_seconds: 0, end_seconds: 4, width: .8,
     }),
   }), { draftOnly: true });
@@ -86,6 +96,7 @@ it.each(["9:16", "16:9"])("uses the original name card dimensions and fixed temp
   fireEvent.click(confirm);
   expect(await screen.findByRole("status")).toHaveTextContent("已加入动画图层");
   expect(api.confirm).toHaveBeenCalledWith("task", "p1");
+  expect(nameCardVisual.values).toEqual({ role: "", accent: "#11aabb" });
 });
 
 it("reports a missing fixed version in the catalog preview", async () => {

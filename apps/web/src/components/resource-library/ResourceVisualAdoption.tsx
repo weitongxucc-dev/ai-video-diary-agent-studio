@@ -76,10 +76,16 @@ export function ResourceVisualAdoption({ taskId, resource, playheadMs, onTaskUpd
         setWorkspace(latest);
         throw new Error("作品已更新，请核对位置后重新准备。");
       }
-      let overlayDefinition = definition;
+      let overlayDefinition = {
+        ...definition,
+        values: {
+          ...Object.fromEntries(definition.bindings.map(binding => [binding.key, binding.default])),
+          ...definition.values,
+        },
+      };
       if (isFullFrameTransition) {
         const [w, h] = (workspace.montage?.aspect_ratio ?? workspace.plan.aspect_ratio).split(":").map(Number);
-        overlayDefinition = { ...definition, width: 384, height: Math.round(384 * h / w) };
+        overlayDefinition = { ...overlayDefinition, width: 384, height: Math.round(384 * h / w) };
       }
       const response = await previewCreationTaskExactEdit(taskId, {
         operation_type: "EditGraphicOverlay", overlay_action: "add", graphic_overlay: {
