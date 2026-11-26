@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.creation.contracts import JobRun
 from app.creation.execution_control import CreationExecutionControl, ExecutionControlRejected
 from app.creation_execution import ExecutionStartRequest
+from app.device_accounts import DeviceAccountError
 from app.device_scheduler import RecoveryBlocked
 from app.job_progress import summarize_job_progress
 from app.schemas import (
@@ -61,8 +62,20 @@ def build_creation_execution_router(
     @router.get("/api/creation-tasks/{task_id}/execution/preview")
     def preview_creation_execution(task_id: str, request: Request) -> dict[str, object]:
         readable_task(request, task_id)
+        workspace_id = workspace_for(request)
+
+        def preview_actor():
+            try:
+                return request_actor(request, workspace_id)
+            except DeviceAccountError:
+                return None
+            except HTTPException as exc:
+                if exc.status_code != 403:
+                    raise
+                return None
+
         try:
-            return control_for().preview(workspace_for(request), task_id)
+            return control_for().preview(workspace_id, task_id, actor_for=preview_actor)
         except ExecutionControlRejected as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 

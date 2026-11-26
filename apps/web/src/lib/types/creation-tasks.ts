@@ -542,6 +542,9 @@ export type CreationExecutionPreview = {
             | { status: "verified"; max_width_px: number; max_height_px: number }
             | { status: "missing" | "stale" | "unknown" };
     };
+    source_audio_input?:
+        | { status: "verified"; source_bytes: number; max_input_bytes: number }
+        | { status: "unknown" };
     narration_source: {
         source_kind: "generated" | "recorded";
         source_artifact_ref: string | null;

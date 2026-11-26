@@ -1,5 +1,6 @@
 """Saved canvas and device-profile facts for the production preview."""
 from pathlib import Path
+from stat import S_ISREG
 
 from app.canvas import canvas_size
 from app.device_resource_configuration import backend_identity, current_device_identity
@@ -11,23 +12,41 @@ def render_target(repository, task, plan, *, connection):
     """Use the same saved montage as the renderer when one has been adopted."""
     planned_size = canvas_size(plan.aspect_ratio)
     if not task.montage_plan_id:
-        return planned_size, None
+        return planned_size, None, None
     try:
         payload = repository.get_creation_task_montage_plan(
             task.workspace_id, task.id, connection=connection)
         montage = creation_task_montage_plan_from_payload(payload)
     except (KeyError, ValueError):
-        return planned_size, None
+        return planned_size, None, None
     if (montage.id != task.montage_plan_id or montage.workspace_id != task.workspace_id
             or montage.task_id != task.id or montage.script_id != task.confirmed_script_id):
-        return planned_size, None
+        return planned_size, None, None
     size = canvas_size(montage.aspect_ratio)
     presenter = bool(montage.presenter_share_target or any(clip.person_render_id for clip in montage.clips))
     if (montage.status not in {"ready", "rendering", "rendered", "failed"}
             or not montage.clips or any(clip.needs_confirmation for clip in montage.clips)
             or presenter != bool(plan.presenter_share_target) or (presenter and plan.source_media is not None)):
-        return size, None
-    return size, "presenter_cpu_render" if presenter else "cpu_render"
+        return size, None, montage
+    return size, "presenter_cpu_render" if presenter else "cpu_render", montage
+
+
+def source_audio_bytes(repository, task, source, *, audio, actor, connection):
+    """Stat the registered original through the same source reader used at sealing."""
+    if actor is None or actor.workspace_id != task.workspace_id or task.owner_user_id != (actor.user_id or actor.member_id):
+        return None
+    try:
+        asset = repository.get_asset(task.workspace_id, source["asset_id"], connection=connection)
+        if asset.updated_at.isoformat() != source["asset_updated_at"]:
+            return None
+        path = audio.source(task.workspace_id, task.id, source["source_ref"], actor=actor, connection=connection)
+        observed = path.stat()
+        if (S_ISREG(observed.st_mode) and observed.st_size > 0
+                and repository.material_source_files.material_copy_revision(observed) == source["file_signature"]):
+            return observed.st_size
+    except (KeyError, ValueError, OSError):
+        return None
+    return None
 
 
 def saved_render_capacity(settings, environment, operation):
@@ -59,4 +78,6 @@ def saved_render_capacity(settings, environment, operation):
     if profile.evidence.get(operation, {}).get("status") != "recorded":
         return {"status": "unknown"}
     budget = getattr(profile.budget, operation)
+    if operation == "cpu_audio":
+        return {"status": "verified", "max_input_bytes": budget.max_input_bytes}
     return {"status": "verified", "max_width_px": budget.max_width_px, "max_height_px": budget.max_height_px}
