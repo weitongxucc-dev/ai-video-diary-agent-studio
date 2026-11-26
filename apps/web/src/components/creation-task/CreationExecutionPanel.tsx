@@ -1,5 +1,6 @@
 "use client";
 import { DeviceProductionStatus } from "../DeviceProductionStatus";
+import { CompositionTimingSummary } from "../CompositionTimingSummary";
 import { PreviewVideo } from "./EditPreviewCard";
 import { ExecutionQueueStatus } from "../ExecutionQueueStatus";
 import { creationTaskFailureReason } from "@/lib/creation-task-status";
@@ -58,12 +59,13 @@ function ExecutionScriptWindow({ preview, onStale }: {
     </details>;
 }
 
-export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voice, availableVoices, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, storyboard, onRegenerateStoryboard, onReadStoryboard, compact = false, onStart, onResume, onCancel, onOpenMontage, onRefreshPreview }: {
+export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voice, availableVoices, template, preview, execution, busy, visualDecision, visualBusy = false, visualError, visualReadRequired = false, onReadVisualDecision, onAdoptVisualDecision, onCloseVisualDecision, storyboard, onRegenerateStoryboard, onReadStoryboard, compact = false, onStart, onResume, onCancel, onOpenMontage, onRefreshPreview }: {
     sourceMedia?: SourceMediaSelection | null;
     taskReason: string | null;
     taskStage: WorkspaceState["task"]["stage"];
     voice: WorkspaceState["plan"]["selected_voice"];
     availableVoices: WorkspaceState["available_voices"];
+    template?: Pick<WorkspaceState["plan"], "template_id" | "template_version" | "template_settings">;
     preview: CreationExecutionPreview | null;
     execution: CreationExecutionStatus | null;
     busy: boolean;
@@ -84,6 +86,11 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
     const [stalePreview, setStalePreview] = useState<string | null>(null);
     const previewKey = preview ? `${preview.task_id}:${preview.input_digest}` : null;
     const previewStale = stalePreview !== null && stalePreview === previewKey;
+    const templateTiming = template?.template_id && template.template_version != null
+      && template.template_settings?.composition_timing
+      ? { version: template.template_version, timing: template.template_settings.composition_timing } : null;
+    const otherTemplateSettings = Object.entries(preview?.requirements.template_settings ?? {})
+      .filter(([name]) => name !== "composition_timing");
     const storyboardControls = !sourceMedia && storyboard && onRegenerateStoryboard ? <section aria-label="重新安排画面" className={styles.workSection}>
       <Button variant="outline" disabled={busy || visualBusy || !storyboard.canSubmit} onClick={onRegenerateStoryboard} type="button">重新安排画面，保留配音</Button>
       <p>重新编排当前文案的镜头，保留原配音、字幕与图层；不会自动生成成片。</p>
@@ -179,11 +186,12 @@ export function CreationExecutionPanel({ taskStage, taskReason, sourceMedia, voi
                     ? `配音来源：已生成 · ${preview.narration_source.duration_seconds.toFixed(1)} 秒`
                     : `声音：${voiceLabel}`}</p>}
         {preview.requirements.selected_voice ? <details><summary>声音引用诊断</summary><p>声音身份：{preview.requirements.selected_voice}{voice?.profile_id === preview.requirements.selected_voice ? ` · 固定版本：${voice.version}` : ""}</p></details> : null}
-        {Object.entries(preview.requirements.template_settings).length ? <details><summary>查看模板中的具体设置</summary><dl>{Object.entries(preview.requirements.template_settings).map(([name, value]) => <div key={name}><dt>{({ fit_mode: "画面适配", color_style: "调色", subtitle_style: "字幕样式" } as Record<string, string>)[name] ?? name}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl></details> : null}
+        {otherTemplateSettings.length ? <details><summary>查看模板中的具体设置</summary><dl>{otherTemplateSettings.map(([name, value]) => <div key={name}><dt>{({ fit_mode: "画面适配", color_style: "调色", subtitle_style: "字幕样式" } as Record<string, string>)[name] ?? name}</dt><dd>{typeof value === "string" ? value : JSON.stringify(value)}</dd></div>)}</dl></details> : null}
       </section>
       {!preview.requirements.can_continue && preview.requirements.continuation_blocker ? <p role="status">{preview.requirements.continuation_blocker}</p> : null}
       {!job ? <div className={styles.primaryAction}><button className="modern-primary-button" disabled={busy || previewStale || !preview.requirements.can_continue} onClick={onStart} type="button">{preview.requirements.can_continue ? sourceMedia ? "生成当前剪辑成片" : "确认以上文案和要求，开始制作" : "暂不能开始制作"}</button></div> : null}
     </> : null}
+    {templateTiming ? <CompositionTimingSummary {...templateTiming} /> : null}
     {job ? <div>
       {execution?.waiting_reason ? <p role="status">{creationTaskFailureReason(execution.waiting_reason, taskStage)}</p> : null}
       {!taskReason && failureReason ? <p>{creationTaskFailureReason(failureReason, taskStage)}</p> : null}

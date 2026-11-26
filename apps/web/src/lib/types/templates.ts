@@ -13,6 +13,11 @@ export type VideoTemplateSettings = {
     kind?: 'visual_component' | 'composition';
     visual?: VisualTemplate;
     visual_components?: Record<string, unknown>[];
+    composition_timing?: {
+        duration_frames: number;
+        cut_frames: number[];
+        sound_cues: { role: "music" | "effect"; start_ms: number; duration_ms: number }[];
+    };
     language: CreationPlanInput["language"];
     aspect_ratio: "9:16" | "16:9" | "1:1";
     duration_target_seconds: number;
