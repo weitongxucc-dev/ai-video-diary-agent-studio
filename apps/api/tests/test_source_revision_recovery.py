@@ -119,3 +119,40 @@ def test_other_member_cannot_recover_visible_work_or_read_its_receipt(recovery_h
     route = f"/api/creation-tasks/{task.id}/source-revision-recoveries"
     assert client.get(f"{route}/{command.request_id}").status_code == 404
     assert client.post(route, json=recover_payload(command)).status_code == 403
+
+
+@pytest.mark.parametrize("file_changed", [False, True])
+def test_exact_edit_only_marks_a_verified_file_with_an_outdated_binding(recovery_http, monkeypatch, file_changed):
+    case, client = recovery_http
+    monkeypatch.setattr(main, "local_members_service", case.members)
+    with case.repo._connect() as conn:
+        token = conn.execute("SELECT token FROM local_members WHERE member_id=?", (case.actor.member_id,)).fetchone()[0]
+    headers = {"X-Local-Member-Token": token}
+    original = case.use_case.create(case.command, case.actor)
+    task, version, recovery = prepare_recovery(case, original)
+    if file_changed:
+        case.path.write_bytes(b"changed source bytes")
+    route = f"/api/creation-tasks/{task.id}"
+    edit = {"request_id": str(uuid4()), "operation_type": "TrimClip", "clip_id": "clip-source",
+        "source_start_seconds": 0.5, "expected_timeline_version_id": version.id,
+        "expected_timeline_sequence": version.sequence}
+    refused = client.post(f"{route}/edits/exact", headers=headers, json=edit)
+    assert refused.status_code == 409, refused.text
+    detail = refused.json()["detail"]
+    if file_changed:
+        assert isinstance(detail, str)
+    else:
+        assert detail["error"] == "source_revision_recovery_required"
+        assert detail["submission_effect"] == "not_submitted"
+        restored = client.post(f"{route}/source-revision-recoveries", headers=headers, json=recover_payload(recovery))
+        assert restored.status_code == 200, restored.text
+    recorded = client.get(f"{route}/assistant/edit-requests/{edit['request_id']}?phase=apply", headers=headers)
+    assert recorded.status_code == 200, recorded.text
+    assert recorded.json()["status"] == "recorded"
+    assert recorded.json()["submitted_input"] == edit
+    assert recorded.json()["result_status_code"] == 409
+    assert recorded.json()["result"] == {"detail": detail}
+    replay = client.post(f"{route}/edits/exact", headers=headers, json=edit)
+    assert replay.status_code == 409 and replay.json()["detail"] == detail
+    assert case.repo.timeline_records.list_timeline_versions("local", task.id) == [version]
+    assert case.repo.edit_records.list_edit_operations("local", task.id) == []

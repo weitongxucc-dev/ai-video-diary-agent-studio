@@ -14,6 +14,10 @@ from app.materials.source_files import MaterialSourceFileAccess
 from app.creation.editing.affected import affected_source_clip_ids, affected_clip_facts
 
 
+class SourceRevisionRecoveryRequired(EditConflict):
+    """The registered revision advanced while the adopted file is still present."""
+
+
 class EditClipSourceReader:
     """Resolve clip bounds and read current source facts through explicit readers."""
     def __init__(self, *, connection_factory, read_montage, read_task, read_plan, read_asset, read_person_render,
@@ -48,7 +52,7 @@ class EditClipSourceReader:
         if not eligibility.eligible:
             raise self._conflict_error(f'{eligibility.status}：{eligibility.reason}；{eligibility.repair_action}')
         start, end = source['source_start_seconds'], source['source_end_seconds']
-        if (asset.updated_at.isoformat() != source['asset_updated_at'] or asset.media_type != 'video'
+        if (asset.media_type != 'video'
                 or asset.duration_seconds is None or not math.isfinite(asset.duration_seconds)
                 or not 0 <= start < end <= asset.duration_seconds
                 or not all(math.isfinite(value) for value in (clip['source_start_seconds'], clip['source_end_seconds']))
@@ -65,6 +69,8 @@ class EditClipSourceReader:
         if (not file_stat.S_ISREG(observed.st_mode) or observed.st_size <= 0
                 or MaterialSourceFileAccess.material_copy_revision(observed) != source['file_signature']):
             raise self._conflict_error('原片文件与采用时的修订已变化')
+        if asset.updated_at.isoformat() != source['asset_updated_at']:
+            raise SourceRevisionRecoveryRequired('原片素材修订已变化，请先复核原片绑定。')
         # Retained original audio must not acquire a separate picture-only speed.
         selection = ClipSourceSelection(start, end, source['preserve_audio'], asset.id, None, reference, clip['role'])
         return selection, source, asset, observed

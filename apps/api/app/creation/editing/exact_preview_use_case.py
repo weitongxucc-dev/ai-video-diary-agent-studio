@@ -16,6 +16,7 @@ from app.media.picture_preview import PicturePreviewRejected
 from app.creation.editing.clips import CLIP_SETTING_OPERATIONS
 from app.creation.editing.edit_scope import edit_scope_blocker
 from app.creation.editing.metadata_use_case import (EditPreviewRejected, metadata_edit_command, effective_audio_timeline, logical_montage_output_refs)
+from app.creation.editing.sources import SourceRevisionRecoveryRequired
 from app.creation.editing.subtitle_use_case import subtitle_values
 from app.materials.contracts import MediaAuthorityError
 from app.creation.editing.picture import EditConflict
@@ -277,6 +278,12 @@ class ExactPreviewUseCase:
                 expected_replacement_version=payload.expected_replacement_asset_updated_at if payload.operation_type == 'ReplaceClip' else None)
         except PermissionError as exc:
             raise EditPreviewRejected(status_code=403, detail=str(exc)) from exc
+        except SourceRevisionRecoveryRequired as exc:
+            raise EditPreviewRejected(status_code=409, detail={
+                'error': 'source_revision_recovery_required',
+                'reason': str(exc),
+                'submission_effect': 'not_submitted',
+            }) from exc
         except EditConflict as exc:
             raise EditPreviewRejected(status_code=409, detail=str(exc)) from exc
         except (KeyError, ValueError, OSError) as exc:
