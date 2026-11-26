@@ -1,0 +1,41 @@
+.section {
+  min-inline-size: 0;
+  padding-block: 0.5rem;
+  overflow-wrap: break-word;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.actions p {
+  flex-basis: 100%;
+}
+
+.facts {
+  display: grid;
+  gap: 0.375rem;
+  margin-block: 0.625rem;
+}
+
+.facts div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.facts dt {
+  font-weight: 600;
+}
+
+.facts dd {
+  min-inline-size: 0;
+  margin: 0;
+}
+
+.facts time {
+  overflow-wrap: anywhere;
+}

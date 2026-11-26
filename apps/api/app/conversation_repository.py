@@ -1461,6 +1461,8 @@ class ConversationRepository:
     @staticmethod
     def _source_task_adoption_current(conn, adoption, workspace_id, member_id, task_id):
         """Check the original source receipt and adopted Plan on this connection."""
+        from app.creation.source_task_use_case import source_task_binding_matches
+
         event = conn.execute("SELECT payload_json FROM task_events WHERE workspace_id=? AND task_id=? "
             "AND id=? AND event_type='source_task_created'", (workspace_id, task_id, adoption['event_id'])).fetchone()
         task_row = conn.execute('SELECT payload FROM creation_tasks WHERE workspace_id=? AND id=?',
@@ -1486,10 +1488,12 @@ class ConversationRepository:
             and plan['workspace_id'] == workspace_id and plan['creation_task_id'] == task_id
             and task['owner_user_id'] == plan['owner_user_id'] == member_id and plan['status'] == 'confirmed'
             and task['confirmed_script_id'] is None and task['narration_cache_key'] is None
-            and plan.get('source_media') is not None and plan['source_media'] == receipt['source_media']
             and payload['input_digest'] == digest == adoption['input_fingerprint']
             and adopted.get('kind') == 'delegated_system' and adopted.get('member_id') == member_id
-            and adopted.get('version') == digest and adopted.get('authorization_source') == source)
+            and adopted.get('version') == digest and adopted.get('authorization_source') == source
+            and source_task_binding_matches(conn, workspace_id=workspace_id, task_id=task_id, plan_id=plan['id'],
+                member_id=member_id, source_event_id=adoption['event_id'],
+                original=receipt['source_media'], current=plan.get('source_media')))
 
     def register_creation_task_goals(self, source_turn_id: str, workspace_id: str, member_id: str,
                                      adoption: dict, task_contexts: list[dict]) -> list[str]:

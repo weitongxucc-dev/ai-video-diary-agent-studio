@@ -26,6 +26,8 @@ import { Tabs, TabsContent } from "./ui/tabs";
 import { Button } from "./ui/button";
 import { MediaVisibility } from "./ui/media-visibility";
 import { EditingStatusTray } from "./creation-task/EditingStatusTray";
+import { SourceRevisionRecovery } from "./creation-task/SourceRevisionRecovery";
+import { sameSourceRevision, type SourceRevisionRecoveryReceipt } from "@/lib/api/source-revision-recovery";
 import { TaskViewNavigation } from "./creation-task/TaskViewNavigation";
 import { TaskSaveState, TaskOutputActions, TimelineEditingActions, SelectedObjectReferenceAction } from "./creation-task/TaskActions";
 
@@ -141,6 +143,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const [pendingTimelineRestore, setPendingTimelineRestore] = useState<PendingTimelineRestore | null>(null);
   const pendingTimelineRestoreRef = useRef<PendingTimelineRestore | null>(null);
   const editRequestScope = useRef<string | null>(null);
+  const [sourceRevisionMemberScope, setSourceRevisionMemberScope] = useState<string | null>(null);
   const restoredIdentityScope = useRef<string | undefined>(undefined);
   const [editRequestRecoveryReady, setEditRequestRecoveryReady] = useState(false);
   const editRequestRecoveryError = useRef<ReturnType<typeof errorDetails> | null>(null);
@@ -159,6 +162,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       editRequestRecoveryError.current = null;
       const previousScope = editRequestScope.current;
       editRequestScope.current = nextScope;
+      setSourceRevisionMemberScope(memberId ? JSON.stringify([workspace.task.workspace_id, workspace.task.id, memberId]) : null);
       const restoredScope = JSON.stringify([subtitleStoragePrefix, memberId]);
       if (restoredIdentityScope.current !== undefined && restoredIdentityScope.current !== restoredScope) {
         setError(null); setNotice(null);
@@ -243,6 +247,31 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
     setWorkspace(next);
     setTasks(items => [next.task, ...items.filter(item => item.id !== next.task.id)]);
     return true;
+  }
+  async function readRecoveredSource(receipt: SourceRevisionRecoveryReceipt, isCurrent: () => boolean) {
+    const readRevision = workspaceReceiptRevision.current;
+    const next = await getCreationTaskWorkspace(receipt.task_id);
+    const current = currentWorkspace.current;
+    if (!isCurrent() || currentTaskId.current !== receipt.task_id || readRevision !== workspaceReceiptRevision.current
+      || next.task.id !== receipt.task_id || next.task.workspace_id !== current.task.workspace_id) return "unverified";
+    if (current.task.plan_id !== receipt.plan_id || next.task.plan_id !== receipt.plan_id
+      || current.task.current_timeline_version_id !== receipt.timeline_version_id
+      || next.task.current_timeline_version_id !== receipt.timeline_version_id
+      || current.task.timeline_sequence !== receipt.timeline_sequence || next.task.timeline_sequence !== receipt.timeline_sequence)
+      return "past";
+    const bound = current.plan.source_media;
+    const recovered = next.plan.source_media;
+    if (!bound || !recovered || bound.asset_id !== receipt.asset_id || recovered.asset_id !== bound.asset_id
+      || recovered.source_ref !== bound.source_ref || recovered.source_start_seconds !== bound.source_start_seconds
+      || recovered.source_end_seconds !== bound.source_end_seconds || recovered.aspect_ratio !== bound.aspect_ratio
+      || recovered.preserve_audio !== bound.preserve_audio
+      || !sameSourceRevision(recovered.asset_updated_at, receipt.asset_updated_at)
+      || (!sameSourceRevision(bound.asset_updated_at, receipt.previous_asset_updated_at)
+        && !sameSourceRevision(bound.asset_updated_at, receipt.asset_updated_at))) return "unverified";
+    // This operation only changes the source proof on the existing head.
+    // The general refresh also resets editor drafts and transient proposals.
+    return acceptWorkspace({ ...current, plan: { ...current.plan, source_media: recovered } }, readRevision)
+      ? "updated" : "unverified";
   }
   const navigationReadRevision = useRef(0);
   const pendingNavigationRead = useRef<{ taskId: string; inputRevision: number } | null>({ taskId: initialWorkspace.task.id, inputRevision: 0 });
@@ -1591,6 +1620,22 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       if (pending.submissionError) setError(pending.submissionError);
       return false;
     }
+    const detail = receipt.result && "detail" in receipt.result ? receipt.result.detail : null;
+    if (receipt.result_status_code === 409 && detail && typeof detail === "object"
+      && "error" in detail && detail.error === "source_revision_recovery_required"
+      && "submission_effect" in detail && detail.submission_effect === "not_submitted") {
+      sessionStorage.removeItem(`subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`);
+      pendingMetadataSaveRef.current = null;
+      setPendingMetadataSave(null);
+      setNotice(null);
+      setError({
+        message: "原片登记已变化，原修改未保存。",
+        code: detail.error,
+        impact: "当前版本和未保存的编辑仍保留。",
+        repairAction: "核对原片来源后继续编辑。",
+      });
+      return false;
+    }
     if (receipt.result_status_code < 200 || receipt.result_status_code >= 300 || !receipt.result || !("operation" in receipt.result)) {
       const target = pending.input.operation_type === "UpdateSubtitleCue" ? "字幕" : pending.input.operation_type==='EditGraphicOverlay'?'动画图层':"镜头";
       setNotice(`原${target}保存返回 ${receipt.result_status_code}，可能已有写入。请保留原请求，核对版本和${target}；未自动重试。`);
@@ -2336,6 +2381,12 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
         {error ? <TaskIssue stage={activeView} reason={error.message} impact={error.impact} repair={error.repairAction} code={error.code}>{error.code === "timeline_version_required" ? <button className={editorUi.button} disabled={!editRequestRecoveryReady || busy !== null || pendingMetadataSave !== null || pendingTimelineRestore !== null} onClick={() => { if (!editRequestRecoveryReady || editRequestOperation.current || pendingMetadataSaveRef.current || pendingTimelineRestoreRef.current) return; void run("clip", async () => { const clips = clipDrafts; const dirty = editorDraft; const saved = await initializeCreationTaskTimeline(task.id); if (currentTaskId.current === task.id && currentWorkspace.current.task.current_timeline_version_id === null) initializedDraft.current = { versionId: saved.version_id, clips, dirty }; }, "已为当前故事板建立初始版本，可继续预览裁剪。"); } } type="button">保留当前故事板并建立版本</button> : null}</TaskIssue> : null}
         {executionError ? <TaskIssue stage={task.stage} reason={executionError.code === "device_budget_unavailable" ? "这台设备还没有完成制作资源标定，暂时不能开始制作。" : executionError.message} impact={executionError.impact} repair={executionError.repairAction} code={executionError.code}>{executionError.code === "device_budget_unavailable" ? <><Link href="/health">检查运行情况</Link><details className={styles.traceDetails}><summary>制作资源诊断</summary><p>{executionError.message}</p></details></> : null}{task.confirmed_script_id || workspace.plan.source_media ? <button className={styles.secondaryButton} disabled={busy !== null} onClick={() => void changeExecution(executionController.recheckRequirements)} type="button">{workspace.plan.source_media ? "重新核对原片制作要求" : "重新核对文案和制作要求"}</button> : null}</TaskIssue> : null}
         {!error && !executionError && task.stage_status === "failed" && activeView === task.stage && (task.stage_reason || task.stage_impact) ? <TaskIssue stage={task.stage} reason={task.stage_reason} impact={task.stage_impact} repair={task.stage_repair_action} label={`${stageLabels[activeView]}失败`} /> : null}
+        {workspace.plan.source_media && task.current_timeline_version_id && task.timeline_sequence > 0 ?
+          <SourceRevisionRecovery key={task.id} taskId={task.id} planId={task.plan_id}
+            versionId={task.current_timeline_version_id} sequence={task.timeline_sequence} source={workspace.plan.source_media}
+            memberScope={editRequestRecoveryReady ? sourceRevisionMemberScope : null}
+            active={workbenchPage?.active ?? true} disabled={busy !== null || pendingTimelineRestore !== null}
+            onRecovered={readRecoveredSource} /> : null}
         {activeView === "narration" && confirmedScript && workspace.plan.updated_at &&
           workspace.plan.selected_person && (workspace.plan.selected_voice || presenterSelection) &&
           (workspace.plan.presenter_share_target ?? 0) > 0 &&
