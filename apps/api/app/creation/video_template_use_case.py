@@ -23,7 +23,7 @@ from app.creation.visual_template_reuse import reusable_components
 
 
 VideoTemplateRejectionCode = Literal["field_builtin_readonly", "field_not_owner", "task_not_rendered",
-    "target_pair_incomplete", "task_builtin_overwrite", "task_not_owner", "persist_conflict"]
+    "source_task_not_owned", "target_pair_incomplete", "task_builtin_overwrite", "task_not_owner", "persist_conflict"]
 
 
 class VideoTemplateRejected(RuntimeError):
@@ -99,7 +99,10 @@ class VideoTemplateUseCase:
             raise ValueError('原保存请求已用于其他模板，请查询原模板，不重复覆盖')
         return existing
 
-    def rendered_source(self, workspace_id: str, task_id: str, task: CreationTask) -> CreationTaskMontagePlan:
+    def rendered_source(self, workspace_id: str, task_id: str, task: CreationTask, *,
+                        reader_user_id: str | None, local_diagnostic: bool) -> CreationTaskMontagePlan:
+        if not local_diagnostic and (reader_user_id is None or task.owner_user_id != reader_user_id):
+            raise VideoTemplateRejected("source_task_not_owned", "creation task not found")
         try:
             montage = creation_task_montage_plan_from_payload(self.production.get_creation_task_montage_plan(workspace_id, task_id))
         except KeyError as exc:
