@@ -3,6 +3,7 @@ import { WorkspaceVideo } from "../workbench/WorkspaceMedia";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleMinus, Film, MessageSquarePlus, Volume2 } from "lucide-react";
+import { NEW_VIDEO_HREF } from "@/lib/preflight-draft-url";
 import type { MaterialAsset } from "@/lib/types";
 import { assetDuration, fileLabel, mediaLabel, roleLabel, reviewLabel } from './material-labels';
 import { useStateOptions } from './material-state';
@@ -90,7 +91,12 @@ export function MaterialResults({ assets, selectedId, selectionDisabled, viewMod
                     ? "导入本地文件即可开始；外部复制的文件需要先确认复制完成。"
                     : "点击导入素材，检查接入目录后选择本地文件或媒体直链。"}
               </p>
-              {hasFilters ? hasTagFilter ? <Link href="/library" className={styles.resetFilters}>重置全部</Link> : <button className={styles.resetFilters} onClick={onResetFilters} type="button">重置全部</button> : <button className={styles.importButton} onClick={onImport} type="button">导入素材</button>}
+              {hasFilters ? hasTagFilter ? <Link href="/library" className={styles.resetFilters}>重置全部</Link> : <button className={styles.resetFilters} onClick={onResetFilters} type="button">重置全部</button> : (
+                <div className={styles.emptyActions}>
+                  <button className={styles.importButton} onClick={onImport} type="button">导入素材</button>
+                  <Link className={styles.startCreation} href={NEW_VIDEO_HREF} prefetch={false}>新建视频</Link>
+                </div>
+              )}
             </div>
           </div>)}
   </>;
