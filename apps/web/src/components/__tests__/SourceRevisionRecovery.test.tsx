@@ -99,6 +99,52 @@ it("retains a lost response after remount and only retries the same request when
     expect(sessionStorage.length).toBe(0);
 });
 
+it("allows a fresh material check after the original replay rejects a stale revision", async () => {
+    fetcher.mockRejectedValueOnce(new TypeError("response interrupted"))
+        .mockResolvedValueOnce(Response.json({ detail: "原复核请求尚无已提交回执" }, { status: 404 }))
+        .mockResolvedValueOnce(Response.json({ detail: "当前原片登记已变化" }, { status: 409 }));
+    render(<SourceRevisionRecovery {...props} />);
+    check();
+    await confirm();
+    expect(await screen.findByRole("alert")).toHaveTextContent("原复核结果待核对");
+    const original = submittedInput();
+    query();
+    fireEvent.click(await screen.findByRole("button", { name: "按原请求重试" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请重新核对素材登记");
+    expect(JSON.parse(String(fetcher.mock.calls[2][1]?.body))).toEqual(original);
+    expect(sessionStorage.length).toBe(0);
+    expect(props.onRecovered).not.toHaveBeenCalled();
+
+    const newRevision = "2026-11-26T13:00:00.123457Z";
+    vi.mocked(getProductionMaterial).mockResolvedValueOnce(material(newRevision));
+    check();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    fetcher.mockImplementationOnce(async (_url, init) => Response.json({
+        ...receipt(JSON.parse(String(init?.body))), asset_updated_at: newRevision,
+    }));
+    await confirm();
+    expect(await screen.findByText("已复核同一原片。可继续编辑当前版本。")).toBeVisible();
+    const fresh = JSON.parse(String(fetcher.mock.calls[3][1]?.body));
+    expect(fresh).toEqual({ ...original, request_id: expect.any(String), expected_asset_updated_at: newRevision });
+    expect(fresh.request_id).not.toBe(original.request_id);
+});
+
+it("retains the original request when authorization is lost during replay", async () => {
+    fetcher.mockRejectedValueOnce(new TypeError("response interrupted"))
+        .mockResolvedValueOnce(Response.json({ detail: "原复核请求尚无已提交回执" }, { status: 404 }))
+        .mockResolvedValueOnce(Response.json({ detail: "当前成员无权复核" }, { status: 403 }));
+    render(<SourceRevisionRecovery {...props} />);
+    check();
+    await confirm();
+    expect(await screen.findByRole("alert")).toHaveTextContent("原复核结果待核对");
+    query();
+    fireEvent.click(await screen.findByRole("button", { name: "按原请求重试" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("当前成员无权复核");
+    expect(screen.getByRole("button", { name: "查询原复核结果" })).toBeVisible();
+    expect(sessionStorage.length).toBe(1);
+    expect(props.onRecovered).not.toHaveBeenCalled();
+});
+
 it("keeps a returned receipt with different facts out of the active workspace and can query the original", async () => {
     fetcher.mockImplementationOnce(async (_url, init) => Response.json({
         ...receipt(JSON.parse(String(init?.body))), task_id: "different-work",

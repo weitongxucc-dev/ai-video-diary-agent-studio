@@ -150,7 +150,8 @@ export function SourceRevisionRecovery({ taskId, planId, versionId, sequence, so
                     : await recoverSourceRevision(taskId, value.input);
             } catch (cause) {
                 if (!isCurrent()) return;
-                if (mode === "submit" && rejected(cause)) {
+                const replayConflict = mode === "replay" && cause instanceof CreationPlanApiError && cause.status === 409;
+                if ((mode === "submit" && rejected(cause)) || replayConflict) {
                     sessionStorage.removeItem(storageKey);
                     setAttempt(null);
                     setObservation(null);
