@@ -102,6 +102,51 @@ it.each([true, false])("uses original-media requirements with no script or voice
   else { expect(start).toBeDisabled(); expect(screen.getByText("原视频已发生变化")).toBeVisible(); }
 });
 
+type RenderProfile = NonNullable<CreationExecutionPreview["render_specification"]>["profile"];
+
+const renderProfileCases: Array<[RenderProfile, string, string | null]> = [
+  [{ status: "verified", max_width_px: 1280, max_height_px: 720 },
+    "目标画幅超出已保存的设备档上限。", "1280 × 720"],
+  [{ status: "verified", max_width_px: 1920, max_height_px: 1080 },
+    "目标画幅在已保存的设备档上限内。", "1920 × 1080"],
+  [{ status: "missing" }, "这台设备尚未保存准备档。", null],
+  [{ status: "stale" }, "已保存设备档与当前设备或画面工具不再匹配，或工具暂不可核对。", null],
+  [{ status: "unknown" }, "暂不能核实适用于这次制作的画幅上限。", null],
+];
+
+it.each(renderProfileCases)("shows production canvas facts for saved profile %j", async (profile, message, limit) => {
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  const onStart = vi.fn();
+  const preview: CreationExecutionPreview = {
+    task_id: "task-1", script_id: "script-1", script_title: "已确认文案",
+    script_updated_at: "2026-11-09", script_sections_total_count: 1, script_sections_loaded: false,
+    plan_id: "plan-1", narration_source: null, input_digest: "digest-1",
+    render_specification: { width_px: 1920, height_px: 1080, profile },
+    requirements: { aspect_ratio: "16:9", duration_target_seconds: 2, presenter_share_target: 0,
+      lipsync_quality: "fast", selected_voice: "voice-1", can_continue: true,
+      continuation_blocker: null, template_settings: {} },
+  };
+  render(<CreationExecutionPanel taskStage="montage" taskReason={null} voice={null}
+    availableVoices={[]} preview={preview} execution={null} busy={false} compact
+    onStart={onStart} onResume={vi.fn()} onCancel={vi.fn()} onOpenMontage={vi.fn()} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "核对制作要求" }));
+  const dialog = within(screen.getByRole("dialog", { name: "制作文案与要求" }));
+  expect(dialog.getByText("目标成片画幅 1920 × 1080 像素")).toBeVisible();
+  expect(dialog.getByText(text => text.startsWith(message))).toBeVisible();
+  if (limit) {
+    expect(dialog.getByText(`已核对的画幅上限 ${limit} 像素`)).toBeVisible();
+    expect(dialog.getByText(/制作仍需核对其他资源与执行条件/)).toBeVisible();
+  } else {
+    expect(dialog.queryByText(/已核对的画幅上限/)).not.toBeInTheDocument();
+  }
+  expect(dialog.getByRole("link", { name: "查看设备准备" })).toHaveAttribute("href", "/settings?section=runtime");
+  expect(dialog.getByRole("button", { name: "确认以上文案和要求，开始制作" })).toBeEnabled();
+  expect(fetch).not.toHaveBeenCalled();
+  expect(onStart).not.toHaveBeenCalled();
+});
+
 describe.each([false, true])("CreationExecutionPanel compact=%s", compact => {
   it("shows storyboard confirmation without reporting narration failure from the old task stage", async () => {
     render(panel(compact, "queued", "waiting_for_user"));
