@@ -1,5 +1,7 @@
 from uuid import uuid4
 
+import pytest
+
 import app.main as main
 from app.conversation_repository import ConversationRepository
 from test_creation_request_api import client_state as client_state  # noqa: F401
@@ -91,3 +93,30 @@ def test_draft_write_identity_belongs_to_the_current_owned_version(client_state,
         draft["draft_text"], str(uuid4()), 3, {"kind": "home"}, expected_reference_version=0)
     consumed = c.client.get(url, headers=c.alice).json()
     assert (consumed["draft_text"], consumed["draft_version"], consumed["draft_write_id"]) == ("", 4, None)
+
+
+@pytest.mark.parametrize("original_arrives_first", [True, False])
+def test_latest_draft_can_follow_only_the_exact_in_flight_write(client_state, original_arrives_first):
+    c = client_state
+    c.client.app.add_api_route("/api/assistant/conversations/{conversation_id}",
+        main._conversation_http_adapter().update, methods=["PATCH"])
+    chat = c.conversations.create("request-test", c.member.member_id, "home", "home")
+    url = f"/api/assistant/conversations/{chat['id']}"
+    first = {"draft_text": "较早的在途编辑", "expected_draft_version": 0, "draft_write_id": str(uuid4())}
+    last = {"draft_text": "关闭前最后一笔", "expected_draft_version": 0, "draft_write_id": str(uuid4()),
+        "after_draft_write_id": first["draft_write_id"]}
+    if original_arrives_first:
+        assert c.client.patch(url, headers=c.alice, json=first).status_code == 200
+        unrelated = {**last, "after_draft_write_id": str(uuid4())}
+        assert c.client.patch(url, headers=c.alice, json=unrelated).status_code == 409
+    assert c.client.patch(url, headers=c.bob, json=last).status_code == 404
+    response = c.client.patch(url, headers=c.alice, json=last)
+    assert response.status_code == 200, response.text
+    version = 2 if original_arrives_first else 1
+    assert (response.json()["draft_version"], response.json()["draft_write_id"]) == (version, last["draft_write_id"])
+    if not original_arrives_first:
+        assert c.client.patch(url, headers=c.alice, json=first).status_code == 409
+    c.conversations.create_turn_idempotent(chat["id"], "request-test", c.member.member_id,
+        last["draft_text"], str(uuid4()), version, {"kind": "home"}, expected_reference_version=0)
+    consumed = {**first, "expected_draft_version": version, "after_draft_write_id": last["draft_write_id"]}
+    assert c.client.patch(url, headers=c.alice, json=consumed).status_code == 409

@@ -65,6 +65,7 @@ afterEach(() => {
 vi.mock("@/lib/api/creation-tasks", async original => ({ ...await original<typeof import("@/lib/api/creation-tasks")>(), getCreationTaskScriptWindowRequest: api.readWindow }));
 
 beforeEach(() => {
+  localStorage.clear();
   api.readWindow.mockReset();
   api.referenceSaved.clear();
   api.getAssistantConversationReference.mockImplementation(async (id:string) => api.referenceSaved.get(id) ?? {selected_reference:null,reference_version:0,status:"ready",reason:null});
@@ -1280,6 +1281,7 @@ describe("AssistantConversationPanel", () => {
     const oldDraft = "保留在上一段对话的修改草稿";
     fireEvent.change(screen.getByRole("textbox"), {target: {value: oldDraft}});
     const lateStream = controller.bindTurnEvents(original.id, original.turns[0].id);
+    expect(screen.getByText("草稿尚未保存")).toBeVisible();
     fireEvent.click(screen.getByRole("button", {name: "新对话"}));
     const assertSwitching = () => {
       expect(screen.getByRole("status")).toHaveTextContent("正在切换对话…");
@@ -1290,7 +1292,8 @@ describe("AssistantConversationPanel", () => {
     };
     assertSwitching();
     await waitFor(() => expect(api.updateAssistantConversation).toHaveBeenCalledWith(original.id,
-      expect.objectContaining({draft_text: oldDraft, expected_draft_version: 0})));
+      expect.objectContaining({draft_text: oldDraft, expected_draft_version: 0, draft_write_id: expect.any(String)}),
+      {keepalive: true}));
     expect(api.createAssistantConversation).not.toHaveBeenCalled();
     await act(async () => saveDraft({...original, draft_text: oldDraft, draft_version: 1}));
     await waitFor(() => expect(api.createAssistantConversation).toHaveBeenCalledWith({scope_kind: "task", scope_id: "task-one"}));

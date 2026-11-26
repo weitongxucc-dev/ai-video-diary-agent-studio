@@ -1,63 +1,60 @@
 import type { AssistantConversation } from "@/lib/types";
 
-const draftLimit = 4000;
-const maxWriteIds = 16;
+const prefix = "ai-video-diary.assistant-draft-receipt.v1:";
 const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const receiptLifetime = 10_000;
 
-export type DraftRecovery = {
+export type DraftWriteReceipt = {
   id: string;
   version: number;
-  text: string;
-  writeIds: string[];
+  after?: string;
+  expiresAt: number;
 };
 
 function key(conversation: AssistantConversation) {
-  // This key is derived only after the API has authorized the conversation.
-  return `ai-video-diary.assistant-draft-recovery.v1:${JSON.stringify([
+  return prefix + JSON.stringify([
     conversation.workspace_id, conversation.scope_kind, conversation.scope_id, conversation.id,
-  ])}`;
+  ]);
 }
 
-export function readDraftRecovery(conversation: AssistantConversation): DraftRecovery | undefined {
+export function readDraftWriteReceipt(conversation: AssistantConversation): DraftWriteReceipt | undefined {
   try {
-    const raw = localStorage.getItem(key(conversation));
-    if (!raw || raw.length > 6 * draftLimit + 1024) return;
+    const name = key(conversation);
+    const raw = localStorage.getItem(name);
+    if (!raw || raw.length > 512) return;
     const value = JSON.parse(raw);
-    if (typeof value?.id === "string" && uuid.test(value.id)
-        && Number.isSafeInteger(value.version) && value.version >= 0
-        && typeof value.text === "string" && value.text.length <= draftLimit
-        && Array.isArray(value.writeIds) && value.writeIds.length <= maxWriteIds
-        && value.writeIds.every((id: unknown) => typeof id === "string" && uuid.test(id))) return value;
+    if (typeof value?.id !== "string" || !uuid.test(value.id)
+        || !Number.isSafeInteger(value.version) || value.version < 0
+        || !Number.isSafeInteger(value.expiresAt)
+        || (value.after !== undefined && (typeof value.after !== "string" || !uuid.test(value.after)))) return;
+    if (value.expiresAt <= Date.now()) localStorage.removeItem(name);
+    else return value;
   } catch {
-    // Server-side draft saving also works when browser storage is unavailable.
+    // The persisted conversation is available without a local receipt.
   }
 }
 
-function storeDraftRecovery(conversation: AssistantConversation, value: DraftRecovery | undefined) {
+export function rememberDraftWrite(conversation: AssistantConversation, version: number, after?: string): DraftWriteReceipt {
+  const receipt = { id: crypto.randomUUID(), version, after, expiresAt: Date.now() + receiptLifetime };
   try {
-    if (value) localStorage.setItem(key(conversation), JSON.stringify(value));
-    else localStorage.removeItem(key(conversation));
+    localStorage.setItem(key(conversation), JSON.stringify(receipt));
   } catch {
-    // Keep the input and continue through the existing server-side save.
+    // The request can still be delivered and saved by the server.
+  }
+  return receipt;
+}
+
+export function forgetDraftWrite(conversation: AssistantConversation, receipt: DraftWriteReceipt) {
+  try {
+    if (readDraftWriteReceipt(conversation)?.id === receipt.id) localStorage.removeItem(key(conversation));
+  } catch {
+    // A receipt left behind expires without retaining draft text.
   }
 }
 
-export function rememberDraft(conversation: AssistantConversation, version: number, text: string, previous?: DraftRecovery) {
-  if (text.length > draftLimit) return;
-  const pending: DraftRecovery = {
-    id: crypto.randomUUID(), version, text,
-    writeIds: previous?.version === version ? previous.writeIds : [],
-  };
-  storeDraftRecovery(conversation, pending);
-  return pending;
-}
-
-export function updateDraftRecovery(conversation: AssistantConversation, previous: DraftRecovery, next?: DraftRecovery) {
-  if (readDraftRecovery(conversation)?.id !== previous.id) return false;
-  storeDraftRecovery(conversation, next);
-  return true;
-}
-
-export function recordDraftWrite(pending: DraftRecovery, writeId: string): DraftRecovery {
-  return { ...pending, writeIds: [...pending.writeIds, writeId].slice(-maxWriteIds) };
+export function awaitsDraftWrite(conversation: AssistantConversation, receipt: DraftWriteReceipt) {
+  return conversation.draft_version === receipt.version || (
+    conversation.draft_version === receipt.version + 1 && Boolean(receipt.after)
+    && conversation.draft_write_id === receipt.after
+  );
 }

@@ -280,7 +280,8 @@ class ConversationRepository:
         return self.get(conversation_id, workspace_id, member_id)
 
     def save_draft(self, conversation_id: str, workspace_id: str, member_id: str,
-                   draft_text: str, expected_draft_version: int, *, draft_write_id: str | None = None) -> dict | None:
+                   draft_text: str, expected_draft_version: int, *, draft_write_id: str | None = None,
+                   after_draft_write_id: str | None = None) -> dict | None:
         """Compare-and-save a draft under its trusted conversation owner."""
         if expected_draft_version < 0:
             raise ValueError("expected_draft_version must be non-negative")
@@ -293,12 +294,16 @@ class ConversationRepository:
             if row is None:
                 return None
             current = self._conversation(row)
-            if current["draft_version"] != expected_draft_version:
+            current_version = current["draft_version"]
+            follows_original_write = (after_draft_write_id is not None
+                and current_version == expected_draft_version + 1
+                and current["draft_write_id"] == after_draft_write_id)
+            if current_version != expected_draft_version and not follows_original_write:
                 raise ConversationDraftVersionConflict(current)
             cursor = conn.execute(
                 "UPDATE assistant_conversations SET draft_text=?,draft_version=draft_version+1,draft_write_id=?,updated_at=? "
                 "WHERE id=? AND workspace_id=? AND member_id=? AND draft_version=?",
-                (draft_text, draft_write_id, _now(), conversation_id, workspace_id, member_id, expected_draft_version),
+                (draft_text, draft_write_id, _now(), conversation_id, workspace_id, member_id, current_version),
             )
             if cursor.rowcount != 1:
                 row = conn.execute(

@@ -37,8 +37,8 @@ export function listAssistantConversations(scope: AssistantConversationScope): P
     const query = new URLSearchParams({ scope_kind: scope.scope_kind, scope_id: scope.scope_id });
     return creationPlanRequest(`/api/assistant/conversations?${query.toString()}`);
 }
-export function getAssistantConversation(conversationId: string): Promise<AssistantConversation> {
-    return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`);
+export function getAssistantConversation(conversationId: string, signal?: AbortSignal): Promise<AssistantConversation> {
+    return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`, { signal });
 }
 export function getAssistantTurnTrace(turnId: string, before?: number | null): Promise<AssistantTurnTrace> {
     const query = before == null ? "" : `?before=${encodeURIComponent(String(before))}`;
@@ -54,9 +54,10 @@ export function updateAssistantConversation(conversationId: string, update: {
     draft_text?: string;
     expected_draft_version?: number;
     draft_write_id?: string;
-}): Promise<AssistantConversation> {
+    after_draft_write_id?: string;
+}, options?: { keepalive: boolean }): Promise<AssistantConversation> {
     return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`, {
-        method: "PATCH", body: JSON.stringify(update),
+        method: "PATCH", body: JSON.stringify(update), keepalive: options?.keepalive,
     });
 }
 export function restoreUnpersistedAssistantTurnDraft(conversationId: string, input: {

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantConversationProvider, useAssistantReferenceStatus, useAssistantSelection } from "../AssistantConversationProvider";
 import { useAssistantConversation } from "../useAssistantConversation";
 import { CreationPlanApiError } from "@/lib/api/creation-transport";
-import { readDraftRecovery, recordDraftWrite, rememberDraft, updateDraftRecovery } from "@/lib/assistant-draft-recovery";
+import { readDraftWriteReceipt, rememberDraftWrite } from "@/lib/assistant-draft-recovery";
 import type { AssistantConversation, AssistantConversationReferenceState, AssistantSavedReference, AssistantScriptToolReceipt, CreationTaskAssistantTurnResponse } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
@@ -59,43 +59,82 @@ beforeEach(() => {
 
 afterEach(() => { vi.useRealTimers(); });
 
-describe("draft recovery after reopening a conversation", () => {
-  const writeId = "044a8d8b-5d03-4584-b295-d9537d2d2d76";
-  const latestText = "刷新前最后编辑";
+describe("draft persistence through page exit", () => {
   const scope = { scope_kind: "home" as const, scope_id: "home" };
 
-  function pendingWrite() {
-    const original = conversation({ draft_text: "已保存" });
-    const pending = rememberDraft(original, original.draft_version, latestText)!;
-    updateDraftRecovery(original, pending, recordDraftWrite(pending, writeId));
-    return original;
-  }
+  it("dispatches the newest edit immediately with the outstanding write as its CAS predecessor", async () => {
+    const earlier = deferred<AssistantConversation>();
+    const final = deferred<AssistantConversation>();
+    api.updateAssistantConversation.mockReturnValueOnce(earlier.promise).mockReturnValueOnce(final.promise);
+    const { result } = renderHook(() => useAssistantConversation(scope));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.setDraftText("正在保存的第一笔"));
+    await waitFor(() => expect(api.updateAssistantConversation).toHaveBeenCalledTimes(1));
+    const first = api.updateAssistantConversation.mock.calls[0][1];
+    act(() => {
+      result.current.setDraftText("离开页面前的最新编辑");
+      window.dispatchEvent(new Event("pagehide"));
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(api.updateAssistantConversation).toHaveBeenCalledTimes(2);
+    const [id, second, options] = api.updateAssistantConversation.mock.calls[1];
+    expect(id).toBe("conversation-one");
+    expect(options).toEqual({ keepalive: true });
+    expect(second).toMatchObject({ draft_text: "离开页面前的最新编辑", expected_draft_version: 1,
+      after_draft_write_id: first.draft_write_id });
+    expect(Object.values(localStorage).join("")).not.toContain(second.draft_text);
+    await act(async () => {
+      final.resolve(conversation({ draft_text: second.draft_text, draft_version: 2, draft_write_id: second.draft_write_id }));
+      earlier.reject(new CreationPlanApiError(409, null, "旧请求输给最新编辑"));
+    });
+    expect(result.current.draftText).toBe(second.draft_text);
+    expect(result.current.error).toBeNull();
+    expect(readDraftWriteReceipt(conversation())).toBeUndefined();
+  });
 
-  it("retries the original CAS only over its own write that arrived during recovery", async () => {
-    const original = pendingWrite();
-    api.getCurrentAssistantConversation.mockResolvedValue(original);
-    api.updateAssistantConversation.mockRejectedValueOnce(new CreationPlanApiError(409, null, "冲突"));
+  it("reads a late committed write after reopening without replaying its text", async () => {
+    const first = conversation();
+    const prior = rememberDraftWrite(first, 1);
+    const receipt = rememberDraftWrite(first, 1, prior.id);
+    api.getCurrentAssistantConversation.mockResolvedValue(conversation({ draft_version: 2, draft_write_id: prior.id }));
     api.getAssistantConversation.mockResolvedValue(conversation({
-      draft_text: "仍在途的编辑", draft_version: 2, draft_write_id: writeId,
+      draft_text: "服务器已核验的最后一笔", draft_version: 3, draft_write_id: receipt.id,
     }));
     const { result } = renderHook(() => useAssistantConversation(scope));
-    await waitFor(() => expect(readDraftRecovery(original)).toBeUndefined());
-    expect(result.current.draftText).toBe(latestText);
-    expect(api.updateAssistantConversation.mock.calls.map(([, body]) => [body.draft_text, body.expected_draft_version]))
-      .toEqual([[latestText, 1], [latestText, 2]]);
+    await waitFor(() => expect(result.current.draftText).toBe("服务器已核验的最后一笔"));
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+    expect(readDraftWriteReceipt(first)).toBeUndefined();
+  });
+
+  it("does not rebase a newer local edit onto a receipt read that was already in flight", async () => {
+    const initial = conversation();
+    const receipt = rememberDraftWrite(initial, initial.draft_version);
+    const reading = deferred<AssistantConversation>();
+    api.getAssistantConversation.mockReturnValueOnce(reading.promise);
+    const { result } = renderHook(() => useAssistantConversation(scope));
+    await waitFor(() => expect(api.getAssistantConversation).toHaveBeenCalled());
+    act(() => result.current.setDraftText("回读发出之后的新编辑"));
+    await act(async () => reading.resolve(conversation({
+      draft_text: "上一页保存的文字", draft_version: 2, draft_write_id: receipt.id,
+    })));
+    expect(result.current.draftText).toBe("回读发出之后的新编辑");
+    expect(api.updateAssistantConversation).toHaveBeenCalledWith(initial.id, {
+      draft_text: "回读发出之后的新编辑", expected_draft_version: 1,
+    });
   });
 
   it.each([
-    ["other client with identical text", { draft_text: "仍在途的编辑", draft_write_id: "98032ffc-60a8-4a06-9191-79def82d9c83" }],
-    ["accepted message", { draft_text: "", draft_write_id: null }],
-    ["other member's conversation", { id: "conversation-other", draft_text: "", draft_write_id: writeId }],
-  ])("leaves the server draft in place for %s", async (_description, overrides) => {
-    pendingWrite();
+    ["another client's edit", { draft_text: "另一客户端的草稿", draft_write_id: "98032ffc-60a8-4a06-9191-79def82d9c83" }],
+    ["accepted input", { draft_text: "", draft_write_id: null }],
+    ["another member's conversation", { id: "conversation-other" }],
+  ])("loads only the authorized server snapshot after %s", async (_description, overrides) => {
+    rememberDraftWrite(conversation(), 1);
     const current = conversation({ ...overrides, draft_version: 2 });
     api.getCurrentAssistantConversation.mockResolvedValue(current);
     const { result } = renderHook(() => useAssistantConversation(scope));
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.draftText).toBe(current.draft_text);
+    expect(api.getAssistantConversation).not.toHaveBeenCalled();
     expect(api.updateAssistantConversation).not.toHaveBeenCalled();
   });
 });

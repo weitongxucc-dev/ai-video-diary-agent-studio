@@ -211,6 +211,7 @@ class ConversationHTTPAdapter:
                 updated = self._conversations_for().save_draft(
                     conversation_id, workspace_id, member_id, payload.draft_text, payload.expected_draft_version,
                     draft_write_id=str(payload.draft_write_id) if payload.draft_write_id else None,
+                    after_draft_write_id=str(payload.after_draft_write_id) if payload.after_draft_write_id else None,
                 )
             except ConversationDraftVersionConflict as exc:
                 raise HTTPException(status_code=409, detail={'error': 'assistant_draft_conflict', 'message': '草稿已在其他位置更新；当前较新的草稿已保留，请重新读取后继续。', 'current_draft_version': exc.current['draft_version']}) from exc

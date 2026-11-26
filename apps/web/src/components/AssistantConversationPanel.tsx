@@ -1023,13 +1023,15 @@ export function AssistantConversationPanel({
         </Button>; }) : <p>{capabilities ? "没有匹配的已接通命令" : "正在读取可用命令…"}</p>}
         {busy || currentRunning ? <p>本轮运行中，可以编辑草稿，暂不能执行命令。</p> : null}
       </div> : null}
-      <InputGroupTextarea ref={setFocus} aria-autocomplete="list" aria-controls={menuOpen ? `${diagnosticsId}-commands` : undefined} aria-describedby={`${diagnosticsId}-input-help`} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => { onInput(event.target.value); if (event.target.value.endsWith("@") && !composing) setReferencePickerOpen(true); }} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={acceptsQueuedInput ? "还有什么要补充？" : placeholder ?? "想做什么，或想怎么改？"} rows={1} />
+      <InputGroupTextarea ref={setFocus} autoComplete="off" aria-autocomplete="list" aria-controls={menuOpen ? `${diagnosticsId}-commands` : undefined} aria-describedby={`${diagnosticsId}-input-help`} aria-label={inputLabel} value={input} disabled={state.loading || !conversation} onChange={(event) => { onInput(event.target.value); if (event.target.value.endsWith("@") && !composing) setReferencePickerOpen(true); }} onCompositionStart={() => setComposing(true)} onCompositionEnd={() => setComposing(false)} onKeyDown={keyDown} placeholder={acceptsQueuedInput ? "还有什么要补充？" : placeholder ?? "想做什么，或想怎么改？"} rows={1} />
       <div className="assistant-conversation-actions">
         <div className="assistant-input-tools">
           <ReferencePicker open={referencePickerOpen} onOpenChange={setReferencePickerOpen} onAdded={()=>{if(input.endsWith("@"))onInput(input.slice(0,-1));focus?.focus();}}/>
           {composerActions}
           {acceptsQueuedInput ? <label className="assistant-input-mode"><span className="assistant-visually-hidden">追加要求</span><select aria-label="追加要求处理方式" title="补充当前要求，或等本轮结束后再处理" value={inputMode} onChange={event=>setInputMode(event.target.value as "steer"|"follow_up")}><option value="steer">补充当前要求</option><option value="follow_up">完成后处理</option></select></label> : null}
-          {!configured ? <a className="assistant-input-status" href="/settings" aria-label="连接文字模型" title="在设置中连接对话服务"><CircleHelp size={14}/>对话未连接</a> : referenceStatus.pending ? <span className="assistant-input-status" role="status">正在核验引用</span> : null}</div>
+          {!configured ? <a className="assistant-input-status" href="/settings" aria-label="连接文字模型" title="在设置中连接对话服务"><CircleHelp size={14}/>对话未连接</a> : referenceStatus.pending ? <span className="assistant-input-status" role="status">正在核验引用</span> : null}
+          {conversation && state.draftText !== conversation.draft_text ? <span className="assistant-input-status">草稿尚未保存</span> : null}
+        </div>
         {currentRunning && lastTurnId && !lastTurnId.startsWith("pending-") ? <Button variant="ghost" className="assistant-stop" type="button" aria-label={stopping ? "正在请求停止" : "停止本轮"} disabled={stopping} title="停止本轮回复；已提交的业务动作不撤销" onClick={() => void stopCurrentTurn()}><Square aria-hidden="true" size={14}/></Button>
           : null}
         {!currentRunning || input.trim() ? <Tooltip label={sendReason}><Button variant="ghost" className="assistant-send" type="submit" aria-label={sendLabel} aria-description={sendReason} disabled={sendDisabled}><ArrowUp aria-hidden="true" size={16} /></Button></Tooltip> : null}

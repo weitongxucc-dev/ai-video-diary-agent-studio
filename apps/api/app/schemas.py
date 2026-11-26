@@ -2691,6 +2691,7 @@ class AssistantConversationUpdateRequest(BaseModel):
     draft_text: str | None = Field(default=None, max_length=4000)
     expected_draft_version: int | None = Field(default=None, ge=0)
     draft_write_id: UUID | None = None
+    after_draft_write_id: UUID | None = None
 
     @model_validator(mode="after")
     def require_draft_version(self):
@@ -2698,6 +2699,10 @@ class AssistantConversationUpdateRequest(BaseModel):
             raise ValueError("保存草稿必须提供expected_draft_version")
         if self.draft_write_id is not None and self.draft_text is None:
             raise ValueError("draft_write_id 只能用于保存草稿")
+        if self.after_draft_write_id is not None and (
+            self.draft_write_id is None or self.draft_write_id == self.after_draft_write_id
+        ):
+            raise ValueError("接续保存必须提供不同的草稿写入标识")
         return self
 
 
