@@ -1137,12 +1137,16 @@ class MontageRenderer:
                 command.extend(["-loop", "1", "-framerate", "30", "-i", str(overlay_path)])
         intervals=subtitle_intervals if subtitle_intervals is not None else [(clip.timeline_start_seconds,clip.timeline_end_seconds) for clip in plan.clips]
         positions = overlay_positions if overlay_positions is not None else [(0, 0)] * len(subtitle_overlays)
-        for index, ((start,end), _overlay_path, (left,top)) in enumerate(zip(intervals,subtitle_overlays,positions,strict=True)):
+        for index, ((start,end), overlay_path, (left,top)) in enumerate(zip(intervals,subtitle_overlays,positions,strict=True)):
             overlay_input = audio_index + 1 + index
             next_label = f"[vsub{index}]"
+            if overlay_path.suffix == '.ffconcat':
+                # Template frames already encode visibility with alpha on the picture clock.
+                options = "eof_action=pass:repeatlast=0:shortest=0"
+            else:
+                options = f"shortest=1:enable='gte(t,{start:.6f})*lt(t,{end:.6f})'"
             filters.append(
-                f"{output_label}[{overlay_input}:v]overlay={left}:{top}:shortest=1:"
-                f"enable='gte(t,{start:.6f})*lt(t,{end:.6f})'{next_label}"
+                f"{output_label}[{overlay_input}:v]overlay={left}:{top}:{options}{next_label}"
             )
             output_label = next_label
         if subtitle_sequence is not None:
