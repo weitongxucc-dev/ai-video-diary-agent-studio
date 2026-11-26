@@ -35,6 +35,40 @@ describe("EditorResourceLibraryPanel", () => {
     expect(screen.queryByRole("button", { name: "添加到作品" })).not.toBeInTheDocument();
   });
 
+  it("shows an audio preview error only for the open resource version and allows a fresh preview", async () => {
+    const glass = { id: "openfilm:sound-glass-pulse", category_id: "sfx", name: "玻璃脉冲",
+      version: 1, status: "connected", resource_type: "audio", provenance: [],
+      runtime_requirements: { engine: "EditAudioTimeline" },
+      preview: { kind: "audio", thumbnail_ref: "/preview/glass?version=1" },
+    };
+    const resources = [glass, { ...glass, version: 2,
+      preview: { ...glass.preview, thumbnail_ref: "/preview/glass?version=2" } }];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({
+      categories: [], resources,
+    }) }));
+    render(<EditorResourceLibraryPanel materials={null} initialCategory="sfx" renderResourceAction={() => null} />);
+    const first = (await screen.findByText("可用 · v1")).closest("article")!;
+    const second = screen.getByText("可用 · v2").closest("article")!;
+
+    fireEvent.click(within(first).getByRole("button", { name: "查看预览" }));
+    const failingAudio = within(first).getByLabelText("预览：玻璃脉冲");
+    expect(failingAudio).toHaveAttribute("src", glass.preview.thumbnail_ref);
+    fireEvent.error(failingAudio);
+    expect(within(first).getByRole("status")).toHaveTextContent("暂时无法试听此版本");
+    expect(within(first).getByRole("button", { name: "添加到作品" })).toBeEnabled();
+
+    fireEvent.click(within(second).getByRole("button", { name: "查看预览" }));
+    expect(within(first).queryByRole("status")).not.toBeInTheDocument();
+    const playableAudio = within(second).getByLabelText("预览：玻璃脉冲");
+    expect(playableAudio).toHaveAttribute("src", "/preview/glass?version=2");
+    fireEvent.canPlay(playableAudio);
+    expect(within(second).getByRole("status")).toBeEmptyDOMElement();
+
+    fireEvent.click(within(first).getByRole("button", { name: "查看预览" }));
+    expect(within(first).getByRole("status")).toBeEmptyDOMElement();
+    expect(within(first).getByLabelText("预览：玻璃脉冲")).not.toBe(failingAudio);
+  });
+
   it("distinguishes usable methods, external references, and planned skills without offering execution", async () => {
     const method = { id: "skill:cut-as-code-video-cut", category_id: "skills", name: "cut-as-code-video-cut", version: 1,
       status: "connected", resource_type: "skill", preview: { kind: "method_document" },
