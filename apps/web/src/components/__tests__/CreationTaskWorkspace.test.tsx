@@ -2447,6 +2447,45 @@ describe("CreationTaskWorkspace", () => {
     reopened.unmount();
   });
 
+  it("quotes the timeline subtitle and previews that fixed cue after selecting a shot", async () => {
+    mocks.withReferenceProvider = true;
+    const initial = subtitleCoverWorkspace();
+    initial.montage!.clips = [{
+      id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
+      source_reference: "workspace://clip.mp4", source_start_seconds: 0, source_end_seconds: 4,
+      timeline_start_seconds: 0, timeline_end_seconds: 4, match_score: .9,
+      match_reasons: [], needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false,
+    }];
+    mocks.previewEdit.mockResolvedValue(exactPreview(initial.task, "UpdateSubtitleCue"));
+    renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
+    fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
+    const input = await readyInput("局部修改要求");
+    const subtitle = screen.getByRole("button", { name: "定位字幕：真实运行不是口号" });
+    fireEvent.click(subtitle);
+    expect(subtitle).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "引用所选对象到对话" }));
+    await waitFor(() => expect(mocks.saveReference).toHaveBeenCalledWith(expect.any(String), {
+      kind: "selection", items: [expect.objectContaining({
+        kind: "subtitle", task_id: initial.task.id, object_id: "subtitle-cue-1",
+        version: "timeline-version-6", start_ms: 0, end_ms: 3200,
+      })],
+    }, 0));
+
+    fireEvent.click(openStoryboardClip(1));
+    expect(subtitle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.change(input, { target: { value: "把这句字幕改成：真实运行可以验证。" } });
+    const preview = screen.getByRole("button", { name: "精确预览修改" });
+    await waitFor(() => expect(preview).toBeEnabled());
+    fireEvent.click(preview);
+    await waitFor(() => expect(mocks.previewEdit).toHaveBeenCalledWith(initial.task.id, {
+      raw_command: "把这句字幕改成：真实运行可以验证。",
+      context_stage: "subtitle_cover",
+      selected_object_refs: ["cue:subtitle-cue-1", "subtitle-track:subtitle-track-zh"],
+      playhead_ms: null,
+    }));
+    expect(mocks.saveReference).toHaveBeenCalledOnce();
+  });
+
   it("uses persisted cues when switching tracks and selecting another cue", async () => {
     mocks.withReferenceProvider = true;
     const initial = subtitleCoverWorkspace();
