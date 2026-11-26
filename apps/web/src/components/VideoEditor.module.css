@@ -344,11 +344,8 @@
 .audioClip svg { width: 100%; height: 30px; stroke: currentColor; stroke-width: 1px; fill: none; }
 .audioClipSelect { position:absolute; inset:0; width:100%; border:0; padding:0; background:transparent; color:inherit; text-align:left; cursor:pointer; }
 .audioClipName { position:absolute; left:5px; top:0; max-width:calc(100% - 10px); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; line-height:18px; color:var(--text-2); }
-.audioWaveState { position:absolute; left:5px; right:22px; bottom:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; line-height:18px; color:var(--text-3); }
+.audioWaveState { position:absolute; left:5px; right:5px; bottom:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; line-height:18px; color:var(--text-3); }
 .audioClipSelect svg { position:absolute; left:0; bottom:0; height:22px; }
-.audioWaveDetails { position:absolute; right:1px; bottom:1px; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:3px; background:var(--surface-1); color:var(--text-2); cursor:pointer; }
-.audioWaveDetails svg { width:13px; height:13px; }
-.audioWaveDetails:hover { background:var(--surface-2); }
 .audioTimeline audio, .previewDiff audio { width: 100%; min-width: 0; height: 32px; }
 .audioPlayhead { position: absolute; inset-block: 0; width: 1px; background: var(--text-1); pointer-events: none; }
 
