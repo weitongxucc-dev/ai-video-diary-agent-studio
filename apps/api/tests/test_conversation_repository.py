@@ -186,6 +186,7 @@ def test_existing_conversation_and_turn_schema_upgrades_without_losing_saved_tex
     assert saved is not None
     assert saved["draft_text"] == "保留的旧草稿"
     assert saved["draft_version"] == 0
+    assert saved["draft_write_id"] is None
     assert turn is not None
     assert turn["user_message"] == "旧请求"
     with sqlite3.connect(database) as conn:
@@ -309,7 +310,8 @@ def test_turn_request_is_idempotent_and_rejects_reused_identity_with_other_conte
 def test_failure_recovery_restores_only_an_unpersisted_unchanged_draft_version(tmp_path):
     repository = ConversationRepository(tmp_path / "recovery-cas.sqlite3")
     conversation = repository.current_or_create("workspace-one", "member-one", "home", "home")
-    prepared = repository.save_draft(conversation["id"], "workspace-one", "member-one", "原始已发送句子", 0)
+    prepared = repository.save_draft(conversation["id"], "workspace-one", "member-one", "原始已发送句子", 0,
+        draft_write_id="e31b22c3-891c-4767-92be-45c0fd7935e6")
     assert prepared is not None
     restored, outcome = repository.restore_unpersisted_turn_draft(
         conversation["id"], "workspace-one", "member-one", "request-unpersisted", "原始已发送句子", prepared["draft_version"],
@@ -317,6 +319,7 @@ def test_failure_recovery_restores_only_an_unpersisted_unchanged_draft_version(t
     assert restored is not None and outcome == "restored"
     assert restored["draft_text"] == "原始已发送句子"
     assert restored["draft_version"] == 2
+    assert restored["draft_write_id"] is None
     with pytest.raises(ConversationTurnRequestConflict):
         repository.restore_unpersisted_turn_draft(
             conversation["id"], "workspace-one", "member-one", "request-unpersisted", "被改写的同ID请求", prepared["draft_version"],

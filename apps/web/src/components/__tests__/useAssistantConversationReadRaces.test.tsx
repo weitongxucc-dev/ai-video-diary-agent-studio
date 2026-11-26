@@ -3,6 +3,8 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantConversationProvider, useAssistantReferenceStatus, useAssistantSelection } from "../AssistantConversationProvider";
 import { useAssistantConversation } from "../useAssistantConversation";
+import { CreationPlanApiError } from "@/lib/api/creation-transport";
+import { readDraftRecovery, recordDraftWrite, rememberDraft, updateDraftRecovery } from "@/lib/assistant-draft-recovery";
 import type { AssistantConversation, AssistantConversationReferenceState, AssistantSavedReference, AssistantScriptToolReceipt, CreationTaskAssistantTurnResponse } from "@/lib/types";
 
 const api = vi.hoisted(() => ({
@@ -18,7 +20,9 @@ const api = vi.hoisted(() => ({
   saveAssistantConversationReference: vi.fn(),
 }));
 
-vi.mock("@/lib/api", () => api);
+vi.mock("@/lib/api", async () => ({
+  ...api, CreationPlanApiError: (await import("@/lib/api/creation-transport")).CreationPlanApiError,
+}));
 vi.mock("next/navigation", () => ({useRouter: () => ({push: vi.fn()})}));
 vi.mock("@/hooks/useLocalMemberIdentity", () => ({useLocalMemberIdentity: () => ({token: "test-member"})}));
 
@@ -38,6 +42,7 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   vi.clearAllMocks();
   const initial = conversation();
   api.getCurrentAssistantConversation.mockResolvedValue(initial);
@@ -53,6 +58,47 @@ beforeEach(() => {
 });
 
 afterEach(() => { vi.useRealTimers(); });
+
+describe("draft recovery after reopening a conversation", () => {
+  const writeId = "044a8d8b-5d03-4584-b295-d9537d2d2d76";
+  const latestText = "刷新前最后编辑";
+  const scope = { scope_kind: "home" as const, scope_id: "home" };
+
+  function pendingWrite() {
+    const original = conversation({ draft_text: "已保存" });
+    const pending = rememberDraft(original, original.draft_version, latestText)!;
+    updateDraftRecovery(original, pending, recordDraftWrite(pending, writeId));
+    return original;
+  }
+
+  it("retries the original CAS only over its own write that arrived during recovery", async () => {
+    const original = pendingWrite();
+    api.getCurrentAssistantConversation.mockResolvedValue(original);
+    api.updateAssistantConversation.mockRejectedValueOnce(new CreationPlanApiError(409, null, "冲突"));
+    api.getAssistantConversation.mockResolvedValue(conversation({
+      draft_text: "仍在途的编辑", draft_version: 2, draft_write_id: writeId,
+    }));
+    const { result } = renderHook(() => useAssistantConversation(scope));
+    await waitFor(() => expect(readDraftRecovery(original)).toBeUndefined());
+    expect(result.current.draftText).toBe(latestText);
+    expect(api.updateAssistantConversation.mock.calls.map(([, body]) => [body.draft_text, body.expected_draft_version]))
+      .toEqual([[latestText, 1], [latestText, 2]]);
+  });
+
+  it.each([
+    ["other client with identical text", { draft_text: "仍在途的编辑", draft_write_id: "98032ffc-60a8-4a06-9191-79def82d9c83" }],
+    ["accepted message", { draft_text: "", draft_write_id: null }],
+    ["other member's conversation", { id: "conversation-other", draft_text: "", draft_write_id: writeId }],
+  ])("leaves the server draft in place for %s", async (_description, overrides) => {
+    pendingWrite();
+    const current = conversation({ ...overrides, draft_version: 2 });
+    api.getCurrentAssistantConversation.mockResolvedValue(current);
+    const { result } = renderHook(() => useAssistantConversation(scope));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.draftText).toBe(current.draft_text);
+    expect(api.updateAssistantConversation).not.toHaveBeenCalled();
+  });
+});
 
 function businessConversation(status: "queued" | "running" | "confirmed" | "unknown" = "queued"): AssistantConversation {
   const current = conversation();

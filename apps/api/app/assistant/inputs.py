@@ -68,7 +68,7 @@ def enqueue_input(conn, *, conversation_id, workspace_id, member_id, target_turn
     events = json.loads(turn["events_json"])
     events.append(item)
     conn.execute("UPDATE assistant_conversation_turns SET events_json=?,updated_at=? WHERE id=?", (json.dumps(events, ensure_ascii=False), now, target_turn_id))
-    conn.execute("UPDATE assistant_conversations SET draft_text='',draft_version=draft_version+1,updated_at=? WHERE id=?", (now, conversation_id))
+    conn.execute("UPDATE assistant_conversations SET draft_text='',draft_version=draft_version+1,draft_write_id=NULL,updated_at=? WHERE id=?", (now, conversation_id))
     return item, True
 
 

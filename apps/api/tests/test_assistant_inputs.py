@@ -44,13 +44,14 @@ def test_input_receipt_consumes_draft_once_keeps_original_target_and_can_be_with
                                          {"kind": "task", "task_id": "t"})
     repo.record_task_execution(turn["id"],"w","m","t",{"task_id":"t","job":{"id":"existing-job","status":"queued"}})
     assert repo.get_task_goal(turn["id"])["status"] == "waiting_result"
-    repo.save_draft(chat["id"], "w", "m", "改成第二种字幕", 2)
+    repo.save_draft(chat["id"], "w", "m", "改成第二种字幕", 2, draft_write_id="e31b22c3-891c-4767-92be-45c0fd7935e6")
     values = dict(target_turn_id=turn["id"], client_request_id="second", message="改成第二种字幕",
                   mode="steer", expected_draft_version=3, expected_reference_version=0,
                   request_context={"kind": "task", "task_id": "t", "selected_reference": None})
     receipt, created = repo.enqueue_input(chat["id"], "w", "m", **values)
     assert created and receipt["status"] == "accepted"
-    assert repo.get(chat["id"], "w", "m")["draft_version"] == 4
+    cleared = repo.get(chat["id"], "w", "m")
+    assert (cleared["draft_text"], cleared["draft_version"], cleared["draft_write_id"]) == ("", 4, None)
     assert repo.enqueue_input(chat["id"], "w", "m", **values) == (receipt, False)
     with pytest.raises(AssistantInputConflict):
         repo.enqueue_input(chat["id"], "w", "m", **{**values, "message": "不同要求"})

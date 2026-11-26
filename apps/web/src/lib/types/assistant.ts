@@ -352,6 +352,7 @@ export type AssistantConversation = {
     title: string;
     draft_text: string;
     draft_version: number;
+  draft_write_id?: string | null;
     created_at: string;
     updated_at: string;
     turns: AssistantConversationTurn[];

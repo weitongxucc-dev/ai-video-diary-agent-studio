@@ -53,6 +53,7 @@ export function updateAssistantConversation(conversationId: string, update: {
     title?: string;
     draft_text?: string;
     expected_draft_version?: number;
+    draft_write_id?: string;
 }): Promise<AssistantConversation> {
     return creationPlanRequest(`/api/assistant/conversations/${encodeURIComponent(conversationId)}`, {
         method: "PATCH", body: JSON.stringify(update),

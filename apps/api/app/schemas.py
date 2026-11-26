@@ -2690,11 +2690,14 @@ class AssistantConversationUpdateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=80)
     draft_text: str | None = Field(default=None, max_length=4000)
     expected_draft_version: int | None = Field(default=None, ge=0)
+    draft_write_id: UUID | None = None
 
     @model_validator(mode="after")
     def require_draft_version(self):
         if self.draft_text is not None and self.expected_draft_version is None:
             raise ValueError("保存草稿必须提供expected_draft_version")
+        if self.draft_write_id is not None and self.draft_text is None:
+            raise ValueError("draft_write_id 只能用于保存草稿")
         return self
 
 
@@ -2740,6 +2743,7 @@ class AssistantConversationResponse(BaseModel):
     title: str
     draft_text: str
     draft_version: int = Field(ge=0)
+    draft_write_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
     turns: list[AssistantConversationTurnResponse] = Field(default_factory=list)
