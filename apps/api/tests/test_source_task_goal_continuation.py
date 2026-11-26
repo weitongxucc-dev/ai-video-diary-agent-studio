@@ -24,6 +24,7 @@ from app.knowledge_files import KnowledgeSection
 from app.schemas import WorkspaceAssistantPlanTurnRequest
 from app.source_repository import SourceRepository
 from app.source_types import KnowledgeItem
+from test_source_revision_recovery import prepare_recovery
 from test_source_task_use_case import source_case as source_case  # noqa: F401
 
 
@@ -390,6 +391,46 @@ def test_persisted_source_change_invalidates_the_registered_goal_before_a_round(
     bind(case, roots)
     with case.repo._connect() as connection:
         connection.execute("UPDATE task_events SET payload_json=json_set(payload_json,'$.source.message_digest','changed') WHERE id=?", (case.event.id,))
+    assert case.service.reconcile() == 0 and case.calls == []
+    assert case.conversations.get_task_goal(roots[0])['status'] == 'invalidated'
+
+
+def test_registered_source_goal_reopens_after_a_formal_revision_recovery(goal_case):
+    case = goal_case
+    complete(case)
+    roots = register(case)
+    bind(case, roots)
+    task, _, command = prepare_recovery(case, case.receipt)
+    case.use_case.recover_revision(task.id, command, case.actor)
+    case.plan = case.repo.plan_records.get_creation_plan('local', task.plan_id)
+    # Reconciliation checks durable proof only. No source read is needed to reopen the goal.
+    case.path.unlink()
+    assert register(case) == roots
+    assert case.service.reconcile() == 1
+    assert len(case.calls) == 1
+
+
+@pytest.mark.parametrize('drift', ['another_source_event', 'another_range', 'missing_receive_proof'])
+def test_source_goal_rejects_a_recovery_without_its_original_proof(goal_case, drift):
+    case = goal_case
+    complete(case)
+    roots = register(case)
+    bind(case, roots)
+    task, _, command = prepare_recovery(case, case.receipt)
+    case.use_case.recover_revision(task.id, command, case.actor)
+    with case.repo._connect() as connection:
+        if drift == 'another_source_event':
+            connection.execute("UPDATE task_events SET payload_json=json_set(payload_json,'$.source_event_id','other') "
+                "WHERE task_id=? AND event_type='source_revision_recovered'", (task.id,))
+        elif drift == 'another_range':
+            current = case.repo.plan_records.read_creation_plan(connection, 'local', task.plan_id)
+            case.repo.plan_records.write_plan_payload(connection, 'local', replace(current,
+                source_media={**current.source_media, 'source_start_seconds': 1}))
+        else:
+            connection.execute('DELETE FROM material_discovery_receipts')
+    case.plan = case.repo.plan_records.get_creation_plan('local', task.plan_id)
+    with pytest.raises(ValueError, match='采用回执'):
+        register(case)
     assert case.service.reconcile() == 0 and case.calls == []
     assert case.conversations.get_task_goal(roots[0])['status'] == 'invalidated'
 

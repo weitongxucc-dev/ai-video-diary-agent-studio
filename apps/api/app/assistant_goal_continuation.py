@@ -189,6 +189,8 @@ class GoalContinuationService:
 
     def register_source_task(self, turn_id, workspace_id, member_id, event, task, plan) -> list[str]:
         """Continue a real adopted source task without manufacturing a window."""
+        from app.creation.source_task_use_case import source_task_binding_matches
+
         source, receipt = event.payload['source'], event.payload['receipt']
         if source.get('kind') != 'conversation_input' or source.get('turn_id') != turn_id:
             return []
@@ -196,7 +198,6 @@ class GoalContinuationService:
         if (event.event_type != 'source_task_created' or event.workspace_id != workspace_id
                 or event.task_id != task.id or receipt['task_id'] != task.id or receipt['plan_id'] != plan.id
                 or task.workspace_id != workspace_id or task.plan_id != plan.id or plan.creation_task_id != task.id
-                or plan.source_media is None or receipt['source_media'] != plan.source_media
                 or adopted.get('kind') != 'delegated_system' or adopted.get('member_id') != member_id
                 or adopted.get('authorization_source') != source or adopted.get('version') != event.payload['input_digest']):
             raise ValueError('原片任务采用回执与原制作目标不一致')
@@ -205,6 +206,10 @@ class GoalContinuationService:
                 "AND event_type='source_task_created'", (workspace_id, event.id)).fetchone()
             if saved is None or saved['task_id'] != task.id or json.loads(saved['payload_json']) != event.payload:
                 raise ValueError('原片任务采用回执不是当前持久事件')
+            if not source_task_binding_matches(conn, workspace_id=workspace_id, task_id=task.id, plan_id=plan.id,
+                    member_id=member_id, source_event_id=event.id, original=receipt['source_media'],
+                    current=plan.source_media):
+                raise ValueError('原片任务采用回执与当前来源绑定不一致')
             version = conn.execute('SELECT sequence FROM timeline_versions WHERE workspace_id=? AND task_id=? AND id=?',
                 (workspace_id, task.id, task.current_timeline_version_id)).fetchone()
         if version is None:
