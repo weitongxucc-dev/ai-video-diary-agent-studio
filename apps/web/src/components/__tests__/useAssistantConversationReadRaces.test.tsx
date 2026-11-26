@@ -123,6 +123,45 @@ describe("draft persistence through page exit", () => {
     });
   });
 
+  it("uses the freshly loaded draft version when returning after a save conflict", async () => {
+    let saved = conversation({ scope_kind: "task", scope_id: "task-one" });
+    const second = conversation({ id: "conversation-two", scope_kind: "task", scope_id: "task-two" });
+    api.getCurrentAssistantConversation.mockImplementation(async ({ scope_id }) =>
+      scope_id === saved.scope_id ? saved : second);
+    api.updateAssistantConversation.mockImplementation(async (_id, update) => {
+      if (update.expected_draft_version !== saved.draft_version) {
+        throw new CreationPlanApiError(409, null, "另一窗口已保存");
+      }
+      saved = { ...saved, draft_text: update.draft_text, draft_version: saved.draft_version + 1 };
+      return saved;
+    });
+    const { result, rerender } = renderHook(
+      ({ scopeId }) => useAssistantConversation({ scope_kind: "task", scope_id: scopeId }),
+      { initialProps: { scopeId: saved.scope_id } },
+    );
+    await waitFor(() => expect(result.current.conversation?.draft_version).toBe(1));
+
+    saved = { ...saved, draft_text: "另一窗口的草稿", draft_version: 2 };
+    act(() => {
+      result.current.setDraftText("未同步的旧编辑");
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    await waitFor(() => expect(result.current.error).toBe("另一窗口已保存"));
+    rerender({ scopeId: second.scope_id });
+    await waitFor(() => expect(result.current.conversation?.id).toBe(second.id));
+    rerender({ scopeId: saved.scope_id });
+    await waitFor(() => expect(result.current.draftText).toBe("另一窗口的草稿"));
+
+    act(() => {
+      result.current.setDraftText("回到作品后的新编辑");
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(api.updateAssistantConversation).toHaveBeenLastCalledWith(saved.id, expect.objectContaining({
+      draft_text: "回到作品后的新编辑", expected_draft_version: 2,
+    }), { keepalive: true });
+    await waitFor(() => expect(result.current.conversation?.draft_version).toBe(3));
+  });
+
   it.each([
     ["another client's edit", { draft_text: "另一客户端的草稿", draft_write_id: "98032ffc-60a8-4a06-9191-79def82d9c83" }],
     ["accepted input", { draft_text: "", draft_write_id: null }],

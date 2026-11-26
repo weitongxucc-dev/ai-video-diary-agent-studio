@@ -597,6 +597,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
         draftVersionByConversation.current.set(restored.id, restored.draft_version);
         replace(restored);
         if (revision.current === loadRevision) {
+          pendingDrafts.current.delete(restored.id);
           draftValue.current = restored.draft_text;
           setDraftTextState(restored.draft_text);
         } else {
@@ -887,6 +888,7 @@ export function useScopedAssistantConversation(scope: AssistantConversationScope
       advanceDraftRevision(draftRevisionByConversation.current, next.id);
       draftVersionByConversation.current.set(next.id, next.draft_version);
       replace(next);
+      pendingDrafts.current.delete(next.id);
       draftValue.current = next.draft_text;
       setDraftTextState(next.draft_text);
       setConversations(items => [next, ...items.filter(item => item.id !== next.id)]);
