@@ -38,6 +38,26 @@ it("sends an exact gain submission without changing the source range",()=>{
   expect(track.clips[0].source_start_ms).toBe(1000);
 });
 
+it.each([
+  ["时间线起点（秒）", "0.967", "timeline_start_ms", 967],
+  ["源音频终点（秒）", "0.233", "source_end_ms", 233],
+  ["源音频起点（秒）", "1.001", "source_start_ms", 1001],
+])("submits %s in integer milliseconds", (label, seconds, key, milliseconds) => {
+  const preview = vi.fn();
+  const clip = { ...track.clips[0], source_start_ms: 0, source_end_ms: 3000, timeline_start_ms: 960 };
+  render(<AudioTimelineInspector track={track} clip={clip} versionId="version" playhead={0}
+    busy={false} onPreview={preview} onDraftChange={vi.fn()} />);
+  expect(screen.getByText("0.960–3.960 秒 · 音乐")).toBeVisible();
+  const input = screen.getByRole<HTMLInputElement>("spinbutton", { name: label });
+  input.focus();
+  fireEvent.change(input, { target: { value: seconds } });
+  expect(input.checkValidity()).toBe(true);
+  fireEvent.blur(input);
+  expect(preview).toHaveBeenCalledExactlyOnceWith({
+    base_version_id: "version", target_id: "clip", action: "update", values: { [key]: milliseconds },
+  });
+});
+
 it.each(["clip", "track"])("keeps %s gain controls synchronized and submits only after leaving the slider", async target => {
   const preview = vi.fn();
   const user = userEvent.setup();

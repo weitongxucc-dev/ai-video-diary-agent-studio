@@ -30,7 +30,7 @@ function panel(compact: boolean, status: JobStatus, failureReason: string) {
     onCancel={vi.fn()} onOpenMontage={vi.fn()} />;
 }
 
-it("shows the saved template snapshot in finished work without an execution preview", () => {
+it("uses the saved edit length with the pinned template in finished work without an execution preview", () => {
   const settings: VideoTemplateSettings = {
     kind: "composition", language: "en-US", aspect_ratio: "16:9", duration_target_seconds: 6, voice: null,
     style_instruction: "", fit_mode: "fit", subtitle_style: {},
@@ -39,15 +39,19 @@ it("shows the saved template snapshot in finished work without an execution prev
     },
   };
   const completed = { ...execution("succeeded", ""), video_ready: true };
-  function review(templateSettings: VideoTemplateSettings) {
+  function review(templateSettings: VideoTemplateSettings, durationSeconds?: number) {
     return <CreationExecutionPanel taskStage="review" taskReason={null} voice={null} availableVoices={[]}
       template={{ template_id: "fixed-template", template_version: 1, template_settings: templateSettings }}
-      preview={null} execution={completed} busy={false}
+      compositionDurationSeconds={durationSeconds} preview={null} execution={completed} busy={false}
       onStart={vi.fn()} onResume={vi.fn()} onCancel={vi.fn()} onOpenMontage={vi.fn()} />;
   }
-  const view = render(review(settings));
+  const view = render(review(settings, 3));
   const timing = within(screen.getByRole("region", { name: "模板来源 · 第1版参考节奏" }));
   expect(timing.getByText("4.000 秒 · 120 帧")).toBeVisible();
+  expect(timing.getByText("3.000 秒 · 90 帧")).toBeVisible();
+  expect(timing.getByText("0.767 秒 · 第 23 帧")).toBeVisible();
+  expect(timing.getByText("音效 0.967–1.200 秒")).toBeVisible();
+  view.rerender(review(settings));
   expect(timing.getByText("1.000 秒 · 第 30 帧")).toBeVisible();
   expect(timing.getByText("2.600 秒 · 第 78 帧")).toBeVisible();
   expect(timing.getByText("音效 1.300–1.600 秒")).toBeVisible();
