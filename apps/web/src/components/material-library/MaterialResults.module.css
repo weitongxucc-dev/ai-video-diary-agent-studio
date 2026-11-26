@@ -27,3 +27,11 @@
 .objectList .referenceAction { top:16px; }
 .resetFilters { composes:button outline from "../ui/workbench-controls.module.css"; }
 .importButton { composes:button secondary from "../ui/workbench-controls.module.css"; }
+.startCreation { composes:button outline from "../ui/workbench-controls.module.css"; min-height:36px; }
+.emptyActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}

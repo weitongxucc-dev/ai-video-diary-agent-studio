@@ -508,6 +508,13 @@ it("distinguishes an empty search result from an empty library without warning o
   await screen.findByText("没有匹配的素材");
   expect(screen.queryByText(/选中的素材已不在当前列表/)).not.toBeInTheDocument();
   expect(screen.queryByText("素材库还是空的")).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "新建视频" })).not.toBeInTheDocument();
+});
+
+it("links the empty material library to the shared new video entry", () => {
+  render(<MaterialLibraryWorkspace initialLibrary={{ ...library, assets: [], total_count: 0 }} initialInsights={{ ...insights, asset_count: 0 }} initialCollections={{collections:[],total_count:0}} />);
+  expect(screen.getByText("素材库还是空的")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "新建视频" })).toHaveAttribute("href", "/production?new=1");
 });
 
 it("preserves an explicitly selected material's unsaved description while it leaves the filtered list", async () => {
