@@ -1878,35 +1878,37 @@ describe("CreationTaskWorkspace", () => {
       player.currentTime = 3;
       fireEvent.seeked(player);
       expect(screen.getByLabelText("局部修改要求")).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "调整成片" }));
-      fireEvent.click(screen.getByRole("button", { name: "修改镜头" }));
+      fireEvent.click(screen.getByText("调整成片", { selector: "button" }));
+      fireEvent.click(screen.getByText("修改镜头", { selector: "button" }));
       const editor = screen.getByLabelText("剪辑成片预览") as HTMLVideoElement;
       fireEvent.loadedMetadata(editor);
       expect(editor.currentTime).toBe(3);
-      expect(openStoryboardClip(2)).toHaveAttribute("aria-pressed", "true");
+      fireEvent.click(screen.getByLabelText("展开镜头列表"));
+      const shot = (index: number) => within(screen.getByLabelText("镜头故事板")).getByLabelText(`选择镜头 ${index}`);
+      expect(shot(2)).toHaveAttribute("aria-pressed", "true");
       fireEvent.canPlay(editor);
       fireEvent.play(editor);
-      const playbackControl = screen.getByRole("button", { name: "暂停成片" });
-      const positionControl = screen.getByRole("slider", { name: "成片播放位置" });
+      const playbackControl = screen.getByLabelText("暂停成片");
+      const positionControl = screen.getByLabelText("成片播放位置");
 
       const preview = exactPreview(initial.task, "ReplaceClip");
       preview.proposal.target_refs = ["clip:clip-2"];
       let resolvePreview!: (value: ReturnType<typeof exactPreview>) => void;
       mocks.previewEdit.mockReturnValue(new Promise((resolve) => { resolvePreview = resolve; }));
       fireEvent.change(await readyInput("局部修改要求"), { target: { value: "换成另一个镜头" } });
-      fireEvent.click(screen.getByRole("button", { name: "精确预览修改" }));
+      fireEvent.click(within(screen.getByLabelText("修改视频")).getByRole("button", { name: "精确预览修改" }));
       expect(mocks.previewEdit).toHaveBeenCalledWith(initial.task.id, expect.objectContaining({
         selected_object_refs: ["clip:clip-2"], playhead_ms: 3000,
       }));
       if (scenario === "confirmation visible") {
         await act(async () => resolvePreview(preview));
-        expect(screen.getByRole("button", { name: "应用到草稿" })).toBeVisible();
+        expect(screen.getByText("应用到草稿", { selector: "button" })).toBeVisible();
       }
       if (scenario === "user selects a different shot") {
-        fireEvent.click(openStoryboardClip(1));
+        fireEvent.click(shot(1));
         await act(async () => resolvePreview(preview));
         expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
-        expect(openStoryboardClip(1)).toHaveAttribute("aria-pressed", "true");
+        expect(shot(1)).toHaveAttribute("aria-pressed", "true");
         expect(editor.currentTime).toBe(1.5);
       }
 
@@ -1919,14 +1921,14 @@ describe("CreationTaskWorkspace", () => {
 
       if (scenario !== "user selects a different shot") {
         if (scenario === "response pending") await act(async () => resolvePreview(preview));
-        expect(screen.getByRole("button", { name: "应用到草稿" })).toBeVisible();
-        expect(openStoryboardClip(2)).toHaveAttribute("aria-pressed", "true");
-        fireEvent.click(screen.getByRole("button", { name: "返回详情" }));
+        expect(screen.getByText("应用到草稿", { selector: "button" })).toBeVisible();
+        expect(shot(2)).toHaveAttribute("aria-pressed", "true");
+        fireEvent.click(screen.getByText("返回详情", { selector: "button" }));
         expect(screen.queryByLabelText("变更预览")).not.toBeInTheDocument();
       }
 
       fireEvent.pause(editor);
-      expect(openStoryboardClip(3)).toHaveAttribute("aria-pressed", "true");
+      expect(shot(3)).toHaveAttribute("aria-pressed", "true");
       expect(mocks.confirmEdit).not.toHaveBeenCalled();
     },
   );
@@ -3872,11 +3874,17 @@ describe("CreationTaskWorkspace", () => {
       return { ...render(page(slot, value)), slot };
     };
     const trim = () => {
-      fireEvent.click(openStoryboardClip(1));
+      const expand = screen.queryByLabelText("展开镜头列表");
+      if (expand) fireEvent.click(expand);
+      fireEvent.click(within(screen.getByLabelText("镜头故事板")).getByLabelText("选择镜头 1"));
       const field = screen.getByLabelText("镜头 1 裁剪起点");
       fireEvent.change(field, { target: { value: "1.5" } });
       fireEvent.keyDown(field, { key: "Enter" });
     };
+    const recoveryText = "查询原保存结果";
+    const recoveryButton = { selector: "button" };
+    const queryRecovery = () => screen.queryByText(recoveryText, recoveryButton);
+    const clickRecovery = () => fireEvent.click(screen.getByText(recoveryText, recoveryButton));
     const first = mount();
     const originalSet = Storage.prototype.setItem;
     const storageGuard = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key, value) {
@@ -3901,41 +3909,40 @@ describe("CreationTaskWorkspace", () => {
     expect(JSON.parse(sessionStorage.getItem(key)!)).toMatchObject({ memberId: "member-1", taskId: task.id, input: original });
     mocks.memberId = "member-other";
     first.rerender(page(first.slot));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument());
+    await waitFor(() => expect(queryRecovery()).not.toBeInTheDocument());
     await act(async () => { rejectPost(new Error("clip response lost")); });
     expect(screen.queryByText(/clip response lost/)).not.toBeInTheDocument();
     expect(mocks.readEditRequest).not.toHaveBeenCalled();
     first.unmount();
     const foreign = mount();
     await act(async () => {});
-    expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument();
+    expect(queryRecovery()).not.toBeInTheDocument();
     foreign.unmount();
     mocks.memberId = "member-1";
     const other = { ...initial, task: { ...task, id: "task-other" } };
     const foreignTask = mount(other);
     await act(async () => {});
-    expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument();
+    expect(queryRecovery()).not.toBeInTheDocument();
     foreignTask.unmount();
     const reopened = mount();
-    await screen.findByRole("button", { name: "查询原保存结果" });
     mocks.readEditRequest.mockResolvedValue({ task_id: task.id, request_id: original.request_id, phase: "apply",
       submitted_input: original, status: "unknown", result_status_code: null, result: null });
-    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    fireEvent.click(await screen.findByText(recoveryText, recoveryButton));
     await screen.findByText(/保存结果尚未核实/);
     expect(mocks.readEditRequest).toHaveBeenLastCalledWith(task.id, original.request_id);
     mocks.readEditRequest.mockRejectedValueOnce(new CreationPlanApiError(404, null, "clip receipt not found"));
-    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    clickRecovery();
     expect(await within(await screen.findByRole("alert")).findByText("clip response lost；原请求查询：clip receipt not found")).toBeVisible();
     expect(JSON.parse(sessionStorage.getItem(key)!).input).toEqual(original);
     let resolveReceipt!: (receipt: unknown) => void;
     mocks.readEditRequest.mockImplementationOnce(() => new Promise(resolve => { resolveReceipt = resolve; }));
-    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    clickRecovery();
     await waitFor(() => expect(mocks.readEditRequest).toHaveBeenCalledTimes(3));
     const recorded = { task_id: task.id, request_id: original.request_id, phase: "apply", submitted_input: original,
       status: "recorded", result_status_code: 200, result: { operation: { id: "clip-saved" } } };
     mocks.memberId = "member-other";
     reopened.rerender(page(reopened.slot));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument());
+    await waitFor(() => expect(queryRecovery()).not.toBeInTheDocument());
     const readsBeforeLate = mocks.getWorkspace.mock.calls.length;
     await act(async () => { resolveReceipt(recorded); });
     expect(mocks.getWorkspace).toHaveBeenCalledTimes(readsBeforeLate);
@@ -3948,12 +3955,11 @@ describe("CreationTaskWorkspace", () => {
     const last = mount(initial, new Map([[draftsKey, {
       "task-1:clip-1": { start: 1.5, mode: "fill", x: .5, y: .5 }, "task-1:clip-other": otherDraft,
     }]]));
-    await screen.findByRole("button", { name: "查询原保存结果" });
     mocks.readEditRequest.mockResolvedValue(recorded);
     const saved = { ...initial, task: { ...task, current_timeline_version_id: "timeline-version-3", timeline_sequence: 3 },
       montage: { ...montage, clips: [{ ...montage.clips[0], source_start_seconds: 1.5 }] } };
     mocks.getWorkspace.mockResolvedValue(saved);
-    fireEvent.click(screen.getByRole("button", { name: "查询原保存结果" }));
+    fireEvent.click(await screen.findByText(recoveryText, recoveryButton));
     await screen.findByText("镜头修改已保存，可撤销。");
     expect(sessionStorage.getItem(key)).toBeNull();
     expect(last.slot.viewState.get(draftsKey)).toEqual({ "task-1:clip-other": otherDraft });
@@ -3972,7 +3978,7 @@ describe("CreationTaskWorkspace", () => {
       const stored = JSON.parse(sessionStorage.getItem(key)!);
       mocks.memberId = "member-other";
       stale.rerender(page(stale.slot));
-      await waitFor(() => expect(screen.queryByRole("button", { name: "查询原保存结果" })).not.toBeInTheDocument());
+      await waitFor(() => expect(queryRecovery()).not.toBeInTheDocument());
       const replacement = state === "cleared" ? null : JSON.stringify({ ...stored,
         input: { ...stored.input, request_id: crypto.randomUUID() } });
       if (replacement === null) sessionStorage.removeItem(key);
