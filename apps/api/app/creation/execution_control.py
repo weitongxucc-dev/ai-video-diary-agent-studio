@@ -16,6 +16,7 @@ from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecu
     CreationInputRejected, creation_input_rejection, revision_digest, submit_creation_stage, montage_waiting_for_confirmation,
     migrate_creation_narration_request, resume_original_narration)
 from app.creation.render_stage_use_case import RenderRejected
+from app.creation.render_specification import render_target
 from app.creation.render_reopen import continue_failed_presenter_render
 from app.creation.contracts import TaskEvent, JobRun
 from app.creation.task_authorization import TaskAuthorizationDenied
@@ -198,19 +199,23 @@ _EXECUTION_WAITING_TEXT = {
 
 
 class CreationExecutionControl:
-    def __init__(self, repository, execution, render_stage, verify_identity, *, segments=None):
+    def __init__(self, repository, execution, render_stage, verify_identity, *, segments=None, render_capacity=None):
         self.repository = repository
         self.execution = execution
         self.render_stage = render_stage
         self.verify_identity = verify_identity
         self.segments = segments
+        self.render_capacity = render_capacity
 
     def preview(self, workspace_id: str, task_id: str) -> dict[str, object]:
         from app.creation.execution_input import validate_execution_relationships
         try:
-            snapshot = self.repository.execution_inputs.read_creation_execution_snapshot(workspace_id, task_id)
-            task, plan, script = snapshot.task, snapshot.plan, snapshot.script_header
-            validate_execution_relationships(task, script, plan)
+            reader = self.repository.execution_inputs
+            with reader.creation_execution_read() as connection:
+                snapshot = reader.read_creation_execution_snapshot(workspace_id, task_id, connection=connection)
+                task, plan, script = snapshot.task, snapshot.plan, snapshot.script_header
+                validate_execution_relationships(task, script, plan)
+                (width, height), operation = render_target(self.repository, task, plan, connection=connection)
         except KeyError as exc:
             raise ExecutionControlRejected(status_code=404, detail="创作任务或确认对象不存在") from exc
         except ValueError as exc:
@@ -250,6 +255,11 @@ class CreationExecutionControl:
             "script_sections_total_count": script.sections_total_count if script is not None else 0,
             "script_sections_loaded": False,
             "plan_id": plan.id,
+            "render_specification": {
+                "width_px": width,
+                "height_px": height,
+                "profile": self.render_capacity(operation) if operation and self.render_capacity else {"status": "unknown"},
+            },
             "narration_source": ({
                 "source_kind": narration_artifact.source_kind,
                 "source_artifact_ref": narration_artifact.source_artifact_ref,

@@ -535,6 +535,13 @@ export type CreationExecutionPreview = {
     script_sections_total_count: number;
     script_sections_loaded: false;
     plan_id: string;
+    render_specification?: {
+        width_px: number;
+        height_px: number;
+        profile:
+            | { status: "verified"; max_width_px: number; max_height_px: number }
+            | { status: "missing" | "stale" | "unknown" };
+    };
     narration_source: {
         source_kind: "generated" | "recorded";
         source_artifact_ref: string | null;
