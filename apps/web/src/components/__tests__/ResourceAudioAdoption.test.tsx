@@ -2,21 +2,33 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ResourceAudioAdoption } from "../resource-library/ResourceAudioAdoption";
 
-const api = vi.hoisted(() => ({ read: vi.fn(), history: vi.fn(), confirm: vi.fn(), undo: vi.fn(), import: vi.fn(), preview: vi.fn(), resolve: vi.fn(), readJob: vi.fn() }));
+const api = vi.hoisted(() => ({ read: vi.fn(), history: vi.fn(), confirm: vi.fn(), undo: vi.fn(), import: vi.fn(), preview: vi.fn(), resolve: vi.fn(), readJob: vi.fn(), readRequest: vi.fn(), scope: vi.fn() }));
 vi.mock("@/lib/api/creation-tasks", () => ({ getCreationTaskWorkspace: api.read, confirmCreationTaskEdit: api.confirm, undoCreationTaskTimeline: api.undo }));
 vi.mock("@/lib/api/creation-transport", () => ({ creationPlanRequest: api.history }));
-vi.mock("@/lib/api/task-media", () => ({ importCreationTaskResourceAudio: api.import, previewCreationTaskAudio: api.preview, resolveCreationTaskMediaResponse: api.resolve, getCreationTaskMediaJob: api.readJob }));
+vi.mock("@/lib/api/task-media", () => ({ importCreationTaskResourceAudio: api.import, readCreationTaskResourceAudioRequest: api.readRequest, previewCreationTaskAudio: api.preview, resolveCreationTaskMediaResponse: api.resolve, getCreationTaskMediaJob: api.readJob }));
+vi.mock("@/lib/preflight-draft", async importOriginal => ({
+  ...await importOriginal<typeof import("@/lib/preflight-draft")>(),
+  readPreflightDraftScope: api.scope,
+}));
 const resource = { id: "openfilm:music", version: 2, name: "钢琴", category_id: "music" };
 const workspace = { task: { id: "task", name: "新作品", current_timeline_version_id: "v1", timeline_sequence: 1 }, montage: { duration_seconds: 20, audio_timeline: { tracks: [{ id: "music", name: "配乐", role: "music", locked: false }] } } };
 const glass = { id: "openfilm:sound-glass-pulse", version: 1, name: "玻璃脉冲", category_id: "sfx" };
 const adopted = { ...workspace, task: { ...workspace.task, current_timeline_version_id: "v2", timeline_sequence: 2, can_undo: true } };
 const glassAdoption = { timeline_version_id: "v2", sequence: 2, transition: "added", operation_type: "EditAudioTimeline", operation_id: "glass-op" };
-const glassHistory = { completeness: "complete", current_resource_present: true, timeline_history: [glassAdoption] };
+const noHistory = { completeness: "complete", current_resource_present: false, timeline_history: [], requests: [] };
+const glassHistory = { ...noHistory, current_resource_present: true, timeline_history: [glassAdoption] };
+const scope = { workspaceId: "workspace", memberId: "member" };
+const requestKey = "ai-video-diary.resource-audio-request.v1:workspace:member:task:openfilm%3Amusic:2";
+const imported = { source_ref: "artifacts/task/music", duration_ms: 45000 };
+const importJob = { job_id: "resource-import", status: "succeeded", result: imported };
 beforeEach(() => {
   vi.resetAllMocks();
+  sessionStorage.clear();
+  api.scope.mockResolvedValue(scope);
   api.read.mockResolvedValue(workspace);
-  api.import.mockResolvedValue({ source_ref: "artifacts/task/music", duration_ms: 45000 });
-  api.resolve.mockImplementation(async (_task, response) => response);
+  api.history.mockResolvedValue(noHistory);
+  api.import.mockResolvedValue(importJob);
+  api.resolve.mockImplementation(async (_task, response, kind) => kind === "audio_source" ? response.result : response);
   api.preview.mockResolvedValue({ proposal: { id: "proposal", summary: "加入钢琴" } });
   api.confirm.mockResolvedValue({ operation: { id: "op", status: "applied", result_version_id: "v2" } });
   api.undo.mockResolvedValue({});
@@ -78,8 +90,9 @@ it("imports the chosen fixed resource, previews trimmed placement, confirms expl
   await screen.findByText("新作品");
   fireEvent.click(screen.getByRole("button", { name: "准备采用" }));
   await screen.findByRole("button", { name: "确认加入音轨" });
-  expect(api.import).toHaveBeenCalledWith("task", "openfilm:music", 2);
-  expect(api.resolve).toHaveBeenCalledWith("task", expect.anything(), "audio_source", expect.objectContaining({ baseVersionId: null }));
+  expect(api.import).toHaveBeenCalledWith("task", "openfilm:music", 2, expect.any(String));
+  expect(sessionStorage.getItem(requestKey)).toBe(api.import.mock.calls[0][3]);
+  expect(api.resolve).toHaveBeenCalledWith("task", expect.anything(), "audio_source", expect.objectContaining({ baseVersionId: null, onUpdate: expect.any(Function) }));
   expect(api.preview).toHaveBeenCalledWith("task", expect.objectContaining({ base_version_id: "v1", target_id: "music", values: expect.objectContaining({ source_ref: "artifacts/task/music", source_end_ms: 15000, timeline_start_ms: 5000, gain_db: -18 }) }));
   expect(api.confirm).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "确认加入音轨" }));
@@ -110,17 +123,118 @@ it("does not import against a stale timeline or undo later edits", async () => {
 it("retains a failed import Job for rereading instead of submitting another import", async () => {
   const job = { job_id: "original", status: "failed" };
   api.import.mockResolvedValue(job);
-  api.resolve.mockImplementationOnce(async (_task, _response, _kind, options) => { options.onUpdate(job); throw new Error("设备暂不可用"); });
+  api.resolve.mockRejectedValueOnce(new Error("设备暂不可用"));
   render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
   await screen.findByText("新作品");
   fireEvent.click(screen.getByRole("button", { name: "准备采用" }));
   await screen.findByText("设备暂不可用");
   expect(api.confirm).not.toHaveBeenCalled();
-  api.readJob.mockResolvedValue({ source_ref: "artifacts/task/music", duration_ms: 1000 });
+  api.readJob.mockResolvedValue({ ...importJob, job_id: job.job_id });
   fireEvent.click(screen.getByRole("button", { name: "读取导入结果" }));
   await screen.findByRole("button", { name: "确认加入音轨" });
   expect(api.import).toHaveBeenCalledTimes(1);
   expect(api.readJob).toHaveBeenCalledWith("task", "original", expect.any(AbortSignal));
+});
+
+it("only makes a new import after a confirmed non-submission and a new user action", async () => {
+  api.import.mockImplementationOnce(async (_task, _resource, _version, id) => {
+    expect(sessionStorage.getItem(requestKey)).toBe(id);
+    throw new Error("固定音频文件不可用");
+  });
+  api.readRequest.mockImplementation(async (_task, id) => ({
+    task_id: "task", request_id: id, status: "rejected", submission_effect: "not_submitted", job_id: null,
+  }));
+  const first = render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  await screen.findByText("新作品");
+  fireEvent.click(screen.getByRole("button", { name: "准备采用" }));
+  await screen.findByRole("button", { name: "重新尝试导入" });
+  const id = api.import.mock.calls[0][3];
+  expect(api.readRequest).toHaveBeenCalledWith("task", id, expect.any(AbortSignal));
+  expect(api.import).toHaveBeenCalledTimes(1);
+  expect(api.preview).not.toHaveBeenCalled();
+
+  first.unmount();
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  fireEvent.click(await screen.findByRole("button", { name: "查询原导入请求" }));
+  fireEvent.click(await screen.findByRole("button", { name: "重新尝试导入" }));
+  await screen.findByRole("button", { name: "确认加入音轨" });
+  const retryId = api.import.mock.calls[1][3];
+  expect(api.import).toHaveBeenCalledTimes(2);
+  expect(retryId).not.toBe(id);
+  expect(sessionStorage.getItem(requestKey)).toBe(retryId);
+  expect(api.confirm).not.toHaveBeenCalled();
+});
+
+it("reopens an unknown import and reads its original Job without another POST", async () => {
+  api.import.mockRejectedValueOnce(new Error("响应超时"));
+  api.readRequest.mockRejectedValueOnce(Object.assign(new Error("原请求不存在"), { status: 404 }));
+  const first = render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  await screen.findByText("新作品");
+  fireEvent.click(screen.getByRole("button", { name: "准备采用" }));
+  await screen.findByText(/原导入结果尚未确认/);
+  const id = api.import.mock.calls[0][3];
+  expect(sessionStorage.getItem(requestKey)).toBe(id);
+  expect(api.readRequest).toHaveBeenCalledWith("task", id, expect.any(AbortSignal));
+  expect(screen.queryByRole("button", { name: "重新尝试导入" })).not.toBeInTheDocument();
+  first.unmount();
+
+  api.readRequest.mockRejectedValueOnce(new Error("网络中断"))
+    .mockResolvedValueOnce({ task_id: "task", request_id: id, status: "unknown", job_id: null })
+    .mockResolvedValueOnce({ task_id: "task", request_id: id, status: "recorded", job_id: importJob.job_id });
+  api.readJob.mockResolvedValue(importJob);
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  for (const reads of [2, 3]) {
+    fireEvent.click(await screen.findByRole("button", { name: "查询原导入请求" }));
+    await waitFor(() => expect(api.readRequest).toHaveBeenCalledTimes(reads));
+    await screen.findByText(/原导入结果尚未确认/);
+    expect(screen.queryByRole("button", { name: "重新尝试导入" })).not.toBeInTheDocument();
+  }
+  fireEvent.click(screen.getByRole("button", { name: "查询原导入请求" }));
+  const readResult = await screen.findByRole("button", { name: "读取导入结果" });
+  expect(api.readRequest.mock.calls.map(call => call[1])).toEqual([id, id, id, id]);
+  expect(api.preview).not.toHaveBeenCalled();
+  fireEvent.click(readResult);
+  await screen.findByRole("button", { name: "确认加入音轨" });
+  expect(api.readJob).toHaveBeenCalledWith("task", importJob.job_id, expect.any(AbortSignal));
+  expect(api.import).toHaveBeenCalledTimes(1);
+  expect(api.confirm).not.toHaveBeenCalled();
+});
+
+it("does not read or submit a saved request after the workspace or member changes", async () => {
+  sessionStorage.setItem(requestKey, "a0c244c9-ab13-4601-8cbc-bcb450830ca2");
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  const readOriginal = await screen.findByRole("button", { name: "查询原导入请求" });
+  await waitFor(() => expect(readOriginal).toBeEnabled());
+  api.scope.mockResolvedValue({ ...scope, memberId: "another-member" });
+  fireEvent.click(readOriginal);
+  await screen.findByText(/成员或工作区已变化/);
+  expect(api.readRequest).not.toHaveBeenCalled();
+  expect(api.import).not.toHaveBeenCalled();
+});
+
+it.each(["recorded", "unknown", "rejected"] as const)("finds an earlier client's %s request in the fixed resource history", async status => {
+  const originalId = "a0c244c9-ab13-4601-8cbc-bcb450830ca2";
+  api.history.mockResolvedValue({ ...noHistory, requests: [{ request_id: originalId, status }] });
+  api.readRequest.mockResolvedValue({ request_id: originalId, task_id: "task", status,
+    ...(status === "recorded" ? { job_id: importJob.job_id } : { job_id: null, submission_effect: "not_submitted" }),
+  });
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  fireEvent.click(await screen.findByRole("button", { name: "准备采用" }));
+  const action = { recorded: "读取导入结果", unknown: "查询原导入请求", rejected: "重新尝试导入" }[status];
+  await screen.findByRole("button", { name: action });
+  expect(sessionStorage.getItem(requestKey)).toBe(originalId);
+  expect(api.readRequest).toHaveBeenCalledWith("task", originalId, expect.any(AbortSignal));
+  expect(api.import).not.toHaveBeenCalled();
+  expect(api.confirm).not.toHaveBeenCalled();
+});
+
+it("requires complete history before the first submission without a local request", async () => {
+  api.history.mockResolvedValue({ ...noHistory, completeness: "partial" });
+  render(<ResourceAudioAdoption taskId="task" resource={resource} playheadMs={0} />);
+  fireEvent.click(await screen.findByRole("button", { name: "准备采用" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("原导入历史尚未核对完整");
+  expect(sessionStorage.getItem(requestKey)).toBeNull();
+  expect(api.import).not.toHaveBeenCalled();
 });
 
 it("shares gain between slider and exact input, invalidates old proposals, and prepares only the final value", async () => {
