@@ -167,14 +167,27 @@ it("separates the source name from waveform failure and rereads only the origina
   const fetcher=vi.fn(async()=>new Response(JSON.stringify(failed)));
   vi.stubGlobal("fetch",fetcher);
   vi.mocked(getCreationTaskMediaJob).mockResolvedValue({...failed,status:"succeeded",result:{peaks:[.1,.5],seconds_per_peak:1}});
-  render(<AudioTimelineTracks taskId="task" versionId="version" durationSeconds={10} audioTimeline={{format_version:1,tracks:[{...track,clips:[{...track.clips[0],name:"当前配音"}]}]}} selectedId={null} onSelect={vi.fn()} onPreview={vi.fn()} busy={false}/>);
+  const onSelect = vi.fn();
+  const props = { taskId:"task", versionId:"version", durationSeconds:10, onSelect, onPreview:vi.fn(), busy:false,
+    audioTimeline:{format_version:1 as const,tracks:[{...track,clips:[{...track.clips[0],name:"当前配音"}]}]} };
+  const { rerender } = render(<AudioTimelineTracks {...props} selectedId={null}/>);
   expect(await screen.findByText("波形不可用")).toBeInTheDocument();
   const selection=screen.getByRole("button",{name:"选择音频：当前配音"});
   expect(selection).toHaveTextContent("当前配音");
+  expect(screen.queryByRole("button",{name:"查看波形问题：当前配音"})).not.toBeInTheDocument();
+  fireEvent.click(selection);
+  expect(onSelect).toHaveBeenCalledWith("clip",4);
+  rerender(<AudioTimelineTracks {...props} selectedId="clip"/>);
   const problem=screen.getByRole("button",{name:"查看波形问题：当前配音"});
   expect(selection.contains(problem)).toBe(false);
   fireEvent.click(problem);
   expect(await screen.findByRole("alert")).toHaveTextContent("波形资源检查未通过");
+  expect(onSelect).toHaveBeenCalledTimes(1);
+  rerender(<AudioTimelineTracks {...props} selectedId="music"/>);
+  expect(screen.queryByRole("dialog",{name:"波形未加载"})).not.toBeInTheDocument();
+  rerender(<AudioTimelineTracks {...props} selectedId="clip"/>);
+  expect(screen.queryByRole("dialog",{name:"波形未加载"})).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button",{name:"查看波形问题：当前配音"}));
   fireEvent.click(screen.getByRole("button",{name:"重新读取波形"}));
   await waitFor(()=>expect(selection.querySelector("svg")).not.toBeNull());
   expect(getCreationTaskMediaJob).toHaveBeenCalledWith("task","wave-original",expect.any(AbortSignal));
@@ -184,7 +197,7 @@ it("separates the source name from waveform failure and rereads only the origina
 
 it("keeps the original request error without offering an unbound resubmission", async () => {
   vi.stubGlobal("fetch",vi.fn(async()=>{throw new Error("连接已断开");}));
-  render(<AudioTimelineTracks taskId="task" versionId="version" durationSeconds={10} audioTimeline={{format_version:1,tracks:[track]}} selectedId={null} onSelect={vi.fn()} onPreview={vi.fn()} busy={false}/>);
+  render(<AudioTimelineTracks taskId="task" versionId="version" durationSeconds={10} audioTimeline={{format_version:1,tracks:[track]}} selectedId="clip" onSelect={vi.fn()} onPreview={vi.fn()} busy={false}/>);
   fireEvent.click(await screen.findByRole("button",{name:"查看波形问题：背景音乐"}));
   expect(await screen.findByRole("alert")).toHaveTextContent("本地服务未接通。");
   expect(screen.queryByRole("button",{name:"重新读取波形"})).not.toBeInTheDocument();

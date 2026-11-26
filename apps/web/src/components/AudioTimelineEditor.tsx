@@ -14,9 +14,10 @@ import ui from "./VideoEditor.module.css";
 import { HomeCardDialog } from "./HomeCardDialog";
 import { AudioLines, CircleAlert, Headphones } from "lucide-react";
 
-function AudioTimelineClip({ taskId, versionId, clip, duration, selected, muted, onSelect }: {
+function AudioTimelineClip({ taskId, versionId, clip, duration, selected, muted, waveformTools, onSelect }: {
   taskId: string; versionId: string | null; clip: TimelineAudioClip; duration: number;
-  selected: boolean; muted: boolean; onSelect: (time: number) => void;
+  selected: boolean; muted: boolean; waveformTools: HTMLDivElement | null;
+  onSelect: (time: number) => void;
 }) {
   const identity = JSON.stringify([taskId, versionId, clip.id, clip.source_ref]);
   const [wave, setWave] = useState<{ identity: string; peaks: number[]; seconds_per_peak: number } | null>(null);
@@ -44,6 +45,9 @@ function AudioTimelineClip({ taskId, versionId, clip, duration, selected, muted,
       .catch(cause => { if (!controller.signal.aborted) setError({ identity, message: cause instanceof Error ? cause.message : "波形读取失败" }); });
     return () => controller.abort();
   }, [taskId, versionId, clip.id, clip.source_ref, identity]);
+  useEffect(() => {
+    if (!selected) setDetails(false);
+  }, [selected]);
   async function reread() {
     if (!currentJob) return;
     const controller = new AbortController();
@@ -75,22 +79,29 @@ function AudioTimelineClip({ taskId, versionId, clip, duration, selected, muted,
     waveform = <svg viewBox="0 0 240 32" preserveAspectRatio="none" aria-hidden><path d={points.join(" ")} vectorEffect="non-scaling-stroke" /></svg>;
   }
   const state = currentError ? "波形不可用" : currentJob ? taskMediaJobLabel(currentJob) : "读取波形…";
-  return <div className={ui.audioClip} data-selected={selected || undefined}
-    style={{left:`${clip.timeline_start_ms/1000/duration*100}%`,width:`${((clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000/duration*100}%`,opacity:muted || clip.muted ? .45 : 1}}>
-    <button type="button" className={ui.audioClipSelect} aria-label={`选择音频：${clip.name}`} aria-pressed={selected}
-      onClick={event => { const bounds=event.currentTarget.getBoundingClientRect();
-        const fraction=event.detail && bounds.width ? Math.max(0,Math.min(1,(event.clientX-bounds.left)/bounds.width)) : 0;
-        onSelect((clip.timeline_start_ms+fraction*((clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1)))/1000); }}>
-      <span className={ui.audioClipName}>{clip.name}{clip.locked ? " · 已锁定" : ""}</span>
-      {waveform ?? <span className={ui.audioWaveState} role="status" title={currentError ?? state}>{state}</span>}
-    </button>
-    {currentError ? <button ref={detailsAnchor} className={ui.audioWaveDetails} type="button" aria-label={`查看波形问题：${clip.name}`} title="查看波形问题" onClick={() => setDetails(true)}><CircleAlert size={13}/></button> : null}
-    {details ? <HomeCardDialog kind="selection" title="波形未加载" anchor={detailsAnchor} onClose={() => setDetails(false)}>
-      <p role="alert">{currentError}</p>
-      {currentJob ? <><button className={ui.button} disabled={reading} type="button" onClick={() => void reread()}>{reading ? "读取中…" : "重新读取波形"}</button><p>读取原请求的结果，不会重新生成配音。</p></> : <p>尚未取得可读取的波形作业；先核对本机媒体准备与运行详情，保留当前音轨。</p>}
-      <Link href="/settings">检查本机媒体准备</Link>
-    </HomeCardDialog> : null}
-  </div>;
+  return <>
+    <div className={ui.audioClip} data-selected={selected || undefined}
+      style={{left:`${clip.timeline_start_ms/1000/duration*100}%`,width:`${((clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000/duration*100}%`,opacity:muted || clip.muted ? .45 : 1}}>
+      <button type="button" className={ui.audioClipSelect} aria-label={`选择音频：${clip.name}`} aria-pressed={selected}
+        onClick={event => { const bounds=event.currentTarget.getBoundingClientRect();
+          const fraction=event.detail && bounds.width ? Math.max(0,Math.min(1,(event.clientX-bounds.left)/bounds.width)) : 0;
+          onSelect((clip.timeline_start_ms+fraction*((clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1)))/1000); }}>
+        <span className={ui.audioClipName}>{clip.name}{clip.locked ? " · 已锁定" : ""}</span>
+        {waveform ?? <span className={ui.audioWaveState} role="status" title={currentError ?? state}>{state}</span>}
+      </button>
+    </div>
+    {selected && currentError && waveformTools ? createPortal(<>
+      <IconButton ref={detailsAnchor} type="button" label={`查看波形问题：${clip.name}`}
+        aria-haspopup="dialog" aria-expanded={details} onClick={() => setDetails(true)}>
+        <CircleAlert size={14} aria-hidden />
+      </IconButton>
+      {details ? <HomeCardDialog kind="selection" title="波形未加载" anchor={detailsAnchor} onClose={() => setDetails(false)}>
+        <p role="alert">{currentError}</p>
+        {currentJob ? <><button className={ui.button} disabled={reading} type="button" onClick={() => void reread()}>{reading ? "读取中…" : "重新读取波形"}</button><p>读取原请求的结果，不会重新生成配音。</p></> : <p>尚未取得可读取的波形作业；先核对本机媒体准备与运行详情，保留当前音轨。</p>}
+        <Link href="/settings">检查本机媒体准备</Link>
+      </HomeCardDialog> : null}
+    </>, waveformTools) : null}
+  </>;
 }
 
 export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, durationSeconds: duration, selectedId, onSelect, onPreview, busy, playhead = 0, onListenPosition, sharedTimeScale = false, subtitleTrack }: {
@@ -101,6 +112,7 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
   const toolsHost = useActiveEditorDock("timelineTools");
   const [toolsOpen, setToolsOpen] = useState(false);
   const toolsAnchor = useRef<HTMLButtonElement>(null);
+  const [waveformTools, setWaveformTools] = useState<HTMLDivElement | null>(null);
   const [zoom, setZoom] = useWorkspaceViewState("audio.zoom", 1);
   const [role, setRole] = useWorkspaceViewState("audio.role", graph.tracks.find(track => track.role === "music")?.id ?? graph.tracks[0]?.id ?? "");
   const importTrackId = graph.tracks.some(track => track.id === role) ? role : "";
@@ -165,7 +177,10 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
       if (result.status === "cancelled") { listenController.current?.abort(); setWorking(false); }
     } catch (cause) { if (currentListenContext.current === context) setError(cause instanceof Error ? cause.message : "试听取消未完成"); }
   }
-  const audioToolAccess = <div className={ui.audioToolAccess}><IconButton ref={toolsAnchor} label="音频工具" type="button" aria-expanded={toolsOpen} aria-haspopup="dialog" onClick={() => setToolsOpen(value => !value)}><AudioLines size={14}/></IconButton>{working ? <span role="status">处理中…</span> : error ? <span>音频处理未完成</span> : null}</div>;
+  const audioToolAccess = <div className={ui.audioToolAccess} ref={setWaveformTools}>
+    <IconButton ref={toolsAnchor} label="音频工具" type="button" aria-expanded={toolsOpen} aria-haspopup="dialog" onClick={() => setToolsOpen(value => !value)}><AudioLines size={14}/></IconButton>
+    {working ? <span role="status">处理中…</span> : error ? <span>音频处理未完成</span> : null}
+  </div>;
   const importControls = (
 <div className={ui.audioToolbar}>
       <AppSelect aria-label="音频导入轨道" value={importTrackId} onValueChange={newValue => setRole(newValue)} disabled={busy || working}><AppSelectOption value="">选择导入轨道</AppSelectOption>{graph.tracks.map(track => <AppSelectOption key={track.id} value={track.id}>{track.name}</AppSelectOption>)}</AppSelect>
@@ -185,7 +200,7 @@ export function AudioTimelineTracks({ taskId, versionId, audioTimeline: graph, d
     <div data-workspace-scroll="audio-tracks" className={sharedTimeScale ? undefined : ui.audioScroll}><div style={{ width: `${(sharedTimeScale ? 1 : zoom)*100}%` }}>{graph.tracks.filter(track => track.clips.length).map(track => <div className={ui.audioTrack} key={track.id}>
       <div className={ui.audioTrackLabel}><button type="button" aria-pressed={selectedId === track.id} onClick={() => onSelect(track.id)}>{track.name}{track.muted ? " · 静音" : ""}</button>
         <IconButton label={`独听${track.name}`} aria-pressed={solo.includes(track.id)} className={ui.audioSoloButton} onClick={() => { setSolo(solo.includes(track.id) ? solo.filter(id => id !== track.id) : [...solo,track.id]); setAudio(null); }}><Headphones size={12}/></IconButton></div>
-      <div className={ui.audioLane}>{track.clips.map(clip => <AudioTimelineClip key={`${clip.id}:${clip.source_ref}`} taskId={taskId} versionId={versionId} clip={clip} duration={duration} selected={selectedId === clip.id} muted={track.muted}
+      <div className={ui.audioLane}>{track.clips.map(clip => <AudioTimelineClip key={`${clip.id}:${clip.source_ref}`} taskId={taskId} versionId={versionId} clip={clip} duration={duration} selected={selectedId === clip.id} muted={track.muted} waveformTools={waveformTools}
         onSelect={time => { onSelect(clip.id,time); setStart(clip.timeline_start_ms/1000); setEnd(Math.min(duration,(clip.timeline_start_ms+(clip.source_end_ms-clip.source_start_ms)/(clip.playback_rate ?? 1))/1000)); setAudio(null); }}/>) }<span className={ui.audioPlayhead} style={{left:`${playhead/duration*100}%`}} aria-hidden /></div>
     </div>)}</div></div>
     {subtitleTrack}
