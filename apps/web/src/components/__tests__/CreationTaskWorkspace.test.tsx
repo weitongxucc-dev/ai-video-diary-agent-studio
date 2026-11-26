@@ -2447,8 +2447,10 @@ describe("CreationTaskWorkspace", () => {
     reopened.unmount();
   });
 
-  it("quotes the timeline subtitle and previews that fixed cue after selecting a shot", async () => {
+  it.each(["subtitle", "shot"] as const)("quotes the timeline subtitle and can review the fixed cue with the %s selected", async (selection) => {
     mocks.withReferenceProvider = true;
+    mocks.realShell = true;
+    vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     const initial = subtitleCoverWorkspace();
     initial.montage!.clips = [{
       id: "clip-1", cue_id: "cue-1", asset_id: "asset-1", segment_id: "segment-1",
@@ -2456,7 +2458,9 @@ describe("CreationTaskWorkspace", () => {
       timeline_start_seconds: 0, timeline_end_seconds: 4, match_score: .9,
       match_reasons: [], needs_confirmation: false, role: "b_roll", locked: false, manually_selected: false,
     }];
-    mocks.previewEdit.mockResolvedValue(exactPreview(initial.task, "UpdateSubtitleCue"));
+    const proposal = exactPreview(initial.task, "UpdateSubtitleCue");
+    proposal.proposal.target_refs = ["cue:subtitle-cue-1"];
+    mocks.previewEdit.mockResolvedValue(proposal);
     renderTaskSubject(<CreationTaskWorkspace initialTasks={[]} initialTopics={null} initialWorkspace={initial} />);
     fireEvent.click(getWorkspaceViewControl(/^视频剪辑：/));
     const input = await readyInput("局部修改要求");
@@ -2471,8 +2475,8 @@ describe("CreationTaskWorkspace", () => {
       })],
     }, 0));
 
-    fireEvent.click(openStoryboardClip(1));
-    expect(subtitle).toHaveAttribute("aria-pressed", "false");
+    if (selection === "shot") fireEvent.click(openStoryboardClip(1));
+    expect(subtitle).toHaveAttribute("aria-pressed", String(selection === "subtitle"));
     fireEvent.change(input, { target: { value: "把这句字幕改成：真实运行可以验证。" } });
     const preview = screen.getByRole("button", { name: "精确预览修改" });
     await waitFor(() => expect(preview).toBeEnabled());
@@ -2483,6 +2487,11 @@ describe("CreationTaskWorkspace", () => {
       selected_object_refs: ["cue:subtitle-cue-1", "subtitle-track:subtitle-track-zh"],
       playhead_ms: null,
     }));
+    const dialog = within(await screen.findByRole("dialog", { name: "修改提案" }));
+    expect(dialog.getByRole("button", { name: "应用到草稿" })).toBeEnabled();
+    expect(mocks.confirmEdit).not.toHaveBeenCalled();
+    fireEvent.click(dialog.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "修改提案" })).not.toBeInTheDocument());
     expect(mocks.saveReference).toHaveBeenCalledOnce();
   });
 

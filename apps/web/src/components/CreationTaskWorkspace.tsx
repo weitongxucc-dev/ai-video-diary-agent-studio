@@ -1916,7 +1916,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const previewCommand = editPreview && !previewInputOwner.current ? editPreview.intent.raw_command : editCommand;
   const ordinaryObjectEdit = operation && (["ReplaceClip", "ChangeCrop", "TrimClip", "ChangeClipSpeed", "SetClipLock", "ConfirmClip", "SetClipTransition", "AdjustVisualEffects", "UpdateSubtitleCue"].includes(operation.operation_type)
     || (operation.operation_type === "EditGraphicOverlay" && operation.payload.overlay_action === "update"));
-  const localConfirmation = Boolean(ordinaryObjectEdit && selectedEditContext && editPreview
+  const localConfirmation = Boolean((inspector || quickInspector) && ordinaryObjectEdit && selectedEditContext && editPreview
     && editPreview.proposal.task_id === task.id && editPreview.proposal.workspace_id === task.workspace_id
     && editPreview.proposal.target_refs.length > 0
     && editPreview.proposal.target_refs.every(ref => ref === selectedEditContext.ref));
