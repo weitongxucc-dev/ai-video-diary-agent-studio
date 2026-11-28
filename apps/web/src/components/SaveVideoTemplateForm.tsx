@@ -42,7 +42,7 @@ export function SaveVideoTemplateForm({ taskId, onEditingChange }: { taskId: str
     <label><span>保存方式</span><AppSelect disabled={pending} value={target} onValueChange={newValue => { const value = newValue; setTarget(value); const item = latest.find((item) => item.id === value); if (item) { setName(item.name); setStyle(item.settings.style_instruction); } }}><AppSelectOption value="">新建我的模板</AppSelectOption>{latest.map((item) => <AppSelectOption key={item.id} value={item.id}>{item.name} · 保存为 v{item.version + 1}</AppSelectOption>)}</AppSelect></label>
     <label><span>模板名称</span><input required maxLength={120} value={name} disabled={pending} onChange={(event) => setName(event.target.value)} /></label>
     <label><span>新文案的风格要求（可选）</span><textarea maxLength={500} value={style} disabled={pending} onChange={(event) => setStyle(event.target.value)} placeholder="例如：短句，先讲结论，再给操作步骤" /></label>
-    <p>保存声音版本、文案段数、语言、画幅、时长、画面适配与字幕样式。所有镜头调色一致时保存调色；逐镜头差异不合并。混合适配将统一为填满画面。不复制当前内容、裁切位置、封面或完成状态。</p>
+    <p>复用图文动画组件、切镜节奏和声音提示。模板保留画幅、目标时长、画面适配、语言、文案段数和字幕样式。新作品需重新选择声音和素材，并撰写文案。所有镜头调色一致时保存调色。混合适配统一为填满画面。</p>
     {error ? <p role="alert">{error}</p> : null}
   </form></HomeCardDialog>;
 }
