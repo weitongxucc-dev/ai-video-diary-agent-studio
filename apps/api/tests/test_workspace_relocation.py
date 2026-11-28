@@ -8,7 +8,7 @@ import json
 import os
 import sqlite3
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -359,7 +359,7 @@ def test_cli_reports_the_applied_receipt_after_configuration_has_moved(tmp_path,
         temporary_target=None, operation_id=None, receipt=str(workspace.receipt_path),
         volume_record=str(workspace.record_path),
     ))
-    receipt = run_relocation(request)
+    receipt = run_relocation(replace(request, lock_path=workspace.lock_path))
 
     assert request.source["materials"] == workspace.source["materials"]
     assert receipt["status"] == "applied"
@@ -466,3 +466,196 @@ def test_copy_file_refuses_to_overwrite_without_a_resume_receipt(tmp_path):
     with pytest.raises(RelocationError, match="拒绝覆盖"):
         _copy_file(source, target, resuming=False)
     assert target.read_bytes() == b"other"
+
+
+def test_relocation_seals_identity_before_copy_and_resumes_same_backup(tmp_path, monkeypatch):
+    workspace = _build_workspace(tmp_path, monkeypatch)
+
+    def interrupt(*args, **kwargs):
+        persisted = json.loads(workspace.receipt_path.read_text())
+        assert persisted["status"] == "backup"
+        assert persisted["volume_identity"] == IDENTITY.as_record()
+        assert not list(workspace.external.iterdir())
+        raise OSError("interrupted before the first target write")
+
+    with monkeypatch.context() as stop:
+        stop.setattr(workspace_relocate, "_install_database", interrupt)
+        with pytest.raises(OSError, match="interrupted"):
+            run_relocation(workspace.request())
+    checkpoint = json.loads(workspace.receipt_path.read_text())
+    assert plan_relocation(workspace.request()).resuming
+
+    receipt = run_relocation(workspace.request())
+
+    assert receipt["status"] == "applied"
+    assert receipt["operation_id"] == checkpoint["operation_id"]
+    assert receipt["started_at"] == checkpoint["started_at"]
+    assert receipt["backup"]["path"] == checkpoint["backup"]["path"]
+    assert receipt["backup"]["sha256"] == checkpoint["backup"]["sha256"]
+    assert receipt["backup"]["reused"] is True
+    assert receipt["rebind"]["status"] == "applied"
+
+
+@pytest.mark.parametrize("state", ["new", "partial", "legacy_applied"])
+@pytest.mark.parametrize("failure", ["missing", "same_name"])
+def test_relocation_rejects_wrong_target_before_receipt_or_target_writes(tmp_path, monkeypatch, state, failure):
+    workspace = _build_workspace(tmp_path, monkeypatch)
+    if state == "legacy_applied":
+        receipt = run_relocation(workspace.request())
+        del receipt["volume_identity"]
+        workspace.receipt_path.write_text(json.dumps(receipt))
+    elif state == "partial":
+        plan = plan_relocation(workspace.request())
+        workspace.receipt_path.write_text(json.dumps({
+            "format": workspace_relocate.RECEIPT_FORMAT, "status": "backup",
+            "operation_id": plan.operation_id, "target_volume": str(plan.target_volume),
+            "source": {key: str(path) for key, path in plan.source.items()},
+            "target": {key: str(path) for key, path in plan.target.items()},
+            "volume_identity": IDENTITY.as_record(),
+        }))
+    else:
+        volume_identity.save_volume_identity_record(workspace.record_path, [IDENTITY])
+    request = workspace.request(
+        is_external=lambda _path: failure != "missing",
+        probe=lambda _path: replace(IDENTITY, uuid="different-volume"),
+    )
+    config_before = workspace.env_path.read_bytes()
+    receipt_before = workspace.receipt_path.read_bytes() if workspace.receipt_path.exists() else None
+    target_before = {p: p.read_bytes() for p in workspace.external.rglob("*") if p.is_file()}
+    monkeypatch.setattr(workspace_relocate, "_acquire_execution_lock",
+        lambda _path: pytest.fail("invalid volume reached the migration lock"))
+
+    message = "不是已挂载的外接盘" if failure == "missing" else "身份不匹配"
+    with pytest.raises(RelocationError, match=message):
+        run_relocation(request)
+
+    assert workspace.env_path.read_bytes() == config_before
+    assert (workspace.receipt_path.read_bytes() if workspace.receipt_path.exists() else None) == receipt_before
+    assert {p: p.read_bytes() for p in workspace.external.rglob("*") if p.is_file()} == target_before
+
+
+def test_legacy_partial_receipt_does_not_infer_identity_from_mount_or_global_record(tmp_path, monkeypatch):
+    workspace = _build_workspace(tmp_path, monkeypatch)
+    plan = plan_relocation(workspace.request())
+    receipt = {
+        "format": workspace_relocate.RECEIPT_FORMAT, "status": "copied",
+        "operation_id": plan.operation_id, "target_volume": str(plan.target_volume),
+        "source": {key: str(path) for key, path in plan.source.items()},
+        "target": {key: str(path) for key, path in plan.target.items()},
+    }
+    original = json.dumps(receipt).encode()
+    workspace.receipt_path.write_bytes(original)
+    volume_identity.save_volume_identity_record(workspace.record_path, [IDENTITY])
+
+    with pytest.raises(RelocationError, match="缺少可信目标卷身份"):
+        run_relocation(workspace.request())
+
+    assert workspace.receipt_path.read_bytes() == original
+    assert not list(workspace.external.iterdir())
+    assert not workspace.lock_path.exists()
+
+
+def test_legacy_applied_receipt_reads_back_with_recorded_uuid_without_writes(tmp_path, monkeypatch):
+    workspace = _build_workspace(tmp_path, monkeypatch)
+    receipt = run_relocation(workspace.request())
+    del receipt["volume_identity"]
+    original = json.dumps(receipt).encode()
+    workspace.receipt_path.write_bytes(original)
+    monkeypatch.setattr(workspace_relocate, "_write_receipt",
+        lambda *_: pytest.fail("applied readback tried to rewrite the receipt"))
+
+    assert run_relocation(workspace.request()) == {**receipt, "reapplied": True}
+    assert workspace.receipt_path.read_bytes() == original
+
+    workspace.target_media.write_bytes(b"incomplete target")
+    with pytest.raises(RelocationError, match="旧迁移结果无法通过复核"):
+        run_relocation(workspace.request())
+    assert workspace.target_media.read_bytes() == b"incomplete target"
+    assert workspace.receipt_path.read_bytes() == original
+
+
+def test_relocation_compares_preflight_uuid_again_under_execution_lock(tmp_path, monkeypatch):
+    workspace = _build_workspace(tmp_path, monkeypatch)
+    observations = iter([IDENTITY, replace(IDENTITY, uuid="different-volume")])
+
+    with pytest.raises(RelocationError, match="身份不匹配"):
+        run_relocation(workspace.request(probe=lambda _volume: next(observations)))
+
+    assert not workspace.receipt_path.exists()
+    assert not list(workspace.external.iterdir())
+    assert not (workspace.source["database"].parent / "backups").exists()
+
+
+@pytest.mark.parametrize("field", ["receipt_path", "record_path"])
+def test_relocation_keeps_identity_evidence_outside_target_volume(tmp_path, monkeypatch, field):
+    workspace = _build_workspace(tmp_path, monkeypatch)
+    monkeypatch.setattr(volume_identity, "volume_root", lambda _path: workspace.external)
+    request = workspace.request(**{field: workspace.external / "control.json"})
+
+    with pytest.raises(RelocationError, match="保存在目标卷之外"):
+        run_relocation(request)
+
+    assert not list(workspace.external.iterdir())
+    assert not workspace.receipt_path.exists()
+    assert not workspace.lock_path.exists()
+
+
+@pytest.mark.parametrize("boundary", [
+    "before_rebind", "before_commit_rebind", "before_config", "before_config_commit", "before_applied",
+])
+@pytest.mark.parametrize("failure", ["missing", "same_name"])
+def test_relocation_stops_when_volume_changes_at_adoption_boundaries(tmp_path, monkeypatch, boundary, failure):
+    workspace = _build_workspace(tmp_path, monkeypatch)
+    changed = False
+    config_before = workspace.env_path.read_bytes()
+    port, name, status = {
+        "before_rebind": (workspace_relocate, "_verify_database_copy", "copied"),
+        "before_commit_rebind": (workspace_relocate.MaterialSourceFileAccess, "prepare_material_rebind", "copied"),
+        "before_config": (workspace_relocate, "_rebind_material_library", "copied"),
+        "before_config_commit": (workspace_relocate, "prepare_dotenv_values", "identity"),
+        "before_applied": (workspace_relocate, "_update_dotenv", "identity"),
+    }[boundary]
+    original = getattr(port, name)
+
+    def switch_after(*args, **kwargs):
+        nonlocal changed
+        result = original(*args, **kwargs)
+        changed = True
+        return result
+
+    monkeypatch.setattr(port, name, switch_after)
+    message = "不是已挂载的外接盘" if failure == "missing" else "身份不匹配"
+    with pytest.raises(RelocationError, match=message):
+        run_relocation(workspace.request(
+            is_external=lambda _volume: not changed or failure != "missing",
+            probe=lambda _volume: replace(IDENTITY, uuid="different-volume") if changed else IDENTITY,
+        ))
+
+    receipt = json.loads(workspace.receipt_path.read_text())
+    assert receipt["status"] == status
+    assert receipt["volume_identity"] == IDENTITY.as_record()
+    if boundary != "before_applied":
+        assert workspace.env_path.read_bytes() == config_before
+    if boundary in {"before_rebind", "before_commit_rebind", "before_config"}:
+        assert not workspace.record_path.exists()
+    if boundary == "before_config_commit":
+        assert list(workspace.env_path.parent.iterdir()) == [workspace.env_path]
+    if boundary in {"before_rebind", "before_commit_rebind"}:
+        binding = _row(workspace.target["database"], "SELECT library_path FROM material_ingestion_binding")
+        assert binding[0] == str(workspace.source["materials"].resolve())
+    if boundary == "before_applied":
+        assert str(workspace.target["database"]) in workspace.env_path.read_text()
+        monkeypatch.setenv("AI_VIDEO_DIARY_DOTENV", str(workspace.env_path))
+        monkeypatch.setattr(workspace_relocate, "_is_external_mount", lambda _path: True)
+        monkeypatch.setattr(workspace_relocate, "_free_bytes", lambda _path: 10**12)
+        monkeypatch.setattr(volume_identity, "probe_volume_identity", lambda _path: IDENTITY)
+        monkeypatch.setattr(workspace_relocate, "_install_database", lambda *_args, **_kwargs:
+            pytest.fail("config already switched; must not copy the database again"))
+        request = _request_from_args(argparse.Namespace(
+            target_root=str(workspace.external), database_target=None, materials_target=None,
+            outputs_target=None, drafts_target=None, temporary_target=None, operation_id=None,
+            receipt=str(workspace.receipt_path), volume_record=str(workspace.record_path),
+        ))
+        recovered = run_relocation(replace(request, lock_path=workspace.lock_path))
+        assert recovered["status"] == "applied" and recovered["operation_id"] == receipt["operation_id"]
+        assert recovered["volume_identity"] == IDENTITY.as_record()
