@@ -30,28 +30,37 @@ export type TimelineCandidateSummary = Omit<TimelineCandidateDetail, "version" |
 
 type CropSettings = Pick<CropEdit, "fit_mode" | "crop_x" | "crop_y">;
 
-type AdoptionBinding = {
+export type TimelineCandidateCropChange = {
+  clip_id: string;
+  clip_number: number;
+  before: CropSettings;
+  after: CropSettings;
+};
+
+type AdoptionVersionBinding = {
   task_id: string;
   candidate_id: string;
   candidate_version_id: string;
   candidate_sequence: number;
   base_version_id: string;
   base_sequence: number;
-  clip_id: string;
 };
 
-export type TimelineCandidateAdoptionSelection = AdoptionBinding & {
-  clip_number: number;
-  before: CropSettings;
-  after: CropSettings;
+type AdoptionScope = { clip_id: string; all_crops?: never }
+  | { all_crops: true; clip_id?: never };
+
+type AdoptionBinding = AdoptionVersionBinding & AdoptionScope;
+type AllCrops = { all_crops: true; clip_id?: never; changes: TimelineCandidateCropChange[] };
+
+export type TimelineCandidateAdoptionSelection = AdoptionVersionBinding & {
   selection_digest: string;
-};
+} & ((TimelineCandidateCropChange & { all_crops?: never }) | AllCrops);
 
-export type TimelineCandidateAdoptionResult = AdoptionBinding & {
+export type TimelineCandidateAdoptionResult = AdoptionVersionBinding & {
   operation_id: string;
   result_version_id: string;
   result_sequence: number;
-};
+} & ({ clip_id: string; all_crops?: never } | AllCrops);
 
 export type TimelineCandidatePreview = {
   task_id: string;
@@ -91,7 +100,7 @@ function requireAdoption(expected: AdoptionBinding, actual: AdoptionBinding) {
   if (actual.task_id !== expected.task_id || actual.candidate_id !== expected.candidate_id
       || actual.candidate_version_id !== expected.candidate_version_id || actual.candidate_sequence !== expected.candidate_sequence
       || actual.base_version_id !== expected.base_version_id || actual.base_sequence !== expected.base_sequence
-      || actual.clip_id !== expected.clip_id) {
+      || actual.clip_id !== expected.clip_id || actual.all_crops !== expected.all_crops) {
     throw new Error("采用回执与所选候选、基线或镜头不一致。");
   }
 }
@@ -102,24 +111,38 @@ function adoptionInput(binding: AdoptionBinding) {
     expected_timeline_sequence: binding.candidate_sequence,
     base_version_id: binding.base_version_id,
     base_sequence: binding.base_sequence,
-    clip_id: binding.clip_id,
+    ...(binding.all_crops ? { all_crops: true } : { clip_id: binding.clip_id }),
   };
+}
+
+function sameCrop(left: CropSettings, right: CropSettings) {
+  return left.fit_mode === right.fit_mode && left.crop_x === right.crop_x && left.crop_y === right.crop_y;
 }
 
 export async function prepareTimelineCandidateAdoption(
   target: TimelineCandidateTarget, candidate: TimelineCandidateDetail,
-  base: Pick<TimelineCandidateVersion, "id" | "sequence">, clipId: string,
+  base: Pick<TimelineCandidateVersion, "id" | "sequence">, clipId?: string,
 ) {
   requireTarget(target, candidate);
   const binding: AdoptionBinding = {
     task_id: target.taskId, candidate_id: target.candidateId,
     candidate_version_id: candidate.version.id, candidate_sequence: candidate.version.sequence,
-    base_version_id: base.id, base_sequence: base.sequence, clip_id: clipId,
+    base_version_id: base.id, base_sequence: base.sequence,
+    ...(clipId === undefined ? { all_crops: true as const } : { clip_id: clipId }),
   };
   const selection = await creationPlanRequest<TimelineCandidateAdoptionSelection>(`${candidatePath(target)}/adoption/prepare`, {
     method: "POST", body: JSON.stringify(adoptionInput(binding)),
   });
   requireAdoption(binding, selection);
+  if (selection.all_crops && (!Array.isArray(selection.changes) || selection.changes.length < 1
+    || selection.changes.length > 2 || selection.changes.some((change, index) => {
+      const clip = candidate.version.clips[change.clip_number - 1];
+      return !clip || clip.id !== change.clip_id || !sameCrop(clip, change.after)
+        || sameCrop(change.before, change.after)
+        || (index > 0 && selection.changes[index - 1].clip_number >= change.clip_number);
+    }))) {
+    throw new Error("采用说明与所选候选的镜头裁切不一致。");
+  }
   return selection;
 }
 
@@ -130,6 +153,14 @@ export async function confirmTimelineCandidateAdoption(selection: TimelineCandid
     body: JSON.stringify({ ...adoptionInput(selection), request_id: requestId, selection_digest: selection.selection_digest }),
   });
   requireAdoption(selection, result);
+  if (selection.all_crops && (!result.all_crops || !Array.isArray(result.changes)
+    || result.changes.length !== selection.changes.length || result.changes.some((change, index) => {
+      const expected = selection.changes[index];
+      return change.clip_id !== expected.clip_id || change.clip_number !== expected.clip_number
+        || !sameCrop(change.before, expected.before) || !sameCrop(change.after, expected.after);
+    }))) {
+    throw new Error("采用回执与已确认的镜头裁切不一致。");
+  }
   if (!result.operation_id || !result.result_version_id || result.result_sequence !== result.base_sequence + 1) {
     throw new Error("正式保存结果暂不可核对，请读取原采用回执。");
   }

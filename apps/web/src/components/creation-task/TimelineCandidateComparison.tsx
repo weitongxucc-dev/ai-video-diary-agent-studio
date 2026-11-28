@@ -7,7 +7,7 @@ import {
   readTimelineCandidate, readTimelineCandidatePreview, readTimelineCandidatePreviewVideo,
   saveTimelineCandidateCrop, submitTimelineCandidatePreview,
   type TimelineCandidateAdoptionResult, type TimelineCandidateAdoptionSelection,
-  type TimelineCandidateDetail, type TimelineCandidatePreview, type TimelineCandidateSummary,
+  type TimelineCandidateCropChange, type TimelineCandidateDetail, type TimelineCandidatePreview, type TimelineCandidateSummary,
 } from "@/lib/api/timeline-candidates";
 import { Button } from "../ui/button";
 import { MediaVisibilityContext } from "../ui/media-visibility";
@@ -79,20 +79,21 @@ function CandidateVideo({ side, preview, target }: {
     onError={() => setError("无法播放此候选画面，请重新打开预览。")} />;
 }
 
-function cropSummary(crop: TimelineCandidateAdoptionSelection["before"]) {
+function cropSummary(crop: TimelineCandidateCropChange["before"]) {
   const percent = (value: number | undefined) => Number(((value ?? .5) * 100).toPrecision(12));
   return `${crop.fit_mode === "fit" ? "适应" : "填满"} · 水平 ${percent(crop.crop_x)}% · 垂直 ${percent(crop.crop_y)}%`;
 }
 
-function CandidateEdit({ side, taskId, candidateId, clipId, openJobId, onVideo, base, currentFormalId,
+function CandidateEdit({ side, taskId, candidateId, initialClipId, openJobId, onVideo, base, currentFormalId,
   adoptionSide, adopting, onSelectAdoption, onAdopting, onAdopted }: {
-  side: Side; taskId: string; candidateId: string; clipId: string;
+  side: Side; taskId: string; candidateId: string; initialClipId: string;
   openJobId: string | null; onVideo: Dispatch<SetStateAction<string | null>>;
   base: CandidateComparisonTarget["base"]; currentFormalId: string | null;
   adoptionSide: Side | null; adopting: boolean; onSelectAdoption: (side: Side | null) => void;
   onAdopting: (adopting: boolean) => void; onAdopted: (result: TimelineCandidateAdoptionResult) => Promise<void>;
 }) {
   const visible = useContext(MediaVisibilityContext);
+  const [clipId, setClipId] = useState(initialClipId);
   const [detail, setDetail] = useState<TimelineCandidateDetail | null>(null);
   const [preview, setPreview] = useState<TimelineCandidatePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -147,7 +148,7 @@ function CandidateEdit({ side, taskId, candidateId, clipId, openJobId, onVideo, 
     const cropX = Number(fields.get("crop-x")) / 100;
     const cropY = Number(fields.get("crop-y")) / 100;
     const fit = fields.get("fit") === "fit" ? "fit" : "fill";
-    const key = `${detail.head_version_id}:${fit}:${cropX}:${cropY}`;
+    const key = `crop:${detail.head_version_id}:${clipId}:${fit}:${cropX}:${cropY}`;
     const id = request.current?.key === key ? request.current.id : crypto.randomUUID();
     request.current = { key, id };
     setAction("save");
@@ -212,7 +213,7 @@ function CandidateEdit({ side, taskId, candidateId, clipId, openJobId, onVideo, 
     setError(null);
     setAction("prepare-adoption");
     try {
-      const selection = await prepareTimelineCandidateAdoption(target, detail, base, clipId);
+      const selection = await prepareTimelineCandidateAdoption(target, detail, base);
       setPrepared({ selection, requestId: crypto.randomUUID() });
     } catch (cause) {
       setError(message(cause));
@@ -248,6 +249,9 @@ function CandidateEdit({ side, taskId, candidateId, clipId, openJobId, onVideo, 
   const canAdopt = detail && !detail.adoption && currentBase && detail.version.id !== detail.base_version_id && !dirty;
   const confirmation = canAdopt && adoptionSide === side && prepared?.selection.candidate_version_id === detail.version.id
     ? prepared : null;
+  const changes = confirmation
+    ? (confirmation.selection.all_crops ? confirmation.selection.changes : [confirmation.selection])
+    : [];
   useEffect(() => {
     if (confirmation) confirmationHeading.current?.focus();
   }, [confirmation]);
@@ -271,9 +275,23 @@ function CandidateEdit({ side, taskId, candidateId, clipId, openJobId, onVideo, 
     </div> : null}
     {!detail && !error ? <p role="status">正在读取候选…</p> : null}
     {detail && !clip ? <p role="status">这个候选中没有所选镜头。</p> : null}
+    {detail && detail.version.clips.length > 1 ? <label>编辑镜头
+      <select value={clipId} disabled={dirty || action !== null || adopting} onChange={(event) => {
+        onVideo((active) => active === preview?.job_id ? null : active);
+        setClipId(event.target.value);
+        setPreview(null);
+        setReadingPreview(true);
+        setError(null);
+        setSaved(false);
+      }}>
+        {!clip ? <option value={clipId} disabled>原镜头不可用</option> : null}
+        {detail.version.clips.map((item, index) => <option key={item.id} value={item.id}>镜头 {index + 1}</option>)}
+      </select>
+    </label> : null}
     {detail && clip ? <>
-      <p className={styles.meta}>候选版本 #{detail.version.sequence}{saved ? " · 已保存" : ""}</p>
-      <form key={detail.version.id} className={styles.form} onSubmit={(event) => void save(event)} onChange={(event) => {
+      <p className={styles.meta} aria-live="polite">候选版本 #{detail.version.sequence}{saved ? " · 已保存" : ""}</p>
+      <form key={`${detail.version.id}:${clipId}`} className={styles.form}
+        onSubmit={(event) => void save(event)} onReset={() => setDirtyVersion(null)} onChange={(event) => {
         const values = new FormData(event.currentTarget);
         const changed = values.get("fit") !== (clip.fit_mode ?? "fill")
           || Number(values.get("crop-x")) !== (clip.crop_x ?? .5) * 100
@@ -288,7 +306,10 @@ function CandidateEdit({ side, taskId, candidateId, clipId, openJobId, onVideo, 
           <label>水平位置（%）<input name="crop-x" type="number" required min="0" max="100" step="any" defaultValue={(clip.crop_x ?? .5) * 100} /></label>
           <label>垂直位置（%）<input name="crop-y" type="number" required min="0" max="100" step="any" defaultValue={(clip.crop_y ?? .5) * 100} /></label>
         </div>
-        <Button variant="outline" type="submit" disabled={action !== null || adopting || !dirty}>{action === "save" ? "正在保存…" : "保存候选裁切"}</Button>
+        <div className={styles.actions}>
+          <Button variant="outline" type="submit" disabled={action !== null || adopting || !dirty}>{action === "save" ? "正在保存…" : "保存候选裁切"}</Button>
+          {dirty ? <Button variant="ghost" type="reset" disabled={action !== null || adopting}>放弃未保存裁切</Button> : null}
+        </div>
       </form>
       <div className={styles.actions}>
         {(preview?.status !== "succeeded" || preview.silent) && !pending(preview)
@@ -317,10 +338,13 @@ function CandidateEdit({ side, taskId, candidateId, clipId, openJobId, onVideo, 
       </div> : null}
       {confirmation ? <form className={styles.adoption} aria-label={`确认采用候选 ${side}`} onSubmit={(event) => void confirmAdoption(event)}>
         <p ref={confirmationHeading} tabIndex={-1}><strong>采用候选 {side} 第 {confirmation.selection.candidate_sequence} 版</strong></p>
-        <p className={styles.meta}>正式第 {confirmation.selection.base_sequence} 版 · 镜头 {confirmation.selection.clip_number}</p>
-        <p>当前 {cropSummary(confirmation.selection.before)}</p>
-        <p>采用后 {cropSummary(confirmation.selection.after)}</p>
-        <p className={styles.meta}>保存新的正式版本。可从历史撤销，成片需另行生成。</p>
+        <p className={styles.meta}>正式第 {confirmation.selection.base_sequence} 版 · {changes.length} 处镜头裁切</p>
+        {changes.map((change) => <div className={styles.form} key={change.clip_id}>
+          <p><strong>镜头 {change.clip_number}</strong></p>
+          <p>当前 {cropSummary(change.before)}</p>
+          <p>采用后 {cropSummary(change.after)}</p>
+        </div>)}
+        <p className={styles.meta}>全部裁切保存到同一个正式版本，可从历史一次撤销。成片需另行生成。</p>
         <div className={styles.actions}>
           <Button type="submit" disabled={action !== null || adopting}>
             {action === "confirm-adoption" ? "正在采用…" : `确认采用候选 ${side}`}
@@ -383,7 +407,7 @@ export function TimelineCandidateComparison({ taskId, clipId, clipNumber, base, 
   }
 
   return <div className={styles.comparison}>
-    <p className={styles.meta}>镜头 {clipNumber} · 最多预览 5 秒，仅比较镜头画面与该区间音轨。</p>
+    <p className={styles.meta}>默认镜头 {clipNumber} · 最多预览 5 秒，仅比较镜头画面与该区间音轨。</p>
     {error ? <div role="alert" className={styles.error}>{error}{" "}
       <Button variant="ghost" onClick={() => { setError(null); setReload((value) => value + 1); }}>重新读取</Button>
     </div> : null}
@@ -410,7 +434,7 @@ export function TimelineCandidateComparison({ taskId, clipId, clipNumber, base, 
           {!selected[side] && other && !choices.length && other.base_version_id !== base.id
             ? <p className={styles.meta}>这个基线只有一个候选。可以清除另一侧选择，切回当前版。</p> : null}
           {selected[side] ? <CandidateEdit key={`${taskId}:${clipId}:${selected[side]}`} side={side}
-            taskId={taskId} candidateId={selected[side]} clipId={clipId} openJobId={openJobId} onVideo={setOpenJobId}
+            taskId={taskId} candidateId={selected[side]} initialClipId={clipId} openJobId={openJobId} onVideo={setOpenJobId}
             base={base} currentFormalId={currentFormalId} adoptionSide={adoptionSide} adopting={adopting}
             onSelectAdoption={setAdoptionSide} onAdopting={setAdopting} onAdopted={onAdopted} /> : null}
         </section>;

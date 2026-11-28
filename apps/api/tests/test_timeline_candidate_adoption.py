@@ -1,9 +1,12 @@
 from dataclasses import asdict, replace
+from copy import deepcopy
+from shutil import copy2
 from uuid import uuid4
 
 import pytest
 
-from app.creation.contracts import CreationTask
+from app.creation.contracts import CreationTask, TimelineVersion
+from app.creation.editing.metadata_use_case import MetadataEditUseCase
 from app.production import ProductionRepository
 from app.content_identity_http import ContentIdentityHttpAdapter
 from test_task_media_grants import _visual_scope_case
@@ -149,3 +152,129 @@ def test_adopt_only_bound_crop_and_undo_through_formal_history(tmp_path, monkeyp
         assert counts() == (3, 2, 2, 1, 0)
     finally:
         runtime.stop(0)
+
+
+def test_adopt_two_saved_crops_atomically_and_restore_once(tmp_path, monkeypatch):
+    main, repo, _, _, runtime, client, original, _, _ = _visual_scope_case(tmp_path, monkeypatch)
+    task = "/api/creation-tasks/task"
+    collection = task + "/timeline/candidates"
+    monkeypatch.setattr(main, "_creation_runtime", lambda: pytest.fail("candidate adoption is a metadata transaction"))
+
+    def ok(response, status=200):
+        assert response.status_code == status, response.text
+        return response.json()
+
+    def bind(version):
+        return {"expected_timeline_version_id": version["id"], "expected_timeline_sequence": version["sequence"]}
+
+    def fork():
+        created = ok(client.post(collection, json={**bind(base), "candidate_id": str(uuid4())}))
+        return f"{collection}/{created['id']}", created["version"]
+
+    def crop(path, version, clip, x):
+        return ok(client.post(path + "/edits/exact", json={**bind(version), "request_id": str(uuid4()),
+            "operation_type": "ChangeCrop", "clip_id": clip, "fit_mode": "fill", "crop_x": x, "crop_y": .5}))["version"]
+
+    def prepare(path, version):
+        target = {**bind(version), "base_version_id": base["id"], "base_sequence": base["sequence"], "all_crops": True}
+        selection = ok(client.post(path + "/adoption/prepare", json=target))
+        return selection, {**target, "selection_digest": selection["selection_digest"], "request_id": str(uuid4())}
+
+    def counts():
+        with repo._connect() as conn:
+            tables = ("edit_intents", "edit_proposals", "edit_operations", "timeline_versions",
+                "task_events", "device_work_requests")
+            return tuple(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables)
+
+    try:
+        source = repo.get_asset("local", "asset")
+        second_path = repo.video_library_path / "second.mp4"
+        copy2(source.path, second_path)
+        second = repo._save_asset(replace(source, id="second", path=str(second_path), file_name=second_path.name,
+            owner_user_id="other-member", visibility="shared",
+            segments=[replace(source.segments[0], id="second-segment", asset_id="second")]))
+        reference = repo.workspace_media_reference_for_asset("local", second.id)
+        with repo._connect() as conn:
+            repo._claim_workspace_media_reference(conn, workspace_id="local", reference=reference)
+        montage = deepcopy(original)
+        montage["clips"][2].update(asset_id=second.id, segment_id="second-segment", source_path=reference)
+        _, live = repo.montage_plan_adoption.save_creation_task_montage_plan("local", "task", montage["id"], montage)
+        base = {"id": "two-crop-base", "sequence": 2}
+        repo.timeline_records.create_timeline_version(TimelineVersion(base["id"], "local", "task", "timeline",
+            base["sequence"], {"montage": live}, None))
+
+        path, head = fork()
+        head = crop(path, head, "clip_2", .78)
+        _, old = prepare(path, head)
+        head = crop(path, head, "clip_1", .31)
+        selection, confirm = prepare(path, head)
+        changes = selection["changes"]
+        assert [(c["clip_id"], c["clip_number"], c["before"]["crop_x"], c["after"]["crop_x"]) for c in changes] == [
+            ("clip_1", 2, .5, .31), ("clip_2", 3, .5, .78)]
+        other, other_head = fork()
+        other_head = crop(other, other_head, "clip_3", .6)
+        _, other_confirm = prepare(other, other_head)
+        oversized, oversized_head = fork()
+        for clip_id in ("clip_1", "clip_2", "clip_3"):
+            oversized_head = crop(oversized, oversized_head, clip_id, .6)
+        oversized_input = {**bind(oversized_head), "base_version_id": base["id"], "base_sequence": 2, "all_crops": True}
+        ok(client.post(oversized + "/adoption/prepare", json=oversized_input), 409)
+
+        unchanged = counts()
+        adopt_url = path + "/adoption/confirm"
+        ok(client.post(adopt_url, json=old), 409)
+        ok(client.post(adopt_url, json={**confirm, "all_crops": False, "clip_id": "clip_1"}), 409)
+        ok(client.post(adopt_url, json={**confirm, "all_crops": True, "clip_id": "clip_1"}), 422)
+        ok(client.post(adopt_url, json={**confirm, "selection_digest": "0" * 64}), 409)
+        repo.set_asset_visibility("local", second.id, "private")
+        ok(client.post(adopt_url, json=confirm), 409)
+        repo.set_asset_visibility("local", second.id, "shared")
+        ok(client.post(adopt_url, json=confirm), 409)
+        second = repo.get_asset("local", second.id)
+        _, confirm = prepare(path, head)
+        repo._save_asset(replace(second, segments=[replace(second.segments[0], end_seconds=.5)]))
+        assert "范围" in ok(client.post(adopt_url, json=confirm), 409)["detail"]
+        assert counts() == unchanged and repo.get_creation_task_montage_plan("local", "task") == live
+        assert ok(client.get(path))["adoption"] is None
+
+        repo._save_asset(second)
+        _, confirm = prepare(path, head)
+        persist = MetadataEditUseCase.persist_montage_edit
+
+        def change_source_after_prepare(case, **kwargs):
+            second_path.write_bytes(second_path.read_bytes() + b"\x00")
+            return persist(case, **kwargs)
+
+        with monkeypatch.context() as changed_on_commit:
+            changed_on_commit.setattr(MetadataEditUseCase, "persist_montage_edit", change_source_after_prepare)
+            ok(client.post(adopt_url, json=confirm), 409)
+        assert counts() == unchanged and repo.get_creation_task_montage_plan("local", "task") == live
+        copy2(source.path, second_path)
+        _, confirm = prepare(path, head)
+        result = ok(client.post(adopt_url, json=confirm))
+        assert result["changes"] == changes and result["result_sequence"] == 3
+        after = counts()
+        assert after[:4] == tuple(count + 1 for count in unchanged[:4])
+        assert after[-1] == unchanged[-1]
+        assert ok(client.post(adopt_url, json=confirm)) == result
+        ok(client.post(other + "/adoption/confirm", json=other_confirm), 409)
+        assert counts() == after
+        persisted = repo.timeline_records.get_timeline_version("local", result["result_version_id"])
+        expected = deepcopy(live["clips"])
+        expected[1]["crop_x"], expected[2]["crop_x"] = .31, .78
+        assert persisted.snapshot["montage"]["clips"] == expected
+        for field in ("audio_timeline", "narration_audio_path", "graphic_overlays", "cues", "duration_seconds"):
+            assert persisted.snapshot["montage"][field] == live[field]
+        undo = ok(client.post(task + "/timeline/undo", json={**bind({"id": persisted.id, "sequence": 3}),
+            "request_id": str(uuid4()), "target_operation_id": result["operation_id"]}))["operation"]
+
+        reopened = ProductionRepository(repo.database_path, repo.video_library_path)
+        restored = reopened.timeline_records.get_timeline_version("local", undo["result_version_id"])
+        assert restored.parent_version_id == persisted.id and restored.sequence == 4
+        assert restored.snapshot["montage"]["clips"] == live["clips"]
+        assert reopened.edit_records.get_edit_operation("local", result["operation_id"]).payload["changes"] == changes
+        assert ok(client.get(path))["adoption"] == result
+        assert ok(client.post(adopt_url, json=confirm)) == result
+    finally:
+        runtime.stop(0)
+        client.close()
