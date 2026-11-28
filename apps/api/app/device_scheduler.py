@@ -1198,7 +1198,7 @@ class DeviceScheduler(DeviceRequestReadAccess):
             data = self._recover_ledger(self._read_ledger(existed))
             _check_database_switch(self.database_path, data)
             now = self._now()
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 conn.execute("BEGIN IMMEDIATE")
                 permit = self._reconcile_local(conn, data, _stamp(now))
                 # Preparation shares the machine permit, but must not reclassify
@@ -1215,7 +1215,19 @@ class DeviceScheduler(DeviceRequestReadAccess):
                         self._update_wait(conn, row, now, wait)
                     else:
                         candidates.append(request)
-                conn.commit()
+                try:
+                    conn.commit()
+                except sqlite3.OperationalError as exc:
+                    code = getattr(exc, "sqlite_errorcode", 0) & 0xff
+                    if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or not conn.in_transaction:
+                        raise
+                    # No grant has been prepared. Only a confirmed rollback
+                    # lets the next poll rescan the original queue.
+                    conn.rollback()
+                    if conn.in_transaction:
+                        raise
+                    logger.debug("Device queue scan commit deferred after SQLite rollback")
+                    return None
             observations = []
             for request in candidates:
                 observation = self._observe_candidate(request)
