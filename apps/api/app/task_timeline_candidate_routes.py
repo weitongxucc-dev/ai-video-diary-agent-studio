@@ -5,7 +5,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.responses import FileResponse, JSONResponse
 
 from app.creation.clip_preview import CandidateClipPreviewCommand, CandidateClipPreviewTarget, ClipPreviewUnavailable
@@ -42,7 +42,14 @@ class CandidatePreviewRequest(_VersionBinding):
 class CandidateAdoptionRequest(_VersionBinding):
     base_version_id: str = Field(min_length=1, max_length=120)
     base_sequence: int = Field(ge=1)
-    clip_id: str = Field(min_length=1, max_length=120)
+    clip_id: str | None = Field(default=None, min_length=1, max_length=120)
+    all_crops: bool = False
+
+    @model_validator(mode="after")
+    def require_scope(self):
+        if self.all_crops == (self.clip_id is not None):
+            raise ValueError("必须确认一个指定镜头或候选的全部已保存裁切")
+        return self
 
     def target(self, candidate_id):
         return CandidateAdoptionTarget(str(candidate_id), self.expected_timeline_version_id,

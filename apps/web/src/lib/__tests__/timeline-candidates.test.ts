@@ -102,6 +102,32 @@ describe("candidate version requests", () => {
     await expect(confirmTimelineCandidateAdoption(prepared, "same-request")).rejects.toThrow("采用回执与所选候选、基线或镜头不一致");
   });
 
+  it("binds the ordered crop set to the confirmation and rejects reordered receipts", async () => {
+    const detail = candidate("B", "b13", .8);
+    detail.version.clips.push({ id: "other", fit_mode: "fit", crop_x: .65, crop_y: .5 });
+    const base = { id: "v12", sequence: 12 };
+    const changes = detail.version.clips.map(({ id, ...after }, index) => ({
+      clip_id: id, clip_number: index + 1, before: { fit_mode: "fill", crop_x: .5, crop_y: .5 }, after,
+    }));
+    const binding = { task_id: "work", candidate_id: "B", candidate_version_id: "b13", candidate_sequence: 13,
+      base_version_id: base.id, base_sequence: base.sequence, all_crops: true };
+    const selection = { ...binding, changes, selection_digest: "digest" };
+    const result = { ...binding, changes, operation_id: "op", result_version_id: "formal13", result_sequence: 13 };
+    request.mockResolvedValueOnce({ ...selection, changes: [...changes].reverse() })
+      .mockResolvedValueOnce(selection)
+      .mockResolvedValueOnce({ ...result, changes: changes.slice(0, 1) })
+      .mockResolvedValueOnce(result);
+    await expect(prepareTimelineCandidateAdoption(b, detail, base)).rejects.toThrow("采用说明与所选候选的镜头裁切不一致");
+    const prepared = await prepareTimelineCandidateAdoption(b, detail, base);
+    await expect(confirmTimelineCandidateAdoption(prepared, "same-request")).rejects.toThrow("采用回执与已确认的镜头裁切不一致");
+    await expect(confirmTimelineCandidateAdoption(prepared, "same-request")).resolves.toEqual(result);
+    expect(request.mock.calls[2]).toEqual(request.mock.calls[3]);
+    expect(request.mock.calls[3][1]?.body).toBe(JSON.stringify({
+      expected_timeline_version_id: "b13", expected_timeline_sequence: 13, base_version_id: "v12",
+      base_sequence: 12, all_crops: true, request_id: "same-request", selection_digest: "digest",
+    }));
+  });
+
   it("reads only the submitted candidate preview and accepts video from the same version and job", async () => {
     const path = `${aPath}/versions/a13/previews/job-a`;
     const pending: TimelineCandidatePreview = {
