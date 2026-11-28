@@ -33,6 +33,10 @@
 .cueFields { display:grid;gap:10px;min-width:0; }
 .cueFields label { display:grid;gap:4px;color:var(--text-2);min-width:0; }
 .timeFields { display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px; }
+.firstCueTitle { margin:0; }
+.firstCueLanguage { display:flex;flex-wrap:wrap;gap:var(--space-3);margin:0;padding:0;border:0;color:var(--text-2); }
+.firstCueLanguage label { display:inline-flex;align-items:center;gap:var(--space-1); }
+.firstCueLanguage input { accent-color:var(--accent); }
 .cueFields input, .cueFields textarea, .field input { min-width:0;width:100%;min-height:32px;padding:5px 8px;border:1px solid var(--border-1);border-radius:6px;background:var(--surface-1);color:var(--text-1);font:inherit;line-height:20px; }
 .cueFields textarea { min-height:84px;resize:vertical;line-height:1.7; }
 .styleEditor .cueFields > label { grid-template-columns:88px minmax(0,1fr);align-items:center;gap:8px; }

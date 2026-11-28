@@ -507,7 +507,8 @@ class TimelineRestoreUseCase:
             original = self.repository.edit_records.get_edit_operation(workspace_id, command.target_operation_id)
             if original.operation_type in {'AdjustVisualEffects', 'SetClipLock', 'SetClipAudio', 'ReplaceClip',
                     'SetClipTransition', 'EditGraphicOverlay', 'UpdateSubtitleCue', 'ReplaceSubtitleText',
-                    'ConfigureSubtitleTrack', 'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'} or (
+                    'ConfigureSubtitleTrack', 'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue',
+                    'AddFirstSubtitleCue'} or (
                     original.operation_type == 'EditAudioTimeline' and original.payload.get('edit', {}).get('action') == 'add'):
                 return self.prepare_local_restore(command, original, changed_version, target_version, operation_type, action_label)
         self.verify_whole_timeline_restore(workspace_id,task_id,changed_version.id)
@@ -515,6 +516,7 @@ class TimelineRestoreUseCase:
             "RedoTimelineVersion",
             "ConfigureSubtitleTrack",
             "GenerateCoverFromFrame",
+            "AddFirstSubtitleCue",
             "UpdateSubtitleCue",
             "ReplaceSubtitleText",
             "SplitSubtitleCue",
@@ -639,7 +641,7 @@ class TimelineRestoreUseCase:
             for version, plan in zip((current_version, expected_version, desired_version), plans)]
         merged_tracks = self.restore_subtitle_tracks(*tracks, allow_membership=original.operation_type in {
             'UpdateSubtitleCue', 'ReplaceSubtitleText', 'ConfigureSubtitleTrack',
-            'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'})
+            'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue', 'AddFirstSubtitleCue'})
         sources = []
         person_sources = {}
         for clip_id in affected_clips:

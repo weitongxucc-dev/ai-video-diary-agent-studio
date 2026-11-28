@@ -11,11 +11,11 @@ from uuid import uuid4
 
 from app.canvas import canvas_size
 from app.creation.contracts import EditCommand, EditIntent, EditProposal, SubtitleTrack, SubtitleCue, TaskEvent
-from app.creation.editing.metadata import check_command
+from app.creation.editing.metadata import check_command, make_metadata_proposal
 from app.creation.editing.metadata_use_case import (MetadataEditUseCase, MetadataEditResult,
     SubtitleNoChange, SubtitleTargetMissing, normalized_subtitle_text, execution_subtitle_track,
     logical_montage_output_refs, prepare_changed_montage, refresh_montage_review_state,
-    LegacyMontageReference, InvalidMontage)
+    LegacyMontageReference, InvalidMontage, default_subtitle_style)
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.sources import EditSourceVerifier
 from app.creation.editing.subtitle_changes import (prepare_subtitle_content_proposal,
@@ -31,6 +31,11 @@ from app.subtitle_schedule import subtitle_schedule, new_subtitle_gap_intervals
 from app.subtitle_tracks import render_srt
 
 SUBTITLE_CONTENT_OPERATIONS = frozenset({'ReplaceSubtitleText', 'SplitSubtitleCue', 'MergeSubtitleCue', 'DeleteSubtitleCue'})
+
+
+def first_subtitle_rejected(status_code, reason):
+    return EditPreviewRejected(status_code, {'error': 'first_subtitle_rejected',
+        'reason': reason, 'submission_effect': 'not_submitted'})
 
 
 def is_subtitle_edit(operation_type, values):
@@ -62,6 +67,60 @@ class SubtitleEditUseCase:
             raise ValueError('字幕编辑必须绑定同一仓储负责人')
         self.repository = repository
         self.montage_edits = montage_edits
+
+    def add_first_cue(self, task, command: EditCommand):
+        check_command(task, command)
+        workspace_id, task_id = command.workspace_id, command.task_id
+        base = self.repository.timeline_records.get_timeline_version(workspace_id, command.base_version_id)
+        if not isinstance(base.snapshot.get('montage'), dict):
+            raise first_subtitle_rejected(409, '当前版本尚无可编辑的时间线')
+        montage = creation_task_montage_plan_from_payload(
+            self.repository.get_creation_task_montage_plan(workspace_id, task_id))
+        plan = self.repository.plan_records.get_creation_plan(workspace_id, task.plan_id)
+        source = plan.source_media
+        if (not source or source.get('preserve_audio') is not True or montage.audio_timeline is None
+                or not any(track.role == 'original' and track.clips for track in montage.audio_timeline.tracks)):
+            raise first_subtitle_rejected(409, '仅保留原声的原片作品可以添加首条字幕')
+        if montage.status == 'rendering':
+            raise first_subtitle_rejected(409, '正在生成成片，完成后再添加字幕')
+        if montage.cues or self.montage_edits.current_subtitle_tracks(
+                workspace_id, task, current_version=base, montage=montage):
+            raise first_subtitle_rejected(409, '当前版本已有字幕，请使用字幕编辑')
+        values = command.values
+        start, end = values['start_seconds'], values['end_seconds']
+        if not 0 <= start < end <= montage.duration_seconds or round(start * 1000) >= round(end * 1000):
+            raise first_subtitle_rejected(422, '字幕区间必须位于作品内，且结束时间晚于开始时间')
+        try:
+            text, breaks = normalized_subtitle_text(values['text'].strip(), None)
+            if not text.strip():
+                raise ValueError('请输入字幕文字')
+        except ValueError as exc:
+            raise first_subtitle_rejected(422, str(exc)) from exc
+        cue = SubtitleCue(f'cue_{uuid4().hex}', None, text, start, end, line_breaks=breaks)
+        version_id = f'timeline_{uuid4().hex}'
+        track = SubtitleTrack(f'subtitle_{uuid4().hex}', workspace_id, task_id, version_id,
+            values['language'], None, default_subtitle_style(), [cue], 'timeline', None, None, None, 'valid')
+        operation_payload = {**values, 'cue_id': cue.id, 'text': cue.text, 'line_breaks': cue.line_breaks}
+        intent, proposal = make_metadata_proposal(
+            command, [f'cue:{cue.id}'], '添加首条字幕', operation_payload)
+        proposal = replace(proposal, invalidated_refs=logical_montage_output_refs(montage))
+        try:
+            content = render_srt(execution_subtitle_track(track))
+        except ValueError as exc:
+            raise first_subtitle_rejected(422, str(exc)) from exc
+        reference, transform = self.montage_edits.publish_subtitle_text(
+            workspace_id=workspace_id, task_id=task_id, proposal_id=proposal.id,
+            kind='subtitle_cue_add', input_refs=[f'timeline:{base.id}'],
+            content=content, engine='subtitle-srt/v1', parameters={'language': track.language})
+        track = replace(track, artifact_ref=reference, transform_id=transform)
+        verifier = EditSourceVerifier(self.repository, identity=command.actor_identity)
+        command = verifier.bind_affected(command, montage, montage)
+        prepare_changed_montage(montage, message='字幕已保存；生成成片后写入画面。')
+        return self.montage_edits.persist_montage_edit(
+            workspace_id=workspace_id, task=task, proposal=proposal, base_version=base,
+            updated_plan=montage, operation_type=command.operation_type, operation_payload=operation_payload,
+            edited_subtitle_tracks=[track], direct_command=command, direct_intent=intent,
+            direct_source_verifier=verifier, result_version_id=version_id)
 
     def prepare_preview(self, command: EditCommand) -> PreparedSubtitleEdit:
         if not is_subtitle_edit(command.operation_type, command.values):

@@ -2274,6 +2274,7 @@ EXACT_EDIT_FIELDS = {
     "ChangeCanvas": {"aspect_ratio", "fit_mode"},
     "SetClipTransition": {"clip_id", "transition_seconds"},
     "EditGraphicOverlay": {"overlay_action", "graphic_overlay", "overlay_id"},
+    "AddFirstSubtitleCue": {"text", "start_seconds", "end_seconds", "language"},
     "UpdateSubtitleCue": {"track_id", "cue_id", "text", "start_seconds", "end_seconds", "line_breaks", "emphasis", "style"},
     "ReplaceSubtitleText": {"track_id", "find_text", "replacement_text"},
     "SplitSubtitleCue": {"track_id", "cue_id", "split_offset", "split_time_seconds"},
@@ -2344,6 +2345,7 @@ class CreationTaskExactEditRequest(BaseModel):
         "SetClipLock",
         "ConfirmClip",
         "RegenerateNarrationSegment",
+        "AddFirstSubtitleCue",
         "UpdateSubtitleCue",
         "ReplaceSubtitleText",
         "SplitSubtitleCue",
@@ -2365,6 +2367,7 @@ class CreationTaskExactEditRequest(BaseModel):
     start_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     end_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     text: str | None = Field(default=None, min_length=1, max_length=96)
+    language: Literal["zh-CN", "en-US"] | None = None
     title: str | None = Field(default=None, min_length=1, max_length=80)
     title_position: Literal["center", "bottom"] = "bottom"
     subtitle_display: Literal["none", "zh", "en", "zh-en"] | None = None
@@ -2393,6 +2396,8 @@ class CreationTaskExactEditRequest(BaseModel):
     @model_validator(mode="after")
     def exact_action_fields(self):
         allowed = EXACT_EDIT_FIELDS.get(self.operation_type)
+        if "language" in self.model_fields_set and self.operation_type != "AddFirstSubtitleCue":
+            raise ValueError("字幕语言仅用于添加首条字幕")
         if allowed is not None and self.model_fields_set - allowed - EXACT_EDIT_ENVELOPE_FIELDS - {"operation_type"}:
             raise ValueError("精确编辑包含与当前动作无关的字段")
         if self.operation_type == "EditAudioTimeline" and self.audio_edit is None:
@@ -3138,6 +3143,7 @@ class EditOperationResponse(BaseModel):
         "ConfirmClip",
         "RegenerateNarrationSegment",
         "ReviseScriptSection",
+        "AddFirstSubtitleCue",
         "UpdateSubtitleCue",
         "AlignSubtitleTiming",
         "ReplaceSubtitleText",

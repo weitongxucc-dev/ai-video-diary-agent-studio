@@ -17,7 +17,7 @@ from app.creation.editing.clips import CLIP_SETTING_OPERATIONS
 from app.creation.editing.edit_scope import edit_scope_blocker
 from app.creation.editing.metadata_use_case import (EditPreviewRejected, metadata_edit_command, effective_audio_timeline, logical_montage_output_refs)
 from app.creation.editing.sources import SourceRevisionRecoveryRequired
-from app.creation.editing.subtitle_use_case import subtitle_values
+from app.creation.editing.subtitle_use_case import first_subtitle_rejected, subtitle_values
 from app.materials.contracts import MediaAuthorityError
 from app.creation.editing.picture import EditConflict
 from app.creation.editing.linked_timeline_use_case import LINKED_EDIT_OPERATIONS, LinkedEditInputError, InsertMaterialMissing, InsertSourceRangeError
@@ -237,6 +237,8 @@ class ExactPreviewUseCase:
         if not {'expected_timeline_version_id', 'expected_timeline_sequence'} <= payload.model_fields_set:
             raise EditPreviewRejected(status_code=422, detail='类型化请求须绑定期望时间线版本和序号')
         if (payload.expected_timeline_version_id, payload.expected_timeline_sequence) != (task.current_timeline_version_id, version.sequence if version else 0):
+            if payload.operation_type == 'AddFirstSubtitleCue':
+                raise first_subtitle_rejected(409, '时间线已变化，请重新读取当前作品')
             raise EditPreviewRejected(status_code=409, detail='时间线已变化，请重新读取当前任务')
         source = {'workspace_id': task.workspace_id, 'task_id': task.id, 'member_id': member_id, 'request_id': str(payload.request_id) if payload.request_id else None, 'expected_timeline_version_id': payload.expected_timeline_version_id, 'expected_timeline_sequence': payload.expected_timeline_sequence}
         return source, version
@@ -320,6 +322,8 @@ class ExactPreviewUseCase:
 
     def preview(self, workspace_id, task_id, payload, *, identity, actor, source, draft_only, execution, reader_identity):
         operation = payload.operation_type
+        if operation == 'AddFirstSubtitleCue':
+            raise EditPreviewRejected(422, '请从字幕编辑直接保存首条字幕')
         if blocker := edit_scope_blocker(source, linked=operation in LINKED_EDIT_OPERATIONS):
             raise EditPreviewRejected(409, blocker)
         if operation in {'ChangePersonSegment','RegeneratePersonRender','RegenerateNarrationSegment'}:
@@ -690,6 +694,16 @@ class ExactPreviewUseCase:
                 command = metadata_edit_command(task, identity, payload.operation_type, values, source=source)
                 audio_edit = self.audio_request(payload, command.base_version_id) if payload.operation_type == 'EditAudioTimeline' else None
                 outcome = self.metadata.save(task, command, audio_edit=audio_edit, audio_actor=actor)
+            elif payload.operation_type == 'AddFirstSubtitleCue':
+                values = payload.action_values()
+                values.pop('operation_type')
+                if (source is None or not source.get('request_id') or not source.get('expected_timeline_version_id')
+                        or source.get('assistant_turn_id')
+                        or any(values.get(key) is None for key in EXACT_EDIT_FIELDS[payload.operation_type])):
+                    raise EditPreviewRejected(422, '请明确填写首条字幕，并绑定当前版本和保存请求')
+                command = metadata_edit_command(task, identity, payload.operation_type,
+                    {**values, 'base_version_id': source['expected_timeline_version_id']}, source=source)
+                outcome = self.subtitles.add_first_cue(task, command)
             elif payload.operation_type in LINKED_EDIT_OPERATIONS:
                 task, values = self.prepare_linked(task.workspace_id, task.id, payload)
                 command = self.linked_command(task, identity, payload.operation_type,

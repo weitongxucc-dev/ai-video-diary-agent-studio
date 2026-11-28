@@ -12,11 +12,13 @@ import pytest
 
 import app.main as main
 from app.artifact_store import ArtifactStore
+from app.creation.editing.metadata_use_case import default_subtitle_style
 from app.creation.render_result_provenance import rendered_version_provenance
 from app.creation.source_task_use_case import SourceTaskCommand, SourceTaskUseCase
 from app.creation_execution import CreationJobUnitExecutor, submit_creation_stage
 from app.host_resource_probes import CpuAudioBudget, CpuRenderBudget, HostBudget, HostResourceProbe
 from app.materials.contracts import MaterialAsset, MaterialSegment
+from app.montage import _resolve_subtitle_font
 from app.schemas import CreationTaskExactEditRequest
 from app.task_audio import TaskAudio
 from app.video_jobs import VideoJobRunner
@@ -25,8 +27,13 @@ from test_creation_execution import _render_version_fixture
 from test_host_resource_probes import _render_budget
 
 
-@pytest.mark.parametrize('edit,preserve_audio', [('', True), ('ripple', True), ('', False), ('replace', True)])
+@pytest.mark.parametrize('edit,preserve_audio', [('', True), ('ripple', True), ('', False), ('replace', True), ('subtitle', True)])
 def test_source_video_renders_requested_sound_without_script_or_narration(tmp_path, monkeypatch, edit, preserve_audio):
+    if edit == 'subtitle':
+        try:
+            _resolve_subtitle_font(default_subtitle_style()['font_family'])
+        except OSError as exc:
+            pytest.skip(str(exc))
     repo, _, _, _, actor, execution, owner, scheduler, _, members = _render_version_fixture(tmp_path, source_seconds=4)
     store = ArtifactStore(tmp_path / 'source-artifacts')
     settings = SimpleNamespace(video_output_path=str(tmp_path/'source-output'),
@@ -80,6 +87,16 @@ def test_source_video_renders_requested_sound_without_script_or_narration(tmp_pa
         applied, = repo.edit_records.list_edit_operations('local', task_id)
         assert applied.operation_type == 'ReplaceClip' and applied.base_version_id == receipt['timeline_version_id']
         assert repo.task_records.get_creation_task('local', task_id).current_timeline_version_id == applied.result_version_id
+    elif edit == 'subtitle':
+        task = repo.task_records.get_creation_task('local', task_id)
+        main._task_authorizations_for_goal().ensure(task, actor, interactive=True)
+        command = CreationTaskExactEditRequest(operation_type='AddFirstSubtitleCue', request_id=uuid4(),
+            text='Original audio', start_seconds=.25, end_seconds=1.25, language='en-US',
+            expected_timeline_version_id=receipt['timeline_version_id'], expected_timeline_sequence=1)
+        result = main._exact_preview_use_case().apply(task, actor, command,
+            identity={'member_id': actor.member_id, 'local_diagnostic': False})
+        assert result.status_code == 200, result.value
+        applied, = repo.edit_records.list_edit_operations('local', task_id)
     audio = TaskAudio(repo, store, settings.effective_temporary_root_path)
     cap = CpuAudioBudget(3, 8_000_000, 60, 10, 48000, 2, 4_000_000, 1, 60,
         512*1024**2, 16, .05, 1024**3, 1_000_000)
@@ -147,7 +164,22 @@ def test_source_video_renders_requested_sound_without_script_or_narration(tmp_pa
             '-ac', '1', '-ar', '16000', '-f', 's16le', '-'], check=True, capture_output=True).stdout
         peak = max(abs(value) for value in array('h', decoded))
         assert peak > 500 if preserve_audio else peak == 0
-        assert store.resolve_file(montage['subtitle_path']).read_text().strip() == ''
+        subtitle_text = store.resolve_file(montage['subtitle_path']).read_text().strip()
+        if edit == 'subtitle':
+            rendered = repo.timeline_records.get_timeline_version('local', task.current_timeline_version_id)
+            assert rendered.parent_version_id == applied.result_version_id
+            assert rendered_version_provenance(repo, rendered)['job_id'] == job.id
+            assert subtitle_text == '1\n00:00:00,250 --> 00:00:01,250\nOriginal audio'
+            brightness = []
+            for seconds in ('0.10', '0.50', '1.50'):
+                frame = subprocess.run(['ffmpeg', '-v', 'error', '-ss', seconds, '-i', str(output),
+                    '-frames:v', '1', '-vf', 'crop=iw:ih/2:0:ih/2,format=gray', '-f', 'rawvideo', '-'],
+                    check=True, capture_output=True).stdout
+                assert frame
+                brightness.append(sum(value > 210 for value in frame))
+            assert brightness[0] == brightness[2] == 0 and brightness[1] > 100
+        else:
+            assert subtitle_text == ''
         assert not repo.script_records.list_creation_task_scripts('local', task_id)
         assert not repo.narration_records.list_narration_segments('local', task_id, None)
     finally:
