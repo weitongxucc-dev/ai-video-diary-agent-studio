@@ -36,6 +36,7 @@ class CandidateCropRequest(_VersionBinding):
 class CandidatePreviewRequest(_VersionBinding):
     request_id: UUID
     clip_id: str = Field(min_length=1, max_length=120)
+    with_audio: bool = False
 
 
 class CandidateAdoptionRequest(_VersionBinding):
@@ -144,7 +145,7 @@ def build_task_timeline_candidate_router(*, repository_for, access_for, preview_
         task, _member_id = access_for()(task_id, request, write=True)
         actor = actor_for()(request, task.workspace_id)
         command = CandidateClipPreviewCommand(str(candidate_id), payload.expected_timeline_version_id,
-            payload.expected_timeline_sequence, payload.clip_id, str(payload.request_id))
+            payload.expected_timeline_sequence, payload.clip_id, str(payload.request_id), payload.with_audio)
         with _candidate_errors():
             result = preview_for().submit(actor, task_id, command, runtime_for())
         return JSONResponse(status_code=202, content=result)

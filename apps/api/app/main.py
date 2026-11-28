@@ -2235,7 +2235,9 @@ def _clip_preview_use_case(repository=None):
         plan = creation_task_montage_plan_from_payload(repo.get_creation_task_montage_plan(task.workspace_id, task.id))
         cue = next((item for item in plan.cues if item.id == clip.cue_id), None)
         return adopted_person_render_source(repo, task, clip, cue, _person_render_media_path)
-    return ClipPreviewUseCase(repo, resolve_presenter_source=presenter_source, budget=profile)
+    return ClipPreviewUseCase(repo, resolve_presenter_source=presenter_source, budget=profile,
+        candidate_picture_renderer=lambda: _picture_preview_components(repo)[2],
+        candidate_picture_budgets=lambda: (_device_operation_budget("cpu_render"), _device_operation_budget("cpu_audio")))
 
 
 def _clip_preview_submission_http_adapter():

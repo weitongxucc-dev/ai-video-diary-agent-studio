@@ -3617,7 +3617,7 @@ describe("CreationTaskWorkspace", () => {
     const latest = vi.spyOn(candidateApi, "readLatestTimelineCandidatePreview").mockImplementation(async (target, version, clipId) => {
       const path = `/api/creation-tasks/${target.taskId}/timeline/candidates/${target.candidateId}/versions/${version.id}/previews/job-${target.candidateId}`;
       return { task_id: target.taskId, candidate_id: target.candidateId, version_id: version.id, clip_id: clipId,
-        job_id: `job-${target.candidateId}`, status: "succeeded", silent: true, width_px: 360, height_px: 640,
+        job_id: `job-${target.candidateId}`, status: "succeeded", silent: target.candidateId === "a", width_px: 360, height_px: 640,
         result_url: path, video_url: `${path}/video`, timeline_start_seconds: 2, timeline_end_seconds: 5,
         source_start_seconds: 0, source_end_seconds: 3, waiting_reason: null, failure_reason: null };
     });
@@ -3634,18 +3634,22 @@ describe("CreationTaskWorkspace", () => {
       fireEvent.timeUpdate(formal);
       fireEvent.click(screen.getByRole("button", { name: "比较候选" }));
       const dialog = await screen.findByRole("dialog", { name: "比较候选" });
-      expect(within(dialog).getByText("镜头 1 · 静音短预览，最多 5 秒")).toBeInTheDocument();
+      expect(within(dialog).getByText(/镜头 1 · 最多预览 5 秒/)).toBeInTheDocument();
       const sideA = within(dialog).getByRole("region", { name: "候选 A" });
       const sideB = within(dialog).getByRole("region", { name: "候选 B" });
       expect(await within(sideA).findByLabelText("水平位置（%）")).toHaveValue(35);
       expect(await within(sideB).findByLabelText("水平位置（%）")).toHaveValue(80);
       expect(video).not.toHaveBeenCalled();
       fireEvent.click(await within(sideA).findByRole("button", { name: "打开预览画面" }));
-      const playerA = await within(sideA).findByLabelText("候选 A 的镜头静音预览");
+      const playerA = await within(sideA).findByLabelText<HTMLVideoElement>("候选 A 的镜头静音预览");
       expect(playerA).toHaveAttribute("src", "blob:clip-a");
+      expect(playerA.muted).toBe(true);
       expect(playerA).not.toHaveAttribute("autoplay");
       fireEvent.click(await within(sideB).findByRole("button", { name: "打开预览画面" }));
-      expect(await within(sideB).findByLabelText("候选 B 的镜头静音预览")).toHaveAttribute("src", "blob:clip-b");
+      const playerB = await within(sideB).findByLabelText<HTMLVideoElement>("候选 B 的镜头有声预览");
+      expect(playerB).toHaveAttribute("src", "blob:clip-b");
+      expect(playerB.muted).toBe(false);
+      expect(playerB).not.toHaveAttribute("autoplay");
       expect(playerA).not.toBeInTheDocument();
       expect(revoke).toHaveBeenCalledWith("blob:clip-a");
       expect(latest).toHaveBeenCalledWith({ taskId: "task-1", candidateId: "b" }, details[1].version, "clip-1", expect.any(AbortSignal));

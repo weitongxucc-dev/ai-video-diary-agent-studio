@@ -106,23 +106,25 @@ describe("candidate version requests", () => {
     const path = `${aPath}/versions/a13/previews/job-a`;
     const pending: TimelineCandidatePreview = {
       task_id: "work", candidate_id: "A", version_id: "a13", clip_id: "clip", job_id: "job-a",
-      status: "queued", result_url: path, video_url: null, silent: true,
+      status: "queued", result_url: path, video_url: null, silent: false,
       width_px: 480, height_px: 480,
       timeline_start_seconds: 1, timeline_end_seconds: 6, source_start_seconds: 0, source_end_seconds: 5,
       waiting_reason: null, failure_reason: null,
     };
     const done = { ...pending, status: "succeeded", video_url: `${path}/video` };
     request.mockResolvedValueOnce(pending).mockResolvedValueOnce(done)
+      .mockResolvedValueOnce({ ...done, silent: true })
       .mockResolvedValueOnce({ ...done, video_url: `${path.replace("a13", "a14")}/video` });
     await expect(submitTimelineCandidatePreview(a, candidate("A", "a13", .35), "clip", "request-a")).resolves.toEqual(pending);
     expect(request).toHaveBeenNthCalledWith(1, `${aPath}/previews`, {
       method: "POST", body: JSON.stringify({
-        request_id: "request-a", clip_id: "clip", expected_timeline_version_id: "a13", expected_timeline_sequence: 13,
+        request_id: "request-a", clip_id: "clip", expected_timeline_version_id: "a13", expected_timeline_sequence: 13, with_audio: true,
       }),
     });
     await expect(readTimelineCandidatePreview(b, pending)).rejects.toThrow("预览回执与所选候选、版本或镜头不一致");
     await expect(readTimelineCandidatePreview(a, pending)).resolves.toEqual(done);
+    await expect(readTimelineCandidatePreview(a, pending)).rejects.toThrow("原预览的声音状态无法核对");
     await expect(readTimelineCandidatePreview(a, pending)).rejects.toThrow("预览回执与所选候选、版本或镜头不一致");
-    expect(request.mock.calls.map(([url]) => url)).toEqual([`${aPath}/previews`, path, path]);
+    expect(request.mock.calls.map(([url]) => url)).toEqual([`${aPath}/previews`, path, path, path]);
   });
 });
