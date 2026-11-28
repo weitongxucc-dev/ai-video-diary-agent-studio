@@ -289,6 +289,136 @@ def _sqlite_table_facts(repository, tables):
                               key=lambda row: json.dumps(row, sort_keys=True)) for table in tables}
 
 
+def test_busy_scan_commit_rolls_back_and_running_driver_dispatches_original_job(tmp_path, monkeypatch):
+    from app.creation.contracts import JobRun
+    from app.device_runtime import DeviceRuntime, OwnerRegistration
+    from test_creation_execution import _seed
+
+    repository, task_id, _, _ = _seed(tmp_path, workspace_id="private-a", voice=False)
+    owners = Owners()
+    clock = Clock(datetime(2026, 9, 27, 12, tzinfo=timezone.utc))
+    scheduler = DeviceScheduler(repository.database_path, tmp_path / "device.lock", owners=owners,
+                                resources=Resources(), processes=Processes(), clock=clock)
+    job = repository.job_records.create_job_run(JobRun("scan-job", "private-a", task_id, "render",
+                                                     "scan-job", "sha256:one"))
+    repository.job_records.claim_job_run(job.workspace_id, job.id)
+    request = scheduler.submit(_intent(job.id, policy=SchedulePolicy(not_before_utc=clock() + timedelta(minutes=1))),
+                               "member-a")
+    assert scheduler.reconcile_released() == 0
+    tables = ("job_runs", "device_work_requests", "device_request_events", "device_permit")
+    before = _sqlite_table_facts(repository, tables)
+    ledger_before = scheduler.ledger_path.read_bytes()
+    attempted, _, statements = _trace_sqlite_commits(monkeypatch, scheduler)
+    first_poll_done, continue_polling, finished = Event(), Event(), Event()
+    first_poll_errors, grants = [], []
+    pick_and_grant = scheduler.pick_and_grant
+
+    def observe_first_poll():
+        if first_poll_done.is_set():
+            return pick_and_grant()
+        try:
+            return pick_and_grant()
+        except Exception as exc:
+            first_poll_errors.append(exc)
+            raise
+        finally:
+            first_poll_done.set()
+            continue_polling.wait(10)
+
+    class Executor:
+        def execute(self, grant, scheduler):
+            grants.append(grant)
+
+            def checkpoint(conn, current):
+                repository.job_records.finish_job_run(job.workspace_id, job.id, status="succeeded", connection=conn)
+                return "scan-checkpoint"
+
+            scheduler.complete_unit(grant, checkpoint_database_path=repository.database_path, checkpoint_write=checkpoint)
+            finished.set()
+
+    monkeypatch.setattr(scheduler, "pick_and_grant", observe_first_poll)
+    runtime = DeviceRuntime(scheduler, {"job_run": OwnerRegistration(owners, Executor())}, poll_interval_seconds=0.01)
+    try:
+        with repository.execution_inputs.creation_execution_read() as reader:
+            assert reader.execute("SELECT count(*) FROM job_runs").fetchone()[0] == 1
+            runtime.start()
+            assert attempted.wait(10)
+            assert first_poll_done.wait(10)
+            assert not first_poll_errors
+            assert any(sql.startswith("UPDATE DEVICE_WORK_REQUESTS SET STATE=") for sql in statements)
+            assert "ROLLBACK" in statements
+            assert _sqlite_table_facts(repository, tables) == before
+            assert scheduler.ledger_path.read_bytes() == ledger_before
+            assert not grants
+            fd, _ = scheduler._acquire_file()
+            assert fd is not None
+            scheduler._unlock(fd)
+        clock.advance(minutes=1)
+        continue_polling.set()
+        assert finished.wait(10)
+        assert runtime.running and runtime.last_error is None
+    finally:
+        continue_polling.set()
+        assert runtime.stop(10)
+    after = _sqlite_table_facts(repository, tables)
+    assert [(grant.request_id, grant.generation, grant.attempt_number) for grant in grants] == [
+        (request.id, 1, request.attempt_number)]
+    assert [(row["id"], row["status"]) for row in after["job_runs"]] == [(job.id, "succeeded")]
+    assert [(row["id"], row["state"], row["checkpoint_ref"]) for row in after["device_work_requests"]] == [
+        (request.id, "done", "scan-checkpoint")]
+    assert (after["device_permit"][0]["state"], after["device_permit"][0]["generation"]) == ("free", 1)
+
+
+@pytest.mark.parametrize("boundary", ["unknown_scan_outcome", "prepared_grant"])
+def test_busy_dispatch_still_stops_without_proof_of_uncommitted_scan(tmp_path, monkeypatch, boundary):
+    from app.device_runtime import DeviceRuntime
+
+    scheduler = _scheduler(tmp_path)
+    request = scheduler.submit(_intent("local-render"), "member-a")
+    assert scheduler.reconcile_released() == 0
+    runtime = DeviceRuntime(scheduler, {}, poll_interval_seconds=0.01)
+    write_ledger = scheduler._write_ledger
+    prepared = []
+
+    class LostCommitOutcome(sqlite3.Connection):
+        def commit(self):
+            super().commit()
+            error = sqlite3.OperationalError("commit outcome unavailable")
+            error.sqlite_errorcode = sqlite3.SQLITE_BUSY
+            raise error
+
+    def connect_with_lost_commit_outcome():
+        conn = sqlite3.connect(scheduler.database_path, isolation_level=None, factory=LostCommitOutcome)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    try:
+        with closing(sqlite3.connect(scheduler.database_path)) as reader:
+            def block_prepared_grant(data):
+                write_ledger(data)
+                if data["state"] == "held":
+                    prepared.append((data["request_id"], data["generation"]))
+                    reader.execute("BEGIN")
+                    reader.execute("SELECT state FROM device_permit").fetchone()
+
+            if boundary == "unknown_scan_outcome":
+                with monkeypatch.context() as scenario:
+                    scenario.setattr(scheduler, "_connect", connect_with_lost_commit_outcome)
+                    with pytest.raises(sqlite3.OperationalError, match="commit outcome unavailable") as caught:
+                        runtime.run_once()
+            else:
+                monkeypatch.setattr(scheduler, "_write_ledger", block_prepared_grant)
+                with pytest.raises(sqlite3.OperationalError, match="database is locked") as caught:
+                    runtime.run_once()
+                assert prepared == [(request.id, 1)]
+            assert caught.value.sqlite_errorcode == sqlite3.SQLITE_BUSY
+        assert runtime.last_error is caught.value
+        assert runtime.run_once() is False
+        assert scheduler._get(request.id).last_grant_generation is None
+    finally:
+        assert runtime.stop(10)
+
+
 @pytest.mark.parametrize("hold_until_timeout", [False, True], ids=["release_within_wait", "timeout_then_resume"])
 def test_production_snapshot_contends_with_original_scheduler_checkpoint(tmp_path, monkeypatch, hold_until_timeout):
     from app.creation.contracts import JobRun, TaskEvent
