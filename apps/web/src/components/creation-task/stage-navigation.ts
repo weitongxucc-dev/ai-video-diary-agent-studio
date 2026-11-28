@@ -122,8 +122,13 @@ export function productStageState(stageId: typeof productStages[number]["id"], w
         return task.stage === "montage" ? { state: "current", detail: "当前" } : { state: "upcoming", detail: "未开始" };
     }
     if (stageId === "subtitle_cover") {
+        if (canAddFirstSubtitle(workspace))
+            return { state: "upcoming", detail: "可添加首条字幕" };
         if (subtitleCoverComplete)
             return { state: "done", detail: "已完成" };
+        if (!rendered && workspace.plan.source_media
+            && workspace.subtitle_tracks.some(track => track.status === "valid" && track.cues.length > 0))
+            return { state: "current", detail: "字幕已保存" };
         if (!rendered)
             return { state: "upcoming", detail: "未开始" };
         return { state: "current", detail: workspace.cover_asset?.status === "valid" ? "待补字幕" : "待补封面" };
@@ -136,6 +141,12 @@ export function productStageState(stageId: typeof productStages[number]["id"], w
         return { state: "current", detail: "当前" };
     return rendered ? { state: "done", detail: "已完成" } : { state: "upcoming", detail: "未开始" };
 }
+export function canAddFirstSubtitle({ task, plan, montage, subtitle_tracks }: WorkspaceState): boolean {
+    return Boolean(task.current_timeline_version_id && plan.source_media?.preserve_audio
+        && montage && montage.status !== "rendering" && !montage.cues.length && !subtitle_tracks.length
+        && montage.audio_timeline?.tracks.some(track => track.role === "original" && track.clips.length > 0));
+}
+
 export function canOpenStage(view: WorkspaceView | null, state: WorkspaceState): view is WorkspaceView {
     if (!view)
         return false;
@@ -154,7 +165,7 @@ export function canOpenStage(view: WorkspaceView | null, state: WorkspaceState):
     if (view === "montage")
         return Boolean(state.montage);
     if (view === "subtitle_cover")
-        return Boolean(state.montage && state.subtitle_tracks.length);
+        return Boolean(state.montage && state.subtitle_tracks.length) || canAddFirstSubtitle(state);
     if (view === "review")
         return hasSavedTimeline(state) || Boolean(state.montage?.output_url);
     return view === "publish" && Boolean(state.montage?.output_url);

@@ -102,6 +102,12 @@ export type CreationTaskExactEditInput = {
     find_text: string;
     replacement_text: string;
 } | {
+    operation_type: "AddFirstSubtitleCue";
+    text: string;
+    start_seconds: number;
+    end_seconds: number;
+    language: "zh-CN" | "en-US";
+} | {
     operation_type: "UpdateSubtitleCue";
     track_id?: string;
     cue_id: string;
@@ -321,7 +327,7 @@ export type CreationTaskSubtitleSaveInput = Extract<CreationTaskExactEditInput, 
     expected_timeline_sequence: number;
 };
 export type CreationTaskMetadataSaveInput = (CreationTaskClipMetadataInput | Extract<CreationTaskExactEditInput, {
-    operation_type: "UpdateSubtitleCue" | "EditGraphicOverlay";
+    operation_type: "AddFirstSubtitleCue" | "UpdateSubtitleCue" | "EditGraphicOverlay";
 }>) & Pick<CreationTaskSubtitleSaveInput, "request_id" | "expected_timeline_version_id" | "expected_timeline_sequence">;
 export type CreationTaskEditRequestReceipt = {
     request_id: string;

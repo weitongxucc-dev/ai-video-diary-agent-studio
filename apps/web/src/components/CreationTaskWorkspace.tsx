@@ -3,7 +3,7 @@ import { WorkspacePanelContext, useWorkspacePage, useWorkspaceViewState } from "
 
 import { ASSISTANT_LOCATE_REFERENCE_EVENT, readAssistantLocateReference, referenceAssistantSelection, type SelectedAssistantReference } from "@/lib/assistant-reference";
 import { useWorkspaceSearchParams as useSearchParams } from "./workbench/context";
-import { canOpenStage, hasSavedTimeline } from "./creation-task/stage-navigation";
+import { canAddFirstSubtitle, canOpenStage, hasSavedTimeline } from "./creation-task/stage-navigation";
 import { editExecutionReadinessMessage } from './creation-task/stage-labels';
 import { saveTaskVideo, saveTaskCover, saveTaskSubtitles, type SaveFeedback } from "./creation-task/output-saving";
 import { ReviewOutputView } from "./creation-task/ReviewOutputView";
@@ -32,6 +32,7 @@ import { TaskViewNavigation } from "./creation-task/TaskViewNavigation";
 import { TaskSaveState, TaskOutputActions, TimelineEditingActions, SelectedObjectReferenceAction } from "./creation-task/TaskActions";
 
 import { SubtitleWorkspace } from "./SubtitleWorkspace";
+import { FirstSubtitleCueEditor } from "./creation-task/FirstSubtitleCueEditor";
 import { GraphicOverlayEditor } from "./GraphicOverlayEditor";
 import { DesktopVoiceRecorder } from "./DesktopVoiceRecorder";
 import { TimelineVersionHistory } from "./TimelineVersionHistory";
@@ -85,10 +86,10 @@ export type Props = {
   initialTasks: CreationTask[];
 };
 
-type MetadataEditInput = CreationTaskClipMetadataInput | Extract<CreationTaskExactEditInput, { operation_type: "UpdateSubtitleCue" | "EditGraphicOverlay" }>;
+type MetadataEditInput = CreationTaskClipMetadataInput | Extract<CreationTaskExactEditInput, { operation_type: "AddFirstSubtitleCue" | "UpdateSubtitleCue" | "EditGraphicOverlay" }>;
 
 function isMetadataSaveInput(input: CreationTaskExactEditInput): input is MetadataEditInput {
-  return (input.operation_type==='EditGraphicOverlay'&&input.graphic_overlay?.kind==='template') || ["UpdateSubtitleCue", "ChangeCrop", "ChangeClipSpeed", "SetClipLock", "ConfirmClip", "ReplaceClip", "TrimClip", "SplitClip", "ReorderClip"].includes(input.operation_type);
+  return (input.operation_type==='EditGraphicOverlay'&&input.graphic_overlay?.kind==='template') || ["AddFirstSubtitleCue", "UpdateSubtitleCue", "ChangeCrop", "ChangeClipSpeed", "SetClipLock", "ConfirmClip", "ReplaceClip", "TrimClip", "SplitClip", "ReorderClip"].includes(input.operation_type);
 }
 
 type PendingMetadataSave = {
@@ -1639,8 +1640,23 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       });
       return false;
     }
+    if (pending.input.operation_type === "AddFirstSubtitleCue"
+      && (receipt.result_status_code === 409 || receipt.result_status_code === 422)
+      && detail && typeof detail === "object"
+      && "error" in detail && detail.error === "first_subtitle_rejected"
+      && "submission_effect" in detail && detail.submission_effect === "not_submitted"
+      && "reason" in detail && typeof detail.reason === "string") {
+      await refresh(true, () => owns());
+      if (!owns()) return false;
+      sessionStorage.removeItem(`subtitle-save:${pending.workspaceId}:${pending.taskId}:${pending.memberId}`);
+      pendingMetadataSaveRef.current = null;
+      setPendingMetadataSave(null);
+      setNotice(null);
+      setError(errorDetails(new Error(detail.reason)));
+      return false;
+    }
     if (receipt.result_status_code < 200 || receipt.result_status_code >= 300 || !receipt.result || !("operation" in receipt.result)) {
-      const target = pending.input.operation_type === "UpdateSubtitleCue" ? "字幕" : pending.input.operation_type==='EditGraphicOverlay'?'动画图层':"镜头";
+      const target = ["AddFirstSubtitleCue", "UpdateSubtitleCue"].includes(pending.input.operation_type) ? "字幕" : pending.input.operation_type==='EditGraphicOverlay'?'动画图层':"镜头";
       setNotice(`原${target}保存返回 ${receipt.result_status_code}，可能已有写入。请保留原请求，核对版本和${target}；未自动重试。`);
       await refresh(true, () => owns());
       return false;
@@ -1656,7 +1672,7 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
       const draftKey = `${pending.taskId}:${pending.input.clip_id}`;
       setClipDrafts(current => { const next = { ...current }; delete next[draftKey]; return next; });
     }
-    setNotice((pending.input.operation_type === "UpdateSubtitleCue" ? "字幕修改" : pending.input.operation_type==='EditGraphicOverlay'?'动画修改':"镜头修改") + "已保存，可撤销。" + (editExecutionReadinessMessage(receipt.result.execution_readiness) ?? ""));
+    setNotice((pending.input.operation_type === "AddFirstSubtitleCue" ? "首条字幕" : pending.input.operation_type === "UpdateSubtitleCue" ? "字幕修改" : pending.input.operation_type==='EditGraphicOverlay'?'动画修改':"镜头修改") + "已保存，可撤销。" + (editExecutionReadinessMessage(receipt.result.execution_readiness) ?? ""));
     return true;
   }
 
@@ -2499,13 +2515,20 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
 
         {activeView === "subtitle_cover" && activeSubtitleTrack && workspace.montage ? <SubtitleWorkspace focusRequest={subtitleFocusRequest} onSeekPreview={positionAudioListen} activeTrack={activeSubtitleTrack} busy={busy !== null || Boolean(pendingMetadataSave)} onDraftChange={markReplayEditorInteraction} onPreviewExact={(input) => void previewExactEdit(input)} onSelectCover={selectCover} onSelectCue={selectCue} onSelectTrack={selectSubtitleTrack} onSaveCover={() => void saveCover()} onSaveSubtitle={(mode) => void saveSubtitle(mode)} onUndo={() => void undoTimeline()} onRedo={() => void undoTimeline(true)} selectedCover={selectedCover} selectedCueId={selectedCueId} taskId={task.id} versionId={task.current_timeline_version_id} canUndo={task.can_undo} canRedo={task.can_redo} cover={workspace.cover_asset} montage={workspace.montage} planAspectRatio={workspace.plan.aspect_ratio} subtitleTracks={workspace.subtitle_tracks} translationCapability={workspace.subtitle_translation_capability} frameCapability={workspace.cover_frame_capability} /> : null}
 
+        {activeView === "subtitle_cover" && canAddFirstSubtitle(workspace) && workspace.montage && task.current_timeline_version_id ?
+          <FirstSubtitleCueEditor key={task.current_timeline_version_id} versionId={task.current_timeline_version_id}
+            duration={workspace.montage.duration_seconds} language={workspace.plan.language === "en-US" ? "en-US" : "zh-CN"}
+            busy={busy !== null || Boolean(pendingMetadataSave) || Boolean(pendingTimelineRestore)}
+            canRedo={Boolean(task.can_redo)} onRedo={() => void undoTimeline(true)}
+            onSave={input => void previewExactEdit(input)} /> : null}
+
         <div className={activeView === "review" ? styles.reviewPane : styles.flowContents} role={activeView === "review" ? "tabpanel" : undefined} id={`review-panel-result-${task.id}`} aria-labelledby={activeView === "review" ? `review-result-${task.id}` : undefined} hidden={activeView === "review" && reviewPane !== "result"}>
         {(activeView === "review" || activeView === "montage") && workspace.montage ? <FinalVideoQualityCheck
           compact={isEditor} taskId={task.id} versionId={task.current_timeline_version_id} outputUrl={workspace.montage.output_url} onLocate={locateQualityFinding}
           renderReview={activeView === "review" && task.stage === "review" && workspace.montage.output_url ? measurement => {
             const videoSeconds = measurement?.taskId === task.id && measurement.versionId === task.current_timeline_version_id
               && measurement.outputUrl === workspace.montage?.output_url ? measurement.seconds : null;
-            return <ReviewOutputView subtitleSummary={subtitleSummary} coverValid={coverValid} canEditSubtitle={Boolean(activeSubtitleTrack)}
+            return <ReviewOutputView subtitleSummary={subtitleSummary} coverValid={coverValid} canEditSubtitle={Boolean(activeSubtitleTrack) || canAddFirstSubtitle(workspace)}
               durationDetail={durationDetails(videoSeconds)} reviewChecks={reviewChecks}
               busy={busy} onEditMontage={editShotAtPlayhead} onRecord={() => setRecordingOpen(true)} onEditSubtitles={() => openView("subtitle_cover")} onSave={() => void saveVideo()} />;
           } : undefined} /> : null}
