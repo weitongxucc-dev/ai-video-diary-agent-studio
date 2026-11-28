@@ -133,6 +133,18 @@ def validate_storage_configuration(settings: Settings, submitted: Mapping[str, o
     replacement path is selected.
     """
     submitted = submitted or {}
+    volumes = _configured_external_volumes(settings)
+    # Verify all configured volumes before the first directory write probe.
+    try:
+        volume_identity.verify_recorded_volumes(
+            volumes, record_path=volume_identity.record_path_for_env(runtime_env_file_path()),
+        )
+    except volume_identity.VolumeIdentityError as exc:
+        raise StorageConfigurationError(str(exc)) from exc
+    for volume in volumes:
+        if not os.path.ismount(volume):
+            raise StorageConfigurationError(f"外接存储未挂载：{volume}。请连接原数据盘后重试。")
+
     for field, kind in _STORAGE_PATH_FIELDS.items():
         value = getattr(settings, field, None)
         if not isinstance(value, str) or not value.strip():
@@ -150,17 +162,6 @@ def validate_storage_configuration(settings: Settings, submitted: Mapping[str, o
     # allowed to create it.
     if not settings.temporary_root_path and _external_volume(settings.effective_temporary_root_path) is not None:
         _validate_storage_location(settings.effective_temporary_root_path, "model", strict=True)
-    # A mounted /Volumes name is not proof of the original data disk: a different
-    # disk can be mounted under the same name.  Once the relocation command has
-    # recorded a volume identity, every startup and settings activation must
-    # match it or fail closed.
-    try:
-        volume_identity.verify_recorded_volumes(
-            _configured_external_volumes(settings),
-            record_path=volume_identity.record_path_for_env(runtime_env_file_path()),
-        )
-    except volume_identity.VolumeIdentityError as exc:
-        raise StorageConfigurationError(str(exc)) from exc
 
 
 def structured_completion_options(model_id: str, *, forced_tools: bool = False) -> dict[str, object]:

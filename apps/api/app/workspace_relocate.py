@@ -1,11 +1,11 @@
 """Stop-the-world relocation of the local workspace onto an external volume.
 
 Operator command (``python -m app.workspace_relocate``).  It preflights the
-source and target, backs up the database, copies and byte-verifies every root,
-rebinds the verified material library in the copied database, records the
-target volume identity, and only then rewrites the dotenv paths.  Source data is
-never deleted and the old database is never rebound, so an interrupted run
-leaves exactly one active configuration and can be resumed.
+source and target, seals the target volume identity in the operation receipt,
+backs up the database, copies and byte-verifies every root, rebinds the
+material library in the copied database, and then rewrites the dotenv paths.
+Source data is never deleted and the old database is never rebound, so an
+interrupted run leaves exactly one active configuration and can be resumed.
 
 The command refuses to run while the application holds the device execution
 lock, when the target is not a mounted external volume, when source and target
@@ -33,7 +33,12 @@ from typing import Literal
 from uuid import uuid4
 
 from app import device_paths, volume_identity
-from app.env_files import runtime_env_file_path, write_dotenv_values
+from app.env_files import (
+    commit_prepared_dotenv_values,
+    discard_prepared_dotenv_values,
+    prepare_dotenv_values,
+    runtime_env_file_path,
+)
 from app.materials.source_files import MaterialSourceFileAccess
 
 RECEIPT_FORMAT = "yaohe-workspace-relocation/v1"
@@ -88,6 +93,7 @@ class RelocationPlan:
     source: dict[str, Path]
     target: dict[str, Path]
     target_volume: Path
+    target_identity: volume_identity.VolumeIdentity
     total_bytes: int
     file_counts: dict[str, int]
     resuming: bool
@@ -191,6 +197,7 @@ def _write_receipt(path: Path, receipt: dict[str, object]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
@@ -248,6 +255,44 @@ def _active_execution(database_path: Path) -> dict[str, int]:
     return active
 
 
+def _observe_target_volume(request: RelocationRequest, volume: Path) -> volume_identity.VolumeIdentity:
+    is_mounted = request.is_external or _is_external_mount
+    if not is_mounted(volume):
+        raise RelocationError(f"目标不是已挂载的外接盘：{volume}。不会迁移到内置盘。")
+    observed = (request.probe or volume_identity.probe_volume_identity)(volume)
+    if not observed.uuid.strip() or Path(observed.mount_point) != volume.resolve():
+        raise RelocationError(f"无法确认目标外接盘身份：{volume}。")
+    if not is_mounted(volume):
+        raise RelocationError(f"目标外接盘已断开：{volume}。请连接原数据盘后重试。")
+    return observed
+
+
+def _require_target_uuid(volume: Path, actual: str, expected: str) -> None:
+    if actual != expected:
+        raise RelocationError(f"目标外接盘身份不匹配：{volume}。请连接原数据盘后重试。")
+
+
+def _plan_target_identity(
+    request: RelocationRequest, volume: Path, record_path: Path, receipt: dict[str, object] | None,
+) -> volume_identity.VolumeIdentity:
+    observed = _observe_target_volume(request, volume)
+    records = volume_identity.load_volume_identity_record(record_path) or {}
+    recorded = records.get(str(volume.resolve()))
+    if recorded is not None:
+        _require_target_uuid(volume, observed.uuid, recorded.get("uuid", ""))
+    if receipt is None:
+        return observed
+
+    sealed = receipt.get("volume_identity")
+    if sealed is None and receipt.get("status") == "applied":
+        # An older successful receipt may rely on the installed identity record.
+        sealed = recorded
+    if not isinstance(sealed, dict) or not isinstance(sealed.get("uuid"), str) or not sealed["uuid"].strip():
+        raise RelocationError("原迁移回执缺少可信目标卷身份，请核对原数据盘与备份；已保留回执。")
+    _require_target_uuid(volume, observed.uuid, sealed["uuid"])
+    return observed
+
+
 def plan_relocation(request: RelocationRequest) -> RelocationPlan:
     """Validate everything the copy depends on without writing user data."""
     source = {name: Path(value).expanduser() for name, value in request.source.items()}
@@ -271,8 +316,6 @@ def plan_relocation(request: RelocationRequest) -> RelocationPlan:
         if request.record_path is not None
         else volume_identity.record_path_for_env(env_path)
     )
-    is_external = request.is_external or _is_external_mount
-
     for name, path in source.items():
         spec = next(item for item in STORAGE_ROOTS if item.name == name)
         if path.is_symlink():
@@ -293,15 +336,9 @@ def plan_relocation(request: RelocationRequest) -> RelocationPlan:
             + "。请先启动应用完成恢复并正常退出，再执行迁移。"
         )
 
-    for name, path in target.items():
+    for path in target.values():
         if not path.is_absolute() or path.is_symlink():
             raise RelocationError(f"目标存储位置必须是绝对且非符号链接路径：{path}")
-        if path.exists():
-            spec = next(item for item in STORAGE_ROOTS if item.name == name)
-            if spec.kind == "file" and not path.is_file():
-                raise RelocationError(f"目标数据库位置不是普通文件：{path}")
-            if spec.kind == "directory" and not path.is_dir():
-                raise RelocationError(f"目标存储位置不是目录：{path}")
     if len({path.name for path in target.values()}) != len(target):
         raise RelocationError("目标存储位置名称重复")
 
@@ -315,8 +352,16 @@ def plan_relocation(request: RelocationRequest) -> RelocationPlan:
         raise RelocationError("所有目标存储位置必须位于同一个外接盘")
     target_volume = next(iter(volumes))
     assert target_volume is not None
-    if not is_external(target_volume):
-        raise RelocationError(f"目标不是已挂载的外接盘：{target_volume}。不会迁移到内置盘。")
+    if any(path.resolve().is_relative_to(target_volume.resolve()) for path in (receipt_path, record_path)):
+        raise RelocationError("迁移回执和卷身份记录必须保存在目标卷之外。")
+    receipt = _load_receipt(receipt_path)
+    if receipt is not None:
+        if str(receipt.get("operation_id")) != operation_id:
+            raise RelocationError("迁移回执属于另一操作，请使用原操作编号或新的回执路径。")
+        if not _same_paths(receipt.get("source", {}), source) or not _same_paths(receipt.get("target", {}), target):
+            raise RelocationError("迁移回执的源或目标与本次请求不一致。")
+    target_identity = _plan_target_identity(request, target_volume, record_path, receipt)
+    resuming = receipt is not None
 
     total_bytes = 0
     file_counts: dict[str, int] = {}
@@ -339,21 +384,20 @@ def plan_relocation(request: RelocationRequest) -> RelocationPlan:
             f"目标外接盘剩余空间不足：需要约 {required} 字节，可用 {free_bytes} 字节。"
         )
 
-    receipt = _load_receipt(receipt_path)
-    resuming = False
-    if receipt is not None:
-        if str(receipt.get("operation_id")) != operation_id:
-            raise RelocationError("迁移回执属于另一操作，请使用原操作编号或新的回执路径。")
-        if not _same_paths(receipt.get("source", {}), source) or not _same_paths(receipt.get("target", {}), target):
-            raise RelocationError("迁移回执的源或目标与本次请求不一致。")
-        resuming = True
-    if not resuming:
-        for name, path in target.items():
-            spec = next(item for item in STORAGE_ROOTS if item.name == name)
-            if not path.exists():
-                continue
-            if spec.kind == "file":
+    for name, path in target.items():
+        if not path.exists():
+            continue
+        spec = next(item for item in STORAGE_ROOTS if item.name == name)
+        if spec.kind == "file":
+            if not path.is_file():
+                raise RelocationError(f"目标数据库位置不是普通文件：{path}")
+            if not resuming:
                 raise RelocationError(f"目标数据库已存在，拒绝覆盖：{path}")
+        else:
+            if not path.is_dir():
+                raise RelocationError(f"目标存储位置不是目录：{path}")
+            if resuming:
+                continue
             foreign = [
                 item for item in path.iterdir()
                 if not item.name.startswith(_PART_PREFIX)
@@ -363,7 +407,7 @@ def plan_relocation(request: RelocationRequest) -> RelocationPlan:
 
     return RelocationPlan(
         operation_id=operation_id, source=source, target=target,
-        target_volume=target_volume, total_bytes=total_bytes,
+        target_volume=target_volume, target_identity=target_identity, total_bytes=total_bytes,
         file_counts=file_counts, resuming=resuming,
         env_path=env_path, receipt_path=receipt_path, record_path=record_path,
     )
@@ -552,7 +596,7 @@ def _install_database(
     return {"source": str(source), "backup": str(backup), **result}
 
 
-def _rebind_material_library(plan: RelocationPlan) -> dict[str, object]:
+def _rebind_material_library(plan: RelocationPlan, *, verify_target: Callable[[], None]) -> dict[str, object]:
     database_path = plan.target["database"]
     old_library = plan.source["materials"].resolve()
     new_library = plan.target["materials"].resolve()
@@ -582,6 +626,7 @@ def _rebind_material_library(plan: RelocationPlan) -> dict[str, object]:
             f"素材目录绑定与配置的素材根不一致：{bound_library} / {old_library}。"
             "请先核对设置，未迁移任何绑定。"
         )
+    verify_target()
     prepared = access.prepare_material_rebind(
         workspace_id, old_directory=str(old_library), new_directory=str(new_library),
         operation_id=plan.operation_id,
@@ -589,6 +634,7 @@ def _rebind_material_library(plan: RelocationPlan) -> dict[str, object]:
     if prepared["status"] == "applied":
         result = prepared
     else:
+        verify_target()
         result = access.commit_material_rebind(
             workspace_id, operation_id=plan.operation_id,
             manifest_sha256=str(prepared["manifest_sha256"]),
@@ -600,7 +646,7 @@ def _rebind_material_library(plan: RelocationPlan) -> dict[str, object]:
     }
 
 
-def _update_dotenv(plan: RelocationPlan) -> dict[str, object]:
+def _update_dotenv(plan: RelocationPlan, *, verify_target: Callable[[], None]) -> dict[str, object]:
     updates = {
         spec.env_key: str(plan.target[spec.name])
         for spec in STORAGE_ROOTS if spec.name in plan.target
@@ -608,7 +654,12 @@ def _update_dotenv(plan: RelocationPlan) -> dict[str, object]:
     current = _env_values(plan.env_path)
     if all(current.get(key) == value for key, value in updates.items()):
         return {"updated": False, "keys": sorted(updates)}
-    write_dotenv_values(plan.env_path, updates)
+    prepared = prepare_dotenv_values(plan.env_path, updates)
+    try:
+        verify_target()
+        commit_prepared_dotenv_values(prepared)
+    finally:
+        discard_prepared_dotenv_values(prepared)
     if any(_env_values(plan.env_path).get(key) != value for key, value in updates.items()):
         raise RelocationError("配置写入后回读不一致")
     return {"updated": True, "keys": sorted(updates)}
@@ -622,48 +673,29 @@ def _read_binding(database_path: Path) -> tuple[str, str] | None:
     return (str(row["workspace_id"]), str(row["library_path"])) if row is not None else None
 
 
-def _already_applied(plan: RelocationPlan, request: RelocationRequest) -> bool:
+def _configuration_points_to_target(plan: RelocationPlan) -> bool:
     values = _env_values(plan.env_path)
-    if any(values.get(spec.env_key) != str(plan.target[spec.name])
-           for spec in STORAGE_ROOTS if spec.name in plan.target):
-        return False
-    if not plan.target["database"].is_file() or _sqlite_integrity(plan.target["database"]) != "ok":
-        raise RelocationError("配置已指向目标位置，但目标数据库不可用。")
-    binding = _read_binding(plan.target["database"])
-    if binding is not None:
-        if Path(binding[1]).expanduser().resolve() != plan.target["materials"].resolve():
-            raise RelocationError("配置已指向目标位置，但素材目录绑定仍在旧位置。")
-        # The applied receipt is not proof that the copied library is still
-        # intact.  A damaged file makes this a resumable repair instead of a
-        # false "already applied".
-        with _connect(plan.target["database"]) as connection:
-            rows = connection.execute(
-                "SELECT file_path, size_bytes FROM material_ingestion_files WHERE workspace_id=?",
-                (binding[0],),
-            ).fetchall()
-        for row in rows:
-            path = Path(str(row["file_path"])).expanduser()
-            if path.is_symlink() or not path.is_file() or path.stat().st_size != int(row["size_bytes"]):
-                return False
-    volume_identity.verify_recorded_volumes(
-        [plan.target_volume], record_path=plan.record_path,
-        probe=request.probe or volume_identity.probe_volume_identity,
+    return all(
+        values.get(spec.env_key) == str(plan.target[spec.name])
+        for spec in STORAGE_ROOTS if spec.name in plan.target
     )
-    return True
 
 
-def _verify_final(plan: RelocationPlan, request: RelocationRequest) -> None:
+def _verify_final(plan: RelocationPlan) -> None:
+    records = volume_identity.load_volume_identity_record(plan.record_path) or {}
+    record = records.get(str(plan.target_volume.resolve()), {})
+    if record.get("uuid") != plan.target_identity.uuid:
+        raise RelocationError("目标卷身份尚未安装到启动配置，请核对原回执后重试。")
     values = _env_values(plan.env_path)
     for spec in STORAGE_ROOTS:
         if spec.name in plan.target and values.get(spec.env_key) != str(plan.target[spec.name]):
             raise RelocationError(f"配置未指向目标位置：{spec.env_key}")
-    volume_identity.verify_recorded_volumes(
-        [plan.target_volume], record_path=plan.record_path,
-        probe=request.probe or volume_identity.probe_volume_identity,
-    )
     database_path = plan.target["database"]
-    if _sqlite_integrity(database_path) != "ok":
+    if not database_path.is_file() or _sqlite_integrity(database_path) != "ok":
         raise RelocationError("目标数据库完整性检查未通过")
+    for path in plan.target.values():
+        if not path.exists():
+            raise RelocationError(f"目标存储位置缺失：{path}")
     binding = _read_binding(database_path)
     if binding is None:
         return
@@ -673,7 +705,7 @@ def _verify_final(plan: RelocationPlan, request: RelocationRequest) -> None:
     old_root = str(plan.source["materials"].resolve())
     with _connect(database_path) as connection:
         rows = connection.execute(
-            "SELECT file_path FROM material_ingestion_files WHERE workspace_id=?",
+            "SELECT file_path, size_bytes FROM material_ingestion_files WHERE workspace_id=?",
             (workspace_id,),
         ).fetchall()
     for row in rows:
@@ -681,37 +713,46 @@ def _verify_final(plan: RelocationPlan, request: RelocationRequest) -> None:
         if file_path == old_root or file_path.startswith(old_root + os.sep):
             raise RelocationError(f"素材登记仍指向旧素材根：{file_path}")
         path = Path(file_path).expanduser()
-        if path.is_symlink() or not path.is_file():
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != int(row["size_bytes"]):
             raise RelocationError(f"迁移后素材文件不可用：{file_path}")
-    for path in plan.target.values():
-        if not path.exists():
-            raise RelocationError(f"目标存储位置缺失：{path}")
 
 
 def run_relocation(request: RelocationRequest) -> dict[str, object]:
     """Run or resume a relocation and return its durable receipt payload."""
-    plan = plan_relocation(request)
-    if _already_applied(plan, request):
-        receipt = _load_receipt(plan.receipt_path) or {
-            "format": RECEIPT_FORMAT, "operation_id": plan.operation_id,
-            "source": {k: str(v) for k, v in plan.source.items()},
-            "target": {k: str(v) for k, v in plan.target.items()},
-        }
-        receipt.update({"status": "applied", "reapplied": True, "updated_at": _now()})
-        _write_receipt(plan.receipt_path, receipt)
-        return receipt
-
+    initial = plan_relocation(request)
     descriptor = _acquire_execution_lock(request.lock_path)
     try:
         # Recompute under the execution lock so the copy cannot race a startup.
         plan = plan_relocation(request)
+        _require_target_uuid(plan.target_volume, plan.target_identity.uuid, initial.target_identity.uuid)
+
+        def verify_target() -> None:
+            observed = _observe_target_volume(request, plan.target_volume)
+            _require_target_uuid(plan.target_volume, observed.uuid, plan.target_identity.uuid)
+
+        verify_target()
         previous = _load_receipt(plan.receipt_path)
+        if previous is not None and (
+            previous.get("status") == "applied"
+            or (previous.get("status") == "identity" and _configuration_points_to_target(plan))
+        ):
+            # The destination can contain work created since the configuration switch.
+            # A failed readback must never reinstall the original database backup.
+            _verify_final(plan)
+            verify_target()
+            if previous["status"] == "applied":
+                return {**previous, "reapplied": True}
+            previous.update(status="applied", applied_at=_now(), updated_at=_now())
+            _write_receipt(plan.receipt_path, previous)
+            return previous
+
         receipt: dict[str, object] = {
             "format": RECEIPT_FORMAT, "operation_id": plan.operation_id,
-            "status": "started", "started_at": _now(),
+            "status": "started", "started_at": (previous or {}).get("started_at", _now()),
             "source": {k: str(v) for k, v in plan.source.items()},
             "target": {k: str(v) for k, v in plan.target.items()},
             "target_volume": str(plan.target_volume),
+            "volume_identity": plan.target_identity.as_record(),
             "total_bytes": plan.total_bytes, "file_counts": plan.file_counts,
         }
         _write_receipt(plan.receipt_path, receipt)
@@ -719,12 +760,14 @@ def run_relocation(request: RelocationRequest) -> dict[str, object]:
         receipt["backup"] = _backup_database(plan, previous)
         receipt["status"] = "backup"
         receipt["updated_at"] = _now()
+        verify_target()
         _write_receipt(plan.receipt_path, receipt)
 
         copies: dict[str, object] = {}
         for spec in STORAGE_ROOTS:
             if spec.name not in plan.source:
                 continue
+            verify_target()
             if spec.kind == "file":
                 copies[spec.name] = _install_database(
                     plan.source[spec.name], plan.target[spec.name],
@@ -737,23 +780,26 @@ def run_relocation(request: RelocationRequest) -> dict[str, object]:
         receipt["copies"] = copies
         receipt["status"] = "copied"
         receipt["updated_at"] = _now()
+        verify_target()
         _write_receipt(plan.receipt_path, receipt)
-
         _verify_database_copy(plan.source["database"], plan.target["database"])
-        receipt["rebind"] = _rebind_material_library(plan)
+        verify_target()
+        receipt["rebind"] = _rebind_material_library(plan, verify_target=verify_target)
         receipt["status"] = "rebound"
         receipt["updated_at"] = _now()
+        verify_target()
         _write_receipt(plan.receipt_path, receipt)
 
-        identity = (request.probe or volume_identity.probe_volume_identity)(plan.target_volume)
-        volume_identity.save_volume_identity_record(plan.record_path, [identity])
-        receipt["volume_identity"] = identity.as_record()
+        volume_identity.save_volume_identity_record(plan.record_path, [plan.target_identity])
         receipt["status"] = "identity"
         receipt["updated_at"] = _now()
+        verify_target()
         _write_receipt(plan.receipt_path, receipt)
 
-        receipt["dotenv"] = _update_dotenv(plan)
-        _verify_final(plan, request)
+        receipt["dotenv"] = _update_dotenv(plan, verify_target=verify_target)
+        verify_target()
+        _verify_final(plan)
+        verify_target()
         receipt["status"] = "applied"
         receipt["applied_at"] = _now()
         receipt["updated_at"] = receipt["applied_at"]
@@ -801,11 +847,11 @@ def _request_from_args(args: argparse.Namespace) -> RelocationRequest:
         stored = _load_receipt(receipt_path)
         recorded = stored.get("source") if stored is not None else None
         if (
-            stored is None or stored.get("status") != "applied"
+            stored is None or stored.get("status") not in {"identity", "applied"}
             or not isinstance(recorded, dict) or set(recorded) != set(target)
         ):
             raise RelocationError(
-                "配置已指向目标位置，但缺少可用的已完成迁移回执；请勿重复迁移。"
+                "配置已指向目标位置，但缺少可用的原迁移回执；请勿重复迁移。"
             )
         source = {name: Path(str(recorded[name])).expanduser() for name in target}
     return RelocationRequest(
@@ -842,6 +888,7 @@ def main(argv: list[str] | None = None) -> int:
                 "source": {k: str(v) for k, v in plan.source.items()},
                 "target": {k: str(v) for k, v in plan.target.items()},
                 "target_volume": str(plan.target_volume),
+                "volume_identity": plan.target_identity.as_record(),
                 "total_bytes": plan.total_bytes,
                 "file_counts": plan.file_counts,
                 "resuming": plan.resuming,

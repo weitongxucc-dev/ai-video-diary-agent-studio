@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 import json
 from pathlib import Path
 
@@ -93,25 +94,47 @@ def test_corrupt_record_fails_closed(tmp_path):
         load_volume_identity_record(record_path)
 
 
-def test_storage_validation_surfaces_a_recorded_volume_mismatch(tmp_path, monkeypatch):
+@pytest.mark.parametrize("second_volume", ["matching", "replacement", "missing_unrecorded"])
+def test_storage_checks_all_volumes_before_directory_write_probes(tmp_path, monkeypatch, second_volume):
+    data, models = tmp_path / "data", tmp_path / "models"
+    data.mkdir()
+    models.mkdir()
     settings = Settings(
-        database_path=str(tmp_path / "agent.sqlite3"),
-        video_inbox_path=str(tmp_path / "inbox"),
-        video_output_path=str(tmp_path / "output"),
-        draft_output_path=str(tmp_path / "drafts"),
-        temporary_root_path=str(tmp_path / "temporary"),
+        database_path=str(data / "agent.sqlite3"),
+        model_root_path=str(models),
     )
+    volumes = [data, models]
+    identities = [VolumeIdentity(str(data.resolve()), "data-original")]
+    if second_volume != "missing_unrecorded":
+        identities.append(VolumeIdentity(str(models.resolve()), "models-original"))
+    record = tmp_path / volume_identity.IDENTITY_RECORD_FILENAME
+    save_volume_identity_record(record, identities)
+    monkeypatch.setattr(config_module, "runtime_env_file_path", lambda: tmp_path / ".env")
     monkeypatch.setattr(
-        config_module, "_configured_external_volumes", lambda _settings: [Path("/Volumes/dataset")],
+        config_module, "_external_volume",
+        lambda path: next((volume for volume in volumes if path.is_relative_to(volume)), None),
     )
+    def mounted(path):
+        return path == data or path == models and second_volume != "missing_unrecorded"
+    monkeypatch.setattr(config_module.os.path, "ismount", mounted)
+    monkeypatch.setattr(Path, "is_mount", mounted)
+    events = []
 
-    def reject(_volumes, *, record_path, probe=None):
-        raise volume_identity.VolumeIdentityError("外接盘身份不匹配：/Volumes/dataset")
+    def probe(path):
+        events.append(("identity", path))
+        uuid = "replacement" if path == models and second_volume == "replacement" else f"{path.name}-original"
+        return VolumeIdentity(str(path.resolve()), uuid)
 
-    monkeypatch.setattr(config_module.volume_identity, "verify_recorded_volumes", reject)
-
-    with pytest.raises(StorageConfigurationError, match="身份不匹配"):
+    monkeypatch.setattr(volume_identity, "verify_recorded_volumes", partial(verify_recorded_volumes, probe=probe))
+    monkeypatch.setattr(config_module, "_storage_write_probe", lambda directory: events.append(("write", directory)))
+    if second_volume == "matching":
         validate_storage_configuration(settings)
+        assert events == [("identity", data), ("identity", models), ("write", data), ("write", models)]
+    else:
+        message = "身份不匹配" if second_volume == "replacement" else "未挂载"
+        with pytest.raises(StorageConfigurationError, match=message):
+            validate_storage_configuration(settings)
+        assert events == [("identity", volume) for volume in volumes[:len(identities)]]
 
 
 def test_configured_external_volumes_are_deduplicated_and_include_derived_temp(tmp_path):
