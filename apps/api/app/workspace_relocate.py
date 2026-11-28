@@ -673,30 +673,12 @@ def _read_binding(database_path: Path) -> tuple[str, str] | None:
     return (str(row["workspace_id"]), str(row["library_path"])) if row is not None else None
 
 
-def _already_applied(plan: RelocationPlan) -> bool:
+def _configuration_points_to_target(plan: RelocationPlan) -> bool:
     values = _env_values(plan.env_path)
-    if any(values.get(spec.env_key) != str(plan.target[spec.name])
-           for spec in STORAGE_ROOTS if spec.name in plan.target):
-        return False
-    if not plan.target["database"].is_file() or _sqlite_integrity(plan.target["database"]) != "ok":
-        raise RelocationError("配置已指向目标位置，但目标数据库不可用。")
-    binding = _read_binding(plan.target["database"])
-    if binding is not None:
-        if Path(binding[1]).expanduser().resolve() != plan.target["materials"].resolve():
-            raise RelocationError("配置已指向目标位置，但素材目录绑定仍在旧位置。")
-        # The applied receipt is not proof that the copied library is still
-        # intact.  A damaged file makes this a resumable repair instead of a
-        # false "already applied".
-        with _connect(plan.target["database"]) as connection:
-            rows = connection.execute(
-                "SELECT file_path, size_bytes FROM material_ingestion_files WHERE workspace_id=?",
-                (binding[0],),
-            ).fetchall()
-        for row in rows:
-            path = Path(str(row["file_path"])).expanduser()
-            if path.is_symlink() or not path.is_file() or path.stat().st_size != int(row["size_bytes"]):
-                return False
-    return True
+    return all(
+        values.get(spec.env_key) == str(plan.target[spec.name])
+        for spec in STORAGE_ROOTS if spec.name in plan.target
+    )
 
 
 def _verify_final(plan: RelocationPlan) -> None:
@@ -709,8 +691,11 @@ def _verify_final(plan: RelocationPlan) -> None:
         if spec.name in plan.target and values.get(spec.env_key) != str(plan.target[spec.name]):
             raise RelocationError(f"配置未指向目标位置：{spec.env_key}")
     database_path = plan.target["database"]
-    if _sqlite_integrity(database_path) != "ok":
+    if not database_path.is_file() or _sqlite_integrity(database_path) != "ok":
         raise RelocationError("目标数据库完整性检查未通过")
+    for path in plan.target.values():
+        if not path.exists():
+            raise RelocationError(f"目标存储位置缺失：{path}")
     binding = _read_binding(database_path)
     if binding is None:
         return
@@ -720,7 +705,7 @@ def _verify_final(plan: RelocationPlan) -> None:
     old_root = str(plan.source["materials"].resolve())
     with _connect(database_path) as connection:
         rows = connection.execute(
-            "SELECT file_path FROM material_ingestion_files WHERE workspace_id=?",
+            "SELECT file_path, size_bytes FROM material_ingestion_files WHERE workspace_id=?",
             (workspace_id,),
         ).fetchall()
     for row in rows:
@@ -728,11 +713,8 @@ def _verify_final(plan: RelocationPlan) -> None:
         if file_path == old_root or file_path.startswith(old_root + os.sep):
             raise RelocationError(f"素材登记仍指向旧素材根：{file_path}")
         path = Path(file_path).expanduser()
-        if path.is_symlink() or not path.is_file():
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != int(row["size_bytes"]):
             raise RelocationError(f"迁移后素材文件不可用：{file_path}")
-    for path in plan.target.values():
-        if not path.exists():
-            raise RelocationError(f"目标存储位置缺失：{path}")
 
 
 def run_relocation(request: RelocationRequest) -> dict[str, object]:
@@ -750,17 +732,19 @@ def run_relocation(request: RelocationRequest) -> dict[str, object]:
 
         verify_target()
         previous = _load_receipt(plan.receipt_path)
-        if previous is not None and previous.get("status") in {"identity", "applied"}:
-            if _already_applied(plan):
-                _verify_final(plan)
-                verify_target()
-                if previous["status"] == "applied":
-                    return {**previous, "reapplied": True}
-                previous.update(status="applied", applied_at=_now(), updated_at=_now())
-                _write_receipt(plan.receipt_path, previous)
-                return previous
-            if previous.get("volume_identity") is None:
-                raise RelocationError("旧迁移结果无法通过复核，原回执未绑定目标卷身份，已保留回执。")
+        if previous is not None and (
+            previous.get("status") == "applied"
+            or (previous.get("status") == "identity" and _configuration_points_to_target(plan))
+        ):
+            # The destination can contain work created since the configuration switch.
+            # A failed readback must never reinstall the original database backup.
+            _verify_final(plan)
+            verify_target()
+            if previous["status"] == "applied":
+                return {**previous, "reapplied": True}
+            previous.update(status="applied", applied_at=_now(), updated_at=_now())
+            _write_receipt(plan.receipt_path, previous)
+            return previous
 
         receipt: dict[str, object] = {
             "format": RECEIPT_FORMAT, "operation_id": plan.operation_id,

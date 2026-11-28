@@ -450,12 +450,43 @@ def test_database_copy_rejects_a_target_with_different_rows(tmp_path, monkeypatc
 
 def test_resume_replaces_a_partial_target_file_after_verifying_source(tmp_path, monkeypatch):
     workspace = _build_workspace(tmp_path, monkeypatch)
-    run_relocation(workspace.request())
-    # Simulate an interrupted/partial copy: the next run must not trust it.
+
+    def interrupt(*_args):
+        raise OSError("interrupted before rebinding")
+
+    with monkeypatch.context() as stop:
+        stop.setattr(workspace_relocate, "_verify_database_copy", interrupt)
+        with pytest.raises(OSError, match="interrupted before rebinding"):
+            run_relocation(workspace.request())
     workspace.target_media.write_bytes(b"partial")
     receipt = run_relocation(workspace.request())
     assert receipt["status"] == "applied"
     assert workspace.target_media.read_bytes() == b"video-bytes-198"
+
+
+@pytest.mark.parametrize("status", ["applied", "identity"])
+def test_relocation_never_reinstalls_a_database_after_configuration_switch(tmp_path, monkeypatch, status):
+    workspace = _build_workspace(tmp_path, monkeypatch)
+    receipt = run_relocation(workspace.request())
+    if status == "identity":
+        receipt["status"] = status
+        workspace.receipt_path.write_text(json.dumps(receipt))
+    target_db = workspace.target["database"]
+    _execute(target_db, "CREATE TABLE post_migration_work (name TEXT)")
+    _execute(target_db, "INSERT INTO post_migration_work VALUES (?)", ("new work",))
+    workspace.target_media.unlink()
+    database_before = target_db.read_bytes()
+    receipt_before = workspace.receipt_path.read_bytes()
+    env_before = workspace.env_path.read_bytes()
+
+    with pytest.raises(RelocationError, match="素材文件不可用"):
+        run_relocation(workspace.request())
+
+    assert target_db.read_bytes() == database_before
+    assert _row(target_db, "SELECT name FROM post_migration_work")[0] == "new work"
+    assert workspace.receipt_path.read_bytes() == receipt_before
+    assert workspace.env_path.read_bytes() == env_before
+    assert not workspace.target_media.exists()
 
 
 def test_copy_file_refuses_to_overwrite_without_a_resume_receipt(tmp_path):
@@ -568,7 +599,7 @@ def test_legacy_applied_receipt_reads_back_with_recorded_uuid_without_writes(tmp
     assert workspace.receipt_path.read_bytes() == original
 
     workspace.target_media.write_bytes(b"incomplete target")
-    with pytest.raises(RelocationError, match="旧迁移结果无法通过复核"):
+    with pytest.raises(RelocationError, match="素材文件不可用"):
         run_relocation(workspace.request())
     assert workspace.target_media.read_bytes() == b"incomplete target"
     assert workspace.receipt_path.read_bytes() == original
