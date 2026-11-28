@@ -2174,6 +2174,32 @@ describe("AssistantConversationPanel", () => {
 
 
 describe("persistent workbench conversation and command completion", () => {
+  it("keeps the valid reference when recovering a draft with one expired item", async () => {
+    const saved = conversation();
+    const manual = { kind: "knowledge" as const, knowledge_item_id: "manual", version: "1", locator: "第3页", label: "固定版说明书" };
+    const segment = { kind: "material" as const, label: "原片 6–12 秒",
+      selection: { scope: "segment" as const, asset_id: "source", segment_id: "segment", expected_updated_at: "2026-10-09T00:00:00Z" } };
+    api.getCurrentAssistantConversation.mockResolvedValue(saved);
+    api.listAssistantConversations.mockResolvedValue({ items: [saved] });
+    api.getAssistantConversationReference.mockResolvedValue({
+      selected_reference: { kind: "selection", items: [segment, manual] },
+      reference_version: 2, status: "unavailable", reason: "素材记录已经变化",
+    });
+    render(<AssistantConversationProvider><AssistantConversationPanel state={state()} input="使用说明书和片段制作短片"
+      onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="工作区"/></AssistantConversationProvider>);
+
+    expect(await screen.findByText(/逐项重新选择或移除/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "清除不可用引用" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看本轮 2 项引用" }));
+    fireEvent.click(await screen.findByRole("button", { name: "取消素材引用：原片 6–12 秒" }));
+
+    await waitFor(() => expect(api.saveAssistantConversationReference).toHaveBeenCalledWith(
+      saved.id, { kind: "selection", items: [manual] }, 2,
+    ));
+    expect(screen.getByRole("button", { name: "查看资料：固定版说明书" })).toBeVisible();
+    expect(screen.getByRole("textbox")).toHaveValue("使用说明书和片段制作短片");
+  });
+
   it.each(["pending", "unavailable"] as const)("keeps four local commands available across button, Enter and menu with %s references", async referenceState => {
     api.getCurrentAssistantConversation.mockResolvedValue(conversation());
     api.listAssistantConversations.mockResolvedValue({items:[conversation()]});
