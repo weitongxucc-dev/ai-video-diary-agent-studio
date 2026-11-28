@@ -2200,6 +2200,39 @@ describe("persistent workbench conversation and command completion", () => {
     expect(screen.getByRole("textbox")).toHaveValue("使用说明书和片段制作短片");
   });
 
+  it.each([false, true])("checks the saved references after a failed removal response (committed=%s)", async committed => {
+    const saved = conversation();
+    const manual = { kind: "knowledge" as const, knowledge_item_id: "manual", version: "1", locator: "第3页", label: "固定版说明书" };
+    const selected = { kind: "selection" as const, items: [manual] };
+    const draft = "使用说明书制作短片";
+    api.getCurrentAssistantConversation.mockResolvedValue(saved);
+    api.listAssistantConversations.mockResolvedValue({ items: [saved] });
+    api.referenceSaved.set(saved.id, {
+      selected_reference: selected, reference_version: 2, status: "ready", reason: null,
+    });
+    api.saveAssistantConversationReference.mockImplementationOnce(async () => {
+      if (committed) {
+        api.referenceSaved.set(saved.id, {
+          selected_reference: null, reference_version: 3, status: "ready", reason: null,
+        });
+      }
+      throw new Error("未收到保存结果");
+    });
+    render(<AssistantConversationProvider><AssistantConversationPanel state={state()} input={draft}
+      onInput={vi.fn()} onSend={vi.fn()} busy={false} configured scopeLabel="工作区"/></AssistantConversationProvider>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "移除引用：固定版说明书" }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新核对引用" }));
+
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(api.getAssistantConversationReference).toHaveBeenCalledTimes(2);
+    expect(api.saveAssistantConversationReference).toHaveBeenCalledExactlyOnceWith(saved.id, null, 2);
+    const restored = screen.queryByRole("button", { name: "查看资料：固定版说明书" });
+    if (committed) expect(restored).not.toBeInTheDocument();
+    else expect(restored).toBeVisible();
+    expect(screen.getByRole("textbox")).toHaveValue(draft);
+  });
+
   it.each(["pending", "unavailable"] as const)("keeps four local commands available across button, Enter and menu with %s references", async referenceState => {
     api.getCurrentAssistantConversation.mockResolvedValue(conversation());
     api.listAssistantConversations.mockResolvedValue({items:[conversation()]});

@@ -15,7 +15,7 @@ import { preflightReturnUrl, validDraftId } from "@/lib/preflight-draft";
 import type { AssistantConversationScope, AssistantSavedReference } from "@/lib/types";
 
 const draftScopePrefix = "draft:";
-const ReferenceStatusContext = createContext<{pending:boolean;reason:string|null;cancel?:()=>void}>({pending:false,reason:null});
+const ReferenceStatusContext = createContext<{pending:boolean;reason:string|null;cancel?:()=>void;readAgain?:()=>void}>({pending:false,reason:null});
 export function useAssistantReferenceStatus() { return useContext(ReferenceStatusContext); }
 
 const MaterialReferenceContext = createContext<{ reference: AssistantMaterialReference | null; setReference: (value: AssistantMaterialReference | null) => void } | null>(null);
@@ -78,6 +78,7 @@ function MemberConversation({ children }: { children: ReactNode }) {
   const [selection, setSelection] = useState<ReferenceSelection>({
     conversationId: null, scopeKey, value: null, pending: true, reason: null,
   });
+  const [referenceReadAttempt, setReferenceReadAttempt] = useState(0);
   const reference = selection.conversationId === conversationId && selection.scopeKey === scopeKey
     ? selection
     : {value: state.conversation?.selected_reference ?? null, pending: true, reason: null};
@@ -88,6 +89,10 @@ function MemberConversation({ children }: { children: ReactNode }) {
   const explicitReferenceId = useRef<string|null>(null);
   if (activeId.current !== conversationId) explicitReferenceId.current=null;
   activeId.current = conversationId;
+  const readReferenceAgain = () => {
+    explicitReferenceId.current = null;
+    setReferenceReadAttempt(attempt => attempt + 1);
+  };
   const referenceRevision = useRef(0);
   const versions = useRef(new Map<string,number>());
   const queues = useRef(new Map<string, Promise<unknown>>());
@@ -156,7 +161,7 @@ function MemberConversation({ children }: { children: ReactNode }) {
         showReference(id,value,false,cause instanceof Error ? cause.message : "引用未能恢复，请重新查看或取消。");
       }
     });
-  }, [conversationId, scopeKey, selectReference, showReference]);
+  }, [conversationId, referenceReadAttempt, scopeKey, selectReference, showReference]);
   const selectItems = useCallback((next:SelectedAssistantReference[], additive = false) => {
     const unique = new Map((additive ? [...itemsRef.current,...next] : next).map(item=>[assistantReferenceKey(item),item]));
     const values = [...unique.values()];
@@ -203,7 +208,7 @@ function MemberConversation({ children }: { children: ReactNode }) {
     window.addEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, receive);
     return () => window.removeEventListener(ASSISTANT_MATERIAL_REFERENCE_EVENT, receive);
   }, [selectMaterial]);
-  return <AssistantConversationContext.Provider value={{...state,resume}}><ReferenceStatusContext.Provider value={{pending:reference.pending,reason:reference.reason,cancel:()=>selectReference(null)}}>
+  return <AssistantConversationContext.Provider value={{...state,resume}}><ReferenceStatusContext.Provider value={{pending:reference.pending,reason:reference.reason,cancel:()=>selectReference(null),readAgain:readReferenceAgain}}>
     <SelectionContext.Provider value={{items,version:conversationId ? versions.current.get(conversationId) : undefined,select:selectItems,remove:removeItem}}><MaterialReferenceContext.Provider value={{reference:materialReference,setReference:selectMaterial}}>
       <ProfileReferenceContext.Provider value={{reference:profileReference,setReference:selectProfile}}>
         <KnowledgeReferenceContext.Provider value={{reference:knowledgeReference,setReference:selectKnowledge}}>{children}</KnowledgeReferenceContext.Provider>
