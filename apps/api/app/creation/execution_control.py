@@ -16,6 +16,7 @@ from app.creation_execution import (CreationExecutionActor, CreationJobUnitExecu
     CreationInputRejected, creation_input_rejection, revision_digest, submit_creation_stage, montage_waiting_for_confirmation,
     migrate_creation_narration_request, resume_original_narration)
 from app.creation.render_stage_use_case import RenderRejected
+from app.creation.duration_requirement import DurationRequirement
 from app.creation.render_specification import render_target, source_audio_bytes
 from app.creation.render_reopen import continue_failed_presenter_render
 from app.creation.contracts import TaskEvent, JobRun
@@ -46,7 +47,7 @@ def _duration_consistency(repository, task: CreationTask, plan: CreationPlan) ->
     rendered file, so an unknown file measurement remains unknown instead of
     being inferred from the timeline.
     """
-    target = float(plan.duration_target_seconds)
+    requirement = DurationRequirement.from_plan(plan)
     original_target = None
     adjustment_event_id = None
     duration_events = [
@@ -61,7 +62,6 @@ def _duration_consistency(repository, task: CreationTask, plan: CreationPlan) ->
         if isinstance(previous, (int, float)):
             original_target = float(previous)
             adjustment_event_id = event.id
-    target_adjusted = original_target is not None and abs(original_target - target) > 1e-9
     version = None
     if task.current_timeline_version_id:
         try:
@@ -72,28 +72,25 @@ def _duration_consistency(repository, task: CreationTask, plan: CreationPlan) ->
             version = None
     montage = (version.snapshot or {}).get("montage") if version else None
     timeline = montage.get("duration_seconds") if isinstance(montage, dict) else None
-    if not isinstance(timeline, (int, float)):
-        return {
-            "status": "adjusted" if target_adjusted else "unknown",
-            "original_target_seconds": original_target,
-            "target_seconds": target,
-            "timeline_seconds": None,
-            "difference_seconds": None,
-            "tolerance_seconds": 1 / 30,
-            "timeline_version_id": version.id if version else task.current_timeline_version_id,
-            "target_adjusted": target_adjusted,
-            "adjustment_event_id": adjustment_event_id,
-        }
-    difference = round(float(timeline) - target, 6)
-    aligned = abs(difference) <= 1 / 30
+    timeline_seconds = float(timeline) if isinstance(timeline, (int, float)) else None
+    if timeline_seconds is not None and plan.source_media is not None and montage.get("script_id") is None:
+        # Original-video selection owns the input range; the edited timeline owns the output clock.
+        requirement = DurationRequirement(timeline_seconds)
+    target = float(requirement.target_seconds)
+    target_adjusted = original_target is not None and abs(original_target - target) > 1e-9
+    assessment = requirement.assess(timeline_seconds, 30)
+    status = {"met": "aligned", "mismatch": "mismatch", "unknown": "unknown"}[assessment]
+    if target_adjusted and status != "mismatch":
+        status = "adjusted"
     return {
-        "status": "adjusted" if target_adjusted and aligned else ("aligned" if aligned else "mismatch"),
+        "status": status,
         "original_target_seconds": original_target,
         "target_seconds": target,
-        "timeline_seconds": round(float(timeline), 6),
-        "difference_seconds": difference,
-        "tolerance_seconds": 1 / 30,
-        "timeline_version_id": version.id,
+        "target_range_seconds": requirement.agreed_range,
+        "timeline_seconds": round(timeline_seconds, 6) if timeline_seconds is not None else None,
+        "difference_seconds": round(timeline_seconds - target, 6) if timeline_seconds is not None else None,
+        "tolerance_seconds": 1 / 30 if requirement.mode == "exact" else None,
+        "timeline_version_id": version.id if version else task.current_timeline_version_id,
         "target_adjusted": target_adjusted,
         "adjustment_event_id": adjustment_event_id,
     }

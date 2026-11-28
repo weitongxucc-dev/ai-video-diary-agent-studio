@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.creation.contracts import CreationTask, JobRun, TaskEvent, TimelineVersion
 from app.creation.execution_control import CreationExecutionControl, _duration_consistency
 from app.creation.plan_contracts import CreationPlan
@@ -16,7 +18,7 @@ def test_duration_consistency_compares_current_timeline_to_plan_target():
         id="task-1",
         current_timeline_version_id="timeline-2",
     )
-    plan = SimpleNamespace(duration_target_seconds=151)
+    plan = SimpleNamespace(duration_target_seconds=151, source_media=None)
     version = SimpleNamespace(
         id="timeline-2",
         snapshot={"montage": {"duration_seconds": 162.73333333333332}},
@@ -32,6 +34,7 @@ def test_duration_consistency_compares_current_timeline_to_plan_target():
         "status": "mismatch",
         "original_target_seconds": None,
         "target_seconds": 151.0,
+        "target_range_seconds": None,
         "timeline_seconds": 162.733333,
         "difference_seconds": 11.733333,
         "tolerance_seconds": 1 / 30,
@@ -47,7 +50,7 @@ def test_duration_consistency_marks_explicit_target_adjustment():
         id="task-1",
         current_timeline_version_id="timeline-2",
     )
-    plan = SimpleNamespace(duration_target_seconds=162.73333333333332)
+    plan = SimpleNamespace(duration_target_seconds=162.73333333333332, source_media=None)
     version = SimpleNamespace(
         id="timeline-2",
         snapshot={"montage": {"duration_seconds": 162.73333333333332}},
@@ -68,6 +71,43 @@ def test_duration_consistency_marks_explicit_target_adjustment():
     assert result["original_target_seconds"] == 151.0
     assert result["target_adjusted"] is True
     assert result["adjustment_event_id"] == "duration-adoption-1"
+
+
+@pytest.mark.parametrize(("seconds", "status"), [
+    (30.5, "aligned"),
+    (31.1, "mismatch"),
+])
+def test_duration_consistency_uses_agreed_range(seconds, status):
+    task = SimpleNamespace(workspace_id="local", id="task", current_timeline_version_id="timeline")
+    plan = SimpleNamespace(
+        duration_target_seconds=30, duration_mode="approximate", duration_range_seconds=(29, 31), source_media=None,
+    )
+    version = SimpleNamespace(id="timeline", snapshot={"montage": {"duration_seconds": seconds}})
+    repository = SimpleNamespace(
+        timeline_records=SimpleNamespace(get_timeline_version=lambda *_: version),
+        execution_records=SimpleNamespace(list_task_events=lambda *_: []),
+    )
+
+    result = _duration_consistency(repository, task, plan)
+
+    assert result["status"] == status
+    assert result["target_range_seconds"] == (29, 31)
+    assert result["tolerance_seconds"] is None
+
+
+def test_duration_consistency_uses_edited_clock_for_original_video():
+    task = SimpleNamespace(workspace_id="local", id="task", current_timeline_version_id="timeline")
+    plan = SimpleNamespace(duration_target_seconds=30, source_media={"asset_id": "original-video"})
+    version = SimpleNamespace(id="timeline", snapshot={"montage": {"duration_seconds": 28, "script_id": None}})
+    repository = SimpleNamespace(
+        timeline_records=SimpleNamespace(get_timeline_version=lambda *_: version),
+        execution_records=SimpleNamespace(list_task_events=lambda *_: []),
+    )
+
+    result = _duration_consistency(repository, task, plan)
+
+    assert result["status"] == "aligned"
+    assert result["target_seconds"] == result["timeline_seconds"] == 28
 
 
 def test_media_queue_summary_keeps_pending_waveforms_visible_with_execution_success(tmp_path):

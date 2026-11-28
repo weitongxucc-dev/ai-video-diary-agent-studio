@@ -513,13 +513,16 @@ export function CreationTaskWorkspace({ initialWorkspace, initialTopics, initial
   const duration = execution?.task_id === task.id && task.current_timeline_version_id
     && durationReceipt?.timeline_version_id === task.current_timeline_version_id ? durationReceipt : null;
   const originalDuration = duration?.target_adjusted && duration.adjustment_event_id ? duration.original_target_seconds : null;
+  const durationRange = duration?.target_range_seconds;
   const durationText = (seconds: number | null | undefined) => seconds == null ? "未知" : `${Number(seconds.toFixed(3))} 秒`;
   const durationDetails = (videoSeconds: number | null) => [
     ...(originalDuration != null ? [`原目标：${durationText(originalDuration)}`] : []),
     `当前目标：${durationText(duration?.target_seconds)}`,
+    ...(durationRange ? [`约定范围：${durationText(durationRange[0])}–${durationText(durationRange[1])}`] : []),
     `时间线时长：${durationText(duration?.timeline_seconds)}`,
     videoSeconds == null ? "成片视频时长未测量" : `成片视频时长：${durationText(videoSeconds)}`,
     ...(originalDuration != null ? ["已按旁白时长调整目标"] : []),
+    ...(duration?.status === "mismatch" ? ["时间线时长未满足交付约定"] : []),
   ].join(" · ");
   const reviewChecks = [
     { title: "字幕", ready: zhSubtitleVisible || enSubtitleVisible, detail: subtitleSummary },

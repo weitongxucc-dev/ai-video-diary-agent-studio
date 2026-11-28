@@ -601,8 +601,10 @@ export type CreationExecutionStatus = {
   visual_decisions?: SegmentVisualDecisionPage;
     task_id: string;
     duration_consistency?: {
+        status: "unknown" | "aligned" | "adjusted" | "mismatch";
         original_target_seconds: number | null;
         target_seconds: number;
+        target_range_seconds?: [number, number] | null;
         timeline_seconds: number | null;
         timeline_version_id: string | null;
         target_adjusted: boolean;
